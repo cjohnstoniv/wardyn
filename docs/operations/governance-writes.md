@@ -68,7 +68,7 @@ an operator follows to turn one on and run the queue.
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
   - for an assignment, `diff.after` embeds the profile it points at as it stood at the proposal.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
-- `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default), `GET /governance/changes/{id}` reads one, and `GET /governance/changes/{id}/impact` replays a pending one through the dry run: the people whose walls change and the live runs it reaches, or `not_computed` with `kind` (also a membership added, removed or promoted, or a unit deleted), `stale` or `refused`.
+- `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default), `GET /governance/changes/{id}` reads one, and `GET /governance/changes/{id}/impact` replays a pending one through the dry run: the assignments whose walls change (each a person, a group or Everyone) and the live runs it reaches, or `not_computed` with `kind` (also a membership added, removed or promoted, or a unit deleted), `stale` or `refused`.
 - `diff.review` says why a change was held: `verdict` is `widens`, `narrows_held` or `not_checked`; `widens` names each field that widens and its entries; `held_because` names why a change that widens nothing is held; `risk` grades a profile or move before and after. A request has none.
 - `GET /governance/changes?approver=security` lists only the changes a security admin alone may decide: no unit admin governs every unit they touch.
 - The proposer may write why the change is wanted, and a ticket reference, with `PUT /governance/changes/{id}/note` (`{"reason","ticket"}`, both optional).
@@ -250,7 +250,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 - That row's actor is the approver and it carries `change_id` and `proposed_by`: two named humans for one change.
 - Also look for:
   - `governance.change.bypass`: the admin token wrote or approved. Alert on it.
-  - `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`, `not_pending` or `error`).
+  - `governance.change.approve` with outcome `failure`: not applied (`error` is `stale`, `not_pending`, `refused` (unit removed) or `error`).
   - `authz.denied` with reason `second_human_required` or `admin_surface` and target `governance.change`: a self-approval, or a security admin at a role-mapping change.
   - A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come through the API. See the threat model's "database is not four-eyed" residual.
 

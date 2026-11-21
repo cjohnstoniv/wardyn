@@ -13,7 +13,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -432,21 +431,6 @@ func (s *Server) handleEndCLISession(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "cli.session.revoke", id.String(), "success",
 		mustJSON(map[string]any{"machine": ended.Machine, "reason": types.CLISessionEndSignedOut})))
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// liveCLISessions counts the live CLI sessions a cut naming name is about to end ("" = every one), for
-// the cli_sessions_ended field of its session.revoke row; 0 when CLI sign-in is off or the count fails.
-// The cut itself ends them (store.ExecRevocationCut), so a failed count costs only the field.
-func (s *Server) liveCLISessions(ctx context.Context, name string) int {
-	cs := s.cliStore()
-	if cs == nil {
-		return 0
-	}
-	n, err := cs.CountLiveCLISessions(ctx, name)
-	if err != nil {
-		slog.WarnContext(ctx, "api: count cli sessions for a session.revoke row failed", "error", err)
-	}
-	return n
 }
 
 type cliRotationKey struct{}

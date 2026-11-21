@@ -157,6 +157,10 @@ type providerGrantSnapshot struct {
 	// resolve refuses when the live row's digest differs, so an edit of the endpoint or its authority
 	// never carries a run's sign-in to the new address. Empty on every other grant.
 	AddressDigest string `json:"address_digest,omitempty"`
+	// ServiceGrantDigest is serviceGrantDigest of a row whose service grant lists the run's owner, a service
+	// identity, as it stood at dispatch. The resolve refuses when the live grant's digest differs. Empty on every
+	// other grant, so a person's run takes their own sign-in.
+	ServiceGrantDigest string `json:"service_grant_digest,omitempty"`
 }
 
 // authorProviderSubscriptionInjection authors the per-person subscription

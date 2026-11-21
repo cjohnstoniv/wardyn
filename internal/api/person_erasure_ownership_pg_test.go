@@ -482,7 +482,7 @@ func TestSCIMPurgeRefusalIsOnTheLedgerOnce(t *testing.T) {
 	}
 	failures := func(when string) {
 		t.Helper()
-		got, err := e.st.ListDeprovisionFailures(ctx, 10)
+		got, err := e.st.ListDeprovisionFailures(ctx, e.issuer, e.tenant, 10)
 		if err != nil || len(got) != 1 || got[0].IdentityID.String() != id || got[0].Kind != store.JobKindPurge ||
 			got[0].Step != store.JobStepAuditDeprovision || !strings.Contains(got[0].LastError, "binds the SCIM user to the person's sign-in") ||
 			strings.Contains(got[0].LastError, "retry the request") {

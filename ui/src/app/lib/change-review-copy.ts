@@ -60,13 +60,18 @@ export const CHANGE_REVIEW = {
 
   IMPACT: "Impact",
   AS_OF_NOW: "As of now",
-  PEOPLE: "People",
+  /** The report counts assignments (memberships), one per subject; an Everyone assignment is one row for many people. */
+  ASSIGNMENTS: "Assignments affected",
   UNITS: "units",
   LIVE_RUNS_WALLS: "live runs whose walls change",
   NOT_IN_REPORT: "Not in this kind's report",
   STORED_POLICIES: "stored policies whose walls change",
   WHOSE_WALLS: "Whose walls change",
-  COL_PERSON: "Person",
+  COL_ASSIGNED_TO: "Assigned to",
+  SUBJECT_PERSON: "Person",
+  SUBJECT_GROUP: "Group",
+  /** An assignment with no subject covers everyone the unit's assignment reaches. */
+  SUBJECT_EVERYONE: "Everyone",
   COL_UNIT: "Unit",
   COL_WHAT_CHANGES: "What changes for them",
   MORE: (n: number) => `+ ${n} more`,

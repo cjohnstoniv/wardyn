@@ -63,9 +63,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -324,7 +324,20 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	run, err := s.cfg.Store.GetRun(r.Context(), runID)
+	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), every
+	// gate's through r, so none holds the request past it. The run read, the governance and data_out doors, the
+	// declared apps, the roster and the background door's inbound and roster reads answer a failure or a stall
+	// with a 503 (data_out's its own, the rest the retryable one). The owner check's sponsor and inbound reads, and the sign-in display's holder
+	// read, keep their refusals for a failure. Any other ticket's actx is r's own context.
+	actx, acancel := ta.admitCtx(r.Context())
+	defer acancel()
+	r = r.WithContext(actx)
+	run, err := s.cfg.Store.GetRun(actx, runID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && !ta.admitBy.IsZero() {
+		slog.ErrorContext(r.Context(), "wardynd: an issuer portal's entry could not read its run", "run_id", runID, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
 	if err != nil {
 		// Byte-identical to the wrong-owner arm below — including the wire
 		// reason (#656 slice 3) — so a missing run and a foreign one stay
@@ -337,7 +350,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !s.uiTicketMayEnter(r.Context(), run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
+	if !s.uiTicketMayEnter(actx, run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -379,6 +392,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 
 	apps, err := s.effectiveUIApps(r.Context(), runID)
+	if err != nil && !ta.admitBy.IsZero() {
+		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
@@ -386,6 +403,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := uiDeclaredApp(apps, app)
+	if !found && !ta.admitBy.IsZero() && actx.Err() != nil { // the sign-in display's holder read ran out
+		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", uiSessionUnverifiableMsg, actx.Err())
+		return
+	}
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
@@ -445,38 +466,6 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relayUISession(w, r, sess)
-}
-
-// relayUISession serves one request of an authenticated session, a cookie's or an inbound token's.
-func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiSession) {
-	// Re-assert the human here as well as in uiDial, debounced but for a helper: net/http dials
-	// only when its pool has nothing reusable, so most requests of a busy
-	// session never reach uiDial at all (uiReassertRelay).
-	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
-		writeErrorReason(w, de.status, de.reason, de.msg)
-		return
-	}
-	if sess.Inbound && !s.admitInbound(w, r, sess) {
-		return
-	}
-	// Keep the run's idle clock alive for the life of the session, debounced
-	// exactly like the decision-ingest and attach keepalives: a human reading
-	// code in an editor is not idle, and the reaper must not stop the run under
-	// them.
-	// A human relaying UI traffic is always real presence, so only the debounce applies.
-	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
-		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
-	}
-	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
-	if sess.Via != nil {
-		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
-	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
-	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	ctx, stop := s.supportWatchCtx(ctx, sess)
-	defer stop()
-	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane

@@ -50,8 +50,10 @@ type scimCovStore struct {
 	grants     []types.UserDriveGrant
 	drives     []types.UserDriveListItem
 
-	pending       []store.PendingLeaver
-	failures      []store.DeprovisionFailure
+	pending  []store.PendingLeaver
+	failures []store.DeprovisionFailure
+	// scoped is the issuer and tenant each scoped status listing was called with, by method name.
+	scoped        map[string][2]string
 	grantsDeleted int64
 	assignDeleted int64
 	poolsNarrowed int64
@@ -729,12 +731,21 @@ func (s *scimCovStore) HeldEmails(context.Context, uuid.UUID, []string, []string
 	return nil, nil
 }
 
-func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]store.PrincipalIdentity, error) {
+// recordScope notes the issuer and tenant a listing was scoped to; the caller holds s.mu.
+func (s *scimCovStore) recordScope(method, issuer, tenant string) {
+	if s.scoped == nil {
+		s.scoped = map[string][2]string{}
+	}
+	s.scoped[method] = [2]string{issuer, tenant}
+}
+
+func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, issuer, tenant string, _ int) ([]store.PrincipalIdentity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("ListDeactivatedIdentities"); err != nil {
 		return nil, err
 	}
+	s.recordScope("ListDeactivatedIdentities", issuer, tenant)
 	var out []store.PrincipalIdentity
 	for _, id := range s.order {
 		if i := s.idents[id]; i.DeactivatedAt != nil && i.PurgedAt == nil {
@@ -744,12 +755,13 @@ func (s *scimCovStore) ListDeactivatedIdentities(_ context.Context, _ int) ([]st
 	return out, nil
 }
 
-func (s *scimCovStore) ListDeprovisionFailures(_ context.Context, _ int) ([]store.DeprovisionFailure, error) {
+func (s *scimCovStore) ListDeprovisionFailures(_ context.Context, issuer, tenant string, _ int) ([]store.DeprovisionFailure, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("ListDeprovisionFailures"); err != nil {
 		return nil, err
 	}
+	s.recordScope("ListDeprovisionFailures", issuer, tenant)
 	return slices.Clone(s.failures), nil
 }
 
@@ -845,6 +857,9 @@ func (s *scimCovStore) AddScimGroupMembers(_ context.Context, id uuid.UUID, iden
 	if err := s.enter("AddScimGroupMembers"); err != nil {
 		return err
 	}
+	if _, ok := s.groups[id]; !ok {
+		return store.ErrNotFound
+	}
 	for _, m := range identities {
 		if _, known := s.idents[m]; known && !slices.Contains(s.members[id], m) {
 			s.members[id] = append(s.members[id], m)
@@ -859,6 +874,12 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 	if err := s.enter("StartGroupRemoval"); err != nil {
 		return err
 	}
+	s.startGroupRemoval(groupID, identityID)
+	return nil
+}
+
+// startGroupRemoval is StartGroupRemoval's work, under s.mu.
+func (s *scimCovStore) startGroupRemoval(groupID, identityID uuid.UUID) {
 	target := groupID.String()
 	wasMember := slices.Contains(s.members[groupID], identityID)
 	s.members[groupID] = slices.DeleteFunc(s.members[groupID], func(m uuid.UUID) bool { return m == identityID })
@@ -877,7 +898,6 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 			s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: identityID, Kind: store.JobKindGroupRemove, Step: step, Target: target})
 		}
 	}
-	return nil
 }
 
 func (s *scimCovStore) ResumeGroupRemoval(_ context.Context, groupID, identityID uuid.UUID) (bool, error) {
@@ -909,7 +929,7 @@ func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UU
 	return out, nil
 }
 
-func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
+func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("DeleteScimGroup"); err != nil {
@@ -917,6 +937,13 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	}
 	if _, ok := s.groups[id]; !ok {
 		return store.ErrNotFound
+	}
+	// Every member of the issuer and tenant still recorded leaves with a removal owed, as the store's delete
+	// opens it.
+	for _, m := range slices.Clone(s.members[id]) {
+		if i, known := s.idents[m]; known && i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant) {
+			s.startGroupRemoval(id, m)
+		}
 	}
 	delete(s.groups, id)
 	delete(s.members, id)

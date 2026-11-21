@@ -270,6 +270,42 @@ export interface ModelProvidersRead extends ModelProviders {
   // Whether a bedrock_sso provider can send run identity on this install: only
   // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
   gateway_identity_bedrock_sso: boolean;
+  // Server facts, not stored and not in the ETag. Each provider's service grant
+  // state by provider id, and the removed grants whose secret is still to be
+  // deleted (Go's types.ServiceGrantStatus and types.ServiceGrantCleanup).
+  service_grants?: Record<string, ServiceGrantStatus>;
+  service_grant_cleanups?: ServiceGrantCleanup[];
+}
+
+export interface ServiceGrantStatus {
+  client_id: string;
+  client_secret_ref: string;
+  // ok, failing or not_yet, read from the live replicas' rows with the live digest only.
+  state: string;
+  replicas: ServiceGrantReplicaStatus[];
+}
+
+// One replica's last outcome for a service grant (Go's types.ServiceGrantReplicaStatus).
+export interface ServiceGrantReplicaStatus {
+  host: string;
+  live: boolean;
+  state: string;
+  attempted_at: string;
+  last_ok_at?: string;
+  valid_until?: string;
+  reason?: string;
+  oauth_error?: string;
+  http_status?: number;
+  egress?: string;
+}
+
+// A pending clean-up of a removed grant's secret (Go's types.ServiceGrantCleanup).
+export interface ServiceGrantCleanup {
+  uid: string;
+  provider_id: string;
+  reason: string;
+  since: string;
+  client_secret_ref: string;
 }
 
 // Closed set, server-validated.
@@ -311,6 +347,22 @@ export interface ProviderOIDC {
   // Set through the API or the policy file only: false signs in against an authority that grants no openid
   // (identity_binding "none" only). Absent is true. The editor shows no control for it and keeps what is stored.
   require_id_token?: boolean;
+  // Set through the API or the policy file only (Go's types.ProviderServiceGrant): the client credentials a
+  // listed service identity's runs get a token with. The editor shows no control for it and keeps what is stored.
+  service_grant?: ProviderServiceGrant;
+}
+
+// A provider's service grant. The client's secret is never part of it: it is written through its own route.
+export interface ProviderServiceGrant {
+  grant_type: "client_credentials";
+  token_url: string;
+  client_id: string;
+  scope?: string;
+  audience?: string;
+  // client_secret_basic (also absent) or client_secret_post.
+  client_auth?: "client_secret_basic" | "client_secret_post" | (string & {});
+  // The service principals (service:<name>) that may use the grant.
+  service_identities: string[];
 }
 
 // One provider. No credential lives here — each person supplies their own.

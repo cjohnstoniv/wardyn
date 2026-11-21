@@ -120,6 +120,11 @@ type queuedLaunch struct {
 	// NoLocal says the launch waits on the pool's remote-hosted runners and cannot run on the person's
 	// own (runPlacement.noLocal): the verdict and the start then keep it off them.
 	NoLocal bool `json:"no_local,omitempty"`
+	// DriveModes is the effective mode each portal drive of the run was admitted with, by drive id: true is
+	// read-only. The start holds the fresh resolution to it (portalDriveModeCap), so an allocation that became
+	// writable while the run waited never widens it. A launch with no entry for one of its portal drives
+	// starts that drive read-only.
+	DriveModes map[string]bool `json:"drive_modes,omitempty"`
 }
 
 // queueWaitSec is the wait a launch gets: max_wait_sec when given, cut at seven days with a warning,
@@ -280,6 +285,12 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	q.run.State = types.RunQueued
+	// The waiting row carries the unit the launch resolved to, as the queue row does, so a portal pin and a
+	// unit scope read the waiting run in its own unit; the start stamps it again.
+	if u := q.f.ceiling.Unit; u != nil {
+		id := u.ID
+		q.run.UnitID = &id
+	}
 	// The snapshots revive, extend and the run.create row read commit with the queue row: a creator
 	// that dies after the commit leaves no promotable run without its authority.
 	entry.Components, entry.Harnesses = q.f.comps.snapshotRows(), q.f.harnesses
@@ -303,6 +314,9 @@ func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) 
 		return
 	case errors.Is(err, store.ErrRunnerPoolStale):
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
+		return
+	case errors.Is(err, store.ErrPortalRevoked):
+		writePortalRevoked(w)
 		return
 	case errors.Is(err, store.ErrRunCreateKeySuperseded):
 		writeRunCreateKeyInFlight(w)
@@ -501,6 +515,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
 	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)
 	launch.Repos = append(launch.Repos, repoLocatorsOf(q.f.spec.WorkspaceRepos)...)
+	launch.DriveModes = portalDriveModes(q.f.drives)
 	if q.f.ceiling.Unit != nil {
 		id := q.f.ceiling.Unit.ID
 		launch.UnitID = &id

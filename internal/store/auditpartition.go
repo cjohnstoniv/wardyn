@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -113,8 +114,10 @@ type AuditPartitionRow struct {
 // AuditPartitionExporter is the OPTIONAL store capability behind GET /audit/export?partition=. A test
 // fake or non-Postgres store has no partitions.
 type AuditPartitionExporter interface {
-	// ExportAuditPartition reads one closed partition in seq order from ONE snapshot. header is called
-	// once, before any row, with the manifest of that snapshot; row once per row. ErrNotFound when name
+	// ExportAuditPartition reads one closed partition in seq order. header is called once, before any
+	// row, with the manifest of one snapshot; the rows follow in bounded pages, none read past that
+	// manifest, and the read fails if they do not add up to its row count. No pool connection is held
+	// while row runs, so row may use the pool. row once per row. ErrNotFound when name
 	// is not a partition of the audit log, ErrAuditPartitionOpen when it can still receive rows; in
 	// both cases neither callback ran. An error from either callback stops the read and is returned.
 	ExportAuditPartition(ctx context.Context, name string, header func(PartitionManifest) error, row func(AuditPartitionRow) error) error
@@ -136,11 +139,53 @@ const partitionClosedSQL = `
 	  CROSS JOIN audit_partition_meta m
 	 WHERE i.inhparent = 'audit_events'::regclass AND c.relname = $1`
 
+// AuditPartitionPageSize is how many rows one page of a partition export reads. A var only so a test can
+// shrink it and cross page boundaries.
+var AuditPartitionPageSize int32 = 1000
+
 func (s PG) ExportAuditPartition(ctx context.Context, name string, header func(PartitionManifest) error, row func(AuditPartitionRow) error) error {
-	// One snapshot for the manifest and the rows, so the header can never disagree with the stream.
+	table, m, err := s.partitionManifest(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := header(m); err != nil {
+		return err
+	}
+	// The manifest was read from one snapshot, and a closed partition takes no new rows, so the rows are
+	// read after it in bounded pages, each its own statement. No connection is held while row runs: a row
+	// callback may need the pool (a sealed actor's subject lookups), and a pool of one would otherwise
+	// wait on the connection this read still held. Rows past the manifest's last seq are never read, and
+	// a read that does not land on the manifest's row count fails rather than stream a different partition.
+	var read int64
+	after := int64(math.MinInt64)
+	for m.Rows > 0 {
+		page, err := s.partitionPage(ctx, table, after, m.SeqHi)
+		if err != nil {
+			return err
+		}
+		for _, r := range page {
+			if err := row(r); err != nil {
+				return err
+			}
+		}
+		read += int64(len(page))
+		if int32(len(page)) < AuditPartitionPageSize {
+			break
+		}
+		after = page[len(page)-1].Seq
+	}
+	if read != m.Rows {
+		return fmt.Errorf("store: audit partition %s changed while it was read: %d rows, its manifest says %d", m.Partition, read, m.Rows)
+	}
+	return nil
+}
+
+// partitionManifest finds the named partition and reads its manifest, both from one read-only snapshot
+// that is closed before it returns. table is the partition's quoted, schema-qualified name.
+func (s PG) partitionManifest(ctx context.Context, name string) (table string, m PartitionManifest, _ error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return fmt.Errorf("store: begin audit partition export: %w", err)
+		return "", m, fmt.Errorf("store: begin audit partition export: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
 
@@ -148,50 +193,51 @@ func (s PG) ExportAuditPartition(ctx context.Context, name string, header func(P
 	var closed bool
 	switch err := tx.QueryRow(ctx, partitionClosedSQL, name).Scan(&schema, &rel, &closed); {
 	case errors.Is(err, pgx.ErrNoRows):
-		return ErrNotFound
+		return "", m, ErrNotFound
 	case err != nil:
-		return fmt.Errorf("store: look up audit partition: %w", err)
+		return "", m, fmt.Errorf("store: look up audit partition: %w", err)
 	}
 	if !closed {
-		return ErrAuditPartitionOpen
+		return "", m, ErrAuditPartitionOpen
 	}
-	table := pgx.Identifier{schema, rel}.Sanitize()
+	table = pgx.Identifier{schema, rel}.Sanitize()
 
-	m := PartitionManifest{Partition: rel}
+	m = PartitionManifest{Partition: rel}
 	if err := tx.QueryRow(ctx, `SELECT count(*), COALESCE(min(seq), 0), COALESCE(max(seq), 0),
 			COALESCE((extract(epoch FROM min(recorded_at)) * 1000000)::bigint, 0),
 			COALESCE((extract(epoch FROM max(recorded_at)) * 1000000)::bigint, 0) FROM `+table).
 		Scan(&m.Rows, &m.SeqLo, &m.SeqHi, &m.RecordedLoUS, &m.RecordedHiUS); err != nil {
-		return fmt.Errorf("store: read audit partition manifest: %w", err)
+		return "", m, fmt.Errorf("store: read audit partition manifest: %w", err)
 	}
-	if err := header(m); err != nil {
-		return err
-	}
+	return table, m, nil
+}
 
-	rows, err := tx.Query(ctx, `
+// partitionPage reads the next AuditPartitionPageSize rows of table after seq, up to seqHi, in seq order,
+// and has closed its cursor, so its connection is back in the pool, when it returns.
+func (s PG) partitionPage(ctx context.Context, table string, after, seqHi int64) ([]AuditPartitionRow, error) {
+	rows, err := s.Pool.Query(ctx, `
 		SELECT seq, (extract(epoch FROM recorded_at) * 1000000)::bigint,
 		       (extract(epoch FROM time) * 1000000)::bigint,
 		       id, run_id, actor_type, actor, action, target, outcome, source_ip, data::text,
 		       prev_hash, row_hash,
 		       COALESCE(row_hash, audit_row_hash(NULL, id, time, run_id, actor_type, actor, action, target,
 		                                         outcome, source_ip, data))
-		  FROM `+table+` ORDER BY seq`)
+		  FROM `+table+` WHERE seq > $1 AND seq <= $2 ORDER BY seq LIMIT $3`, after, seqHi, AuditPartitionPageSize)
 	if err != nil {
-		return fmt.Errorf("store: read audit partition: %w", err)
+		return nil, fmt.Errorf("store: read audit partition: %w", err)
 	}
 	defer rows.Close()
+	var page []AuditPartitionRow
 	for rows.Next() {
 		var r AuditPartitionRow
 		if err := rows.Scan(&r.Seq, &r.RecordedUS, &r.TimeUS, &r.ID, &r.RunID, &r.ActorType, &r.Actor, &r.Action,
 			&r.Target, &r.Outcome, &r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.FoldHash); err != nil {
-			return fmt.Errorf("store: scan audit partition row: %w", err)
+			return nil, fmt.Errorf("store: scan audit partition row: %w", err)
 		}
-		if err := row(r); err != nil {
-			return err
-		}
+		page = append(page, r)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("store: iterate audit partition: %w", err)
+		return nil, fmt.Errorf("store: iterate audit partition: %w", err)
 	}
-	return nil
+	return page, nil
 }

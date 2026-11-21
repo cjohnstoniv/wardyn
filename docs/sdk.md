@@ -188,7 +188,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
-| `host_marks` | `inspected` the allowed hosts Wardyn opens and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
+| `host_marks` | `inspected` the allowed entries whose every destination Wardyn opens, `partial` (absent when empty) each entry it opens only some destinations of (a wildcard, or a host with no port opened on one port) with those destinations (an empty list: some of it is opened, which is not known; a run recorded before `partial` existed has it worked out from `terminated`), and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
 | `wall_preset` | the run's wall preset (`id`, `name`, `scope`, `group_id`, `version`) and what it `narrowed`, `removed` and `added`; only `scope` for a personal preset read by anyone but its owner |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
@@ -946,6 +946,7 @@ start.
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_decidable_by` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
+| `invalid_service_param` | `GET /runs?service=` is present but not `1` or `0`, an empty value included. |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals` and `GET /runs`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_run_past_lifetime` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the run reached its lifetime cap first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -1403,6 +1404,68 @@ console depends on for its own sign-in/connect doors ([`ui/src/app/lib/api/runs.
 | `model_credential` | `POST /runs`' dispatch-time model-credential gate (`runs_dispatch_llm_mechanism.go`): the run was refused specifically over a model credential — the class the console's sign-in door opens on, deliberately not narrowed further (a renewal that merely did not complete grades live and offers no button). On `/runs/preflight` this 422 also carries `setup_items`: the checklist rows resolved before the refusal, model access aside. |
 | `git_credential` | New Run's per-user Azure DevOps connect gate (`scmaccess.go`, the 0.7.7 relaunch path): admitted, but this person has not connected their own git credential yet. The body may also carry `cause` (additive, optional): `token_expired`, `ended`, `consent_needed`, `blocked`, `permissions_missing` or `ado_pat_needs_console_app`; absent means not connected. |
 
+A model provider's service grant (the `/model-providers/{id}/service-grant` routes, the clean-up retry route and a
+run's model access through a grant) answers with its own reasons:
+
+| Reason | Meaning |
+|---|---|
+| `service_grants_not_activated` | A write that adds or changes a provider's `service_grant` (409): service grants are not switched on for this deployment yet. |
+| `service_grant_not_configured` | The service grant routes (409): the provider has no service grant. |
+| `service_grant_not_listed` | A run's model access through a service grant (403): the run's service identity is not one the grant lists. |
+| `service_grant_unavailable` | (503): the token request did not complete, or the grant's store could not be read. Retry. |
+| `service_grant_refused` | (424): the identity provider, or the stored record, refused the grant. An administrator must check it. |
+| `service_grant_failing` | A provider's setup status cause, not an error body: a live server's latest token request for this provider failed. |
+| `service_grant_destination_changed` | The service grant secret routes (409): the body's token URL, client id or gateway address is not the provider's. |
+| `service_grant_cleanup_pending` | (409): a removed grant's secret is still to be deleted under this provider. |
+| `service_grant_cleanup_not_found` | `POST /service-grant-cleanups/{uid}/retry` (404): no clean-up has that uid. |
+| `service_grant_secret_kept` | A removal or a clean-up retry: the secret's deletion did not finish. It stays listed and is retried. |
+| `service_grant_cleanup_revision_changed` | (409): the secret record was written outside Wardyn after the removal, so it needs reconciling. |
+| `service_grant_cleanup_unsupported` | (409): the secret store keeps no revision, so nothing is deleted. |
+| `service_grant_secret_changed` | (409): the secret record changed while its delete ran, so it is kept. |
+
+A portal with its own identity issuer is refused at registration (`POST /admin/delegates`), at activation and
+retirement (`/admin/portal-issuers`), and at an admission change (`PUT /admin/delegates/{id}/admission`) with these
+reasons:
+
+| Reason | Meaning |
+|---|---|
+| `portal_issuers_not_activated` | (409): issuer portals have not been switched on for this deployment. |
+| `portal_issuers_need_sso` | (409): issuer portals need console sign-in configured, since the console issuer is the one they must not equal. |
+| `portal_registration_invalid` | (422): a registration with no client id, an access-token registration with no audience or scopes, or a malformed `audience` or `required_scopes` value (an audience over 200 bytes or with a control character, too many scopes, or a scope that is not a non-empty word of at most 200 bytes). Registration enforces those size and shape limits. The token exchange repeats only the presence checks (an issuer, a client, and the audience and scopes an access-token registration requires) and then compares the token's claims to the configured values. |
+| `delegate_issuer_pin_required` | (422): an issuer portal names no unit to run in (`run_in_under`). |
+| `delegate_issuer_url_invalid` | (422): the issuer or internal address is not an `https` URL with a host and no user info, query or fragment. |
+| `delegate_internal_issuer_not_allowed` | The internal address names a host that `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` does not list: 422 on `POST /admin/delegates`, and 409 on `POST /governance/changes/{id}/approve` when a held registration's host is no longer listed at approval. |
+| `delegate_issuer_is_console` | (409): the issuer, after normalising, is one this deployment has served as its console issuer. |
+| `delegate_issuer_spelling_conflict` / `delegate_issuer_address_conflict` / `delegate_issuer_profile_conflict` | (409): another spelling of a bound issuer is already registered, the bound issuer fetches from another internal address, or the bound issuer names a person by another claim. |
+| `delegate_namespace_in_use` | (409): stored records already name people under this issuer's key. |
+| `delegate_token_profile_invalid` | (422): `token_profile` is not `okta_access_token` or `okta_id_token`. |
+| `delegate_access_fields_need_access_profile` / `delegate_email_domains_need_id_token` | (422): `audience` or `required_scopes` on an ID-token portal, or `email_domains` on an access-token portal. |
+| `delegate_email_domain_invalid` / `delegate_groups_claim_invalid` | (422): an email domain is empty, has an `@` or is not a host name, or `groups_claim` is not a claim name. |
+| `delegate_user_type_invalid` | (422): `user_type` is missing or names no user type. |
+| `delegate_max_age_invalid` / `delegate_grant_ttl_invalid` / `delegate_grant_ttl_above_max_age` | (422): `max_subject_token_age_seconds` is outside 300 to 600, or `grant_ttl_seconds` is below 300 or above the portal's maximum token age. |
+| `delegate_group_or_portal_managed` / `delegate_portal_managed_with_group` / `delegate_portal_managed_needs_issuer` | (422): an issuer portal with no group must set `portal_managed_admission`; that flag cannot go with a group, and a console-issuer portal cannot set it. |
+| `delegate_claim_incomplete` / `delegate_claim_reserved` / `delegate_claim_invalid` | (422): `required_claim` names only one of claim and value, names a claim that already has a meaning, or its name or value breaks its shape. |
+| `delegate_renewal_needs_issuer` / `delegate_issuer_field_needs_issuer` | (422): `ui_session_renewal`, or another field only an issuer portal has, on a console-issuer registration. |
+| `delegate_renewal_withheld` | (422): `ui_session_renewal`, withheld in this release. |
+| `portal_issuers_statement_required` | `POST /admin/portal-issuers/activate` (422): the activation needs `old_servers_stopped: true`. |
+| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): a database client session in the sampled window has an application label that does not identify a 0.10.2 or later `wardynd`. A current client with a missing or unexpected label is listed too, not only an older server. The answer lists each session: stop it, or check it and confirm with `confirm_listed_sessions`. |
+| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database's sessions for a full two minutes. It warms after a start, and again from the beginning after its samples stop for more than 30 seconds. |
+| `portal_issuer_in_use` / `portal_issuer_not_found` | `DELETE /admin/portal-issuers/{k}` (409, 404): a portal, a person, a grant or a stored rule still names the binding, or no binding has that key. |
+| `delegate_admission_stale` | `PUT /admin/delegates/{id}/admission` (409): the portal's admission rule is no longer the one the change expected. |
+| `delegate_person_not_allowed` / `delegate_person_unknown_portal` | An admin-written person list (422): it gives a portal person an admin, sponsor, approver or console role, or names a portal person whose issuer no portal is registered for. |
+
+A refused token exchange (`POST /api/v1/token`) for an issuer portal answers the client with an OAuth error, which is
+separate from the reason its `delegation.exchange` audit row records. A successful exchange records no denial reason.
+The issuer portal adds the refusal reasons below; the `delegation.exchange` row of [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)
+lists the complete set.
+
+| Reason | Meaning |
+|---|---|
+| `portal_issuer_conflict` | (503): the portal's issuer is this server's own console issuer. |
+| `portal_admission_changed` | (503): the portal's admission rule changed after the token was checked. Retry. |
+| `actor_token_unsupported` | (400): an issuer portal takes no actor token. |
+| `portal_unavailable` | (503): the portal's stores, verifier or issuer set are not available on this server. |
+
 ## Pending approval (governance writes)
 
 A deployment can require a second approver for governance writes: a covered write is
@@ -1576,10 +1639,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
-  (only live runs with no end), `workspace`
+  (only live runs with no end), `service=1` (only runs started with Keep it running, which carry a service spec; applied before paging), `workspace`
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
-- `sponsored=exclude` drops a sponsor's service runs from their own list; no-op where already left out.
+- `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers

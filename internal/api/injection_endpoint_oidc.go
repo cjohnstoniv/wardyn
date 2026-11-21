@@ -86,6 +86,7 @@ func providerKeyGrantScope(run types.AgentRun, lane providerKeyLane) map[string]
 	}
 	if lane.provider.OIDC != nil {
 		snap.AddressDigest = providerAddressDigest(lane.provider)
+		snap.ServiceGrantDigest = serviceGrantSnapshotDigest(lane.provider, lane.owner)
 		scope["require_tls"] = true
 	}
 	scope["snapshot"] = snap
@@ -196,27 +197,12 @@ func (s *Server) resolveEndpointOIDCInjection(w http.ResponseWriter, r *http.Req
 	if run == nil || s.cfg.Store == nil {
 		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, endpointOIDCResolveUnreadable, nil)
 	}
-	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil {
-		// Never resolve against a read that failed: the zero SiteConfig is "no rows".
-		return fail(http.StatusServiceUnavailable, reasonRosterUnreadable, endpointOIDCResolveUnreadable, nil)
+	p, lane, refusal := s.endpointOIDCLiveRow(ctx, *run, rec, minted)
+	if refusal != nil {
+		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
 	}
-	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, *run, rec.Harness)
-	if err != nil {
-		return fail(http.StatusServiceUnavailable, reasonRunUnreadable, endpointOIDCResolveUnreadable, nil)
-	}
-	p, found := modelProviderByID(siteCfg.ModelProviders, providerID)
-	drift := endpointOIDCDrift(rec, p, found && launched, harness)
-	if drift != "" {
-		return fail(http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged, map[string]any{"drift": drift, "owner": rec.OwnerSubject})
-	}
-	lane, ok := providerKeyLaneFor(p, harness)
-	if !ok || minted.Injection.Header != lane.header || minted.Injection.Format != lane.format {
-		return fail(http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged,
-			map[string]any{"drift": "lane_withdrawn", "owner": rec.OwnerSubject})
-	}
-	if !hostEqual(minted.Injection.Host, lane.host) {
-		return fail(http.StatusForbidden, reasonHostNotEndpoint, endpointOIDCResolveHostPin, map[string]any{"host": minted.Injection.Host})
+	if rec.ServiceGrantDigest != "" {
+		return s.resolveServiceGrantInjection(w, r, claims, minted, grantID, rec, p, *run, lane, fail)
 	}
 	access, err := s.RedeemEndpointOIDCAccess(ctx, rec.OwnerSubject, p)
 	if err != nil {
@@ -248,6 +234,44 @@ func (s *Server) resolveEndpointOIDCInjection(w http.ResponseWriter, r *http.Req
 		CredentialExpiresAt: credentialExpiry(access.ExpiresAt),
 	})
 	return true
+}
+
+// endpointOIDCRefusal is a resolve the live row does not allow: the status and reason to answer, and what to audit.
+type endpointOIDCRefusal struct {
+	status       int
+	reason, body string
+	extra        map[string]any
+}
+
+// endpointOIDCLiveRow reads the site configuration now and returns the row and key lane the snapshot's grant
+// still names, or the refusal: a read that failed is 503 (the proxy keeps its earlier header), and anything
+// observed to have moved, a withdrawn or turned-off row, an address, a lane's header, format or host, is 403.
+// The service grant's resolve runs it before the token request and again after it.
+func (s *Server) endpointOIDCLiveRow(ctx context.Context, run types.AgentRun, rec providerGrantSnapshot, minted broker.Minted) (types.ModelProvider, providerKeyLane, *endpointOIDCRefusal) {
+	refuse := func(status int, reason, body string, extra map[string]any) (types.ModelProvider, providerKeyLane, *endpointOIDCRefusal) {
+		return types.ModelProvider{}, providerKeyLane{}, &endpointOIDCRefusal{status, reason, body, extra}
+	}
+	siteCfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		// Never resolve against a read that failed: the zero SiteConfig is "no rows".
+		return refuse(http.StatusServiceUnavailable, reasonRosterUnreadable, endpointOIDCResolveUnreadable, nil)
+	}
+	harness, providerID, launched, err := s.sinkHarnessProvider(ctx, run, rec.Harness)
+	if err != nil {
+		return refuse(http.StatusServiceUnavailable, reasonRunUnreadable, endpointOIDCResolveUnreadable, nil)
+	}
+	p, found := modelProviderByID(siteCfg.ModelProviders, providerID)
+	if drift := endpointOIDCDrift(rec, p, found && launched, harness); drift != "" {
+		return refuse(http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged, map[string]any{"drift": drift, "owner": rec.OwnerSubject})
+	}
+	lane, ok := providerKeyLaneFor(p, harness)
+	if !ok || minted.Injection.Header != lane.header || minted.Injection.Format != lane.format {
+		return refuse(http.StatusForbidden, reasonScopeChanged, endpointOIDCResolveChanged, map[string]any{"drift": "lane_withdrawn", "owner": rec.OwnerSubject})
+	}
+	if !hostEqual(minted.Injection.Host, lane.host) {
+		return refuse(http.StatusForbidden, reasonHostNotEndpoint, endpointOIDCResolveHostPin, map[string]any{"host": minted.Injection.Host})
+	}
+	return p, lane, nil
 }
 
 // endpointOIDCDrift names the first thing that moved between the dispatch-time snapshot and the live row

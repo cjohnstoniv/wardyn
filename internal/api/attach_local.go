@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -96,7 +97,11 @@ type localAttachTarget struct {
 // person's own run on that person's own runner is local: never break-glass (no ticket, local mode,
 // an operator-owned run), never a sponsor, never an organisation's runner (C4).
 func (s *Server) localAttachTargetFor(w http.ResponseWriter, r *http.Request, run types.AgentRun) (localAttachTarget, bool) {
-	t, detail := s.localAttachCheck(r, run)
+	t, detail, err := s.localAttachCheck(r, run)
+	if err != nil { // an issuer portal's opening: the runner could not be read, which is no transport answer
+		refuseIssuerOpeningUnread(r.Context(), w, "runner", attachUnverifiableMsg, err)
+		return t, false
+	}
 	if detail == "" {
 		return t, true
 	}
@@ -105,34 +110,39 @@ func (s *Server) localAttachTargetFor(w http.ResponseWriter, r *http.Request, ru
 	return t, false
 }
 
-func (s *Server) localAttachCheck(r *http.Request, run types.AgentRun) (localAttachTarget, string) {
+// localAttachCheck is the local target, or the 409's detail. err is set only on an issuer portal's opening
+// (issuerOpeningIn) whose runner read failed or ran out: that is the retryable 503, never "not your runner".
+func (s *Server) localAttachCheck(r *http.Request, run types.AgentRun) (localAttachTarget, string, error) {
 	if !s.cfg.AttachLocal {
-		return localAttachTarget{}, localAttachFlagOff
+		return localAttachTarget{}, localAttachFlagOff, nil
 	}
 	ta, ok := ticketActorFromContext(r.Context())
 	if !ok || s.cfg.LocalMode || run.OperatorOwned || ta.actorType != types.ActorHuman || ta.principal == "" ||
 		ta.principal != run.CreatedBy || run.Placement != types.PlacementLocal || run.RunnerID == nil {
-		return localAttachTarget{}, localAttachNotYourRunner
+		return localAttachTarget{}, localAttachNotYourRunner, nil
 	}
 	rs, ok := s.cfg.Store.(interface {
 		GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
 	})
 	if !ok {
-		return localAttachTarget{}, localAttachNotYourRunner
+		return localAttachTarget{}, localAttachNotYourRunner, nil
 	}
 	rn, err := rs.GetRunner(r.Context(), *run.RunnerID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && issuerOpeningIn(r.Context()) {
+		return localAttachTarget{}, "", err
+	}
 	if err != nil || rn.State != types.RunnerClaimed || rn.OwnerKind != types.RunnerOwnerPerson || rn.Owner != ta.principal {
-		return localAttachTarget{}, localAttachNotYourRunner
+		return localAttachTarget{}, localAttachNotYourRunner, nil
 	}
 	sub := s.localAttachSubFor(rn.ID)
 	caps, reported := sub.Caps()
 	if !reported || !s.runnerOnline(rn.ID) {
-		return localAttachTarget{}, localAttachRunnerOffline
+		return localAttachTarget{}, localAttachRunnerOffline, nil
 	}
 	if !caps.LocalAttach {
-		return localAttachTarget{}, localAttachRunnerTooOld
+		return localAttachTarget{}, localAttachRunnerTooOld, nil
 	}
-	return localAttachTarget{runnerID: rn.ID, sub: sub}, ""
+	return localAttachTarget{runnerID: rn.ID, sub: sub}, "", nil
 }
 
 // localAttach is one local session's handler state, beside the socket's webAttach.

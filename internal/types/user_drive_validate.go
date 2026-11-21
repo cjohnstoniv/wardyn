@@ -109,17 +109,21 @@ func ValidateUserDrive(d *UserDrive, runnerTarget string) error {
 }
 
 // ValidateTeamDriveGrant is the allocation rule a drive's team flag adds: a team
-// drive is allocated to groups only and never pins a directory, and
+// drive is allocated to groups, or to an issuer portal (DriveSubjectPortal, which
+// is for a team drive only), and never pins a directory, and
 // members_can_write belongs to a team drive's allocation alone. nil when g may
 // be stored for d.
 func ValidateTeamDriveGrant(d UserDrive, g UserDriveGrant) error {
 	if !d.Team {
+		if g.SubjectType == DriveSubjectPortal {
+			return fmt.Errorf("subject_type: a portal allocation is for a team drive only")
+		}
 		if g.MembersCanWrite {
 			return fmt.Errorf("members_can_write: only a team drive's allocation carries it")
 		}
 		return nil
 	}
-	if g.SubjectType != CapabilitySubjectGroup {
+	if g.SubjectType != CapabilitySubjectGroup && g.SubjectType != DriveSubjectPortal {
 		return fmt.Errorf("subject_type: a team drive is allocated to groups only, not %q", g.SubjectType)
 	}
 	if strings.TrimSpace(g.HomeOverride) != "" {
@@ -179,7 +183,7 @@ func validateDriveHostRoot(d *UserDrive) error {
 // CanonicalGroupSubject the login-time snapshot is built with, so the subject
 // vocabulary matches capabilitySubjects exactly.
 func ValidateUserDriveGrant(g *UserDriveGrant) error {
-	if !g.SubjectType.Valid() {
+	if !g.SubjectType.Valid() && g.SubjectType != DriveSubjectPortal {
 		return fmt.Errorf("subject_type: invalid %q", g.SubjectType)
 	}
 	if g.DriveID == uuid.Nil {
@@ -194,7 +198,13 @@ func ValidateUserDriveGrant(g *UserDriveGrant) error {
 		if g.Subject == "" {
 			return fmt.Errorf("subject: required for subject_type %q", g.SubjectType)
 		}
-		if g.SubjectType == CapabilitySubjectGroup {
+		if g.SubjectType == DriveSubjectPortal {
+			// A portal is named by its delegates.id in canonical lowercase form, the one spelling the
+			// store's check and the resolver compare against.
+			if id, err := uuid.Parse(g.Subject); err != nil || id.String() != g.Subject {
+				return fmt.Errorf("subject: a portal is named by its id, in canonical lowercase form")
+			}
+		} else if g.SubjectType == CapabilitySubjectGroup {
 			// Matched by exact equality against the login-time snapshot
 			// (printable ASCII), via CanonicalGroupSubject rather than a plain
 			// ToLower: ToLower would fold U+212A/U+0130 onto an operator-authored

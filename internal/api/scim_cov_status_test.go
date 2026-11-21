@@ -152,6 +152,24 @@ func TestSCIMCovStatusListsDeactivatedAndPending(t *testing.T) {
 	}
 }
 
+// GET /scim/status lists the identities and failures of the SCIM issuer and tenant it serves, as the sweeps
+// and the SCIM user routes compare rows, never every issuer's.
+func TestSCIMStatus_ScopedToSCIMIssuer(t *testing.T) {
+	st := newSCIMCovStore()
+	e := newSCIMCovEnv(t, st)
+	if w, _ := e.status(); w.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	want := [2]string{scimCovIssuer, scimCovTenant}
+	for _, m := range []string{"ListDeactivatedIdentities", "ListDeprovisionFailures"} {
+		if got, ok := st.scoped[m]; !ok || got != want {
+			t.Errorf("%s was scoped to %v (called %v), want issuer and tenant %v", m, got, ok, want)
+		}
+	}
+}
+
 func TestSCIMCovStatusStoreFailures(t *testing.T) {
 	for _, c := range []struct {
 		name, method string

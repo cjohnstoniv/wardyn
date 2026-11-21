@@ -5,7 +5,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,8 +54,8 @@ type queueAuthority struct {
 	Sponsor string `json:"sponsor,omitempty"`
 	// Delegate and Grant are the portal and delegated token of a portal launch. Grant only fills the
 	// audit rows' via; the start never reads the token's ten-minute expiry.
-	Delegate *uuid.UUID `json:"delegate,omitempty"`
-	Grant    *uuid.UUID `json:"grant,omitempty"`
+	Delegate *uuid.UUID  `json:"delegate,omitempty"`
+	Grant    *queueGrant `json:"grant,omitempty"`
 	// Actor is the agent the portal named on that token; the start's rows replay it beside the portal.
 	Actor *types.DelegationActor `json:"actor,omitempty"`
 	// Device is the laptop that submitted the launch, which carries no person: the start replays the fold
@@ -72,6 +76,50 @@ type queueAuthority struct {
 	PolicyPin string `json:"policy_pin,omitempty"`
 }
 
+// queuePortalGrantPrefix marks the grant of an issuer-portal launch in the stored authority: the field holds
+// "portal:<uuid>" there and a bare uuid for a console portal. The prefix is 7 characters, so the whole is 43,
+// a length uuid.UUID's own text decoding refuses: a 0.10.1 worker decodes the field into a *uuid.UUID, fails,
+// and ends the run before any authority is bound (run_queue_start.go, newQueuedStart), never starting it
+// under a console user type. The prefix must never be 9 characters ("urn:uuid:"), which that decoder reads.
+const queuePortalGrantPrefix = "portal:"
+
+// queueGrant is the delegated token a portal launch carried, and whether it came through an issuer portal.
+type queueGrant struct {
+	ID     uuid.UUID
+	Portal bool
+}
+
+// MarshalJSON writes the bare uuid for a console portal and "portal:<uuid>" for an issuer portal.
+func (g queueGrant) MarshalJSON() ([]byte, error) {
+	text := g.ID.String()
+	if g.Portal {
+		text = queuePortalGrantPrefix + text
+	}
+	return json.Marshal(text)
+}
+
+// UnmarshalJSON reads either form.
+func (g *queueGrant) UnmarshalJSON(b []byte) error {
+	var text string
+	if err := json.Unmarshal(b, &text); err != nil {
+		return err
+	}
+	rest, portal := strings.CutPrefix(text, queuePortalGrantPrefix)
+	id, err := uuid.Parse(rest)
+	if err != nil {
+		return fmt.Errorf("queue authority grant: %w", err)
+	}
+	g.ID, g.Portal = id, portal
+	return nil
+}
+
+// portalIssuerLaunch reports whether a is an issuer-portal person's launch: its grant is encoded as one, or
+// its principal is a portal person. Either marks the launch, so a row missing one mark is still never run
+// under the console's derivation.
+func (a queueAuthority) portalIssuerLaunch() bool {
+	return (a.Grant != nil && a.Grant.Portal) || types.IsPortalPersonPrincipal(a.Sub)
+}
+
 // captureQueueAuthority reads the launch's identity off the request context.
 func captureQueueAuthority(ctx context.Context) queueAuthority {
 	a := queueAuthority{
@@ -87,7 +135,7 @@ func captureQueueAuthority(ctx context.Context) queueAuthority {
 		a.Service, a.Sponsor = name, sponsor
 	}
 	if via, ok := audit.DelegationFrom(ctx); ok {
-		a.Delegate, a.Grant, a.Actor = &via.Delegate, &via.Grant, via.Actor
+		a.Delegate, a.Grant, a.Actor = &via.Delegate, &queueGrant{ID: via.Grant, Portal: types.IsPortalPersonPrincipal(a.Sub)}, via.Actor
 	}
 	if d, ok := deviceFromContext(ctx); ok {
 		a.Device = &d.ID
@@ -136,7 +184,7 @@ func (a queueAuthority) via() (types.DelegationVia, bool) {
 	if a.Delegate == nil || a.Grant == nil {
 		return types.DelegationVia{}, false
 	}
-	return types.DelegationVia{Delegate: *a.Delegate, Grant: *a.Grant, Actor: a.Actor}, true
+	return types.DelegationVia{Delegate: *a.Delegate, Grant: a.Grant.ID, Actor: a.Actor}, true
 }
 
 // identityBlocker is the store's one-statement identity read (store.PG.IdentityBlocked): it needs no
@@ -196,6 +244,9 @@ func (s *Server) queueOwnerLive(ctx context.Context, a queueAuthority, queuedAt 
 // person's sign-in ends the run.
 func (s *Server) queueCurrentRole(st *queuedStart) *queueEnd {
 	a := st.auth
+	if a.portalIssuerLaunch() {
+		return s.queuePortalIssuerRole(st)
+	}
 	if s.cfg.OIDC == nil || a.Sub == "" || a.Service != "" {
 		return nil
 	}
@@ -225,4 +276,80 @@ func narrowRole(launched, derived string) string {
 		return launched
 	}
 	return oidc.RoleUser
+}
+
+// The ends a portal launch's start gives that no console launch has.
+const (
+	queueEndUserTypeUnknown   = "user_type_unknown"
+	queueEndPortalUnitScope   = "portal_unit_scope"
+	queueEndPortalRunScope    = "portal_run_scope"
+	queueUserTypeUnknownHint  = "The user type this portal gives its people no longer exists, so this run was not started."
+	queuePortalUnitScopeHint  = "This run's unit is no longer under the portal's unit, so it was not started."
+	queuePortalPrincipalError = "Queue portal start: the principal is not one of the portal's people"
+)
+
+// queuePortalRunScope ends a run that mounted a portal's drive unless it starts through the portal that created it: the
+// row's creator (immutable) must be the portal the stored authority names, or the replay would resolve one portal's
+// drive and attribute it to the other. It runs for every queued start, ahead of queueCurrentRole, because the fold reads
+// the authority's delegate whether or not the authority marks itself a portal launch (portalIssuerLaunch), so a row whose
+// marks and delegate disagree is judged by the delegate too. A run with no portal drive is not touched.
+func queuePortalRunScope(run types.AgentRun, a queueAuthority) *queueEnd {
+	if run.PortalDrives && (run.CreatedVia == nil || a.Delegate == nil || *run.CreatedVia != *a.Delegate) {
+		return &queueEnd{token: queueEndPortalRunScope, hint: portalRunScopeMsg}
+	}
+	return nil
+}
+
+// queuePortalIssuerRole is queueCurrentRole for an issuer-portal person's launch (the stored authority marks
+// it). The role stays user and is never derived. No role mapping or user-type-from-mapping is read: the user
+// type is the live portal row's, and must still exist. The portal row must be live (queueOwnerStanding), the
+// principal must be one of that portal's people (the reverse check), and the unit the launch froze must still
+// be under the portal's pin in the tree as it stands (the resolved context is then held to it by sameUnit).
+func (s *Server) queuePortalIssuerRole(st *queuedStart) *queueEnd {
+	a := st.auth
+	failed := &queueEnd{hint: queueStartFailedHint}
+	via, ok := a.via()
+	dr, drOK := s.cfg.Store.(store.DelegateReader)
+	if !ok || !drOK {
+		return failed
+	}
+	d, err := dr.GetDelegateByID(st.ctx, via.Delegate)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return &queueEnd{token: string(types.RunEndQueuePortalRevoked), hint: types.RunEndQueuePortalRevoked.Sentence()}
+	case err != nil:
+		return failed
+	case d.RevokedAt != nil:
+		return &queueEnd{token: string(types.RunEndQueuePortalRevoked), hint: types.RunEndQueuePortalRevoked.Sentence()}
+	}
+	if d.Issuer == "" || d.IssuerKey == "" || !strings.HasPrefix(a.Sub, types.PortalPersonPrefix+d.IssuerKey+":") {
+		slog.ErrorContext(st.base, queuePortalPrincipalError, slog.String("run_id", st.run.ID.String()), slog.String("delegate", d.ID.String()))
+		return failed
+	}
+	userTypes, err := s.cfg.Store.ListUserTypes(st.ctx)
+	if err != nil {
+		return failed
+	}
+	found := false
+	for _, t := range userTypes {
+		if t.ID == d.UserType {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return &queueEnd{token: queueEndUserTypeUnknown, hint: queueUserTypeUnknownHint}
+	}
+	pin, refusal := s.portalPinOf(st.ctx)
+	switch {
+	case refusal != nil:
+		return failed
+	case !pin.holds(st.launch.UnitID): // the unit frozen at enqueue; the row's own unit is stamped by the start
+		return &queueEnd{token: queueEndPortalUnitScope, hint: queuePortalUnitScopeHint}
+	}
+	a.Role, a.UserType = oidc.RoleUser, d.UserType
+	if err := st.bind(a); err != nil {
+		return failed
+	}
+	return nil
 }

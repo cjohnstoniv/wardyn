@@ -71,11 +71,14 @@ type RunPolicyWallPreset struct {
 }
 
 // RunPolicyHostMarks lists the allowed_domains entries the proxy terminates TLS
-// for (Inspected). Every other allowed entry passes through unread (Tunnel only).
+// for on every destination they allow (Inspected). Partial maps an entry it opens only some destinations of
+// (a wildcard, or a host with no port opened on one port) to those destinations. Every other allowed
+// entry passes through unread (Tunnel only).
 // Terminated is every host the proxy terminates: "host" on any port, "host:port" scoped to one.
 type RunPolicyHostMarks struct {
-	Inspected  []string `json:"inspected"`
-	Terminated []string `json:"terminated"`
+	Inspected  []string            `json:"inspected"`
+	Partial    map[string][]string `json:"partial,omitempty"`
+	Terminated []string            `json:"terminated"`
 	// Outside is the Terminated hosts the proxy opens on a port no allowed_domains entry names; under
 	// allow-all, every one it opens, whatever the allowlist names. It can overlap allowed_domains.
 	Outside []string `json:"outside"`

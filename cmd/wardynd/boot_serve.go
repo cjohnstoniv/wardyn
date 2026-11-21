@@ -218,10 +218,16 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	// Provider service grants: every replica warms and reports its own tokens, with or
+	// without a runner (a headless API serves them too); the claimed clean-up of a
+	// removed grant runs on the sweeper leader only.
+	go goSafe("service.grant.refresher", func() { srv.StartServiceGrantRefresher(rootCtx) })
+	leaderGo(rootCtx, leader, "service.grant.cleanup", srv.RunServiceGrantCleanup)
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
+	startPortalActivationMonitor(rootCtx, srv)
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
@@ -283,6 +289,15 @@ func warnSmallPool(maxConns int32) {
 	}
 	slog.Warn("wardynd: pool_max_conns below 4 — the lifecycle reaper's tick and the terminal-sandbox sweep's tick can overlap, each holding one connection for its lock while its queries take another; requests can block waiting for a connection. Below 6, a sign-in during a tick is not serialized (auth.signin_unserialized)",
 		slog.Int("pool_max_conns", int(maxConns)))
+}
+
+// seedBootState writes what a rebuilt or upgraded database starts with, before anything is served: the network
+// settings from WARDYN_SITE_CONFIG_SEED_FILE (nil seeds nothing), then the remote-provided runner pool.
+func seedBootState(ctx context.Context, srv *api.Server, seed *api.SiteConfigSeed) error {
+	if err := srv.SeedSiteConfig(ctx, seed); err != nil {
+		return err
+	}
+	return srv.BootstrapRunnerPools(ctx)
 }
 
 // bindSSHGatewayEarly is WARDYN_SSH_BIND_EARLY: with it on, the SSH gateway's address is bound before the

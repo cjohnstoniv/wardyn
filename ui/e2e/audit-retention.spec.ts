@@ -79,6 +79,9 @@ test.describe("Audit retention (security admin)", () => {
     const status = await real.json();
     status.partitions[0].eligible = true;
     delete status.partitions[0].refusal;
+    // A cutoff in the middle of a day, with a fraction: the question must say exactly where it cuts.
+    status.cutover = "2026-10-03T12:34:56.789Z";
+    status.partitions[0].hi = status.cutover;
     await page.route("**/api/v1/audit/retention", (route: Route) => route.fulfill({ json: status }));
     await openRetention(page);
 
@@ -87,7 +90,7 @@ test.describe("Audit retention (security admin)", () => {
     await legacy.getByRole("button", { name: "Drop" }).click();
 
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText(/^Drop every event before \d+ \w+ \d{4}\?$/)).toBeVisible();
+    await expect(dialog.getByText("Drop every event recorded before 3 Oct 2026, 12:34:56.789 UTC?")).toBeVisible();
     const confirm = dialog.getByRole("button", { name: "Drop partition" });
     await expect(confirm).toBeDisabled();
     await dialog.getByLabel("Digest from the archive's footer").fill("0".repeat(64));

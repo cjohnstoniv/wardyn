@@ -50,8 +50,9 @@ ISS=https://token.actions.githubusercontent.com
 for img in $IMAGES; do
   ref="ghcr.io/cjohnstoniv/$img:$V"
   digest=$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' 2>"$OUT/imagetools-$img.err" | tr -d '"')
-  plats=$(docker buildx imagetools inspect "$ref" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
   if [[ -z "$digest" ]]; then echo "FAIL $img: no index digest"; tail -3 "$OUT/imagetools-$img.err"; fails=$((fails+1)); continue; fi
+  # The tag is mutable and is resolved once, above: the platform list is read from that digest, the one cosign verifies below.
+  plats=$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/$img@$digest" --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null)
   # Every published index must carry both laptop architectures (an arm64 laptop pulls the same tag).
   for plat in linux/amd64 linux/arm64; do
     [[ " $plats" == *" $plat "* ]] || { echo "FAIL $img: index has no $plat [$plats]"; fails=$((fails+1)); }

@@ -117,6 +117,22 @@ describe("runs.listRunsFiltered — sponsored", () => {
   });
 });
 
+describe("runs.listRunsFiltered — service", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends service=1 only when asked", async () => {
+    await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("service=");
+    await runs.listRunsFiltered({ view: "user", service: true });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("service=1");
+  });
+});
+
 // #159: opting into BOTH limit and offset switches listRuns() onto explicit
 // server-side paging and widens its return to { runs, truncated } — reading
 // X-Wardyn-Truncated off the response, which unwrapList's bare array return

@@ -432,6 +432,9 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		return
 	}
 	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d, refuseIfAllocated)
+	if portalDriveEditRefused(w, err) {
+		return
+	}
 	// The three 409s are three because they have three remedies. All
 	// of them wrap store.ErrConflict, so the STATUS is already right and the
 	// SENTENCE is what must differ: collapsing the two arms below into "a user
@@ -657,16 +660,24 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	if before.GrantCount == 0 {
 		return 0, "", "", driveRehome{}, true
 	}
+	// Only the allocations whose storage object really changes are re-homed. A portal's folder is named by the portal
+	// and the drive ids alone, so of the five fields only a backend change (a Docker volume becoming a claim) moves
+	// it; every other allocation is named by all five. An edit that moves none is acknowledged without a claim of a
+	// move, still guarded against a person's allocation arriving before the write lands.
+	moved, changes := driveRehomedAllocations(*before, d, changes)
+	if moved == 0 {
+		return 0, "", "", driveRehome{}, true
+	}
 	// Confirmed, and the audit row has to say so: `drive.write` covers a
 	// cosmetic edit and one that moved every allocated member's storage, and
 	// without this flag an auditor cannot tell them apart after the fact.
 	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
 		// The refusal this confirmation overrode named both facts; the audit row
 		// now carries them, so the log can answer which objects were orphaned.
-		return 0, "", "", driveRehome{confirmed: true, fields: changes, subjects: before.GrantCount}, false
+		return 0, "", "", driveRehome{confirmed: true, fields: changes, subjects: moved}, false
 	}
 	them := "it"
-	if before.GrantCount > 1 {
+	if moved > 1 {
 		them = "them"
 	}
 	// Names an action its reader can take. The console has no confirm affordance
@@ -681,7 +692,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
-		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
+		pluralDriveSubjects(moved), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
 }
 
 // driveRehome is what the re-home guard decided, carried to the audit row: a
@@ -693,37 +704,6 @@ type driveRehome struct {
 	confirmed bool
 	fields    []string
 	subjects  int
-}
-
-// driveGrantConflictMsg is the ONE store.ErrConflict this write can raise, told
-// apart by the request's own tri-state rather than by a second read.
-//
-// The two causes are mutually exclusive by construction, which is what makes
-// this a decision and not a guess (see PG.UpsertUserDriveGrant): the
-// uniqueness guard short-circuits on an EMPTY home_override and an unstated one
-// is always empty, while the re-home guard is disabled outright by a stated
-// one. So exactly one of them can have fired.
-//
-// The RE-HOME half takes 409 for driveRehomeGuard's reason — "the state of this
-// resource makes that unsafe" — and names the act rather than the field, because
-// an admin who sent a priority edit has no idea they were about to move
-// somebody's storage. Re-sending the name they want is the confirmation; "" is
-// how they clear it deliberately.
-//
-// The UNIQUENESS half names NO subject, for handleDeleteUserDrive's reason: the
-// allocations table the admin is looking at already lists every override, and a
-// name read here would be a second, later answer from a read the refusal does
-// not need.
-func driveGrantConflictMsg(g types.UserDriveGrant, homeOverrideStated bool) string {
-	if !homeOverrideStated {
-		return "this allocation pins a directory name and your request did not mention home_override — writing it " +
-			"would CLEAR that name, so this subject's next run would mount a different object and the one holding " +
-			"their work would be left behind with nothing in Wardyn naming it. Re-send with home_override set to " +
-			"the name you want kept, or to \"\" to drop it deliberately"
-	}
-	return fmt.Sprintf("another allocation on this drive already uses the "+
-		"directory name %q — a directory name is one person's, which is why a group allocation may not "+
-		"carry one; pick a different name or remove the allocation that holds it", g.HomeOverride)
 }
 
 // handleDeleteUserDrive removes a drive (204), or 409 when it is still
@@ -890,7 +870,11 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	}
 	g.ID = uuid.New()
 	g.CreatedBy = principalFromRequest(r)
-	saved, removed, done, err := s.upsertUserDriveGrantAs(w, r, g, homeOverrideStated, req.Additional)
+	upsert := s.upsertUserDriveGrantAs
+	if g.SubjectType == types.DriveSubjectPortal {
+		upsert = s.upsertPortalDriveGrant
+	}
+	saved, removed, done, err := upsert(w, r, g, homeOverrideStated, req.Additional)
 	if done {
 		return
 	}
@@ -909,6 +893,10 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// allocations table the admin is looking at already lists every override,
 	// and a name read here would be a second, later answer from a read the
 	// refusal does not need.
+	if errors.Is(err, store.ErrDriveGrantTeamRule) {
+		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict, driveGrantTeamChangedMsg)
+		return
+	}
 	if errors.Is(err, store.ErrConflict) {
 		writeErrorReason(w, http.StatusConflict, reasonUserDriveGrantConflict, driveGrantConflictMsg(g, homeOverrideStated))
 		return

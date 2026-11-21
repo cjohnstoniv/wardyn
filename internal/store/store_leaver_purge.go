@@ -274,26 +274,31 @@ type DeprovisionFailure struct {
 	LastError  string
 }
 
-// ListDeactivatedIdentities is the identities deactivated and not purged, most recently deactivated
-// first, at most limit.
-func (s PG) ListDeactivatedIdentities(ctx context.Context, limit int) ([]PrincipalIdentity, error) {
+// ListDeactivatedIdentities is the identities of the given issuer, and of the tenant when one is given and
+// the row records one, that are deactivated and not purged, most recently deactivated first, at most limit.
+// The scope is decided before the limit, as the sweep's selectors do: another issuer's identity, a portal
+// person's included, must not fill the page or be listed.
+func (s PG) ListDeactivatedIdentities(ctx context.Context, issuer, tenant string, limit int) ([]PrincipalIdentity, error) {
 	return collect(ctx, s.Pool, "list", "deactivated identities", `SELECT `+principalIdentityCols+`
-		FROM principal_identities WHERE deactivated_at IS NOT NULL AND purged_at IS NULL
-		ORDER BY deactivated_at DESC, id LIMIT $1`, []any{limit}, scanPrincipalIdentity)
+		FROM principal_identities i WHERE i.deactivated_at IS NOT NULL AND i.purged_at IS NULL
+		AND i.issuer = $2 AND ($3::text = '' OR i.tenant_id = '' OR i.tenant_id = $3::text)
+		ORDER BY i.deactivated_at DESC, i.id LIMIT $1`, []any{limit, issuer, tenant}, scanPrincipalIdentity)
 }
 
 // ListDeprovisionFailures is the suspend and purge ledger rows that are pending with a recorded error
 // for an identity still deactivated or purged (the sweeper's scope: a reactivated person's leftover
 // rows are not unfinished work) and every owed refusal row whatever the identity's state, oldest identity first, at most limit. One row per identity, kind and step: a step that fails for
-// several targets is listed once, with the error of the one touched last.
-func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error) {
+// several targets is listed once, with the error of the one touched last. Only an identity of the given issuer,
+// and of the tenant when one is given and the row records one, is listed, decided before the limit.
+func (s PG) ListDeprovisionFailures(ctx context.Context, issuer, tenant string, limit int) ([]DeprovisionFailure, error) {
 	return collect(ctx, s.Pool, "list", "deprovision failures", `
 		SELECT j.identity_id, j.kind, j.step, (array_agg(j.last_error ORDER BY j.updated_at DESC))[1]
 		  FROM deprovision_jobs j JOIN principal_identities i ON i.id = j.identity_id
 		 WHERE j.state = 'pending' AND j.last_error <> '' AND j.kind IN ('suspend', 'purge')
 		   AND (i.deactivated_at IS NOT NULL OR i.purged_at IS NOT NULL OR starts_with(j.step, $2))
+		   AND i.issuer = $3 AND ($4::text = '' OR i.tenant_id = '' OR i.tenant_id = $4::text)
 		 GROUP BY j.identity_id, j.kind, j.step
-		 ORDER BY min(j.created_at), j.identity_id, j.kind, j.step LIMIT $1`, []any{limit, JobStepRefusalAudit}, func(r pgx.Row) (DeprovisionFailure, error) {
+		 ORDER BY min(j.created_at), j.identity_id, j.kind, j.step LIMIT $1`, []any{limit, JobStepRefusalAudit, issuer, tenant}, func(r pgx.Row) (DeprovisionFailure, error) {
 		var f DeprovisionFailure
 		return f, r.Scan(&f.IdentityID, &f.Kind, &f.Step, &f.LastError)
 	})

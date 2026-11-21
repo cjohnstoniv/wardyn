@@ -22,9 +22,25 @@ export function monthLabel(iso: string): string {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 
+/**
+ * The exact instant a legacy drop cuts at, as recorded time in UTC: the destructive question must not read as
+ * keeping the day when the cutoff falls mid-day. Seconds always show, and a fraction when the cutoff has one.
+ */
+export function cutoffLabel(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const fraction = /\.\d+/.exec(iso)?.[0] ?? "";
+  return `${dayLabel(iso)}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}${fraction} UTC`;
+}
+
 /** The legacy partition ends where the log started splitting by month. */
 export function legacyDate(p: AuditRetentionPartition, cutover: string): string {
   return dayLabel(p.hi ?? cutover);
+}
+
+/** The legacy partition's exclusive upper bound, to the second. */
+export function legacyCutoff(p: AuditRetentionPartition, cutover: string): string {
+  return cutoffLabel(p.hi ?? cutover);
 }
 
 /** A partition's "Covers" text: its month, or everything before the cutover for the legacy one. */

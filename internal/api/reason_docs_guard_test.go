@@ -316,14 +316,16 @@ func TestReasonDocsMatchReasonsGo(t *testing.T) {
 // name.
 var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-// reasonsGoFiles is every file the closed set is declared in. reasons.go's header comment explains the split:
-// #656 slice 3 pushed reasons.go past scripts/check-file-size.sh's 1000-line gate, so reasons_routes.go continues
-// it, and reasons_revive.go holds the revive block moved out of reasons_routes.go for the same reason. The others
-// keep one surface's reasons beside its code: reasons_governance.go the run-context reasons,
-// reasons_kept_machine.go the kept-machine ones, reasons_desktop_review.go the reviewed-download ones and
-// reasons_policies.go those of /api/v1/policies. Every reader of the whole set (this guard, and the coverage guard in
-// reason_coverage_guard_test.go) reads this list, so a file left off it hides its values from both.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go"}
+// reasonsGoFiles is every file the closed set is declared in. reasons.go's header comment explains the split: #656
+// slice 3 pushed reasons.go past scripts/check-file-size.sh's 1000-line gate, so reasons_routes.go continues it,
+// and reasons_revive.go holds the revive block moved out of reasons_routes.go for the same reason. The others keep
+// one surface's reasons beside its code: reasons_governance.go the run-context reasons, reasons_kept_machine.go the
+// kept-machine ones, reasons_desktop_review.go the reviewed-download ones, reasons_policies.go those of
+// /api/v1/policies, reasons_service_grant.go the model provider service grant ones and reasons_portal_exchange.go
+// and reasons_portal_registration.go the issuer portal ones. Every reader of the whole set (this guard, and the
+// coverage guard in reason_coverage_guard_test.go) reads this list, so a file left off it hides its values from
+// both.
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go", "reasons_service_grant.go", "reasons_portal_exchange.go", "reasons_portal_registration.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a

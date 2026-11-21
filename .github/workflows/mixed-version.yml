@@ -1,0 +1,246 @@
+name: Mixed version (0.10.1 replica beside this tree)
+
+# The case of an old replica that is still running when the first new replica migrates, isolated in CI. The
+# published v0.10.1 wardynd boots over the schema this tree migrated
+# (WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true is the break-glass for exactly that) as a WARDYN_HA replica beside this
+# tree's own, in one kind cluster. The job proves what the activation barrier promises:
+#   1. the operator's activation is vetoed (409 portal_issuers_old_server_suspected) once the new replica's
+#      rolling sample has seen the old one, and nothing is switched on;
+#   2. the same call with confirm_listed_sessions succeeds, and its audit row names the old replica's own session;
+#      and the veto stays refused for the unconfirmed call until then.
+# Then, on issuer-portal state seeded into the shared database (.github/mixed-version/portal-artifacts.sh):
+#   3. the old server's own entry points refuse every issuer-portal artifact, beside a legacy portal it still
+#      serves, and its revoke of an issuer portal ends that portal's grant on the new server;
+#   4. runs queued through this tree's own launch path, then taken by the old worker with the new replica scaled
+#      to zero: it ends the issuer-portal one before binding any authority, with the start-failed hint, and
+#      dispatches nothing, and it binds and starts the console-portal one;
+#   5. the old server's sign-in callback, against a fake issuer the job starts, refuses an issuer-portal person
+#      the way 0.10.1 does (a redirect to auth_error=sign_in_refused, no session, an auth.fail row naming
+#      reserved_principal), and signs in an ordinary person;
+#   6. the service-grant tests that need the released v0.10.1 wardynd and CLI run against them
+#      (.github/mixed-version/released-service-grant-tests.sh).
+# It is not a supported runtime, it only shows the fence. Dispatch it, or call it from the train.
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_image_tag:
+        description: "Tag of ghcr.io/cjohnstoniv/wardynd to run as the old replica (the supported base is v0.10.1; a v-less tag, as publish-image.yml pushes)"
+        type: string
+        default: "0.10.1"
+  workflow_call:
+    inputs:
+      old_image_tag:
+        type: string
+        default: "0.10.1"
+
+permissions:
+  contents: read
+
+jobs:
+  mixed-version:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 50
+    env:
+      NS: wardyn-mixed
+      OLD_IMAGE: ghcr.io/cjohnstoniv/wardynd
+      OLD_TAG: ${{ inputs.old_image_tag || '0.10.1' }}
+      # The v0.10.1 index digest the release record lists: the 0.10.1 case (the default, and what the train
+      # runs) runs exactly that image, whatever the tag points at now. Another tag runs unpinned.
+      OLD_DIGEST: ${{ (inputs.old_image_tag || '0.10.1') == '0.10.1' && 'sha256:4435df7c2f2aca67f161b085fcb7b4db54bae8ea6dbb0ffadcf15df92354c079' || '' }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - name: Free disk for the images and the kind node
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|postgres:16)@'
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
+        with:
+          version: latest
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+        id: buildx
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+          use: false
+      - name: Build this tree's wardynd (the new replica)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.wardynd
+          tags: wardyn/wardynd:kind-test
+          load: true
+          cache-from: type=gha,scope=wardynd
+      - name: Build wardyn-proxy (the k8s runner refuses to construct without k8s.proxyImage)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:local
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
+      - uses: ./.github/actions/kind-binary
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          cluster_name: wardyn-mixed
+          # The k8s runner refuses to boot on a cluster whose CNI does not enforce NetworkPolicy (its egress
+          # canary), and kind's default kindnet does not: the conformance config and the pinned Calico below
+          # are ci.yml's conformance-k8s recipe.
+          config: deploy/kind/conformance-kind-config.yaml
+          wait: 90s
+      - name: Install Calico (single-file, version-pinned manifest, NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
+      - name: Load the new image into kind, pull the old one
+        run: |
+          set -euo pipefail
+          kind load docker-image wardyn/wardynd:kind-test wardyn/wardyn-proxy:local --name wardyn-mixed
+          if [ -n "$OLD_DIGEST" ]; then
+            docker pull "${OLD_IMAGE}@${OLD_DIGEST}"
+            docker tag "${OLD_IMAGE}@${OLD_DIGEST}" "${OLD_IMAGE}:${OLD_TAG}"
+          else
+            docker pull "${OLD_IMAGE}:${OLD_TAG}"
+          fi
+          kind load docker-image "${OLD_IMAGE}:${OLD_TAG}" --name wardyn-mixed
+      - name: Postgres, one age key and one admin token for both replicas
+        run: |
+          set -euo pipefail
+          # The mirror step only warns when it has no copy, and a runner may already hold another postgres:16:
+          # run the digest deploy/base-images.txt pins, from the local store, else a pull (through the mirror
+          # when it is up), else fail.
+          pg_digest=$(grep -E '^tag docker\.io/library/postgres:16@' deploy/base-images.txt | head -n1 | sed 's/.*@//')
+          [ -n "$pg_digest" ] || { echo "::error::no postgres:16 pin in deploy/base-images.txt"; exit 1; }
+          pg_have=$(docker image inspect --format '{{join .RepoDigests " "}}' postgres:16 2>/dev/null || :)
+          case "$pg_have" in
+            *"@$pg_digest"*) ;;
+            *)
+              docker pull -q "docker.io/library/postgres@$pg_digest" >/dev/null \
+                || { echo "::error::postgres:16 pinned digest $pg_digest unavailable"; exit 1; }
+              docker tag "docker.io/library/postgres@$pg_digest" postgres:16 ;;
+          esac
+          kind load docker-image postgres:16 --name wardyn-mixed
+          kubectl create namespace "$NS"
+          age_key=$(docker run --rm wardyn/wardynd:kind-test -gen-age-key)
+          kubectl -n "$NS" create secret generic wardyn-postgres-dsn \
+            --from-literal=dsn="postgres://wardyn:wardyn@postgres:5432/wardyn?sslmode=disable" \
+            --from-literal=age-key="$age_key"
+          t=$(openssl rand -hex 20)
+          echo "::add-mask::$t"
+          echo "ADMIN_TOKEN=$t" >> "$GITHUB_ENV"
+          kubectl -n "$NS" create deployment postgres --image=postgres:16
+          kubectl -n "$NS" set env deployment/postgres POSTGRES_USER=wardyn POSTGRES_PASSWORD=wardyn POSTGRES_DB=wardyn
+          kubectl -n "$NS" expose deployment postgres --port=5432
+          kubectl -n "$NS" rollout status deployment/postgres --timeout=120s
+      # The new replica first: it runs the migrations, so the old one boots over a schema it does not ship.
+      - name: Install the new replica (WARDYN_HA, this tree's image)
+        run: |
+          set -euo pipefail
+          helm install new ./deploy/helm/wardyn --namespace "$NS" \
+            -f .github/mixed-version/values.yaml \
+            --set image.repository=wardyn/wardynd --set image.tag=kind-test \
+            --set auth.adminToken.value="$ADMIN_TOKEN"
+          kubectl -n "$NS" rollout status deployment/new-wardyn --timeout=300s
+      - name: Install the old replica (published image, break-glass migration check, WARDYN_HA)
+        run: |
+          set -euo pipefail
+          helm install old ./deploy/helm/wardyn --namespace "$NS" \
+            -f .github/mixed-version/values.yaml \
+            --set image.repository="$OLD_IMAGE" --set image.tag="$OLD_TAG" --set image.digest="$OLD_DIGEST" \
+            --set auth.adminToken.value="$ADMIN_TOKEN" \
+            --set 'extraEnv[0].name=WARDYN_ALLOW_UNKNOWN_MIGRATIONS' --set-string 'extraEnv[0].value=true'
+          kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=300s || {
+            kubectl -n "$NS" logs deployment/old-wardyn --tail=100; exit 1; }
+          if [ -n "$OLD_DIGEST" ]; then
+            image=$(kubectl -n "$NS" get deployment/old-wardyn -o jsonpath='{.spec.template.spec.containers[0].image}')
+            [ "$image" = "${OLD_IMAGE}:${OLD_TAG}@${OLD_DIGEST}" ] || { echo "::error::the old replica runs '$image', not ${OLD_IMAGE}:${OLD_TAG}@${OLD_DIGEST}"; exit 1; }
+          fi
+      - name: Find the old replica's database session
+        run: |
+          set -euo pipefail
+          old_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/instance=old -o jsonpath='{.items[0].status.podIP}')
+          new_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/instance=new -o jsonpath='{.items[0].status.podIP}')
+          [ -n "$old_ip" ] && [ -n "$new_ip" ] && [ "$old_ip" != "$new_ip" ]
+          # The old replica holds at least one session from its own pod address, the new one's are its own.
+          n=$(kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
+            "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$old_ip' AND datname = current_database()")
+          [ "$n" -ge 1 ] || { echo "::error::the old replica ($old_ip) has no session on the database"; exit 1; }
+          # And the new replica holds at least one session labelled as a current wardynd (cmd/wardynd/db_label.go:
+          # wardynd/<version>/<replica>, a 0.10.2 build or a 0.10.2 prerelease), so the veto's lack of the new
+          # replica's address below is read off a correctly identified new server, not off a missing one.
+          current_label='^wardynd/0[.]10[.]2(-[0-9A-Za-z.-]+)?/[A-Za-z0-9][A-Za-z0-9._-]*$'
+          n=$(kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
+            "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$new_ip' AND datname = current_database() AND application_name ~ '$current_label'")
+          [ "$n" -ge 1 ] || { echo "::error::the new replica ($new_ip) has no session labelled wardynd/0.10.2/<replica> on the database"; exit 1; }
+          echo "OLD_IP=$old_ip" >> "$GITHUB_ENV"
+          echo "NEW_IP=$new_ip" >> "$GITHUB_ENV"
+      - name: The activation is vetoed beside the old replica, then runs with the audited override
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubectl -n "$NS" port-forward svc/new-wardyn 18080:8080 >/tmp/pf.log 2>&1 &
+          trap 'kill %1 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1 && break; sleep 1; done
+          call() { curl -sS -o /tmp/out.json -w '%{http_code}' -X POST http://127.0.0.1:18080/api/v1/admin/portal-issuers/activate \
+            -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -d "$1"; }
+          # The new replica answers warming for its first two minutes; the veto follows once the sample is full.
+          vetoed=0
+          for _ in $(seq 1 40); do
+            code=$(call '{"old_servers_stopped":true}')
+            if [ "$code" = 409 ] && grep -q portal_issuers_old_server_suspected /tmp/out.json; then vetoed=1; break; fi
+            if [ "$code" != 409 ] || ! grep -q portal_issuers_sample_warming /tmp/out.json; then
+              echo "::error::activate answered $code $(cat /tmp/out.json)"; exit 1; fi
+            sleep 10
+          done
+          [ "$vetoed" = 1 ] || { echo "::error::the activation was never vetoed beside the old replica"; exit 1; }
+          echo "vetoed: $(cat /tmp/out.json)"
+          # The veto lists the old replica's session by its pod address, and not the new replica's.
+          jq -e --arg ip "$OLD_IP" '[.sessions[] | select(.client_addr | startswith($ip + "/") or . == $ip)] | length >= 1' /tmp/out.json >/dev/null \
+            || { echo "::error::the veto does not list the old replica's session ($OLD_IP)"; exit 1; }
+          jq -e --arg ip "$NEW_IP" '[.sessions[] | select(.client_addr | startswith($ip + "/") or . == $ip)] | length == 0' /tmp/out.json >/dev/null \
+            || { echo "::error::the veto lists the new replica's own session ($NEW_IP)"; exit 1; }
+          # No statement, no activation; and the unconfirmed call is still vetoed.
+          [ "$(call '{}')" = 422 ] || { echo "::error::an activation without the statement was not 422"; exit 1; }
+          [ "$(call '{"old_servers_stopped":true}')" = 409 ] || { echo "::error::the unconfirmed call was not still vetoed"; exit 1; }
+          # The operator's override succeeds, and its audit row names the old replica's session.
+          code=$(call '{"old_servers_stopped":true,"confirm_listed_sessions":true}')
+          [ "$code" = 200 ] || { echo "::error::the override answered $code $(cat /tmp/out.json)"; exit 1; }
+          curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" 'http://127.0.0.1:18080/api/v1/audit?action=portal_issuers.activate_override' | tee /tmp/audit.json
+          jq -e --arg ip "$OLD_IP" '[.[] | select(.action == "portal_issuers.activate_override") | .data.sessions[]? | select(endswith("@" + $ip + "/32") or endswith("@" + $ip))] | length >= 1' /tmp/audit.json >/dev/null \
+            || { echo "::error::no portal_issuers.activate_override row names the old replica's session ($OLD_IP)"; exit 1; }
+          # A second call finds it already on.
+          code=$(call '{"old_servers_stopped":true}')
+          [ "$code" = 200 ] && jq -e '.already_activated == true' /tmp/out.json >/dev/null || { echo "::error::a repeat activation answered $code $(cat /tmp/out.json)"; exit 1; }
+      - name: Seed issuer-portal artifacts into the shared database
+        run: bash .github/mixed-version/portal-artifacts.sh seed
+      - name: The old server refuses every issuer-portal artifact, and still serves a legacy portal
+        run: bash .github/mixed-version/portal-artifacts.sh old-refusals
+      - name: The old server's revoke of an issuer portal ends its grant on the new server
+        run: bash .github/mixed-version/portal-artifacts.sh old-revoke
+      # It scales the new replica to zero, so only the old worker can take the row.
+      - name: The old worker ends a queued issuer-portal run and never starts it, and starts a console-portal one
+        run: bash .github/mixed-version/portal-artifacts.sh old-worker
+      # Last of the cluster checks: it upgrades the old replica in place with a sign-in issuer.
+      - name: The old server's sign-in callback refuses an issuer-portal person, and signs in an ordinary one
+        run: bash .github/mixed-version/portal-artifacts.sh old-callback
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: The service-grant tests against the released v0.10.1 wardynd and CLI
+        run: bash .github/mixed-version/released-service-grant-tests.sh
+      - name: Logs on failure
+        if: failure()
+        run: |
+          kubectl -n "$NS" get pods -o wide || true
+          kubectl -n "$NS" logs deployment/new-wardyn --tail=200 || true
+          kubectl -n "$NS" logs deployment/old-wardyn --tail=200 || true

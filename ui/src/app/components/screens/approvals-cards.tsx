@@ -629,7 +629,7 @@ export function DecidedRow({
           run ended first. Full width (basis-full) so it reads as a sentence
           under the row rather than a fourth column. */}
       {item.state === "CANCELLED" && (
-        <p className="basis-full text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
+        <p className="basis-full text-xs text-muted-foreground">{APPROVAL.cancelledBody(item.reason)}</p>
       )}
       {/* How the decision was made, under the row like the sentences above and below it. */}
       {basis && <p className="basis-full text-xs text-muted-foreground">{basis}</p>}

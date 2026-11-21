@@ -210,6 +210,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRunNodeRecord:       {approver: securityApprover, apply: applyRunNodeRecordChange},
 	govKindBoundary:            {approver: securityApprover, apply: applyBoundaryChange},
 	govKindUnitAdmin:           {approver: securityApprover, apply: applyUnitAdminChange},
+	// An issuer-portal registration is a super admin's alone, held or not (delegate_governance.go).
+	govKindDelegate:            {approver: operatorApprover, apply: applyDelegateChange},
 	govKindRestriction:         {approver: securityApprover, apply: applyRestrictionChange},
 	govKindWorkspaceOwningUnit: {approver: securityApprover, apply: applyWorkspaceOwningUnitChange},
 	govKindComponentOwningUnit: {approver: securityApprover, apply: applyComponentOwningUnitChange},

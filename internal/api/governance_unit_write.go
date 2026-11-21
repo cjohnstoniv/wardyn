@@ -337,12 +337,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
-	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	if msg != "" {
+	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
@@ -391,6 +386,9 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			heldReq = kept
 			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
+			if err == nil {
+				err = ruleUnitUIAppCallers(r.Context(), q, p)
+			}
 			effective = res
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
 			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })

@@ -428,6 +428,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
+
+	// The service grant's secret and removal routes, and the clean-up retry: operatorOnly beside the provider
+	// routes (provider_service_grant_routes.go).
+	"PUT /api/v1/model-providers/{id}/service-grant/secret":    {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant/secret": {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant":        {class: classAdmin},
+	"POST /api/v1/service-grant-cleanups/{uid}/retry":          {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
 	// Getting Started -> People editor over the store half of
 	// internal/auth/oidc's RoleMappingSource. SUPER-only, including BOTH reads,
@@ -1081,6 +1088,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
 	"GET /api/v1/admin/delegates":         {class: classSecurity},
 	"DELETE /api/v1/admin/delegates/{id}": {class: classSecurity},
+	// The issuer-portal registry: the switch-on, a binding's retirement and a portal's admission rule are
+	// the super admin's alone (portal_issuer_activate.go, portal_issuer_governance.go).
+	"POST /api/v1/admin/portal-issuers/activate": {class: classAdmin},
+	"DELETE /api/v1/admin/portal-issuers/{k}":    {class: classAdmin},
+	"PUT /api/v1/admin/delegates/{id}/admission": {class: classAdmin},
 
 	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
@@ -2295,7 +2307,7 @@ func (s *authzStore) CountActiveRunsBy(_ context.Context, createdBy string) (int
 	return n, nil
 }
 
-func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page) ([]types.AgentRun, error) {
+func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []types.AgentRun{}
@@ -3246,7 +3258,6 @@ func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, t
 func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
 	return nil, nil
 }
-func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
 
 // authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
 // discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key

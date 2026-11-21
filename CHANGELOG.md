@@ -11,6 +11,26 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-11-21
+
+### Added
+
+- Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `console_issuers`, and
+  `SELECT, INSERT, UPDATE, DELETE` on `portal_issuers`, `portal_grants` and `portal_person_portals`, to every role that was granted `UPDATE` on
+  `delegates`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not
+  pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as
+  the migration has run. WORDING PENDING
+<!-- WORDING PENDING: the service grant lines below are the minimum the migration guards need; the release notes' wording replaces them. -->
+- A `custom_endpoint` provider's `oidc` block can carry a `service_grant`, a client-credentials grant that lists the service identities allowed to use it. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `provider_service_grant_status` to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If
+  the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
+  grant's token request outcome is recorded.
+- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) lists exact host names whose service grant token request always goes through the daemon proxy, even when `WARDYN_DAEMON_NO_PROXY` covers them. For now it changes only that token request; every other call wardynd makes is routed as before. WORDING PENDING
+- A super admin can allocate a team drive to an issuer portal, and a run started through that portal can mount it. Migration `0297_portal_team_drives` adds the `portal` subject type to drive allocations and `agent_runs.portal_drives`; it creates no table, so the split-role grants above are unchanged.
+
 ### Fixed
 
 - A delayed clean-up no longer deletes a kept folder that a later run used. When a run that asked to keep its work folder ends without starting (cancelled or timed out in the queue, or its runner pool removed), the statement that ends it also begins the delete of its folder, so no other run is offered the folder before the clean-up has deleted it or, when the runner has it in use or the person has a run starting, cleared that mark and kept it. A folder whose delete the person had already begun is left to that delete: if it fails the folder is the person's, and the clean-up of the run does not delete it. A run that asks for the folder as its source run ends is refused it as one still held, and is not left holding a folder it cannot mount.

@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -81,6 +80,11 @@ type bootFlags struct {
 	// what a purge does after SCIM suspends a person. Read only when a SCIM token is set.
 	scimPurgeAfter       *time.Duration
 	scimLeaverWorkspaces *string
+	// portalInternalHosts is WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS, comma-separated host[:port]: the only hosts
+	// an issuer portal's internal_issuer may name, and the only ones its fetches may dial at a private
+	// address. portalInternalCAFile is WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE, a PEM bundle trusted for those
+	// hosts and no others. See portalIssuerOptions (boot_portal.go).
+	portalInternalHosts, portalInternalCAFile *string
 	// userDriveHostRoots is the SAME class of knob one level up: where an ADMIN
 	// may point a host_path user drive, whose per-person subdirectories Wardyn
 	// then binds into OTHER PEOPLE's sandboxes. Parsed by
@@ -148,18 +152,17 @@ type bootFlags struct {
 	// refuseWritableCA is WARDYN_TRUSTED_CA_REFUSE_WRITABLE: refuse boot, rather than warn,
 	// when that bundle is group- or world-writable (readTrustedCAFile).
 	refuseWritableCA *bool
-	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
-	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
-	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
-	// GitHub App minting, AWS SSO CreateToken renewal, Entra sync) — the
-	// supported replacement for setting HTTPS_PROXY on wardynd, which stays
-	// unsupported (Go's net/http would also re-point the Kubernetes client and
-	// every http.ProxyFromEnvironment reader process-wide). Same posture class
-	// as trustedCAFile above: control-plane-authored only, never a SiteConfig
-	// field. Empty daemonProxyURL = the shared http.DefaultTransport is left
-	// untouched, byte-identical to today.
-	daemonProxyURL *string
-	daemonNoProxy  *string
+	// daemonProxyURL / daemonNoProxy / daemonProxyAlways are WARDYN_DAEMON_PROXY_URL / _NO_PROXY /
+	// _ALWAYS (see daemon_proxy.go): a forward proxy for wardynd's OWN outbound HTTP calls (OIDC
+	// discovery/JWKS, audit webhooks, GitHub App minting, AWS SSO CreateToken renewal, Entra sync) —
+	// the supported replacement for setting HTTPS_PROXY on wardynd, which stays unsupported (Go's
+	// net/http would also re-point the Kubernetes client and every http.ProxyFromEnvironment reader
+	// process-wide); _ALWAYS names the hosts a service grant's token request sends through it even
+	// past the bypass list. Same posture class as trustedCAFile above: control-plane-authored only,
+	// never a SiteConfig field. Empty daemonProxyURL = the shared http.DefaultTransport is untouched.
+	daemonProxyURL    *string
+	daemonNoProxy     *string
+	daemonProxyAlways *string
 	// daemonProxySecretFile is WARDYN_DAEMON_PROXY_SECRET (see
 	// installDaemonProxySecret, daemon_proxy.go): a PATH to a file holding one
 	// proxy URL that MAY embed user:pass@ — the credentialed form
@@ -517,6 +520,8 @@ func parseBootFlags() *bootFlags {
 		scimTokenNext:          flagEnv("scim-token-next", "WARDYN_SCIM_TOKEN_NEXT", "", "secret second bearer the SCIM routes accept while the identity provider is switched to a new one; requires -scim-token and must differ from it"),
 		scimPurgeAfter:         flagDuration("scim-purge-after", "WARDYN_SCIM_PURGE_AFTER", 720*time.Hour, "how long after SCIM suspends a person the purge sweeper purges them: credentials erased, workspaces reassigned, grants and assignments deleted (duration; 0 disables the automatic purge, a SCIM DELETE still purges)"),
 		scimLeaverWorkspaces:   flagEnv("scim-leaver-workspaces", "WARDYN_SCIM_LEAVER_WORKSPACES", scimWorkspacesReassign, "what a purge does with the workspaces a purged person owns: reassign hands them to the operator (default), keep leaves them"),
+		portalInternalHosts:    flagEnv("portal-internal-issuer-hosts", "WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS", "", "comma-separated host[:port] list of the internal addresses an issuer portal's internal_issuer may name; only these hosts may be reached at a private address, and only for an issuer portal's discovery and keys. Empty (default) lists none"),
+		portalInternalCAFile:   flagEnv("portal-internal-issuer-ca-file", "WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE", "", "path to a PEM CA bundle trusted, on top of the system roots, for the hosts of -portal-internal-issuer-hosts and no other host. There is no setting that skips verification"),
 		userDriveHostRoots:     flagEnv("user-drive-host-roots", "WARDYN_USER_DRIVE_HOST_ROOTS", "", "comma-separated absolute host directories a host_path user drive may be registered inside, typically the mount point of a share the operator mounted host-side. Empty (default) means no host_path drive may be registered; never $HOME or /"),
 		governAdminRuns:        flagBool("govern-admin-runs", "WARDYN_GOVERN_ADMIN_RUNS", false, "govern every run an SSO admin or an admin-role personal token launches, like a member's; the admin token and local mode stay ungoverned and are marked governance_exempt on run.create. With OIDC unset it binds nobody (default false)"),
 		egressPortRule:         flagEnv("egress-port-rule", "WARDYN_EGRESS_PORT_RULE", "off", "container runs' egress port rule: off (default; a bare allowlist host is open on every port), dry_run (nothing refused; each allow the rule would refuse is marked port_rule=dry_run in the audit log) or on (ports 80 and 443 plus host:port allowlist entries). The proxy turns it on for runs dispatched as a desktop VM. Any other value is refused at boot"),
@@ -546,6 +551,7 @@ func parseBootFlags() *bootFlags {
 		refuseWritableCA:       flagBool("trusted-ca-refuse-writable", "WARDYN_TRUSTED_CA_REFUSE_WRITABLE", false, "refuse boot when the -trusted-ca-file bundle is group- or world-writable; off, boot logs a warning naming the file and mode (default false)"),
 		daemonProxyURL:         flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) for wardynd's own outbound HTTP calls: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO token renewal and Entra directory sync. Empty (default) leaves the default transport untouched"),
 		daemonNoProxy:          flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-style bypass list for -daemon-proxy-url (host, .suffix, CIDR or *); ignored when the proxy URL is unset"),
+		daemonProxyAlways:      flagEnv("daemon-proxy-always", "WARDYN_DAEMON_PROXY_ALWAYS", "", "comma-separated exact host names that a provider service grant's token request always sends through the daemon proxy (-daemon-proxy-url, -daemon-proxy-secret-file or HTTPS_PROXY), even when -daemon-no-proxy covers them; no suffix or wildcard, and no other call changes. Refused at boot for an IP address, localhost, a numeric name (a last label of all digits or starting with 0x), a host wardynd always reaches directly (compared in IDNA-ASCII form; a direct host that does not convert also refuses boot), when no daemon proxy is configured, or when that proxy's port is not 1 to 65535. Empty (default) lists none"),
 		daemonProxySecretFile:  flagEnv("daemon-proxy-secret-file", "WARDYN_DAEMON_PROXY_SECRET", "", "path to a file holding one forward-proxy URL that may embed user:pass@, the credentialed form of -daemon-proxy-url; refused if group- or world-writable, or if other-readable and owned by wardynd's own non-root uid (group-read, as a Kubernetes Secret mount gives, is accepted). Mutually exclusive with -daemon-proxy-url"),
 		cliArtifactBase:        flagEnv("cli-artifact-base", "WARDYN_CLI_ARTIFACT_BASE", "", "internal mirror (https://) of the release assets, published on the anonymous /healthz as cli_artifact_base so the console's install line and 'wardyn runner setup' fetch from it: <base>/v<version>/<asset>. Empty (default) publishes none"),
 		orgCAFingerprints:      flagEnv("org-ca-fingerprints", "WARDYN_ORG_CA_FINGERPRINTS", "", "comma-separated sha256:<hex> fingerprints of the organisation's CA certificates, published on the anonymous /healthz as org_ca_fingerprints for people to compare with what 'wardyn ca add' prints. Empty (default) publishes none"),
@@ -822,179 +828,4 @@ func adminTokenStrengthRefusal(token, listen string) error {
 	return fmt.Errorf("refusing to start: WARDYN_ADMIN_TOKEN is %d bytes but the listen address %q is not loopback-only — "+
 		"the admin token is the super-admin credential and is reachable by anything that can connect, so it must be at least %d bytes; "+
 		"set a longer secret (e.g. `openssl rand -hex 32`) or bind loopback", len(token), listen, minAdminTokenLen)
-}
-
-// localModeState is the resolved LOCAL HOST MODE posture: whether the no-auth
-// bypass is in effect, the operator principal to stamp, and whether the bind is
-// loopback (also feeds /setup/status readiness).
-type localModeState struct {
-	enabled  bool
-	operator string
-	loopback bool
-	// trustedPeers is api.Config.LocalTrustedPeers, resolved only in local mode
-	// with -local-trust-forwarder.
-	trustedPeers []netip.Prefix
-}
-
-// resolveAWSSSOEndpointOverride resolves the gated AWS SSO endpoint hatch:
-// refuse when it is set without the acknowledgement, otherwise normalize it and
-// WARN — loudly, every boot, naming it a test hatch. The warning is the point:
-// this is the one knob that makes wardynd treat an arbitrary HTTP server as AWS
-// IAM Identity Center, and an operator who inherits a values file carrying it
-// must see that in the log rather than discover it from an audit row.
-//
-// The refusal shape is this file's own -local-mode-with-OIDC refusal below,
-// deliberately: a posture this dangerous takes two explicit acts, never one
-// stray env var.
-func resolveAWSSSOEndpointOverride(f *bootFlags) (string, error) {
-	override, err := api.ValidateAWSSSOEndpointOverride(*f.awsSSOEndpointOverride, *f.allowTestEndpoints)
-	if err != nil {
-		return "", err
-	}
-	if override != "" {
-		slog.Warn(api.AWSSSOEndpointOverrideWarn,
-			slog.String("aws_sso_endpoint_override", override),
-		)
-	}
-	return override, nil
-}
-
-// resolveLocalMode decides the LOCAL HOST MODE posture (single-developer
-// localhost path): bypass public-API auth so the browser UI works with no
-// SSO/Dex and no token. Auto-enable when no auth is configured AND the bind is
-// loopback; otherwise honor the explicit flag. FAIL CLOSED: never serve a
-// no-auth public API on a publicly-routable IP. The sidecar/run-token path
-// (internalAuth) is unaffected either way.
-func resolveLocalMode(f *bootFlags) (localModeState, error) {
-	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
-	// bug-rbac-1: an EXPLICIT -local-mode alongside a configured -oidc-issuer
-	// is refused up front, before it can ever reach lm.enabled below. The
-	// auto-enable heuristic already excludes a configured issuer
-	// (*f.oidcIssuer == "" in the OR's right-hand side), so this refusal only
-	// ever fires for the explicit flag — humanOrAdminAuth branches on
-	// LocalMode FIRST and bypasses OIDC entirely without ever consulting it,
-	// so a boot that got this far would silently drop the whole SSO/RBAC
-	// deployment to a fixed local:operator with no warning anywhere.
-	if *f.localMode && strings.TrimSpace(*f.oidcIssuer) != "" && !*f.allowLocalModeWithOIDC {
-		return lm, fmt.Errorf("refusing to start: -local-mode is explicitly set alongside a configured -oidc-issuer %q — "+
-			"local mode bypasses ALL public-API auth and would silently disable the configured OIDC/SSO admin-member RBAC deployment; "+
-			"unset -local-mode (WARDYN_LOCAL_MODE) or -oidc-issuer, or explicitly set WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true to override", *f.oidcIssuer)
-	}
-	lm.enabled = *f.localMode || (*f.adminToken == "" && *f.oidcIssuer == "" && lm.loopback)
-	lm.operator = strings.TrimSpace(*f.localOperator)
-	// S-06: "admin-token" is the reserved MECHANISM principal a per_user row's
-	// harness-login refuses (internal/api's adminTokenPrincipal) — naming the
-	// local operator seat that would collide it with a non-person, refusing
-	// the SAME seat boot just accepted.
-	if lm.operator == api.AdminTokenPrincipal() {
-		return lm, fmt.Errorf("refusing to start: -local-operator (WARDYN_LOCAL_OPERATOR) is %q, the reserved admin-token mechanism principal — local mode's operator seat must be a real, distinguishable person; pick a different name", lm.operator)
-	}
-	// The demo admin token is published in this repo (compose + docs) and nothing
-	// mints a random one, so "auth configured" with THAT value is a full-admin API
-	// anyone who read the README can drive. This check sits ABOVE the !lm.enabled
-	// return on purpose: setting an admin token is exactly what turns local mode
-	// off. Same refuse-vs-warn split as -local-trust-forwarder below — refuse on a
-	// specific routable bind, warn on the unspecified one, which from inside a
-	// container is indistinguishable from the safe compose 127.0.0.1-publish. Honest
-	// ceiling: an operator who republishes compose's port on 0.0.0.0 still has
-	// WARDYN_LISTEN=":8080" in the container, so the refusal cannot fire for that
-	// (most realistic) exposure path — this is a backstop, not full coverage.
-	if strings.TrimSpace(*f.adminToken) == demoAdminToken {
-		if listenBindsSpecificRoutable(*f.listen) {
-			return lm, fmt.Errorf("refusing to start: WARDYN_ADMIN_TOKEN is the demo token published in this repo (deploy/compose + docs) but the listen address %q binds a specific non-loopback interface — that is an effectively-unauthenticated admin API; set a secret token (e.g. `openssl rand -hex 32`) or bind loopback", *f.listen)
-		}
-		slog.Warn("wardynd: WARDYN_ADMIN_TOKEN is the demo token published in this repo — anyone who read the docs has full admin. Fine for the loopback-published demo stack; set a secret token before exposing this port.",
-			slog.String("listen", *f.listen),
-		)
-	}
-	if err := adminTokenStrengthRefusal(*f.adminToken, *f.listen); err != nil {
-		return lm, err
-	}
-	if !lm.enabled {
-		return lm, nil
-	}
-	if listenIsRoutablePublic(*f.listen) {
-		return lm, fmt.Errorf("refusing to start: -local-mode bypasses authentication but the listen address %q is a publicly-routable IP; bind to loopback (127.0.0.1) or a private address, or configure auth (WARDYN_ADMIN_TOKEN / OIDC)", *f.listen)
-	}
-	// -local-trust-forwarder DISABLES the unspoofable loopback-PEER gate (it
-	// trusts a loopback-only host publish so the peer is always the docker
-	// gateway). That holds ONLY on a loopback bind or the compose
-	// 0.0.0.0-in-container topology whose host publishes 127.0.0.1:PORT. On a
-	// SPECIFIC non-loopback interface (private/RFC1918, link-local, or public)
-	// it re-opens UNAUTHENTICATED LAN admin access, so refuse to start. The
-	// unspecified all-interfaces bind is indistinguishable from the safe
-	// compose case from inside the container (wardynd cannot see the host's
-	// docker publish), so it earns a DISTINCT error-level log naming the exact
-	// requirement rather than a refusal.
-	if *f.localTrustFwd {
-		if listenBindsSpecificRoutable(*f.listen) {
-			return lm, fmt.Errorf("refusing to start: -local-trust-forwarder disables the loopback-peer gate but the listen address %q binds a specific non-loopback interface — "+
-				"this re-opens UNAUTHENTICATED LAN admin access; use it ONLY when the port is published loopback-only (127.0.0.1:PORT), i.e. bind loopback here or an unspecified address inside a compose container", *f.listen)
-		}
-		if !lm.loopback {
-			slog.Error("wardynd: -local-trust-forwarder on an unspecified bind DISABLES the loopback-peer gate — the UNAUTHENTICATED public API is exposed to the LAN unless the host publishes 127.0.0.1:PORT ONLY (the Compose default). Verify your docker publish / host firewall.",
-				slog.String("listen", *f.listen),
-			)
-		}
-		var raw string
-		if f.localTrustedPeers != nil { // a test's partial bootFlags
-			raw = *f.localTrustedPeers
-		}
-		peers, err := localTrustedPeers(raw)
-		if err != nil {
-			return lm, err
-		}
-		lm.trustedPeers = peers
-		slog.Info("wardynd: local mode trusts these forwarder peers", slog.Any("peers", peers))
-	}
-	// The four-eyes egress switch cannot be enforced in local mode, and an
-	// operator who set both learns that when their FIRST approval hangs — a 503
-	// per decision, forever. Say it at boot instead.
-	//
-	// Scoped to the combination that is actually broken, and only that one: local
-	// mode authenticates nobody, so both the decider and the run's created_by
-	// come from the same client-supplied source and no request in that mode can
-	// prove a second human decided (requireSecondHuman refuses outright). With
-	// either half alone there is nothing to say — the switch works normally off
-	// local mode, and local mode is unaffected with the switch unset — so this
-	// stays silent for both. A boot warning that fires on a merely unusual
-	// configuration gets filtered out of the logs within a week, and is then
-	// missing for the deployment that needed it.
-	//
-	// WARN, not a refusal: everything else in the deployment works, so refusing
-	// to start would cost an operator their whole daemon over one disabled
-	// control. The message names the consequence and the remedy.
-	if api.EgressSecondHumanEnabled() {
-		slog.Warn("wardynd: WARDYN_EGRESS_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY egress_domain approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
-			slog.String("listen", *f.listen),
-		)
-	}
-	// The governance switch, once its boot refusal is lifted (exitOnGovernanceFlags): local mode cannot
-	// enforce it either, and every covered write and every approval is refused with a 503.
-	if api.GovernanceSecondHumanEnabled() {
-		slog.Warn("wardynd: WARDYN_GOVERNANCE_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY governance write and approval will be refused with 503. Configure SSO to use this switch, or unset it.",
-			slog.String("listen", *f.listen),
-		)
-	}
-	// The capability switch is the same story for Azure DevOps escalations.
-	if api.CapabilitySecondHumanEnabled() {
-		slog.Warn("wardynd: WARDYN_CAPABILITY_SECOND_HUMAN is set but LOCAL MODE authenticates nobody — the four-eyes gate cannot be enforced here, so EVERY Azure DevOps capability approval decision will be refused with 503. Configure SSO to use this switch, or unset it.",
-			slog.String("listen", *f.listen),
-		)
-	}
-	if lm.operator == "" {
-		lm.operator = defaultLocalOperator()
-	}
-	if lm.loopback {
-		slog.Info("wardynd: LOCAL HOST MODE — public-API auth disabled; loopback bind. No SSO/token required.",
-			slog.String("operator", lm.operator),
-			slog.String("listen", *f.listen),
-		)
-	} else {
-		slog.Warn("wardynd: LOCAL HOST MODE on a non-loopback bind — the UNAUTHENTICATED public API is reachable beyond localhost; ensure a host firewall or configure auth.",
-			slog.String("listen", *f.listen),
-			slog.String("operator", lm.operator),
-		)
-	}
-	return lm, nil
 }
