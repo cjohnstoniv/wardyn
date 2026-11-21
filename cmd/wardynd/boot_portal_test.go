@@ -10,12 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
-	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The label shapes the activation reads (internal/store/store_portal_activation.go): restated here so a
@@ -71,27 +67,19 @@ func TestPortalInternalIssuerHosts_ListAndCABundle(t *testing.T) {
 	}
 }
 
-func TestPortalRegistrationsOn_NamesSharedIssuerBounded(t *testing.T) {
-	now := time.Now()
-	a := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"), Name: "alpha", IssuerKey: "k1"}
-	b := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"), Name: "beta", IssuerKey: "k1", RevokedAt: &now}
-	c := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000c"), Name: "gamma", IssuerKey: "k2"}
-	console := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000d"), Name: "console"}
-	keys := map[string]bool{"k1": true}
-	got := portalRegistrationsOn(keys, []types.Delegate{c, b, console, a})
-	want := `portal registrations: ` + a.ID.String() + ` "alpha", ` + b.ID.String() + ` "beta" (revoked)`
-	if got != want {
+func TestPortalRegistrationsText_NamesBounded(t *testing.T) {
+	regs := []portalReg{{id: "id-a", name: "alpha"}, {id: "id-b", name: "beta", revoked: true}}
+	if got, want := portalRegistrationsText(2, regs), `portal registrations: id-a "alpha", id-b "beta" (revoked)`; got != want {
 		t.Errorf("two portals on one issuer = %q, want %q", got, want)
 	}
-	if got := portalRegistrationsOn(map[string]bool{"k9": true}, []types.Delegate{a, c}); got != "no portal registration names it" {
+	if got := portalRegistrationsText(0, nil); got != "no portal registration names it" {
 		t.Errorf("an orphaned binding = %q", got)
 	}
-	var many []types.Delegate
-	for i := range portalRegistrationMax + 3 {
-		many = append(many, types.Delegate{ID: uuid.New(), Name: fmt.Sprintf("p%d", i), IssuerKey: "k1"})
+	var many []portalReg
+	for i := range portalRegistrationMax {
+		many = append(many, portalReg{id: fmt.Sprintf("id-%d", i), name: fmt.Sprintf("p%d", i)})
 	}
-	got = portalRegistrationsOn(keys, many)
-	if n := strings.Count(got, `"p`); n != portalRegistrationMax || !strings.HasSuffix(got, " and 3 more") {
-		t.Errorf("%d registrations = %q, want %d named and the rest counted", len(many), got, portalRegistrationMax)
+	if got := portalRegistrationsText(portalRegistrationMax+3, many); strings.Count(got, `"p`) != portalRegistrationMax || !strings.HasSuffix(got, " and 3 more") {
+		t.Errorf("%d registrations = %q, want %d named and the rest counted", portalRegistrationMax+3, got, portalRegistrationMax)
 	}
 }

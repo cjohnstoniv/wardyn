@@ -117,20 +117,19 @@ func recordConsoleIssuer(ctx context.Context, pool *pgxpool.Pool, issuer, replic
 	if err != nil {
 		return fmt.Errorf("read the issuer portal bindings: %w", err)
 	}
-	var clashes []string
-	keys := map[string]bool{}
+	var clashes, keys []string
 	for _, b := range bindings {
 		if types.NormIssuerURL(b.Issuer) == types.NormIssuerURL(issuer) {
 			clashes = append(clashes, b.Issuer)
-			keys[b.IssuerKey] = true
+			keys = append(keys, b.IssuerKey)
 		}
 	}
 	if len(clashes) > 0 {
-		// A diagnostic only: the boot is refused whatever this read finds, a binding no registration names included.
-		all, err := st.ListDelegates(ctx)
-		names := "the portal registrations could not be read: " + fmt.Sprint(err)
-		if err == nil {
-			names = portalRegistrationsOn(keys, all)
+		// A diagnostic only, read through this transaction: the boot is refused whatever this read finds, a
+		// binding no registration names and a failed read included.
+		names := "the portal registrations could not be read"
+		if total, regs, err := portalRegistrationsOn(ctx, tx, keys); err == nil {
+			names = portalRegistrationsText(total, regs)
 		}
 		return fmt.Errorf("%w: the console sign-in issuer %q is also the issuer of an issuer portal binding (%s; %s); an issuer is either the console's or a portal's, never both",
 			errConsoleIssuerIsPortal, issuer, strings.Join(clashes, ", "), names)
@@ -147,26 +146,50 @@ func recordConsoleIssuer(ctx context.Context, pool *pgxpool.Pool, issuer, replic
 // portalRegistrationMax bounds how many registrations the boot refusal names.
 const portalRegistrationMax = 5
 
-// portalRegistrationsOn names, by id and name, the portal registrations on the bindings whose keys are given,
-// revoked ones marked, at most portalRegistrationMax of them and a count of the rest.
-func portalRegistrationsOn(keys map[string]bool, all []types.Delegate) string {
-	var regs []string
-	for _, d := range all {
-		if d.IssuerKey == "" || !keys[d.IssuerKey] {
-			continue
-		}
-		r := fmt.Sprintf("%s %q", d.ID, d.Name)
-		if d.RevokedAt != nil {
-			r += " (revoked)"
+// portalReg is one portal registration the boot refusal names.
+type portalReg struct {
+	id, name string
+	revoked  bool
+}
+
+// portalRegistrationsOn reads through tx how many portal registrations name the bindings keys, and the first
+// portalRegistrationMax of them by id.
+func portalRegistrationsOn(ctx context.Context, tx pgx.Tx, keys []string) (total int, regs []portalReg, err error) {
+	rows, err := tx.Query(ctx, `
+		SELECT count(*) OVER (), id::text, name, revoked_at IS NOT NULL
+		  FROM delegates
+		 WHERE issuer_key = ANY($1)
+		 ORDER BY id
+		 LIMIT $2`, keys, portalRegistrationMax)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r portalReg
+		if err := rows.Scan(&total, &r.id, &r.name, &r.revoked); err != nil {
+			return 0, nil, err
 		}
 		regs = append(regs, r)
 	}
+	return total, regs, rows.Err()
+}
+
+// portalRegistrationsText names regs by id and name, revoked ones marked, and counts the rest of total.
+func portalRegistrationsText(total int, regs []portalReg) string {
 	if len(regs) == 0 {
 		return "no portal registration names it"
 	}
-	sort.Strings(regs)
-	out := "portal registrations: " + strings.Join(regs[:min(len(regs), portalRegistrationMax)], ", ")
-	if more := len(regs) - portalRegistrationMax; more > 0 {
+	named := make([]string, 0, len(regs))
+	for _, r := range regs {
+		n := fmt.Sprintf("%s %q", r.id, r.name)
+		if r.revoked {
+			n += " (revoked)"
+		}
+		named = append(named, n)
+	}
+	out := "portal registrations: " + strings.Join(named, ", ")
+	if more := total - len(regs); more > 0 {
 		out += fmt.Sprintf(" and %d more", more)
 	}
 	return out

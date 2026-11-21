@@ -104,9 +104,21 @@ func TestConsoleIssuer_BootRefusedOnPortalOverlap_PG(t *testing.T) {
 }
 
 // TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG: two portals share the clashing issuer, and the
-// refusal names both registrations, the revoked one marked, and no portal of another issuer.
+// refusal names both registrations, the revoked one marked, and no portal of another issuer; with more than
+// the bound it names that many and counts the rest. The refusal reads through its own transaction, so a pool
+// of one connection answers it.
 func TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG(t *testing.T) {
 	pool := portalBootPool(t, "ovlnames")
+	singleCfg, err := pgxpool.ParseConfig(pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleCfg.MaxConns = 1
+	single, err := pgxpool.NewWithConfig(context.Background(), singleCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(single.Close)
 	ctx := context.Background()
 	b := bindIssuerAs(t, pool, "https://idp.shared.example/oauth2/default")
 	one, _ := registerIssuerPortal(t, pool, b, "shared-one")
@@ -115,18 +127,31 @@ func TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	other, _ := registerIssuerPortal(t, pool, bindIssuerAs(t, pool, "https://idp.other.example/"), "other")
-	err := recordConsoleIssuer(ctx, pool, "https://idp.shared.example/oauth2/default", "r1")
-	if !errors.Is(err, errConsoleIssuerIsPortal) {
-		t.Fatalf("a console issuer two portals share: %v, want the boot refusal", err)
+	refuse := func() string {
+		t.Helper()
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		err := recordConsoleIssuer(rctx, single, "https://idp.shared.example/oauth2/default", "r1")
+		if !errors.Is(err, errConsoleIssuerIsPortal) {
+			t.Fatalf("a console issuer portals share: %v, want the boot refusal", err)
+		}
+		return err.Error()
 	}
-	msg := err.Error()
+	msg := refuse()
 	for _, want := range []string{one.ID.String() + ` "shared-one"`, two.ID.String() + ` "shared-two" (revoked)`} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal %q does not name %s", msg, want)
 		}
 	}
-	if strings.Contains(msg, other.ID.String()) {
-		t.Errorf("refusal %q names a portal of another issuer", msg)
+	if strings.Contains(msg, other.ID.String()) || strings.Contains(msg, "could not be read") {
+		t.Errorf("refusal %q names a portal of another issuer, or lost the names", msg)
+	}
+	for i := range portalRegistrationMax {
+		registerIssuerPortal(t, pool, b, fmt.Sprintf("shared-more-%d", i))
+	}
+	msg = refuse()
+	if n := strings.Count(msg, ` "shared-`); n != portalRegistrationMax || !strings.Contains(msg, " and 2 more)") {
+		t.Errorf("refusal with %d registrations = %q, want %d named and 2 counted", portalRegistrationMax+2, msg, portalRegistrationMax)
 	}
 }
 
