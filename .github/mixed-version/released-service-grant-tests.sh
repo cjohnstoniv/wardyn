@@ -82,7 +82,7 @@ kill "$probe"
 wait "$probe" 2>/dev/null || [ $? -gt 128 ] || fail "the probe wardynd did not stop on SIGTERM"
 
 names=$(IFS='|'; echo "${TESTS[*]}")
-go test -c -o "$BIN/api.test" ./internal/api/
+go test -race -c -o "$BIN/api.test" ./internal/api/
 test_dir=$(mktemp -d "$RUNNER_TEMP/v0101-tests.XXXXXX")
 (cd "$test_dir" && WARDYN_TEST_PG="$PG/wardyn?sslmode=disable" WARDYN_TEST_V0101_WARDYND="$BIN/wardynd" WARDYN_TEST_V0101_CLI="$BIN/wardyn" \
 	exec "$BIN/api.test" -test.count=1 -test.v -test.timeout=15m -test.run "^(${names})\$") 2>&1 | tee "$LOG"
