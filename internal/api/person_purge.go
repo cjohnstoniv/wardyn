@@ -167,7 +167,8 @@ func (s *Server) handlePurgePortalPerson(w http.ResponseWriter, r *http.Request)
 	s.writePortalPersonState(w, r, st, ident.ID)
 }
 
-// portalPersonView is how the reads and the lifecycle routes show a portal person.
+// portalPersonView is how the reads and the lifecycle routes show a portal person. purge_after is the lifecycle
+// answers' alone: the two reads (portalPersonOf) never carry it.
 type portalPersonView struct {
 	Principal     string             `json:"principal"`
 	State         string             `json:"state"`
