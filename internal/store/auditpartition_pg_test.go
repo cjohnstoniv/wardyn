@@ -10,6 +10,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -342,4 +343,61 @@ func TestPG_VerifyAuditChain_DetectsAMissingPartition(t *testing.T) {
 			t.Fatalf("verify with the split range later dropped: %+v, want OK", st)
 		}
 	})
+}
+
+// TestPG_PartitionExportHoldsNoConnectionWhileARowRuns: the row callback of a readable export looks a
+// sealed actor's subject up through the same pool. On a pool of one connection every page shape must
+// still finish: a full page, a partial last page, an exact multiple of the page size (so the last read is
+// empty) and a page larger than the partition. A read that kept its connection while a row ran would wait
+// on itself until the context ended.
+func TestPG_PartitionExportHoldsNoConnectionWhileARowRuns(t *testing.T) {
+	c := newPartChain(t)
+	cfg := c.pool.Config()
+	cfg.MaxConns = 1
+	small, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(small.Close)
+	pg := store.NewPG(small)
+	_, want, wantRows := exportOf(t, c.pool, "audit_events_legacy")
+	if len(wantRows) != 5 {
+		t.Fatalf("fixture: %d legacy rows, want 5", len(wantRows))
+	}
+	defer func(old int32) { store.AuditPartitionPageSize = old }(store.AuditPartitionPageSize)
+	for _, page := range []int32{2, 4, 5, 6} {
+		t.Run(fmt.Sprintf("page-%d", page), func(t *testing.T) {
+			store.AuditPartitionPageSize = page
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			var d *store.PartitionDigest
+			var seqs []int64
+			err := pg.ExportAuditPartition(ctx, "audit_events_legacy",
+				func(h store.PartitionManifest) error { d = store.NewPartitionDigest(h); return nil },
+				func(r store.AuditPartitionRow) error {
+					d.Add(r.FoldHash)
+					seqs = append(seqs, r.Seq)
+					// What the unsealer asks for a sealed human actor, on the pool the export reads from.
+					if _, err := pg.AuditSubjectEras(ctx, uuid.NewString()); err != nil {
+						return err
+					}
+					_, _, err := pg.AuditKeyDestroyedAt(ctx, "someone@example.com")
+					return err
+				})
+			if err != nil {
+				t.Fatalf("export on a one-connection pool with page size %d: %v", page, err)
+			}
+			if len(seqs) != len(wantRows) {
+				t.Fatalf("page size %d streamed %d rows, want %d", page, len(seqs), len(wantRows))
+			}
+			for i, r := range wantRows {
+				if seqs[i] != r.Seq {
+					t.Errorf("page size %d: row %d is seq %d, want %d", page, i, seqs[i], r.Seq)
+				}
+			}
+			if got := d.Sum(); got != want {
+				t.Errorf("page size %d: fold = %s, want %s", page, got, want)
+			}
+		})
+	}
 }
