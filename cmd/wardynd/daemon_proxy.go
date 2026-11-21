@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -59,6 +61,14 @@ const (
 	// through something they did not intend.
 	daemonProxyBothSetRefusal = "refusing to start: both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET " +
 		"are set — unset one; they name the same knob two different ways"
+	// daemonProxyAlwaysNoProxyRefusal is the BOOT REFUSAL when WARDYN_DAEMON_PROXY_ALWAYS
+	// lists a host but no daemon proxy exists to send it to.
+	daemonProxyAlwaysNoProxyRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS lists hosts, but no daemon proxy " +
+		"is configured (WARDYN_DAEMON_PROXY_URL, WARDYN_DAEMON_PROXY_SECRET or HTTPS_PROXY); set one or unset the list"
+	// daemonProxyAlwaysEntryRefusal is the BOOT REFUSAL for one unusable entry. %q is the
+	// entry as typed (a host name, never a credential); %s says why.
+	daemonProxyAlwaysEntryRefusal = "refusing to start: WARDYN_DAEMON_PROXY_ALWAYS entry %q is %s — " +
+		"the list takes exact host names that wardynd reaches directly today, nothing else"
 )
 
 // installDaemonProxy sets tr.Proxy from WARDYN_DAEMON_PROXY_URL, scoped to the
@@ -226,10 +236,13 @@ func wireDaemonProxy(tr *http.Transport, u *url.URL, noProxy string, autoBypass 
 // process-global state. A DefaultTransport that is not a *http.Transport
 // (never true in this binary) is a silent no-op, matching installTrustedCA's
 // own existing behavior.
-func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) error {
+//
+// The returned RoundTripper is the service grant's token-request transport
+// (bootDaemonProxy); nil means the shared transport itself.
+func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) (http.RoundTripper, error) {
 	tr, ok := rt.(*http.Transport)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	installTrustedCA(tr, trustedCAPool)
 	return bootDaemonProxy(tr, f)
@@ -249,7 +262,11 @@ var linkLocalCredentialHosts = []string{"169.254.169.254", "169.254.170.2", "169
 // userinfo or file content — neither install path ever hands one back
 // through effective's scheme://host display) and the effective bypass list,
 // so an operator can grep for it.
-func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
+//
+// It also returns the transport for the service grant's token request
+// (serviceGrantTransport): nil when WARDYN_DAEMON_PROXY_ALWAYS is empty, which
+// leaves that request on the shared transport exactly as before.
+func bootDaemonProxy(tr *http.Transport, f *bootFlags) (http.RoundTripper, error) {
 	autoBypass := []string{
 		os.Getenv("KUBERNETES_SERVICE_HOST"),
 		daemonProxyBypassHost(*f.awsSSOEndpointOverride),
@@ -259,14 +276,18 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 	// agent) are reached only from the host itself, never through a proxy.
 	autoBypass = append(autoBypass, linkLocalCredentialHosts...)
 
+	always, err := parseDaemonProxyAlways(f.daemonProxyAlways, autoBypass)
+	if err != nil {
+		return nil, err
+	}
+
 	plainURL := strings.TrimSpace(*f.daemonProxyURL)
 	secretFile := strings.TrimSpace(*f.daemonProxySecretFile)
 	if plainURL != "" && secretFile != "" {
-		return errors.New(daemonProxyBothSetRefusal)
+		return nil, errors.New(daemonProxyBothSetRefusal)
 	}
 
 	var effective, source string
-	var err error
 	if secretFile != "" {
 		source = "WARDYN_DAEMON_PROXY_SECRET"
 		effective, err = installDaemonProxySecret(tr, secretFile, *f.daemonNoProxy, autoBypass...)
@@ -275,7 +296,7 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		effective, err = installDaemonProxy(tr, plainURL, *f.daemonNoProxy, autoBypass...)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if effective != "" {
 		// scheme://host only — never u.String()'s full form, which could carry
@@ -288,9 +309,108 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		slog.Info("wardynd: daemon egress proxy configured ("+source+")",
 			slog.String("proxy", display),
 			slog.String("no_proxy", *f.daemonNoProxy),
-			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")))
+			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")),
+			slog.String("always", strings.Join(sortedHosts(always), ",")))
 	}
-	return nil
+	var daemonProxy *url.URL
+	if effective != "" {
+		daemonProxy, _ = url.Parse(effective) // effective is u.String() of a URL parsed above
+	}
+	return serviceGrantTransport(tr, daemonProxy, always)
+}
+
+// parseDaemonProxyAlways reads WARDYN_DAEMON_PROXY_ALWAYS: comma-separated EXACT
+// host names, lower-cased with any trailing dot removed. No suffix and no
+// wildcard is understood, so `login.corp.example` never covers
+// `x.login.corp.example` or `corp.example`. raw is nil in a bootFlags that
+// does not carry the flag (a test's partial flags); direct is the hosts
+// wardynd always reaches without the proxy (the autoBypass list), which the
+// list may not name. The result is empty when the variable is.
+func parseDaemonProxyAlways(raw *string, direct []string) (map[string]struct{}, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	skip := map[string]struct{}{}
+	for _, h := range direct {
+		skip[normalizeProxyHost(h)] = struct{}{}
+	}
+	out := map[string]struct{}{}
+	for _, entry := range strings.Split(*raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		host := normalizeProxyHost(entry)
+		why := ""
+		switch {
+		case net.ParseIP(strings.Trim(host, "[]")) != nil:
+			why = "an IP address"
+		case host == "localhost":
+			why = "localhost"
+		case strings.ContainsAny(host, ":/@*") || strings.HasPrefix(host, "."):
+			why = "not an exact host name (no port, path, suffix or wildcard)"
+		}
+		if _, ok := skip[host]; ok && why == "" {
+			why = "a host wardynd always reaches directly (the Kubernetes API, the AWS SSO override, the internal issuer or a link-local credential endpoint)"
+		}
+		if why != "" {
+			return nil, fmt.Errorf(daemonProxyAlwaysEntryRefusal, entry, why)
+		}
+		out[host] = struct{}{}
+	}
+	return out, nil
+}
+
+// normalizeProxyHost lower-cases a host and drops one trailing dot, the form a
+// request URL's host is compared in.
+func normalizeProxyHost(h string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), ".")
+}
+
+func sortedHosts(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// serviceGrantTransport is the transport of the service grant's token request:
+// a clone of the shared transport (so it keeps the trusted CA roots
+// installBootTransport put on it) whose Proxy function sends a host in always
+// to the daemon proxy, ignoring WARDYN_DAEMON_NO_PROXY and NO_PROXY, and every
+// other host wherever the shared transport's own function sends it. The shared
+// transport itself is not changed, so every other daemon call, including the
+// hosts wardynd reaches directly, routes as it did before the list existed.
+//
+// The always hosts go to daemonProxy (WARDYN_DAEMON_PROXY_URL or _SECRET) or,
+// when that is nil, to HTTPS_PROXY. With neither, boot is refused. An empty
+// list returns nil: the request uses the shared transport.
+func serviceGrantTransport(tr *http.Transport, daemonProxy *url.URL, always map[string]struct{}) (http.RoundTripper, error) {
+	if len(always) == 0 {
+		return nil, nil
+	}
+	via := func(*url.URL) (*url.URL, error) { return daemonProxy, nil }
+	if daemonProxy == nil {
+		env := httpproxy.FromEnvironment().HTTPSProxy
+		if env == "" {
+			return nil, errors.New(daemonProxyAlwaysNoProxyRefusal)
+		}
+		via = (&httpproxy.Config{HTTPSProxy: env}).ProxyFunc()
+	}
+	rest := tr.Proxy
+	clone := tr.Clone()
+	clone.Proxy = func(req *http.Request) (*url.URL, error) {
+		if _, ok := always[normalizeProxyHost(req.URL.Hostname())]; ok {
+			return via(req.URL)
+		}
+		if rest == nil {
+			return nil, nil
+		}
+		return rest(req)
+	}
+	return clone, nil
 }
 
 // filterEmpty drops blank entries (after trimming), preserving order — used

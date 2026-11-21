@@ -319,7 +319,7 @@ func TestBootDaemonProxy_UnsetIsNoop(t *testing.T) {
 	tr := freshTransport()
 	before := tr.Proxy
 	f := testBootFlags("", "", "", "")
-	if err := bootDaemonProxy(tr, f); err != nil {
+	if _, err := bootDaemonProxy(tr, f); err != nil {
 		t.Fatalf("bootDaemonProxy(unset): %v", err)
 	}
 	if !reflectSameFunc(before, tr.Proxy) {
@@ -335,7 +335,7 @@ func TestBootDaemonProxy_ConfiguredWiresAndLogsBypassList(t *testing.T) {
 
 	tr := freshTransport()
 	f := testBootFlags("http://proxy.corp.example:3128", "internal.example", "http://wardyn-awsssofake:8090", "http://dex:5556")
-	if err := bootDaemonProxy(tr, f); err != nil {
+	if _, err := bootDaemonProxy(tr, f); err != nil {
 		t.Fatalf("bootDaemonProxy: %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestBootDaemonProxy_ConfiguredWiresAndLogsBypassList(t *testing.T) {
 
 func TestInstallBootTransport_NonTransportIsNoop(t *testing.T) {
 	f := testBootFlags("http://proxy.corp.example:3128", "", "", "")
-	if err := installBootTransport(stubRoundTripper{}, nil, f); err != nil {
+	if _, err := installBootTransport(stubRoundTripper{}, nil, f); err != nil {
 		t.Fatalf("installBootTransport(non-*http.Transport): %v, want nil (silent no-op)", err)
 	}
 }
@@ -377,7 +377,7 @@ func TestInstallBootTransport_WiresTrustedCAAndProxy(t *testing.T) {
 
 	tr := freshTransport()
 	f := testBootFlags("http://proxy.corp.example:3128", "", "", "")
-	if err := installBootTransport(tr, pool, f); err != nil {
+	if _, err := installBootTransport(tr, pool, f); err != nil {
 		t.Fatalf("installBootTransport: %v", err)
 	}
 	if tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs != pool {
@@ -401,7 +401,7 @@ func TestBootDaemonProxy_KubernetesServiceHostEnvAutoBypassed(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.96.0.1")
 	tr := freshTransport()
 	f := testBootFlags("http://proxy.corp.example:3128", "", "", "")
-	if err := bootDaemonProxy(tr, f); err != nil {
+	if _, err := bootDaemonProxy(tr, f); err != nil {
 		t.Fatalf("bootDaemonProxy: %v", err)
 	}
 	got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://10.96.0.1/api")})
@@ -416,7 +416,7 @@ func TestBootDaemonProxy_KubernetesServiceHostEnvAutoBypassed(t *testing.T) {
 func TestInstallBootTransport_MalformedProxyRefusesBoot(t *testing.T) {
 	tr := freshTransport()
 	f := testBootFlags("not a url at all", "", "", "")
-	if err := installBootTransport(tr, nil, f); err == nil {
+	if _, err := installBootTransport(tr, nil, f); err == nil {
 		t.Fatal("installBootTransport(malformed proxy) succeeded, want a refusal")
 	}
 }
@@ -573,7 +573,7 @@ func TestBootDaemonProxy_BothSetRefusesBoot(t *testing.T) {
 	path := writeProxySecretFile(t, "http://alice:s3cr3t@proxy.corp.example:3128", 0o600)
 	tr := freshTransport()
 	f := testBootFlagsWithSecret("http://proxy.corp.example:3128", path, "", "", "")
-	err := bootDaemonProxy(tr, f)
+	_, err := bootDaemonProxy(tr, f)
 	if err == nil {
 		t.Fatal("bootDaemonProxy(both WARDYN_DAEMON_PROXY_URL and WARDYN_DAEMON_PROXY_SECRET set) succeeded, want a refusal")
 	}
@@ -591,7 +591,7 @@ func TestBootDaemonProxy_SecretFileWiresCredentialedProxyAndLogsNoCredential(t *
 	path := writeProxySecretFile(t, "http://alice:s3cr3t-token@proxy.corp.example:3128", 0o600)
 	tr := freshTransport()
 	f := testBootFlagsWithSecret("", path, "", "", "")
-	if err := bootDaemonProxy(tr, f); err != nil {
+	if _, err := bootDaemonProxy(tr, f); err != nil {
 		t.Fatalf("bootDaemonProxy: %v", err)
 	}
 
