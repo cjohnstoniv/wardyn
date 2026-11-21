@@ -330,38 +330,57 @@ func TestKeptRowOfAFolderTheMacSweptIsRemovedByTheOwner(t *testing.T) {
 	}
 }
 
-// TestKeptExpiredRowOfALegacyMacIsClosedOnlyOnItsInventory: a Mac that cannot recheck its deadline removes its own
-// expired folders. When the replica that holds it, online, shows an inventory that does not list the machine,
-// the row is closed record-only, with no call. With no inventory at all, or the Mac not held here, nothing is
-// closed and nothing is tombstoned, and no machine.delete row is written, however many passes run.
-func TestKeptExpiredRowOfALegacyMacIsClosedOnlyOnItsInventory(t *testing.T) {
+// TestKeptExpiredRowOfALegacyMacIsNeverClosedFromItsInventory: a Mac that cannot recheck its deadline removes its
+// own expired folders, but an inventory that omits a machine is no proof the disk is gone (it skips an
+// unreadable or malformed record, and may be a cached list). On a connected legacy runner the omitted, due row
+// is kept, nothing is sent, and no successful machine.delete is written, however many passes run; the owner's
+// delete is the recovery. Held elsewhere or with no inventory it is the same.
+func TestKeptExpiredRowOfALegacyMacIsNeverClosedFromItsInventory(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.expiredKept(t)
-	// Caps with no inventory: nothing to show it is gone.
+	kept := func(when string) {
+		t.Helper()
+		got, ok := k.row(t, m.ID)
+		if !ok || got.State != types.KeptMachineKept || len(k.mac.opsAsked()) != 0 || len(k.rows(t, "machine.delete", m.ID)) != 0 {
+			t.Fatalf("%s: recorded %v, state %s, calls %v, machine.delete rows %v; want kept, none, none",
+				when, ok, got.State, k.mac.opsAsked(), k.rows(t, "machine.delete", m.ID))
+		}
+	}
+	// Caps with no inventory.
 	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	k.sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
 	k.sweep(t)
-	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept {
-		t.Fatalf("no inventory: recorded %v, state %s; want the row kept", ok, got.State)
-	}
-	// Another replica's view: this one does not hold the Mac. Three passes start nothing.
+	kept("no inventory")
+	// Connected and held here, with an inventory that omits the machine.
 	legacyInventoryOf(t, k.sub)
+	for range 3 {
+		k.sweep(t)
+	}
+	kept("an inventory that omits the machine")
+	// Another replica's view: this one does not hold the Mac.
 	k.setOnline(k.rn.ID, false)
 	for range 3 {
 		k.sweep(t)
 	}
-	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept || len(k.rows(t, "machine.delete", m.ID)) != 0 || len(k.mac.opsAsked()) != 0 {
-		t.Fatalf("a Mac held elsewhere: recorded %v, state %s, machine.delete rows %v, calls %v; want kept, none, none",
-			ok, got.State, k.rows(t, "machine.delete", m.ID), k.mac.opsAsked())
-	}
-	// The holder, with the machine unlisted: the row is closed record-only.
-	k.setOnline(k.rn.ID, true)
+	kept("a Mac held elsewhere")
+	// A registered Mac that never connected to this replica: its caps are not known here either.
+	far := k.claimedMac(t, k.owner)
+	farMachine := k.machine(t, k.owner, far.ID, k.newRun(t, k.owner, far.ID).ID, "far", types.KeptMachineKept)
+	k.exec(t, `UPDATE kept_machines SET expires_at = now() - interval '1 hour' WHERE id = $1`, farMachine.ID)
 	k.sweep(t)
-	k.requireDeletedBy(t, m, keptMachineByExpiry, driveReclaimOutcomeRecordOnly)
-	if len(k.mac.opsAsked()) != 0 {
-		t.Fatalf("a record-only close asked the Mac %v", k.mac.opsAsked())
+	if got, ok := k.row(t, farMachine.ID); !ok || got.State != types.KeptMachineKept || len(k.rows(t, "machine.delete", farMachine.ID)) != 0 {
+		t.Fatalf("a Mac never connected here: recorded %v, state %s, machine.delete rows %v; want kept and none", ok, got.State, k.rows(t, "machine.delete", farMachine.ID))
 	}
+	// The owner's delete is the recovery: the plain op, answered already_absent when the folder is gone.
+	k.setOnline(k.rn.ID, true)
+	k.mac.mu.Lock()
+	k.mac.deleted = append(k.mac.deleted, m.ID.String())
+	k.mac.mu.Unlock()
+	if w := k.deleteMine(k.owner, m.ID); w.Code >= 300 {
+		t.Fatalf("the owner's delete = %d %s", w.Code, w.Body)
+	}
+	k.requireDeletedBy(t, m, keptMachineByOwner, runnerwire.KeptMachineAlreadyAbsent)
 }

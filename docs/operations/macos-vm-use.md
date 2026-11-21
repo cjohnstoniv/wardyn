@@ -95,6 +95,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 
 - **The Mac's disk limit is `0`.** `macos_vm_kept_disk_limit_gb` of `0` turns kept machines off on that Mac. A keep is refused, and so is a resume: the Mac answers "This Mac doesn't keep machines." Machines already there are still listed and can still be deleted, and they still expire.
 - **The per-person limit.** `macos_vm.max_kept_machines_per_person` is 1 to 4, and 0 or an unset value reads 1. At the limit, a keep is refused (`kept_machine_person_limit`) and a resume still works. A delete from the Mac itself leaves the organisation record, which still counts.
+- **An earlier release.** A kept machine its Mac removed by itself stays listed after it expires. Delete it with `wardyn machines delete <id>` to free the limit.
 - **The site switch.** With `macos_vm.allow_kept_machines` off, a keep and a resume are both refused (`kept_machine_site_off`).
 
 ### The tools update of a kept machine

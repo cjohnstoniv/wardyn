@@ -147,18 +147,6 @@ func (s *Server) keptMachineHeldElsewhere(ctx context.Context, m types.KeptMachi
 	return rn.RevokedAt == nil && !s.keptMachinesHeldHere(m.RunnerID)
 }
 
-// keptMachineAbsentOnItsMac reports whether this replica holds m's Mac online with an inventory that does not
-// list m. It is the only evidence that lets an expired row of a Mac that cannot recheck its deadline be closed
-// record-only (the Mac's own sweep removed the folder): no inventory, or one from another replica, is not.
-func (s *Server) keptMachineAbsentOnItsMac(m types.KeptMachine) bool {
-	inv, ok := s.keptMachineInventory(m.RunnerID)
-	if !ok {
-		return false
-	}
-	_, listed := inv[m.ID.String()]
-	return !listed
-}
-
 // keptMachineDeleteReady reports whether m's delete can run from here now: its runner is no longer
 // registered, or this replica holds its Mac and the Mac has not booted it.
 func (s *Server) keptMachineDeleteReady(ctx context.Context, m types.KeptMachine) bool {
@@ -193,12 +181,10 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 	case !s.keptMachinesHeldHere(m.RunnerID):
 		res.outcome = driveReclaimOutcomeDeferred
 	case d.By == keptMachineByExpiry && s.keptExpiryDeleteBlocked(sctx, m):
-		// Nothing is sent: the Mac cannot recheck its deadline, so the machine is kept, unless its own sweep
-		// already removed the folder, which its inventory then shows, and only the row is left to close.
+		// Nothing is sent: the Mac cannot recheck its deadline, so the machine is kept. An inventory that omits
+		// it is no proof the disk is gone (the Mac skips an unreadable or malformed record, and may send a
+		// cached list), so the row stays until its owner or an admin deletes it.
 		res.outcome = driveReclaimOutcomeFailed
-		if s.keptMachineAbsentOnItsMac(m) {
-			res.outcome = driveReclaimOutcomeRecordOnly
-		}
 	default:
 		// An expiry-driven delete is the conditional op, which the Mac checks against its own deadline; a
 		// person's or an operator's delete is not conditional.
@@ -616,7 +602,7 @@ func (s *Server) expireKeptMachine(ctx context.Context, ks store.KeptMachineStor
 	if s.keptMachineHeldElsewhere(ctx, m) {
 		return keptMachineDeletion{} // the replica that holds its Mac starts the delete
 	}
-	if s.keptExpiryDeleteBlocked(ctx, m) && !s.keptMachineAbsentOnItsMac(m) {
+	if s.keptExpiryDeleteBlocked(ctx, m) {
 		return keptMachineDeletion{} // its Mac removes its own expired machines in its sweep; no tombstone is started
 	}
 	d, err := ks.BeginKeptMachineDelete(ctx, "", m.ID, keptMachineByExpiry)
@@ -642,7 +628,7 @@ func (s *Server) finishKeptMachineDeletes(ctx context.Context, ks store.KeptMach
 		if !s.keptMachineDeleteReady(ctx, w.Machine) {
 			continue
 		}
-		if w.By == keptMachineByExpiry && s.keptExpiryDeleteBlocked(ctx, w.Machine) && !s.keptMachineAbsentOnItsMac(w.Machine) {
+		if w.By == keptMachineByExpiry && s.keptExpiryDeleteBlocked(ctx, w.Machine) {
 			// A tombstone an earlier control plane left for a Mac that cannot recheck its deadline: the machine
 			// is kept again, not removed.
 			if err := ks.AbortKeptMachineDelete(ctx, w.Machine.ID, w.At); err != nil && !errors.Is(err, store.ErrNotFound) {
