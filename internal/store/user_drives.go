@@ -194,8 +194,14 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 		return types.UserDrive{}, fmt.Errorf("store: begin user drive write: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	// No row yet means this PUT creates; nothing can reference a drive that
-	// doesn't exist yet, so an empty lock is fine.
+	// A PUT at an id that has no row yet has nothing to lock below, so two of them would both go on to the INSERT, and
+	// the one that lost the race to create would take the conflict-update path with its allocation predicate judged in
+	// the snapshot it started with, blind to an allocation committed since the winner created the drive. The drive's id
+	// is therefore a lock of its own, held to the commit: concurrent writes of one id run one after another whether or
+	// not the row exists, and each one's row lock and statement start after the one before it committed.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_drives:' || $1::text, 0))`, d.ID.String()); err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: lock user drive id: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
 		return types.UserDrive{}, fmt.Errorf("store: lock user drive: %w", err)
 	}
