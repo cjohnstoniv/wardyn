@@ -43,6 +43,11 @@ func (e *queueEnv) issuerPortal(t *testing.T, pin *uuid.UUID, shape ...func(*typ
 	if err != nil {
 		t.Fatal(err)
 	}
+	if pin == nil {
+		// An issuer portal always has a pin; the ordinary fixture's is the Default unit, which covers a run in
+		// no unit. A test that wants none removes it in shape.
+		pin = &store.DefaultUnitID
+	}
 	d := types.Delegate{ID: uuid.New(), Name: "portal-" + uuid.NewString(), IdPClientID: uuid.NewString(), RegisteredBy: "test",
 		Issuer: b.Issuer, InternalIssuer: b.InternalIssuerNorm, IssuerKey: b.IssuerKey, RunInUnder: pin,
 		TokenProfile: "okta_access_token", UserType: types.UserTypeStandard, PortalManagedAdmission: true,
@@ -65,7 +70,7 @@ func (e *queueEnv) issuerQueued(t *testing.T, pool types.RunnerPool, f issuerQue
 		'delegate', $4::text, 'grant', 'portal:' || $5::text) WHERE run_id = $1`,
 		run.ID, f.principal, f.portal.UserType, f.portal.ID.String(), uuid.NewString())
 	// The run row froze its creator's type at launch; a portal person's launch would have frozen the portal's.
-	e.exec(`UPDATE agent_runs SET user_type = $2 WHERE id = $1`, run.ID, f.portal.UserType)
+	e.exec(`UPDATE agent_runs SET user_type = $2, unit_id = $3 WHERE id = $1`, run.ID, f.portal.UserType, f.portal.RunInUnder)
 	return run
 }
 
@@ -130,6 +135,20 @@ func TestPG_QueuePortalIssuerLaunch_JudgedByPortalType(t *testing.T) {
 	e.free(occupant)
 	if got := e.waitFailed(run.ID); got.StatusDetail != "queue: capability_agent" {
 		t.Errorf("a portal person of a type with the agent door shut ended %q, want queue: capability_agent", got.StatusDetail)
+	}
+}
+
+// An issuer portal row with no pin reaches nothing: its queued launch ends portal_unit_scope, whatever the run's
+// unit (a registration without a pin is refused, so such a row is a corrupt or hand-written one).
+func TestPG_QueuePortalIssuerLaunch_NoPinEnds(t *testing.T) {
+	e := newQueueEnv(t)
+	pool := e.cappedPool("Busy", 1)
+	f := e.issuerPortal(t, nil, func(d *types.Delegate) { d.RunInUnder = nil })
+	occupant := e.occupy(pool)
+	run := e.issuerQueued(t, pool, f)
+	e.free(occupant)
+	if got := e.waitFailed(run.ID); got.StatusDetail != "queue: portal_unit_scope" || got.FailureHint != queuePortalUnitScopeHint {
+		t.Errorf("a portal with no pin = %s %q %q, want portal_unit_scope", got.State, got.StatusDetail, got.FailureHint)
 	}
 }
 
