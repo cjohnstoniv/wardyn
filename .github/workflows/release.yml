@@ -1340,7 +1340,7 @@ jobs:
           if grep -Eiq '\.(ipsw|img)$' <<<"$payload"; then echo "::error::the package payload lists a macOS image"; exit 1; fi
           pkgutil --expand-full wardyn-runnerd.pkg "$RUNNER_TEMP/pkg"
           # The package installs on macOS 26: no binary slice and no Distribution os-version asks for more.
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for b in wardyn-runnerd wardyn wardyn-macvm wardyn-guest-agent; do
             f="$(find "$RUNNER_TEMP/pkg" -path "*/Payload/usr/local/wardyn/bin/$b" -type f)"
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
