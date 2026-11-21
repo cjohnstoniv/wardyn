@@ -187,16 +187,17 @@ func TestPortalGrant_MintAfterCutoffWhileWaitingRefused_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	signedEnd := time.Now().Add(7 * time.Second)
 	done := make(chan error, 1)
 	go func() {
 		_, _, err := st.MintPortalGrant(ctx, types.PortalGrant{DelegateID: p.Delegate.ID, Principal: principal, UserType: "default",
-			SubjectIssuedAt: time.Now().UTC()}, "wdg_"+uuid.NewString(), time.Now().Add(7*time.Second), 10*time.Minute, p.Delegate.AdmissionRev)
+			SubjectIssuedAt: time.Now().UTC()}, "wdg_"+uuid.NewString(), signedEnd, 10*time.Minute, p.Delegate.AdmissionRev)
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		t.Fatalf("the mint did not wait for the person's lock: %v", err)
-	case <-time.After(3 * time.Second):
+	untilBlockedBy(t, pool, pidOf(t, holder), 1) // the mint waits on the person's lock
+	// The token's cutoff passes while it waits: a mint needs five seconds of life left.
+	for time.Now().Before(signedEnd.Add(-4 * time.Second)) {
+		time.Sleep(10 * time.Millisecond)
 	}
 	if err := holder.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -252,7 +253,7 @@ func TestPortalGrant_ConcurrentFirstMintsOneChain_PG(t *testing.T) {
 // A grant ends at the mint time plus the portal's TTL, whatever the signed end allows, and at the signed
 // end when that comes first.
 func TestPortalGrant_EndCappedByMintPlusGrantTTL_PG(t *testing.T) {
-	st, _ := isolatedStore(t)
+	st, pool := isolatedStore(t)
 	ctx := context.Background()
 	p := newIssuerPortal(t, st, "")
 	principal := types.PortalPrincipal(p.Key, "alice")
@@ -277,6 +278,60 @@ func TestPortalGrant_EndCappedByMintPlusGrantTTL_PG(t *testing.T) {
 	if _, _, err := st.MintPortalGrant(ctx, types.PortalGrant{DelegateID: p.Delegate.ID, Principal: principal, UserType: "default",
 		SubjectIssuedAt: time.Now().UTC()}, "wdg_"+uuid.NewString(), time.Now().Add(3*time.Second), 10*time.Minute, p.Delegate.AdmissionRev); !errors.Is(err, store.ErrSubjectTokenStale) {
 		t.Fatalf("a mint with 3 s left = %v, want ErrSubjectTokenStale", err)
+	}
+
+	// A second transaction holds the person's lock for two seconds first: the end comes from the database clock
+	// read after the wait, whichever of the two terms is first.
+	for _, c := range []struct {
+		name     string
+		signedIn time.Duration // the signed end, from when the holder starts
+		ttl      time.Duration
+		ttlFirst bool
+	}{{"the TTL term first", 24 * time.Hour, 5 * time.Minute, true}, {"the signed end first", 2*time.Minute + 2*time.Second, 10 * time.Minute, false}} {
+		t.Run("held lock, "+c.name, func(t *testing.T) {
+			holder, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = holder.Rollback(ctx) }()
+			if _, err := holder.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text || $2, 0))`, p.Delegate.ID, principal); err != nil {
+				t.Fatal(err)
+			}
+			started := time.Now()
+			signed := started.Add(c.signedIn).Truncate(time.Microsecond)
+			type minted struct {
+				g     types.PortalGrant
+				dbnow time.Time
+				err   error
+			}
+			done := make(chan minted, 1)
+			go func() {
+				g, dbnow, err := st.MintPortalGrant(ctx, types.PortalGrant{DelegateID: p.Delegate.ID, Principal: principal, UserType: "default",
+					SubjectIssuedAt: time.Now().UTC()}, "wdg_"+uuid.NewString(), signed, c.ttl, p.Delegate.AdmissionRev)
+				done <- minted{g, dbnow, err}
+			}()
+			untilBlockedBy(t, pool, pidOf(t, holder), 1) // the mint is waiting on the lock
+			for time.Since(started) < 2*time.Second {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := holder.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			r := <-done
+			if r.err != nil {
+				t.Fatal(r.err)
+			}
+			if r.dbnow.Before(started.Add(2 * time.Second).Add(-100 * time.Millisecond)) {
+				t.Errorf("dbnow %v is before the lock was released: the clock was read before the wait", r.dbnow)
+			}
+			want := signed
+			if c.ttlFirst {
+				want = r.dbnow.Add(c.ttl)
+			}
+			if !r.g.ExpiresAt.Equal(want) {
+				t.Errorf("end = %v, want %v (dbnow %v)", r.g.ExpiresAt, want, r.dbnow)
+			}
+		})
 	}
 }
 

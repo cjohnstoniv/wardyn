@@ -158,7 +158,7 @@ const PortalCredentialPrefix = "wdi_"
 
 // UpdateDelegateAdmissionQ replaces an issuer portal's admission rule with next when its current one is
 // expected, and increments admission_rev. Zero rows (another change landed first, the row is not an
-// issuer portal, or it is unknown) is ErrStaleCompare, so two edits cannot cross. The write updates the
+// issuer portal, it is revoked, or it is unknown) is ErrStaleCompare, so two edits cannot cross. The write updates the
 // portal's delegates row, which the exchange's identity and grant writes hold FOR SHARE, so it waits for
 // an exchange in flight and the next exchange meets the new revision.
 func (s PG) UpdateDelegateAdmissionQ(ctx context.Context, q Querier, id uuid.UUID, expected, next types.PortalAdmission) error {
@@ -179,7 +179,7 @@ func (s PG) UpdateDelegateAdmissionQ(ctx context.Context, q Querier, id uuid.UUI
 	}
 	tag, err := q.Exec(ctx, `
 		UPDATE delegates SET scope_group = $2, portal_managed_admission = $3, required_claim = $4::jsonb, admission_rev = admission_rev + 1
-		 WHERE id = $1 AND issuer <> ''
+		 WHERE id = $1 AND issuer <> '' AND revoked_at IS NULL
 		   AND scope_group = $5 AND portal_managed_admission = $6 AND required_claim IS NOT DISTINCT FROM $7::jsonb`,
 		id, next.Group, next.PortalManaged, now, expected.Group, expected.PortalManaged, was)
 	if err != nil {
