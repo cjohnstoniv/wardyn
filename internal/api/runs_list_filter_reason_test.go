@@ -31,6 +31,7 @@ func TestListRunsFiltered_Reasons(t *testing.T) {
 		{"invalid sponsored", "sponsored=nonsense", http.StatusBadRequest, reasonInvalidSponsoredParam},
 		{"invalid no_end", "no_end=nonsense", http.StatusBadRequest, reasonInvalidNoEndParam},
 		{"invalid service", "service=nonsense", http.StatusBadRequest, reasonInvalidServiceParam},
+		{"empty service", "service=", http.StatusBadRequest, reasonInvalidServiceParam},
 		{"q too long", "q=" + strings.Repeat("q", maxRunsListQueryLen+1), http.StatusBadRequest, reasonRunsSearchQueryTooLong},
 		// A validly-shaped filter still 500s on this harness's nil store, which
 		// cannot implement RunsFilteredPager — the SAME reason GET /approvals'

@@ -182,9 +182,10 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	}
 
 	serviceOnly := false
-	switch q.Get("service") {
-	case "", "0":
-	case "1":
+	switch {
+	case !q.Has("service"):
+	case q.Get("service") == "0":
+	case q.Get("service") == "1":
 		serviceOnly = true
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidServiceParam, "invalid service")
