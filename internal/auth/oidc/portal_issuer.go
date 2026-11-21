@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -115,6 +116,10 @@ type PortalIssuersOptions struct {
 	// logs a warning for each.
 	OnRefreshFailure func(PortalRefreshFailure)
 
+	// Proxy, when set, sends the discovery and key fetches of a listed issuer host through the daemon proxy. A
+	// registration with an internal address never uses it.
+	Proxy *PortalProxy
+
 	clock            func() time.Time
 	handshakeTimeout time.Duration
 	fetchTimeout     time.Duration
@@ -124,7 +129,8 @@ type PortalIssuersOptions struct {
 }
 
 // PortalRefreshFailure names a failed refresh: which issuer, the coarse cause, and whether it was the scheduled
-// refresh ("scheduled") or the fetch an unknown kid triggered ("unknown_kid").
+// refresh ("scheduled"), the fetch an unknown kid triggered ("unknown_kid"), or a verifier the proxied route
+// refused to build ("verifier").
 type PortalRefreshFailure struct {
 	Issuer string
 	Cause  string
@@ -140,6 +146,7 @@ type PortalIssuers struct {
 
 	mu        sync.Mutex
 	verifiers map[[2]string]*portalVerifier
+	refusedAt map[string]time.Time // per issuer, when a proxied verifier refusal was last reported
 }
 
 // NewPortalIssuers builds the verifier set.
@@ -147,11 +154,16 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 	if opts.Reserved == nil {
 		return nil, errors.New("portal issuers: a reserved-name check is required")
 	}
+	if pp := opts.Proxy; pp != nil {
+		if pp.URL == nil || !portalProxySchemes[pp.URL.Scheme] || pp.URL.Hostname() == "" || pp.Listed == nil {
+			return nil, errors.New("portal issuers: the daemon proxy route is incomplete")
+		}
+	}
 	clock := opts.clock
 	if clock == nil {
 		clock = time.Now
 	}
-	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial}
+	pn := &portalNet{handshakeTimeout: opts.handshakeTimeout, fetchTimeout: opts.fetchTimeout, internalHosts: map[string]bool{}, roots: opts.roots, lookup: opts.lookup, dial: opts.dial, proxy: opts.Proxy}
 	for _, h := range opts.InternalHosts {
 		if a := portalListedAuthority(h); a != "" {
 			pn.internalHosts[a] = true
@@ -172,8 +184,11 @@ func NewPortalIssuers(opts PortalIssuersOptions) (*PortalIssuers, error) {
 		}
 		pn.internalCA = pool
 	}
-	return &PortalIssuers{reserved: opts.Reserved, clock: clock, net: pn, onFail: opts.OnRefreshFailure, verifiers: map[[2]string]*portalVerifier{}}, nil
+	return &PortalIssuers{reserved: opts.Reserved, clock: clock, net: pn, onFail: opts.OnRefreshFailure, verifiers: map[[2]string]*portalVerifier{}, refusedAt: map[string]time.Time{}}, nil
 }
+
+// portalProxySchemes are the daemon proxy schemes net/http dials.
+var portalProxySchemes = map[string]bool{"http": true, "https": true, "socks5": true, "socks5h": true}
 
 // PortalIssuerKey is k: the first 26 characters of the lowercase base32 of SHA-256 over the domain tag and the
 // exact issuer bytes. The issuer is never normalised, so two spellings are two people.
@@ -332,8 +347,18 @@ func (p *PortalIssuers) checkVerified(reg PortalRegistration, c portalClaims, he
 }
 
 // verifierFor returns the cached verifier for a registration, building it on first use and dropping any that
-// has sat idle for an hour.
+// has sat idle for an hour. A verifier the proxied route refuses to build is reported as a refresh failure is, at
+// most once per issuer per retry interval; only that decision is made under the lock, and the warning and the
+// hook run after it is released.
 func (p *PortalIssuers) verifierFor(reg PortalRegistration) (*portalVerifier, error) {
+	v, report, err := p.cachedVerifier(reg)
+	if report {
+		portalReportFailure(p.onFail, reg.Issuer, "verifier", portalFetchCause(err), portalRouteProxy, portalFetchDetail(err))
+	}
+	return v, err
+}
+
+func (p *PortalIssuers) cachedVerifier(reg PortalRegistration) (*portalVerifier, bool, error) {
 	now := p.clock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -345,21 +370,34 @@ func (p *PortalIssuers) verifierFor(reg PortalRegistration) (*portalVerifier, er
 	key := [2]string{reg.Issuer, reg.InternalIssuer}
 	if v, ok := p.verifiers[key]; ok {
 		v.lastUsed.Store(now.UnixNano())
-		return v, nil
+		return v, false, nil
 	}
 	v, err := newPortalVerifier(reg.Issuer, reg.InternalIssuer, p.clock, p.net, p.onFail)
 	if err != nil {
-		return nil, err
+		report := false
+		if portalProxyRefusal(err) {
+			if last, ok := p.refusedAt[reg.Issuer]; !ok || !now.Before(last.Add(portalKeyCooldown)) {
+				p.refusedAt[reg.Issuer], report = now, true
+			}
+		}
+		return nil, report, err
 	}
 	v.lastUsed.Store(now.UnixNano())
 	p.verifiers[key] = v
-	return v, nil
+	return v, false, nil
+}
+
+// portalProxyRefusal reports whether a verifier build failed on the proxied route's own refusals.
+func portalProxyRefusal(err error) bool {
+	var fe *portalFetchError
+	return errors.As(err, &fe) && (fe.detail == portalDetailNoIssuerRoots || fe.detail == portalDetailNotComparable)
 }
 
 // portalVerifier is the discovery and key state of one (issuer, internal address) pair.
 type portalVerifier struct {
 	issuer, internal string
 	timeout          time.Duration // the bound of one discovery request
+	route            string        // "proxy" or "direct", decided once when the verifier is built
 	clock            func() time.Time
 	client           *http.Client
 	ks               *portalKeySet
@@ -394,7 +432,11 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 	if err != nil {
 		return nil, err
 	}
-	v := &portalVerifier{issuer: issuer, internal: internal, timeout: pn.timeout(), clock: clock, client: newPortalClient(pn, allowed, private), onFail: onFail}
+	client, route, err := portalRouteClient(issuer, internal, pn, allowed, private)
+	if err != nil {
+		return nil, err
+	}
+	v := &portalVerifier{issuer: issuer, internal: internal, timeout: pn.timeout(), route: route, clock: clock, client: client, onFail: onFail}
 	v.ks = newPortalKeySet(clock, pn.timeout(), func(ctx context.Context, keysURL string) ([]jose.JSONWebKey, error) {
 		if keysURL == "" {
 			return nil, &portalFetchError{cause: portalCauseUnreachable, detail: "no keys address"}
@@ -411,11 +453,35 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 			}
 			v.dropForCause(cause, at)
 		}
-		v.reportFailure(source, cause)
+		v.reportFailure(source, cause, portalFetchDetail(err))
 	}
 	v.ks.onOK = func() { v.settle("") } // keys loaded by either path reopen a verifier whose discovery is healthy
 	v.idv = gooidc.NewVerifier(issuer, v.ks, &gooidc.Config{SkipClientIDCheck: true, SupportedSigningAlgs: []string{string(jose.RS256)}})
 	return v, nil
+}
+
+// portalRouteClient picks a verifier's route once, when it is built. Only a registration with no internal address
+// whose issuer host is on the daemon proxy's always list goes through the proxy, and only under the roots named
+// for proxied issuers; every other one keeps the direct client.
+func portalRouteClient(issuer, internal string, pn *portalNet, allowed map[string]bool, private bool) (*http.Client, string, error) {
+	if internal == "" && pn.proxy != nil {
+		u, err := url.Parse(issuer)
+		if err != nil {
+			return nil, "", &portalFetchError{cause: portalCauseAddressRefused, detail: "not a https url"}
+		}
+		host := strings.ToLower(u.Hostname())
+		listed, err := pn.proxy.Listed(host)
+		if err != nil {
+			return nil, "", &portalFetchError{cause: portalCauseAddressRefused, detail: portalDetailNotComparable}
+		}
+		if listed {
+			if pn.proxy.IssuerRoots == nil {
+				return nil, "", &portalFetchError{cause: portalCauseAddressRefused, detail: portalDetailNoIssuerRoots}
+			}
+			return newPortalProxyClient(pn, allowed, host), portalRouteProxy, nil
+		}
+	}
+	return newPortalClient(pn, allowed, private), portalRouteDirect, nil
 }
 
 // portalRefreshCall is one shared refresh. Every exchange that finds the verifier due waits on the same call, and
@@ -492,10 +558,16 @@ func (v *portalVerifier) runRefresh(call *portalRefreshCall, now time.Time) {
 
 // reportFailure is the one place a failed refresh attempt is reported: a warning and the caller's hook. Every
 // caller has already enforced the failure and released its locks.
-func (v *portalVerifier) reportFailure(source, cause string) {
-	slog.Warn("portal issuer: refresh failed", "issuer", v.issuer, "source", source, "cause", cause)
-	if v.onFail != nil {
-		v.onFail(PortalRefreshFailure{Issuer: v.issuer, Cause: cause, Source: source})
+func (v *portalVerifier) reportFailure(source, cause, detail string) {
+	portalReportFailure(v.onFail, v.issuer, source, cause, v.route, detail)
+}
+
+// portalReportFailure is the warning and the hook of a failed refresh or a refused verifier. It names the route
+// and our own detail, never the proxy or any upstream text.
+func portalReportFailure(onFail func(PortalRefreshFailure), issuer, source, cause, route, detail string) {
+	slog.Warn("portal issuer: refresh failed", "issuer", issuer, "source", source, "cause", cause, "route", route, "detail", detail)
+	if onFail != nil {
+		onFail(PortalRefreshFailure{Issuer: issuer, Cause: cause, Source: source})
 	}
 }
 
@@ -534,7 +606,7 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 			v.setDown(cause)
 		}
 		v.mu.Unlock()
-		v.reportFailure("scheduled", cause)
+		v.reportFailure("scheduled", cause, portalFetchDetail(err))
 		if shown == portalCauseUnreachable {
 			return shown, v.outageWait(), 0
 		}

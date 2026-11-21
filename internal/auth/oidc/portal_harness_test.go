@@ -44,7 +44,7 @@ var (
 )
 
 // portalTestHosts are the names the test server's certificate carries.
-var portalTestHosts = []string{"example.com", "idp.internal.test", "other.example.org", "accounts.google.com"}
+var portalTestHosts = []string{"example.com", "idp.internal.test", "other.example.org", "accounts.google.com", "login.corp.example"}
 
 func portalTestCerts(t testing.TB) {
 	t.Helper()
