@@ -1431,10 +1431,10 @@ reasons:
 |---|---|
 | `portal_issuers_not_activated` | (409): issuer portals have not been switched on for this deployment. |
 | `portal_issuers_need_sso` | (409): issuer portals need console sign-in configured, since the console issuer is the one they must not equal. |
-| `portal_registration_invalid` | (422): a registration with no client id, or an access-token registration with no audience or scopes. The token exchange refuses a stored registration that fails the same check. |
+| `portal_registration_invalid` | (422): a registration with no client id, an access-token registration with no audience or scopes, or a malformed `audience` or `required_scopes` value (an audience over 200 bytes or with a control character, too many scopes, or a scope that is not a non-empty word of at most 200 bytes). The token exchange refuses a stored registration that fails the same check. |
 | `delegate_issuer_pin_required` | (422): an issuer portal names no unit to run in (`run_in_under`). |
 | `delegate_issuer_url_invalid` | (422): the issuer or internal address is not an `https` URL with a host and no user info, query or fragment. |
-| `delegate_internal_issuer_not_allowed` | (409): the internal address names a host the deployment does not list. |
+| `delegate_internal_issuer_not_allowed` | The internal address names a host that `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` does not list: 422 on `POST /admin/delegates`, and 409 on `POST /governance/changes/{id}/approve` when a held registration's host is no longer listed at approval. |
 | `delegate_issuer_is_console` | (409): the issuer, after normalising, is one this deployment has served as its console issuer. |
 | `delegate_issuer_spelling_conflict` / `delegate_issuer_address_conflict` / `delegate_issuer_profile_conflict` | (409): another spelling of a bound issuer is already registered, the bound issuer fetches from another internal address, or the bound issuer names a person by another claim. |
 | `delegate_namespace_in_use` | (409): stored records already name people under this issuer's key. |
@@ -1447,8 +1447,8 @@ reasons:
 | `delegate_claim_incomplete` / `delegate_claim_reserved` / `delegate_claim_invalid` | (422): `required_claim` names only one of claim and value, names a claim that already has a meaning, or its name or value breaks its shape. |
 | `delegate_renewal_needs_issuer` / `delegate_issuer_field_needs_issuer` | (422): `ui_session_renewal`, or another field only an issuer portal has, on a console-issuer registration. |
 | `portal_issuers_statement_required` | `POST /admin/portal-issuers/activate` (422): the activation needs `old_servers_stopped: true`. |
-| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): another client of the database is not a 0.10.2 `wardynd`. The answer lists it. |
-| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database for two minutes yet. |
+| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): a database client session in the sampled window has an application label that does not identify a 0.10.2 or later `wardynd`. A current client with a missing or unexpected label is listed too, not only an older server. The answer lists each session: stop it, or check it and confirm with `confirm_listed_sessions`. |
+| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database's sessions for a full two minutes. It warms after a start, and again from the beginning after its samples stop for more than 30 seconds. |
 | `portal_issuer_in_use` / `portal_issuer_not_found` | `DELETE /admin/portal-issuers/{k}` (409, 404): a portal, a person, a grant or a stored rule still names the binding, or no binding has that key. |
 | `delegate_admission_stale` | `PUT /admin/delegates/{id}/admission` (409): the portal's admission rule is no longer the one the change expected. |
 | `delegate_person_not_allowed` / `delegate_person_unknown_portal` | An admin-written person list (422): it gives a portal person an admin, sponsor, approver or console role, or names a portal person whose issuer no portal is registered for. |
