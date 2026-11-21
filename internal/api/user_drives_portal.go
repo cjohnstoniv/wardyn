@@ -84,10 +84,13 @@ func (s *Server) portalDriveGrantRefused(w http.ResponseWriter, err error) bool 
 }
 
 // portalDriveEditRefused answers a drive edit the store refused because a portal holds the drive and the edit would
-// add a second place or move it off docker_volume or k8s_pvc_static, and reports whether it wrote the answer. Nothing
+// add a second place, move it off docker_volume or k8s_pvc_static, or unmark it as a team drive, and reports whether it wrote the answer. Nothing
 // was written.
 func portalDriveEditRefused(w http.ResponseWriter, err error) bool {
 	switch {
+	case errors.Is(err, store.ErrDrivePortalNotTeam):
+		writeErrorReason(w, http.StatusConflict, reasonUserDriveRehomeInvalid,
+			"a portal is allocated this drive, so it must stay a team drive: remove the portal's allocation first")
 	case errors.Is(err, store.ErrDrivePortalBackend):
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonDrivePortalBackend,
 			"a portal is allocated this drive, and a portal's folder needs docker_volume or k8s_pvc_static: remove the portal's allocation first")

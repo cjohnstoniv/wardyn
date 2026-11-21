@@ -105,16 +105,18 @@ func lockPortalAllocation(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant
 	return nil
 }
 
-// driveEditNeedsPortalCheck reports whether a write of d could break a portal's allocation of it: d has a second
-// place, or a backend the portal's folder cannot be on.
+// driveEditNeedsPortalCheck reports whether a write of d could break a portal's allocation of it: d is not a team
+// drive (a stale edit that read the drive before it became one), has a second place, or has a backend the portal's
+// folder cannot be on.
 func driveEditNeedsPortalCheck(d types.UserDrive) bool {
-	return d.AltBackend != "" || !portalDriveBackendOK(d.Backend)
+	return !d.Team || d.AltBackend != "" || !portalDriveBackendOK(d.Backend)
 }
 
-// refuseEditOfPortalDrive is a drive edit's check under the drive's FOR UPDATE lock: when d has a second place or
-// a backend a portal's folder cannot be on, a drive that a portal holds refuses the edit. Its predicate is its own
-// and judges the row being written, never refuseIfAllocated's refusal of any allocation, so a second place on a
-// group-allocated drive and a confirmed re-home keep working.
+// refuseEditOfPortalDrive is a drive edit's check under the drive's FOR UPDATE lock: when d is not a team drive, has a
+// second place or has a backend a portal's folder cannot be on, a drive that a portal holds refuses the edit. Its
+// predicate is its own and judges the row being written, never refuseIfAllocated's refusal of any allocation, so a
+// second place on a group-allocated drive and a confirmed re-home keep working, and an ordinary edit of a drive no
+// portal holds (the common non-team case) is untouched.
 func refuseEditOfPortalDrive(ctx context.Context, q rowQuerier, d types.UserDrive) error {
 	if !driveEditNeedsPortalCheck(d) {
 		return nil
@@ -127,6 +129,8 @@ func refuseEditOfPortalDrive(ctx context.Context, q rowQuerier, d types.UserDriv
 	switch {
 	case !held:
 		return nil
+	case !d.Team:
+		return ErrDrivePortalNotTeam
 	case !portalDriveBackendOK(d.Backend):
 		return ErrDrivePortalBackend
 	default:
