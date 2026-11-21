@@ -102,7 +102,7 @@ func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
 	if err != nil {
 		return err
 	}
-	if err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
+	if _, err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
 		return err
 	}
 	return mode(f)

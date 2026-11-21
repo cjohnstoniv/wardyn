@@ -187,10 +187,10 @@ func run() error {
 		return err
 	}
 	logTrustedCA(trustedCACount, trustedCAPEM)
-	// installTrustedCA + WARDYN_DAEMON_PROXY_URL, both mutating the shared
-	// http.DefaultTransport in place — see installBootTransport (kept out of
-	// run() itself, which is deliberately low-branching per its doc comment).
-	if err := installBootTransport(http.DefaultTransport, trustedCAPool, f); err != nil {
+	// installTrustedCA + WARDYN_DAEMON_PROXY_URL mutate the shared http.DefaultTransport in place, and
+	// the service grant's transport comes out — see installBootTransport (kept out of run(), which is low-branching).
+	serviceGrantTr, err := installBootTransport(http.DefaultTransport, trustedCAPool, f)
+	if err != nil {
 		return err
 	}
 	// After the transport, which image admission's registry client copies (image_admission.go).
@@ -475,7 +475,8 @@ func run() error {
 		OIDC:                 feats.authn,
 
 		// The OTLP metrics push's failure count; nil (no series) with the push off.
-		OTLPPushConfig: api.OTLPPushConfig{OTLPMetricsPushFailures: otlpMetricsFailures(otlpMetrics)},
+		OTLPPushConfig:        api.OTLPPushConfig{OTLPMetricsPushFailures: otlpMetricsFailures(otlpMetrics)},
+		ServiceGrantTransport: serviceGrantTr,
 
 		// The runner stream's anonymous in-flight bound per client address.
 		RunnerStreamHandshakesPerAddress: *f.runnerPerAddr,
