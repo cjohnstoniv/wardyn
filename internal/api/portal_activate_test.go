@@ -71,6 +71,39 @@ func TestPortalIssuersActivate_LoserOfARaceIsAlreadyActivated(t *testing.T) {
 	}
 }
 
+// Started as the daemon starts it, the monitor takes its first sample at once: the replica's rolling window has a
+// sample in it and the activation no longer answers "never sampled".
+func TestPortalActivationMonitor_RunReachesObservedSample(t *testing.T) {
+	fake := &activationStore{}
+	srv := New(baseTestConfig(newHarness(t), fake))
+	m := srv.portalMonitor()
+	if _, wait := m.suspects(time.Now()); wait != portalSampleWindow {
+		t.Fatalf("before the monitor runs: wait %s, want a whole window", wait)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { srv.RunPortalActivationMonitor(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		m.mu.Lock()
+		sampled := !m.last.IsZero() && len(m.samples) == 1
+		m.mu.Unlock()
+		if sampled {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the running monitor never recorded a sample")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the monitor outlived its context")
+	}
+}
+
 // The mark is a store-only key: a PUT /site-config body that names it is 400 and changes nothing.
 func TestPortalIssuersActivate_BodyNamingMarkRefused(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
