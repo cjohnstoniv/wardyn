@@ -41,11 +41,12 @@ func TestServiceGrant_ProxyRenewsAcrossExpiry_PG(t *testing.T) {
 	}
 
 	var resolves atomic.Int32
+	inner := panicFails(t, f.h.srv.Handler())
 	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/internal/injection/") {
 			resolves.Add(1)
 		}
-		f.h.srv.Handler().ServeHTTP(w, r)
+		inner.ServeHTTP(w, r)
 	}))
 	t.Cleanup(cp.Close)
 	up := newViaOrgUpstream(t)

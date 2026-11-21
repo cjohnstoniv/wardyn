@@ -126,7 +126,7 @@ func TestOldEntryPoints_RefuseIssuerPortalArtifacts(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.SetBasicAuth(d.ID.String(), cred)
 	w := httptest.NewRecorder()
-	old.Handler().ServeHTTP(w, r)
+	panicFails(t, old.Handler()).ServeHTTP(w, r)
 	if w.Code == http.StatusOK {
 		t.Errorf("a wdi_ credential exchanged at the old view: %d %s", w.Code, w.Body.String())
 	}

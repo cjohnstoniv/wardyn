@@ -63,7 +63,7 @@ func TestMixedVersion_ReleasedCLIGetSetKeepsServiceGrant(t *testing.T) {
 	}
 	f := newSvcPG(t, true)
 	f.seedGrant(t)
-	ts := httptest.NewServer(f.srv.Handler())
+	ts := httptest.NewServer(panicFails(t, f.srv.Handler()))
 	defer ts.Close()
 	file := filepath.Join(t.TempDir(), "site.json")
 	run := func(args ...string) []byte {
