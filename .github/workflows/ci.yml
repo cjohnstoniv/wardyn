@@ -2446,7 +2446,7 @@ jobs:
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
         run: |
           set -euo pipefail
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
             echo "$f: minos $mins"
