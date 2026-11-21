@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- `WARDYN_DAEMON_PROXY_ALWAYS` names hosts to which wardynd sends a service grant's token request, and an issuer portal's discovery and key fetches, through its proxy even when `WARDYN_DAEMON_NO_PROXY` covers them; a portal fetch connects to the address wardynd checked and trusts only the new `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. No other call changes.
+
 ## [0.10.2] — 2026-11-21
 
 ### Added
