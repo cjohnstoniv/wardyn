@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -615,40 +616,77 @@ func TestPortalDriveAllocation_ConcurrentTierWritesOneDriveNoDeadlock_PG(t *test
 	}
 }
 
-// holdPortalRow is an open transaction holding the portal's row as a create's insert holds it (FOR SHARE) or as
-// a revoke's UPDATE does, released by the returned commit.
-func holdPortalRow(t *testing.T, pool *pgxpool.Pool, portal uuid.UUID, revoke bool) (release func()) {
+// fixtureT is the part of *testing.T a held-lock fixture uses, so a test can show that a failed observation unwinds one.
+type fixtureT interface {
+	Helper()
+	Fatal(args ...any)
+	Cleanup(func())
+}
+
+// holdTx opens a transaction that runs stmt and holds what it locked until the returned release commits it. The
+// rollback is registered as a cleanup at once, before anything can fail, and release and the cleanup are one
+// idempotent step, so a test that stops on a failed observation still lets go of the lock: the cleanup runs before the
+// pool's own (which closes the pool before it terminates the backends, and would wait on a held lock).
+func holdTx(t fixtureT, pool *pgxpool.Pool, stmt string, args ...any) (release func()) {
 	t.Helper()
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var once sync.Once
+	finish := func(commit bool) (err error) {
+		once.Do(func() {
+			// Its own deadline: the one above may be spent by the time a test stops.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if commit {
+				err = tx.Commit(ctx)
+			} else {
+				err = tx.Rollback(ctx)
+			}
+		})
+		return err
+	}
+	t.Cleanup(func() { _ = finish(false) })
+	if _, err := tx.Exec(ctx, stmt, args...); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		if err := finish(true); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// holdPortalRow is an open transaction holding the portal's row as a create's insert holds it (FOR SHARE) or as
+// a revoke's UPDATE does, released by the returned commit.
+func holdPortalRow(t fixtureT, pool *pgxpool.Pool, portal uuid.UUID, revoke bool) (release func()) {
+	t.Helper()
 	q := `SELECT 1 FROM delegates WHERE id = $1 FOR SHARE`
 	if revoke {
 		q = `UPDATE delegates SET revoked_at = now() WHERE id = $1`
 	}
-	if _, err := tx.Exec(ctx, q, portal); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatal(err)
-	}
-	return func() {
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
+	return holdTx(t, pool, q, portal)
 }
 
 // parked runs f on its own goroutine and reports whether it is still blocked after a pause. result returns f's answer
 // exactly once whichever way it finished: an answer that arrived inside the pause is kept, and a call still blocked is
 // waited for at most 30 seconds.
 func parked(f func() error) (blocked bool, result func() error) {
+	return parkedFor(400*time.Millisecond, f)
+}
+
+// parkedFor is parked with the pause given: a call that must complete while a lock is held elsewhere is given a
+// deadline generous enough for a healthy write on a loaded runner.
+func parkedFor(pause time.Duration, f func() error) (blocked bool, result func() error) {
 	ch := make(chan error, 1)
 	go func() { ch <- f() }()
 	select {
 	case err := <-ch:
 		return false, func() error { return err }
-	case <-time.After(400 * time.Millisecond):
+	case <-time.After(pause):
 		return true, func() error {
 			select {
 			case err := <-ch:
@@ -662,10 +700,20 @@ func parked(f func() error) (blocked bool, result func() error) {
 
 // onAnotherGoroutine runs f where the caller's held connection is not: the pool guard fails a goroutine that asks for a
 // second connection while it holds one, and the tests below hold a transaction on the test's own goroutine.
-func onAnotherGoroutine(f func()) {
+func onAnotherGoroutine(t *testing.T, f func()) {
+	t.Helper()
 	done := make(chan struct{})
 	go func() { defer close(done); f() }()
-	<-done
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("an observation on another goroutine did not finish within 30 seconds")
+	}
+}
+
+// observeCtx bounds one observation query, so a hung read cannot outlive the wait that asked for it.
+func observeCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 20*time.Second)
 }
 
 // backendsWaiting counts the database's backends that are waiting on a lock, read on another goroutine. advisory selects
@@ -673,8 +721,10 @@ func onAnotherGoroutine(f func()) {
 func backendsWaiting(t *testing.T, pool *pgxpool.Pool, advisory bool, sql string) int {
 	t.Helper()
 	var n int
-	onAnotherGoroutine(func() {
-		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+	onAnotherGoroutine(t, func() {
+		ctx, cancel := observeCtx()
+		defer cancel()
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
 			WHERE datname = current_database() AND wait_event_type = 'Lock' AND (wait_event = 'advisory') = $1 AND query ILIKE $2`,
 			advisory, "%"+sql+"%").Scan(&n); err != nil {
 			t.Errorf("read pg_stat_activity: %v", err)
@@ -696,21 +746,87 @@ func waitForPortalLock(t *testing.T, what string, cond func() bool) {
 }
 
 // holdPause is an open transaction holding the advisory lock the pause trigger below waits on, released by the commit.
-func holdPause(t *testing.T, pool *pgxpool.Pool) (release func()) {
+func holdPause(t fixtureT, pool *pgxpool.Pool) (release func()) {
 	t.Helper()
-	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
+	return holdTx(t, pool, `SELECT pg_advisory_xact_lock(7770042)`)
+}
+
+// failedFixtureT is a test that has failed: Fatal stops the goroutine that called it, as testing.T's does, and the
+// cleanups it was given are run by the test, in the order testing runs them.
+type failedFixtureT struct {
+	cleanups []func()
+}
+
+// lockedT is failedFixtureT shared by two goroutines, which serialise the cleanups they register.
+type lockedT struct {
+	*failedFixtureT
+	mu *sync.Mutex
+}
+
+func (l *lockedT) Cleanup(fn func()) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.failedFixtureT.Cleanup(fn)
+}
+
+func (f *failedFixtureT) Helper()           {}
+func (f *failedFixtureT) Cleanup(fn func()) { f.cleanups = append(f.cleanups, fn) }
+func (f *failedFixtureT) Fatal(...any)      { runtime.Goexit() }
+func (f *failedFixtureT) unwind() {
+	for i := len(f.cleanups) - 1; i >= 0; i-- {
+		f.cleanups[i]()
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7770042)`); err != nil {
-		_ = tx.Rollback(ctx)
-		t.Fatal(err)
+}
+
+// A test that stops on a failed observation lets go of the locks its fixtures hold: the pause lock and a portal row held
+// as a revoke holds it are held, the test fails on its first observation, and once its cleanups have run both locks are
+// free, so no later case and no pool close waits on them.
+func TestPG_PortalRunFixtures_FailedObservationUnwinds(t *testing.T) {
+	st, pool := isolatedStore(t)
+	portal := newIssuerPortal(t, st, "").Delegate
+	free := func(sql string, args ...any) bool {
+		var ok bool
+		onAnotherGoroutine(t, func() {
+			ctx, cancel := observeCtx()
+			defer cancel()
+			if err := pool.QueryRow(ctx, sql, args...).Scan(&ok); err != nil {
+				t.Errorf("probe: %v", err)
+			}
+		})
+		return ok
 	}
-	return func() {
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
+	const pauseFree = `SELECT pg_try_advisory_xact_lock(7770042)`
+	const rowFree = `SELECT EXISTS (SELECT 1 FROM delegates WHERE id = $1 FOR UPDATE SKIP LOCKED)`
+	// One goroutine per fixture: the pool guard fails a goroutine that holds a connection and asks for another.
+	ft := &failedFixtureT{}
+	var mu sync.Mutex
+	locked := func(f func(fixtureT)) <-chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			f(&lockedT{failedFixtureT: ft, mu: &mu})
+			ft.Fatal("the observation failed")
+		}()
+		return done
+	}
+	held := []<-chan struct{}{
+		locked(func(f fixtureT) { holdPause(f, pool) }),
+		locked(func(f fixtureT) { holdPortalRow(f, pool, portal.ID, true) }),
+	}
+	for _, done := range held {
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("a failed test's goroutine did not stop within 30 seconds")
 		}
+	}
+	// The goroutines have stopped but their cleanups have not run: both locks are still held here.
+	if free(pauseFree) || free(rowFree, portal.ID) {
+		t.Fatal("a lock the fixtures should hold was free before the cleanups ran")
+	}
+	ft.unwind()
+	if !free(pauseFree) || !free(rowFree, portal.ID) {
+		t.Error("a lock a failed test's fixture held was still held after its cleanups ran")
 	}
 }
 
@@ -722,7 +838,9 @@ func holdPause(t *testing.T, pool *pgxpool.Pool) (release func()) {
 // created while a revoke is in flight.
 func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 	st, pool := isolatedStore(t)
-	ctx := context.Background()
+	// Every writer and the DDL below run on a deadline, so a lock that is never let go ends them with an error.
+	ctx, cancelCtx := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancelCtx()
 	for _, ddl := range []string{
 		`CREATE FUNCTION zz_pause_portal_insert() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(7770042); RETURN NEW; END $$`,
 		`CREATE TRIGGER zz_pause_portal_insert BEFORE INSERT ON agent_runs FOR EACH ROW WHEN (NEW.portal_drives) EXECUTE FUNCTION zz_pause_portal_insert()`,
@@ -751,8 +869,12 @@ func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 	portalRuns := func(t *testing.T, portal types.Delegate) int {
 		t.Helper()
 		var n int
-		onAnotherGoroutine(func() {
-			n = rowCount(t, pool, `SELECT count(*) FROM agent_runs WHERE created_via = $1 AND portal_drives`, portal.ID)
+		onAnotherGoroutine(t, func() {
+			qctx, cancel := observeCtx()
+			defer cancel()
+			if err := pool.QueryRow(qctx, `SELECT count(*) FROM agent_runs WHERE created_via = $1 AND portal_drives`, portal.ID).Scan(&n); err != nil {
+				t.Errorf("count portal runs: %v", err)
+			}
 		})
 		return n
 	}
@@ -811,15 +933,16 @@ func TestPortalRun_InsertOrderedAgainstRevoke_PG_Orders(t *testing.T) {
 			portal := newIssuerPortal(t, st, "").Delegate
 			create := creators(portal, cappedPool(t, st, 1000), false)[path]
 			release := holdPortalRow(t, pool, portal.ID, true)
-			blocked, result := parked(func() error { _, err := create(); return err })
+			// A healthy insert takes well under a second, but a loaded runner can take longer: it is given 30 seconds to
+			// finish while the revoke is held, and only an insert that has not finished by then waited for it.
+			blocked, result := parkedFor(30*time.Second, func() error { _, err := create(); return err })
 			if blocked {
 				release()
 				_ = result()
 				t.Fatal("an ordinary run waited for the portal's revoke")
 			}
 			if err := result(); err != nil {
-				release()
-				t.Fatalf("an ordinary run during the revoke: %v", err)
+				t.Errorf("an ordinary run during the revoke: %v", err)
 			}
 			release()
 		})
