@@ -256,11 +256,9 @@ func selfMintRefusal(err error) error {
 const orgCAFileSince = "0.10.0"
 
 // takesOrgCAFile reports whether a runnerd reporting version v takes --org-ca-file. A development build
-// reports "0.9.8+<rev>[-dirty]", which older cannot read, so the build metadata is cut off first. A prerelease of
-// 0.10.0 takes it as 0.10.0 does, so only the three numbers decide.
+// reports "0.9.8+<rev>[-dirty]", which older cannot read, so the build metadata is cut off first.
 func takesOrgCAFile(v string) bool {
 	core, _, _ := strings.Cut(v, "+")
-	core, _, _ = strings.Cut(core, "-")
 	return !older(core, orgCAFileSince)
 }
 

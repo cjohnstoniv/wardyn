@@ -4,7 +4,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,80 +90,32 @@ func noticeLine(cli, origin, server string) string {
 	return fmt.Sprintf(copyNoticeServerNewer, cli, origin, server)
 }
 
-// older reports whether release a sorts before b by semver precedence: major.minor.patch, then a release
-// ahead of any of its own prereleases (0.10.0-rc.18 is older than 0.10.0). A version that is not a
-// release (a build suffix, a word, an empty identifier, a leading zero) is unknown, and unknown is not older.
+// older reports whether release a sorts before b as major.minor.patch; anything unreadable is not older.
 func older(a, b string) bool {
-	pa, okA := parseRelease(a)
-	pb, okB := parseRelease(b)
-	if !okA || !okB {
+	pa, pb := releaseParts(a), releaseParts(b)
+	if pa == nil || pb == nil {
 		return false
 	}
-	for i := range pa.core {
-		if c := cmpNum(pa.core[i], pb.core[i]); c != 0 {
-			return c < 0
+	for i := range 3 {
+		if pa[i] != pb[i] {
+			return pa[i] < pb[i]
 		}
 	}
-	if len(pa.pre) == 0 || len(pb.pre) == 0 {
-		return len(pa.pre) != 0 && len(pb.pre) == 0
-	}
-	for i := 0; i < len(pa.pre) && i < len(pb.pre); i++ {
-		if c := comparePrereleaseID(pa.pre[i], pb.pre[i]); c != 0 {
-			return c < 0
-		}
-	}
-	return len(pa.pre) < len(pb.pre)
+	return false
 }
 
-type release struct {
-	core [3]string // digits with no leading zero
-	pre  []string
-}
-
-// parseRelease reads major.minor.patch[-prerelease]; ok is false for anything else, "+build" included.
-func parseRelease(v string) (release, bool) {
-	var r release
-	core, pre, hasPre := strings.Cut(v, "-")
-	f := strings.Split(core, ".")
+func releaseParts(v string) []int {
+	f := strings.Split(v, ".")
 	if len(f) != 3 {
-		return r, false
+		return nil
 	}
+	out := make([]int, 3)
 	for i, s := range f {
-		if !isNumericID(s) {
-			return r, false
+		n, err := strconv.Atoi(s)
+		if err != nil {
+			return nil
 		}
-		r.core[i] = s
+		out[i] = n
 	}
-	if hasPre {
-		r.pre = strings.Split(pre, ".")
-		for _, id := range r.pre {
-			if id == "" || strings.Trim(id, "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-") != "" ||
-				(isDigits(id) && !isNumericID(id)) {
-				return r, false
-			}
-		}
-	}
-	return r, true
-}
-
-func isDigits(s string) bool { return s != "" && strings.Trim(s, "0123456789") == "" }
-
-// isNumericID is digits with no leading zero (a lone 0 is fine).
-func isNumericID(s string) bool { return isDigits(s) && (s == "0" || s[0] != '0') }
-
-// cmpNum compares two digit strings with no leading zero by value, whatever their length.
-func cmpNum(a, b string) int { return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b)) }
-
-// comparePrereleaseID orders two prerelease identifiers: numbers by value, below words, words by text.
-func comparePrereleaseID(a, b string) int {
-	na, nb := isDigits(a), isDigits(b)
-	switch {
-	case na && nb:
-		return cmpNum(a, b)
-	case na:
-		return -1
-	case nb:
-		return 1
-	}
-	return cmp.Compare(a, b)
+	return out
 }

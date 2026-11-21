@@ -432,65 +432,6 @@ func TestRunnerOfferLine(t *testing.T) {
 	}
 }
 
-// A runner at a release candidate is older than its organisation's final release, and a final one is not
-// older than a candidate of the same release; a version that is not a release is neither older nor newer.
-func TestRunnerOfferLineReadsPrereleases(t *testing.T) {
-	r := newInstallRig(t)
-	r.installed(r.fakeRunner("0.10.0-rc.18", true))
-	if got, want := runnerOfferLine(context.Background(), "0.10.0"), fmt.Sprintf(copyNoticeRunnerOlder, "0.10.0-rc.18", "0.10.0", "0.10.0"); got != want {
-		t.Fatalf("a candidate runner against the final server: offer = %q, want %q", got, want)
-	}
-	if got := runnerOfferLine(context.Background(), "0.10.0-rc.18"); got != "" {
-		t.Fatalf("a candidate runner against its own release was offered an upgrade: %q", got)
-	}
-	r.installed(r.fakeRunner("0.10.0", true))
-	if got := runnerOfferLine(context.Background(), "0.10.0-rc.18"); got != "" {
-		t.Fatalf("a final runner against a candidate server was offered an upgrade: %q", got)
-	}
-}
-
-func TestOlderIsPrereleaseAware(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		want bool
-	}{
-		{"0.10.0-rc.18", "0.10.0", true},
-		{"0.10.0", "0.10.0-rc.18", false},
-		{"0.10.0-rc.9", "0.10.0-rc.18", true},
-		{"0.10.0-rc.18", "0.10.0-rc.9", false},
-		{"0.10.0-rc.18", "0.10.0-rc.18", false},
-		{"0.10.0-rc", "0.10.0-rc.1", true},
-		{"0.10.0-1", "0.10.0-rc", true},
-		{"0.10.0-rc", "0.10.0-1", false},
-		{"0.10.0-rc.18", "0.10.1", true},
-		{"0.10.1-rc.1", "0.10.0", false},
-		{"0.9.9", "0.10.0", true},
-		{"0.10.0", "0.9.9", false},
-		{"0.10.0", "0.10.0", false},
-		{"dev", "0.10.0", false},
-		{"0.10.0", "dev", false},
-		{"0.10.0+abc", "0.10.1", false},
-		{"0.10.1", "0.10.0+abc", false},
-		{"0.10.0-", "0.10.0", false},
-		{"0.10.0-rc..1", "0.10.0", false},
-		{"0.10.0-01", "0.10.0", false},
-		{"0.010.0", "0.10.1", false},
-		{"0.-1.0", "0.10.1", false},
-		{"", "0.10.0", false},
-	} {
-		if got := older(c.a, c.b); got != c.want {
-			t.Errorf("older(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
-		}
-	}
-	// The notice for a final CLI and an organisation still on a candidate says the organisation is older.
-	if got, want := noticeLine("0.10.0", "https://o", "0.10.0-rc.18"), fmt.Sprintf(copyNoticeServerOlder, "0.10.0", "https://o", "0.10.0-rc.18"); got != want {
-		t.Errorf("noticeLine(final CLI, candidate server) = %q, want %q", got, want)
-	}
-	if got, want := noticeLine("0.10.0-rc.18", "https://o", "0.10.0"), fmt.Sprintf(copyNoticeServerNewer, "0.10.0-rc.18", "https://o", "0.10.0"); got != want {
-		t.Errorf("noticeLine(candidate CLI, final server) = %q, want %q", got, want)
-	}
-}
-
 // A .previous that cannot be examined (a link that loops answers ELOOP, not "no such file") is not "none
 // before": the upgrade is refused with the runner as it was, not run on a guess.
 func TestRunnerUpgradeRefusesAPreviousItCannotExamine(t *testing.T) {
