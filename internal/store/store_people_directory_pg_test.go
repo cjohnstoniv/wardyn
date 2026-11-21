@@ -530,7 +530,7 @@ func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
 	p := newIssuerPortal(t, st, "")
-	now := time.Now().UTC()
+	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	_, _, firstUse := mintFor(t, st, p, "used")
 	_, _, latestUse := mintFor(t, st, p, "used")
