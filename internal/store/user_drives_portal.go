@@ -68,7 +68,7 @@ func (s PG) ResolvePortalTeamDrives(ctx context.Context, portal uuid.UUID) ([]Us
 }
 
 // lockPortalAllocation is the check a portal allocation is written under, held to the write's commit: the drive
-// is read FOR SHARE and judged (a team drive on a Wardyn-named backend with no second place), then the subject's
+// is read FOR SHARE and judged (a team drive on a Wardyn-named backend with no second place, then the shared team rule), then the subject's
 // allocation lock is taken, then the portal's delegates row is read FOR SHARE and judged (known, an issuer
 // portal, not revoked). The drive row's lock conflicts with a drive edit's, and a revoke's UPDATE of the portal
 // conflicts with the delegates lock, so each commits wholly before the check or waits for the write.
@@ -85,6 +85,11 @@ func lockPortalAllocation(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant
 		return ErrDrivePortalBackend
 	case d.AltBackend != "":
 		return ErrDrivePortalSecondPlace
+	}
+	// The shared allocation rule, after the portal's own refusals: a write grant (members_can_write) on a drive that was
+	// made read-only after the API judged it is refused here, not stored for a later change to writable to activate.
+	if err := types.ValidateTeamDriveGrant(d, g); err != nil {
+		return fmt.Errorf("%w: %s", ErrDriveGrantTeamRule, err)
 	}
 	if err := lockUserDriveGrants(ctx, tx, g); err != nil {
 		return err

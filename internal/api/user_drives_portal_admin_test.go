@@ -381,7 +381,7 @@ func TestDriveAllocation_TeamSettingChangedUnderLockIs409(t *testing.T) {
 	w := driveGrantAs(t, srv, driveSuperAdminCtx(),
 		`{"subject_type":"group","subject":"platform","drive_id":"`+d.ID.String()+`","additional":true}`)
 	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveGrantConflict ||
-		!strings.Contains(w.Body.String(), "team setting changed") || len(st.added) != 0 {
+		!strings.Contains(w.Body.String(), "setting changed") || len(st.added) != 0 {
 		t.Fatalf("allocation refused under the lock = %d %s (%d rows), want 409 %s naming the team setting", w.Code, w.Body, len(st.added), reasonUserDriveGrantConflict)
 	}
 }

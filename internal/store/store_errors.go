@@ -45,7 +45,7 @@ var ErrDriveAllocated = fmt.Errorf(
 	"%w: this user drive gained an allocation while the write was being prepared", ErrConflict)
 
 // ErrDriveGrantTeamRule is an allocation write's refusal when the drive, read under its lock, no longer takes the
-// allocation (types.ValidateTeamDriveGrant): the drive's team mode changed after the API judged it. It is not a
+// allocation (types.ValidateTeamDriveGrant): the drive's team mode or write setting changed after the API judged it. It is not a
 // conflict, so the API does not answer it with the uniqueness or re-home message. Nothing was written.
 var ErrDriveGrantTeamRule = errors.New("store: the drive's team setting no longer takes this allocation")
 
