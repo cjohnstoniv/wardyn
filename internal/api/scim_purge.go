@@ -584,7 +584,7 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 		data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 	}
 	ev := s.auditEvent(nil, o.actorType, o.actor, "person.deprovision", id.String(), "success", mustJSON(data))
-	rctx, err := o.pinStepEvent(ctx, st, s.cfg.Now().UTC(), id, store.JobKindPurge, key, &ev)
+	rctx, err := s.pinStepEvent(ctx, o, st, s.cfg.Now().UTC(), id, store.JobKindPurge, key, &ev)
 	if err != nil {
 		return err
 	}

@@ -639,7 +639,8 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 	data := map[string]any{"queued": true}
 	maps.Copy(data, extra)
 	s.metrics.queueWait(queueOutcomeCancelled, s.cfg.Now().Sub(run.CreatedAt))
-	s.recordAudit(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
+	rctx, kev := killReceiptOf(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
+	s.recordAudit(rctx, kev)
 	s.dropUnstartedKeptDrive(ctx, run.ID)
 	return map[string]any{}
 }

@@ -5,7 +5,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -100,21 +99,15 @@ func (o leaverOrigin) portalLedger(ctx context.Context, st any, id uuid.UUID) (s
 	return led, b.at, true
 }
 
-// pinnedPayload is the part of a portal step's audit event that is fixed with its id and time: who wrote it and
-// what it says.
-type pinnedPayload struct {
-	ActorType types.ActorType `json:"actor_type"`
-	Actor     string          `json:"actor"`
-	Data      json.RawMessage `json:"data"`
-}
-
 // pinStepEvent fixes the audit event a portal step writes on the step's ledger row, the first attempt's winning
 // whole: its id, time, actor and data. ev is rewritten to what the row holds, and ctx is marked as a replay, so a
 // second writer of the same step, on any replica, writes the same event and adds no row. key names the row the
 // caller read and must carry its id; in a bound suspension tail the pin also requires, in the same statement,
 // that the row belongs to the suspension the tail is bound to. A row a later suspension replaced is
-// store.ErrSuperseded, and nothing is pinned or written. Other origins are untouched.
-func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
+// store.ErrSuperseded, and nothing is pinned or written. The payload is held sealed under a human actor's audit
+// key (sealPinned); once that key is erased the replay keeps the pinned id and time and writes the caller's own
+// actor and data. Other origins are untouched.
+func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore, now time.Time, id uuid.UUID, kind string, key store.JobKey, ev *types.AuditEvent) (context.Context, error) {
 	if !o.portal {
 		return ctx, nil
 	}
@@ -122,7 +115,7 @@ func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.T
 	if !ok {
 		return ctx, errors.New("the store cannot pin a portal step's audit event")
 	}
-	payload, err := json.Marshal(pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
+	payload, err := s.sealPinned(ctx, pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
 	if err != nil {
 		return ctx, err
 	}
@@ -134,11 +127,12 @@ func (o leaverOrigin) pinStepEvent(ctx context.Context, st scimStore, now time.T
 	if err != nil {
 		return ctx, err
 	}
-	var p pinnedPayload
-	if err := json.Unmarshal(held.Payload, &p); err != nil {
-		return ctx, fmt.Errorf("read a pinned audit event: %w", err)
+	ev.ID, ev.Time = held.ID, held.At
+	if p, ok, err := s.openPinned(ctx, held.Payload); err != nil {
+		return ctx, err
+	} else if ok {
+		ev.ActorType, ev.Actor, ev.Data = p.ActorType, p.Actor, p.Data
 	}
-	ev.ID, ev.Time, ev.ActorType, ev.Actor, ev.Data = held.ID, held.At, p.ActorType, p.Actor, p.Data
 	return store.WithAuditReplay(ctx), nil
 }
 
@@ -817,10 +811,25 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			tctx = withKillGuard(ctx, killGuard{led: led, id: id, key: key, at: at})
 		}
 		if err := s.teardownRun(tctx, o, st, runID); err != nil {
-			errs = append(errs, errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err)))
+			if errors.Is(err, store.ErrKillHeld) {
+				// Another worker's claim of this occurrence owns the teardown and its receipt; its finish, or the end
+				// of its lease, is what this row waits for.
+				errs = append(errs, err)
+				continue
+			}
+			failed := errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err))
+			if g, ok := killGuardOf(tctx); ok && !errors.Is(err, store.ErrSuperseded) {
+				// A teardown that failed after its claim leaves the claim for its retry to take at once.
+				failed = errors.Join(failed, g.led.ReleaseSuspensionKillAt(ctx, id, key))
+			}
+			errs = append(errs, failed)
 			continue
 		}
-		errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 1}))
+		ferr := finishStep(ctx, st, id, key, map[string]int{"runs_killed": 1})
+		if g, ok := killGuardOf(tctx); ok && errors.Is(ferr, store.ErrReceiptNotStored) {
+			ferr = errors.Join(ferr, g.led.ReleaseSuspensionKillAt(ctx, id, key)) // the receipt is not stored: the retry writes it
+		}
+		errs = append(errs, ferr)
 	}
 	return errors.Join(servicesErr, errors.Join(errs...))
 }
@@ -933,7 +942,7 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 			key.ID = j.ID
 		}
 		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
-		rctx, err := o.pinStepEvent(ctx, st, s.cfg.Now().UTC(), id, store.JobKindSuspend, key, &ev)
+		rctx, err := s.pinStepEvent(ctx, o, st, s.cfg.Now().UTC(), id, store.JobKindSuspend, key, &ev)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -966,9 +975,11 @@ var errAuditHeldBySpool = errors.New("the audit row is held by this replica's sp
 
 // recordAuditStepEvent writes a step's audit row. A portal step settles in the shared ledger only once the row is
 // in the shared audit table: a row the audit spool took is not enough, since the spool is one replica's, and losing
-// it would leave a done step with no stored receipt for any other replica to write. The step stays pending, and its
-// retry replays the same pinned event, which adds no row once the table has it. Other origins keep
-// recordAuditStrict.
+// it would leave a done step with no stored receipt for any other replica to write. A recorder that answers
+// audit.ErrSpooled leaves the step pending here; one that answers nil is not trusted either (a sealing recorder can
+// append to the spool alone and answer nil), so the step's finish itself requires the pinned id and time in the
+// audit table, in the statement that marks it done (store.ErrReceiptNotStored). Either way the retry replays the
+// same pinned event, which adds no row once the table has it. Other origins keep recordAuditStrict.
 func (s *Server) recordAuditStepEvent(ctx context.Context, o leaverOrigin, ev types.AuditEvent) error {
 	if !o.portal {
 		return s.recordAuditStrict(ctx, ev)

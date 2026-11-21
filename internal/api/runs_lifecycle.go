@@ -928,8 +928,8 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// On revokeCtx, not ctx: a slow kill leaves ctx expired, and the audit row and the reconciles below
 	// would then write and read nothing. It is detached and already bounded, and it shares the
 	// revokes' window so the tail's worst case stays killCascadeTimeout + killRevokeTimeout.
-	s.recordAudit(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill",
-		id.String(), outcome, mustJSON(data)))
+	rctx, kev := killReceiptOf(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill", id.String(), outcome, mustJSON(data)))
+	s.recordAudit(rctx, kev)
 
 	// A killed workspace run still settles its workspace: verify/scan runs get
 	// the no-result reconcile; a record run's kill IS the normal "Done recording"
