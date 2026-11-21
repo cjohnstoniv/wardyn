@@ -115,6 +115,19 @@ jobs:
       - name: Postgres, one age key and one admin token for both replicas
         run: |
           set -euo pipefail
+          # The mirror step only warns when it has no copy, and a runner may already hold another postgres:16:
+          # run the digest deploy/base-images.txt pins, from the local store, else a pull (through the mirror
+          # when it is up), else fail.
+          pg_digest=$(grep -E '^tag docker\.io/library/postgres:16@' deploy/base-images.txt | head -n1 | sed 's/.*@//')
+          [ -n "$pg_digest" ] || { echo "::error::no postgres:16 pin in deploy/base-images.txt"; exit 1; }
+          pg_have=$(docker image inspect --format '{{join .RepoDigests " "}}' postgres:16 2>/dev/null || :)
+          case "$pg_have" in
+            *"@$pg_digest"*) ;;
+            *)
+              docker pull -q "docker.io/library/postgres@$pg_digest" >/dev/null \
+                || { echo "::error::postgres:16 pinned digest $pg_digest unavailable"; exit 1; }
+              docker tag "docker.io/library/postgres@$pg_digest" postgres:16 ;;
+          esac
           kind load docker-image postgres:16 --name wardyn-mixed
           kubectl create namespace "$NS"
           age_key=$(docker run --rm wardyn/wardynd:kind-test -gen-age-key)
