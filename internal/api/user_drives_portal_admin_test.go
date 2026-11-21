@@ -372,3 +372,16 @@ func TestTeamDriveRehome_LegacyRenameMovesOnlyANamedObject(t *testing.T) {
 		}
 	}
 }
+
+// An allocation the store refuses under the drive's lock because the drive's team setting changed after the API judged
+// it is a 409 naming that change, not the home-name or re-home message of the other conflict, and it writes nothing.
+func TestDriveAllocation_TeamSettingChangedUnderLockIs409(t *testing.T) {
+	srv, st, d := portalAdminFixture(t)
+	st.addErr = fmt.Errorf("%w: subject_type: a team drive is allocated to groups only", store.ErrDriveGrantTeamRule)
+	w := driveGrantAs(t, srv, driveSuperAdminCtx(),
+		`{"subject_type":"group","subject":"platform","drive_id":"`+d.ID.String()+`","additional":true}`)
+	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveGrantConflict ||
+		!strings.Contains(w.Body.String(), "team setting changed") || len(st.added) != 0 {
+		t.Fatalf("allocation refused under the lock = %d %s (%d rows), want 409 %s naming the team setting", w.Code, w.Body, len(st.added), reasonUserDriveGrantConflict)
+	}
+}

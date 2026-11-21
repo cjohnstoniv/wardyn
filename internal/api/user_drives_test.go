@@ -118,6 +118,14 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 		s.grantsAppear()
 		s.grantsAppear = nil
 	}
+	// A change of team mode while any allocation holds the drive, whatever refuseIfAllocated says (driveTeamFlipOfAllocatedPred).
+	if before, held := s.drives[d.ID]; held && before.Team != d.Team {
+		for _, g := range s.grants {
+			if g.DriveID == d.ID {
+				return types.UserDrive{}, store.ErrDriveAllocated
+			}
+		}
+	}
 	if refuseIfAllocated {
 		// As the store's statement judges them (driveMovesAnAllocationPred): an allocation counts when this write moves its object.
 		before, held := s.drives[d.ID]
