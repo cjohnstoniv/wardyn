@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -247,9 +248,13 @@ const (
 	attachUnverifiableMsg        = "Could not verify this terminal session; try again"
 )
 
+// issuerAdmitWaitNS replaces issuerAdmitBound's watch bound when set: tests only, so a test can keep a short
+// watch bound and still give its opening reads room.
+var issuerAdmitWaitNS atomic.Int64
+
 // issuerAdmitBound is the bound on an issuer portal's opening authorization reads, the watch's own.
 func issuerAdmitBound() time.Duration {
-	return time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
+	return time.Duration(cmp.Or(issuerAdmitWaitNS.Load(), supportWatchWaitNS.Load(), int64(supportWatchWait)))
 }
 
 // uiStreamEnd is an issuer-portal stream's known end on the wall clock: the earliest of sess's signed
