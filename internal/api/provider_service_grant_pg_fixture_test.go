@@ -16,10 +16,13 @@ import (
 	"slices"
 	"testing"
 
+	"filippo.io/age"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -34,6 +37,10 @@ type svcPG struct {
 	audit  *memAudit
 	admin  *http.Cookie
 	person *http.Cookie
+	// sealed, when set, is the Postgres secret store every server of the fixture uses instead of sec, sealed
+	// under ageKey, so a released wardynd given the same key reads the same records.
+	sealed *secretspg.Store
+	ageKey string
 }
 
 // newSvcPG builds the fixture over a throwaway database. activated is the 0.10.2 switch-on.
@@ -45,6 +52,17 @@ func newSvcPG(t *testing.T, activated bool) *svcPG {
 // newSvcPGClocked is newSvcPG with the server reading clock when it is set.
 func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
 	t.Helper()
+	return newSvcPGWith(t, activated, clock, false)
+}
+
+// newSvcPGSealed is newSvcPG with the Postgres secret store, sealed under a key of its own, for every server.
+func newSvcPGSealed(t *testing.T, activated bool) *svcPG {
+	t.Helper()
+	return newSvcPGWith(t, activated, nil, true)
+}
+
+func newSvcPGWith(t *testing.T, activated bool, clock *svcClock, sealed bool) *svcPG {
+	t.Helper()
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
@@ -53,6 +71,19 @@ func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
 	}
 	f := &svcPG{t: t, pool: pool, pg: pg, sec: newSvcSecrets(), idp: &svcIdP{}, audit: &memAudit{}}
 	f.sec.m[oidcSecretRef] = []byte(oidcClientSecret)
+	if sealed {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.sealed, err = secretspg.New(pool, id); err != nil {
+			t.Fatal(err)
+		}
+		f.ageKey = id.String()
+		if err := f.sealed.Put(ctx, oidcSecretRef, []byte(oidcClientSecret)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if activated {
 		f.activate()
 	}
@@ -60,7 +91,7 @@ func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
 	cfg := baseTestConfig(h, pg)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Audit = f.audit
-	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), f.idp
+	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.secrets(), secretmask.NewRegistry(), f.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
 	if clock != nil {
@@ -83,11 +114,12 @@ func (f *svcPG) newReplica() *svcPG {
 func (f *svcPG) newReplicaClocked(clock *svcClock) *svcPG {
 	f.t.Helper()
 	h := newHarness(f.t)
-	r := &svcPG{t: f.t, pool: f.pool, pg: f.pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person}
+	r := &svcPG{t: f.t, pool: f.pool, pg: f.pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person,
+		sealed: f.sealed, ageKey: f.ageKey}
 	cfg := baseTestConfig(h, f.pg)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Audit = r.audit
-	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), r.idp
+	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.secrets(), secretmask.NewRegistry(), r.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
 	if clock != nil {
@@ -95,6 +127,14 @@ func (f *svcPG) newReplicaClocked(clock *svcClock) *svcPG {
 	}
 	r.srv = New(cfg)
 	return r
+}
+
+// secrets is the store the fixture's servers use: the sealed Postgres one when set, else the double.
+func (f *svcPG) secrets() secretstore.Store {
+	if f.sealed != nil {
+		return f.sealed
+	}
+	return f.sec
 }
 
 // activate stores the 0.10.2 switch-on mark, as lane 2's activate call does.
