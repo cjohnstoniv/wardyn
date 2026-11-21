@@ -42,6 +42,10 @@ const (
 	teardownAttempts = 3
 )
 
+// errNotSCIMOwned is an identity of another issuer or tenant than this SCIM endpoint serves (scimOwns): no
+// suspension work of it is run or resumed here.
+var errNotSCIMOwned = errors.New("the identity belongs to another identity provider issuer or tenant than this SCIM endpoint serves")
+
 // errDeprovisionIncomplete is a suspension that has not finished: the identity is deactivated and
 // every pending step is on the ledger, but the caller must retry.
 var errDeprovisionIncomplete = errors.New("deprovisioning is incomplete; retry the request")
@@ -320,6 +324,12 @@ func jobByKey(jobs []store.DeprovisionJob, step, target string) (store.Deprovisi
 	return jobs[i], true
 }
 
+// warnNotSCIMOwned logs that the sweeper left identity id alone: it belongs to another issuer or tenant than
+// this endpoint serves, so any work of it still pending is left in place, never resumed or destroyed here.
+func (s *Server) warnNotSCIMOwned(ctx context.Context, id uuid.UUID) {
+	slog.WarnContext(ctx, "api: scim: leaving an identity of another issuer or tenant alone", slog.String("identity", id.String()), slog.Any("err", errNotSCIMOwned))
+}
+
 // suspendIdentity runs the suspension of identity id to completion, or returns
 // errDeprovisionIncomplete with whatever is left pending on the ledger. A suspension whose ledger is
 // already done writes nothing new, so an identity provider that repeats the request costs nothing.
@@ -329,7 +339,8 @@ func (s *Server) suspendIdentity(ctx context.Context, st scimStore, id uuid.UUID
 
 // resumeSuspension is the sweeper's recovery of a suspension it listed (store.PendingLeavers). It goes on only
 // while the identity is still deactivated at the instant it was listed with: a reactivation that commits in
-// between stands, and a person suspended again since is that suspension's own work.
+// between stands, and a person suspended again since is that suspension's own work. An identity of another
+// issuer or tenant is left alone: the ownership check is suspendStepOne's, on the row it reads first.
 func (s *Server) resumeSuspension(ctx context.Context, st scimStore, p store.PendingLeaver) error {
 	if p.DeactivatedAt == nil {
 		return nil
@@ -418,6 +429,10 @@ func finishStep(ctx context.Context, st scimStore, id uuid.UUID, key store.JobKe
 func (s *Server) runSuspension(ctx context.Context, st scimStore, id uuid.UUID, slot string, resumeOf *time.Time) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	ident, forms, keys, err := s.suspendStepOne(ctx, st, id, resumeOf)
+	if errors.Is(err, errNotSCIMOwned) {
+		s.warnNotSCIMOwned(ctx, id)
+		return nil
+	}
 	// A sign-in that bound the row after it was read is seen under the suspension's lock: read it again, so
 	// the newly bound principal is cut, swept and has its runs killed. A binding never changes once made,
 	// so the second plan is the last one.
@@ -463,6 +478,9 @@ func (s *Server) suspendStepOne(ctx context.Context, st scimStore, id uuid.UUID,
 	ident, err := st.GetIdentity(ctx, id)
 	if err != nil {
 		return ident, leaverForms{}, nil, err
+	}
+	if !s.scimOwns(ident) {
+		return ident, leaverForms{}, nil, errNotSCIMOwned
 	}
 	if resumeOf != nil && (ident.DeactivatedAt == nil || !ident.DeactivatedAt.Equal(*resumeOf)) {
 		return ident, leaverForms{}, nil, store.ErrSuperseded

@@ -387,7 +387,7 @@ func TestSCIMSweeperLeavesAScheduleAfterAnOldSuspensionOfItsOwn(t *testing.T) {
 				t.Fatalf("control: %q's suspension ledger = %+v (%v), want its old rows kept", o.p, jobs, err)
 			}
 
-			due, err := e.st.PurgeDueIdentities(ctx, 50)
+			due, err := e.st.PurgeDueIdentities(ctx, e.issuer, e.tenant, 50)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -396,7 +396,7 @@ func TestSCIMSweeperLeavesAScheduleAfterAnOldSuspensionOfItsOwn(t *testing.T) {
 					t.Errorf("the candidate read counts %q's old suspension as proof of its current deactivation", o.p)
 				}
 			}
-			if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true); err != nil || marked {
+			if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true, e.issuer, e.tenant); err != nil || marked {
 				t.Fatalf("the sweeper's mark on %q = %v (%v), want it refused under the row lock", o.p, marked, err)
 			}
 			if err := e.sweepPastThePurgeDelay(); err != nil {

@@ -86,7 +86,7 @@ func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 // retry finishes the steps that are still pending and writes nothing new once they are all done.
 func (s *Server) purgeIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string, requireDue bool) (bool, error) {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	marked, err := st.MarkIdentityPurged(ctx, id, requireDue)
+	marked, err := st.MarkIdentityPurged(ctx, id, requireDue, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant)
 	if err != nil {
 		return false, err
 	}
@@ -103,6 +103,12 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	ident, err := st.GetIdentity(ctx, id)
 	if err != nil {
 		return err
+	}
+	// Nothing of a foreign identity is purged: the suspension above already left it alone (suspendStepOne),
+	// and no step below runs for it.
+	if !s.scimOwns(ident) {
+		s.warnNotSCIMOwned(ctx, id)
+		return nil
 	}
 	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
 	if err != nil {
@@ -611,7 +617,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	var errs []error
 	if s.cfg.SCIM.PurgeAfter > 0 {
-		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
+		due, err := st.PurgeDueIdentities(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimSweepBatch)
 		errs = append(errs, err)
 		for _, d := range due {
 			// A schedule with no proof that the identity's current deactivation is its own suspension's came
@@ -629,7 +635,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			}
 		}
 	}
-	pending, err := st.PendingLeavers(ctx, scimResumeIdle, scimSweepBatch)
+	pending, err := st.PendingLeavers(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range pending {
 		if p.Purged {

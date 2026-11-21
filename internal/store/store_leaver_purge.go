@@ -57,25 +57,28 @@ const ownSuspension = `EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity
 // this call marked it: false when the row was already purged and, with requireDue, when it is not
 // (still) deactivated by its own suspension (ownSuspension) with a purge_after that has passed. The
 // re-check under the lock is what lets a reactivation that committed first win; once the mark commits a
-// reactivation is ErrIdentityPurged.
-func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error) {
+// reactivation is ErrIdentityPurged. It also reports false, and marks nothing, when the locked row is not
+// the given issuer's (and the tenant's, when one is given and the row records one): the same ownership the
+// SCIM by-id routes apply, decided here at the authoritative write.
+func (s PG) MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool, issuer, tenant string) (bool, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return false, fmt.Errorf("store: mark identity purged: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var purged, due bool
+	var purged, due, owned bool
 	err = tx.QueryRow(ctx, `
 		SELECT i.purged_at IS NOT NULL, i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
-		       AND `+ownSuspension+`
-		  FROM principal_identities i WHERE i.id = $1 FOR UPDATE`, id).Scan(&purged, &due)
+		       AND `+ownSuspension+`,
+		       i.issuer = $2 AND ($3::text = '' OR i.tenant_id = '' OR i.tenant_id = $3::text)
+		  FROM principal_identities i WHERE i.id = $1 FOR UPDATE`, id, issuer, tenant).Scan(&purged, &due, &owned)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, ErrNotFound
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: lock identity: %w", err)
 	}
-	if purged || (requireDue && !due) {
+	if !owned || purged || (requireDue && !due) {
 		return false, nil
 	}
 	if _, err = tx.Exec(ctx, `UPDATE principal_identities SET purged_at = clock_timestamp() WHERE id = $1`, id); err != nil {
@@ -101,14 +104,17 @@ type DueIdentity struct {
 }
 
 // PurgeDueIdentities is the identities deactivated and not yet purged whose purge_after has passed, those
-// deactivated by their own suspension first, then oldest first, at most limit. It is only a candidate
-// read: MarkIdentityPurged re-checks under the lock.
-func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error) {
+// deactivated by their own suspension first, then oldest first, at most limit. Only an identity of the given
+// issuer, and of the tenant when one is given and the row records one, is listed, and that is decided before
+// the limit: another issuer's due identity must not fill the batch. It is only a candidate read:
+// MarkIdentityPurged re-checks under the lock.
+func (s PG) PurgeDueIdentities(ctx context.Context, issuer, tenant string, limit int) ([]DueIdentity, error) {
 	return collect(ctx, s.Pool, "list", "identities due for purge", `
 		SELECT i.id, `+ownSuspension+` AS suspended
 		  FROM principal_identities i
 		 WHERE i.purged_at IS NULL AND i.deactivated_at IS NOT NULL AND i.purge_after IS NOT NULL AND i.purge_after <= now()
-		 ORDER BY suspended DESC, i.purge_after, i.id LIMIT $1`, []any{limit}, func(r pgx.Row) (DueIdentity, error) {
+		   AND i.issuer = $2 AND ($3::text = '' OR i.tenant_id = '' OR i.tenant_id = $3::text)
+		 ORDER BY suspended DESC, i.purge_after, i.id LIMIT $1`, []any{limit, issuer, tenant}, func(r pgx.Row) (DueIdentity, error) {
 		var d DueIdentity
 		return d, r.Scan(&d.ID, &d.Suspended)
 	})
@@ -118,18 +124,20 @@ func (s PG) PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, e
 // touched for idleFor (a request still working on it is not one the sweeper may race), at most limit.
 // An identity that is neither deactivated nor purged has a stale ledger and is not listed. The fewest
 // failed attempts come first, so steps a retry cannot finish (a held refusal is retried every pass) do
-// not fill the batch ahead of newer leavers.
-func (s PG) PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error) {
+// not fill the batch ahead of newer leavers. Only an identity of the given issuer, and of the tenant when
+// one is given and the row records one, is listed, decided before the limit like PurgeDueIdentities.
+func (s PG) PendingLeavers(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingLeaver, error) {
 	return collect(ctx, s.Pool, "list", "pending leavers", `
 		SELECT i.id, i.purged_at IS NOT NULL, i.deactivated_at
 		  FROM principal_identities i
 		 WHERE (i.purged_at IS NOT NULL OR i.deactivated_at IS NOT NULL)
+		   AND i.issuer = $3 AND ($4::text = '' OR i.tenant_id = '' OR i.tenant_id = $4::text)
 		   AND EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.state = 'pending'
 		                  AND j.kind IN ('suspend', 'purge'))
 		   AND NOT EXISTS (SELECT 1 FROM deprovision_jobs j WHERE j.identity_id = i.id
 		                  AND j.updated_at > now() - $1::bigint * interval '1 microsecond')
 		 ORDER BY (SELECT COALESCE(MAX(j.attempts), 0) FROM deprovision_jobs j WHERE j.identity_id = i.id AND j.state = 'pending'),
-		          i.created_at, i.id LIMIT $2`, []any{idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingLeaver, error) {
+		          i.created_at, i.id LIMIT $2`, []any{idleFor.Microseconds(), limit, issuer, tenant}, func(r pgx.Row) (PendingLeaver, error) {
 		var p PendingLeaver
 		return p, r.Scan(&p.ID, &p.Purged, &p.DeactivatedAt)
 	})

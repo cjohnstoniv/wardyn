@@ -149,9 +149,9 @@ type LeaverStore interface {
 	// PinDeprovisionEvent stores id and at on a row that has none and returns what the row holds, so two
 	// writers of one obligation agree on the event.
 	PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error)
-	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool) (bool, error)
-	PurgeDueIdentities(ctx context.Context, limit int) ([]DueIdentity, error)
-	PendingLeavers(ctx context.Context, idleFor time.Duration, limit int) ([]PendingLeaver, error)
+	MarkIdentityPurged(ctx context.Context, id uuid.UUID, requireDue bool, issuer, tenant string) (bool, error)
+	PurgeDueIdentities(ctx context.Context, issuer, tenant string, limit int) ([]DueIdentity, error)
+	PendingLeavers(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingLeaver, error)
 	PendingRefusalAudits(ctx context.Context, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error)
 	DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals, emails []string) (UserSubjectRowsDeleted, error)
 	HeldEmails(ctx context.Context, id uuid.UUID, principals, emails []string) ([]string, error)

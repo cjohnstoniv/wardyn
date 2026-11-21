@@ -63,7 +63,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, and group requests ignore such a user named as a member. Before, a SCIM token that knew such a user's id could read, change, suspend or remove the user, and a group removal naming them cut their sessions and revoked their tokens.
+- SCIM requests that name a user by id now answer not found for a user from a different identity provider issuer or tenant, and group requests ignore such a user named as a member. Before, a SCIM token that knew such a user's id could read, change, suspend or remove the user, and a group removal naming them cut their sessions and revoked their tokens. The SCIM sweeper also leaves such a user alone: it no longer resumes their suspension or purges them, so a suspension of them started through SCIM before this release is left unfinished, with the user still suspended.
 
 ### Before you upgrade
 
