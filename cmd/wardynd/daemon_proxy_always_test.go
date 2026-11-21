@@ -272,7 +272,7 @@ func TestDaemonProxyAlways_ListedHostNeverDirect(t *testing.T) {
 		}
 		for _, target := range []string{"https://login.corp.example/t", "https://login.corp.example:8443/t", "https://LOGIN.corp.example./t", "http://idp.corp.example/t",
 			// net/http dials the IDNA-ASCII form, so these spellings are the listed hosts too.
-			"https://\uff4cogin.corp.example/token", "https://login\u3002corp.example/token", "https://b\u00fccher.corp.example/token"} {
+			"https://\uff4cogin.corp.example/token", "https://login\u3002corp.example/token", "https://b\u00fccher.corp.example/token", "https://b\u00fccher.corp.example./token"} {
 			if got := proxyFor(t, grant, target); got == "" {
 				t.Errorf("%s: a listed host, %s, goes direct", name, target)
 			}
@@ -337,7 +337,7 @@ func TestDaemonProxyAlways_RefusesNonHostnameEntry(t *testing.T) {
 	for _, entry := range []string{
 		"login.corp.example?MARKER-q1", "login.corp.example#MARKER-f1", "login corp.example", "login..corp.example",
 		"-bad.example", "bad-.example", long, strings.Repeat("a.", 130) + "example", "log\u00efn.example", "under_score.example", ".",
-		"127.1", "2130706433", "0x7f.0.0.1",
+		"127.1", "2130706433", "0x7f.0.0.1", "0x7f", "h.0xff",
 	} {
 		_, err := bootDaemonProxy(freshTransport(), alwaysFlags("http://proxy.corp.example:3128", "", "ok.example,"+entry))
 		if err == nil {
@@ -368,9 +368,10 @@ func TestDaemonProxyAlways_ProtectedHostsCompareAfterIDNA(t *testing.T) {
 		{"unicode issuer, punycode entry", "https://idp.bücher.example", "", "ok.example,idp.xn--bcher-kva.example", "entry 2 "},
 		{"unicode issuer, upper-case dotted entry", "https://idp.bücher.example", "", "IDP.xn--bcher-kva.example.", "entry 1 "},
 		{"punycode issuer, unicode entry", "https://idp.xn--bcher-kva.example", "", "ok.example,idp.bücher.example", "entry 2 "},
-		{"punycode issuer, fullwidth entry", "https://idp.xn--bcher-kva.example", "", "ｉdp.xn--bcher-kva.example", "entry 1 "},
-		{"punycode issuer, ideographic dot entry", "https://idp.xn--bcher-kva.example", "", "idp。xn--bcher-kva.example", "entry 1 "},
+		{"punycode issuer, fullwidth entry", "https://idp.xn--bcher-kva.example", "", "\uff49dp.xn--bcher-kva.example", "entry 1 "},
+		{"punycode issuer, ideographic dot entry", "https://idp.xn--bcher-kva.example", "", "idp\u3002xn--bcher-kva.example", "entry 1 "},
 		{"unicode cluster host, punycode entry", "", "k8s.bücher.example", "k8s.xn--bcher-kva.example", "entry 1 "},
+		{"cluster host with a port, ascii entry", "", "k8s.corp.example:6443", "k8s.corp.example", "entry 1 "},
 		{"issuer with a port, ascii entry", "https://idp.corp.example:8443", "", "idp.corp.example", "entry 1 "},
 	}
 	for _, c := range cases {
@@ -397,13 +398,13 @@ func TestDaemonProxyAlways_ProtectedHostsCompareAfterIDNA(t *testing.T) {
 	}
 	// A protected host that does not convert refuses boot when a list is set, and only then.
 	f = alwaysFlags(proxy, "", "login.corp.example")
-	*f.oidcInternalIss = "https://a b.example"
+	*f.oidcInternalIss = "https://a\u2028b.example"
 	_, err := bootDaemonProxy(freshTransport(), f)
 	if err == nil || !strings.Contains(err.Error(), "WARDYN_DAEMON_PROXY_ALWAYS") || strings.Contains(err.Error(), "b.example") {
 		t.Errorf("unconvertible protected host with a list: %v; want a refusal that names the variable and not the host", err)
 	}
 	f = alwaysFlags(proxy, "", "")
-	*f.oidcInternalIss = "https://a b.example"
+	*f.oidcInternalIss = "https://a\u2028b.example"
 	if _, err := bootDaemonProxy(freshTransport(), f); err != nil {
 		t.Errorf("unconvertible protected host without a list refused boot: %v", err)
 	}
