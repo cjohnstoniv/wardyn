@@ -246,7 +246,18 @@ jobs:
             docker cp "$cid:/host/." "$RUNNER_TEMP/host"
             docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
             docker rm "$cid" >/dev/null
-            for f in "$RUNNER_TEMP/wardynd" "$RUNNER_TEMP"/host/wardyn*; do
+            # Every file the image is built to carry is checked, so one that is missing fails here rather than
+            # dropping out of a glob: the daemon, the generic host CLI that `make setup` falls back to, and one
+            # host CLI for each of the four supported platforms (deploy/compose/Dockerfile.wardynd). A symbolic
+            # link is not a copied-out file, so only regular files are read.
+            expected=("$RUNNER_TEMP/wardynd" "$RUNNER_TEMP/host/wardyn")
+            for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+              expected+=("$RUNNER_TEMP/host/wardyn-$platform")
+            done
+            for f in "${expected[@]}"; do
+              if [ -L "$f" ] || [ ! -f "$f" ]; then
+                echo "::error::$(basename "$f") is missing from the image or is not a regular file"; exit 1
+              fi
               grep -aqF "$REVISION" "$f" \
                 || { echo "::error::$(basename "$f") was not stamped with revision ${REVISION}"; exit 1; }
             done
