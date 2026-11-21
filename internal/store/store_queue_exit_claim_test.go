@@ -19,6 +19,7 @@ import (
 // statement takes no claim. A statement added elsewhere fails until it is listed here.
 var queueExitStatements = map[string]string{
 	"LeaveRunQueueIn":    "",
+	"EndUnstartedRun":    "",
 	"cancelPoolQueue":    "",
 	"promoteQueuedRun":   "promotion: the run is admitted, nothing ended",
 	"RequeuePromotedRun": "puts a promoted run back in the queue, nothing ended",

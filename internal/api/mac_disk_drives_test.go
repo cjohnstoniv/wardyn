@@ -268,8 +268,8 @@ func TestOwnerDeleteOfADiskARunJustEndedSaysItIsReleasing(t *testing.T) {
 	}
 }
 
-// A macOS VM run its Mac refused when it started (no sandbox created, the run ended) gives up the drive
-// it kept its work folder in, once its dispatch has let go of its lease (#3900). A run that got a
+// A macOS VM run that ended before its Mac was asked to create a sandbox gives up the drive
+// it kept its work folder in, once its dispatch has let go of its lease: the claim its end took is finished (#3900). A run that got a
 // sandbox, and a run that is not a macOS VM, keep theirs.
 func TestUncreatedMacRunDropsItsKeptDrive(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -283,9 +283,11 @@ func TestUncreatedMacRunDropsItsKeptDrive(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, st, _, d := macDiskDeleteRig(t)
-			run := types.AgentRun{ID: uuid.New(), State: types.RunFailed, MachineKind: tc.kind, CreatedBy: aliceSub}
+			ended := time.Now()
+			run := types.AgentRun{ID: uuid.New(), State: types.RunFailed, MachineKind: tc.kind, CreatedBy: aliceSub, EndedAt: &ended}
 			delete(st.drives, d.ID)
-			d.ID, d.KeptFromRun = keptWorkFolderDriveID(run.ID), &run.ID
+			// The statement that ended the run took the claim at the instant it ended.
+			d.ID, d.KeptFromRun, d.DeleteStartedAt = keptWorkFolderDriveID(run.ID), &run.ID, &ended
 			st.drives[d.ID] = d
 			st.runs = map[uuid.UUID]types.AgentRun{run.ID: run}
 			created := tc.created

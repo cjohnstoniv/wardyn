@@ -621,6 +621,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// member-drive delete would read as a create still in flight until the heartbeat aged out.
 	// Deferred first, so it runs after the create lease's ticker has stopped.
 	created := false
+	// A macOS VM run that ends before its Mac is asked to create the sandbox claims the drive it kept in the
+	// statement that ends it (store.EndUnstartedRun); the cleanup below finishes that claim. The marker is on both
+	// contexts: the delivery's refusal fails the run on createCtx.
+	if run.MachineKind.IsMacOSVM() {
+		unstarted := &unstartedEnd{}
+		ctx, createCtx = withUnstartedEnd(ctx, unstarted), withUnstartedEnd(createCtx, unstarted)
+	}
 	defer s.dropUncreatedMacKeptDrive(ctx, run, &created) // after the lease release below: defers run last-in first-out
 	defer s.releaseUncreatedRunLease(ctx, run.ID, &created)
 	defer stopCreateLease()
