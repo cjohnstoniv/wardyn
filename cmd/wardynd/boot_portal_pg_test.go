@@ -228,7 +228,7 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	if err := store.LockPortalIssuerRegistry(ctx, rtx); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.RetirePortalIssuerQ(ctx, rtx, b.IssuerKey); err != nil {
+	if err := st.RetirePortalIssuerQ(ctx, rtx, b.IssuerKey, nil); err != nil {
 		t.Fatalf("retire as the app role: %v", err)
 	}
 	if err := rtx.Commit(ctx); err != nil {
