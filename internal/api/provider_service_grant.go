@@ -43,8 +43,6 @@ const (
 	serviceGrantMinLifetime = 900
 	// serviceGrantPacing separates the attempts a resolve or a dispatch starts after a failure, per row and replica.
 	serviceGrantPacing = time.Minute
-	// serviceGrantPublishBound bounds the reads and audit row that publish a token, apart from the token request's own.
-	serviceGrantPublishBound = 5 * time.Second
 
 	serviceGrantActor = "wardyn/service-grant"
 
@@ -67,6 +65,14 @@ const (
 )
 
 // serviceGrantOAuthErrors are RFC 6749 section 5.2's six error codes; any other string is recorded as "other".
+// The service grant's time bounds; variables only so tests can shorten them.
+var (
+	// serviceGrantTokenBound bounds the record's read and the token request of one mint.
+	serviceGrantTokenBound = adoEntraRedeemTimeout
+	// serviceGrantPublishBound bounds the reads and audit row that publish a token, apart from the token request's own.
+	serviceGrantPublishBound = 5 * time.Second
+)
+
 var serviceGrantOAuthErrors = []string{"invalid_request", "invalid_client", "invalid_grant", "unauthorized_client", "unsupported_grant_type", "invalid_scope"}
 
 var (
@@ -431,7 +437,7 @@ func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool, f ser
 func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt uint64) (serviceGrantMinted, error) {
 	g := p.OIDC.ServiceGrant
 	name := serviceGrantSecretName(p.UID)
-	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoEntraRedeemTimeout)
+	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantTokenBound)
 	defer cancel()
 	rec, ferr := s.readServiceGrantRecord(mctx, name)
 	if ferr != nil {
