@@ -759,10 +759,12 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 		if o.portal {
 			key.ID = j.ID
 		}
-		if spared[runID] {
+		if spared[runID] && j.EventID == uuid.Nil {
 			// A run the database stamped after the tail's bound, read while the person is active again, was made
 			// after a reactivation: the suspension never owed its kill, so its row, whether this pass or an earlier
-			// one added it, closes with no teardown and no kill counted.
+			// one added it, closes with no teardown and no kill counted. A row that already pins a run.kill receipt is
+			// not spared: a claim pins it in the transaction that killed the run, so that kill was applied (whichever
+			// worker made it, alive or not) and its teardown and receipt are still owed; the pass below takes it over.
 			slog.InfoContext(ctx, "api: a suspension left a run made after its deactivation", slog.String("identity", id.String()), slog.String("run", j.Target))
 			errs = append(errs, finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0}))
 			continue
