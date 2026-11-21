@@ -129,7 +129,8 @@ func (s *Server) noteServiceGrantCleanup(uid string, out cleanupOutcome) {
 //  1. Under the document lock: read the claim again and the record's revision. Absence settles the claim; the
 //     claim's own revision lets the attempt go on; another revision, a store that keeps none, or a read error keeps it.
 //  2. Without the lock: delete with the claim's revision.
-//  3. Under the lock again, whatever the delete answered: absence settles the claim, anything else keeps it.
+//  3. Under the lock again, whatever the delete answered: the claim is read again, and only the same claim
+//     (its id) whose record is absent is settled; a claim already settled is a no-op and a replacement is kept.
 func (s *Server) serviceGrantCleanupAttempt(ctx context.Context, uid string) cleanupOutcome {
 	gs, ok := s.serviceGrantStore()
 	if !ok {
@@ -189,6 +190,19 @@ func (s *Server) serviceGrantCleanupSettle(ctx context.Context, gs store.Service
 		return cleanupKept
 	}
 	defer unlock()
+	// The claim as it stands now: gone means another attempt settled it, and a different id is a replacement
+	// claim on the same uid, which this attempt neither settles nor audits.
+	doc, err := gs.ServiceGrantDoc(lctx)
+	if err != nil {
+		return cleanupKept
+	}
+	cur, found := doc.Cleanups[uid]
+	switch {
+	case !found:
+		return cleanupSettled
+	case cur.ID != claim.ID:
+		return cleanupKept
+	}
 	rev, revOK, err := s.serviceGrantRevision(lctx, serviceGrantSecretName(uid))
 	if err != nil || !revOK || rev != "" {
 		return cleanupKept
@@ -197,7 +211,7 @@ func (s *Server) serviceGrantCleanupSettle(ctx context.Context, gs store.Service
 }
 
 func (s *Server) settleServiceGrantClaim(ctx context.Context, gs store.ServiceGrantStore, uid string, claim store.ServiceGrantCleanup) cleanupOutcome {
-	removed, err := gs.SettleServiceGrantCleanup(ctx, uid)
+	removed, err := gs.SettleServiceGrantCleanup(ctx, uid, claim.ID)
 	if err != nil {
 		return cleanupKept
 	}

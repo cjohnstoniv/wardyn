@@ -110,6 +110,7 @@ type serviceGrantCached struct {
 
 type serviceGrantFailed struct {
 	at     time.Time
+	gen    uint64 // the attempt's local generation: older attempts never replace newer ones
 	digest string
 	rev    string
 	err    *serviceGrantError
@@ -120,6 +121,8 @@ type serviceGrantRuntime struct {
 	mu      sync.Mutex
 	cache   map[string]serviceGrantCached // by provider uid
 	failed  map[string]serviceGrantFailed // each row's latest failed attempt
+	seq     uint64                        // attempt generations, in the order attempts start on this replica
+	succGen map[string]uint64             // the generation of each row's latest published success
 	running map[string]bool               // refresher attempts in flight
 	nameMu  map[string]*sync.Mutex        // one per secret name: held across a record's read or write and its mask call
 	masked  map[string]bool               // secret names this replica has applied a mask for
@@ -208,6 +211,32 @@ func (s *Server) serviceGrantsActive(ctx context.Context) (bool, error) {
 	return doc.Activated, nil
 }
 
+// serviceGrantGate reads the stored document once: whether the switch-on has been made, and whether the uid
+// still has a clean-up claim, that is, a predecessor grant whose secret record is not yet verified retired.
+func (s *Server) serviceGrantGate(ctx context.Context, uid string) (active, retiring bool, err error) {
+	gs, ok := s.serviceGrantStore()
+	if !ok {
+		return false, false, nil
+	}
+	doc, err := gs.ServiceGrantDoc(ctx)
+	if err != nil {
+		return false, false, err
+	}
+	if doc.Activated {
+		s.svcGrant.activated.Store(true)
+	}
+	_, retiring = doc.Cleanups[uid]
+	return doc.Activated || s.svcGrant.activated.Load(), retiring, nil
+}
+
+// nextServiceGrantGen takes the next attempt generation.
+func (s *Server) nextServiceGrantGen() uint64 {
+	s.svcGrant.mu.Lock()
+	defer s.svcGrant.mu.Unlock()
+	s.svcGrant.seq++
+	return s.svcGrant.seq
+}
+
 // serviceGrantToken returns a token for provider p's client. snap is the digest the caller's run was
 // authorised under, and empty for the refresher; a digest that differs is drift, with no mint and no cached
 // token. trigger is why: refresh, dispatch or resolve.
@@ -230,12 +259,16 @@ func (s *Server) serviceGrantToken(ctx context.Context, p types.ModelProvider, s
 
 func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvider, digest, trigger string) (serviceGrantMinted, error) {
 	started := s.cfg.Now() // the attempt's one timestamp: a failure is recorded at it, never at the time it ends
-	active, err := s.serviceGrantsActive(ctx)
+	attempt := s.nextServiceGrantGen()
+	active, retiring, err := s.serviceGrantGate(ctx, p.UID)
 	if err != nil {
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 	}
 	if !active {
-		return s.serviceGrantFailure(ctx, p, digest, "", started, svcFail(svcReasonNotActivated, true))
+		return s.serviceGrantFailure(ctx, p, digest, "", started, attempt, svcFail(svcReasonNotActivated, true))
+	}
+	if retiring {
+		return s.serviceGrantWhileRetiring(ctx, p, digest, started)
 	}
 	name := serviceGrantSecretName(p.UID)
 	rev, revOK, err := s.serviceGrantRevision(ctx, name)
@@ -244,7 +277,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	}
 	if revOK && rev == "" {
 		s.dropServiceGrantCache(p.UID)
-		return s.serviceGrantFailure(ctx, p, digest, rev, started, svcFail(svcReasonSecretGone, true))
+		return s.serviceGrantFailure(ctx, p, digest, rev, started, attempt, svcFail(svcReasonSecretGone, true))
 	}
 	if hit, ok := s.cachedServiceGrantToken(p.UID, digest, rev, revOK, serviceGrantReuseMargin); ok {
 		return hit, nil
@@ -253,17 +286,33 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 		return s.serviceGrantFallback(p.UID, digest, rev, revOK, f)
 	}
 	key := p.UID + "|" + digest + "|" + rev
+	// The elected flight publishes the one result, a failure included, so a waiter never records the same
+	// failed request again after a newer attempt has succeeded.
 	v, err, _ := s.svcGrant.flights.Do(key, func() (any, error) {
-		return s.serviceGrantMint(ctx, p, digest, rev, revOK, trigger)
+		tok, merr := s.serviceGrantMint(ctx, p, digest, rev, revOK, trigger, attempt)
+		var se *serviceGrantError
+		if errors.As(merr, &se) {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoEntraRedeemTimeout)
+			defer cancel()
+			return s.serviceGrantFailure(fctx, p, digest, rev, started, attempt, se)
+		}
+		return tok, merr
 	})
 	if err != nil {
-		var se *serviceGrantError
-		if errors.As(err, &se) {
-			return s.serviceGrantFailure(ctx, p, digest, rev, started, se)
-		}
 		return serviceGrantMinted{}, err
 	}
 	return v.(serviceGrantMinted), nil
+}
+
+// serviceGrantWhileRetiring answers a token request for a uid whose predecessor's secret record is not yet
+// verified deleted: nothing is served from the old generation, the cache is dropped, and the refusal is
+// definitive, so a proxy drops its last header. The row serves again once the claim is settled and a fresh
+// secret has been written.
+func (s *Server) serviceGrantWhileRetiring(ctx context.Context, p types.ModelProvider, digest string, started time.Time) (serviceGrantMinted, error) {
+	s.dropServiceGrantCache(p.UID)
+	e := svcFail(svcReasonSecretGone, true)
+	s.writeServiceGrantStatus(ctx, p, digest, started, nil, e)
+	return serviceGrantMinted{}, e
 }
 
 // cachedServiceGrantToken is a cached token under the same digest and, when the store keeps revisions, the
@@ -299,14 +348,17 @@ func (s *Server) serviceGrantPacedFailure(uid, digest, rev, trigger string) (ser
 
 // serviceGrantFailure records a failed attempt and answers: a cached token with more than a minute left, minted
 // under the current digest and revision, is still returned unless the secret is gone; otherwise the error.
-func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider, digest, rev string, started time.Time, e *serviceGrantError) (serviceGrantMinted, error) {
+func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider, digest, rev string, started time.Time, gen uint64, e *serviceGrantError) (serviceGrantMinted, error) {
 	if e.reason != svcReasonNotActivated {
 		// What was read before the request may be gone: look again before a status row is written or a cached
 		// token is served. Authoritative absence evicts and refuses; a moved revision gets the one retry; a
 		// changed row is drift; a failed read serves nothing from the cache.
 		liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, serviceGrantSecretName(p.UID))
-		liveDigest, found := s.liveServiceGrantDigest(ctx, p.UID)
+		liveDigest, found, derr := s.liveServiceGrantDigest(ctx, p.UID)
 		switch {
+		case derr != nil:
+			// An unreadable configuration is not a withdrawal: retryable, and nothing from the cache is served.
+			return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 		case !found || liveDigest != digest:
 			return serviceGrantMinted{}, errServiceGrantDrift
 		case rerr != nil:
@@ -322,12 +374,17 @@ func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider,
 	if s.svcGrant.failed == nil {
 		s.svcGrant.failed = map[string]serviceGrantFailed{}
 	}
-	// An older attempt that ends late never replaces a newer attempt's record, here or in the status row.
-	if prev, ok := s.svcGrant.failed[p.UID]; !ok || !prev.at.After(started) {
-		s.svcGrant.failed[p.UID] = serviceGrantFailed{at: started, digest: digest, rev: rev, err: e}
+	// An older attempt that ends late never replaces a newer attempt's record, here or in the status row:
+	// it is compared with the latest success and the latest failure by generation.
+	prev, had := s.svcGrant.failed[p.UID]
+	stale := s.svcGrant.succGen[p.UID] > gen || (had && prev.gen > gen)
+	if !stale {
+		s.svcGrant.failed[p.UID] = serviceGrantFailed{at: started, gen: gen, digest: digest, rev: rev, err: e}
 	}
 	s.svcGrant.mu.Unlock()
-	s.writeServiceGrantStatus(ctx, p, digest, started, nil, e)
+	if !stale {
+		s.writeServiceGrantStatus(ctx, p, digest, started, nil, e)
+	}
 	if e.reason == svcReasonSecretGone {
 		return serviceGrantMinted{}, e
 	}
@@ -349,7 +406,7 @@ func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool, f ser
 
 // serviceGrantMint is one token request: the record's read, the request, and the checks of its answer, then
 // the publish. It holds no database lock and runs under the single-flight on (uid, digest, revision).
-func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string) (serviceGrantMinted, error) {
+func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt uint64) (serviceGrantMinted, error) {
 	g := p.OIDC.ServiceGrant
 	name := serviceGrantSecretName(p.UID)
 	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoEntraRedeemTimeout)
@@ -387,19 +444,26 @@ func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, di
 		s.auditServiceGrantMint(mctx, p, trigger, sent, nil, ferr, false)
 		return serviceGrantMinted{}, ferr
 	}
-	return s.publishServiceGrantToken(mctx, p, digest, rev, revOK, trigger, sent, tok)
+	return s.publishServiceGrantToken(mctx, p, digest, rev, revOK, trigger, sent, attempt, tok)
 }
 
 // publishServiceGrantToken re-reads the revision and the live digest before the token is cached or returned.
 // A token the provider issued but that is not published is audited as superseded and stays masked.
 func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool,
-	trigger string, sent time.Time, tok serviceGrantMinted,
+	trigger string, sent time.Time, attempt uint64, tok serviceGrantMinted,
 ) (serviceGrantMinted, error) {
 	name := serviceGrantSecretName(p.UID)
 	liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, name)
-	liveDigest, found := s.liveServiceGrantDigest(ctx, p.UID)
+	liveDigest, found, derr := s.liveServiceGrantDigest(ctx, p.UID)
+	_, retiring, gerr := s.serviceGrantGate(ctx, p.UID)
 	superseded := func() { s.auditServiceGrantMint(ctx, p, trigger, sent, &tok, nil, true) }
 	switch {
+	case derr != nil || gerr != nil:
+		superseded()
+		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
+	case retiring:
+		superseded()
+		return serviceGrantMinted{}, svcFail(svcReasonSecretGone, true)
 	case !found || liveDigest != digest:
 		superseded()
 		return serviceGrantMinted{}, errServiceGrantDrift
@@ -417,8 +481,14 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 		s.svcGrant.cache = map[string]serviceGrantCached{}
 	}
 	s.svcGrant.cache[p.UID] = serviceGrantCached{serviceGrantMinted: tok, digest: digest, rev: rev, revOK: revOK}
-	if f, ok := s.svcGrant.failed[p.UID]; ok && !f.at.After(sent) {
+	if f, ok := s.svcGrant.failed[p.UID]; ok && f.gen < attempt {
 		delete(s.svcGrant.failed, p.UID)
+	}
+	if s.svcGrant.succGen == nil {
+		s.svcGrant.succGen = map[string]uint64{}
+	}
+	if s.svcGrant.succGen[p.UID] < attempt {
+		s.svcGrant.succGen[p.UID] = attempt
 	}
 	s.svcGrant.mu.Unlock()
 	s.writeServiceGrantStatus(ctx, p, digest, sent, &tok, nil)
@@ -426,18 +496,23 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 }
 
 // liveServiceGrantDigest is the digest of the row with this uid as the site configuration holds it now.
-func (s *Server) liveServiceGrantDigest(ctx context.Context, uid string) (string, bool) {
+// found is false for a confirmed absence (no row, disabled, or no grant); a configuration that cannot be read
+// is the error, never an absence.
+func (s *Server) liveServiceGrantDigest(ctx context.Context, uid string) (digest string, found bool, err error) {
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil || sc.ModelProviders == nil {
-		return "", false
+	if err != nil {
+		return "", false, err
+	}
+	if sc.ModelProviders == nil {
+		return "", false, nil
 	}
 	for _, p := range sc.ModelProviders.Providers {
 		if p.UID == uid && !p.Disabled {
 			d := serviceGrantDigest(p)
-			return d, d != ""
+			return d, d != "", nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 // serviceTokenAnswer is the token answer as the service lane keeps it: nothing of the ID token, the refresh

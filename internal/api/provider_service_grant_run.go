@@ -87,17 +87,18 @@ func (s *Server) resolveServiceGrantInjection(w http.ResponseWriter, r *http.Req
 		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
 	}
 	tok, err := s.serviceGrantToken(ctx, p, rec.ServiceGrantDigest, serviceGrantTriggerResolve)
-	if err != nil {
-		return s.failServiceGrantResolve(err, rec, fail)
-	}
-	// The same row, lane and host checks again, after the token request: whatever moved while it ran is a
-	// refusal, and a read that fails is the only thing that answers 503.
+	// The same row, lane, host and owner checks again, after the token request whatever it answered: a
+	// withdrawal that happened while a renewal was failing is a 403 and the proxy drops its last good header. A
+	// configuration that cannot be read is 503, never a withdrawal.
 	again, _, refusal := s.endpointOIDCLiveRow(ctx, run, rec, minted)
 	if refusal == nil {
 		refusal = s.serviceGrantRowRefusal(rec, again)
 	}
 	if refusal != nil {
 		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
+	}
+	if err != nil {
+		return s.failServiceGrantResolve(err, rec, fail)
 	}
 	value := formatInjectionValue(lane.format, []byte(tok.token))
 	if s.refuseUnmasked(w, r, claims, "injection.resolve", []byte(tok.token), []byte(value)) {

@@ -83,6 +83,13 @@ func (s *Server) serviceGrantPassSafely(ctx context.Context) {
 // serviceGrantPass is one refresher pass: it retires masks no grant names and attempts the rows that are due, at
 // most 8 at once and one per row. The replica heartbeat is its own loop (runServiceGrantHeartbeat).
 func (s *Server) serviceGrantPass(ctx context.Context) {
+	// No store, or one that keeps no grants (a bare api.New): nothing can be configured, activated or minted.
+	if s.cfg.Store == nil {
+		return
+	}
+	if _, ok := s.serviceGrantStore(); !ok {
+		return
+	}
 	// The mask reconciliation runs beside the attempts, never ahead of them: a name another request holds is
 	// left to the next pass.
 	reconciled := make(chan struct{})

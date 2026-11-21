@@ -38,8 +38,10 @@ const (
 var ErrServiceGrantsNotActivated = errors.New("store: service grants are not activated")
 
 // ServiceGrantCleanup is a claim on one retired provider uid: its secret record is to be deleted. Revision is
-// the record's revision when the claim was written, "" when the secret store keeps none.
+// the record's revision when the claim was written, "" when the secret store keeps none. ID names this claim
+// alone: a later claim on the same uid has another, so a settlement can tell its own claim from a replacement.
 type ServiceGrantCleanup struct {
+	ID         string    `json:"id"`
 	ProviderID string    `json:"provider_id"`
 	Reason     string    `json:"reason"`
 	Revision   string    `json:"revision,omitempty"`
@@ -81,9 +83,10 @@ type ServiceGrantStore interface {
 	PutSiteConfigGrants(ctx context.Context, cfg types.SiteConfig, change ServiceGrantChange) (types.SiteConfig, error)
 	// ServiceGrantDoc reads the stored grants, claims and mark, whatever rows exist.
 	ServiceGrantDoc(ctx context.Context) (ServiceGrantDoc, error)
-	// SettleServiceGrantCleanup removes one claim and reports whether this call removed it, so only the attempt
-	// that did writes the settlement's audit row. The caller holds the site-config document lock.
-	SettleServiceGrantCleanup(ctx context.Context, uid string) (bool, error)
+	// SettleServiceGrantCleanup removes the claim on uid when it still has this id, and reports whether this call
+	// removed it, so only the attempt that did writes the settlement's audit row. A replacement claim on the
+	// same uid, or an absent one, is left alone. The caller holds the site-config document lock.
+	SettleServiceGrantCleanup(ctx context.Context, uid, claimID string) (bool, error)
 	UpsertServiceGrantStatus(ctx context.Context, row ServiceGrantStatusRow) error
 	TouchServiceGrantReplica(ctx context.Context, replicaID string) error
 	ServiceGrantStatuses(ctx context.Context, uids []string) ([]ServiceGrantStatusRow, error)
@@ -266,18 +269,19 @@ func ServiceGrantDocQ(ctx context.Context, q Querier) (ServiceGrantDoc, error) {
 }
 
 // SettleServiceGrantCleanup removes the claim on uid (ServiceGrantStore).
-func (s PG) SettleServiceGrantCleanup(ctx context.Context, uid string) (bool, error) {
-	return SettleServiceGrantCleanupQ(ctx, s.Pool, uid)
+func (s PG) SettleServiceGrantCleanup(ctx context.Context, uid, claimID string) (bool, error) {
+	return SettleServiceGrantCleanupQ(ctx, s.Pool, uid, claimID)
 }
 
-// SettleServiceGrantCleanupQ removes one uid's claim, and no other, from the stored claims. The caller holds
+// SettleServiceGrantCleanupQ removes one uid's claim, and no other, from the stored claims, only while the
+// stored claim still has claimID. The caller holds
 // the site-config document lock; the claims are not part of the document an ETag covers, so no writer's
 // If-Match fails for it.
-func SettleServiceGrantCleanupQ(ctx context.Context, q Querier, uid string) (bool, error) {
+func SettleServiceGrantCleanupQ(ctx context.Context, q Querier, uid, claimID string) (bool, error) {
 	tag, err := q.Exec(ctx, `
 		UPDATE site_config
 		   SET config = config #- ARRAY[$1::text, $2::text], updated_at = now()
-		 WHERE singleton AND jsonb_exists(config -> $1::text, $2::text)`, ServiceGrantCleanupsKey, uid)
+		 WHERE singleton AND config -> $1::text -> $2::text ->> 'id' = $3::text`, ServiceGrantCleanupsKey, uid, claimID)
 	if err != nil {
 		return false, fmt.Errorf("store: settle service grant cleanup: %w", err)
 	}

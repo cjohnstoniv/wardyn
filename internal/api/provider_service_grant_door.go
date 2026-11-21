@@ -18,6 +18,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -218,7 +220,7 @@ func (s *Server) serviceGrantClaims(ctx context.Context, drops []string, existin
 		if inert[uid] {
 			reason = cleanupReasonInert
 		}
-		claims[uid] = store.ServiceGrantCleanup{ProviderID: id, Reason: reason, Revision: rev, Since: s.cfg.Now().UTC()}
+		claims[uid] = store.ServiceGrantCleanup{ID: uuid.NewString(), ProviderID: id, Reason: reason, Revision: rev, Since: s.cfg.Now().UTC()}
 	}
 	return claims, nil
 }
@@ -306,7 +308,7 @@ func (s *Server) serviceGrantInlineDelete(ctx context.Context, gs store.ServiceG
 	if err := s.deleteServiceGrantRecord(dctx, serviceGrantSecretName(uid), &rev); err != nil {
 		return err
 	}
-	removed, err := gs.SettleServiceGrantCleanup(ctx, uid)
+	removed, err := gs.SettleServiceGrantCleanup(ctx, uid, claim.ID)
 	if err != nil {
 		return err
 	}
