@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -21,6 +22,8 @@ type portalGrantStore struct {
 	*driveCRUDStore
 	addErr error
 	added  []types.UserDriveGrant
+	// readsAfterWrite counts the drive reads attempted once a portal row was committed.
+	readsAfterWrite int
 }
 
 func (s *portalGrantStore) AddUserDriveGrant(_ context.Context, g types.UserDriveGrant, _ bool) (types.UserDriveGrant, error) {
@@ -29,6 +32,16 @@ func (s *portalGrantStore) AddUserDriveGrant(_ context.Context, g types.UserDriv
 	}
 	s.added = append(s.added, g)
 	return g, nil
+}
+
+// GetUserDrive answers like driveCRUDStore's until a portal row has been written; after that it fails, as a database
+// that dropped between the commit and the answer would.
+func (s *portalGrantStore) GetUserDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error) {
+	if len(s.added) > 0 {
+		s.readsAfterWrite++
+		return types.UserDrive{}, errors.New("database went away after the commit")
+	}
+	return s.driveCRUDStore.GetUserDrive(ctx, id)
 }
 
 func (s *portalGrantStore) ReplaceUserDriveGrant(context.Context, types.UserDriveGrant, bool) (types.UserDriveGrant, []uuid.UUID, error) {
@@ -84,6 +97,41 @@ func TestPortalDriveAllocation_SuperAdminOnly(t *testing.T) {
 	}
 }
 
+// A committed allocation is answered and audited with no further database read: the object name is a function of the
+// portal and the drive's id, so a store that fails every read after the commit still gets its 201 and its
+// drive.grant.write row.
+func TestPortalDriveAllocation_CommittedGrantNeedsNoSecondRead(t *testing.T) {
+	srv, st, d := portalAdminFixture(t)
+	audit := &recRecorder{}
+	srv.cfg.Audit = audit
+	portal := uuid.New()
+	w := driveGrantAs(t, srv, driveSuperAdminCtx(), portalAllocBody(d, portal.String(), `,"additional":true`))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("allocation with a failing post-commit read = %d %s, want 201", w.Code, w.Body)
+	}
+	if st.readsAfterWrite != 0 {
+		t.Errorf("%d drive reads after the commit, want 0", st.readsAfterWrite)
+	}
+	var out struct {
+		ObjectName string `json:"object_name"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if want := types.DrivePortalObjectName(d, types.DrivePortalHome(d, portal)); out.ObjectName != want {
+		t.Errorf("object_name = %q, want %q", out.ObjectName, want)
+	}
+	var writes int
+	for _, ev := range audit.events {
+		if ev.Action == "drive.grant.write" {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("drive.grant.write rows = %d, want 1 (events %+v)", writes, audit.events)
+	}
+}
+
 // Each refusal of a portal allocation is its own status and reason, writes no row, and a subject that is not a
 // canonical lower-case uuid is refused at the shape check.
 func TestPortalDriveAllocation_TeamDriveAndIssuerPortalOnly(t *testing.T) {
@@ -133,5 +181,16 @@ func TestPortalDriveAllocation_DriveEditRefusedWhileHeld(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity || errorReason(w) != c.reason {
 			t.Errorf("edit refused with %v = %d %s, want 422 %s", c.err, w.Code, w.Body, c.reason)
 		}
+	}
+}
+
+// An edit that would unmark a drive a portal holds as a team drive is a 409 with the re-home reason and writes nothing.
+func TestPortalDriveAllocation_UnmarkTeamRefusedWhileHeld(t *testing.T) {
+	srv, st, d := portalAdminFixture(t)
+	st.upsertErr = store.ErrDrivePortalNotTeam
+	w := driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String(),
+		`{"name":"Team Data","backend":"docker_volume","team":false}`, map[string]string{"id": d.ID.String()})
+	if w.Code != http.StatusConflict || errorReason(w) != reasonUserDriveRehomeInvalid {
+		t.Errorf("unmark refused = %d %s, want 409 %s", w.Code, w.Body, reasonUserDriveRehomeInvalid)
 	}
 }
