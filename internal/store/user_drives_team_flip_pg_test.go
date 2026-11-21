@@ -211,4 +211,64 @@ func TestPG_DriveRegistration_AllocationUnderTheFirstModeBlocksALaterFlip(t *tes
 	if n := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, d.ID); n != 1 {
 		t.Errorf("%d allocation row(s), want the one", n)
 	}
+	// The retry reads the row as it is then: with the allocation gone the same flip is written, and a new allocation
+	// made under the shared mode blocks the flip back.
+	if _, err := pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE drive_id = $1`, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.UpsertUserDrive(ctx, flip, true); err != nil || !got.Team {
+		t.Fatalf("retry of the flip after the allocation was removed = %+v, %v; want it written", got, err)
+	}
+	if _, err := st.AddUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: types.CapabilitySubjectGroup, Subject: "platform",
+		DriveID: d.ID, Enabled: true, CreatedBy: "admin@example.com"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpsertUserDrive(ctx, d, true); !errors.Is(err, store.ErrDriveAllocated) {
+		t.Errorf("flip back of an allocated shared drive: err = %v, want ErrDriveAllocated", err)
+	}
+}
+
+// A portal's allocation asking for write access, behind a drive edit that made the drive read-only, is refused under the
+// drive's lock and stores nothing, so a later change to writable cannot activate it; against a writable drive the same
+// allocation is stored.
+func TestPG_PortalDriveAllocation_WriteGrantBehindAReadOnlyEdit(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	portal := newIssuerPortal(t, st, "").Delegate
+	writable := seedStaticTeamDrive(t, st, "rw-"+uuid.NewString()[:8])
+	g := portalGrant(portal, writable)
+	g.MembersCanWrite = true
+	if _, err := st.AddUserDriveGrant(ctx, g, true); err != nil {
+		t.Fatalf("write allocation on a writable drive: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE drive_id = $1`, writable.ID) })
+
+	readOnly := seedStaticTeamDrive(t, st, "ro-"+uuid.NewString()[:8])
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // already committed on the happy path
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, readOnly.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE user_drives SET writable = false WHERE id = $1`, readOnly.ID); err != nil {
+		t.Fatal(err)
+	}
+	g = portalGrant(portal, readOnly)
+	g.MembersCanWrite = true
+	blocked, result := parked(func() error { _, err := st.AddUserDriveGrant(ctx, g, true); return err })
+	if !blocked {
+		_ = tx.Commit(ctx)
+		t.Fatal("the allocation did not wait for the edit in flight")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := result(); !errors.Is(err, store.ErrDriveGrantTeamRule) {
+		t.Errorf("a write allocation behind a read-only edit: err = %v, want ErrDriveGrantTeamRule", err)
+	}
+	if n := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, readOnly.ID); n != 0 {
+		t.Errorf("%d allocation row(s) on the read-only drive, want none", n)
+	}
 }
