@@ -445,12 +445,15 @@ func (v *portalVerifier) prepare(ctx context.Context) (string, time.Duration) {
 		case v.disc == nil:
 			if standing := v.standing; standing != "" && cooling {
 				v.mu.Unlock()
+				if standing == portalCauseUnreachable {
+					return standing, last.Add(portalKeyCooldown).Sub(now) // an outage: the rest of the retry interval
+				}
 				return standing, 0
 			}
 		case v.discFailed || keysFailed:
 			if cooling {
 				v.mu.Unlock()
-				return portalCauseIssuerDown, 0
+				return portalCauseIssuerDown, last.Add(portalKeyCooldown).Sub(now)
 			}
 		case keysOKAt.IsZero():
 			// The keys address changed and the new keys are not loaded yet: closed until they are.
@@ -532,6 +535,9 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 		}
 		v.mu.Unlock()
 		v.reportFailure("scheduled", cause)
+		if shown == portalCauseUnreachable {
+			return shown, v.outageWait(), 0
+		}
 		return shown, 0, 0
 	}
 	// The document and its keys address are published together. A changed keys address drops the keys and every
@@ -549,14 +555,16 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 		v.settle("") // the keys are younger than the budget: nothing to fetch
 		return "", 0, 0
 	case out == portalEnsureCooling:
-		v.settle(portalCauseKeysCooldown)
+		if shown := v.settle(portalCauseKeysCooldown); shown != portalCauseKeysCooldown {
+			return shown, 0, 0 // a rule refusal recorded since the publish stands, under its own cause
+		}
 		return portalCauseKeysCooldown, wait, 0
 	case err != nil:
 		if cause := portalFetchCause(err); cause != portalCauseUnreachable {
 			return cause, 0, 0 // the key set's failure callback has already dropped the verifier under it
 		}
 		v.settle(portalCauseIssuerDown)
-		return portalCauseKeysUnreachable, 0, 0
+		return portalCauseKeysUnreachable, v.outageWait(), 0
 	}
 	v.settle("")
 	return "", 0, v.ks.seqNow()
@@ -566,17 +574,23 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 // address's keys are loaded and good, whichever fetch loaded them; otherwise closed under cause, or left as it is
 // when cause is "". Discovery and the key set are read under one lock, so a key success and a refresh outcome
 // never publish out of order, and a discovery that failed or was refused is never reopened by a key success.
-func (v *portalVerifier) settle(cause string) {
+// While a rule refusal stands, its cause stays the closed cause; settle returns the cause the verifier is closed
+// under, or cause when it is open.
+func (v *portalVerifier) settle(cause string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	okAt, _, failed := v.ks.state()
 	if v.disc != nil && !v.discFailed && v.standing == "" && !okAt.IsZero() && !failed {
 		v.down.Store(nil)
-		return
+		return cause
+	}
+	if v.disc == nil && v.standing != "" && v.standing != portalCauseUnreachable {
+		return v.standing
 	}
 	if cause != "" {
 		v.setDown(cause)
 	}
+	return cause
 }
 
 // dropForCause drops the cached discovery result and keys, as a hostile discovery document does, and closes the
@@ -637,11 +651,17 @@ func (v *portalVerifier) recheck(box *portalBox) PortalRefusal {
 	if cause == portalCauseKeysCooldown {
 		wait = v.ks.cooldownLeft() // the keys wait for the key budget alone
 	} else {
-		last := time.Unix(0, v.attemptNano.Load())
-		if _, ksAttempt, _ := v.ks.state(); ksAttempt.After(last) {
-			last = ksAttempt
-		}
-		wait = max(last.Add(portalKeyCooldown).Sub(v.clock()), 0)
+		wait = v.outageWait()
 	}
 	return PortalRefusal{Reason: PortalIssuerUnavailable, Cause: cause, Class: PortalRefusedUnavailable, RetryAfter: wait}
+}
+
+// outageWait is the Retry-After of an outage, at the door and at the success point alike: the rest of the retry
+// interval since the last attempt, discovery or keys.
+func (v *portalVerifier) outageWait() time.Duration {
+	last := time.Unix(0, v.attemptNano.Load())
+	if _, ksAttempt, _ := v.ks.state(); ksAttempt.After(last) {
+		last = ksAttempt
+	}
+	return max(last.Add(portalKeyCooldown).Sub(v.clock()), 0)
 }
