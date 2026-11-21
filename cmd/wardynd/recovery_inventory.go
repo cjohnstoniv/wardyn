@@ -148,7 +148,7 @@ func recoveryItems(f *bootFlags, dep string) []recoveryItem {
 				"under the runner login's Application Support/Wardyn; one image, the drive object name with .img, per drive and home",
 			SetPath: "drives/<drive id>/<home>/",
 			Note: "the image is the drive's bytes and is on that Mac only, outside the database and every volume above; " +
-				"quiesce its writers, keep it sparse, and restore each image on the Mac that was its home",
+				"quiesce its writers and keep it sparse; a rehearsal keeps the image in the scratch set, and only a real recovery restores it, on the Mac that was its home",
 		},
 		{
 			Item: "keys", Location: where["keys"], Source: keySources(f),

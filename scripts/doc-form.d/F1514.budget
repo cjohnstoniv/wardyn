@@ -4,4 +4,5 @@
 # docs/operations/recovery-rehearsal.md 1210 adds 5 over 1205 (G-090-cleanup slice F r1 fix: the CI recipe as a service identity): measured; the lead re-measures at merge.
 # 0.9.4 L8: docs/operations/recovery-rehearsal.md 1309 adds 99 over 1210: the key-service env for the rehearsal pod.
 # 0.10.2: docs/operations/recovery-rehearsal.md 1383 adds 74 over 1309: Mac disk images in the recovery set.
-docs/operations/recovery-rehearsal.md=1383 share=20
+# 0.10.2: docs/operations/recovery-rehearsal.md 1449 adds 66 over 1383: a rehearsal keeps Mac images in the scratch set; a real recovery names its target.
+docs/operations/recovery-rehearsal.md=1449 share=20

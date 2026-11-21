@@ -47,7 +47,7 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 ## Rehearse a set
 
 1. Load the dump, or restore the snapshot, into a scratch database. Never into the live one.
-2. Restore the set into a new directory. Put each `mac_disk` image back on its own Mac (`home_runner_id`).
+2. Restore the set into a new directory. Every file of a rehearsal stays under that scratch directory, `mac_disk` images included: the check never needs the Mac, and a live Mac's image is never overwritten.
 3. Run the rehearsal with the deployment's key settings in the environment and the scratch database in `WARDYN_REHEARSE_PG_DSN`. The DSN is an environment variable and not a flag, so a password never shows in the process list.
 
    ```sh
@@ -57,6 +57,8 @@ Design: [recovery-set.md](../design/0.9/recovery-set.md).
 
 4. Read the JSON report and the exit code.
 5. Drop the scratch database and remove the restored directory yourself.
+
+A real recovery of a `mac_disk` drive is a separate act, not a rehearsal step. Name the Mac with `home_runner_id`, quiesce its writers so no run has the disk attached, and put the image from the set at `macos-vm.noindex/drives/<object name>.img` on that Mac only, never over a working image.
 
 On Compose and the managed desktop, run the verbs with `docker compose run --rm wardynd`, the set mounted, and stop the converge job first. On Helm, use the pod below.
 

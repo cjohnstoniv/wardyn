@@ -527,7 +527,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
 
-**Disk drives on Macs.** A `mac_disk` drive's image sits on one Mac runner, outside every volume above. The inventory lists it as `mac_disk_images`, naming the Mac and the image. Quiesce its writers, copy it sparse (`cp -c`, or `rsync --sparse`) and restore it on that Mac ([steps](operations/recovery-rehearsal.md#take-a-set)).
+**Disk drives on Macs.** A `mac_disk` drive's image sits on one Mac runner, outside every volume above. The inventory lists it as `mac_disk_images`, naming the Mac and the image. Quiesce its writers and copy it sparse (`cp -c`, or `rsync --sparse`) ([steps](operations/recovery-rehearsal.md#take-a-set)). A rehearsal keeps the image under the scratch set and never touches the Mac. Restore it only in a real recovery, on the Mac `home_runner_id` names with its writers quiesced, never over a working image.
 
 **Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
 
