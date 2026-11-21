@@ -406,7 +406,7 @@ func TestUIRenewal_DesktopAndSupportNeverRenew(t *testing.T) {
 	if sess := h.srv.newUISession(h.run, base, "code", uiTestPort, time.Hour); sess.Chain == uuid.Nil || sess.Expires <= grantEnd.Unix() {
 		t.Fatalf("a renewable web app session: chain %s, expires %d; want the chain and the TTL", sess.Chain, sess.Expires)
 	}
-	for _, app := range []string{uiDesktopAppName, "novnc"} {
+	for _, app := range []string{uiDesktopAppName, "novnc", desktopSigninApp} {
 		if sess := h.srv.newUISession(h.run, base, app, 0, time.Hour); sess.Chain != uuid.Nil || sess.Expires > grantEnd.Unix() {
 			t.Errorf("desktop %s: chain %s, expires %d past the grant's %d", app, sess.Chain, sess.Expires, grantEnd.Unix())
 		}
@@ -464,22 +464,36 @@ func TestUIRenewal_NeverPastIssuedAtPlusTTL(t *testing.T) {
 // portal's registration naming ui_session_renewal is refused, and a session through a portal that already
 // renews is opened with no chain and ends with its grant.
 func TestPortalRegistration_RenewalWithheldRefused(t *testing.T) {
+	// A renewable cookie signed while renewal shipped, with a successor live and its entry grant ended.
+	rig, a, c := renewingRig(t)
+	rig.is.grant(rig.principal, a.ChainID, rig.clock.now().Add(time.Hour))
+	rig.clock.advance(6 * time.Minute)
+	if r := rig.relay(c); r.Code != http.StatusOK {
+		t.Fatalf("renewal shipping, past the entry grant with a successor live: %d %s", r.Code, r.Body.String())
+	}
+
+	prev := uiSessionRenewalShips
 	uiSessionRenewalShips = false
-	t.Cleanup(func() { uiSessionRenewalShips = true })
+	t.Cleanup(func() { uiSessionRenewalShips = prev })
 	e := newRegEnv(t)
 	e.wantRefusal(t, "renewal withheld", regBody(map[string]any{"ui_session_renewal": true}), 422, reasonDelegateRenewalWithheld)
 	e.wantCreated(t, "without renewal", regBody(nil))
 
-	rig := newIssuerUIRig(t, closingBackend("app"))
-	rig.is.renewal = true
-	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute))
-	c := rig.session(a)
-	if c.Expires.After(a.ExpiresAt) {
-		t.Fatalf("renewal withheld: the cookie expires %v, after its grant's %v", c.Expires, a.ExpiresAt)
-	}
-	rig.is.grant(rig.principal, a.ChainID, rig.clock.now().Add(time.Hour))
-	rig.clock.advance(6 * time.Minute)
+	// The cookie signed before the switch: served by its entry grant alone, which has ended.
 	if r := rig.relay(c); r.Code != http.StatusForbidden {
+		t.Fatalf("renewal withheld, an already-signed renewable cookie past its entry grant: %d, want 403", r.Code)
+	}
+	// A cookie signed after it: capped by its grant.
+	fresh := newIssuerUIRig(t, closingBackend("app"))
+	fresh.is.renewal = true
+	b := fresh.is.grant(fresh.principal, uuid.Nil, fresh.clock.now().Add(5*time.Minute))
+	fc := fresh.session(b)
+	if fc.Expires.After(b.ExpiresAt) {
+		t.Fatalf("renewal withheld: the cookie expires %v, after its grant's %v", fc.Expires, b.ExpiresAt)
+	}
+	fresh.is.grant(fresh.principal, b.ChainID, fresh.clock.now().Add(time.Hour))
+	fresh.clock.advance(6 * time.Minute)
+	if r := fresh.relay(fc); r.Code != http.StatusForbidden {
 		t.Fatalf("renewal withheld, past the grant with a successor live: %d, want 403", r.Code)
 	}
 }

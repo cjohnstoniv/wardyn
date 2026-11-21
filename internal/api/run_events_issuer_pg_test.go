@@ -151,10 +151,7 @@ func TestRunEventsIssuerPortal_KeepaliveChecks_PG(t *testing.T) {
 func streamSlotFreed(t *testing.T, srv *Server, within time.Duration) time.Time {
 	t.Helper()
 	for deadline := time.Now().Add(within); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		srv.runEvents.mu.Lock()
-		n := len(srv.runEvents.streams)
-		srv.runEvents.mu.Unlock()
-		if n == 0 {
+		if !streamSlotHeld(srv) {
 			return time.Now()
 		}
 	}
@@ -162,12 +159,17 @@ func streamSlotFreed(t *testing.T, srv *Server, within time.Duration) time.Time 
 	return time.Time{}
 }
 
-// TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG: an HTTP/2 client that grants the stream no window
-// blocks the handler's first flush, under the unscaled 30 s batch deadline. A portal revoke still ends the
-// handler within one beat and the bound.
-func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
-	e := newIssuerEventsEnv(t)
-	ts := newH2EventsServer(t, e.h.srv)
+// streamSlotHeld reports whether srv holds an event stream open.
+func streamSlotHeld(srv *Server) bool {
+	srv.runEvents.mu.Lock()
+	defer srv.runEvents.mu.Unlock()
+	return len(srv.runEvents.streams) > 0
+}
+
+// openZeroWindow opens the run's event stream over HTTP/2 with bearer and a client that grants it no window,
+// and returns the client connection once the stream's HEADERS answered 200.
+func openZeroWindow(t *testing.T, ts *httptest.Server, runID string, bearer string) *tls.Conn {
+	t.Helper()
 	addr := ts.Listener.Addr().String()
 	pool := x509.NewCertPool()
 	pool.AddCert(ts.Certificate())
@@ -187,15 +189,16 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 	enc := hpack.NewEncoder(&block)
 	for _, f := range [][2]string{
 		{":method", http.MethodGet}, {":scheme", "https"}, {":authority", addr},
-		{":path", "/api/v1/runs/" + e.run.ID.String() + "/events"}, {"authorization", "Bearer " + e.raw},
+		{":path", "/api/v1/runs/" + runID + "/events"}, {"authorization", "Bearer " + bearer},
 	} {
 		_ = enc.WriteField(hpack.HeaderField{Name: f[0], Value: f[1]})
 	}
 	if err := fr.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: block.Bytes(), EndStream: true, EndHeaders: true}); err != nil {
 		t.Fatal(err)
 	}
-	answered := make(chan struct{})
+	status := make(chan string, 1)
 	go func() { // read and drop every frame; never grant a window
+		dec := hpack.NewDecoder(4096, nil)
 		for once := false; ; {
 			f, err := fr.ReadFrame()
 			if err != nil {
@@ -203,21 +206,58 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 			}
 			if h, ok := f.(*http2.HeadersFrame); ok && h.StreamID == 1 && !once {
 				once = true
-				close(answered)
+				fields, _ := dec.DecodeFull(h.HeaderBlockFragment())
+				st := ""
+				for _, hf := range fields {
+					if hf.Name == ":status" {
+						st = hf.Value
+					}
+				}
+				status <- st
 			}
 		}
 	}()
 	select {
-	case <-answered:
+	case st := <-status:
+		if st != "200" {
+			t.Fatalf("the stream answered %q, want 200: not admitted", st)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream never answered")
 	}
-	time.Sleep(2 * eventsBeat) // past a clean tick, the handler blocked in its flush
-	at := time.Now()
-	if _, _, err := e.st.RevokeDelegate(context.Background(), e.d.ID, time.Now(), false); err != nil {
-		t.Fatalf("revoke the portal: %v", err)
-	}
-	cutBy(t, "HTTP2 event stream, client not reading", at, streamSlotFreed(t, e.h.srv, 20*time.Second), eventsBeat+eventsBound+relaySlack)
+	return conn
+}
+
+// TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG: an HTTP/2 client that grants the stream no window
+// blocks the handler's first flush, under the unscaled 30 s batch deadline. The stream answered 200 and still
+// holds its slot just before a portal revoke, which ends the handler within one beat and the bound. Negative
+// control: a client that disconnects early frees the slot before any event, which the pre-event check refuses
+// to count as a cut.
+func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
+	t.Run("revoke", func(t *testing.T) {
+		e := newIssuerEventsEnv(t)
+		ts := newH2EventsServer(t, e.h.srv)
+		openZeroWindow(t, ts, e.run.ID.String(), e.raw)
+		time.Sleep(2 * eventsBeat) // past a clean tick, the handler blocked in its flush
+		if !streamSlotHeld(e.h.srv) {
+			t.Fatal("the stream was not open and blocked just before the event")
+		}
+		at := time.Now()
+		if _, _, err := e.st.RevokeDelegate(context.Background(), e.d.ID, time.Now(), false); err != nil {
+			t.Fatalf("revoke the portal: %v", err)
+		}
+		cutBy(t, "HTTP2 event stream, client not reading", at, streamSlotFreed(t, e.h.srv, 20*time.Second), eventsBeat+eventsBound+relaySlack)
+	})
+	t.Run("early disconnect is no cut", func(t *testing.T) {
+		e := newIssuerEventsEnv(t)
+		ts := newH2EventsServer(t, e.h.srv)
+		conn := openZeroWindow(t, ts, e.run.ID.String(), e.raw)
+		_ = conn.Close()
+		streamSlotFreed(t, e.h.srv, 5*time.Second)
+		if streamSlotHeld(e.h.srv) { // the revoke case's pre-event check refuses this state
+			t.Fatal("the pre-event check would count a disconnected stream as open")
+		}
+	})
 }
 
 // TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG: the run's unit moves out of the pin

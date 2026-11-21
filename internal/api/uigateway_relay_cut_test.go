@@ -40,7 +40,12 @@ type inputLog struct {
 	mu    sync.Mutex
 	sent  []time.Time
 	bytes int
+	fin   bool // the backend's reader returned
 }
+
+func (l *inputLog) finish() { l.mu.Lock(); l.fin = true; l.mu.Unlock() }
+
+func (l *inputLog) finished() bool { l.mu.Lock(); defer l.mu.Unlock(); return l.fin }
 
 func (l *inputLog) add(line string) {
 	l.mu.Lock()
@@ -66,7 +71,8 @@ func (l *inputLog) sentAfter(t time.Time) int {
 
 // streamBackend is the sandbox app: /stream an endless event stream, /hang headers that never come, /early a
 // 103 at the time ?at names and then a hang, /rogue101 a 101 to a request that asked for none, /body a read
-// of a streamed request body, and any upgrade a 101 that then writes without end and logs its input.
+// of a streamed request body, and any upgrade a 101 that then writes without end (nothing with X-Quiet) and logs
+// its input.
 func streamBackend(in *inputLog) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -79,6 +85,9 @@ func streamBackend(in *inputLog) http.Handler {
 			_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: " + r.Header.Get("Upgrade") + "\r\nConnection: Upgrade\r\n\r\n")
 			_ = brw.Flush()
 			go func() {
+				if r.Header.Get("X-Quiet") != "" {
+					return // sends nothing
+				}
 				chunk := []byte(strings.Repeat("o", 32<<10))
 				for {
 					if _, err := conn.Write(chunk); err != nil {
@@ -90,6 +99,7 @@ func streamBackend(in *inputLog) http.Handler {
 			for sc.Scan() {
 				in.add(sc.Text())
 			}
+			in.finish()
 		case strings.HasSuffix(r.URL.Path, "/stream"):
 			w.Header().Set("Content-Type", "text/event-stream")
 			rc := http.NewResponseController(w)
@@ -120,6 +130,7 @@ func streamBackend(in *inputLog) http.Handler {
 			for sc.Scan() {
 				in.add(sc.Text())
 			}
+			in.finish()
 		default:
 			_, _ = io.WriteString(w, "app")
 		}
@@ -196,6 +207,26 @@ func rawMethod(t *testing.T, srv *httptest.Server, mode gatewayMode, method, pat
 	return conn
 }
 
+// awaitHeaders reads conn's response through its header block, so the request was admitted before the test goes on.
+func awaitHeaders(t *testing.T, conn net.Conn) {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+	if line, err := br.ReadString('\n'); err != nil || !strings.Contains(line, " 200 ") {
+		t.Fatalf("the stream was not admitted: %q %v", line, err)
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("the stream's headers did not arrive: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+}
+
 // h2Unread starts an HTTP/2 GET for path with cookie and never reads its body: flow control then blocks the
 // server's writes. The request ends with the test.
 func h2Unread(t *testing.T, srv *httptest.Server, path string, c *http.Cookie) {
@@ -234,12 +265,16 @@ func requireOpen(t *testing.T, ended <-chan time.Time, d time.Duration) {
 	}
 }
 
-// cutBy checks a cut landed within bound of the event at from, and logs the measure.
+// cutBy checks a cut landed after the event at from and within bound of it, and logs the measure. An end
+// before the event is a refusal or a disconnect, never a measured cut.
 func cutBy(t *testing.T, what string, from, at time.Time, bound time.Duration) {
 	t.Helper()
 	d := at.Sub(from)
 	t.Logf("%s: the stream ended %v after the event (bound %v)", what, d.Round(time.Millisecond), bound)
-	if d > bound {
+	switch {
+	case d < 0:
+		t.Errorf("%s: ended %v before the event: not a cut by it", what, -d)
+	case d > bound:
 		t.Errorf("%s: ended %v after the event, past the bound %v", what, d, bound)
 	}
 }
@@ -314,7 +349,7 @@ func TestUIRenewal_OpenStreamCutAtAbsoluteExpiry(t *testing.T) {
 	c := rig.session(a)
 	end := rig.wall(time.Unix(rig.clock.now().Unix(), 0).Add(3 * time.Second)) // IssuedAt is the redemption's second
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
-	rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, "")
+	awaitHeaders(t, rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, "")) // admitted before the portal exchanges
 	stop := make(chan struct{})
 	go func() { // the portal keeps exchanging
 		for {
@@ -609,11 +644,11 @@ func TestUIRelayIssuerPortal_CutDuringStalledTLSShutdownStopsInput(t *testing.T)
 				rig.revoke()
 			}
 			cutAt := waitEnded(t, ended, 10*time.Second, by)
-			bound := relayEvery + relayBound + relaySlack
 			if by == "end" {
-				bound = relaySlack
+				cutWithin(t, "TLS 101 (end): the stream ended", cutAt, event, relaySlack)
+			} else {
+				cutBy(t, "TLS 101 (revoke)", event, cutAt, relayEvery+relayBound+relaySlack)
 			}
-			cutBy(t, "TLS 101 ("+by+")", event, cutAt, bound)
 			select {
 			case at := <-sendErr:
 				if at.Sub(cutAt) > 2*time.Second {
@@ -622,9 +657,50 @@ func TestUIRelayIssuerPortal_CutDuringStalledTLSShutdownStopsInput(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Error("the client could still send 5 s after the cut: the socket is open")
 			}
-			if n := in.sentAfter(cutAt); n != 0 {
+			waitFor(t, 5*time.Second, "the backend's reader returned", in.finished)
+			limit := cutAt
+			if by == "end" {
+				limit = earlier(cutAt, event.Add(inputGrace))
+			}
+			if n := in.sentAfter(limit); n != 0 {
 				t.Errorf("the backend received %d lines sent after the cut", n)
 			}
 		})
+	}
+}
+
+// inputGrace is how long past a known cut point a line may still be stamped and reach the backend: the
+// client stamps it before the write the cut then stops.
+const inputGrace = 20 * time.Millisecond
+
+// earlier is the earlier of a and b.
+func earlier(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+// TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd: a 101 whose backend sends nothing, with the viewer still
+// sending, crosses its end: only the end stops the input, and no line sent after it reaches the backend.
+func TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd(t *testing.T) {
+	setSupportWatch(t, time.Hour, relayBound) // no re-check due: the end alone must cut
+	in := &inputLog{}
+	rig := newIssuerUIRig(t, streamBackend(in))
+	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(2*time.Second))
+	c := rig.session(a)
+	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
+	conn := rawRequest(t, srv, gwHTTP1, rig.path("/ws"), c, "Connection: Upgrade\r\nUpgrade: test\r\nX-Quiet: 1\r\n")
+	if line, _ := bufio.NewReader(conn).ReadString('\n'); !strings.Contains(line, "101") {
+		t.Fatalf("no 101: %q", line)
+	}
+	end := rig.wall(a.ExpiresAt) // as the gateway converted it at admission
+	go sendLines(conn)
+	waitFor(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(time.Now().Add(-time.Minute)) > 0 })
+	at := waitEnded(t, ended, 10*time.Second, "quiet 101")
+	cutWithin(t, "quiet 101 (end): the stream ended", at, end, relaySlack)
+	waitFor(t, 5*time.Second, "the backend's reader returned", in.finished)
+	if n := in.sentAfter(earlier(at, end.Add(inputGrace))); n != 0 {
+		t.Errorf("the backend received %d lines the viewer sent after the end", n)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,7 +178,8 @@ func TestAttachIssuerPortal_RevokeDuringSetupCutWithin35s(t *testing.T) {
 
 // TestAttachIssuerPortal_BlockedWriterCutOnSuspend_PG: the terminal floods output to a client that has
 // stopped reading, so the server's websocket write blocks under the unscaled 30 s per-write deadline; a
-// suspend ends the socket within one re-check. One of the renewal gate's measures: a websocket with a client
+// suspend ends the socket within one re-check. Just before the suspend the socket is still open and the
+// output has stopped moving. One of the renewal gate's measures: a websocket with a client
 // that has stopped reading.
 func TestAttachIssuerPortal_BlockedWriterCutOnSuspend_PG(t *testing.T) {
 	rig := newIssuerAttachRig(t)
@@ -194,15 +196,28 @@ func TestAttachIssuerPortal_BlockedWriterCutOnSuspend_PG(t *testing.T) {
 			t.Fatal("the terminal's exec never opened")
 		}
 	}
+	var wrote atomic.Int64
 	go func() {
 		chunk := []byte(strings.Repeat("o", 32<<10))
 		for {
-			if _, err := sess.w.Write(chunk); err != nil {
+			n, err := sess.w.Write(chunk)
+			wrote.Add(int64(n))
+			if err != nil {
 				return
 			}
 		}
 	}()
 	time.Sleep(2 * relayEvery) // the client's buffers fill and the server's write blocks
+	before := wrote.Load()
+	time.Sleep(relayEvery)
+	if after := wrote.Load(); before == 0 || after != before {
+		t.Fatalf("the terminal's output was not blocked just before the event: %d then %d bytes", before, after)
+	}
+	select {
+	case <-rig.audit.detached:
+		t.Fatal("the socket closed before the event: not a cut by it")
+	default:
+	}
 	at := rig.suspend(t)
 	select {
 	case got := <-rig.audit.detached:
