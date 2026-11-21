@@ -65,6 +65,13 @@ func newSvcPG(t *testing.T, activated bool) *svcPG {
 // newReplica is a second server on the same database, with its own memory, secrets view and identity provider.
 func (f *svcPG) newReplica() *svcPG {
 	f.t.Helper()
+	return f.newReplicaClocked(nil)
+}
+
+// newReplicaClocked is newReplica reading clock when it is set, so a test can bring the replica's cached token
+// to its renewal point.
+func (f *svcPG) newReplicaClocked(clock *svcClock) *svcPG {
+	f.t.Helper()
 	h := newHarness(f.t)
 	r := &svcPG{t: f.t, pool: f.pool, pg: f.pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person}
 	cfg := baseTestConfig(h, f.pg)
@@ -73,6 +80,9 @@ func (f *svcPG) newReplica() *svcPG {
 	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), r.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
+	if clock != nil {
+		cfg.Now = clock.Now
+	}
 	r.srv = New(cfg)
 	return r
 }

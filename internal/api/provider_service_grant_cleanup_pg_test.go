@@ -9,6 +9,8 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,59 +58,84 @@ func (f *svcPG) secretDeleteRows() int {
 	return len(f.audit.find("model_provider.service_grant.secret_delete"))
 }
 
-// A held external delete on one process leaves the other's refresh, heartbeat and provider save alone.
+// A held external delete on one process leaves the other's refresh, heartbeat and provider save alone. The other
+// process's healthy row is brought to its renewal point while the delete is held, so its pass must mint anew and
+// persist a fresh attempt; an earlier OK row cannot satisfy the check.
 func TestServiceGrantCleanup_HeldDeleteLeavesRefreshAndHeartbeat_PG(t *testing.T) {
 	f := newSvcPG(t, true)
-	r := f.newReplica()
+	clock := &svcClock{t: time.Now().UTC()}
+	r := f.newReplicaClocked(clock)
+	r.idp.respond = func(n int, _ svcReq) svcAnswer { return svcOK(n, serviceGrantMinLifetime) }
 	uid := f.removedWithClaim()
 	if _, err := r.mint("corp-a"); err != nil {
 		t.Fatalf("the second process's own mint: %v", err)
 	}
 	replica := r.srv.svcGrant.replica()
 	baseline := f.seenAt(replica)
-	if baseline.IsZero() {
-		t.Fatal("setup: the second process has no status row")
+	first, ok := f.pgStatus("corp-a", replica)
+	if baseline.IsZero() || !ok || first.Outcome != "ok" {
+		t.Fatalf("setup: the second process's status row = %+v, %v, seen %v; want ok", first, ok, baseline)
 	}
 	name := serviceGrantSecretName(uid)
 	held, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var armed atomic.Bool
+	armed.Store(true)
 	f.sec.mu.Lock()
 	f.sec.hold = func(op, n string) {
-		if op == "delete" && n == name {
-			f.sec.hold = nil
+		if op == "delete" && n == name && armed.CompareAndSwap(true, false) {
 			close(held)
-			<-release
+			if !svcWaited(release) {
+				t.Error("the held delete was never released")
+			}
 		}
 	}
 	f.sec.mu.Unlock()
 	done := make(chan cleanupOutcome, 1)
 	go func() { done <- f.srv.serviceGrantCleanupAttempt(context.Background(), uid) }()
-	<-held
+	svcAwait(t, held, "the external delete to be held")
 
-	finished := make(chan *int, 1)
+	// Six minutes on, the 15-minute token is inside the reuse margin: corp-a is due on the second process.
+	clock.Advance(6 * time.Minute)
+	if !r.srv.serviceGrantDue(context.Background(), r.row("corp-a")) {
+		t.Fatal("setup: corp-a is not due on the second process")
+	}
+	sent := r.idp.count()
+	finished := make(chan int, 1)
 	go func() {
 		ctx := context.Background()
 		r.srv.serviceGrantHeartbeat(ctx)
 		r.srv.serviceGrantPass(ctx)
-		code := r.put(svcPGRow("corp-a", true)).Code
-		finished <- &code
+		finished <- r.put(svcPGRow("corp-a", true)).Code
 	}()
 	select {
 	case code := <-finished:
-		if *code/100 != 2 {
-			t.Fatalf("the second process's provider save = %d while the delete is held, want it committed", *code)
+		if code/100 != 2 {
+			t.Fatalf("the second process's provider save = %d while the delete is held, want it committed", code)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the second process's heartbeat, refresh or save waited for a held external delete")
 	}
+	if n := r.idp.count() - sent; n != 1 {
+		t.Errorf("the second process sent %d token requests for the due row while the delete was held, want 1", n)
+	}
 	if after := f.seenAt(replica); !after.After(baseline) {
 		t.Errorf("the second process's heartbeat did not advance past its own baseline (%v then %v)", baseline, after)
 	}
-	if row, ok := f.pgStatus("corp-a", replica); !ok || row.Outcome != "ok" {
-		t.Errorf("the second process's status for corp-a = %+v, %v, want ok", row, ok)
+	row, ok := f.pgStatus("corp-a", replica)
+	if !ok || row.Outcome != "ok" || !row.AttemptedAt.After(first.AttemptedAt) || row.LastOKAt == nil ||
+		first.LastOKAt == nil || !row.LastOKAt.After(*first.LastOKAt) {
+		t.Errorf("the second process's status for corp-a = %+v, %v; want a fresh ok attempt after %v", row, ok, first.AttemptedAt)
 	}
-	close(release)
-	if out := <-done; out != cleanupSettled {
-		t.Fatalf("the held attempt ended %d, want settled", out)
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case out := <-done:
+		if out != cleanupSettled {
+			t.Fatalf("the held attempt ended %d, want settled", out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the released delete to settle")
 	}
 	if got := f.claimUIDs(); len(got) != 0 || f.secretDeleteRows() != 1 {
 		t.Fatalf("after the release: claims %v, settle rows %d, want none and one", got, f.secretDeleteRows())
