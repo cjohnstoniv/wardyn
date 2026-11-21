@@ -117,6 +117,8 @@ type portalStore struct {
 	stamped   int
 	swept     int
 	mintErr   error
+	// userTypeErr, groupsErr and issueErr fail the user type read, the sign-in record write and the identity write.
+	userTypeErr, groupsErr, issueErr error
 	// audit is the recorder whose rows stand for the shared audit table.
 	audit *recRecorder
 }
@@ -129,6 +131,9 @@ var (
 func (p *portalStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.userTypeErr != nil {
+		return types.UserType{}, p.userTypeErr
+	}
 	if p.userTypes[id] {
 		return types.UserType{ID: id, Name: id}, nil
 	}
@@ -154,6 +159,10 @@ func (p *portalStore) AuditEventsStored(_ context.Context, want []store.AuditEve
 		}
 	}
 	return out, nil
+}
+
+func (p *portalStore) PutPrincipalGroups(context.Context, string, string, string, []string, bool, time.Time) error {
+	return p.groupsErr
 }
 
 func (p *portalStore) GetIssuerDelegateByRaw(_ context.Context, raw string) (types.Delegate, error) {
@@ -183,6 +192,9 @@ func (p *portalStore) lockPortal(id uuid.UUID, rev int64) (types.Delegate, error
 func (p *portalStore) IssuePortalIdentity(_ context.Context, principal, key, display, realIssuer string, portal uuid.UUID, rev int64) (uuid.UUID, bool, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.issueErr != nil {
+		return uuid.Nil, false, p.issueErr
+	}
 	if _, err := p.lockPortal(portal, rev); err != nil {
 		return uuid.Nil, false, err
 	}

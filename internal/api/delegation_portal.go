@@ -146,6 +146,17 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	unavailable := func(reason string, extra map[string]any) {
 		deny(http.StatusServiceUnavailable, "temporarily_unavailable", "", reason, extra)
 	}
+	// failed answers a failure of this server's own reads or writes after the portal authenticated. The reply
+	// is the one the step always gave; the row's reason is the reply's code and its cause names the step
+	// that failed, never the error.
+	failed := func(status int, code, desc, target, step string) {
+		data := map[string]any{"reason": code, "cause": step}
+		for k, v := range base {
+			data[k] = v
+		}
+		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange", target, "failure", mustJSON(data)))
+		writeOAuthError(w, status, code, desc)
+	}
 	pgs, okG := s.cfg.Store.(store.PortalGrantStore)
 	pis, okI := s.cfg.Store.(store.PortalIdentityStore)
 	if !okG || !okI || s.cfg.PortalIssuers == nil {
@@ -197,7 +208,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	if err != nil {
 		slog.ErrorContext(ctx, "api: revocation order lookup failed; portal exchange refused", "error", err)
 		s.metrics.authStoreErrorInc()
-		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed")
+		failed(http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed", subj.Principal, "revocation_order_lookup")
 		return
 	}
 	if s.cfg.SessionRevocations != nil {
@@ -205,7 +216,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		if err != nil {
 			slog.ErrorContext(ctx, "api: session-revocation lookup failed; portal exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
-			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed")
+			failed(http.StatusServiceUnavailable, "temporarily_unavailable", "session revocation lookup failed", subj.Principal, "session_revocation_lookup")
 			return
 		}
 		if revoked {
@@ -218,7 +229,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	if err != nil {
 		slog.ErrorContext(ctx, "api: user type lookup failed; portal exchange refused", "error", err)
 		s.metrics.authStoreErrorInc()
-		writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "user type lookup failed")
+		failed(http.StatusServiceUnavailable, "temporarily_unavailable", "user type lookup failed", subj.Principal, "user_type_lookup")
 		return
 	}
 	if !exists {
@@ -232,7 +243,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		display = subj.Email
 	}
 	identity, _, err := pis.IssuePortalIdentity(ctx, subj.Principal, subj.K, display, d.Issuer, d.ID, d.AdmissionRev)
-	if s.portalWriteRefused(w, r, err, "issue portal identity", subj.Principal, deny) {
+	if s.portalWriteRefused(w, r, err, "issue portal identity", subj.Principal, deny, failed) {
 		return
 	}
 	s.deliverPortalIntroductions(ctx, pis, identity)
@@ -241,7 +252,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		if err := pw.PutPrincipalGroups(ctx, subj.Principal, d.ID.String(), "", nil, false, subj.IssuedAt); err != nil {
 			slog.ErrorContext(ctx, "api: record the portal exchange failed; portal exchange refused", "error", err)
 			s.metrics.authStoreErrorInc()
-			writeOAuthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed")
+			failed(http.StatusServiceUnavailable, "temporarily_unavailable", "sign-in record write failed", subj.Principal, "sign_in_record_write")
 			return
 		}
 	}
@@ -253,7 +264,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, oidc.SubjectTokenStale, nil)
 		return
 	}
-	if s.portalWriteRefused(w, r, err, "mint portal grant", subj.Principal, deny) {
+	if s.portalWriteRefused(w, r, err, "mint portal grant", subj.Principal, deny, failed) {
 		return
 	}
 	// After the commit, so two people's mints never wait on each other: the portal's last use, at most
@@ -293,8 +304,9 @@ func portalMaxAge(d types.Delegate) time.Duration {
 // portal revoked or an issuer binding retired since the token was checked is the revoked portal's answer,
 // 401 invalid_client, and writes nothing; an admission rule changed since is 503 portal_admission_changed
 // and the portal retries under the new rule; a deactivated or purged person is refused as the console
-// refuses one. Anything else is a failed write: 500, nothing minted.
-func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err error, what, principal string, deny func(int, string, string, string, map[string]any)) bool {
+// refuses one. Anything else is a failed write: 500, nothing minted, and a failure row naming the step.
+func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err error, what, principal string,
+	deny func(int, string, string, string, map[string]any), failed func(int, string, string, string, string)) bool {
 	switch {
 	case err == nil:
 		return false
@@ -308,7 +320,7 @@ func (s *Server) portalWriteRefused(w http.ResponseWriter, r *http.Request, err 
 		deny(http.StatusBadRequest, "invalid_grant", principal, oidc.DenialIdentityDeactivated, nil)
 	default:
 		slog.ErrorContext(r.Context(), "api: portal exchange write failed", "step", what, "error", err)
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", what+" failed")
+		failed(http.StatusInternalServerError, "server_error", what+" failed", principal, strings.ReplaceAll(what, " ", "_"))
 	}
 	return true
 }
