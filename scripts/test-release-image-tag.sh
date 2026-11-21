@@ -218,7 +218,8 @@ docker cp "$cid:/wardynd" "$RUNNER_TEMP/$arch/wardynd"
 docker rm "$cid" >/dev/null
 docker buildx imagetools create --tag "$t" "$IMAGE_REF"
 now="$(docker buildx imagetools inspect "$t" --format '"'"'{{.Manifest.Digest}}'"'"')"'
-PIN_FILES='mkdir -p "$RUNNER_TEMP/$arch/host"
+PIN_FILES='for arch in amd64 arm64; do
+mkdir -p "$RUNNER_TEMP/$arch/host"
 expected=("$RUNNER_TEMP/$arch/wardynd" "$RUNNER_TEMP/$arch/host/wardyn")
 expected+=("$RUNNER_TEMP/$arch/host/wardyn-$platform")
 for f in "${expected[@]}"; do
@@ -226,26 +227,31 @@ if [ -L "$f" ] || [ ! -f "$f" ]; then
 echo "::error::$(basename "$f") is missing from the linux/$arch image or is not a regular file"; exit 1
 grep -aqF "$REVISION" "$f" \
 || { echo "::error::$(basename "$f") in the linux/$arch image was not stamped with revision ${REVISION}"; exit 1; }'
-publisher_pin_guard() {
+publisher_pin_guard() { # PIN_REQUIRE=1 also demands every known line
   PIN_BODY="$PIN_BODY" PIN_DOCKER="$PIN_DOCKER" PIN_FILES="$PIN_FILES" awk '
     function trim(x) { sub(/^[[:space:]]+/, "", x); sub(/[[:space:]]+$/, "", x); return x }
-    function flush() { if (job != "" && priv) { if (!seen) { print job ": no run_in_image function"; found = 1 } else if (got != body) { print job ": run_in_image is not the expected command: " got; found = 1 } } }
-    BEGIN { body = ENVIRON["PIN_BODY"]; n = split(ENVIRON["PIN_DOCKER"], d, "\n"); for (i = 1; i <= n; i++) okd[d[i]] = 1; n = split(ENVIRON["PIN_FILES"], fl, "\n"); for (i = 1; i <= n; i++) okf[fl[i]] = 1 }
+    function flush(  k) {
+      if (job == "" || !priv) return
+      if (defs != 1) { print job ": run_in_image is defined " defs " times, want once"; found = 1 }
+      if (require) { for (k in okd) if (!(k in hit)) { print job ": a known line is missing: " k; found = 1 }; for (k in okf) if (!(k in hit)) { print job ": a known line is missing: " k; found = 1 } }
+    }
+    BEGIN { body = ENVIRON["PIN_BODY"]; require = (ENVIRON["PIN_REQUIRE"] == "1"); n = split(ENVIRON["PIN_DOCKER"], d, "\n"); for (i = 1; i <= n; i++) okd[d[i]] = 1; n = split(ENVIRON["PIN_FILES"], fl, "\n"); for (i = 1; i <= n; i++) okf[fl[i]] = 1 }
     /^permissions:/ { top = 1; next }
     /^[A-Za-z]/ { top = 0 }
     top && /^  (packages|id-token): write/ { wfwrite = 1 }
     /^jobs:/ { injobs = 1; next }
-    injobs && /^  [A-Za-z0-9_-]+:$/ { flush(); job = $1; own = 0; ownwrite = 0; priv = 0; seen = 0; inbody = 0; got = ""; next }
+    injobs && /^  [A-Za-z0-9_-]+:$/ { flush(); job = $1; own = 0; ownwrite = 0; priv = 0; defs = 0; inbody = 0; got = ""; delete hit; next }
     injobs && /^    permissions:/ { own = 1; next }
     injobs && own && /^      (packages|id-token): write/ { ownwrite = 1 }
     injobs { priv = ownwrite || (!own && wfwrite) }
     !(injobs && priv) || /^[[:space:]]*#/ { next }
     { t = trim($0) }
-    t ~ /^run_in_image\(\)[[:space:]]*\{$/ { inbody = 1; seen = 1; got = ""; next }
-    inbody && t == "}" { inbody = 0; next }
+    t ~ /^run_in_image\(\)[[:space:]]*\{$/ { inbody = 1; defs++; got = ""; next }
+    inbody && t == "}" { inbody = 0; if (got != body) { print job ": run_in_image is not the expected command: " got; found = 1 }; next }
     inbody { got = (got == "" ? t : got "\n" t); next }
+    (t in okd) || (t in okf) { hit[t] = 1 }
     t ~ /(^|[^A-Za-z0-9_.\/-])docker[[:space:]]/ && !(t in okd) { print job ": a docker command that is not one of the known lines: " t; found = 1 }
-    t ~ /\$\{?(RUNNER_TEMP|f|cid)\}?([^A-Za-z0-9_]|$)/ || t ~ /(^|[[:space:];(])(f|cid)=/ || t ~ /(^|[[:space:];])for[[:space:]]+(f|cid)[[:space:]]/ {
+    t ~ /\$\{?(RUNNER_TEMP|f|cid)\}?([^A-Za-z0-9_]|$)/ || t ~ /(^|[[:space:];(])(f|cid)=/ || t ~ /(^|[[:space:];])for[[:space:]]+(f|cid|arch)[[:space:]]/ {
       if (!(t in okf) && !(t in okd)) { print job ": a line that names the copied-out files and is not one of the known lines: " t; found = 1 }
     }
     END { flush(); exit found }
@@ -271,7 +277,7 @@ OLD
 if publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null; then fail "the publisher guard accepts a runner-side run of an extracted CLI"; fi
 sed -i '/^    runs-on/a\    permissions:\n      contents: read' "$WORK/old-shape.yml"
 publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null || fail "the publisher guard refuses a job that holds no write permission"
-publisher_pin_guard < "$PI" || fail "the publishing job in publish-image.yml handles the image outside the pinned lines (lines above)"
+PIN_REQUIRE=1 publisher_pin_guard < "$PI" || fail "the publishing job in publish-image.yml handles the image outside the pinned lines (lines above)"
 # One fixture per way the unsigned image's bytes could reach the runner again; each must fail its guard, and the
 # workflow as it stands must pass both (above).
 mkfix() { # NAME BODY: a workflow whose publishing job runs BODY
@@ -305,6 +311,21 @@ if publisher_pin_guard < "$WORK/fix-nonew.yml" >/dev/null; then fail "the docker
 mkfix second <<<"$GOOD_RUN
           docker run --rm -v /:/host \"\$IMAGE_REF\""
 if publisher_pin_guard < "$WORK/fix-second.yml" >/dev/null; then fail "the docker run guard accepts a second docker run outside run_in_image"; fi
+# A command taken out is as much a change as one put in: with the real workflow, every known line is removed in turn
+# and each removal must fail, and run_in_image defined a second time (even identically) must fail too.
+while IFS= read -r known; do
+  [ -n "$known" ] || continue
+  KNOWN="$known" awk '{ t = $0; sub(/^[[:space:]]+/, "", t); sub(/[[:space:]]+$/, "", t); if (t != ENVIRON["KNOWN"]) print }' "$PI" > "$WORK/fix-missing.yml"
+  cmp -s "$PI" "$WORK/fix-missing.yml" && fail "the missing-command control did not remove: $known"
+  if PIN_REQUIRE=1 publisher_pin_guard < "$WORK/fix-missing.yml" >/dev/null; then fail "the pin guard accepts the publishing job without: $known"; fi
+done <<< "$PIN_DOCKER
+$PIN_FILES"
+mkfix twice <<<"$GOOD_RUN
+$GOOD_RUN"
+if publisher_pin_guard < "$WORK/fix-twice.yml" >/dev/null; then fail "the pin guard accepts run_in_image defined twice"; fi
+mkfix twice-other <<<"$GOOD_RUN
+${GOOD_RUN/--network none /}"
+if publisher_pin_guard < "$WORK/fix-twice-other.yml" >/dev/null; then fail "the pin guard accepts a second, different run_in_image"; fi
 
 # The image check itself, run with a stub docker: a failing version command and an empty answer each fail it, on a branch
 # and on a tag, and a tag must report exactly its release version.
