@@ -340,6 +340,8 @@ func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant st
 		if err != nil {
 			return err
 		}
+		// A deadlock with a concurrent removal or purge of one of these people aborts the whole transaction: no
+		// ledger is opened and the group stays, so the 5xx is retried and the retry starts over.
 		for _, m := range members {
 			if err := startGroupRemoval(ctx, q, id, m); err != nil {
 				return err
