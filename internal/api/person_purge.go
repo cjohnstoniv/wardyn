@@ -31,14 +31,21 @@ import (
 // neither suspended nor purged is store.ErrPersonNotSuspended.
 func (s *Server) purgePortalIdentity(ctx context.Context, st portalLifecycleStore, id uuid.UUID, mode store.PortalPurgeMode, o leaverOrigin) (bool, error) {
 	ctx = withActor(ctx, o.actorType, o.actor)
+	proceed, err := markPortalPurge(ctx, st, id, mode)
+	if err != nil || !proceed {
+		return false, err
+	}
+	return true, s.finishPortalPurge(ctx, st, id, o)
+}
+
+// markPortalPurge is the locked mark of a purge (store.MarkPortalIdentityPurged) and whether the steps go on:
+// a scheduled purge that the lock found not due, owned or suspended any more stops, with no error.
+func markPortalPurge(ctx context.Context, st portalLifecycleStore, id uuid.UUID, mode store.PortalPurgeMode) (bool, error) {
 	marked, err := st.MarkPortalIdentityPurged(ctx, id, mode)
 	if err != nil {
 		return false, err
 	}
-	if mode == store.PortalPurgeScheduled && !marked {
-		return false, nil
-	}
-	return true, s.finishPortalPurge(ctx, st, id, o)
+	return mode != store.PortalPurgeScheduled || marked, nil
 }
 
 // finishPortalPurge runs a marked purge's steps, each idempotent and recorded in deprovision_jobs under kind
@@ -131,8 +138,17 @@ func (s *Server) handlePurgePortalPerson(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	actorType, actor := actorFromRequest(r)
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "person.purge", ident.Principal, "success", mustJSON(map[string]any{"identity": ident.ID})))
-	_, err := s.purgePortalIdentity(r.Context(), st, ident.ID, store.PortalPurgeExplicit, portalOrigin(actorType, actor))
+	o := portalOrigin(actorType, actor)
+	ctx := withActor(r.Context(), o.actorType, o.actor)
+	// The row says what the locked mark decided: success only once it holds, a denial when a reactivation won.
+	_, err := markPortalPurge(ctx, st, ident.ID, store.PortalPurgeExplicit)
+	switch {
+	case err == nil:
+		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "person.purge", ident.Principal, "success", mustJSON(map[string]any{"identity": ident.ID})))
+		err = s.finishPortalPurge(ctx, st, ident.ID, o)
+	case errors.Is(err, store.ErrPersonNotSuspended):
+		s.denyPortalPerson(r, "person.purge", ident.Principal, reasonPersonNotSuspended)
+	}
 	switch {
 	case errors.Is(err, store.ErrPersonNotSuspended):
 		// A reactivation that committed first wins.
