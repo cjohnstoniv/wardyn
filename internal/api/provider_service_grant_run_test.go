@@ -413,6 +413,7 @@ func TestServiceGrant_UnmaskableTokenNotHandedOut(t *testing.T) {
 
 func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	f := newSvcFixWithSecret(t)
+	ids := f.captureRowIDs()
 	plan, env, policy, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
@@ -422,6 +423,7 @@ func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("resolve: %d", code)
 	}
+	f.awaitSink(t, ids()...) // the sweep covers each success's sink copy
 	sandbox, _ := json.Marshal(env)
 	planned, _ := json.Marshal(policy)
 	grants, _ := json.Marshal(f.st.grants)

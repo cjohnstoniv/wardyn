@@ -70,6 +70,7 @@ func (f *svcFix) cached() bool {
 // owner check, so the answer is the 403 that makes the proxy drop its last good header, not a 503 it rides out.
 func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	f := newSvcFixWithSecret(t)
+	ids := f.captureRowIDs()
 	plan, _, _, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
@@ -92,6 +93,13 @@ func TestServiceGrant_OwnerRemovedDuringFailedRenewalWithdraws(t *testing.T) {
 	if code != http.StatusForbidden || body["reason"] != reasonServiceGrantNotListed {
 		t.Fatalf("resolve = %d %v, want 403 %s", code, body, reasonServiceGrantNotListed)
 	}
+	got := ids()
+	if len(got) == 0 {
+		t.Fatal("no mint row id was captured")
+	}
+	failing := got[len(got)-1] // the failed renewal's row settles after the answer: the sweep covers it and its copy
+	f.awaitRows(t, failing)
+	f.awaitSink(t, failing)
 	if strings.Contains(f.auditAll(), svcToken(1)) {
 		t.Error("the last good token reached the audit")
 	}
@@ -730,18 +738,22 @@ func TestServiceGrant_RecordGoneAtReadStaysFinalOverInconclusiveRereads(t *testi
 	}
 }
 
-// A token that answers late in the token request's window is still published: the publish reads run under a bound
-// of their own, never the time the request left over. The bounds are shortened to real milliseconds, since a context's
-// deadline runs on the real clock: the provider answers 300 ms into a 400 ms request, and the publish's revision read
-// then takes 200 ms, ending after the request's deadline and inside the publish's own 300 ms. The controls run the
-// same read under a child of the request's context and under an expired one, and both must fail; a read that takes
-// longer than the publish bound is cut at that bound.
+// A token that answers late in the token request's window is still published: the publication runs under the
+// attempt's context, never the time the try left over. The bounds are shortened to real milliseconds, since a
+// context's deadline runs on the real clock: the provider answers 300 ms into a 400 ms try, and the publication's
+// revision read then takes 200 ms, ending after the try's deadline and inside the attempt's 1200 ms. The controls
+// run the same publication under a child of the request's context and under an expired one, and both must fail; a
+// read that outlasts the attempt is cut at its deadline.
 func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 	const answerAt, readTakes = 300 * time.Millisecond, 200 * time.Millisecond
+	// The attempt keeps attempt >= token + tail, so the try is the 400 ms token bound and the publication runs
+	// under the attempt's context, which ends at 1200 ms.
 	shorten := func(t *testing.T) {
-		tokenBound, publishBound := serviceGrantTokenBound, serviceGrantPublishBound
-		serviceGrantTokenBound, serviceGrantPublishBound = 400*time.Millisecond, 300*time.Millisecond
-		t.Cleanup(func() { serviceGrantTokenBound, serviceGrantPublishBound = tokenBound, publishBound })
+		attempt, tokenBound, tail, publishBound := serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound
+		serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound = 1200*time.Millisecond, 400*time.Millisecond, 700*time.Millisecond, 300*time.Millisecond
+		t.Cleanup(func() {
+			serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantTailBound, serviceGrantPublishBound = attempt, tokenBound, tail, publishBound
+		})
 	}
 	lateFix := func(t *testing.T, read time.Duration) *svcFix {
 		f := newSvcFixWithSecret(t)
@@ -768,7 +780,7 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 		f.sec.mu.Unlock()
 		tok := serviceGrantMinted{token: svcToken(9), expiresAt: f.clock.Now().Add(time.Hour)}
 		_, err := f.srv.publishServiceGrantToken(ctx, p, serviceGrantDigest(p), rev, true, serviceGrantTriggerRefresh,
-			f.clock.Now(), f.srv.nextServiceGrantGen(), f.srv.serviceGrantCacheGen(p.UID), tok)
+			f.clock.Now(), f.srv.nextServiceGrantGen(), f.srv.serviceGrantCacheGen(p.UID), tok, func() {})
 		return err
 	}
 
@@ -780,7 +792,7 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 		if err != nil || tok.token != svcToken(1) || !f.cached() {
 			t.Fatalf("late answer = %q, %v, cached %v; want the token published", tok.token, err, f.cached())
 		}
-		if took := time.Since(started); took < answerAt+readTakes || took >= serviceGrantTokenBound+serviceGrantPublishBound {
+		if took := time.Since(started); took < answerAt+readTakes || took >= serviceGrantAttemptBound {
 			t.Fatalf("the mint took %v, want the late answer and the full read (at least %v) inside both bounds", took, answerAt+readTakes)
 		}
 	})
@@ -805,7 +817,7 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 			t.Fatalf("publish under an expired context = %v, cached %v; want it refused", err, f.cached())
 		}
 	})
-	t.Run("a read longer than the publish bound is cut at it", func(t *testing.T) {
+	t.Run("a publication read past the attempt's deadline is cut there", func(t *testing.T) {
 		shorten(t)
 		f := lateFix(t, 10*time.Second)
 		started := time.Now()
@@ -815,8 +827,8 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 		if !errors.As(err, &se) || se.reason != svcReasonUnavailable || se.definitive || f.cached() {
 			t.Fatalf("a publish read past its bound = %v (%+v), cached %v; want the transient unavailable, nothing cached", err, se, f.cached())
 		}
-		if took < answerAt+serviceGrantPublishBound || took >= answerAt+serviceGrantPublishBound+2*time.Second {
-			t.Fatalf("the mint took %v, want it to end at the publish bound (about %v)", took, answerAt+serviceGrantPublishBound)
+		if took < serviceGrantAttemptBound-50*time.Millisecond || took >= serviceGrantAttemptBound+time.Second {
+			t.Fatalf("the mint took %v, want it to end at the attempt's bound (about %v)", took, serviceGrantAttemptBound)
 		}
 	})
 }
@@ -829,6 +841,7 @@ func TestServiceGrant_RotationAfterLastRevisionReadNeverPublishesOldToken(t *tes
 	for _, newerFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("newer attempt publishes first=%v", newerFirst), func(t *testing.T) {
 			f := newSvcFixWithSecret(t)
+			ids := f.captureRowIDs() // the old attempt's publication fixes the first id
 			var oldSent, held atomic.Bool
 			paused, resume := make(chan struct{}), make(chan struct{})
 			var once sync.Once
@@ -909,79 +922,15 @@ func TestServiceGrant_RotationAfterLastRevisionReadNeverPublishesOldToken(t *tes
 				t.Fatalf("%d token requests, %d superseded and %d success rows; want 2, 1 (the old) and 1 (the new)",
 					f.idp.count(), superseded, success)
 			}
+			oldID := ids()[0]
+			rows := f.st.rowsOf(oldID)
+			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"superseded_by":"eviction"`) {
+				t.Fatalf("the old attempt's rows = %v, want one superseded by the eviction", rows)
+			}
+			f.sinkSettled(t)
+			if n := f.sink.copiesOf(oldID); n != 1 {
+				t.Fatalf("the sink holds %d copies of the old attempt's row, want 1", n)
+			}
 		})
 	}
-}
-
-// One attempt ends within its own bound whatever its phases take, and a refresher slot is released when it does.
-// The bounds are shortened to real milliseconds: a 600 ms attempt, a 400 ms token request and a 300 ms publish.
-// A provider answering at 300 ms with a 150 ms publish read is published, cached and recorded ok, and the pass
-// returns with the slot free; a publish read still running at the attempt's deadline is cut there and answers the
-// transient error, with nothing cached.
-func TestServiceGrant_AttemptBoundReleasesRefresherSlot(t *testing.T) {
-	const answerAt = 300 * time.Millisecond
-	shorten := func(t *testing.T, publish time.Duration) {
-		attempt, tokenBound, publishBound := serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantPublishBound
-		serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantPublishBound = 600*time.Millisecond, 400*time.Millisecond, publish
-		t.Cleanup(func() {
-			serviceGrantAttemptBound, serviceGrantTokenBound, serviceGrantPublishBound = attempt, tokenBound, publishBound
-		})
-	}
-	// slowFix answers the token request at answerAt and then makes the next bounded revision read, the publish's,
-	// take read.
-	slowFix := func(t *testing.T, read time.Duration) *svcFix {
-		f := newSvcFixWithSecret(t)
-		f.idp.mu.Lock()
-		f.idp.respond = func(n int, _ svcReq) svcAnswer {
-			time.Sleep(answerAt)
-			f.sec.mu.Lock()
-			f.sec.revDelay = read
-			f.sec.mu.Unlock()
-			return svcOK(n, 3600)
-		}
-		f.idp.mu.Unlock()
-		return f
-	}
-	running := func(f *svcFix) bool {
-		f.srv.svcGrant.mu.Lock()
-		defer f.srv.svcGrant.mu.Unlock()
-		return f.srv.svcGrant.running[f.uid]
-	}
-
-	t.Run("a delayed publish completes and frees the slot", func(t *testing.T) {
-		shorten(t, 300*time.Millisecond)
-		f := slowFix(t, 150*time.Millisecond)
-		started := time.Now()
-		f.srv.serviceGrantPass(context.Background())
-		took := time.Since(started)
-		if took < answerAt || took >= serviceGrantAttemptBound+400*time.Millisecond {
-			t.Fatalf("the pass took %v, want the attempt's work inside its %v bound", took, serviceGrantAttemptBound)
-		}
-		if running(f) {
-			t.Fatal("the refresher slot is still held after the pass returned")
-		}
-		f.srv.svcGrant.mu.Lock()
-		c, ok := f.srv.svcGrant.cache[f.uid]
-		f.srv.svcGrant.mu.Unlock()
-		if !ok || c.token != svcToken(1) {
-			t.Fatalf("cache = %q (present %v), want the delayed token published", c.token, ok)
-		}
-		if row, ok := f.st.statusOf(f.uid, f.srv.svcGrant.replica()); !ok || row.Outcome != "ok" || row.LastOKAt == nil {
-			t.Fatalf("status row = %+v (present %v), want ok with the success time", row, ok)
-		}
-	})
-	t.Run("a publish running at the attempt deadline is cut there", func(t *testing.T) {
-		shorten(t, 10*time.Second) // the publish's own bound is longer, so the attempt's deadline is the one that cuts
-		f := slowFix(t, 10*time.Second)
-		started := time.Now()
-		_, err := f.token(serviceGrantTriggerRefresh)
-		took := time.Since(started)
-		var se *serviceGrantError
-		if !errors.As(err, &se) || se.reason != svcReasonUnavailable || se.definitive || f.cached() {
-			t.Fatalf("a publish cut by the attempt = %v (%+v), cached %v; want the transient unavailable, nothing cached", err, se, f.cached())
-		}
-		if took < serviceGrantAttemptBound-50*time.Millisecond || took >= serviceGrantAttemptBound+time.Second {
-			t.Fatalf("the attempt took %v, want it to end at its %v bound", took, serviceGrantAttemptBound)
-		}
-	})
 }

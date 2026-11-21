@@ -74,6 +74,7 @@ func TestServiceGrant_NoOpenIDAndIDTokenIgnored(t *testing.T) {
 	f.idp.respond = func(n int, _ svcReq) svcAnswer {
 		return svcAnswer{Status: 200, Body: `{"access_token":"` + svcToken(n) + `","expires_in":3600,"id_token":"idtoken-never-verified-or-kept-0001","refresh_token":"refresh-never-kept-0000000001"}`}
 	}
+	ids := f.captureRowIDs()
 	f.mustToken(serviceGrantTriggerRefresh)
 	req := f.idp.requests()[0]
 	if strings.Contains(req.Form.Get("scope"), "openid") || req.Form.Has("nonce") {
@@ -85,6 +86,7 @@ func TestServiceGrant_NoOpenIDAndIDTokenIgnored(t *testing.T) {
 	if cached.token != svcToken(1) {
 		t.Fatalf("cached token = %q, want the access token", cached.token)
 	}
+	f.awaitSink(t, ids()...) // the sweep covers the success's sink copy
 	all := f.auditAll() + f.logs.String()
 	for _, v := range []string{"idtoken-never-verified-or-kept-0001", "refresh-never-kept-0000000001"} {
 		if strings.Contains(all, v) {
@@ -372,10 +374,13 @@ func TestServiceGrant_SecretAbsentFromLogsAndErrors(t *testing.T) {
 	f.idp.respond = func(int, svcReq) svcAnswer {
 		return svcAnswer{Status: 400, Body: `{"error":"invalid_client","error_description":"bad secret ` + svcClientSecret + `"}`}
 	}
+	ids := f.captureRowIDs()
 	_, err := f.token(serviceGrantTriggerRefresh)
 	if err == nil || strings.Contains(err.Error(), svcClientSecret) {
 		t.Fatalf("error = %v", err)
 	}
+	f.awaitRows(t, ids()...) // the failure row settles after the answer: the sweep covers it and its copy
+	f.awaitSink(t, ids()...)
 	row, _ := f.st.statusOf(f.uid, f.srv.svcGrant.replica())
 	haystack := f.logs.String() + f.auditAll() + err.Error() + row.Reason + row.OAuthError
 	if strings.Contains(haystack, svcClientSecret) || strings.Contains(haystack, "bad secret") {
@@ -398,6 +403,7 @@ func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	t.Cleanup(proxy.Close)
 	pu, _ := url.Parse(proxy.URL)
 	f.srv.cfg.ServiceGrantTransport = &http.Transport{Proxy: http.ProxyURL(pu)}
+	ids := f.captureRowIDs()
 	if _, err := f.token(serviceGrantTriggerRefresh); err == nil {
 		t.Fatal("the proxy refused the tunnel and the mint succeeded")
 	}
@@ -406,7 +412,11 @@ func TestServiceGrant_TokenCallUsesDaemonTransport(t *testing.T) {
 	if len(connects) != 1 || connects[0] != "idp.example.test:443" {
 		t.Fatalf("proxy saw CONNECT %v, want one for the token host", connects)
 	}
-	rows := f.mintRows()
+	if len(ids()) != 1 {
+		t.Fatalf("row ids = %v, want the one request's", ids())
+	}
+	f.awaitRows(t, ids()[0]) // the failure row settles after the answer
+	rows := f.st.rowsOf(ids()[0])
 	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"egress":"proxy"`) {
 		t.Fatalf("audit rows = %v, want one naming egress proxy", rows)
 	}
