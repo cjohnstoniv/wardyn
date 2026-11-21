@@ -540,6 +540,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 		id                   uuid.UUID
 	}
 	n := 0
+	var proposed *httptest.ResponseRecorder // the last proposal's 202
 	propose := func(t *testing.T, mut map[string]any) held {
 		t.Helper()
 		n++
@@ -548,6 +549,7 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 			m[k] = v
 		}
 		change, cred, w := e.proposeHeld(t, m)
+		proposed = w
 		if change == "" || !strings.HasPrefix(cred, store.PortalCredentialPrefix) {
 			t.Fatalf("propose = %d %s, want 202 with the credential once", w.Code, w.Body.String())
 		}
@@ -583,11 +585,26 @@ func TestPortalRegistration_HeldDecisions_PG(t *testing.T) {
 	}
 
 	t.Run("pending", func(t *testing.T) {
-		h := propose(t, nil)
+		h := propose(t, map[string]any{"required_claim": map[string]string{"claim": "tenant", "value": "prod"}})
 		unusable(t, h, types.GovernanceChangePending)
-		body := doSSO(t, e.h.srv, http.MethodGet, "/api/v1/governance/changes/"+h.change, e.admin2, "").Body.String()
-		if strings.Contains(body, h.cred) || strings.Contains(body, hashPortalCredential(h.cred)) {
-			t.Errorf("the change read carries the credential or its digest: %s", body)
+		digest := hashPortalCredential(h.cred)
+		if strings.Contains(proposed.Body.String(), digest) {
+			t.Errorf("the 202 carries the credential's digest: %s", proposed.Body.String())
+		}
+		// The approver's reads: the change with its diff, and the list that names it.
+		for _, path := range []string{"/api/v1/governance/changes/" + h.change, "/api/v1/governance/changes"} {
+			w := doSSO(t, e.h.srv, http.MethodGet, path, e.admin2, "")
+			body := w.Body.String()
+			if w.Code != http.StatusOK || !strings.Contains(body, h.change) {
+				t.Fatalf("GET %s = %d %s, want 200 naming the change", path, w.Code, body)
+			}
+			if strings.Contains(body, h.cred) || strings.Contains(body, digest) {
+				t.Errorf("GET %s carries the credential or its digest: %s", path, body)
+			}
+			// The diff still shows the claim name and value the approver approves.
+			if !strings.Contains(body, "tenant") || !strings.Contains(body, "prod") {
+				t.Errorf("GET %s does not show the required claim: %s", path, body)
+			}
 		}
 	})
 	t.Run("self-approval", func(t *testing.T) {

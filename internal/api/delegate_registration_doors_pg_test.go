@@ -183,3 +183,45 @@ func TestPortalRegistration_ConsolePortalShapeFromPersistedRows_PG(t *testing.T)
 		t.Errorf("found %d of the 3 portals in the list: %s", seen, list.Body.String())
 	}
 }
+
+// The admin token registers a portal directly under the second-human switch: 201 with the portal row and its
+// delegate.create row, nothing held, and one governance.change.bypass row naming the delegate kind.
+func TestPortalRegistration_AdminTokenBypassesSecondHuman_PG(t *testing.T) {
+	e := newRegPG(t)
+	t.Setenv(envGovernanceSecondHuman, "true")
+	issuer := "https://token-bypass.example.com"
+	w := do(t, e.h.srv, http.MethodPost, "/api/v1/admin/delegates", adminToken, e.body(map[string]any{"issuer": issuer}))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("admin-token registration = %d %s, want 201", w.Code, w.Body.String())
+	}
+	var d types.Delegate
+	if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil || d.ID == uuid.Nil {
+		t.Fatalf("registration body = %s, %v", w.Body.String(), err)
+	}
+	if n := e.portals(t, issuer); n != 1 {
+		t.Errorf("portal rows = %d, want 1", n)
+	}
+	if n := e.countPending(t); n != 0 {
+		t.Errorf("pending changes = %d, want 0: the admin token's registration is not held", n)
+	}
+	created := 0
+	for _, ev := range e.rows("delegate.create") {
+		if ev.Target == d.ID.String() && ev.Outcome == "success" {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Errorf("delegate.create rows for the portal = %d, want 1", created)
+	}
+	var bypass []string
+	for _, ev := range e.rows("governance.change.bypass") {
+		var data struct {
+			Kind string `json:"target_kind"`
+		}
+		_ = json.Unmarshal(ev.Data, &data)
+		bypass = append(bypass, ev.Target+"/"+ev.Outcome+"/"+data.Kind)
+	}
+	if want := d.ID.String() + "/success/" + govKindDelegate; len(bypass) != 1 || bypass[0] != want {
+		t.Errorf("bypass rows = %v, want [%s]", bypass, want)
+	}
+}
