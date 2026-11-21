@@ -53,11 +53,20 @@ const wasClosed = (grant: string): boolean => {
   }
 };
 
-const time = (t?: string): number => (t ? Date.parse(t) || 0 : 0);
+/** Orders two timestamps at the full precision the API sends (microseconds); a missing one sorts lowest. */
+function compareTimes(a?: string, b?: string): number {
+  if (!a || !b) return a ? 1 : b ? -1 : 0;
+  const ms = (Date.parse(a) || 0) - (Date.parse(b) || 0);
+  if (ms !== 0) return ms;
+  const frac = (t: string) => (/\.(\d+)/.exec(t)?.[1] ?? "").padEnd(9, "0");
+  const fa = frac(a);
+  const fb = frac(b);
+  return fa === fb ? 0 : fa > fb ? 1 : -1;
+}
 
 /** True when grant a ended later than grant b by the server's order: ended_at, then requested_at (equal is not newer). */
 function endedLater(a: SupportGrantView, b: SupportGrantView): boolean {
-  return time(a.ended_at) !== time(b.ended_at) ? time(a.ended_at) > time(b.ended_at) : time(a.requested_at) > time(b.requested_at);
+  return (compareTimes(a.ended_at, b.ended_at) || compareTimes(a.requested_at, b.requested_at)) > 0;
 }
 
 export interface RunSupport {

@@ -292,6 +292,38 @@ describe("support strip: the banner", () => {
     expect(screen.getByTestId("support-ended").textContent).not.toContain("you ended it");
   });
 
+  it("a late end orders ended grants within one millisecond", async () => {
+    // Same millisecond, microseconds apart: the later ended_at wins whichever grant it belongs to.
+    const cases = [
+      { shown: "2026-01-01T00:00:00.400090Z", confirmed: "2026-01-01T00:00:00.400010Z", line: "Nobody answered" },
+      { shown: "2026-01-01T00:00:00.400010Z", confirmed: "2026-01-01T00:00:00.400090Z", line: "you ended it" },
+    ];
+    for (const c of cases) {
+      Object.values(api).forEach((m) => m.mockReset());
+      const endedA = active({ state: "ended", end_reason: "revoked", ended_at: c.confirmed });
+      const endedB = grant({ grant: "g-2", state: "ended", end_reason: "lapsed", ended_at: c.shown });
+      let release: (g: SupportGrantView) => void = () => {};
+      api.end.mockReturnValueOnce(
+        new Promise<SupportGrantView>((res) => {
+          release = res;
+        }),
+      );
+      api.status
+        .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: active() })
+        .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: null, ended: endedB })
+        .mockRejectedValueOnce(new Error("status unavailable"));
+      const user = userEvent.setup();
+      mount({ principal: "maya" });
+      await user.click(await screen.findByRole("button", { name: "End now" }));
+      await user.click(screen.getByRole("button", { name: "read again" }));
+      expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
+      await act(async () => release(endedA));
+      await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
+      expect(screen.getByTestId("support-ended").textContent).toContain(c.line);
+      cleanup();
+    }
+  });
+
   it("shows the ended line with Close, and Close is remembered for that grant", async () => {
     answer({ open: null, ended: active({ state: "ended", end_reason: "expired" }) });
     const user = userEvent.setup();
