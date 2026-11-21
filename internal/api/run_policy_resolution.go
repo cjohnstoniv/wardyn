@@ -163,6 +163,9 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 		if err := validatePolicySpec(spec); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runError(http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 		}
+		if err := s.ruleUIAppCallers(ctx, spec); err != nil {
+			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, uiAppCallerRefusal(err)
+		}
 		if code, err := s.validateRunSecretRefs(ctx, s.secretOwnerFromRequest(r), runIdentitySubject(ctx, principalFromRequest(r)), spec, credentials); err != nil {
 			return types.RunPolicySpec{}, nil, nil, policySourceRecord{}, runSecretRefsRefusal("invalid inline_policy: ", code, err)
 		}

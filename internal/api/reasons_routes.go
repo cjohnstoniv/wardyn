@@ -983,3 +983,11 @@ const (
 	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
 	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
 )
+
+// portal authority reasons
+const (
+	reasonDelegatePersonUnknownPortal = "delegate_person_unknown_portal" // a person list names a portal person whose issuer has no binding (shared with the store-ruling mapping)
+)
+
+// delegatePersonUnknownPortalMsg is the sentence of reasonDelegatePersonUnknownPortal.
+const delegatePersonUnknownPortalMsg = "A portal person is named whose issuer no portal is registered for."
