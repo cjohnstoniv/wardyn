@@ -37,12 +37,16 @@ func (f *stallingDialer) DialDesktop(ctx context.Context, _ string) (io.ReadWrit
 // slowClosedStore answers the Closed set after delay, once slow is set, or fails when ctx ends first.
 type slowClosedStore struct {
 	issuerPGStore
-	slow  *atomic.Bool
-	delay time.Duration
+	slow    *atomic.Bool
+	delay   time.Duration
+	entered *atomic.Int64 // counts the slow reads begun, when set
 }
 
 func (s slowClosedStore) UIDesktopClosed(ctx context.Context, key string, now time.Time) (bool, error) {
 	if s.slow.Load() {
+		if s.entered != nil {
+			s.entered.Add(1)
+		}
 		select {
 		case <-time.After(s.delay):
 		case <-ctx.Done():
@@ -134,25 +138,33 @@ func TestUIDesktopIssuerPortal_SlowClosedSetLookupDoesNotDelayRecheck_PG(t *test
 }
 
 // TestUIDesktopIssuerPortal_AdmissionClosedReadHeldPastBound_PG: the desktop's opening Closed-set read hangs;
-// the open is refused within the admission bound, not held for as long as the store takes.
+// the handshake is answered 503, retryable, within the admission bound, after the read began, not held for as
+// long as the store takes.
 func TestUIDesktopIssuerPortal_AdmissionClosedReadHeldPastBound_PG(t *testing.T) {
 	rig, srv := desktopPGRig(t)
 	const bound = 200 * time.Millisecond
 	setSupportWatch(t, time.Hour, bound)
 	slow := &atomic.Bool{}
 	slow.Store(true)
-	rig.srv.cfg.Store = slowClosedStore{issuerPGStore: rig.srv.cfg.Store.(issuerPGStore), slow: slow, delay: time.Minute}
+	entered := &atomic.Int64{}
+	rig.srv.cfg.Store = slowClosedStore{issuerPGStore: rig.srv.cfg.Store.(issuerPGStore), slow: slow, delay: time.Minute, entered: entered}
 	rig.srv.cfg.Runner = &desktopFakeRunner{sshFakeRunner: rig.runner, dialled: make(chan string, 8)}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	c := rig.desktopCookie()
 	start := time.Now()
-	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(rig.uiHarness, uiDesktopRFB),
+	ws, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(rig.uiHarness, uiDesktopRFB),
 		&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c.Name + "=" + c.Value}}})
 	took := time.Since(start)
 	if err == nil {
 		_ = ws.CloseNow()
 		t.Fatal("a desktop whose Closed-set read hung was opened")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a hung Closed-set read: %v %v, want the retryable 503", resp, err)
+	}
+	if entered.Load() == 0 {
+		t.Fatal("the handshake never reached the Closed-set read: the refusal came from elsewhere")
 	}
 	if took > bound+400*time.Millisecond {
 		t.Fatalf("the open was held %v by a hung Closed-set read, want within %v", took, bound+400*time.Millisecond)

@@ -157,6 +157,10 @@ type uiSession struct {
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
 	sponsor string
+	// admitBy and closedUnread ride one request, never a cookie: an issuer portal's shared deadline for its
+	// opening reads (issuerAdmitCtx), and a desktop's Closed set that could not be read within it.
+	admitBy      time.Time
+	closedUnread bool
 }
 
 // backgroundWatch says sess is a view-only watch of a background run's built-in desktop, the one way a person
@@ -328,15 +332,21 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTLFor(sess) {
 		return uiSession{}, false
 	}
-	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosed reads the shared set.
-	// An issuer portal's read is bounded, as its whole opening check is (issuerAdmitCtx).
+	// An issuer portal's opening reads share one deadline from here (issuerAdmitCtx).
+	if issuerPortalPerson(sess.Via, sess.Principal) {
+		sess.admitBy = time.Now().Add(issuerAdmitBound())
+	}
+	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosedRead reads the shared set.
+	// For an issuer portal's session a set that could not be read is the caller's 503 (closedUnread), not a
+	// cookie refused as invalid.
 	if sess.Desktop {
 		ctx, cancel := issuerAdmitCtx(r.Context(), sess)
-		closed := s.uiDesktopClosed(ctx, sess, now)
+		closed, unread := s.uiDesktopClosedRead(ctx, sess, now)
 		cancel()
-		if closed {
+		if closed || (unread && sess.admitBy.IsZero()) {
 			return uiSession{}, false
 		}
+		sess.closedUnread = unread
 	}
 	return sess, true
 }

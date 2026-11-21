@@ -4,7 +4,6 @@
 package api
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -183,6 +182,12 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 		return ticketActor{}, verdictInvalid, nil
 	}
 	ta.checkStart = start
+	// An issuer portal's authority reads, the chain's included, share one bound from here.
+	if issuerPortalPerson(ta.via, ta.principal) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, issuerAdmitBound())
+		defer cancel()
+	}
 	expires, v := s.ticketAuthority(ctx, ta, runID)
 	ta.grantExpires = expires
 	if v == verdictOK {
@@ -202,7 +207,7 @@ func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid
 	// that hangs is a 503, never a held request.
 	if issuerPortalPerson(ta.via, ta.principal) {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
+		ctx, cancel = context.WithTimeout(ctx, issuerAdmitBound())
 		defer cancel()
 	}
 	// The credential the ticket was minted under (a personal token, or a CLI sign-in's session) is asked after

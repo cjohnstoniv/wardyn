@@ -260,6 +260,10 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
 		return
 	}
+	if sess.closedUnread { // an issuer portal's session whose Closed set could not be read in its bound
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
 	checkStart := time.Now() // an issuer portal's open stream is re-checked from here (desktopIssuerCut)
 	actx, acancel := issuerAdmitCtx(r.Context(), sess)
 	end, de := s.uiReassertRelayEnd(actx, sess)
@@ -384,28 +388,28 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 // the person and the run as uiDial does, and ending at the session's bound, at Close, when the run
 // stops, or when the person may no longer enter it.
 func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession, checkStart, end time.Time) {
+	viewer := &viewerHijack{ResponseWriter: w}
+	// An issuer portal's stream is cut from beside it, from before its setup reads and the upgrade, so neither
+	// they nor the start lock and the dial below delay its re-check; a cut ends their context.
+	base, upgrade, cut, stopCut := s.desktopIssuerCut(r, viewer, sess, checkStart, end)
+	defer stopCut()
 	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
 	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
-	_, rules, _, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	_, rules, _, err := s.runDesktopPolicy(base, sess.Run)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
 	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
 	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
 	// that cannot be read refuses the stream rather than record it.
-	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
+	signIn, err := s.watchVMSignIn(base, sess.Run)
 	if err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 		return
 	}
 	defer signIn.stop()
-	viewer := &viewerHijack{ResponseWriter: w}
-	// An issuer portal's stream is cut from beside it, from before the upgrade, so the start lock and the dial
-	// below never delay its re-check.
-	base, upgrade, cut, stopCut := s.desktopIssuerCut(r, viewer, sess, checkStart, end)
-	defer stopCut()
 	ws, err := websocket.Accept(upgrade, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request

@@ -197,14 +197,23 @@ func (s *Server) relayWatchCtx(ctx context.Context, w http.ResponseWriter, sess 
 	}
 }
 
-// issuerAdmitCtx bounds an issuer portal's foreground authorization reads (a request's re-check, a desktop's
-// Closed-set read) by supportWatchWait, apart from the life of the stream they admit: a store that hangs answers
-// 503 within it rather than holding the request. Any other session keeps ctx.
+// issuerAdmitCtx bounds an issuer portal's foreground authorization reads (a desktop's Closed-set read, a
+// request's re-check) by one deadline, set when its cookie was decoded (uiSession.admitBy), apart from the life of
+// the stream they admit: a store that hangs answers 503 within it rather than holding the request, and a slow
+// first read leaves the later ones only what remains. Any other session keeps ctx.
 func issuerAdmitCtx(ctx context.Context, sess uiSession) (context.Context, context.CancelFunc) {
 	if !issuerPortalPerson(sess.Via, sess.Principal) {
 		return ctx, func() {}
 	}
-	return context.WithTimeout(ctx, time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
+	if !sess.admitBy.IsZero() {
+		return context.WithDeadline(ctx, sess.admitBy)
+	}
+	return context.WithTimeout(ctx, issuerAdmitBound())
+}
+
+// issuerAdmitBound is the bound on an issuer portal's opening authorization reads, the watch's own.
+func issuerAdmitBound() time.Duration {
+	return time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
 }
 
 // uiStreamEnd is an issuer-portal stream's known end on the wall clock: the earliest of sess's signed
