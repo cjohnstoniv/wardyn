@@ -393,9 +393,13 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// they nor the start lock and the dial below delay its re-check; a cut ends their context.
 	base, upgrade, cut, stopCut := s.desktopIssuerCut(r, viewer, sess, checkStart, end)
 	defer stopCut()
+	// Its setup reads run under the session's opening deadline (issuerAdmitCtx), on the cut's context, so a read
+	// that stalls answers 503 within the bound; the stream then lives on base.
+	actx, acancel := issuerAdmitCtx(base, sess)
+	defer acancel()
 	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
 	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
-	_, rules, _, err := s.runDesktopPolicy(base, sess.Run)
+	_, rules, _, err := s.runDesktopPolicy(actx, sess.Run)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
 		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
@@ -404,7 +408,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
 	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
 	// that cannot be read refuses the stream rather than record it.
-	signIn, err := s.watchVMSignIn(base, sess.Run)
+	signIn, err := s.watchVMSignIn(actx, sess.Run)
 	if err != nil {
 		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 		return

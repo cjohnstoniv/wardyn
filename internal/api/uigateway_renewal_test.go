@@ -5,8 +5,10 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,8 +35,10 @@ type issuerUIStore struct {
 	units   []types.GovernanceUnit
 	reads   int // grant and chain reads
 
-	hang           chan struct{}             // while set, a chain read waits for it to close
-	hangIdentity   chan struct{}             // while set, an identity read waits for it to close
+	hang           chan struct{}                          // while set, a chain read waits for it to close
+	hangIdentity   chan struct{}                          // while set, an identity read waits for it to close
+	runHook        func(ctx context.Context, n int) error // when set, answers the n-th run read (1 is the first): an error, or nil to read
+	runReads       int
 	afterChainRead func()                    // runs once, after the next chain read answers
 	stallTouch     func(ctx context.Context) // replaces the idle clock's write when set
 }
@@ -111,6 +115,19 @@ func (s *issuerUIStore) StampPortalUsed(context.Context, uuid.UUID, time.Time) e
 
 func (s *issuerUIStore) SweepExpiredPortalGrants(context.Context, time.Time) (int64, error) {
 	return 0, nil
+}
+
+func (s *issuerUIStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	s.runReads++
+	n, hook := s.runReads, s.runHook
+	s.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx, n); err != nil {
+			return types.AgentRun{}, err
+		}
+	}
+	return s.uiMemStore.GetRun(ctx, id)
 }
 
 func (s *issuerUIStore) IdentityBlocked(ctx context.Context, principal string, _ int64) (bool, error) {
@@ -548,5 +565,45 @@ func TestUIIssuerPortal_TicketAdmissionReadHeldPastBound(t *testing.T) {
 	}
 	if d := time.Since(start); d > bound+400*time.Millisecond {
 		t.Errorf("answered %v after the enter, want at the %v bound", d, bound)
+	}
+}
+
+// TestUIIssuerPortal_EntryRunReadAnswers: after redemption (its own run read is the first), the entry's run read
+// stalls, fails or finds no run. A stall answers the retryable 503 within the opening bound, an outage the same
+// 503, and a missing run the wrong-owner 403 a foreign run gets.
+func TestUIIssuerPortal_EntryRunReadAnswers(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	for _, tc := range []struct {
+		name   string
+		hook   func(ctx context.Context) error
+		code   int
+		reason string
+	}{
+		{"stall", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable},
+		{"outage", func(context.Context) error { return errors.New("store down") }, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable},
+		{"missing", func(context.Context) error { return store.ErrNotFound }, http.StatusForbidden, reasonUIGatewayTicketRunMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newIssuerUIRig(t, closingBackend("app"))
+			tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+			rig.is.mu.Lock()
+			rig.is.runReads = 0 // count from the enter on
+			rig.is.runHook = func(ctx context.Context, n int) error {
+				if n < 2 {
+					return nil
+				}
+				return tc.hook(ctx)
+			}
+			rig.is.mu.Unlock()
+			start := time.Now()
+			rec := rig.enterWith(tok)
+			if rec.Code != tc.code || !strings.Contains(rec.Body.String(), tc.reason) {
+				t.Fatalf("%s: %d %s, want %d %s", tc.name, rec.Code, rec.Body.String(), tc.code, tc.reason)
+			}
+			if d := time.Since(start); d > bound+400*time.Millisecond {
+				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, d, bound)
+			}
+		})
 	}
 }

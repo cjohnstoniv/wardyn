@@ -65,6 +65,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -323,7 +324,16 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	run, err := s.cfg.Store.GetRun(r.Context(), runID)
+	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), and one
+	// that fails or runs out is the retryable 503, never the wrong-owner answer.
+	actx, acancel := ta.admitCtx(r.Context())
+	defer acancel()
+	run, err := s.cfg.Store.GetRun(actx, runID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && !ta.admitBy.IsZero() {
+		slog.ErrorContext(r.Context(), "wardynd: an issuer portal's entry could not read its run", "run_id", runID, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
 	if err != nil {
 		// Byte-identical to the wrong-owner arm below — including the wire
 		// reason (#656 slice 3) — so a missing run and a foreign one stay
@@ -336,7 +346,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !s.uiTicketMayEnter(r.Context(), run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
+	if !s.uiTicketMayEnter(actx, run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return

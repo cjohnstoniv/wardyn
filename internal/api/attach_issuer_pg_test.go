@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -29,7 +31,31 @@ import (
 type issuerAttachStore struct {
 	*authorityUnits
 	store.PortalGrantStore
-	pg store.PG
+	pg    store.PG
+	reads *runReadHook
+}
+
+// runReadHook answers the rig's run reads through hook, when set, from the second after n is reset on (the
+// first is redemption's own check).
+type runReadHook struct {
+	mu   sync.Mutex
+	n    int
+	hook func(ctx context.Context) error
+}
+
+func (s issuerAttachStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.reads != nil {
+		s.reads.mu.Lock()
+		s.reads.n++
+		n, hook := s.reads.n, s.reads.hook
+		s.reads.mu.Unlock()
+		if hook != nil && n >= 2 {
+			if err := hook(ctx); err != nil {
+				return types.AgentRun{}, err
+			}
+		}
+	}
+	return s.authorityUnits.GetRun(ctx, id)
 }
 
 func (s issuerAttachStore) GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error) {
@@ -84,6 +110,7 @@ type issuerAttachRig struct {
 	run    types.AgentRun
 	via    types.DelegationVia
 	person string
+	reads  *runReadHook
 }
 
 func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
@@ -96,11 +123,12 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 		t.Fatalf("read the seeded grant: %v", err)
 	}
 	ast := newAuthzStore()
-	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st}
+	reads := &runReadHook{}
+	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st, reads: reads}
 	cfg := baseTestConfig(newHarness(t), st)
 	rig := &issuerAttachRig{env: e, runner: &holderTestRunner{}, person: principal,
 		audit: &issuerAttachAudit{held: make(chan time.Time, 1), detached: make(chan time.Time, 4)},
-		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}}
+		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads}
 	cfg.Audit, cfg.Runner, cfg.SessionRevocations = rig.audit, rig.runner, newAttachRevocations()
 	rig.srv = New(cfg)
 	rig.srv.authorityTest = attachAuthorityTimings{every: relayEvery, lookup: relayBound}
@@ -227,5 +255,49 @@ func TestAttachIssuerPortal_BlockedWriterCutOnSuspend_PG(t *testing.T) {
 		cutBy(t, "websocket, client not reading, suspend", at, got, relayEvery+relayBound+relaySlack)
 	case <-time.After(20 * time.Second):
 		t.Fatal("the terminal outlived a suspend with its client not reading")
+	}
+}
+
+// TestAttachIssuerPortal_OpeningRunReadAnswers_PG: after redemption, the terminal's run read stalls, fails or
+// finds no run. A stall and an outage answer the retryable 503 within the opening bound; a missing run the 404 a
+// missing run gets on this route.
+func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	for _, tc := range []struct {
+		name string
+		hook func(ctx context.Context) error
+		code int
+	}{
+		{"stall", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, http.StatusServiceUnavailable},
+		{"outage", func(context.Context) error { return errors.New("store down") }, http.StatusServiceUnavailable},
+		{"missing", func(context.Context) error { return store.ErrNotFound }, http.StatusNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newIssuerAttachRig(t)
+			tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
+				rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
+			if err != nil {
+				t.Fatalf("mint a ticket: %v", err)
+			}
+			rig.reads.mu.Lock()
+			rig.reads.n = 0 // count from the dial on
+			rig.reads.hook = tc.hook
+			rig.reads.mu.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			start := time.Now()
+			c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tok, nil)
+			if err == nil {
+				_ = c.CloseNow()
+				t.Fatalf("%s: the terminal opened", tc.name)
+			}
+			if resp == nil || resp.StatusCode != tc.code {
+				t.Fatalf("%s: %v %v, want %d", tc.name, resp, err, tc.code)
+			}
+			if d := time.Since(start); d > bound+400*time.Millisecond {
+				t.Errorf("%s: answered %v after the dial, want within the %v bound", tc.name, d, bound)
+			}
+		})
 	}
 }

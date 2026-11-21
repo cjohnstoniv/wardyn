@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -168,5 +169,82 @@ func TestUIDesktopIssuerPortal_AdmissionClosedReadHeldPastBound_PG(t *testing.T)
 	}
 	if took > bound+400*time.Millisecond {
 		t.Fatalf("the open was held %v by a hung Closed-set read, want within %v", took, bound+400*time.Millisecond)
+	}
+}
+
+// heldDesktopReadStore holds the desktop's opening reads until ctx ends: the rules read (the run's policy
+// rows) once policy is set, and once signIn is set the run read after the rules read, which is the sign-in
+// watch's (watchVMSignIn reads on, for a store that keeps take overs).
+type heldDesktopReadStore struct {
+	issuerPGStore
+	policy, signIn, armed *atomic.Bool
+}
+
+func (s heldDesktopReadStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	if s.policy.Load() {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	events, err := s.issuerPGStore.QueryAuditEvents(ctx, runID, limit)
+	if s.signIn.Load() {
+		s.armed.Store(true)
+	}
+	return events, err
+}
+
+func (s heldDesktopReadStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.armed.Load() {
+		<-ctx.Done()
+		return types.AgentRun{}, ctx.Err()
+	}
+	return s.issuerPGStore.GetRun(ctx, id)
+}
+
+func (s heldDesktopReadStore) OpenTakeovers(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+// TestUIDesktopIssuerPortal_OpeningRulesAndSignInReadsHeld_PG: after admission, the desktop's rules read or its
+// sign-in watch's run read hangs. Each is answered with its own 503 within the session's opening bound, never
+// held for as long as the store takes.
+func TestUIDesktopIssuerPortal_OpeningRulesAndSignInReadsHeld_PG(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	for _, tc := range []struct {
+		name, reason string
+		policy       bool
+	}{
+		{"rules", reasonDesktopRulesUnreadable, true},
+		{"sign-ins", reasonDesktopSignInsUnavailable, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig, srv := desktopPGRig(t)
+			setSupportWatch(t, time.Hour, bound)
+			st := heldDesktopReadStore{issuerPGStore: rig.srv.cfg.Store.(issuerPGStore), policy: &atomic.Bool{}, signIn: &atomic.Bool{}, armed: &atomic.Bool{}}
+			st.policy.Store(tc.policy)
+			st.signIn.Store(!tc.policy)
+			rig.srv.cfg.Store = st
+			rig.srv.cfg.Runner = &desktopFakeRunner{sshFakeRunner: rig.runner, dialled: make(chan string, 8)}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			c := rig.desktopCookie()
+			start := time.Now()
+			ws, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+desktopPath(rig.uiHarness, uiDesktopRFB),
+				&websocket.DialOptions{HTTPHeader: http.Header{"Cookie": {c.Name + "=" + c.Value}}})
+			took := time.Since(start)
+			if err == nil {
+				_ = ws.CloseNow()
+				t.Fatalf("%s: a desktop whose read hung was opened", tc.name)
+			}
+			if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("%s: %v %v, want 503", tc.name, resp, err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if !strings.Contains(string(body), tc.reason) {
+				t.Fatalf("%s: answered %s, want %s: the refusal came from another read", tc.name, body, tc.reason)
+			}
+			if took > bound+400*time.Millisecond {
+				t.Fatalf("%s: the open was held %v, want within %v", tc.name, took, bound+400*time.Millisecond)
+			}
+		})
 	}
 }

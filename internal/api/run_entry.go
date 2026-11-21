@@ -182,10 +182,11 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 		return ticketActor{}, verdictInvalid, nil
 	}
 	ta.checkStart = start
-	// An issuer portal's authority reads, the chain's included, share one bound from here.
+	// An issuer portal's opening reads, the chain's here and the entry's after redemption, share one deadline.
 	if issuerPortalPerson(ta.via, ta.principal) {
+		ta.admitBy = time.Now().Add(issuerAdmitBound())
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, issuerAdmitBound())
+		ctx, cancel = ta.admitCtx(ctx)
 		defer cancel()
 	}
 	expires, v := s.ticketAuthority(ctx, ta, runID)

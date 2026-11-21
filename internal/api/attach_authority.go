@@ -275,12 +275,15 @@ func (s *Server) attachIssuerCut(r *http.Request, w http.ResponseWriter, runID u
 	check := s.attachAuthority(r, runID)
 	ctx, cancel := context.WithCancel(r.Context())
 	hardEnd := time.Now() // a grant no longer live: the socket ends before it opens
-	// The opening read is bounded as every re-check is.
-	lctx, lcancel := context.WithTimeout(ctx, s.attachAuthorityLookupBound())
+	// The opening read runs under the ticket's opening deadline (ticketActor.admitCtx), bounded as every
+	// re-check is.
+	actx, acancel := ta.admitCtx(ctx)
+	lctx, lcancel := context.WithTimeout(actx, s.attachAuthorityLookupBound())
 	if end, v := s.delegationLive(lctx, *ta.via); v == verdictOK {
 		hardEnd = time.Now().Add(end.Sub(s.cfg.Now()))
 	}
 	lcancel()
+	acancel()
 	cut := newStreamCut(w, hardEnd, cancel)
 	start := ta.checkStart
 	if start.IsZero() {

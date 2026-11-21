@@ -222,13 +222,28 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, ok := s.getRunOr404(w, r, id)
-	if !ok {
+	// An issuer portal's ticket is admitted under its opening deadline (ticketActor.admitCtx), the run read and
+	// the entry checks included; the socket then lives on the request.
+	admit, _ := ticketActorFromContext(ctx)
+	actx, acancel := admit.admitCtx(ctx)
+	defer acancel()
+	ar := r.WithContext(actx)
+	var run types.AgentRun
+	if !admit.admitBy.IsZero() {
+		got, gone, ok := s.issuerOpeningRun(actx, w, id, uiSessionUnverifiableMsg)
+		if gone {
+			writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
+		}
+		if !ok {
+			return
+		}
+		run = got
+	} else if run, ok = s.getRunOr404(w, r, id); !ok {
 		return
 	}
 
 	// Entry authorization (#1476): the owner rule, on both lanes.
-	if s.refuseAttachEntry(w, r, run) || s.refuseBackgroundOnly(w, r, run, "terminal") {
+	if s.refuseAttachEntry(w, ar, run) || s.refuseBackgroundOnly(w, ar, run, "terminal") {
 		return
 	}
 
@@ -250,7 +265,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Door 2 of five (mask_manifest.go): the terminal's recorded tail is masked
 	// against the run's corpus, which this server must be able to prove whole.
-	if s.refuseUncovered(w, r, run.ID, "runs.attach") {
+	if s.refuseUncovered(w, ar, run.ID, "runs.attach") {
 		return
 	}
 
