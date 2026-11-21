@@ -177,6 +177,21 @@ describe("ImpactSection", () => {
     expect(within(boundary).getByText("Allowed hosts: a → Not set")).toBeInTheDocument();
   });
 
+  it("an empty boundary report says no existing policies would change", () => {
+    render(
+      <ImpactSection
+        change={change(undefined, { target_kind: "governance_boundary" })}
+        impact={impact({
+          computed: "boundary",
+          boundary: { target: "boundary", deployment: [], units: [], stored_policies: [], memberships: [], provider_rows: [] },
+        })}
+      />,
+    );
+    const boundary = screen.getByTestId("change-impact-boundary");
+    expect(within(boundary).getByText("No existing policies would change")).toBeInTheDocument();
+    expect(within(boundary).queryByText("No change")).toBeNull();
+  });
+
   it.each([
     ["kind", CHANGE_REVIEW.IMPACT_NOT_COMPUTED],
     ["stale", CHANGE_REVIEW.IMPACT_STALE("u1")],

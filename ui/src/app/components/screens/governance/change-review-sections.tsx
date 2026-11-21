@@ -185,7 +185,7 @@ function BoundaryImpact({ report }: { report: BoundaryReport }) {
         <Tile n={people.length} label={BOUNDARY_DRY_RUN.TILE_PEOPLE(people.length)} />
       </div>
       {none ? (
-        <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_CHANGE}</Chip>
+        <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_POLICY_CHANGE}</Chip>
       ) : (
         groups.map(
           (g) =>
