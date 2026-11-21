@@ -108,4 +108,17 @@ func TestKeptMachineExpiryDeleteRechecksTheLocalDeadline(t *testing.T) {
 			t.Fatalf("an expiry delete of a recoverable folder removed %s: %v", p, err)
 		}
 	}
+	// A stat error that is not "not found" says nothing about the folder: neither already_absent (the organisation
+	// would drop its row) nor a removal, at the first look or under the lock.
+	denied := &fs.PathError{Op: "lstat", Path: "x", Err: fs.ErrPermission}
+	orig := keptLstat
+	keptLstat = func(string) (fs.FileInfo, error) { return nil, denied }
+	defer func() { keptLstat = orig }()
+	noRecord := uuid.New()
+	if out, err := r.d.DeleteExpiredKeptMachine(ctx, noRecord, runnerwire.KeptMachineByExpiry); err == nil || refused(err) || out != "" {
+		t.Fatalf("a stat error at the first look: %q, %v; want an unconfirmed error, not already_absent or a refusal", out, err)
+	}
+	if gone, err := c.removeKeptIfExpired(c.keptDir(noRecord), noRecord); gone || !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("a stat error under the lock: %v, %v; want the error and nothing removed", gone, err)
+	}
 }

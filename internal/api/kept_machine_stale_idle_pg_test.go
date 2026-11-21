@@ -4,12 +4,15 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -23,7 +26,7 @@ func TestKeptStaleIdleReportNeverSettlesOrExpiresAReusedMachine(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.exec(t, `UPDATE kept_machines SET expires_at = now() - interval '1 hour' WHERE id = $1`, m.ID)
-	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now(), sandbox_ref = 'sb-1' WHERE id = $1`, k.run.ID)
+	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	past := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	for name, stop := range map[string]string{
 		"an older stop's cached idle report": uuid.NewString(),
@@ -48,26 +51,44 @@ func TestKeptStaleIdleReportNeverSettlesOrExpiresAReusedMachine(t *testing.T) {
 }
 
 // TestKeptUnmatchedIdleReportGivesTheMachineBackAfterTheGrace: the run ended long enough ago that its stop
-// report is not coming (an older runner never names the stop, or the report was lost), and the Mac's idle
-// report is an earlier use's or unversioned. The machine is kept and unscrubbed with a fresh deadline of the
-// site's idle days, never the report's past one, so the owner can resume or delete it and nothing expires in
-// the same sweep; the Mac is not asked to delete.
+// report is not coming (an older runner never names the stop, the report was lost, or the create never
+// reached the Mac), and the Mac's idle report is an earlier use's or unversioned. The machine is kept and
+// unscrubbed, never with the report's past deadline, so the owner can resume or delete it and nothing expires
+// in the same sweep; the Mac is not asked to delete. The deadline it had is kept only when the Mac says it runs
+// this release (the conditional delete) and names a stop of an earlier run: then it holds no stop of this one.
+// Any other Mac gets the site's idle days from now, whether the run's sandbox ref was cleared at its end or
+// never set.
 func TestKeptUnmatchedIdleReportGivesTheMachineBackAfterTheGrace(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
-	for name, stop := range map[string]string{
-		"an earlier stop's idle report": uuid.NewString(),
-		"an unversioned idle report":    "",
+	for name, tc := range map[string]struct {
+		legacy   bool
+		stop     string
+		previous bool
+	}{
+		"a current Mac, an earlier stop":   {false, uuid.NewString(), true},
+		"a current Mac, an unversioned":    {false, "", false},
+		"a legacy Mac, any stop id":        {true, uuid.NewString(), false},
+		"a legacy Mac, an unversioned one": {true, "", false},
 	} {
 		k := newKeptFixture(t)
 		m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
-		k.exec(t, `UPDATE kept_machines SET expires_at = now() - interval '1 hour', scrubbed = true WHERE id = $1`, m.ID)
-		k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() - interval '1 hour', sandbox_ref = 'sb-1' WHERE id = $1`, k.run.ID)
-		k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: stop, ExpiresAt: past, Scrubbed: true})
+		k.exec(t, `UPDATE kept_machines SET expires_at = now() + interval '3 days', scrubbed = true WHERE id = $1`, m.ID)
+		before, _ := k.row(t, m.ID)
+		k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() - interval '1 hour', sandbox_ref = '' WHERE id = $1`, k.run.ID)
+		report := runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: tc.stop, ExpiresAt: past, Scrubbed: true}
+		if tc.legacy {
+			legacyInventoryOf(t, k.sub, report)
+		} else {
+			k.inventory(t, report)
+		}
 		k.sweep(t)
 		got, ok := k.row(t, m.ID)
-		fresh := time.Now().AddDate(0, 0, types.KeptMachineIdleDaysDefault)
-		if !ok || got.State != types.KeptMachineKept || got.Scrubbed || got.ExpiresAt.Before(fresh.Add(-time.Hour)) || got.ExpiresAt.After(fresh.Add(time.Hour)) {
-			t.Fatalf("%s: recorded %v, %+v; want kept, unscrubbed, due near %s", name, ok, got, fresh)
+		want := time.Now().AddDate(0, 0, types.KeptMachineIdleDaysDefault)
+		if tc.previous {
+			want = before.ExpiresAt
+		}
+		if !ok || got.State != types.KeptMachineKept || got.Scrubbed || got.ExpiresAt.Before(want.Add(-time.Hour)) || got.ExpiresAt.After(want.Add(time.Hour)) {
+			t.Fatalf("%s: recorded %v, %+v; want kept, unscrubbed, due near %s", name, ok, got, want)
 		}
 		if len(k.mac.opsAsked()) != 0 {
 			t.Fatalf("%s: Mac asked %v; want nothing", name, k.mac.opsAsked())
@@ -109,8 +130,9 @@ func TestKeptExpiryDeleteNeedsTheMacsConditionalDelete(t *testing.T) {
 	k := newKeptFixture(t)
 	m := k.expiredKept(t)
 
-	// A stale kept row, a legacy Mac.
-	legacyInventoryOf(t, k.sub)
+	// A stale kept row, a legacy Mac that lists the machine.
+	listed := runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30}
+	legacyInventoryOf(t, k.sub, listed)
 	k.sweep(t)
 	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept || len(k.mac.opsAsked()) != 0 {
 		t.Fatalf("a legacy Mac: recorded %v, state %s, calls %v; want kept and no call", ok, got.State, k.mac.opsAsked())
@@ -124,6 +146,29 @@ func TestKeptExpiryDeleteNeedsTheMacsConditionalDelete(t *testing.T) {
 	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept || len(k.mac.opsAsked()) != 0 {
 		t.Fatalf("an old tombstone, a legacy Mac: recorded %v, state %s, calls %v; want kept again and no call", ok, got.State, k.mac.opsAsked())
 	}
+	if rows := k.rows(t, "machine.delete", m.ID); len(rows) != 0 {
+		t.Fatalf("a tombstone put back wrote machine.delete rows %v; want none", rows)
+	}
+	// An owner's delete that takes over such a tombstone (older than a minute) is still an expiry for a Mac
+	// that cannot recheck: nothing is sent and the machine stays; asked again, it is the plain delete.
+	if _, err := k.st.BeginKeptMachineDelete(k.ctx, "", m.ID, keptMachineByExpiry); err != nil {
+		t.Fatal(err)
+	}
+	k.exec(t, `UPDATE kept_machines SET delete_started_at = now() - interval '1 hour' WHERE id = $1`, m.ID)
+	k.deleteMine(k.owner, m.ID)
+	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept || len(k.mac.opsAsked()) != 0 {
+		t.Fatalf("an owner's delete over an expiry tombstone, a legacy Mac: recorded %v, state %s, calls %v; want kept and no call", ok, got.State, k.mac.opsAsked())
+	}
+	if w := k.deleteMine(k.owner, m.ID); w.Code >= 300 {
+		t.Fatalf("the owner's delete after that = %d %s", w.Code, w.Body)
+	}
+	if ops := k.mac.opsAsked(); len(ops) != 1 || ops[0] != runnerwire.KeptMachineOpDelete {
+		t.Fatalf("the owner's own delete sent %v, want one plain delete", ops)
+	}
+	k.mac.mu.Lock()
+	k.mac.ops, k.mac.deleted = nil, nil
+	k.mac.mu.Unlock()
+	m = k.expiredKept(t)
 	// The same tombstone, a Mac that runs the conditional delete: finished with the conditional op.
 	if _, err := k.st.BeginKeptMachineDelete(k.ctx, "", m.ID, keptMachineByExpiry); err != nil {
 		t.Fatal(err)
@@ -230,6 +275,21 @@ func TestKeptExpiryRefusedByTheMacMovesTheDeadlineForward(t *testing.T) {
 	if ops := k.mac.opsAsked(); len(ops) != 1 || len(k.rows(t, "machine.delete", m.ID)) != rows {
 		t.Fatalf("later passes asked %v and wrote %d audit rows (was %d); want nothing more", ops, len(k.rows(t, "machine.delete", m.ID)), rows)
 	}
+	// The Mac names the row's run with a deadline that is already past (its clock is behind, or the machine is
+	// locked by an update): the repair does not move the row back, so three passes ask once and audit once.
+	k3 := newKeptFixture(t)
+	m3 := k3.expiredKept(t)
+	k3.mac.fail = keptMacRefuses
+	k3.inventory(t, runnerwire.MacVMKeptMachine{ID: m3.ID.String(), Bytes: 1 << 30, StopRunID: k3.run.ID.String(), ExpiresAt: time.Now().Add(-time.Minute).UTC()})
+	k3.sweep(t)
+	k3.sweep(t)
+	k3.sweep(t)
+	if ops, rows := k3.mac.opsAsked(), k3.rows(t, "machine.delete", m3.ID); len(ops) != 1 || len(rows) != 1 {
+		t.Fatalf("a named past deadline: calls %v, machine.delete rows %d; want one of each", ops, len(rows))
+	}
+	if got, _ := k3.row(t, m3.ID); got.ExpiresAt.Before(time.Now().Add(23 * time.Hour)) {
+		t.Fatalf("a named past deadline left the row due at %s; want about a day on", got.ExpiresAt)
+	}
 	// Without the Mac's deadline in the inventory the row backs off a day.
 	k2 := newKeptFixture(t)
 	m2 := k2.expiredKept(t)
@@ -238,5 +298,70 @@ func TestKeptExpiryRefusedByTheMacMovesTheDeadlineForward(t *testing.T) {
 	k2.sweep(t)
 	if got, _ := k2.row(t, m2.ID); got.ExpiresAt.Before(time.Now().Add(23 * time.Hour)) {
 		t.Fatalf("a refusal with no deadline from the Mac left the row due at %s; want about a day on", got.ExpiresAt)
+	}
+}
+
+// TestKeptRowOfAFolderTheMacSweptIsRemovedByTheOwner: a Mac of the earlier release removed an expired folder
+// itself and never tells the organisation, so the row stays, counts against the owner's limit and refuses a
+// replacement. The owner's own delete is the recovery: the Mac answers already_absent, the row goes, and a replacement
+// can be created.
+func TestKeptRowOfAFolderTheMacSweptIsRemovedByTheOwner(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.expiredKept(t)
+	legacyInventoryOf(t, k.sub, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30}) // listed: not yet swept away
+	k.sweep(t)
+	if _, ok := k.row(t, m.ID); !ok || len(k.mac.opsAsked()) != 0 {
+		t.Fatalf("a listed machine of a legacy Mac: recorded %v, calls %v; want the row kept and nothing sent", ok, k.mac.opsAsked())
+	}
+	replacement := types.KeptMachine{Name: "again", OwnerSubject: k.owner, RunnerID: k.rn.ID, Base: "base-1",
+		BasePreparedAt: time.Now().Add(-time.Hour).UTC(), RunID: &k.run.ID, ExpiresAt: time.Now().Add(time.Hour).UTC()}
+	if _, err := k.st.CreateKeptMachine(k.ctx, replacement, 1); !errors.Is(err, store.ErrKeptMachineLimit) {
+		t.Fatalf("a replacement at the limit: %v; want ErrKeptMachineLimit", err)
+	}
+	k.mac.mu.Lock()
+	k.mac.deleted = append(k.mac.deleted, m.ID.String()) // the folder is already gone on the Mac
+	k.mac.mu.Unlock()
+	if w := k.deleteMine(k.owner, m.ID); w.Code >= 300 {
+		t.Fatalf("the owner's delete = %d %s", w.Code, w.Body)
+	}
+	k.requireDeletedBy(t, m, "owner", runnerwire.KeptMachineAlreadyAbsent)
+	if _, err := k.st.CreateKeptMachine(k.ctx, replacement, 1); err != nil {
+		t.Fatalf("a replacement after the row was removed: %v", err)
+	}
+}
+
+// TestKeptExpiredRowOfALegacyMacIsClosedOnlyOnItsInventory: a Mac that cannot recheck its deadline removes its own
+// expired folders. When the replica that holds it, online, shows an inventory that does not list the machine,
+// the row is closed record-only, with no call. With no inventory at all, or the Mac not held here, nothing is
+// closed and nothing is tombstoned, and no machine.delete row is written, however many passes run.
+func TestKeptExpiredRowOfALegacyMacIsClosedOnlyOnItsInventory(t *testing.T) {
+	k := newKeptFixture(t)
+	m := k.expiredKept(t)
+	// Caps with no inventory: nothing to show it is gone.
+	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	k.sweep(t)
+	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept {
+		t.Fatalf("no inventory: recorded %v, state %s; want the row kept", ok, got.State)
+	}
+	// Another replica's view: this one does not hold the Mac. Three passes start nothing.
+	legacyInventoryOf(t, k.sub)
+	k.setOnline(k.rn.ID, false)
+	for range 3 {
+		k.sweep(t)
+	}
+	if got, ok := k.row(t, m.ID); !ok || got.State != types.KeptMachineKept || len(k.rows(t, "machine.delete", m.ID)) != 0 || len(k.mac.opsAsked()) != 0 {
+		t.Fatalf("a Mac held elsewhere: recorded %v, state %s, machine.delete rows %v, calls %v; want kept, none, none",
+			ok, got.State, k.rows(t, "machine.delete", m.ID), k.mac.opsAsked())
+	}
+	// The holder, with the machine unlisted: the row is closed record-only.
+	k.setOnline(k.rn.ID, true)
+	k.sweep(t)
+	k.requireDeletedBy(t, m, keptMachineByExpiry, driveReclaimOutcomeRecordOnly)
+	if len(k.mac.opsAsked()) != 0 {
+		t.Fatalf("a record-only close asked the Mac %v", k.mac.opsAsked())
 	}
 }

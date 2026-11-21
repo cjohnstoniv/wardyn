@@ -550,6 +550,9 @@ func (d *Driver) DeleteKeptMachine(_ context.Context, id uuid.UUID, by string) (
 // say it has expired: it was used or stopped after the organisation last heard.
 var errKeptNotExpired = errors.New("docker: the kept machine's record has not expired")
 
+// keptLstat is os.Lstat for the expiry delete's look at a folder whose record is missing; a test injects an error.
+var keptLstat = os.Lstat
+
 // errKeptRecordMissing is an expiry-driven delete of a folder whose record is gone while the folder is not: the
 // state a failed tools update can leave, which is the sweep's to recover, never a deadline's to remove.
 var errKeptRecordMissing = errors.New("docker: the kept machine folder has no record")
@@ -570,7 +573,7 @@ func (c *MacVMConfig) removeKeptIfExpired(dir string, id uuid.UUID) (bool, error
 	case errors.Is(err, fs.ErrNotExist):
 		// A missing record is not a missing folder: a failed tools update leaves a folder with no record beside
 		// the person's old disk moved aside, which nothing here may remove.
-		if _, serr := os.Lstat(dir); errors.Is(serr, fs.ErrNotExist) {
+		if _, serr := keptLstat(dir); errors.Is(serr, fs.ErrNotExist) {
 			if rerr := os.Remove(dir + ".lock"); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				return false, rerr
 			}
@@ -600,8 +603,13 @@ func (d *Driver) DeleteExpiredKeptMachine(_ context.Context, id uuid.UUID, by st
 	_, err := macvm.ReadKept(dir, id.String())
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		if _, serr := os.Lstat(dir); serr == nil {
+		// Only a directory that is not there is absent; any other stat error says nothing about it, and the
+		// organisation keeps its row on an error.
+		switch _, serr := keptLstat(dir); {
+		case serr == nil:
 			return "", runnerwire.Refuse("docker: kept machine %s has a folder but no record on this Mac, which an expiry does not remove", id) // nothing was removed
+		case !errors.Is(serr, fs.ErrNotExist):
+			return "", fmt.Errorf("docker: kept machine %s: %w", id, serr)
 		}
 		return runnerwire.KeptMachineAlreadyAbsent, nil
 	case errors.Is(err, macvm.ErrKeptIDMismatch):

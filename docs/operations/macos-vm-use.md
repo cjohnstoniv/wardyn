@@ -85,7 +85,7 @@ A kept machine's disk is a folder in the `kept` folder of `macos-vm.noindex`, in
 
 - `wardyn machines delete <id|name>` asks first. Without a terminal it refuses, and `--yes` deletes without asking. An admin deletes someone's machine with `DELETE /machines/kept/{id}` ([sdk.md](../sdk.md#kept-machines)).
 - **In use.** A machine a run holds is refused (`409`, `kept_machine_in_use`) until the Mac records the run's stop, or saves it at its next sweep when it could not at the stop.
-- **A run with no stop.** If no stop of an ended run appears (an older runner, a lost report, a resume never sent), Wardyn keeps the machine unscrubbed ten minutes after the run ended, with new idle days.
+- **A run with no stop.** If no stop of an ended run appears (an older runner, a lost report, a resume never sent), Wardyn keeps the machine unscrubbed ten minutes after the run ended. It keeps the old date if the Mac names its stops and has none for this run, else gives new idle days.
 - **Expiry on the Mac.** The Mac deletes for expiry only if its own record agrees, and Wardyn then moves its date to the Mac's. An older runner gets no expiry delete; its own sweep removes the machine.
 - **The Mac is offline.** The delete is accepted (`202`) and waits. It finishes when the Mac is back, and `wardyn machines` shows the machine as deleting. If the Mac is no longer registered, Wardyn only records the delete (`record_only`).
 - **Unconfirmed.** If the Mac's answer is lost, Wardyn cannot tell whether the machine is gone (`503`, `kept_machine_delete_unconfirmed`). The delete stays pending and is retried until the Mac confirms. You cannot resume the machine meanwhile.
