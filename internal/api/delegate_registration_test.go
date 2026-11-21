@@ -142,7 +142,31 @@ func (f *regStore) ConsoleIssuersQ(context.Context, store.Querier) ([]types.Cons
 func (f *regStore) RecordConsoleIssuerQ(context.Context, store.Querier, string, string) error {
 	return nil
 }
-func (f *regStore) RetirePortalIssuerQ(context.Context, store.Querier, string) error { return nil }
+
+// RetirePortalIssuerQ is the real retirement's semantics over the fake registry: an unknown key is not
+// found, a want that is no longer the stored binding is stale, a live portal on the key or a census hit
+// keeps the binding, and a nil want skips the comparison.
+func (f *regStore) RetirePortalIssuerQ(_ context.Context, _ store.Querier, issuerKey string, want *types.PortalIssuer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for issuer, cur := range f.bound {
+		if cur.IssuerKey != issuerKey {
+			continue
+		}
+		if want != nil && (!cur.CreatedAt.Equal(want.CreatedAt) || cur.Issuer != want.Issuer ||
+			cur.InternalIssuerNorm != want.InternalIssuerNorm || cur.PersonIDClaim != want.PersonIDClaim) {
+			return store.ErrStaleCompare
+		}
+		for _, d := range f.created {
+			if d.IssuerKey == issuerKey && d.RevokedAt == nil {
+				return store.ErrIssuerInUse
+			}
+		}
+		delete(f.bound, issuer)
+		return nil
+	}
+	return store.ErrNotFound
+}
 func (f *regStore) UpdateDelegateAdmissionQ(context.Context, store.Querier, uuid.UUID, types.PortalAdmission, types.PortalAdmission) error {
 	return nil
 }

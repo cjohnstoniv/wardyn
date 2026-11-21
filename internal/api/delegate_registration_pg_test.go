@@ -32,8 +32,8 @@ type regPG struct {
 func newRegPG(t *testing.T) *regPG {
 	t.Helper()
 	e := &regPG{delegationPG: newDelegationPG(t)}
-	if err := e.st.ActivatePortalIssuers(context.Background(), "test", nil); err != nil {
-		t.Fatal(err)
+	if activated, err := e.st.ActivatePortalIssuers(context.Background(), "test", nil); err != nil || !activated {
+		t.Fatalf("ActivatePortalIssuers = %v, %v, want the first activation to report true", activated, err)
 	}
 	e.admin2 = accessSession(t, "root2", "root2@corp.example", oidc.RoleAdmin, []string{})
 	return e
