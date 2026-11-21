@@ -53,7 +53,7 @@ Some identity services never grant `openid` to a client, so no identity token is
 - Renewal works as it does for any other sign-in.
 - Turning `require_id_token` on or off is an address change: it deletes every person's stored sign-in for the row, and a sign-in that was started or stored under the other setting is refused. Leaving it out is the same as `true`, and a row that never set it keeps its sign-ins.
 - The capture audit row records `id_token: not_required` for such a row, whether or not a token came back ([Audit actions](../AUDIT-ACTIONS.md)).
-- In this release the field is set through the API and the policy file. The console editor keeps a value set that way when an unrelated change is saved, and shows no control for it.
+- In this release the field is set through the site-config API or a file sent with `wardyn site-config set`. The console editor keeps a value set that way when an unrelated change is saved, and shows no control for it.
 
 ## How a person signs in
 
