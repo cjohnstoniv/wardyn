@@ -602,8 +602,10 @@ func TestUpdateDelegateAdmission_RevokedPortalIsStale_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
 	p := newIssuerPortal(t, st, "")
-	was := types.PortalAdmission{Group: p.Delegate.Group, PortalManaged: true}
-	next := types.PortalAdmission{Group: p.Delegate.Group, PortalManaged: false}
+	was := types.PortalAdmission{Group: "", PortalManaged: true}
+	// A managed-admission portal has no group; turning the flag off needs one (delegates_admission_shape), so
+	// next is a valid edit that would land if the portal were live.
+	next := types.PortalAdmission{Group: "portal-users", PortalManaged: false}
 	rev := func() int {
 		return rowCount(t, pool, `SELECT admission_rev FROM delegates WHERE id = $1`, p.Delegate.ID)
 	}
@@ -655,5 +657,70 @@ func TestRetirePortalIssuer_StaleRecordLeavesReplacement_PG(t *testing.T) {
 	}
 	if err := st.RetirePortalIssuerQ(ctx, pool, replacement.IssuerKey, &replacement); err != nil {
 		t.Fatalf("retire with the replacement's own record = %v", err)
+	}
+}
+
+// Each field of the binding record the retirement was decided on is compared under the lock: the record is
+// retired, the same issuer is registered again changing exactly one of created_at, the internal address or the
+// person-id claim (the row's created_at is set back to the old one where the case must differ in the other
+// field alone), and the held decision is ErrStaleCompare and the replacement stays. The issuer string itself
+// cannot differ under one key, which is derived from its bytes.
+func TestRetirePortalIssuer_EachRecordFieldPinsTheCompare_PG(t *testing.T) {
+	cases := []struct {
+		name       string
+		sameAddr   bool
+		claim      string
+		keepStamp  bool // set created_at back to the held record's
+		wantDiffer func(old, now types.PortalIssuer) bool
+	}{
+		{"created_at only", true, "uid", false, func(o, n types.PortalIssuer) bool {
+			return !n.CreatedAt.Equal(o.CreatedAt) && n.InternalIssuerNorm == o.InternalIssuerNorm && n.PersonIDClaim == o.PersonIDClaim
+		}},
+		{"address only", false, "uid", true, func(o, n types.PortalIssuer) bool {
+			return n.CreatedAt.Equal(o.CreatedAt) && n.InternalIssuerNorm != o.InternalIssuerNorm && n.PersonIDClaim == o.PersonIDClaim
+		}},
+		{"person-id claim only", true, "sub", true, func(o, n types.PortalIssuer) bool {
+			return n.CreatedAt.Equal(o.CreatedAt) && n.InternalIssuerNorm == o.InternalIssuerNorm && n.PersonIDClaim != o.PersonIDClaim
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st, pool := isolatedStore(t)
+			ctx := context.Background()
+			issuer := "https://idp-" + uuid.NewString() + ".example.com"
+			addr := "https://internal-" + uuid.NewString() + ".example.com"
+			held, err := st.BindPortalIssuerQ(ctx, pool, issuer, addr, "uid", "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.RetirePortalIssuerQ(ctx, pool, held.IssuerKey, &held); err != nil {
+				t.Fatalf("retire with the current record = %v", err)
+			}
+			again := addr
+			if !c.sameAddr {
+				again = "https://internal-" + uuid.NewString() + ".example.com"
+			}
+			if _, err := st.BindPortalIssuerQ(ctx, pool, issuer, again, c.claim, "test"); err != nil {
+				t.Fatal(err)
+			}
+			if c.keepStamp {
+				if _, err := pool.Exec(ctx, `UPDATE portal_issuers SET created_at = $2 WHERE issuer_key = $1`, held.IssuerKey, held.CreatedAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			all, err := store.PortalIssuersQ(ctx, pool)
+			if err != nil || len(all) != 1 {
+				t.Fatalf("bindings after re-registering = %+v, %v", all, err)
+			}
+			if !c.wantDiffer(held, all[0]) {
+				t.Fatalf("fixture: replacement %+v does not differ from %+v in %s alone", all[0], held, c.name)
+			}
+			if err := st.RetirePortalIssuerQ(ctx, pool, held.IssuerKey, &held); !errors.Is(err, store.ErrStaleCompare) {
+				t.Fatalf("retire with the old record = %v, want ErrStaleCompare", err)
+			}
+			if bound, err := store.IssuerKeyBoundQ(ctx, pool, held.IssuerKey); err != nil || !bound {
+				t.Fatalf("replacement after the stale retire: bound=%v err=%v, want it kept", bound, err)
+			}
+		})
 	}
 }
