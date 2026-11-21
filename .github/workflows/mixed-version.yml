@@ -101,17 +101,20 @@ jobs:
           kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
           kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
           kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
-      - name: Load the new image into kind, pull the old one
+      - name: Load the new image into kind, pull the old one inside the node
         run: |
           set -euo pipefail
           kind load docker-image wardyn/wardynd:kind-test wardyn/wardyn-proxy:local --name wardyn-mixed
+          # The old image is a multi-arch index, which `docker save` exports without the other platforms'
+          # content, so `kind load` cannot import it. The node pulls it by the reference the pod will use
+          # (the chart's pull policy is IfNotPresent, so the kubelet then finds it and pulls nothing).
           if [ -n "$OLD_DIGEST" ]; then
-            docker pull "${OLD_IMAGE}@${OLD_DIGEST}"
-            docker tag "${OLD_IMAGE}@${OLD_DIGEST}" "${OLD_IMAGE}:${OLD_TAG}"
+            old_ref="${OLD_IMAGE}@${OLD_DIGEST}"
           else
-            docker pull "${OLD_IMAGE}:${OLD_TAG}"
+            old_ref="${OLD_IMAGE}:${OLD_TAG}"
           fi
-          kind load docker-image "${OLD_IMAGE}:${OLD_TAG}" --name wardyn-mixed
+          docker exec wardyn-mixed-control-plane crictl pull "$old_ref" \
+            || { echo "::error::the kind node could not pull the old image $old_ref"; exit 1; }
       - name: Postgres, one age key and one admin token for both replicas
         run: |
           set -euo pipefail
