@@ -403,8 +403,9 @@ const (
 )
 
 // isPolicyDeny reports whether an egress.Deny with this rule_source is a denial
-// by policy — the thing wardyn_egress_denies_total's HELP string promises and
-// the only thing an operator alerting on that series wants to be paged for.
+// by policy or a built-in guard — the filter wardyn_egress_denies_total's HELP string
+// names (network faults, credential reauthentication timeouts and dropped-decision
+// summaries are left out of the count) and the only thing an operator alerting on that series wants to be paged for.
 //
 // Exclusion, not an allowlist, on purpose: the policy/guard sources are open-
 // ended (policy, approval:<id>, builtin:private-ip, policy:tool-deny,
@@ -471,7 +472,7 @@ func (m *metrics) write(w io.Writer) {
 	// to describe the labels the series actually has (none), rather than
 	// splitting it into {reason=...}, which stays a separate, owner-gated
 	// change (the filed alternative in M2-canon-sheet.md §2/§6b).
-	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny (proxy decision ingest). Unlabeled: does not break down by reason.\n"+
+	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions denied by policy or a built-in guard: ingested decision=deny rows, less network faults, credential reauthentication timeouts and dropped-decision summaries. Unlabeled: does not break down by reason.\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	m.writeModelTokens(w)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
