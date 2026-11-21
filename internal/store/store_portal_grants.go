@@ -253,7 +253,7 @@ func (s PG) StampPortalUsed(ctx context.Context, id uuid.UUID, at time.Time) err
 // a mint commits, never inside it, so two people's mints never wait on each other's deletes; chain inheritance
 // reads live grants only, so the sweep's timing changes nothing.
 func (s PG) SweepExpiredPortalGrants(ctx context.Context, at time.Time) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM portal_grants WHERE expires_at <= $1`, at)
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE expires_at <= $1 ORDER BY id FOR UPDATE)`, at)
 	if err != nil {
 		return 0, fmt.Errorf("store: sweep portal grants: %w", err)
 	}

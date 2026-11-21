@@ -124,7 +124,7 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 		}
 		for _, stmt := range []string{
 			`DELETE FROM delegated_tokens WHERE principal = ANY($1)`,
-			`DELETE FROM portal_grants WHERE principal = ANY($1)`,
+			`DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE principal = ANY($1) ORDER BY id FOR UPDATE)`,
 		} {
 			tag, err := q.Exec(ctx, stmt, principals)
 			if err != nil {

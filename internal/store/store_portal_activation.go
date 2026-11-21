@@ -83,7 +83,7 @@ func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []str
 // (PortalSessionUnknown); a client that sets no application name has an empty label and is reported with it.
 func (s PG) UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error) {
 	all, err := collect(ctx, s.Pool, "list", "client sessions", `
-		SELECT COALESCE(application_name, $1), CASE WHEN application_name IS NULL THEN $1 ELSE COALESCE(client_addr::text, '') END
+		SELECT COALESCE(application_name, $1), CASE WHEN application_name IS NULL THEN $1 ELSE COALESCE(host(client_addr), '') END
 		  FROM pg_stat_activity
 		 WHERE datname = current_database() AND pid <> pg_backend_pid() AND `+db.OtherClientSQL+`
 		 ORDER BY 1, 2`, []any{PortalSessionUnknown}, func(r pgx.Row) (types.ClientSession, error) {

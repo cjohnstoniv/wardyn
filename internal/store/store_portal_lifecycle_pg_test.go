@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -220,11 +219,7 @@ func TestPortalPurge_ExplicitRefusedAfterConcurrentReactivate_PG(t *testing.T) {
 		marked, err := st.MarkPortalIdentityPurged(ctx, id, store.PortalPurgeExplicit)
 		done <- result{marked, err}
 	}()
-	select {
-	case r := <-done:
-		t.Fatalf("the purge did not wait for the reactivation: %+v", r)
-	case <-time.After(time.Second):
-	}
+	untilBlockedBy(t, pool, pidOf(t, tx), 1) // the purge waits on the reactivation's row lock
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}

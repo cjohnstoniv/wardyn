@@ -163,35 +163,100 @@ var unruledWrites = map[string]string{
 	"EraseServiceIdentityAttributionOf": "erases a person's name from rows; removal is never ruled",
 	"RetireServiceIdentity":             "retires the identity; the sponsor is unchanged",
 	"RenameGovernanceUnitQ":             "writes the unit's name only",
+	"WriteGovernanceUnitQ":              "recomputes the depth of every unit through refreshUnitDepths; the unit's own document is written by upsertGovernanceUnitTx, which rules it",
 	"replaceUserDriveGrantOn":           "repoints the drive of a subject's existing row, then writes the grant through upsertUserDriveGrant, which rules it",
 }
 
-// Every statement that writes a ruled table, in any non-test Go file of the module, sits in a function that
-// rules the write, or is named in unruledWrites with its reason; every ruled list has a call site naming it.
-func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
-	write := regexp.MustCompile(`(?is)\b(insert\s+into|update)\s+(` + strings.Join(ruledTables, "|") + `)\b`)
-	sources := moduleGoSources(t)
-	files := make([]string, 0, len(sources))
-	for f := range sources {
-		files = append(files, f)
+// writeHit is one function that holds a statement writing a ruled table.
+type writeHit struct {
+	File, Func, Table string
+	Ruled             bool
+}
+
+var ruledWriteStatement = regexp.MustCompile(`(?is)\b(insert\s+into|update)\s+(` + strings.Join(ruledTables, "|") + `)\b`)
+
+// stringExpr is the value of a string expression made of literals, identifiers that name a string constant or
+// variable of consts, and +; ok is false for any other expression.
+func stringExpr(e ast.Expr, consts map[string]string) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind != token.STRING {
+			return "", false
+		}
+		s, err := strconv.Unquote(v.Value)
+		return s, err == nil
+	case *ast.Ident:
+		s, ok := consts[v.Name]
+		return s, ok
+	case *ast.ParenExpr:
+		return stringExpr(v.X, consts)
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		l, lok := stringExpr(v.X, consts)
+		r, rok := stringExpr(v.Y, consts)
+		return l + r, lok && rok
 	}
-	sort.Strings(files)
-	seenUnruled := map[string]bool{}
-	ruledIn := map[string]bool{}
-	var allSource strings.Builder
-	for _, f := range files {
-		src := sources[f]
-		if f != filepath.Join("internal", "store", "store_portal_subjects.go") {
-			allSource.Write(src)
+	return "", false
+}
+
+// packageStrings is the package-level string constants and variables of the files of one directory, resolved
+// through each other until none more resolves, so a statement held in a const that another const extends is
+// found by the function that uses either.
+func packageStrings(files []*ast.File) map[string]string {
+	out := map[string]string{}
+	for range 8 {
+		for _, file := range files {
+			for _, decl := range file.Decls {
+				gd, ok := decl.(*ast.GenDecl)
+				if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+					continue
+				}
+				for _, spec := range gd.Specs {
+					vs := spec.(*ast.ValueSpec)
+					for i, name := range vs.Names {
+						if i < len(vs.Values) {
+							if s, ok := stringExpr(vs.Values[i], out); ok {
+								out[name.Name] = s
+							}
+						}
+					}
+				}
+			}
 		}
-		if !write.Match(src) {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), f, src, 0)
+	}
+	return out
+}
+
+// scanRuledWrites finds every function of the sources whose statements, literals inside it or package-level
+// string constants it names, write a ruled table, and whether it calls a ruling. Sources are keyed by path; the
+// package-level strings are those of the files in the same directory.
+func scanRuledWrites(t *testing.T, sources map[string][]byte) []writeHit {
+	t.Helper()
+	paths := make([]string, 0, len(sources))
+	for f := range sources {
+		paths = append(paths, f)
+	}
+	sort.Strings(paths)
+	parsed := map[string]*ast.File{}
+	byDir := map[string][]*ast.File{}
+	for _, f := range paths {
+		file, err := parser.ParseFile(token.NewFileSet(), f, sources[f], 0)
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
-		for _, decl := range file.Decls {
+		parsed[f] = file
+		byDir[filepath.Dir(f)] = append(byDir[filepath.Dir(f)], file)
+	}
+	pkgStrings := map[string]map[string]string{}
+	for dir, files := range byDir {
+		pkgStrings[dir] = packageStrings(files)
+	}
+	var hits []writeHit
+	for _, f := range paths {
+		consts := pkgStrings[filepath.Dir(f)]
+		for _, decl := range parsed[f].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				continue
@@ -206,6 +271,10 @@ func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
 							sql.WriteString(s + " ")
 						}
 					}
+				case *ast.Ident:
+					if s, ok := consts[v.Name]; ok {
+						sql.WriteString(s + " ")
+					}
 				case *ast.CallExpr:
 					switch c := v.Fun.(type) {
 					case *ast.Ident:
@@ -216,23 +285,39 @@ func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
 				}
 				return true
 			})
-			m := write.FindStringSubmatch(sql.String())
-			if m == nil {
-				continue
+			if m := ruledWriteStatement.FindStringSubmatch(sql.String()); m != nil {
+				hits = append(hits, writeHit{File: f, Func: fn.Name.Name, Table: m[2], Ruled: ruled})
 			}
-			name := fn.Name.Name
-			if reason, listed := unruledWrites[name]; listed {
-				seenUnruled[name] = true
-				if ruled {
-					t.Errorf("%s (%s) calls a ruling and is also listed as needing none (%s)", name, f, reason)
-				}
-				continue
+		}
+	}
+	return hits
+}
+
+// Every statement that writes a ruled table, in any non-test Go file of the module (inline, or in a
+// package-level constant the function names), sits in a function that rules the write, or is named in
+// unruledWrites with its reason; every ruled list has a call site naming it.
+func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
+	sources := moduleGoSources(t)
+	seenUnruled := map[string]bool{}
+	ruledIn := map[string]bool{}
+	var allSource strings.Builder
+	for f, src := range sources {
+		if f != filepath.Join("internal", "store", "store_portal_subjects.go") {
+			allSource.Write(src)
+		}
+	}
+	for _, h := range scanRuledWrites(t, sources) {
+		if reason, listed := unruledWrites[h.Func]; listed {
+			seenUnruled[h.Func] = true
+			if h.Ruled {
+				t.Errorf("%s (%s) calls a ruling and is also listed as needing none (%s)", h.Func, h.File, reason)
 			}
-			if !ruled {
-				t.Errorf("%s (%s) writes %s and calls no portal person ruling", name, f, m[2])
-			} else {
-				ruledIn[f] = true
-			}
+			continue
+		}
+		if !h.Ruled {
+			t.Errorf("%s (%s) writes %s and calls no portal person ruling", h.Func, h.File, h.Table)
+		} else {
+			ruledIn[h.File] = true
 		}
 	}
 	if f := filepath.Join("internal", "secretstore", "keydomain", "service.go"); !ruledIn[f] {
@@ -255,6 +340,31 @@ func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
 	}
 }
 
+// The guard finds a statement held in a package-level constant, a constant built from others, and a package
+// variable, whichever file of the package holds it, and tells a ruled function from an unruled one.
+func TestPortalSubjectRuling_WriteGuardSeesConstSQL(t *testing.T) {
+	sources := map[string][]byte{
+		"x/sql.go": []byte("package x\n\nconst insertGrant = `INSERT INTO capability_grants (id) VALUES ($1)`\nconst upsertGrant = insertGrant + ` ON CONFLICT DO NOTHING`\nvar updateRoles = \"UPDATE role_mappings SET role = $1\"\nconst harmless = `UPDATE some_other_table SET a = 1`\n"),
+		"x/use.go": []byte("package x\n\nfunc Unruled(q Q) { q.Exec(upsertGrant) }\nfunc Ruled(q Q) { ruleDelegatePersonSubject(q); q.Exec(insertGrant) }\nfunc Roles(q Q) { q.Exec(updateRoles) }\nfunc Other(q Q) { q.Exec(harmless) }\n"),
+	}
+	got := map[string]writeHit{}
+	for _, h := range scanRuledWrites(t, sources) {
+		got[h.Func] = h
+	}
+	if h, ok := got["Unruled"]; !ok || h.Ruled || h.Table != "capability_grants" {
+		t.Errorf("Unruled = %+v (found %v), want an unruled write of capability_grants through a built constant", h, ok)
+	}
+	if h, ok := got["Ruled"]; !ok || !h.Ruled {
+		t.Errorf("Ruled = %+v (found %v), want a ruled write", h, ok)
+	}
+	if h, ok := got["Roles"]; !ok || h.Ruled || h.Table != "role_mappings" {
+		t.Errorf("Roles = %+v (found %v), want an unruled write of role_mappings through a variable", h, ok)
+	}
+	if _, ok := got["Other"]; ok {
+		t.Error("a statement on an unruled table was reported")
+	}
+}
+
 // uiAppCallerKeys reads the callers of the ui_apps entries as decoded strings, in whatever JSON spelling and
 // wherever the array sits, and nothing else.
 func TestPortalSubjectRuling_UICallerKeysReadDecodedCallersOnly(t *testing.T) {
@@ -271,6 +381,10 @@ func TestPortalSubjectRuling_UICallerKeysReadDecodedCallersOnly(t *testing.T) {
 		{"spacing, key order, case and padding", "{ \"ui_apps\" : [ { \"callers\" : [ \" USER:Delegate:Person:" + k1 + ":MFRGG \" ], \"name\" : \"a\" } ] }", []string{k1}, false},
 		{"inside a launch request's overlay", `{"task":"x","policy_overlay":{"ui_apps":[{"callers":["user:delegate:person:` + k2 + `:mfrgg"]}]}}`, []string{k2}, false},
 		{"two keys, one repeated, sorted", `{"ui_apps":[{"callers":["user:delegate:person:` + k2 + `:a","user:delegate:person:` + k1 + `:b","user:delegate:person:` + k2 + `:c"]}]}`, []string{k1, k2}, false},
+		{"upper-case keys", `{"UI_APPS":[{"CALLERS":["user:delegate:person:` + k1 + `:mfrgg"]}]}`, []string{k1}, false},
+		{"mixed-case keys in a launch overlay", `{"policy_overlay":{"Ui_Apps":[{"Name":"a","Callers":["user:delegate:person:` + k2 + `:mfrgg"]}]}}`, []string{k2}, false},
+		{"mixed-case key beside a lower-case one", `{"ui_apps":[{"callers":["user:delegate:person:` + k1 + `:a"]}],"UI_APPS":[{"Callers":["user:delegate:person:` + k2 + `:b"]}]}`, []string{k1, k2}, false},
+		{"mixed-case malformed key", `{"UI_APPS":[{"CALLERS":["user:delegate:person:short:x"]}]}`, nil, true},
 		{"free text", `{"task":"ask user:delegate:person:` + k1 + `:x","description":"ui_apps callers user:delegate:person:` + k1 + `:x"}`, nil, false},
 		{"callers outside ui_apps", `{"callers":["user:delegate:person:` + k1 + `:x"],"other":[{"callers":["user:delegate:person:` + k1 + `:x"]}]}`, nil, false},
 		{"group and service callers", `{"ui_apps":[{"callers":["group:delegate:person:` + k1 + `:x","service:delegate:person:` + k1 + `:x","user:alice@example.com"]}]}`, nil, false},

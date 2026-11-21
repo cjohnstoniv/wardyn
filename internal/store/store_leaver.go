@@ -438,7 +438,7 @@ func (s PG) SuspendIdentity(ctx context.Context, p SuspendPlan) (SuspendResult, 
 		return SuspendResult{}, fmt.Errorf("store: deactivate identities: %w", err)
 	}
 	if p.PortalLifecycle {
-		if _, err = tx.Exec(ctx, `DELETE FROM portal_grants WHERE principal = ANY($1::text[])`, principals); err != nil {
+		if _, err = tx.Exec(ctx, `DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE principal = ANY($1::text[]) ORDER BY id FOR UPDATE)`, principals); err != nil {
 			return SuspendResult{}, fmt.Errorf("store: delete portal grants: %w", err)
 		}
 	}

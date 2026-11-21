@@ -98,11 +98,7 @@ func TestPortalIssuerBinding_RetireRacesFirstIntroduction_PG(t *testing.T) {
 		_, _, err := st.IssuePortalIdentity(ctx, types.PortalPrincipal(b.Key, "bob"), b.Key, "", b.Issuer, b.Delegate.ID, b.Delegate.AdmissionRev)
 		done <- err
 	}()
-	select {
-	case err := <-done:
-		t.Fatalf("the introduction did not wait for the retirement: %v", err)
-	case <-time.After(time.Second):
-	}
+	untilBlockedBy(t, pool, pidOf(t, tx), 1) // the introduction waits on the retirement's binding row
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +255,11 @@ func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 		}},
 		{"PutLaunchPreset policy_overlay", "launch_presets.request", func(key string) error {
 			_, _, err := st.PutLaunchPreset(ctx, preset(`{"task":"x","policy_overlay":`+uiAppsJSON(key)+`}`))
+			return err
+		}},
+		{"PutLaunchPreset policy_overlay with upper-case keys", "launch_presets.request", func(key string) error {
+			doc := strings.NewReplacer(`"ui_apps"`, `"UI_APPS"`, `"callers"`, `"Callers"`).Replace(uiAppsJSON(key))
+			_, _, err := st.PutLaunchPreset(ctx, preset(`{"task":"x","policy_overlay":`+doc+`}`))
 			return err
 		}},
 		{"CreateTemplate intent.inline_policy", "run_template_revisions.document", func(key string) error {
