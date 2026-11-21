@@ -6,10 +6,10 @@ ha:
 k8s:
   enabled: true
   # Built from deploy/compose/Dockerfile.proxy and loaded into kind by the job; the runner refuses to
-  # construct without one, though this job launches no run.
+  # construct without one. The job's one dispatched run is a queued command the old worker starts.
   proxyImage: wardyn/wardyn-proxy:local
-  # This job launches no run and the namespace holds only Postgres and the two replicas, so the chart's
-  # shared-namespace warning does not apply.
+  # The namespace holds only Postgres, the two replicas and that one run, so the chart's shared-namespace
+  # warning does not apply.
   allowRunsInReleaseNamespace: true
 serviceAccount:
   automount: true
