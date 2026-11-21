@@ -339,15 +339,6 @@ func (p *portalStore) SweepExpiredPortalGrants(context.Context, time.Time) (int6
 	return 0, nil
 }
 
-func (p *portalStore) revoke(id uuid.UUID) {
-	p.pmu.Lock()
-	defer p.pmu.Unlock()
-	d := p.portals[id]
-	now := time.Now()
-	d.RevokedAt = &now
-	p.portals[id] = d
-}
-
 // seedGrant stores a live grant row exactly as given, for the reverse check's corrupt-store cases.
 func (p *portalStore) seedGrant(g types.PortalGrant) string {
 	raw := newBearer(delegatedTokenPrefix)
@@ -632,7 +623,9 @@ func TestPortalExchange_AuditRows(t *testing.T) {
 		t.Fatalf("denial rows = %+v, want exactly %v", rows, want)
 	}
 	// The success: the grant, its end, the role, the freshness settings and the names of the admission rule.
+	// The token now carries the claim the portal requires.
 	h.ver.refusal = oidc.PortalRefusal{}
+	h.ver.claims = map[string]string{"tenant": "secret-environment-name"}
 	_, out := portalToken(t, h.exchange(t, d.ID, cred, "the-subject-token", nil))
 	rows := h.exchangeRows()
 	if len(rows) != 2 || rows[1].Outcome != "success" || rows[1].Target != h.ver.subj.Principal {
