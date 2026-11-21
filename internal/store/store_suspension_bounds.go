@@ -335,6 +335,8 @@ func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string,
 		return PinnedEvent{}, ErrSuperseded
 	}
 	var out PinnedEvent
+	var pid *uuid.UUID
+	var pat *time.Time
 	err := s.Pool.QueryRow(ctx, `
 		WITH cur AS (SELECT id, state, audit_event_id, audit_event_at, audit_event_payload FROM deprovision_jobs
 		              WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND id = $8
@@ -345,12 +347,23 @@ func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string,
 		          RETURNING d.audit_event_id, d.audit_event_at, d.audit_event_payload)
 		SELECT COALESCE(upd.audit_event_id, cur.audit_event_id), COALESCE(upd.audit_event_at, cur.audit_event_at), COALESCE(upd.audit_event_payload, cur.audit_event_payload), cur.state = 'done'
 		  FROM cur LEFT JOIN upd ON true`,
-		identity, kind, k.Step, k.Target, id, at, payload, k.ID, bound).Scan(&out.ID, &out.At, &out.Payload, &out.Done)
+		identity, kind, k.Step, k.Target, id, at, payload, k.ID, bound).Scan(&pid, &pat, &out.Payload, &out.Done)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PinnedEvent{}, ErrSuperseded
 	}
 	if err != nil {
 		return PinnedEvent{}, fmt.Errorf("store: pin portal event: %w", err)
+	}
+	// A pending row holds the pair just written. A finished one may hold none (a step finished with no event pinned,
+	// which 0196 allows) and its payload is gone: nothing here puts the caller's back.
+	if pid != nil {
+		out.ID = *pid
+	}
+	if pat != nil {
+		out.At = *pat
+	}
+	if !out.Done && (pid == nil || pat == nil) {
+		return PinnedEvent{}, fmt.Errorf("store: pin portal event: the pending row holds no event")
 	}
 	return out, nil
 }

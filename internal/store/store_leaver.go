@@ -125,9 +125,9 @@ type DeprovisionJob struct {
 // (DeprovisionJob.ID): a finish or a failure then applies to that occurrence only, and one whose row a newer
 // occurrence replaced is ErrSuperseded.
 //
-// Claim, when set, is the ownership handle a kill claim returned (KillClaim.ClaimID): a finish then applies only
-// while that claim is still the row's, so a worker whose lease ended and was taken over cannot finish the
-// successor's row.
+// Claim is the ownership handle a kill claim returned (KillClaim.ClaimID), zero for a worker that holds none: a
+// finish or a failure of a named row applies only while the row's claim is exactly this one (none for none), so a
+// worker whose claim was taken over, or released, cannot finish or mark the successor's row.
 type JobKey struct {
 	Step, Target string
 	ID           uuid.UUID
@@ -613,7 +613,7 @@ func (s PG) finishJob(ctx context.Context, identityID uuid.UUID, kind string, k 
 	var found, done, lost int
 	err := s.Pool.QueryRow(ctx, `
 		WITH j AS (SELECT id, ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored,
-		                  ($7::uuid IS NULL OR kill_claim_id IS NULL OR kill_claim_id = $7) AS owned
+		                  kill_claim_id IS NOT DISTINCT FROM $7::uuid AS owned
 		             FROM deprovision_jobs
 		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`+current+` FOR UPDATE),
 		     u AS (UPDATE deprovision_jobs d SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5,
@@ -640,15 +640,25 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 	if len(msg) > 512 {
 		msg = strings.ToValidUTF8(msg[:512], "")
 	}
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET attempts = attempts + 1, last_error = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
-		identityID, kind, k.Step, k.Target, msg, k.occurrence())
+	// A row named by its id is marked only while it is pending and the failing attempt owns it (finishJob), so a
+	// worker that lost its claim, or one that failed after the row was finished, writes nothing.
+	var found, marked int
+	var pending bool
+	err := s.Pool.QueryRow(ctx, `
+		WITH j AS (SELECT id, state = 'pending' AS pending, kill_claim_id IS NOT DISTINCT FROM $7::uuid AS owned FROM deprovision_jobs
+		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6) FOR UPDATE),
+		     u AS (UPDATE deprovision_jobs d SET attempts = attempts + 1, last_error = $5, updated_at = now()
+		            FROM j WHERE d.id = j.id AND ($6::uuid IS NULL OR (j.pending AND j.owned)) RETURNING 1)
+		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u), COALESCE((SELECT bool_or(pending) FROM j), false)`,
+		identityID, kind, k.Step, k.Target, msg, k.occurrence(), k.claim()).Scan(&found, &marked, &pending)
 	if err != nil {
 		return fmt.Errorf("store: fail deprovision job: %w", err)
 	}
-	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+	switch {
+	case k.ID != uuid.Nil && found == 0:
 		return ErrSuperseded
+	case k.ID != uuid.Nil && found > 0 && marked == 0 && pending:
+		return ErrKillHeld // another attempt's claim owns the row
 	}
 	return nil
 }
