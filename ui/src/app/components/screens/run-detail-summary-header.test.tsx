@@ -32,6 +32,7 @@ import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
 import { END_RUN } from "../wardyn/copy/run-lifetime";
+import { shortTime } from "../../lib/format";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -904,6 +905,9 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
       </OperatorProvider>,
     );
     expect(screen.getByLabelText("Total run time 5m 0s")).toBeInTheDocument();
+    // The clock beside it is the end time too, not the teardown two days later.
+    expect(screen.getByLabelText("Total run time 5m 0s")).toHaveTextContent(`Ran 5m 0s · ended ${shortTime(at(5 * 60_000))}`);
+    expect(screen.getByLabelText("Total run time 5m 0s")).not.toHaveTextContent(shortTime(at(2 * 86_400_000)));
   });
 
   it("falls back to updated_at when the run has no ended_at", () => {
@@ -919,6 +923,7 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
       </OperatorProvider>,
     );
     expect(screen.getByLabelText("Total run time 7m 0s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total run time 7m 0s")).toHaveTextContent(`ended ${shortTime(at(7 * 60_000))}`);
   });
 });
 
