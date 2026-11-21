@@ -138,25 +138,13 @@ try {
     else { Say 'checksum: matches SHA256SUMS from the same place: catches a broken download, not a tampered release' }
 
     $target = Join-Path $dir 'wardyn.exe'
-    $old = Join-Path $dir 'wardyn.exe.old'
-    $parked = $false
     if (Test-Path $target) {
       # A running wardyn.exe cannot be overwritten, but it can be renamed.
+      $old = Join-Path $dir 'wardyn.exe.old'
       Remove-Item -Force -ErrorAction SilentlyContinue $old
       Move-Item -Force -Path $target -Destination $old
-      $parked = $true
     }
-    $swapped = $false
-    try {
-      Move-Item -Force -Path $stage -Destination $target
-      $swapped = $true
-    } finally {
-      # A failed or interrupted second move (finally also runs on Ctrl-C) must not leave the command missing:
-      # put the working copy back, and let the error go on.
-      if ($parked -and -not $swapped -and -not (Test-Path $target)) {
-        Move-Item -Force -Path $old -Destination $target
-      }
-    }
+    Move-Item -Force -Path $stage -Destination $target
     Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $dir 'wardyn.exe.old')
     Say "installed $target"
   } finally {

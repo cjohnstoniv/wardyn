@@ -310,9 +310,6 @@ fi
 awk '/ErrorActionPreference = .Continue./{c=NR} /& cosign verify-blob/{v=NR} /\$vrc = \$LASTEXITCODE/{l=NR} /ErrorActionPreference = \$prevEap/{r=NR} END{exit !(c && v && l && r && c<v && v<l && l<r)}' "$PS1_SCRIPT" \
   || fail "install-cli.ps1: the cosign call is not wrapped Continue ... exit code read ... Stop restored"
 grep -qE '2>\$errFile' "$PS1_SCRIPT" || fail "install-cli.ps1: cosign's stderr does not go to a file"
-# A failed or interrupted swap puts wardyn.exe back from wardyn.exe.old; a text pin, as pwsh is not on every box.
-awk '/Move-Item -Force -Path \$stage -Destination \$target/{s=NR} /\} finally \{/{if(!f)f=NR} /Move-Item -Force -Path \$old -Destination \$target/{r=NR} END{exit !(s && f && r && s<f && f<r)}' "$PS1_SCRIPT" \
-  || fail "install-cli.ps1: a failed swap does not restore wardyn.exe from wardyn.exe.old"
 grep -qF 'matches the SHA256SUMS list that cosign verified' "$PS1_SCRIPT" || fail "install-cli.ps1 lost the signed-list checksum line"
 pass "install-cli.ps1 carries the same checks (parsed by pwsh when present)"
 
