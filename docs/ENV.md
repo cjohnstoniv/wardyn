@@ -2275,7 +2275,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A PEM file of the root certificates that sign the certificates of the issuer hosts `WARDYN_DAEMON_PROXY_ALWAYS` lists, read at boot into a fresh pool (flag `-portal-proxied-issuer-ca-file`; `portalProxiedIssuerRoots`, [`cmd/wardynd/boot_portal.go`](../cmd/wardynd/boot_portal.go)). It is the only trust a proxied issuer portal's discovery and key fetches use.
 - It never uses the system roots or `WARDYN_TRUSTED_CA_FILE`, so a certificate authority the image or the operator added for a TLS-inspecting proxy cannot stand in for the issuer.
 - One pool for the whole installation. Every root in this file is trusted for every listed issuer host, so if two issuers use different private authorities, either authority can vouch for either host. Include only roots you trust for all of them.
-- Boot refuses an unreadable file, an empty one, one with no certificate, and one holding a certificate that is also in `WARDYN_TRUSTED_CA_FILE`.
+- Boot refuses an unreadable file, an empty one, one with no certificate, and one holding a certificate whose public key is also in a certificate in `WARDYN_TRUSTED_CA_FILE`.
 - Name the provider's own roots, never the proxy's inspection CA; include every root your provider publishes for the issuer host.
 - Unset while `WARDYN_DAEMON_PROXY_ALWAYS` is set: boot logs a warning, and each issuer portal whose issuer host is listed is refused at its exchanges, with `no proxied issuer roots` in the log.
 

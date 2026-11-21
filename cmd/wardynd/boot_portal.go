@@ -62,9 +62,10 @@ func portalIssuerOptions(hosts, caFile, localOperator string, counter *api.Porta
 
 // portalProxiedIssuerRoots reads WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE into a fresh pool: the only roots a proxied
 // issuer is trusted under, never the system roots, WARDYN_TRUSTED_CA_FILE or the internal issuer CA file. An unset
-// path gives a nil pool, never an empty one. An unreadable file, one with no certificate, and one sharing a
-// certificate with WARDYN_TRUSTED_CA_FILE (the corporate CA by purpose, so most likely the inspection CA named by
-// mistake) refuse boot. The count is the number of certificates in the pool.
+// path gives a nil pool, never an empty one. An unreadable file, one with no certificate, and one holding a
+// certificate whose public key is also in a certificate in WARDYN_TRUSTED_CA_FILE (the corporate CA by purpose, so
+// most likely the inspection CA named by mistake, whether renewed or re-issued under another name) refuse boot.
+// The count is the number of certificates in the pool.
 func portalProxiedIssuerRoots(path, trustedPEM string) (*x509.CertPool, int, error) {
 	if path = strings.TrimSpace(path); path == "" {
 		return nil, 0, nil
@@ -79,13 +80,13 @@ func portalProxiedIssuerRoots(path, trustedPEM string) (*x509.CertPool, int, err
 	}
 	trusted := map[string]bool{}
 	for _, c := range pemCertificates([]byte(trustedPEM)) {
-		trusted[string(c.Raw)] = true
+		trusted[string(c.RawSubjectPublicKeyInfo)] = true
 	}
 	pool := x509.NewCertPool()
 	for _, c := range certs {
-		if trusted[string(c.Raw)] {
-			return nil, 0, errors.New("refusing to start: WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE holds a certificate that is also in " +
-				"WARDYN_TRUSTED_CA_FILE; name only the roots that sign the proxied issuers' certificates, never the proxy's inspection CA")
+		if trusted[string(c.RawSubjectPublicKeyInfo)] {
+			return nil, 0, errors.New("refusing to start: WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE holds a certificate whose public key is also " +
+				"in a certificate in WARDYN_TRUSTED_CA_FILE; name only the roots that sign the proxied issuers' certificates, never the proxy's inspection CA")
 		}
 		pool.AddCert(c)
 	}

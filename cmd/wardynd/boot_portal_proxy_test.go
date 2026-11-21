@@ -299,3 +299,49 @@ func portalRootsChild(t *testing.T) {
 		}
 	}
 }
+
+// portalProxyTestCAOnKey is a self-signed CA certificate for key under name, as PEM; serial tells renewals apart.
+func portalProxyTestCAOnKey(t *testing.T, name string, key *ecdsa.PrivateKey, serial int64) []byte {
+	t.Helper()
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(48 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// The issuer CA file is refused when any of its certificates holds a public key that WARDYN_TRUSTED_CA_FILE also
+// holds, whatever the certificate's subject, serial or validity, and whichever file has the renewed copy.
+func TestPortalProxiedIssuerRoots_SharedPublicKeyRefused(t *testing.T) {
+	k1, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := portalProxyTestCAOnKey(t, "Inspection CA", k1, 1)
+	for name, c := range map[string]struct {
+		issuer, trusted []byte
+		refused         bool
+	}{
+		"identical certificate":                {orig, orig, true},
+		"same key renewed, renewal in issuer":  {portalProxyTestCAOnKey(t, "Inspection CA", k1, 2), orig, true},
+		"same key renewed, renewal in trusted": {orig, portalProxyTestCAOnKey(t, "Inspection CA", k1, 2), true},
+		"same key under another subject":       {portalProxyTestCAOnKey(t, "Another name", k1, 3), orig, true},
+		"another key under the same subject":   {portalProxyTestCAOnKey(t, "Inspection CA", k2, 4), orig, false},
+	} {
+		pool, n, err := portalProxiedIssuerRoots(portalProxyTestFile(t, "issuer.pem", c.issuer), string(c.trusted))
+		if c.refused {
+			if err == nil || pool != nil || n != 0 || !strings.Contains(err.Error(), "public key is also in a certificate in WARDYN_TRUSTED_CA_FILE") {
+				t.Errorf("%s: %v, %d; want a refusal naming the shared public key", name, err, n)
+			}
+		} else if err != nil || pool == nil || n != 1 {
+			t.Errorf("%s: %v, %d; want the one certificate accepted", name, err, n)
+		}
+	}
+}
