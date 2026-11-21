@@ -199,6 +199,55 @@ if publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null; then fail "the 
 sed -i '/^    runs-on/a\    permissions:\n      contents: read' "$WORK/old-shape.yml"
 publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null || fail "the publisher guard refuses a job that holds no write permission"
 
+# The image check itself, run with a stub docker: a failing version command and an empty answer each fail it, on a branch
+# and on a tag, and a tag must report exactly its release version.
+awk '
+  /^      - name: Check the image reports its revision$/ { want = 1; next }
+  want && /^        run: \|$/ { grab = 1; next }
+  grab && /^          / { sub(/^          /, ""); print > (dir "/check.sh"); next }
+  grab { grab = 0; want = 0 }
+' dir="$WORK" "$PI"
+[ -s "$WORK/check.sh" ] || fail "no 'Check the image reports its revision' step in publish-image.yml"
+mkdir -p "$WORK/chk/bin"
+cat > "$WORK/chk/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  run)
+    entry=""; prev=""
+    for a in "$@"; do [ "$prev" = "--entrypoint" ] && entry="$a"; prev="$a"; done
+    printf '%s' "$STUB_VERSION"
+    # A failing command still printed a plausible version: only its exit status can fail the check.
+    case "$entry" in
+      *"$STUB_FAIL"*) [ -z "$STUB_FAIL" ] || exit 3;;
+    esac;;
+  create) echo cid;;
+  cp) case "$2" in
+        */.) printf '%s' "$STUB_BYTES" > "$3/wardyn-linux-amd64";;
+        *) printf '%s' "$STUB_BYTES" > "$3";;
+      esac;;
+esac
+STUB
+chmod +x "$WORK/chk/bin/docker"
+runcheck() { # WANT(0|1) REVISION REF_NAME VERSION FAIL-ENTRYPOINT-SUBSTRING NAME
+  rm -rf "$WORK/chk/tmp"; mkdir "$WORK/chk/tmp"; local rc=0
+  PATH="$WORK/chk/bin:$PATH" RUNNER_TEMP="$WORK/chk/tmp" IMAGE_REF=img@sha256:x REVISION="$2" REF_NAME="$3" \
+    STUB_VERSION="$4" STUB_FAIL="$5" STUB_BYTES="stamped $2" bash "$WORK/check.sh" >"$WORK/chk/out" 2>&1 || rc=$?
+  if [ "$1" = 0 ] && [ "$rc" -ne 0 ]; then fail "image check refused a good case ($6): $(cat "$WORK/chk/out")"; fi
+  if [ "$1" = 1 ] && [ "$rc" -eq 0 ]; then fail "image check accepted a bad case: $6"; fi
+}
+runcheck 0 "$sha" main "0.10.1+111111111" "" "branch, reports the commit"
+runcheck 1 "$sha" main "0.10.1+111111111" "/usr/local/bin/wardyn" "branch, the in-container CLI fails"
+runcheck 1 "$sha" main "0.10.1+111111111" "/host/wardyn" "branch, the host CLI fails"
+runcheck 1 "$sha" main "" "" "branch, empty output"
+runcheck 1 "$sha" main "0.10.1" "" "branch, bare version"
+runcheck 1 "$sha" main "0.10.1+222222222" "" "branch, another commit"
+runcheck 0 "" v0.4.4 "0.4.4" "" "tag, the release version"
+runcheck 1 "" v0.4.4 "0.4.4" "/usr/local/bin/wardyn" "tag, the in-container CLI fails"
+runcheck 1 "" v0.4.4 "0.4.4" "/host/wardyn" "tag, the host CLI fails"
+runcheck 1 "" v0.4.4 "" "" "tag, empty output"
+runcheck 1 "" v0.4.4 "0.4.4+111111111" "" "tag, a commit suffix"
+runcheck 1 "" v0.4.4 "0.4.3" "" "tag, another version"
+
 # release.yml: no job that can write to the repository or mint the signing identity executes a binary built from
 # the tree, and no step whose env holds the Apple secrets executes one either.
 awk '

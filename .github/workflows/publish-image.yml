@@ -210,14 +210,16 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
           REVISION: ${{ steps.tags.outputs.revision }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # reports NAME VERSION: a version ends in +<9 characters of the commit>, or is bare on a tag ref.
+          # reports NAME VERSION: a branch build's version ends in +<9 characters of the commit>; a tag ref
+          # (empty REVISION) reports exactly the release version its tag names. Empty never passes.
           reports() {
             if [ -n "$REVISION" ]; then
               case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '$2', want it to end in +${REVISION::9}"; exit 1;; esac
-            else
-              case "$2" in *+*) echo "::error::$1 printed '$2', want the bare version on a tag ref"; exit 1;; esac
+            elif [ "$2" != "${REF_NAME#v}" ]; then
+              echo "::error::$1 printed '$2', want the release version ${REF_NAME#v}"; exit 1
             fi
           }
           # Every binary is run inside the image it came from, pulled by digest, with no network, no host
@@ -227,8 +229,10 @@ jobs:
             docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
               --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
           }
-          reports "wardyn in the image" "$(run_in_image /usr/local/bin/wardyn)"
-          got="$(run_in_image /host/wardyn-linux-amd64)"
+          # Each command is captured on its own, so its exit status stops the step.
+          cli="$(run_in_image /usr/local/bin/wardyn)" || { echo "::error::wardyn version failed in the image"; exit 1; }
+          got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI's version command failed in the image"; exit 1; }
+          reports "wardyn in the image" "$cli"
           reports "the linux/amd64 host CLI in the image" "$got"
           if [ -n "$REVISION" ]; then
             # The files are copied out and read as data only, never executed here. The host CLIs are built
