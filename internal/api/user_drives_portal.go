@@ -36,6 +36,12 @@ func (s *Server) upsertPortalDriveGrant(w http.ResponseWriter, r *http.Request, 
 			"invalid allocation: a portal holds one allocation per drive; send additional: true")
 		return saved, nil, true, nil
 	}
+	// Parsed before the write, so nothing after the commit can fail: the grant is committed and audited whatever follows.
+	portal, perr := uuid.Parse(g.Subject)
+	if perr != nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonUserDriveGrantInvalid, "invalid allocation: subject: a portal is named by its id")
+		return saved, nil, true, nil
+	}
 	saved, _, err = s.writeUserDriveGrant(r.Context(), g, false, true)
 	if s.portalDriveGrantRefused(w, err) {
 		return saved, nil, true, nil
@@ -43,16 +49,9 @@ func (s *Server) upsertPortalDriveGrant(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		return saved, nil, false, err
 	}
-	// The folder's object name, so the super admin can create the claim before the first run.
-	d, err := s.cfg.Store.GetUserDrive(r.Context(), saved.DriveID)
-	if err != nil {
-		return saved, nil, false, err
-	}
-	portal, perr := uuid.Parse(saved.Subject)
-	if perr != nil {
-		return saved, nil, false, perr
-	}
-	saved.ObjectName = types.DrivePortalObjectName(d, types.DrivePortalHome(d, portal))
+	// The folder's object name, so the super admin can create the claim before the first run. It is a function of the
+	// portal and the drive's id alone, so no second read of the drive.
+	saved.ObjectName = types.DrivePortalObjectName(types.UserDrive{ID: saved.DriveID}, types.DrivePortalHome(types.UserDrive{ID: saved.DriveID}, portal))
 	return saved, nil, false, nil
 }
 
