@@ -324,6 +324,40 @@ describe("support strip: the banner", () => {
     }
   });
 
+  it("a late end falls back to requested_at on equal ended_at and ranks a missing ended_at lowest", async () => {
+    const T = "2026-01-01T00:00:00.400010Z";
+    const cases = [
+      // Equal ended_at: the shown grant was requested later, so it stays.
+      { shown: { ended_at: T, requested_at: SEEN }, confirmed: { ended_at: T, requested_at: REQUESTED }, line: "Nobody answered" },
+      // The shown grant has no ended_at: the confirmed grant wins.
+      { shown: { requested_at: SEEN }, confirmed: { ended_at: T, requested_at: REQUESTED }, line: "you ended it" },
+    ];
+    for (const c of cases) {
+      Object.values(api).forEach((m) => m.mockReset());
+      const endedA = active({ state: "ended", end_reason: "revoked", ...c.confirmed });
+      const endedB = grant({ grant: "g-2", state: "ended", end_reason: "lapsed", ...c.shown });
+      let release: (g: SupportGrantView) => void = () => {};
+      api.end.mockReturnValueOnce(
+        new Promise<SupportGrantView>((res) => {
+          release = res;
+        }),
+      );
+      api.status
+        .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: active() })
+        .mockResolvedValueOnce({ doors_offered: OFFERED as SupportDoor[], open: null, ended: endedB })
+        .mockRejectedValueOnce(new Error("status unavailable"));
+      const user = userEvent.setup();
+      mount({ principal: "maya" });
+      await user.click(await screen.findByRole("button", { name: "End now" }));
+      await user.click(screen.getByRole("button", { name: "read again" }));
+      expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
+      await act(async () => release(endedA));
+      await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
+      expect(screen.getByTestId("support-ended").textContent).toContain(c.line);
+      cleanup();
+    }
+  });
+
   it("shows the ended line with Close, and Close is remembered for that grant", async () => {
     answer({ open: null, ended: active({ state: "ended", end_reason: "expired" }) });
     const user = userEvent.setup();
