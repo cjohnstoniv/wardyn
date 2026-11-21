@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -70,20 +71,44 @@ func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list people", err)
 		return
 	}
-	out := types.PersonList{People: make([]types.PersonSummary, len(page.People))}
+	out := personDirectoryPage{People: make([]personDirectoryEntry, len(page.People))}
 	for i, p := range page.People {
-		out.People[i] = types.PersonSummary{
+		out.People[i] = personDirectoryEntry{PersonSummary: types.PersonSummary{
 			Principal: p.Principal, Email: p.Email, IssuerKind: personIssuerKind(p),
 			PreCreated: p.PreCreated, FirstSignedInAt: p.FirstSignInAt, LastSignedInAt: p.LastSignInAt,
-			DeactivatedAt: p.DeactivatedAt, Role: roleOf(p),
+			DeactivatedAt: p.DeactivatedAt, Role: personRole(p, roleOf),
 			ActiveSessions: p.ActiveSessions, APITokens: p.APITokens, SSHKeys: p.SSHKeys,
 			Credentials: p.Credentials, ActiveRuns: p.ActiveRuns,
-		}
+		}, Issuer: p.PortalIssuer, InternalAddress: p.PortalInternalIssuer}
 	}
 	if page.Next != "" {
 		out.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(page.Next))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// personDirectoryEntry is one listed person. A portal person also carries the issuer its portal's identity
+// provider is and the internal address its binding fetches keys from ("" when the issuer's own address is
+// used); both are absent for everyone else.
+type personDirectoryEntry struct {
+	types.PersonSummary
+	Issuer          string `json:"issuer,omitempty"`
+	InternalAddress string `json:"internal_address,omitempty"`
+}
+
+// personDirectoryPage is one page of GET /people, types.PersonList with portal people's two address fields.
+type personDirectoryPage struct {
+	People     []personDirectoryEntry `json:"people"`
+	NextCursor string                 `json:"next_cursor,omitempty"`
+}
+
+// personRole is a person's role in the list. A portal person is always a user: no role mapping is read for
+// one, since none applies to a person the portal's own provider vouches for.
+func personRole(p store.PersonListing, roleOf func(store.PersonListing) string) string {
+	if p.PortalIssuer != "" {
+		return oidc.RoleUser
+	}
+	return roleOf(p)
 }
 
 // personIssuerKind names where a person's identity comes from. A local-mode seat ("local:" is
