@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -28,14 +29,14 @@ var pgEvents = map[string]func(*issuerPGRig, *testing.T){
 	"suspend":       (*issuerPGRig).suspend,
 }
 
-// openBlocked opens the relay stream at path in mode with a client that has stopped reading.
+// openBlocked opens the relay stream at path in mode, requires its 200, and then stops reading.
 func openBlocked(t *testing.T, rig *issuerPGRig, mode gatewayMode, path string, c *http.Cookie) chan time.Time {
 	t.Helper()
 	srv, ended := serveGateway(t, rig.issuerUIRig, mode, nil)
 	if mode == gwHTTP2 {
 		h2Unread(t, srv, rig.path(path), c)
 	} else {
-		rawRequest(t, srv, mode, rig.path(path), c, "")
+		awaitHeaders(t, rawRequest(t, srv, mode, rig.path(path), c, ""))
 	}
 	return ended
 }
@@ -48,9 +49,10 @@ func TestUIRelayIssuerPortal_BlockedClientWriteCutOnRevoke_PG(t *testing.T) {
 	for _, mode := range []gatewayMode{gwHTTP1, gwHTTP2} {
 		for name, event := range pgEvents {
 			t.Run(mode.String()+"/"+name, func(t *testing.T) {
-				rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
+				in := &inputLog{}
+				rig := newIssuerPGRig(t, streamBackend(in), renews)
 				ended := openBlocked(t, rig, mode, relayPath, rig.session(rig.grant))
-				requireOpen(t, ended, 500*time.Millisecond) // the client's buffers fill and the gateway's write blocks
+				requireBlocked(t, in, ended) // a 200 that streamed, then the gateway's write to its client pending
 				at := time.Now()
 				event(rig, t)
 				cutBy(t, mode.String()+" stream, client not reading, "+name, at, waitEnded(t, ended, 20*time.Second, name), relayEvery+relayBound+relaySlack)
@@ -105,14 +107,25 @@ func sendLines(w io.Writer) {
 	}
 }
 
-// chunkLines is a chunked request body whose every chunk is one timestamp line.
-type chunkLines struct{ w io.Writer }
-
-func (c chunkLines) Write(p []byte) (int, error) {
-	if _, err := fmt.Fprintf(c.w, "%x\r\n%s\r\n", len(p), p); err != nil {
-		return 0, err
+// duplexBody posts an endless request body of timestamp lines to path over HTTP/2, requires its 200, and reads
+// the answer that streams back meanwhile into the returned log.
+func duplexBody(t *testing.T, srv *httptest.Server, path string, c *http.Cookie) *readLog {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, pr)
+	req.AddCookie(c)
+	go sendLines(pw)
+	resp, err := srv.Client().Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK || resp.ProtoMajor != 2 {
+		t.Fatalf("the duplex body was not admitted: %v %v", resp, err)
 	}
-	return len(p), nil
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	out := newReadLog()
+	go out.readAll(resp.Body)
+	return out
 }
 
 // waitWithin polls cond until it holds, failing after within.
@@ -125,11 +138,11 @@ func waitWithin(t *testing.T, within time.Duration, what string, cond func() boo
 	}
 }
 
-// TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG: a renewable 101 and a streamed request body cross their
-// admitted end while the portal keeps minting the person successors. Traffic is shown flowing in each direction
-// the case claims (both for the 101, the viewer's input for the body) before the end; once the stream has ended
-// and the observers have returned, no viewer input sent after the end reached the backend, and no backend output
-// reached the viewer after it. The same with a revoke in place of the end.
+// TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG: a renewable 101 (HTTP/1) and a streamed request body whose
+// answer streams back at the same time (HTTP/2, full duplex) cross their admitted end while the portal keeps
+// minting the person successors. Traffic is shown flowing in both directions before the end; once the stream has
+// ended and the observers have returned, no viewer input sent after the end reached the backend, and, asserted
+// apart, no backend output reached the viewer after it. The same with a revoke in place of the end.
 func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 	setSupportWatch(t, relayEvery, relayBound)
 	for _, shape := range []string{"101", "request body"} {
@@ -143,7 +156,11 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 				}
 				end := rig.endIn(t, rig.grant, life)
 				c := rig.session(rig.grant)
-				srv, ended := serveGateway(t, rig.issuerUIRig, gwHTTP1, nil)
+				mode := gwHTTP1
+				if shape == "request body" {
+					mode = gwHTTP2
+				}
+				srv, ended := serveGateway(t, rig.issuerUIRig, mode, nil)
 				var out *readLog
 				if shape == "101" {
 					conn := rawRequest(t, srv, gwHTTP1, rig.path("/ws"), c, "Connection: Upgrade\r\nUpgrade: test\r\n")
@@ -156,8 +173,7 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					go out.readAll(br)
 					go sendLines(conn)
 				} else {
-					conn := rawMethod(t, srv, gwHTTP1, http.MethodPost, rig.path("/body"), c, "Transfer-Encoding: chunked\r\n")
-					go sendLines(chunkLines{conn})
+					out = duplexBody(t, srv, rig.path("/body"), c)
 				}
 				// Admitted and flowing in every claimed direction, before any successor or event.
 				opened := time.Now()

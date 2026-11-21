@@ -113,12 +113,15 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 	return rig
 }
 
+// suspend commits the person's suspension and returns the time just before the statement went out: the commit,
+// and so any cut it causes, lies after it, while a close before it is no cut by the suspend.
 func (rig *issuerAttachRig) suspend(t *testing.T) time.Time {
 	t.Helper()
+	before := time.Now()
 	if _, err := rig.env.st.Pool.Exec(context.Background(), `UPDATE principal_identities SET deactivated_at = now() WHERE principal = $1`, rig.person); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
-	return time.Now()
+	return before
 }
 
 // dial opens the terminal with a ticket the portal minted for the person, and returns the socket unread.

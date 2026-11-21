@@ -41,7 +41,10 @@ type inputLog struct {
 	sent  []time.Time
 	bytes int
 	fin   bool // the backend's reader returned
+	out   int  // bytes the /stream backend wrote and flushed
 }
+
+func (l *inputLog) streamed() int { l.mu.Lock(); defer l.mu.Unlock(); return l.out }
 
 func (l *inputLog) finish() { l.mu.Lock(); l.fin = true; l.mu.Unlock() }
 
@@ -71,7 +74,7 @@ func (l *inputLog) sentAfter(t time.Time) int {
 
 // streamBackend is the sandbox app: /stream an endless event stream, /hang headers that never come, /early a
 // 103 at the time ?at names and then a hang, /rogue101 a 101 to a request that asked for none, /body a read
-// of a streamed request body, and any upgrade a 101 that then writes without end (nothing with X-Quiet) and logs
+// of a streamed request body while an answer streams back, and any upgrade a 101 that then writes without end (nothing with X-Quiet) and logs
 // its input.
 func streamBackend(in *inputLog) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +111,9 @@ func streamBackend(in *inputLog) http.Handler {
 				if _, err := io.WriteString(w, chunk); err != nil || rc.Flush() != nil {
 					return
 				}
+				in.mu.Lock()
+				in.out += len(chunk)
+				in.mu.Unlock()
 			}
 		case strings.HasSuffix(r.URL.Path, "/hang"):
 			<-r.Context().Done()
@@ -126,11 +132,32 @@ func streamBackend(in *inputLog) http.Handler {
 			_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
 			time.Sleep(time.Second)
 		case strings.HasSuffix(r.URL.Path, "/body"):
+			rc := http.NewResponseController(w)
+			_ = rc.EnableFullDuplex() // the answer streams while the body is still being read
+			w.WriteHeader(http.StatusOK)
+			_ = rc.Flush()
+			wrote, read := make(chan struct{}), make(chan struct{})
+			go func() {
+				defer close(wrote)
+				for r.Context().Err() == nil {
+					select {
+					case <-read:
+						return
+					default:
+					}
+					if _, err := io.WriteString(w, "o\n"); err != nil || rc.Flush() != nil {
+						return
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}()
 			sc := bufio.NewScanner(r.Body)
 			for sc.Scan() {
 				in.add(sc.Text())
 			}
 			in.finish()
+			close(read)
+			<-wrote // the writer stops with the body, before the handler returns
 		default:
 			_, _ = io.WriteString(w, "app")
 		}
@@ -227,20 +254,61 @@ func awaitHeaders(t *testing.T, conn net.Conn) {
 	_ = conn.SetReadDeadline(time.Time{})
 }
 
-// h2Unread starts an HTTP/2 GET for path with cookie and never reads its body: flow control then blocks the
-// server's writes. The request ends with the test.
+// h2Unread starts an HTTP/2 GET for path with cookie, requires its 200, and never reads its body: flow control
+// then blocks the server's writes. The request ends with the test.
 func h2Unread(t *testing.T, srv *httptest.Server, path string, c *http.Cookie) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
 	req.AddCookie(c)
+	type answer struct {
+		code, major int
+		err         error
+	}
+	got := make(chan answer, 1)
 	go func() {
-		if resp, err := srv.Client().Do(req); err == nil {
-			<-ctx.Done()
-			_ = resp.Body.Close()
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			got <- answer{err: err}
+			return
 		}
+		got <- answer{code: resp.StatusCode, major: resp.ProtoMajor}
+		<-ctx.Done()
+		_ = resp.Body.Close()
 	}()
+	select {
+	case a := <-got:
+		if a.err != nil || a.code != http.StatusOK || a.major != 2 {
+			t.Fatalf("the HTTP/2 stream was not admitted: %d (HTTP/%d) %v", a.code, a.major, a.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the HTTP/2 stream never answered")
+	}
+}
+
+// requireBlocked fails unless the backend has streamed through the gateway and then stopped, with the request
+// still open: the gateway's write to its client is pending.
+func requireBlocked(t *testing.T, in *inputLog, ended <-chan time.Time) {
+	t.Helper()
+	last, still := -1, 0
+	for deadline := time.Now().Add(10 * time.Second); still < 2; {
+		select {
+		case <-ended:
+			t.Fatal("the stream ended before anything cut it")
+		case <-time.After(200 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the backend never stopped streaming (%d bytes): the gateway's write never blocked", in.streamed())
+		}
+		n := in.streamed()
+		if n > 0 && n == last {
+			still++
+		} else {
+			still = 0
+		}
+		last = n
+	}
 }
 
 // waitEnded waits for the gateway's request to end and returns when it did.
@@ -283,9 +351,17 @@ func cutBy(t *testing.T, what string, from, at time.Time, bound time.Duration) {
 // that ends in 5 minutes.
 func streamRig(t *testing.T) (*issuerUIRig, *http.Cookie) {
 	t.Helper()
-	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
+	rig, c, _ := streamRigLog(t)
+	return rig, c
+}
+
+// streamRigLog is streamRig with the backend's log.
+func streamRigLog(t *testing.T) (*issuerUIRig, *http.Cookie, *inputLog) {
+	t.Helper()
+	in := &inputLog{}
+	rig := newIssuerUIRig(t, streamBackend(in))
 	rig.is.renewal = true
-	return rig, rig.session(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+	return rig, rig.session(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute))), in
 }
 
 // wall is the wall-clock time of t on the rig's harness clock, as the gateway converts a stream's end.
@@ -567,14 +643,21 @@ func TestUIRelayIssuerPortal_PerWriteDeadlineBoundsBlockedClient(t *testing.T) {
 		extra string
 	}{{"HTTP1 stream", gwHTTP1, relayPath, ""}, {"HTTP2 stream", gwHTTP2, relayPath, ""}, {"HTTP1 101", gwHTTP1, "/ws", "Connection: Upgrade\r\nUpgrade: test\r\n"}} {
 		t.Run(tc.name, func(t *testing.T) {
-			rig, c := streamRig(t)
+			rig, c, in := streamRigLog(t)
 			srv, ended := serveGateway(t, rig, tc.mode, nil)
-			if tc.mode == gwHTTP2 {
+			switch {
+			case tc.mode == gwHTTP2:
 				h2Unread(t, srv, rig.path(tc.path), c)
-			} else {
+			case tc.path == relayPath:
+				awaitHeaders(t, rawRequest(t, srv, tc.mode, rig.path(tc.path), c, tc.extra))
+			default:
 				rawRequest(t, srv, tc.mode, rig.path(tc.path), c, tc.extra)
 			}
-			requireOpen(t, ended, 500*time.Millisecond)
+			if tc.path == relayPath {
+				requireBlocked(t, in, ended)
+			} else {
+				requireOpen(t, ended, 500*time.Millisecond)
+			}
 			at := time.Now()
 			rig.revoke()
 			cutBy(t, tc.name+" (per-write fallback)", at, waitEnded(t, ended, 15*time.Second, tc.name), bound)

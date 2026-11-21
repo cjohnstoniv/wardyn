@@ -81,6 +81,9 @@ func issuerEventsEvents() map[string]func(*issuerEventsEnv, *testing.T) {
 		},
 		"person purged": func(e *issuerEventsEnv, t *testing.T) {
 			tombstonePerson(t, e.st, e.principal)
+			if _, err := e.st.GetPortalGrantByRaw(context.Background(), e.raw, time.Now()); err != nil {
+				t.Fatalf("the grant did not stay live across the tombstone: %v", err)
+			}
 		},
 		"unit moves out of the pin": func(e *issuerEventsEnv, t *testing.T) {
 			team := e.team
