@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"golang.org/x/net/http2/hpack"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // An issuer portal's run-events stream on Postgres: its authority runs beside it every beat, each lookup
@@ -216,6 +218,52 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 		t.Fatalf("revoke the portal: %v", err)
 	}
 	cutBy(t, "HTTP2 event stream, client not reading", at, streamSlotFreed(t, e.h.srv, 20*time.Second), eventsBeat+eventsBound+relaySlack)
+}
+
+// TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG: the run's unit moves out of the pin
+// while the stream's setup is delayed past a beat, after its authorization read; the stream is refused before
+// its backlog goes. Control: the same delay with no move serves the backlog.
+func TestRunEventsIssuerPortal_PinChangeDuringDelayedSetupReleasesNoBacklog_PG(t *testing.T) {
+	for _, move := range []bool{true, false} {
+		t.Run(map[bool]string{true: "unit moves out", false: "control"}[move], func(t *testing.T) {
+			e := newIssuerEventsEnv(t)
+			e.h.srv.runEvents.emit(e.run.ID, client.RunEvent{Type: client.RunEventPulling, At: time.Now()}) // the backlog
+			e.h.srv.runEvents.onSetup = func() {
+				if move {
+					team := e.team
+					team.ParentID = &e.other.ID
+					if _, err := e.st.UpsertGovernanceUnit(context.Background(), team); err != nil {
+						t.Errorf("move the run's unit: %v", err)
+					}
+				}
+				time.Sleep(2 * eventsBeat)
+			}
+			ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
+			t.Cleanup(ts.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			resp := openEventsAs(t, ctx, ts.URL, e.run.ID, e.raw)
+			if !move {
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("control: %d", resp.StatusCode)
+				}
+				br := bufio.NewReader(resp.Body)
+				for {
+					line, err := br.ReadString('\n')
+					if err != nil {
+						t.Fatalf("control: the backlog never came: %v", err)
+					}
+					if strings.Contains(line, client.RunEventPulling) {
+						return
+					}
+				}
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusForbidden || strings.Contains(string(body), client.RunEventPulling) {
+				t.Fatalf("a stream whose run left the pin during its setup: %d %q, want 403 and no backlog", resp.StatusCode, body)
+			}
+		})
+	}
 }
 
 // TestRunEventsIssuerPortal_BlockedLookupStillEnds_PG: the grant table is locked, so the next tick's lookup

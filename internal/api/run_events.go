@@ -74,6 +74,8 @@ type runEventHub struct {
 	beat, hold, write time.Duration
 	// onBatch, when set, runs at the top of each batch of an issuer portal's stream, after its wake: tests only.
 	onBatch func(*streamCut)
+	// onSetup, when set, runs as an issuer portal's stream is set up, after its authorization: tests only.
+	onSetup func()
 	// streams counts each principal's open streams (maxRunEventStreams).
 	streams map[runEventStreamer]int
 	// publish, when set, sends the events this replica itself emits to the others
@@ -288,7 +290,12 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSponsorOrAdmin)
+	// An issuer portal's stream is bounded from admission: its opening reads are bounded, and its first
+	// re-check is timed from here (runEventsIssuerCut).
+	admitted, admittedAt := time.Now(), s.cfg.Now().UTC()
+	ar, endOpening := s.runEventsOpening(r)
+	run, ok := s.getRunAuthorizedBy(w, ar, id, s.ownsRunOrSponsorOrAdmin)
+	endOpening()
 	if !ok {
 		return
 	}
@@ -307,8 +314,12 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 	openedAt := s.cfg.Now().UTC()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("X-Accel-Buffering", "no")
-	ctx, w, cut, stop := s.runEventsIssuerCut(r, w, id, principal, openedAt)
+	ctx, w, cut, stop, refusal := s.runEventsIssuerCut(r, w, id, principal, admitted, admittedAt)
 	defer stop()
+	if refusal != nil {
+		writeErrorReason(w, refusal.status, refusal.reason, refusal.msg)
+		return
+	}
 	rc := http.NewResponseController(w)
 	deadline := rc.SetWriteDeadline
 	if cut != nil {
@@ -358,7 +369,7 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
 			if cut == nil && (s.sessionRevokedSince(r, principal, openedAt) || s.delegationEndedSince(r)) {
 				return
 			}
-			if cur, err := s.cfg.Store.GetRun(r.Context(), id); err == nil {
+			if cur, err := s.cfg.Store.GetRun(ctx, id); err == nil {
 				s.runEvents.settle(id, cur.State)
 			}
 		case <-hold.C:
@@ -423,34 +434,65 @@ func (s *Server) delegationEndedSince(r *http.Request) bool {
 	return err != nil
 }
 
+// runEventsOpening is r with its authorization reads bounded by supportWatchWait for an issuer portal's
+// stream, and r as it is for any other; the func ends the bound.
+func (s *Server) runEventsOpening(r *http.Request) (*http.Request, func()) {
+	via, delegated := audit.DelegationFrom(r.Context())
+	if _, principal := actorFromRequest(r); !delegated || !issuerPortalPerson(&via, principal) {
+		return r, func() {}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
+	return r.WithContext(ctx), cancel
+}
+
 // runEventsIssuerCut is the guarded cut over an issuer portal's event stream, and ctx, w and a no-op stop for
 // any other request. The stream ends at its grant's end, and its authority runs beside it, every beat from
-// openedAt, each lookup bounded by supportWatchWait: the grant (its portal's revoke included), the person's
-// session cutoff, the person's identity and the portal's pin on the current tree. A check that fails cuts the
-// stream, a blocked write included, so it ends within one beat and the bound of the event (20 s).
-func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runID uuid.UUID, principal string, openedAt time.Time) (context.Context, http.ResponseWriter, *streamCut, func()) {
+// admitted, each lookup bounded by supportWatchWait: the grant (its portal's revoke included), the person's
+// session cutoff since admittedAt, the person's identity and the portal's pin on the current tree. A check that
+// fails cuts the stream, a blocked write included, so it ends within one beat and the bound of the event
+// (20 s). A setup that took a beat or longer is checked afresh before any event goes, and a refusal of that
+// check, or of the grant's read, is returned to be answered instead of the stream.
+func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runID uuid.UUID, principal string, admitted, admittedAt time.Time) (context.Context, http.ResponseWriter, *streamCut, func(), *uiDialError) {
 	via, delegated := audit.DelegationFrom(r.Context())
 	if !delegated || !issuerPortalPerson(&via, principal) {
-		return r.Context(), w, nil, func() {}
+		return r.Context(), w, nil, func() {}, nil
 	}
-	ctx, cancel := context.WithCancel(r.Context())
-	end, v := s.delegationLive(ctx, via)
-	hardEnd := time.Now()
-	if v == verdictOK {
-		hardEnd = time.Now().Add(end.Sub(s.cfg.Now()))
+	if s.runEvents.onSetup != nil {
+		s.runEvents.onSetup()
 	}
-	cut := newStreamCut(w, hardEnd, cancel) // a grant no longer live: the stream ends before its first write
 	every := cmp.Or(s.runEvents.beat, runEventsBeat)
 	bound := time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
-	opened := time.Now()
-	cut.watch(ctx, opened.Add(every), every, bound, func(lctx context.Context) error {
-		return s.runEventsIssuerHolds(lctx, principal, via, runID, openedAt)
-	})
+	check := func(lctx context.Context) error {
+		return s.runEventsIssuerHolds(lctx, principal, via, runID, admittedAt)
+	}
+	none := func() {}
+	lctx, lcancel := context.WithTimeout(r.Context(), bound)
+	end, v := s.delegationLive(lctx, via)
+	var err error
+	if v == verdictOK && time.Since(admitted) >= every {
+		err = check(lctx)
+	}
+	lcancel()
+	switch {
+	case v.unavailable() || (err != nil && !errors.Is(err, errRunEventsAuthorityEnded)):
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusServiceUnavailable, reason: uiDeniedReasonRevocationUnavailable, msg: runEventsUnverifiableMsg}
+	case v != verdictOK || err != nil:
+		return r.Context(), w, nil, none, &uiDialError{status: http.StatusForbidden, reason: uiDeniedReasonRevoked, msg: runEventsNoLongerAuthorizedMsg}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	cut := newStreamCut(w, time.Now().Add(end.Sub(s.cfg.Now())), cancel)
+	cut.watch(ctx, admitted.Add(every), every, bound, check)
 	return ctx, cut.Writer(w), cut, func() {
 		defer cancel()
 		cut.End()
-	}
+	}, nil
 }
+
+// The answers to an issuer portal's stream whose setup check refused or could not be made.
+const (
+	runEventsNoLongerAuthorizedMsg = "This event stream is no longer authorized; open it again"
+	runEventsUnverifiableMsg       = "Could not verify this event stream; try again"
+)
 
 // errRunEventsAuthorityEnded is an issuer portal's event stream whose re-check refused.
 var errRunEventsAuthorityEnded = errors.New("api: this event stream is no longer authorized")
