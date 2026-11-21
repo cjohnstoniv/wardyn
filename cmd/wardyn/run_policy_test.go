@@ -288,7 +288,7 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			"# api.anthropic.com: Inspected\n",
 			"# pypi.org: Tunnel only\n",
 			"# Inspected: Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.\n",
-			"# Tunnel only: Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.\n",
+			"# Tunnel only: Wardyn passes this traffic through without reading it. It sees only the host name. Wardyn leaves the TLS connection intact, but a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.\n",
 		} {
 			if !strings.Contains(head, want) {
 				t.Errorf("missing %q in:\n%s", want, head)
