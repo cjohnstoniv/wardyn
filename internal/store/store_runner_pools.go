@@ -107,13 +107,7 @@ type RunnerPoolDeletion struct {
 	OrgDefaultsBefore *types.RunnerPoolDefaults
 	OrgDefaultsAfter  *types.RunnerPoolDefaults
 	// CancelledRuns are the runs that were waiting for the pool and were ended KILLED with it.
-	CancelledRuns []CancelledRun
-}
-
-// CancelledRun is a run a pool's removal ended while it waited, and when it joined the queue.
-type CancelledRun struct {
-	ID       uuid.UUID
-	QueuedAt time.Time
+	CancelledRuns []uuid.UUID
 }
 
 const runnerPoolCols = `id, name, scope, COALESCE(owner, ''), state, revision, limits, created_at, updated_at, recording`

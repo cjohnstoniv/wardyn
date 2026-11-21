@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -12,13 +11,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -273,33 +270,5 @@ func TestJSONEqual(t *testing.T) {
 	}
 	if jsonEqual(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":2}`)) || jsonEqual(json.RawMessage(`{`), json.RawMessage(`{}`)) {
 		t.Error("different or unreadable documents compare equal")
-	}
-}
-
-// A pool's removal records each cancelled run's real wait in the queue histogram, not zero: two runs that waited
-// 90 s and 10 min add 690 s and land in the 300 s and 900 s buckets, not both in the first.
-func TestAuditPoolRemovalCancelsRecordsEachRunsWait(t *testing.T) {
-	h := newHarness(t)
-	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
-	cfg := baseTestConfig(h, newAuthzStore())
-	cfg.Now = func() time.Time { return now }
-	srv := New(cfg)
-	srv.auditPoolRemovalCancels(context.Background(), []store.CancelledRun{
-		{ID: uuid.New(), QueuedAt: now.Add(-90 * time.Second)},
-		{ID: uuid.New(), QueuedAt: now.Add(-10 * time.Minute)},
-		{ID: uuid.New(), QueuedAt: now.Add(time.Minute)}, // a clock ahead of the stamp reads as no wait
-	})
-	var out bytes.Buffer
-	srv.metrics.write(&out)
-	for _, want := range []string{
-		`wardyn_runner_pool_queue_wait_seconds_bucket{outcome="cancelled",le="60"} 1`,
-		`wardyn_runner_pool_queue_wait_seconds_bucket{outcome="cancelled",le="300"} 2`,
-		`wardyn_runner_pool_queue_wait_seconds_bucket{outcome="cancelled",le="900"} 3`,
-		`wardyn_runner_pool_queue_wait_seconds_sum{outcome="cancelled"} 690`,
-		`wardyn_runner_pool_queue_wait_seconds_count{outcome="cancelled"} 3`,
-	} {
-		if !strings.Contains(out.String(), want+"\n") {
-			t.Errorf("metrics lack %q", want)
-		}
 	}
 }
