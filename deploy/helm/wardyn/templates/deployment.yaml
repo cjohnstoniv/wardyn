@@ -127,6 +127,13 @@ chart can read.
 {{- $eff := dict -}}
 {{- range $k, $v := .Values.env }}{{ $_ := set $eff $k (toString $v) }}{{ end -}}
 {{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
+{{- /*
+wardynd answers TLS on its public listener when both WARDYN_TLS_CERT and WARDYN_TLS_KEY are set (cmd/wardynd:
+tlsEnabled), and a plaintext probe then gets 400, so the pod never becomes ready and the startup probe restarts it.
+$nativeTLS reads $eff, like every guard here; a valueFrom entry reads as set. Behind a terminating ingress
+(WARDYN_TLS_TERMINATED) the listener stays plain HTTP and the probes keep the default scheme.
+*/ -}}
+{{- $nativeTLS := and (ne (get $eff "WARDYN_TLS_CERT") "") (ne (get $eff "WARDYN_TLS_KEY") "") -}}
 {{- $xeLast := dict -}}
 {{- range $i, $e := .Values.extraEnv }}{{ $_ := set $xeLast ($e.name | toString) $i }}{{ end -}}
 {{- if hasKey $eff "WARDYN_HA" -}}
@@ -793,6 +800,9 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -812,6 +822,9 @@ spec:
             httpGet:
               path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/readyz") | quote }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 3
             periodSeconds: 10
             timeoutSeconds: 3
@@ -828,6 +841,9 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 5
             # 5s periods over 30s connect + WARDYN_MIGRATE_TIMEOUT + 120s slack (see $startupFailureThreshold).
             failureThreshold: {{ $startupFailureThreshold }}

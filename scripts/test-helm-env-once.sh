@@ -11,6 +11,7 @@
 #     extraEnv, a key-service setting plus extraEnv, env plus extraEnv, extraEnv twice, k8s runner names in env and
 #     extraEnv, and the metrics listener in extraEnv;
 #   - the all-on render repeats no name, and an unrelated extraEnv entry adds exactly itself to the default env;
+#   - the probes' scheme is HTTPS exactly when both WARDYN_TLS_CERT and WARDYN_TLS_KEY are set non-empty;
 #   - when BASE is a git rev, the default and all-on renders are byte-identical to that commit's chart.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -98,6 +99,30 @@ render "${BASAL[@]}" --set 'extraEnv[0].name=WARDYN_ENV_ONCE_PROBE' --set 'extra
 [[ "$(names "$TMP/probe.out")" == "$(names "$TMP/default.out")"$'\n'WARDYN_ENV_ONCE_PROBE ]] \
   || die "an unrelated extraEnv entry changed the rest of the default env, or did not render last"
 ok "an unrelated extraEnv entry adds only itself"
+
+# The probes follow the public listener: HTTPS when env or extraEnv sets both WARDYN_TLS_CERT and WARDYN_TLS_KEY, the
+# default scheme otherwise (one alone, behind a terminating ingress, or neither).
+probe_schemes() { # <render file>: the liveness, readiness and startup scheme, "-" where none is set
+  y 'select(.kind == "Deployment") | .spec.template.spec.containers[0] | [.livenessProbe.httpGet.scheme // "-", .readinessProbe.httpGet.scheme // "-", .startupProbe.httpGet.scheme // "-"] | join(" ")' "$1"
+}
+tls_cert=(--set-string env.WARDYN_TLS_CERT=/certs/tls.crt)
+tls_key=(--set-string env.WARDYN_TLS_KEY=/certs/tls.key)
+for c in "default:-:- - -" "both in env:cert key:HTTPS HTTPS HTTPS" "cert only:cert:- - -" "key only:key:- - -" \
+         "terminated ingress:term:- - -" "both, cert in extraEnv:extra:HTTPS HTTPS HTTPS" "both, key emptied by extraEnv:empty:- - -"; do
+  IFS=: read -r label which want <<<"$c"
+  args=("${BASAL[@]}")
+  case "$which" in
+    *cert*key*) args+=("${tls_cert[@]}" "${tls_key[@]}") ;;
+    cert) args+=("${tls_cert[@]}") ;;
+    key) args+=("${tls_key[@]}") ;;
+    term) args+=(--set-string env.WARDYN_TLS_TERMINATED=true) ;;
+    extra) args+=("${tls_key[@]}" --set 'extraEnv[0].name=WARDYN_TLS_CERT' --set 'extraEnv[0].value=/certs/tls.crt') ;;
+    empty) args+=("${tls_cert[@]}" "${tls_key[@]}" --set 'extraEnv[0].name=WARDYN_TLS_KEY' --set-string 'extraEnv[0].value=') ;;
+  esac
+  render "${args[@]}" >"$TMP/probe.out"
+  [[ "$(probe_schemes "$TMP/probe.out")" == "$want" ]] || die "probe schemes ($label) are $(probe_schemes "$TMP/probe.out"), want $want"
+  ok "probe schemes, $label: $want"
+done
 
 # Byte-identity to the commit before this change, when the caller names one.
 if [[ -n "${BASE:-}" ]]; then
