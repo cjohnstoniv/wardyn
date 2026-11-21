@@ -165,53 +165,160 @@ func TestPortalSuspend_KillClaimBelongsToItsAcquisition_PG(t *testing.T) {
 	}
 }
 
-// A worker that claimed a kill and died leaves its claim id on the row. While the lease runs, a claim-less write (a
-// failure before any claim, the finish of a step that owes no kill) is refused; once it has run out such a write owns
-// the row, so the spared finish closes it on the next pass instead of being refused on every one, and it closes with no
-// receipt pinned, since no kill is counted for it.
-func TestPortalSuspend_ClaimLessWriteOwnsARowWhoseLeaseRanOut_PG(t *testing.T) {
+// madeAfterReactivation makes the run one a reactivated person made after the suspension's bound: the person is active
+// again and the database stamped the run later than the bound, so the tail's run selection spares it.
+func madeAfterReactivation(t *testing.T, l *portalLife, principal string, c claimedKill) {
+	t.Helper()
+	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != 200 {
+		t.Fatalf("reactivate = %d", w.Code)
+	}
+	if _, err := l.pool.Exec(context.Background(), `UPDATE agent_runs SET inserted_at = clock_timestamp() + interval '1 day' WHERE id = $1`, c.run); err != nil {
+		t.Fatal(err)
+	}
+	spared, err := l.st.RunsInsertedAfter(context.Background(), c.id, []uuid.UUID{c.run}, c.bound)
+	if err != nil || !spared[c.run] {
+		t.Fatalf("control: the run is not one the selection spares (%v, %v)", spared, err)
+	}
+}
+
+// jobOf is the kill row's state, claim and receipt columns and its recorded kill count, for comparing before and after.
+func jobOf(t *testing.T, l *portalLife, id uuid.UUID) string {
+	t.Helper()
+	var out string
+	if err := l.pool.QueryRow(context.Background(), `SELECT state || '|' || attempts || '|' || last_error || '|killed=' || COALESCE(detail->>'runs_killed', '-') || '|pinned=' || (audit_event_id IS NOT NULL)::text
+		FROM deprovision_jobs WHERE id = $1`, id).Scan(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// A worker that applied a kill and died has killed the run, whatever its lease says: the claim pinned the run.kill
+// receipt in the transaction that moved the run. When the person has been reactivated and the run is one the selection
+// would now spare, the next pass still owes that kill: it takes the row over, finishes the teardown, stores the same
+// receipt once and counts one kill, instead of closing the row with no kill and no receipt.
+func TestPortalSuspend_AppliedKillOfALostWorkerIsRecoveredAfterReactivation_PG(t *testing.T) {
 	l := newPortalLife(t)
 	ctx := context.Background()
 	principal, _ := l.signIn(t, "u1")
 	run := l.seedRun(t, principal, types.RunRunning)
 	c := killRowOf(t, l, principal, run)
-	got, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run, From: types.RunRunning, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
-	if err != nil || !got.Applied {
-		t.Fatalf("the dead worker's claim = %+v, %v", got, err)
+	lost, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run, From: types.RunRunning, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+	if err != nil || !lost.Applied {
+		t.Fatalf("the lost worker's claim = %+v, %v", lost, err)
 	}
-	row := func() string {
-		var out string
-		if err := l.pool.QueryRow(ctx, `SELECT state || '|' || attempts || '|' || last_error || '|' || (audit_event_id IS NOT NULL)::text FROM deprovision_jobs WHERE id = $1`, c.key.ID).Scan(&out); err != nil {
-			t.Fatal(err)
-		}
-		return out
-	}
-	// Inside the lease the claim holds: neither a claim-less failure nor a claim-less finish takes the row.
-	before := row()
-	if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, c.key, errors.New("before any claim")); !errors.Is(err, store.ErrKillHeld) {
-		t.Errorf("a claim-less failure inside the lease = %v, want ErrKillHeld", err)
-	}
-	if err := l.st.FinishSuspensionJobAt(ctx, c.id, c.key, nil, c.bound); !errors.Is(err, store.ErrKillHeld) {
-		t.Errorf("a claim-less finish inside the lease = %v, want ErrKillHeld", err)
-	}
-	if after := row(); after != before {
-		t.Fatalf("a refused write changed the row: %q -> %q", before, after)
-	}
-	// The worker is dead: its lease has run out.
 	if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET kill_claimed_at = now() - interval '10 minutes' WHERE id = $1`, c.key.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, c.key, errors.New("before any claim")); err != nil {
-		t.Errorf("a claim-less failure after the lease = %v, want it recorded", err)
+	madeAfterReactivation(t, l, principal, c)
+	sweep := portalSweepOrigin()
+	sctx := withPortalSuspensionBound(withActor(ctx, sweep.actorType, sweep.actor), c.id, c.bound)
+	if err := l.h.srv.killStep(sctx, sweep, l.st, c.id, c.forms.targets); err != nil {
+		t.Fatalf("the replacement pass: %v", err)
 	}
-	if got := row(); got != "pending|1|before any claim|true" {
-		t.Errorf("row after the claim-less failure = %q, want pending, one attempt, the error, the pinned receipt kept", got)
+	if got := jobOf(t, l, c.key.ID); got != "done|1||killed=1|pinned=true" {
+		t.Errorf("row after the replacement = %q, want done under one kill with the receipt still pinned", got)
 	}
-	if err := l.st.FinishSuspensionJobAt(ctx, c.id, c.key, map[string]int{"runs_killed": 0}, c.bound); err != nil {
-		t.Errorf("the spared finish after the lease = %v, want nil", err)
+	if n := l.count(t, `SELECT count(*) FROM audit_events WHERE id = $1 AND action = 'run.kill'`, lost.ReceiptID); n != 1 {
+		t.Errorf("the pinned receipt is stored %d times, want once", n)
 	}
-	if got := row(); got != "done|2||false" {
-		t.Errorf("row after the spared finish = %q, want done, two attempts, no error and no receipt pinned", got)
+}
+
+// A run nobody claimed that a reactivated person made after the bound is owed no kill: its row closes with no teardown,
+// no receipt and a count of zero, and the run is left alone.
+func TestPortalSuspend_UntouchedRunMadeAfterReactivationIsSparedReceiptless_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, _ := l.signIn(t, "u1")
+	run := l.seedRun(t, principal, types.RunRunning)
+	c := killRowOf(t, l, principal, run)
+	madeAfterReactivation(t, l, principal, c)
+	kills := l.run.killCount()
+	sweep := portalSweepOrigin()
+	sctx := withPortalSuspensionBound(withActor(ctx, sweep.actorType, sweep.actor), c.id, c.bound)
+	if err := l.h.srv.killStep(sctx, sweep, l.st, c.id, c.forms.targets); err != nil {
+		t.Fatalf("the pass: %v", err)
+	}
+	if got := jobOf(t, l, c.key.ID); got != "done|1||killed=0|pinned=false" {
+		t.Errorf("row after the pass = %q, want done, zero kills, no receipt", got)
+	}
+	if got := l.runState(t, run); got != types.RunRunning || l.run.killCount() != kills {
+		t.Errorf("the spared run is %s after %d runner calls, want RUNNING and none", got, l.run.killCount()-kills)
+	}
+}
+
+// Once a kill was applied, only a holder of a claim closes its row, and only while the row is pending: the former
+// claimant's late finish after another worker took over is refused and leaves the final detail as it was; a claim-less
+// finish (the spared path) of a row that pins a kill is refused whether the lease holds, ran out or was released; and a
+// failure that named no claim is recorded once the lease ran out.
+func TestPortalSuspend_FinishAfterATakeoverIsFencedToTheNewClaim_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, _ := l.signIn(t, "u1")
+	run := l.seedRun(t, principal, types.RunRunning)
+	c := killRowOf(t, l, principal, run)
+	claim := func(from types.RunState) store.KillClaim {
+		got, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run, From: from, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+		if err != nil || !got.Applied {
+			t.Fatalf("claim from %s = %+v, %v", from, got, err)
+		}
+		return got
+	}
+	age := func() {
+		if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET kill_claimed_at = now() - interval '10 minutes' WHERE id = $1`, c.key.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := claim(types.RunRunning)
+	spared := c.key // the spared path names no claim
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, spared, map[string]int{"runs_killed": 0}, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less finish inside the lease = %v, want ErrKillHeld", err)
+	}
+	age()
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, spared, map[string]int{"runs_killed": 0}, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less finish after the lease ran out = %v, want ErrKillHeld", err)
+	}
+	if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, spared, errors.New("before any claim")); err != nil {
+		t.Errorf("a claim-less failure after the lease ran out = %v, want it recorded", err)
+	}
+	if got := jobOf(t, l, c.key.ID); got != "pending|1|before any claim|killed=-|pinned=true" {
+		t.Errorf("row after the failure = %q, want pending, one attempt, the receipt still pinned", got)
+	}
+	// The claim is released after a failed teardown: the row has no claim, and still pins the kill it applied.
+	if err := l.st.ReleaseSuspensionKillAt(ctx, c.id, c.key, first.ClaimID); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, spared, map[string]int{"runs_killed": 0}, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less finish of a released row that applied a kill = %v, want ErrKillHeld", err)
+	}
+	// The replacement takes the repair claim, stores the receipt and finishes with its count.
+	second := claim(types.RunKilled)
+	ev := types.AuditEvent{ID: second.ReceiptID, Time: second.ReceiptAt, RunID: &run, ActorType: types.ActorSystem, Actor: portalLifecycleActor, Action: "run.kill", Target: run.String(), Outcome: "success"}
+	if err := (store.Recorder{Pool: l.pool}).Record(store.WithAuditReplay(ctx), ev); err != nil {
+		t.Fatal(err)
+	}
+	newKey := c.key
+	newKey.Claim = second.ClaimID
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, newKey, map[string]int{"runs_killed": 1}, c.bound); err != nil {
+		t.Fatalf("the replacement's finish = %v", err)
+	}
+	done := jobOf(t, l, c.key.ID)
+	if want := "done|2||killed=1|pinned=true"; done != want {
+		t.Fatalf("row after the replacement = %q, want %q", done, want)
+	}
+	// The former claimant finishes late with a different count; the replacement's own claim cannot finish twice either.
+	oldKey := c.key
+	oldKey.Claim = first.ClaimID
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, oldKey, map[string]int{"runs_killed": 0}, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("the former claimant's late finish = %v, want ErrKillHeld", err)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, newKey, map[string]int{"runs_killed": 9}, c.bound); err != nil {
+		t.Errorf("a second finish under the same claim = %v, want nil and no write", err)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, spared, map[string]int{"runs_killed": 0}, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("a claim-less finish of a finished kill row = %v, want ErrKillHeld", err)
+	}
+	if got := jobOf(t, l, c.key.ID); got != done {
+		t.Errorf("a late finish changed the finished row: %q -> %q", done, got)
 	}
 }
 
