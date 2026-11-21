@@ -55,6 +55,7 @@ func newIssuerEventsEnv(t *testing.T) *issuerEventsEnv {
 	run := e.run(t, principal, &e.team.ID, d.ID)
 	e.h.srv.runEvents.beat = eventsBeat
 	setSupportWatch(t, time.Hour, eventsBound)
+	setIssuerAdmit(t, 2*time.Second) // a short watch bound; the opening reads on Postgres under -race get room
 	return &issuerEventsEnv{authorityEnv: e, d: d, principal: principal, raw: raw, run: run}
 }
 
@@ -372,6 +373,8 @@ func TestRunEventsIssuerPortal_FirstRunLookupAnswers_PG(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newIssuerEventsEnv(t)
+			const bound = time.Second
+			setIssuerAdmit(t, bound)
 			f := newFlakyEventsStore(e.st)
 			tc.set(f)
 			e.h.srv.cfg.Store = f
@@ -385,8 +388,8 @@ func TestRunEventsIssuerPortal_FirstRunLookupAnswers_PG(t *testing.T) {
 			if resp.StatusCode != tc.want || !strings.Contains(string(body), tc.reason) {
 				t.Fatalf("%s: %d %q, want %d %s", tc.name, resp.StatusCode, body, tc.want, tc.reason)
 			}
-			if d := time.Since(start); d > eventsBound+400*time.Millisecond {
-				t.Errorf("%s: answered %v after the open, want within the %v bound", tc.name, d, eventsBound)
+			if d := time.Since(start); d > bound+400*time.Millisecond {
+				t.Errorf("%s: answered %v after the open, want within the %v bound", tc.name, d, bound)
 			}
 		})
 	}

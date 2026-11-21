@@ -33,14 +33,25 @@ func viewerCut(w http.ResponseWriter, r *http.Request, cutAt time.Time) (context
 func TestUIDesktopIssuerPortal_CutInterruptsHandshakeFlush(t *testing.T) {
 	conns := make(chan *stallConn, 4)
 	result := make(chan error, 1)
+	held := make(chan *stallConn, 1)
 	srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
 		sc := <-conns
+		held <- sc
 		_, c, cw := viewerCut(w, r, time.Now().Add(200*time.Millisecond))
 		defer c.End()
 		sc.stall(true)
 		cw.WriteHeader(http.StatusSwitchingProtocols)
 		_, _, err := cw.(http.Hijacker).Hijack()
 		result <- err
+	})
+	// Registered after the server's Close, so it runs first: a flush the cut never reached is released and the
+	// failure below is reported, not the package timeout while Close waits on the handler.
+	t.Cleanup(func() {
+		select {
+		case sc := <-held:
+			sc.stall(false)
+		default:
+		}
 	})
 	raw := dialUpgrade(t, srv)
 	defer raw.Close()

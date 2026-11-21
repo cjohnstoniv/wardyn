@@ -47,7 +47,7 @@ func openBlocked(t *testing.T, rig *issuerPGRig, mode gatewayMode, path string, 
 // client not reading, is cut within one re-check of a portal revoke and of a suspend. One of the renewal
 // gate's measures: each subtest logs the stream's end after the event.
 func TestUIRelayIssuerPortal_BlockedClientWriteCutOnRevoke_PG(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	for _, mode := range []gatewayMode{gwHTTP1, gwHTTP2} {
 		for name, event := range pgEvents {
 			t.Run(mode.String()+"/"+name, func(t *testing.T) {
@@ -87,6 +87,9 @@ func (l *readLog) stampedAfter(t time.Time) int {
 }
 
 func newReadLog() *readLog { return &readLog{done: make(chan struct{})} }
+
+// stampCount is how many frame stamps readAll parsed.
+func (l *readLog) stampCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.stamps) }
 
 func (l *readLog) after(t time.Time) int {
 	l.mu.Lock()
@@ -174,6 +177,16 @@ func duplexBody(t *testing.T, srv *httptest.Server, path string, c *http.Cookie)
 	return out
 }
 
+// chunkLines is a chunked request body whose every chunk is one timestamp line.
+type chunkLines struct{ w io.Writer }
+
+func (c chunkLines) Write(p []byte) (int, error) {
+	if _, err := fmt.Fprintf(c.w, "%x\r\n%s\r\n", len(p), p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
 // waitWithin polls cond until it holds, failing after within.
 func waitWithin(t *testing.T, within time.Duration, what string, cond func() bool) {
 	t.Helper()
@@ -184,14 +197,14 @@ func waitWithin(t *testing.T, within time.Duration, what string, cond func() boo
 	}
 }
 
-// TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG: a renewable 101 (HTTP/1) and a streamed request body whose
-// answer streams back at the same time (HTTP/2, full duplex) cross their admitted end while the portal keeps
-// minting the person successors. Traffic is shown flowing in both directions before the end; once the stream has
+// TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG: a renewable 101 (HTTP/1), a streamed request body whose
+// answer streams back at the same time (HTTP/2, full duplex) and a streamed upload with no answer yet (HTTP/1,
+// input only) cross their admitted end while the portal keeps minting the person successors. Traffic is shown flowing in both directions before the end; once the stream has
 // ended and the observers have returned, no viewer input sent after the end reached the backend, and, asserted
 // apart, no backend output reached the viewer after it. The same with a revoke in place of the end.
 func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
-	for _, shape := range []string{"101", "request body"} {
+	setRelayWatch(t, relayEvery)
+	for _, shape := range []string{"101", "request body", "upload"} {
 		for _, by := range []string{"end", "revoke"} {
 			t.Run(shape+"/"+by, func(t *testing.T) {
 				in := &inputLog{}
@@ -218,6 +231,9 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					out = newReadLog()
 					go out.readAll(br)
 					go sendLines(conn)
+				} else if shape == "upload" { // admitted is shown by the input reaching the backend
+					conn := rawMethod(t, srv, gwHTTP1, http.MethodPost, rig.path("/upload"), c, "Transfer-Encoding: chunked\r\n")
+					go sendLines(chunkLines{conn})
 				} else {
 					out = duplexBody(t, srv, rig.path("/body"), c)
 				}
@@ -253,8 +269,13 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					chainEnd, _, err := rig.env.st.PortalChainLive(context.Background(), rig.d.ID, rig.principal, rig.grant.ChainID)
 					return err == nil && minted.Load() > 0 && chainEnd.After(end)
 				})
+				admitted := end
 				if by == "revoke" {
 					time.Sleep(500 * time.Millisecond)
+					// Far enough before the admitted end that a cut by the end could not pass for the revoke's.
+					if left := time.Until(admitted); left < relayEvery+relayBound+relaySlack {
+						t.Fatalf("the revoke lands %v before the admitted end, inside the window a revoke's cut may take", left)
+					}
 					evented.Store(true)
 					end = time.Now()
 					rig.revokePortal(t)
@@ -266,6 +287,9 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					cutWithin(t, shape+" (end): the stream ended", at, end, relaySlack)
 				} else {
 					cutBy(t, shape+" (revoke)", end, at, relayEvery+relayBound+relaySlack)
+					if !at.Before(admitted) {
+						t.Fatalf("%s (revoke): ended %v, not before the admitted end %v", shape, at, admitted)
+					}
 				}
 				if in.sentAfter(end.Add(-time.Minute)) == 0 {
 					t.Fatal("no viewer input crossed the stream at all")
@@ -287,6 +311,9 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 					case <-time.After(5 * time.Second):
 						t.Fatal("the viewer's reader never returned")
 					}
+					if out.stampCount() == 0 {
+						t.Fatal("no frame stamp was read: nothing below tells output after the end from a drain")
+					}
 					if n := out.stampedAfter(limit); n != 0 {
 						t.Errorf("the viewer read %d frames the backend sent after the stream ended", n)
 					}
@@ -299,7 +326,7 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 // TestUIRenewal_ChainEndJustAfterCleanTickCutsAtEnd_PG: the chain's end falls just after a clean tick, with no
 // successor; the stream is cut at the end, not at the next tick.
 func TestUIRenewal_ChainEndJustAfterCleanTickCutsAtEnd_PG(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	t.Run("no successor", func(t *testing.T) {
 		rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
 		end := rig.endIn(t, rig.grant, relayEvery+relayEvery/10) // a tick at relayEvery passes clean
@@ -312,7 +339,7 @@ func TestUIRenewal_ChainEndJustAfterCleanTickCutsAtEnd_PG(t *testing.T) {
 // TestUIRenewal_BlockedClientCutAtChainEnd_PG: a renewable stream whose client has stopped reading, on HTTP/1
 // and on HTTP/2, is cut at the end its chain had at admission.
 func TestUIRenewal_BlockedClientCutAtChainEnd_PG(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound)
+	setRelayWatch(t, time.Hour)
 	for _, mode := range []gatewayMode{gwHTTP1, gwHTTP2} {
 		t.Run(mode.String(), func(t *testing.T) {
 			rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
@@ -354,7 +381,7 @@ func (rig *issuerPGRig) successorTo(t *testing.T, signedEnd time.Time) {
 // from the same last subject token. The open stream ends at its admitted end; the app's next request is served
 // and opens a new stream, which ends at that token's signed end: no stream outlives it.
 func TestUIRenewal_OpenStreamEndsAtAdmittedEndWhilePortalExchanges_PG(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
 	admitted := rig.endIn(t, rig.grant, 2*time.Second)
 	c := rig.session(rig.grant)
@@ -383,7 +410,7 @@ func TestUIRenewal_OpenStreamEndsAtAdmittedEndWhilePortalExchanges_PG(t *testing
 // that a ticket minted before the event, a new relay request and a desktop open are all refused.
 func eventRefusesEverything(t *testing.T, event func(*issuerPGRig, *testing.T), what string) {
 	t.Helper()
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig := newIssuerPGRig(t, streamBackend(&inputLog{}))
 	c := rig.session(rig.grant)
 	ticket := rig.ticket(rig.grant)

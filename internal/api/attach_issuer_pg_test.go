@@ -32,8 +32,17 @@ import (
 type issuerAttachStore struct {
 	*authorityUnits
 	store.PortalGrantStore
-	pg    store.PG
-	reads *runReadHook
+	pg        store.PG
+	reads     *runReadHook
+	grantHang *atomic.Bool // while set, a grant read waits for its context to end
+}
+
+func (s issuerAttachStore) GetPortalGrantByID(ctx context.Context, id uuid.UUID, now time.Time) (types.PortalGrant, error) {
+	if s.grantHang != nil && s.grantHang.Load() {
+		<-ctx.Done()
+		return types.PortalGrant{}, ctx.Err()
+	}
+	return s.PortalGrantStore.GetPortalGrantByID(ctx, id, now)
 }
 
 // runReadHook answers the rig's run reads through hook, when set, from the second after n is reset on (the
@@ -103,15 +112,16 @@ func (a *issuerAttachAudit) Record(ctx context.Context, ev types.AuditEvent) err
 }
 
 type issuerAttachRig struct {
-	env    *authorityEnv
-	srv    *Server
-	ts     *httptest.Server
-	runner *holderTestRunner
-	audit  *issuerAttachAudit
-	run    types.AgentRun
-	via    types.DelegationVia
-	person string
-	reads  *runReadHook
+	env       *authorityEnv
+	srv       *Server
+	ts        *httptest.Server
+	runner    *holderTestRunner
+	audit     *issuerAttachAudit
+	run       types.AgentRun
+	via       types.DelegationVia
+	person    string
+	reads     *runReadHook
+	grantHang *atomic.Bool
 }
 
 func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
@@ -124,12 +134,13 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 		t.Fatalf("read the seeded grant: %v", err)
 	}
 	ast := newAuthzStore()
-	reads := &runReadHook{}
-	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st, reads: reads}
+	reads, grantHang := &runReadHook{}, &atomic.Bool{}
+	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st,
+		reads: reads, grantHang: grantHang}
 	cfg := baseTestConfig(newHarness(t), st)
 	rig := &issuerAttachRig{env: e, runner: &holderTestRunner{}, person: principal,
 		audit: &issuerAttachAudit{held: make(chan time.Time, 1), detached: make(chan time.Time, 4)},
-		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads}
+		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads, grantHang: grantHang}
 	cfg.Audit, cfg.Runner, cfg.SessionRevocations = rig.audit, rig.runner, newAttachRevocations()
 	rig.srv = New(cfg)
 	rig.srv.authorityTest = attachAuthorityTimings{every: relayEvery, lookup: relayBound}
@@ -261,18 +272,20 @@ func TestAttachIssuerPortal_BlockedWriterCutOnSuspend_PG(t *testing.T) {
 
 // TestAttachIssuerPortal_OpeningRunReadAnswers_PG: after redemption, the terminal's run read stalls, fails or
 // finds no run. A stall and an outage answer the retryable 503 within the opening bound; a missing run the 404 a
-// missing run gets on this route.
+// missing run gets on this route. The body names the terminal's own 503, apart from redemption's, and the hook
+// shows the read after redemption is the one answered.
 func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
-	const bound = 200 * time.Millisecond
+	const bound = time.Second // the Postgres reads before the stalled one fit inside it under -race
 	setSupportWatch(t, time.Hour, bound)
 	for _, tc := range []struct {
 		name string
 		hook func(ctx context.Context) error
 		code int
+		body string
 	}{
-		{"stall", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, http.StatusServiceUnavailable},
-		{"outage", func(context.Context) error { return errors.New("store down") }, http.StatusServiceUnavailable},
-		{"missing", func(context.Context) error { return store.ErrNotFound }, http.StatusNotFound},
+		{"stall", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, http.StatusServiceUnavailable, attachUnverifiableMsg},
+		{"outage", func(context.Context) error { return errors.New("store down") }, http.StatusServiceUnavailable, attachUnverifiableMsg},
+		{"missing", func(context.Context) error { return store.ErrNotFound }, http.StatusNotFound, reasonRunNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newIssuerAttachRig(t)
@@ -281,9 +294,10 @@ func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
 			if err != nil {
 				t.Fatalf("mint a ticket: %v", err)
 			}
+			var hit atomic.Bool
 			rig.reads.mu.Lock()
 			rig.reads.n = 0 // count from the dial on
-			rig.reads.hook = tc.hook
+			rig.reads.hook = func(ctx context.Context) error { hit.Store(true); return tc.hook(ctx) }
 			rig.reads.mu.Unlock()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -296,6 +310,12 @@ func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
 			if resp == nil || resp.StatusCode != tc.code {
 				t.Fatalf("%s: %v %v, want %d", tc.name, resp, err, tc.code)
 			}
+			if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), tc.body) {
+				t.Fatalf("%s: answered %s, want %s", tc.name, body, tc.body)
+			}
+			if !hit.Load() {
+				t.Fatalf("%s: the read after redemption was never asked: the answer came from another read", tc.name)
+			}
 			if d := time.Since(start); d > bound+400*time.Millisecond {
 				t.Errorf("%s: answered %v after the dial, want within the %v bound", tc.name, d, bound)
 			}
@@ -307,7 +327,7 @@ func TestAttachIssuerPortal_OpeningRunReadAnswers_PG(t *testing.T) {
 // thaw waits for it. The wait runs under the opening deadline and answers the retryable 503 within the bound,
 // not when the lock frees.
 func TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG(t *testing.T) {
-	const bound = 200 * time.Millisecond
+	const bound = time.Second
 	setSupportWatch(t, time.Hour, bound)
 	rig := newIssuerAttachRig(t)
 	_, unlock, err := rig.srv.lockRunOp(context.Background(), rig.run.ID)
@@ -332,10 +352,59 @@ func TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG(t *testing.T) {
 	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("a held run lock: %v %v, want the retryable 503", resp, err)
 	}
-	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), uiDeniedReasonRevocationUnavailable) {
-		t.Fatalf("a held run lock answered %s, want %s", body, uiDeniedReasonRevocationUnavailable)
+	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), uiDeniedReasonRevocationUnavailable) || !strings.Contains(string(body), attachUnverifiableMsg) {
+		t.Fatalf("a held run lock answered %s, want %s: %s", body, uiDeniedReasonRevocationUnavailable, attachUnverifiableMsg)
 	}
 	if took > bound+400*time.Millisecond {
 		t.Fatalf("the open waited %v on the run's lock, want within %v", took, bound+400*time.Millisecond)
+	}
+}
+
+// TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG: the thaw waits on the run's lock for part of the
+// opening bound, and once it frees the grant can no longer be read in time. The socket still opens, at the grant
+// end redemption read: setup that spends the bound never turns a live grant into an ended one.
+func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
+	const bound = 2 * time.Second
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerAttachRig(t)
+	_, unlock, err := rig.srv.lockRunOp(context.Background(), rig.run.ID)
+	if err != nil {
+		t.Fatalf("hold the run's lock: %v", err)
+	}
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			unlock()
+		}
+	}()
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
+		rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
+	if err != nil {
+		t.Fatalf("mint a ticket: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	type dialed struct {
+		c    *websocket.Conn
+		resp *http.Response
+		err  error
+	}
+	got := make(chan dialed, 1)
+	go func() {
+		c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tok, nil)
+		got <- dialed{c, resp, err}
+	}()
+	time.Sleep(bound / 3) // redemption is done; the thaw waits on the lock
+	rig.grantHang.Store(true)
+	unlock()
+	unlocked = true
+	select {
+	case d := <-got:
+		if d.err != nil {
+			t.Fatalf("a live grant after a slow setup: %v %v, want the terminal open", d.resp, d.err)
+		}
+		_ = d.c.CloseNow()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the terminal never answered")
 	}
 }

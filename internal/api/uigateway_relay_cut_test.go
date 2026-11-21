@@ -33,7 +33,16 @@ const (
 	relayEvery = time.Second
 	relayBound = 167 * time.Millisecond
 	relaySlack = 400 * time.Millisecond
+	relayAdmit = 2 * time.Second // the opening reads' own bound: a stream is admitted before it can be cut
 )
+
+// setRelayWatch scales the relay watch (setSupportWatch at relayBound) and gives the opening reads relayAdmit,
+// so a cut test's admission does not race the scaled lookup bound, on Postgres under -race included.
+func setRelayWatch(t *testing.T, every time.Duration) {
+	t.Helper()
+	setSupportWatch(t, every, relayBound)
+	setIssuerAdmit(t, relayAdmit)
+}
 
 // inputLog records what the backend of a switched stream read: each line's send time, as the client stamped it.
 type inputLog struct {
@@ -74,7 +83,8 @@ func (l *inputLog) sentAfter(t time.Time) int {
 
 // streamBackend is the sandbox app: /stream an endless event stream, /hang headers that never come, /early a
 // 103 at the time ?at names and then a hang, /rogue101 a 101 to a request that asked for none, /body a read
-// of a streamed request body while an answer streams back, and any upgrade a 101 that then writes without end (nothing with X-Quiet) and logs
+// of a streamed request body while an answer streams back, /upload a read of one with no answer until it ends,
+// and any upgrade a 101 that then writes without end (nothing with X-Quiet), counting what it streamed, and logs
 // its input.
 func streamBackend(in *inputLog) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +103,11 @@ func streamBackend(in *inputLog) http.Handler {
 				}
 				pad := " " + strings.Repeat("o", 32<<10) + "\n"
 				for { // each frame starts with its send time (readLog.stampedAfter)
-					if _, err := io.WriteString(conn, strconv.FormatInt(time.Now().UnixNano(), 10)+pad); err != nil {
+					n, err := io.WriteString(conn, strconv.FormatInt(time.Now().UnixNano(), 10)+pad)
+					in.mu.Lock()
+					in.out += n // what the backend streamed (inputLog.streamed)
+					in.mu.Unlock()
+					if err != nil {
 						return
 					}
 				}
@@ -158,6 +172,12 @@ func streamBackend(in *inputLog) http.Handler {
 			in.finish()
 			close(read)
 			<-wrote // the writer stops with the body, before the handler returns
+		case strings.HasSuffix(r.URL.Path, "/upload"): // input only: nothing is answered until the body ends
+			sc := bufio.NewScanner(r.Body)
+			for sc.Scan() {
+				in.add(sc.Text())
+			}
+			in.finish()
 		default:
 			_, _ = io.WriteString(w, "app")
 		}
@@ -235,11 +255,14 @@ func rawMethod(t *testing.T, srv *httptest.Server, mode gatewayMode, method, pat
 }
 
 // awaitHeaders reads conn's response through its header block, so the request was admitted before the test goes on.
-func awaitHeaders(t *testing.T, conn net.Conn) {
+func awaitHeaders(t *testing.T, conn net.Conn) { t.Helper(); awaitStatus(t, conn, " 200 ") }
+
+// awaitStatus is awaitHeaders for a response whose status line holds code (" 101 " for a switch).
+func awaitStatus(t *testing.T, conn net.Conn, code string) {
 	t.Helper()
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReader(conn)
-	if line, err := br.ReadString('\n'); err != nil || !strings.Contains(line, " 200 ") {
+	if line, err := br.ReadString('\n'); err != nil || !strings.Contains(line, code) {
 		t.Fatalf("the stream was not admitted: %q %v", line, err)
 	}
 	for {
@@ -380,7 +403,7 @@ func (rig *issuerUIRig) path(p string) string { return uiRelayPrefix(rig.run.ID,
 // TestUIRenewal_OpenStreamStopsWithin35s: an open event stream, a request whose headers never come and a
 // 101 are each cut within one re-check of a portal revoke, renewal on.
 func TestUIRenewal_OpenStreamStopsWithin35s(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	cases := map[string]struct{ path, extra string }{
 		"event stream":    {relayPath, ""},
 		"delayed headers": {"/hang", ""},
@@ -402,7 +425,7 @@ func TestUIRenewal_OpenStreamStopsWithin35s(t *testing.T) {
 // TestUIRenewal_CheckOutageStopsWithin35s: a re-check whose store hangs is cut at its lookup bound: the
 // stream ends within one tick and the bound.
 func TestUIRenewal_CheckOutageStopsWithin35s(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
 	rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, "")
@@ -417,7 +440,7 @@ func TestUIRenewal_CheckOutageStopsWithin35s(t *testing.T) {
 // TestUIRenewal_OpenStreamCutAtAbsoluteExpiry: a renewable stream crosses its cookie's absolute end, issue
 // time plus the session TTL, while the portal keeps exchanging, and is cut at it.
 func TestUIRenewal_OpenStreamCutAtAbsoluteExpiry(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	rig.is.renewal = true
 	rig.srv.cfg.UISessionTTL = 3 * time.Second
@@ -446,7 +469,7 @@ func TestUIRenewal_OpenStreamCutAtAbsoluteExpiry(t *testing.T) {
 // check's portal read, while the rest of that check runs, is seen by the first tick, which is timed from the
 // check's start: the stream is cut within one tick and the bound of the commit.
 func TestUIRenewal_RevokeBetweenAdmissionReadsCutWithin35s(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
 	committed := make(chan time.Time, 1)
@@ -472,7 +495,7 @@ func endsAt(t *testing.T, rig *issuerUIRig, c *http.Cookie, end time.Time, what 
 // TestUIIssuerPortal_NonRenewableStreamEndsAtGrantExpiry: with renewal off, an open stream ends at its entry
 // grant's end, though a later grant lives.
 func TestUIIssuerPortal_NonRenewableStreamEndsAtGrantExpiry(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound)
+	setRelayWatch(t, time.Hour)
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(2*time.Second))
 	c := rig.session(a)
@@ -483,7 +506,7 @@ func TestUIIssuerPortal_NonRenewableStreamEndsAtGrantExpiry(t *testing.T) {
 // TestPortalDisable_OpenStreamsEndAtGrantExpiry: a person the identity provider disabled gets no further
 // grant, so a renewable session's open stream ends at the end its chain had when it was admitted.
 func TestPortalDisable_OpenStreamsEndAtGrantExpiry(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound)
+	setRelayWatch(t, time.Hour)
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	rig.is.renewal = true
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(2*time.Second))
@@ -493,7 +516,7 @@ func TestPortalDisable_OpenStreamsEndAtGrantExpiry(t *testing.T) {
 // TestUIIssuerPortal_LocalTTLShorterThanGrantCuts: a serving TTL shorter than the grant's remaining life
 // cuts the stream at the TTL.
 func TestUIIssuerPortal_LocalTTLShorterThanGrantCuts(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound)
+	setRelayWatch(t, time.Hour)
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	c := rig.session(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(time.Hour)))
 	rig.srv.cfg.UISessionTTL = 3 * time.Second // this process's own TTL, shorter than the one the cookie was minted under
@@ -503,7 +526,7 @@ func TestUIIssuerPortal_LocalTTLShorterThanGrantCuts(t *testing.T) {
 // TestUIRenewal_WatchInstalledBeforePresenceWork: the presence work after admission stalls (the idle clock's
 // store write hangs), and the watch still cuts the request within one tick and the bound of admission.
 func TestUIRenewal_WatchInstalledBeforePresenceWork(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
 	stalled := make(chan time.Time, 1)
 	rig.is.mu.Lock()
@@ -524,7 +547,7 @@ func TestUIRenewal_WatchInstalledBeforePresenceWork(t *testing.T) {
 // cookie behind a stream already open on a new server, which keeps serving to its admitted end. A console
 // portal's session, default off, carries no chain and is checked the same way by both.
 func TestUIRenewal_MixedReplicas(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
 	rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, "") // open on the new server
@@ -572,7 +595,7 @@ func decodeCookie(t *testing.T, h *uiHarness, c *http.Cookie) uiSession {
 // TestUIRelayIssuerPortal_CutBeforeHijackRefusesSwitch: the cut lands between the backend's 101 and the
 // hijack. The switch is refused and no byte reaches the client after the cut.
 func TestUIRelayIssuerPortal_CutBeforeHijackRefusesSwitch(t *testing.T) {
-	setSupportWatch(t, 50*time.Millisecond, relayBound)
+	setRelayWatch(t, 50*time.Millisecond)
 	rig, c := streamRig(t)
 	hook := func(sc *streamCut) {
 		rig.revoke()
@@ -593,7 +616,7 @@ func TestUIRelayIssuerPortal_CutBeforeHijackRefusesSwitch(t *testing.T) {
 
 // TestUIRelayIssuerPortal_CutAfterHijackClosesSocket: a 101 on HTTP/1, then a revoke; the socket closes.
 func TestUIRelayIssuerPortal_CutAfterHijackClosesSocket(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
 	conn := rawRequest(t, srv, gwHTTP1, rig.path("/ws"), c, "Connection: Upgrade\r\nUpgrade: test\r\n")
@@ -629,9 +652,9 @@ func TestUIRelayIssuerPortal_UpgradeOnHTTP2Refused(t *testing.T) {
 
 // TestUIRelayIssuerPortal_PerWriteDeadlineBoundsBlockedClient: with the concurrent interrupt off, a blocked
 // streaming answer (HTTP/1 and HTTP/2) and a blocked 101 still end within the check bound plus one
-// per-write deadline.
+// per-write deadline. Each leg is admitted (its 200 or 101 read) and its write shown pending before the revoke.
 func TestUIRelayIssuerPortal_PerWriteDeadlineBoundsBlockedClient(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	streamCutNoInterrupt.Store(true)
 	streamOpWriteNS.Store(int64(time.Second))
 	t.Cleanup(func() { streamCutNoInterrupt.Store(false); streamOpWriteNS.Store(0) })
@@ -651,13 +674,9 @@ func TestUIRelayIssuerPortal_PerWriteDeadlineBoundsBlockedClient(t *testing.T) {
 			case tc.path == relayPath:
 				awaitHeaders(t, rawRequest(t, srv, tc.mode, rig.path(tc.path), c, tc.extra))
 			default:
-				rawRequest(t, srv, tc.mode, rig.path(tc.path), c, tc.extra)
+				awaitStatus(t, rawRequest(t, srv, tc.mode, rig.path(tc.path), c, tc.extra), " 101 ")
 			}
-			if tc.path == relayPath {
-				requireBlocked(t, in, ended)
-			} else {
-				requireOpen(t, ended, 500*time.Millisecond)
-			}
+			requireBlocked(t, in, ended)
 			at := time.Now()
 			rig.revoke()
 			cutBy(t, tc.name+" (per-write fallback)", at, waitEnded(t, ended, 15*time.Second, tc.name), bound)
@@ -668,7 +687,7 @@ func TestUIRelayIssuerPortal_PerWriteDeadlineBoundsBlockedClient(t *testing.T) {
 // TestUIRelayIssuerPortal_InterimResponseBoundedByEnd: the backend sends a 103 to a client that is not
 // reading, 1 s before the stream's end. The interim write returns by the end, and nothing is written after it.
 func TestUIRelayIssuerPortal_InterimResponseBoundedByEnd(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound)
+	setRelayWatch(t, time.Hour)
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(3*time.Second))
 	c := rig.session(a)
@@ -692,7 +711,7 @@ func TestUIRelayIssuerPortal_InterimResponseBoundedByEnd(t *testing.T) {
 // after the cut, and Cut closes the socket without waiting for a close_notify the client would never read.
 // One of the renewal gate's measures: a relayed 101 with a client that has stopped reading.
 func TestUIRelayIssuerPortal_CutDuringStalledTLSShutdownStopsInput(t *testing.T) {
-	setSupportWatch(t, relayEvery, relayBound)
+	setRelayWatch(t, relayEvery)
 	for _, by := range []string{"revoke", "end"} {
 		t.Run(by, func(t *testing.T) {
 			in := &inputLog{}
@@ -767,7 +786,7 @@ func earlier(a, b time.Time) time.Time {
 // TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd: a 101 whose backend sends nothing, with the viewer still
 // sending, crosses its end: only the end stops the input, and no line sent after it reaches the backend.
 func TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd(t *testing.T) {
-	setSupportWatch(t, time.Hour, relayBound) // no re-check due: the end alone must cut
+	setRelayWatch(t, time.Hour) // no re-check due: the end alone must cut
 	in := &inputLog{}
 	rig := newIssuerUIRig(t, streamBackend(in))
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(2*time.Second))
