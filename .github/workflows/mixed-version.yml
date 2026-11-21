@@ -77,7 +77,16 @@ jobs:
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
           cluster_name: wardyn-mixed
+          # The k8s runner refuses to boot on a cluster whose CNI does not enforce NetworkPolicy (its egress
+          # canary), and kind's default kindnet does not: the conformance config and the pinned Calico below
+          # are ci.yml's conformance-k8s recipe.
+          config: deploy/kind/conformance-kind-config.yaml
           wait: 90s
+      - name: Install Calico (single-file, version-pinned manifest, NetworkPolicy enforcement)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=180s
+          kubectl -n kube-system rollout status deployment/calico-kube-controllers --timeout=180s
       - name: Load the new image into kind, pull the old one
         run: |
           set -euo pipefail
@@ -105,7 +114,7 @@ jobs:
             -f .github/mixed-version/values.yaml \
             --set image.repository=wardyn/wardynd --set image.tag=kind-test \
             --set auth.adminToken.value="$ADMIN_TOKEN"
-          kubectl -n "$NS" rollout status deployment/new-wardyn --timeout=180s
+          kubectl -n "$NS" rollout status deployment/new-wardyn --timeout=300s
       - name: Install the old replica (published image, break-glass migration check, WARDYN_HA)
         run: |
           set -euo pipefail
@@ -114,7 +123,7 @@ jobs:
             --set image.repository="$OLD_IMAGE" --set image.tag="$OLD_TAG" \
             --set auth.adminToken.value="$ADMIN_TOKEN" \
             --set 'extraEnv[0].name=WARDYN_ALLOW_UNKNOWN_MIGRATIONS' --set-string 'extraEnv[0].value=true'
-          kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=180s || {
+          kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=300s || {
             kubectl -n "$NS" logs deployment/old-wardyn --tail=100; exit 1; }
       - name: Find the old replica's database session
         run: |
