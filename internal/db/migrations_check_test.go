@@ -543,7 +543,7 @@ func closedEnumChecks() []closedEnumCheck {
 		// "who is this row written against". Pinned here so a fourth subject
 		// type cannot land on two tables' CHECKs and not the third's.
 		//
-		// THIS ONE TABLE DIFFERS: it also accepts types.DriveSubjectPortal (0296),
+		// THIS ONE TABLE DIFFERS: it also accepts types.DriveSubjectPortal (0297),
 		// which names an issuer portal and is a drive allocation's subject only.
 		// capability_grants and governance_assignments never learn it, so they stay
 		// on the four capability subject types.

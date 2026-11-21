@@ -497,7 +497,7 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // wall_preset (0248, types.AgentRun.WallPreset) and image_admission (types.AgentRun.ImageAdmission) are in
 // runCols too, and a queued start rewrites both. proxy_addr (0275) is read through COALESCE AS proxy_addr,
 // so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names. data_out
-// (0292, types.AgentRun.DataOut) is written only by RaiseRunDataOut. portal_drives (0296, types.AgentRun.PortalDrives) is in
+// (0292, types.AgentRun.DataOut) is written only by RaiseRunDataOut. portal_drives (0297, types.AgentRun.PortalDrives) is in
 // runCols too and never changes after the insert.
 const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission, portal_drives`
 
