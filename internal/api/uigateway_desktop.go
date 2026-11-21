@@ -725,6 +725,10 @@ type viewerHijack struct {
 	frames *rfbfilter.ClientFrames
 }
 
+// Unwrap hands the server's writer to http.ResponseController, so a deadline set on the viewer reaches the
+// connection: an issuer portal's cut interrupts a blocked handshake flush through it (desktopIssuerCut).
+func (v *viewerHijack) Unwrap() http.ResponseWriter { return v.ResponseWriter }
+
 func (v *viewerHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
 	if err != nil {
@@ -744,6 +748,10 @@ type checkedConn struct {
 }
 
 func (c checkedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// NetConn is the hijacked connection under the check, so a cut closes the transport itself (closeRawConn), not
+// through a TLS close.
+func (c checkedConn) NetConn() net.Conn { return c.Conn }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
 // made, re-encoded by the filter, so no mask is ever set.

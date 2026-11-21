@@ -6,6 +6,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -818,5 +819,39 @@ func TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket(t *testing.T) {
 	_ = raw.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := io.Copy(io.Discard, raw); isTimeout(err) {
 		t.Error("the connection is still open")
+	}
+}
+
+// wrappedConn is a connection wrapper that gives up its connection, as the desktop's frame-checked reader does.
+type wrappedConn struct {
+	net.Conn
+	closed bool
+}
+
+func (w *wrappedConn) Close() error      { w.closed = true; return w.Conn.Close() }
+func (w *wrappedConn) NetConn() net.Conn { return w.Conn }
+
+// TestStreamCut_CloseRawConnUnwrapsWrappers: a cut closes the transport under every wrapper that gives up its
+// connection, never through a wrapper's own Close (for TLS, the one that sends close_notify first): a wrapper
+// over a wrapper over the socket, and a TLS connection over the socket.
+func TestStreamCut_CloseRawConnUnwrapsWrappers(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	raw := &wrappedConn{Conn: a} // the socket: records its Close
+	mid := &wrappedConn{Conn: struct{ net.Conn }{raw}}
+	outer := &wrappedConn{Conn: mid}
+	closeRawConn(outer)
+	if outer.closed || mid.closed {
+		t.Errorf("a wrapper's own Close ran (outer %v, middle %v)", outer.closed, mid.closed)
+	}
+	if !raw.closed {
+		t.Error("the transport under both wrappers was not closed")
+	}
+	c, d := net.Pipe()
+	defer d.Close()
+	raw2 := &wrappedConn{Conn: c}
+	closeRawConn(&wrappedConn{Conn: tls.Client(struct{ net.Conn }{raw2}, &tls.Config{InsecureSkipVerify: true})}) // #nosec G402 -- never handshakes
+	if !raw2.closed {
+		t.Error("the transport under a TLS connection was not closed")
 	}
 }

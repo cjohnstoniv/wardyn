@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"cmp"
 	"context"
-	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net"
@@ -204,12 +203,20 @@ func (c *streamCut) cutSwitched(conn net.Conn, closers []func()) {
 	}
 }
 
-// closeRawConn closes the transport under conn: for TLS the connection beneath it, because tls.Conn.Close
-// first sends close_notify under a fresh write deadline, and the peer could still deliver input meanwhile.
+// netConner is a connection that wraps another and gives it up: *tls.Conn, and a wrapper of the server's
+// hijacked connection (the desktop's frame-checked reader) that must not hide the transport under it.
+type netConner interface{ NetConn() net.Conn }
+
+// closeRawConn closes the transport under conn, through every wrapper that gives up its connection: for TLS the
+// connection beneath it, because tls.Conn.Close first sends close_notify under a fresh write deadline, and the
+// peer could still deliver input meanwhile.
 func closeRawConn(conn net.Conn) {
-	if tc, ok := conn.(*tls.Conn); ok {
-		_ = tc.NetConn().Close()
-		return
+	for {
+		w, ok := conn.(netConner)
+		if !ok {
+			break
+		}
+		conn = w.NetConn()
 	}
 	_ = conn.Close()
 }
