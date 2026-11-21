@@ -41,3 +41,13 @@ func (s *Server) requiredImageSignersRefusal(ctx context.Context, field string, 
 	}
 	return ""
 }
+
+// unitRequiredSignersRefusal is why req names a required_image_signers signer the site does not define, or "": on
+// the profile's own limits and on its overlay.
+func (s *Server) unitRequiredSignersRefusal(ctx context.Context, req governanceUnitRequest) string {
+	msg := s.requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	return msg
+}

@@ -440,16 +440,6 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
 }
 
-// unitRequiredSignersRefusal is why req names a required_image_signers signer the site does not define, or "": on
-// the profile's own limits and on its overlay.
-func (s *Server) unitRequiredSignersRefusal(ctx context.Context, req governanceUnitRequest) string {
-	msg := s.requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	return msg
-}
-
 // unitWriteSuccessData is a stored write's governance.unit.write row data, with the unit admin's scope when one
 // wrote it. A PUT that created the profile is logged here, before the row is recorded.
 func (s *Server) unitWriteSuccessData(r *http.Request, id uuid.UUID, saved types.GovernanceUnit, effective *ResolvedUnit,
