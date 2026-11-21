@@ -62,10 +62,10 @@ func scanPortalGrant(row pgx.Row) (types.PortalGrant, error) {
 // mint and the next one finds it done; then the per-(portal, person) advisory lock; then one read of the
 // database clock, which decides everything after it. The grant ends at min(signedEnd, dbnow + grantTTL), and a
 // mint with less than five seconds of life left is ErrSubjectTokenStale, nothing written. Lock order: the
-// binding, the portal's row, the per-(portal, person) advisory lock, then the person's identity row FOR SHARE
-// (ErrPortalPersonPurged when the person is purged, nothing written). The purge and the credential erase hold
-// only identity rows, taken FOR UPDATE, so neither can wait on a lock a mint holds and a mint waits for them
-// at its last lock: no cycle. The grant joins
+// binding, the portal's row, the per-(portal, person) advisory lock, the per-person advisory lock, then the
+// person's identity row FOR SHARE (ErrPortalPersonPurged when the person is purged, nothing written). The
+// purge holds only the identity row (FOR UPDATE) and the credential erase only per-person locks, neither of
+// which waits on a lock a mint holds, and a mint waits for them at its last two locks: no cycle. The grant joins
 // the chain of the person's latest-expiring grant through this portal that is live at dbnow, or starts one.
 //
 // Nothing in the transaction writes delegates: two people's mints through one portal both hold its row
@@ -85,10 +85,15 @@ func (s PG) MintPortalGrant(ctx context.Context, g types.PortalGrant, raw string
 		if _, err = q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text || $2, 0))`, g.DelegateID, g.Principal); err != nil {
 			return fmt.Errorf("store: lock portal grant mints: %w", err)
 		}
-		// The person's identity row FOR SHARE, held to commit: a permanent purge or a credential erase of this
-		// person takes it FOR UPDATE, so it either finished before this read, and the mint is refused, or waits
-		// for this commit and then deletes the grant and the history written here. A person with no identity
-		// row records no history below.
+		// The person's own lock, shared with the credential erase and taken whether or not the identity row
+		// exists yet: the erase either commits before the grant and the history are written, or waits for this
+		// commit and deletes both.
+		if _, err = q.Exec(ctx, `SELECT pg_advisory_xact_lock(`+portalPersonLockKey("$1::text")+`)`, g.Principal); err != nil {
+			return fmt.Errorf("store: lock portal person: %w", err)
+		}
+		// The person's identity row FOR SHARE, held to commit: a permanent purge takes it FOR UPDATE, so it
+		// either finished before this read, and the mint is refused, or waits for this commit and then deletes
+		// the history written here. A person with no identity row records no history below.
 		var purged bool
 		err = q.QueryRow(ctx, `SELECT purged_at IS NOT NULL FROM principal_identities WHERE issuer = $1 AND principal = $2 FOR SHARE`,
 			types.PortalPersonPrefix+key, g.Principal).Scan(&purged)
@@ -253,4 +258,11 @@ func (s PG) SweepExpiredPortalGrants(ctx context.Context, at time.Time) (int64, 
 		return 0, fmt.Errorf("store: sweep portal grants: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// portalPersonLockKey is the SQL for the advisory lock key of one portal person, from the SQL expression of the
+// person's principal. The mint and the credential erase both take this lock, so it must not depend on a row
+// that may not exist yet.
+func portalPersonLockKey(principal string) string {
+	return `hashtextextended('portal-person:' || ` + principal + `, 0)`
 }

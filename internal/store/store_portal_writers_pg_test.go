@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
@@ -18,12 +19,12 @@ import (
 // Every writer of a list that can name a person calls the ruling itself, not only the shared helper: each is
 // driven here with a portal person. A refuse list refuses one whose issuer is bound as well as one whose
 // issuer is not (ErrDelegatePersonNotAllowed). An allow list refuses one of an unbound issuer
-// (ErrDelegatePersonUnknownPortal), and lets the ruling pass one of a bound issuer, so the write goes on to
-// fail or succeed on its own account.
+// (ErrDelegatePersonUnknownPortal) and stores one of a bound issuer, which is read back.
 func TestPortalSubjectRuling_EveryWriterRules_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
-	bound := types.PortalPrincipal(newIssuerPortal(t, st, "").Key, "alice")
+	p := newIssuerPortal(t, st, "")
+	bound := types.PortalPrincipal(p.Key, "alice")
 	unbound := types.PortalPrincipal(types.PortalIssuerKey("https://never-bound.example.com"), "alice")
 	user := types.CapabilitySubjectUser
 	keys := keydomain.NewService(pool, nil)
@@ -59,39 +60,54 @@ func TestPortalSubjectRuling_EveryWriterRules_PG(t *testing.T) {
 			return err
 		},
 	}
-	allow := map[string]func(subject string) error{
-		"UpsertCapabilityGrantQ": func(s string) error {
+	// The rows an allow-list write refers to exist: the Default unit, a drive and an organization pool.
+	drive, err := st.UpsertUserDrive(ctx, types.UserDrive{Name: "drive-" + uuid.NewString(), Backend: types.DriveBackendDockerVolume,
+		HomeTemplate: types.HomeTemplateHash, Reclaim: types.DriveReclaimRetain, CreatedBy: "admin@example.com"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgPool, err := st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "pool-" + uuid.NewString(), Scope: types.RunnerPoolOrganization}, "admin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An allow writer, and the statement that counts the stored rows holding the subject it wrote.
+	type allowed struct {
+		write func(subject string) error
+		count string
+	}
+	allow := map[string]allowed{
+		"UpsertCapabilityGrantQ": {func(s string) error {
 			_, err := store.UpsertCapabilityGrantQ(ctx, pool, capabilityGrantFor(s))
 			return err
-		},
-		"UpsertGovernanceMembershipQ": func(s string) error {
-			_, err := store.UpsertGovernanceMembershipQ(ctx, pool, types.GovernanceMembership{SubjectType: user, Subject: s, UnitID: uuid.New(), CreatedBy: "admin@example.com"})
+		}, `SELECT count(*) FROM capability_grants WHERE subject_type = 'user' AND subject = $1`},
+		"UpsertGovernanceMembershipQ": {func(s string) error {
+			_, err := store.UpsertGovernanceMembershipQ(ctx, pool, types.GovernanceMembership{ID: uuid.New(), SubjectType: user, Subject: s, UnitID: store.DefaultUnitID, CreatedBy: "admin@example.com"})
 			return err
-		},
-		"InsertGovernanceMembershipQ": func(s string) error {
-			return store.InsertGovernanceMembershipQ(ctx, pool, types.GovernanceMembership{SubjectType: user, Subject: s, UnitID: uuid.New(), CreatedBy: "admin@example.com"})
-		},
-		"UpsertUserDriveGrant": func(s string) error {
-			_, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: user, Subject: s, DriveID: uuid.New()}, false)
+		}, `SELECT count(*) FROM governance_memberships WHERE subject_type = 'user' AND subject = $1`},
+		"InsertGovernanceMembershipQ": {func(s string) error {
+			return store.InsertGovernanceMembershipQ(ctx, pool, types.GovernanceMembership{ID: uuid.New(), SubjectType: user, Subject: s, UnitID: store.DefaultUnitID, CreatedBy: "admin@example.com"})
+		}, `SELECT count(*) FROM governance_memberships WHERE subject_type = 'user' AND subject = $1`},
+		"UpsertUserDriveGrant": {func(s string) error {
+			_, err := st.UpsertUserDriveGrant(ctx, types.UserDriveGrant{ID: uuid.New(), SubjectType: user, Subject: s, DriveID: drive.ID}, false)
 			return err
-		},
-		"ReplaceUserDriveGrant": func(s string) error {
-			_, _, err := st.ReplaceUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: user, Subject: s, DriveID: uuid.New()}, false)
+		}, `SELECT count(*) FROM user_drive_grants WHERE subject_type = 'user' AND subject = $1`},
+		"ReplaceUserDriveGrant": {func(s string) error {
+			_, _, err := st.ReplaceUserDriveGrant(ctx, types.UserDriveGrant{ID: uuid.New(), SubjectType: user, Subject: s, DriveID: drive.ID}, false)
 			return err
-		},
-		"AddUserDriveGrant": func(s string) error {
-			_, err := st.AddUserDriveGrant(ctx, types.UserDriveGrant{SubjectType: user, Subject: s, DriveID: uuid.New()}, false)
+		}, `SELECT count(*) FROM user_drive_grants WHERE subject_type = 'user' AND subject = $1`},
+		"AddUserDriveGrant": {func(s string) error {
+			_, err := st.AddUserDriveGrant(ctx, types.UserDriveGrant{ID: uuid.New(), SubjectType: user, Subject: s, DriveID: drive.ID}, false)
 			return err
-		},
-		"PutRunnerPoolUsePolicyQ": func(s string) error {
-			_, err := store.PutRunnerPoolUsePolicyQ(ctx, pool, uuid.New(), nil, []types.RunnerPoolSubject{{SubjectType: user, Subject: s}}, "admin@example.com")
+		}, `SELECT count(*) FROM user_drive_grants WHERE subject_type = 'user' AND subject = $1`},
+		"PutRunnerPoolUsePolicyQ": {func(s string) error {
+			_, err := store.PutRunnerPoolUsePolicyQ(ctx, pool, orgPool.ID, nil, []types.RunnerPoolSubject{{SubjectType: user, Subject: s}}, "admin@example.com")
 			return err
-		},
-		"PutRestrictionQ": func(s string) error {
+		}, `SELECT count(*) FROM runner_pool_use_policies WHERE subjects @> jsonb_build_array(jsonb_build_object('subject_type', 'user', 'subject', $1::text))`},
+		"PutRestrictionQ": {func(s string) error {
 			_, err := store.PutRestrictionQ(ctx, pool, types.Restriction{ID: uuid.New(), Name: "r-" + uuid.NewString(),
 				Members: []types.RestrictionMember{{SubjectType: user, Subject: s}}, CreatedBy: "admin@example.com"}, "admin@example.com")
 			return err
-		},
+		}, `SELECT count(*) FROM governance_restriction_members WHERE subject_type = 'user' AND subject = $1`},
 	}
 	for name, write := range refuse {
 		for _, who := range []string{bound, unbound} {
@@ -100,12 +116,22 @@ func TestPortalSubjectRuling_EveryWriterRules_PG(t *testing.T) {
 			}
 		}
 	}
-	for name, write := range allow {
-		if err := write(unbound); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
+	n := 0
+	for name, w := range allow {
+		if err := w.write(unbound); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
 			t.Errorf("%s with an unbound person = %v, want ErrDelegatePersonUnknownPortal", name, err)
 		}
-		if err := write(bound); errors.Is(err, store.ErrDelegatePersonUnknownPortal) || errors.Is(err, store.ErrDelegatePersonNotAllowed) {
-			t.Errorf("%s with a bound person = %v, want the ruling to pass", name, err)
+		if got := rowCount(t, pool, w.count, unbound); got != 0 {
+			t.Errorf("%s stored the unbound person (%d rows)", name, got)
+		}
+		n++
+		person := types.PortalPrincipal(p.Key, "person"+strconv.Itoa(n)) // one person per writer, so no write sees another's row
+		if err := w.write(person); err != nil {
+			t.Errorf("%s with a bound person = %v, want it stored", name, err)
+			continue
+		}
+		if got := rowCount(t, pool, w.count, person); got != 1 {
+			t.Errorf("%s stored %d rows for the bound person, want 1", name, got)
 		}
 	}
 }

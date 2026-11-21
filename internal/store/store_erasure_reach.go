@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -101,12 +103,24 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 	}
 	var deleted int64
 	err := s.inTx(ctx, func(q Querier) error {
-		// A portal person's identity rows FOR UPDATE first, in id order, so a mint that writes a grant and its
-		// history (it holds the row FOR SHARE) either commits before this and is deleted whole, or waits for
-		// this commit and writes both after it. The erase takes no other lock a mint holds.
-		if _, err := q.Exec(ctx, `SELECT id FROM principal_identities WHERE principal = ANY($1) AND starts_with(issuer, $2)
-			ORDER BY id FOR UPDATE`, principals, types.PortalPersonPrefix); err != nil {
+		// The per-person lock of every portal person named, in lock-key order, held to commit. A mint takes the
+		// same lock before it writes a grant and its history, so it either commits whole before this and is
+		// deleted whole, or waits for this commit and writes both after it. The lock does not depend on an
+		// identity row, which a first exchange creates after the erase has looked. The erase takes no other lock
+		// a mint holds, so the two cannot wait on each other in a cycle.
+		rows, err := q.Query(ctx, `SELECT DISTINCT `+portalPersonLockKey("p")+` AS k FROM unnest($1::text[]) p WHERE starts_with(p, $2) ORDER BY k`,
+			principals, types.PortalPersonPrefix)
+		if err != nil {
 			return err
+		}
+		keys, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, k); err != nil {
+				return err
+			}
 		}
 		for _, stmt := range []string{
 			`DELETE FROM delegated_tokens WHERE principal = ANY($1)`,
@@ -118,7 +132,7 @@ func (s PG) DeleteDelegatedTokensOf(ctx context.Context, principals []string) (i
 			}
 			deleted += tag.RowsAffected()
 		}
-		_, err := q.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id IN
+		_, err = q.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id IN
 			(SELECT id FROM principal_identities WHERE principal = ANY($1))`, principals)
 		return err
 	})

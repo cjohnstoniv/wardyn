@@ -26,20 +26,31 @@ func mintDirect(st store.PG, p issuerPortal, person string) error {
 	return err
 }
 
-// untilBlocked returns once some other session on this database is waiting for a lock, which is the point at
-// which the transaction the test started has reached the row the test holds. It polls the lock wait itself, not
-// a clock, and gives up after ten seconds.
-func untilBlocked(t *testing.T, pool *pgxpool.Pool) {
+// pidOf is the backend process id of the session tx runs on.
+func pidOf(t *testing.T, tx pgx.Tx) int {
+	t.Helper()
+	var pid int
+	if err := tx.QueryRow(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+// untilBlockedBy returns once n sessions are each waiting on the session holder, as PostgreSQL itself reports
+// (pg_blocking_pids), and gives up after ten seconds. It polls that wait, not a clock, so the test releases
+// the holder only when every write it means to order is queued behind it.
+func untilBlockedBy(t *testing.T, pool *pgxpool.Pool, holder, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
+	got := 0
 	for time.Now().Before(deadline) {
-		if rowCount(t, pool, `SELECT count(*) FROM pg_stat_activity
-			WHERE datname = current_database() AND pid <> pg_backend_pid() AND wait_event_type = 'Lock'`) > 0 {
+		got = rowCount(t, pool, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder)
+		if got >= n {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("no transaction is waiting for the identity row: the write does not lock it")
+	t.Fatalf("%d session(s) wait on the holder, want %d: the write does not take the lock the test holds", got, n)
 }
 
 // holdIdentity opens a transaction that holds the identity row of principal in the given mode (FOR SHARE or
@@ -57,6 +68,37 @@ func holdIdentity(t *testing.T, pool *pgxpool.Pool, principal, mode string) pgx.
 		t.Fatalf("hold the identity %s: %v", mode, err)
 	}
 	return tx
+}
+
+// holdPerson opens a transaction that holds the per-person lock the mint and the credential erase share (the
+// key is the one portalPersonLockKey spells), whether or not the person has an identity row yet.
+func holdPerson(t *testing.T, pool *pgxpool.Pool, principal string) pgx.Tx {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('portal-person:' || $1::text, 0))`, principal); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+
+// writeGrantAndHistory is what a mint in flight has written: a live grant for principal and the use of portal p
+// recorded for identity id.
+func writeGrantAndHistory(t *testing.T, tx pgx.Tx, p issuerPortal, id uuid.UUID, principal string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := tx.Exec(ctx, `INSERT INTO portal_grants (id, delegate_id, token_sha256, principal, user_type, chain_id, subject_issued_at, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, 'default', $1, now(), now(), now() + interval '10 minutes')`, uuid.New(), p.Delegate.ID, sha256Hex(uuid.NewString()), principal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id) VALUES ($1, $2)
+		ON CONFLICT (identity_id, delegate_id) DO UPDATE SET last_used_at = clock_timestamp()`, id, p.Delegate.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type portalState struct{ grants, history int }
@@ -100,7 +142,7 @@ func TestPortalGrant_MintAfterPurgeRefusedWritesNothing_PG(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- mintDirect(st, p, "alice") }()
-	untilBlocked(t, pool)
+	untilBlockedBy(t, pool, pidOf(t, purge), 1)
 	if err := purge.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -132,13 +174,7 @@ func TestPortalGrant_MintBeforePurgeLeavesNoHistory_PG(t *testing.T) {
 
 	// The mint is in flight: it holds the identity row FOR SHARE and has written its grant and history.
 	mint := holdIdentity(t, pool, principal, "FOR SHARE")
-	if _, err := mint.Exec(ctx, `INSERT INTO portal_grants (id, delegate_id, token_sha256, principal, user_type, chain_id, subject_issued_at, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, 'default', $1, now(), now(), now() + interval '10 minutes')`, uuid.New(), p.Delegate.ID, sha256Hex(uuid.NewString()), principal); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := mint.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id) VALUES ($1, $2)`, id, p.Delegate.ID); err != nil {
-		t.Fatal(err)
-	}
+	writeGrantAndHistory(t, mint, p, id, principal)
 	type result struct {
 		marked bool
 		err    error
@@ -148,7 +184,7 @@ func TestPortalGrant_MintBeforePurgeLeavesNoHistory_PG(t *testing.T) {
 		marked, err := st.MarkPortalIdentityPurged(ctx, id, store.PortalPurgeExplicit)
 		done <- result{marked, err}
 	}()
-	untilBlocked(t, pool)
+	untilBlockedBy(t, pool, pidOf(t, mint), 1)
 	if err := mint.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -169,9 +205,10 @@ func TestPortalGrant_MintBeforePurgeLeavesNoHistory_PG(t *testing.T) {
 	}
 }
 
-// A credential erase that holds the identity first makes a concurrent mint wait, and the mint then writes its
-// grant and its history together. Lock order (erase): identity rows FOR UPDATE in id order, then the deletes;
-// it takes no binding or portal lock, so it cannot wait on a mint that waits on it.
+// A credential erase that holds the person's lock first makes every concurrent mint wait, through the same
+// portal or another portal of the issuer, and the mints then write their grants and their histories after it.
+// Lock order (erase): the per-person locks in lock-key order, then the deletes; it takes no binding, portal,
+// advisory-per-portal or identity lock, so it cannot wait on a mint that waits on it.
 func TestPortalGrant_EraseBeforeMintKeepsGrantAndHistoryTogether_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
@@ -183,7 +220,7 @@ func TestPortalGrant_EraseBeforeMintKeepsGrantAndHistoryTogether_PG(t *testing.T
 		t.Fatal(err)
 	}
 
-	erase := holdIdentity(t, pool, principal, "FOR UPDATE")
+	erase := holdPerson(t, pool, principal)
 	for _, stmt := range []string{
 		`DELETE FROM portal_grants WHERE principal = '` + principal + `'`,
 		`DELETE FROM portal_person_portals WHERE identity_id IN (SELECT id FROM principal_identities WHERE principal = '` + principal + `')`,
@@ -192,11 +229,10 @@ func TestPortalGrant_EraseBeforeMintKeepsGrantAndHistoryTogether_PG(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	// A mint through the same portal and one through another portal of the same issuer both wait.
 	done := make(chan error, 2)
 	go func() { done <- mintDirect(st, p, "alice") }()
 	go func() { done <- mintDirect(st, other, "alice") }()
-	untilBlocked(t, pool)
+	untilBlockedBy(t, pool, pidOf(t, erase), 2) // both mints, one per portal, wait on the erase
 	if err := erase.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -210,40 +246,84 @@ func TestPortalGrant_EraseBeforeMintKeepsGrantAndHistoryTogether_PG(t *testing.T
 	}
 }
 
-// A mint that holds the identity first makes a concurrent erase wait, and the erase then deletes the grant and
-// the history it wrote: either both survive or neither does.
-func TestPortalGrant_MintBeforeEraseLeavesNeither_PG(t *testing.T) {
+// A first introduction: the erase has looked and found no identity row, and deleted nothing, when the person's
+// first exchange creates the identity and mints. The mint waits for the erase's lock and then writes the grant
+// with its history; the person ends with both, never a grant without its history.
+func TestPortalGrant_FirstIntroductionAfterEraseKeepsGrantAndHistory_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
 	p := newIssuerPortal(t, st, "")
-	id, _ := issueFor(t, st, p, "alice")
 	principal := types.PortalPrincipal(p.Key, "alice")
+	if n := rowCount(t, pool, `SELECT count(*) FROM principal_identities WHERE principal = $1`, principal); n != 0 {
+		t.Fatalf("%d identity rows before the first exchange", n)
+	}
 
-	mint := holdIdentity(t, pool, principal, "FOR SHARE")
-	if _, err := mint.Exec(ctx, `INSERT INTO portal_grants (id, delegate_id, token_sha256, principal, user_type, chain_id, subject_issued_at, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, 'default', $1, now(), now(), now() + interval '10 minutes')`, uuid.New(), p.Delegate.ID, sha256Hex(uuid.NewString()), principal); err != nil {
+	erase := holdPerson(t, pool, principal)
+	if _, err := erase.Exec(ctx, `DELETE FROM portal_grants WHERE principal = $1`, principal); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mint.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id) VALUES ($1, $2)`, id, p.Delegate.ID); err != nil {
+	if _, err := erase.Exec(ctx, `DELETE FROM portal_person_portals WHERE identity_id IN (SELECT id FROM principal_identities WHERE principal = $1)`, principal); err != nil {
 		t.Fatal(err)
 	}
-	type result struct {
-		n   int64
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		n, err := st.DeleteDelegatedTokensOf(ctx, []string{principal})
-		done <- result{n, err}
-	}()
-	untilBlocked(t, pool)
-	if err := mint.Commit(ctx); err != nil {
+	issueFor(t, st, p, "alice") // the first exchange creates the identity after the erase looked
+	done := make(chan error, 1)
+	go func() { done <- mintDirect(st, p, "alice") }()
+	untilBlockedBy(t, pool, pidOf(t, erase), 1)
+	if err := erase.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r := <-done; r.err != nil || r.n != 1 {
-		t.Fatalf("erase = %d, %v, want the one grant", r.n, r.err)
+	if err := <-done; err != nil {
+		t.Fatalf("the first mint behind an erase = %v", err)
 	}
-	if got := stateOf(t, pool, principal); got != (portalState{}) {
-		t.Errorf("after the mint and the erase: %+v, want neither a grant nor history", got)
+	if got := stateOf(t, pool, principal); got != (portalState{grants: 1, history: 1}) {
+		t.Errorf("after the erase and the first mint: %+v, want one grant and its history", got)
+	}
+}
+
+// A mint that holds the person's lock first makes a concurrent erase wait, and the erase then deletes the grant
+// and the history it wrote: either both survive or neither does. It holds for a first introduction (the erase
+// started when no identity row existed) and for a person who has used the portal before (the history row is
+// updated in place).
+func TestPortalGrant_MintBeforeEraseLeavesNeither_PG(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		first bool
+		want  int64
+	}{{"first introduction", true, 1}, {"repeat use", false, 2}} {
+		t.Run(c.name, func(t *testing.T) {
+			st, pool := isolatedStore(t)
+			ctx := context.Background()
+			p := newIssuerPortal(t, st, "")
+			principal := types.PortalPrincipal(p.Key, "alice")
+			if !c.first {
+				issueFor(t, st, p, "alice")
+				if err := mintDirect(st, p, "alice"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			mint := holdPerson(t, pool, principal)
+			type result struct {
+				n   int64
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				n, err := st.DeleteDelegatedTokensOf(ctx, []string{principal})
+				done <- result{n, err}
+			}()
+			untilBlockedBy(t, pool, pidOf(t, mint), 1)
+			id, _ := issueFor(t, st, p, "alice") // a first exchange creates the identity while the erase waits
+			writeGrantAndHistory(t, mint, p, id, principal)
+			if err := mint.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if r := <-done; r.err != nil || r.n != c.want {
+				t.Fatalf("erase = %d, %v, want %d grants", r.n, r.err, c.want)
+			}
+			if got := stateOf(t, pool, principal); got != (portalState{}) {
+				t.Errorf("after the mint and the erase: %+v, want neither a grant nor history", got)
+			}
+		})
 	}
 }
