@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -26,6 +27,9 @@ type personListDoor struct {
 	stored func(person string) int
 	// approver decides a held change of this door; nil is the second super admin.
 	approver *http.Cookie
+	// listed reports whether the row's own authenticated read lists exactly this person; nil for a refuse
+	// row, which stores nothing to list.
+	listed func(person string) bool
 }
 
 func (d personListDoor) send(t *testing.T, e *regPG, person, tag string) *httptest.ResponseRecorder {
@@ -73,6 +77,24 @@ func personListStoredSubject(t *testing.T, e *regPG, table string) func(string) 
 	}
 }
 
+// personListRead is an allow row's read-back: the list route an admin reads it with, answering 200, and
+// whether the body carries the stored principal as an exact JSON string (form spells it as the list does,
+// nil for the principal itself).
+func personListRead(t *testing.T, e *regPG, path string, form func(string) string) func(string) bool {
+	return func(person string) bool {
+		t.Helper()
+		w := doSSO(t, e.h.srv, http.MethodGet, path, e.admin, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s, want 200", path, w.Code, w.Body.String())
+		}
+		if form != nil {
+			person = form(person)
+		}
+		quoted, _ := json.Marshal(person)
+		return strings.Contains(w.Body.String(), string(quoted))
+	}
+}
+
 func personListConst(path string) func(string) string { return func(string) string { return path } }
 
 // personListPending reads the 202 of a held write and returns the change, asserting it is a pending change of
@@ -110,7 +132,7 @@ func personDoorRows() []personDoorRow {
 				return personListDoor{http.MethodPost, personListConst("/api/v1/permissions/grants"),
 					func(p, _ string) string {
 						return fmt.Sprintf(`{"subject_type":"user","subject":%q,"capability":"egress_host","value":"example.com","effect":"allow"}`, p)
-					}, personListStoredSubject(t, e, "capability_grants"), nil}
+					}, personListStoredSubject(t, e, "capability_grants"), nil, personListRead(t, e, "/api/v1/permissions", nil)}
 			}},
 		{n: 2, list: "governance membership, user subject", kind: govKindMembership,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -118,7 +140,7 @@ func personDoorRows() []personDoorRow {
 				return personListDoor{http.MethodPost, personListConst("/api/v1/governance/memberships"),
 					func(p, _ string) string {
 						return fmt.Sprintf(`{"subject_type":"user","subject":%q,"unit_id":%q,"priority":1}`, p, unit)
-					}, personListStoredSubject(t, e, "governance_memberships"), nil}
+					}, personListStoredSubject(t, e, "governance_memberships"), nil, personListRead(t, e, "/api/v1/governance", nil)}
 			}},
 		{n: 3, list: "restriction members", kind: govKindRestriction,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -132,7 +154,7 @@ func personDoorRows() []personDoorRow {
 							t.Fatal(err)
 						}
 						return string(b)
-					}, personListStoredSubject(t, e, "governance_restriction_members"), nil}
+					}, personListStoredSubject(t, e, "governance_restriction_members"), nil, personListRead(t, e, "/api/v1/governance", nil)}
 			}},
 		{n: 4, list: "drive grant subject",
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -146,7 +168,7 @@ func personDoorRows() []personDoorRow {
 				return personListDoor{http.MethodPost, personListConst("/api/v1/drives/grants"),
 					func(p, _ string) string {
 						return fmt.Sprintf(`{"subject_type":"user","subject":%q,"drive_id":%q,"priority":1}`, p, drive.ID)
-					}, personListStoredSubject(t, e, "user_drive_grants"), nil}
+					}, personListStoredSubject(t, e, "user_drive_grants"), nil, personListRead(t, e, "/api/v1/drives", nil)}
 			}},
 		{n: 5, list: "UI-app callers, user arm",
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -156,7 +178,7 @@ func personDoorRows() []personDoorRow {
 							`"ui_apps":[{"name":"web","port":3000,"inbound":true,"callers":[%q]}]}}`, n, tag, "user:"+p)
 					}, func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM run_policies WHERE strpos(spec::text, $1) > 0`, p)
-					}, nil}
+					}, nil, personListRead(t, e, "/api/v1/policies", func(p string) string { return "user:" + p })}
 			}},
 		{n: 6, list: "runner pool use-policy subjects", kind: govKindRunnerPoolUsePolicy,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -170,7 +192,7 @@ func personDoorRows() []personDoorRow {
 						return fmt.Sprintf(`{"subjects":[{"subject_type":"user","subject":%q}]}`, p)
 					}, func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM runner_pool_use_policies WHERE pool_id = $1 AND strpos(subjects::text, $2) > 0`, pool.ID, p)
-					}, nil}
+					}, nil, personListRead(t, e, "/api/v1/runner-pools/"+pool.ID.String()+"/use-policy", nil)}
 			}},
 		{n: 7, list: "remote runner people subjects", refuse: true, kind: govKindRemoteRunnerPeople,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -182,14 +204,14 @@ func personDoorRows() []personDoorRow {
 						return fmt.Sprintf(`{"people_pools":"listed","subjects":[{"subject_type":"user","subject":%q}]}`, p)
 					}, func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM remote_runners WHERE id = 'fake' AND strpos(people_subjects::text, $1) > 0`, p)
-					}, nil}
+					}, nil, nil}
 			}},
 		{n: 8, list: "unit admin grant", refuse: true, kind: govKindUnitAdmin,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
 				unit := personListUnit(t, e, n)
 				return personListDoor{http.MethodPost, personListConst("/api/v1/governance/units/" + unit.String() + "/admins"),
 					func(p, _ string) string { return fmt.Sprintf(`{"subject_type":"user","subject":%q}`, p) },
-					personListStoredSubject(t, e, "governance_unit_admins"), nil}
+					personListStoredSubject(t, e, "governance_unit_admins"), nil, nil}
 			}},
 		{n: 9, list: "template group admin person", refuse: true,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -199,18 +221,22 @@ func personDoorRows() []personDoorRow {
 					},
 					func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM template_group_admins WHERE person = $1`, p)
-					}, nil}
+					}, nil, nil}
 			}},
 		{n: 10, list: "role mapping value", refuse: true, kind: govKindRoleMapping,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
-				// The approval's lockout guard reads the approver's own sign-in, so the approver is a second
-				// person whose address the chart maps to admin.
-				approver := accessSession(t, "root3", "root@corp.example", oidc.RoleAdmin, []string{})
+				// The approval's lockout guard reads the approver's own sign-in, and the second-human check
+				// compares addresses as well as subjects: the approver is another person, at another address
+				// that a stored role mapping makes an admin.
+				if _, err := e.st.UpsertRoleMapping(t.Context(), types.RoleMapping{ID: uuid.New(), Value: "root3@corp.example", Role: oidc.RoleAdmin}); err != nil {
+					t.Fatal(err)
+				}
+				approver := accessSession(t, "root3", "root3@corp.example", oidc.RoleAdmin, []string{})
 				return personListDoor{http.MethodPost, personListConst("/api/v1/access/mappings"),
 					func(p, _ string) string { return fmt.Sprintf(`{"value":%q,"role":"user"}`, p) },
 					func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM role_mappings WHERE value = $1`, p)
-					}, approver}
+					}, approver, nil}
 			}},
 		{n: 11, list: "service identity sponsor", refuse: true, kind: govKindServiceIdentity, refusedAtProposal: true,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
@@ -218,14 +244,14 @@ func personDoorRows() []personDoorRow {
 					func(p, tag string) string { return fmt.Sprintf(`{"name":"person-list-%d-%s","sponsor":%q}`, n, tag, p) },
 					func(p string) int {
 						return personListCount(t, e, `SELECT count(*) FROM service_identities WHERE sponsor = $1`, p)
-					}, nil}
+					}, nil, nil}
 			}},
 		{n: 16, list: "key-domain assignment, user subject", refuse: true, kind: govKindKeyDomain,
 			prep: func(t *testing.T, e *regPG, n int) personListDoor {
 				e.h.srv.cfg.KeyDomains = keydomain.NewService(e.pool, []string{"a", "b"})
 				return personListDoor{http.MethodPut, func(p string) string { return "/api/v1/key-domains/assignments/user/" + p },
 					func(string, string) string { return `{"domain":"a"}` },
-					personListStoredSubject(t, e, "key_domain_assignments"), nil}
+					personListStoredSubject(t, e, "key_domain_assignments"), nil, nil}
 			}},
 	}
 }
@@ -273,10 +299,16 @@ func TestAdminPersonLists_DelegatePersonRuling_PG(t *testing.T) {
 				if n := door.stored(p); n != 1 {
 					t.Errorf("stored rows naming %s = %d, want 1", p, n)
 				}
+				if !door.listed(p) {
+					t.Errorf("the row's list does not name %s", p)
+				}
 				u := person(types.PortalIssuerKey(fmt.Sprintf("https://never-registered-%d.example.com", row.n)), row.n, "direct")
 				wantRefused("write under an unbound key", door.send(t, e, u, "unbound"), reasonDelegatePersonUnknownPortal)
 				if n := door.stored(u); n != 0 {
 					t.Errorf("a refused write stored %d rows", n)
+				}
+				if door.listed(u) {
+					t.Errorf("the row's list names the refused %s", u)
 				}
 			}
 			if row.kind == "" {
@@ -298,6 +330,9 @@ func TestAdminPersonLists_DelegatePersonRuling_PG(t *testing.T) {
 			if n := door.stored(p); n != 0 {
 				t.Errorf("a held write stored %d rows before its approval", n)
 			}
+			if !row.refuse && door.listed(p) {
+				t.Errorf("the row's list names %s before its approval", p)
+			}
 			w := approve(change)
 			if row.refuse {
 				wantRefused("approval", w, reasonDelegatePersonNotAllowed)
@@ -317,6 +352,9 @@ func TestAdminPersonLists_DelegatePersonRuling_PG(t *testing.T) {
 			}
 			if n := door.stored(p); n != 1 {
 				t.Errorf("stored rows naming %s after approval = %d, want 1", p, n)
+			}
+			if !door.listed(p) {
+				t.Errorf("the row's list does not name %s after approval", p)
 			}
 		})
 	}
