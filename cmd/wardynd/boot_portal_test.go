@@ -4,13 +4,18 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The label shapes the activation reads (internal/store/store_portal_activation.go): restated here so a
@@ -63,5 +68,30 @@ func TestPortalInternalIssuerHosts_ListAndCABundle(t *testing.T) {
 	}
 	if _, err := portalIssuerOptions("idp.corp.example", pem, "ops-seat", counter); err != nil {
 		t.Fatalf("reading the bundle is the verifier's to judge, not the option builder's: %v", err)
+	}
+}
+
+func TestPortalRegistrationsOn_NamesSharedIssuerBounded(t *testing.T) {
+	now := time.Now()
+	a := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"), Name: "alpha", IssuerKey: "k1"}
+	b := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"), Name: "beta", IssuerKey: "k1", RevokedAt: &now}
+	c := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000c"), Name: "gamma", IssuerKey: "k2"}
+	console := types.Delegate{ID: uuid.MustParse("00000000-0000-0000-0000-00000000000d"), Name: "console"}
+	keys := map[string]bool{"k1": true}
+	got := portalRegistrationsOn(keys, []types.Delegate{c, b, console, a})
+	want := `portal registrations: ` + a.ID.String() + ` "alpha", ` + b.ID.String() + ` "beta" (revoked)`
+	if got != want {
+		t.Errorf("two portals on one issuer = %q, want %q", got, want)
+	}
+	if got := portalRegistrationsOn(map[string]bool{"k9": true}, []types.Delegate{a, c}); got != "no portal registration names it" {
+		t.Errorf("an orphaned binding = %q", got)
+	}
+	var many []types.Delegate
+	for i := range portalRegistrationMax + 3 {
+		many = append(many, types.Delegate{ID: uuid.New(), Name: fmt.Sprintf("p%d", i), IssuerKey: "k1"})
+	}
+	got = portalRegistrationsOn(keys, many)
+	if n := strings.Count(got, `"p`); n != portalRegistrationMax || !strings.HasSuffix(got, " and 3 more") {
+		t.Errorf("%d registrations = %q, want %d named and the rest counted", len(many), got, portalRegistrationMax)
 	}
 }

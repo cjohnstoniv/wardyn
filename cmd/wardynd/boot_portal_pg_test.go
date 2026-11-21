@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,8 +99,8 @@ func TestConsoleIssuer_BootRefusedOnPortalOverlap_PG(t *testing.T) {
 	bindPortalIssuer(t, pool, "https://idp.portal.example/oauth2/default")
 	// The same issuer in another spelling that is equal under norm: refused, and nothing recorded.
 	err := recordConsoleIssuer(context.Background(), pool, "HTTPS://IDP.portal.example:443/oauth2/default/", "r1")
-	if !errors.Is(err, errConsoleIssuerIsPortal) {
-		t.Fatalf("a console issuer equal to a binding's: %v, want the boot refusal", err)
+	if !errors.Is(err, errConsoleIssuerIsPortal) || !strings.Contains(err.Error(), "no portal registration names it") {
+		t.Fatalf("a console issuer equal to a binding no registration names: %v, want the boot refusal saying so", err)
 	}
 	if got := recordedConsoleIssuers(t, pool); len(got) != 0 {
 		t.Fatalf("a refused boot recorded %+v", got)
@@ -110,6 +111,33 @@ func TestConsoleIssuer_BootRefusedOnPortalOverlap_PG(t *testing.T) {
 	}
 	if got := recordedConsoleIssuers(t, pool); len(got) != 1 {
 		t.Fatalf("recorded = %+v, want one", got)
+	}
+}
+
+// TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG: two portals share the clashing issuer, and the
+// refusal names both registrations, the revoked one marked, and no portal of another issuer.
+func TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG(t *testing.T) {
+	pool := portalBootPool(t, "ovlnames")
+	ctx := context.Background()
+	b := bindIssuerAs(t, pool, "https://idp.shared.example/oauth2/default")
+	one, _ := registerIssuerPortal(t, pool, b, "shared-one")
+	two, _ := registerIssuerPortal(t, pool, b, "shared-two")
+	if _, _, err := store.NewPG(pool).RevokeDelegate(ctx, two.ID, time.Now(), false); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := registerIssuerPortal(t, pool, bindIssuerAs(t, pool, "https://idp.other.example/"), "other")
+	err := recordConsoleIssuer(ctx, pool, "https://idp.shared.example/oauth2/default", "r1")
+	if !errors.Is(err, errConsoleIssuerIsPortal) {
+		t.Fatalf("a console issuer two portals share: %v, want the boot refusal", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{one.ID.String() + ` "shared-one"`, two.ID.String() + ` "shared-two" (revoked)`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q does not name %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, other.ID.String()) {
+		t.Errorf("refusal %q names a portal of another issuer", msg)
 	}
 }
 

@@ -118,14 +118,22 @@ func recordConsoleIssuer(ctx context.Context, pool *pgxpool.Pool, issuer, replic
 		return fmt.Errorf("read the issuer portal bindings: %w", err)
 	}
 	var clashes []string
+	keys := map[string]bool{}
 	for _, b := range bindings {
 		if types.NormIssuerURL(b.Issuer) == types.NormIssuerURL(issuer) {
 			clashes = append(clashes, b.Issuer)
+			keys[b.IssuerKey] = true
 		}
 	}
 	if len(clashes) > 0 {
-		return fmt.Errorf("%w: the console sign-in issuer %q is also the issuer of an issuer portal binding (%s); an issuer is either the console's or a portal's, never both",
-			errConsoleIssuerIsPortal, issuer, strings.Join(clashes, ", "))
+		// A diagnostic only: the boot is refused whatever this read finds, a binding no registration names included.
+		all, err := st.ListDelegates(ctx)
+		names := "the portal registrations could not be read: " + fmt.Sprint(err)
+		if err == nil {
+			names = portalRegistrationsOn(keys, all)
+		}
+		return fmt.Errorf("%w: the console sign-in issuer %q is also the issuer of an issuer portal binding (%s; %s); an issuer is either the console's or a portal's, never both",
+			errConsoleIssuerIsPortal, issuer, strings.Join(clashes, ", "), names)
 	}
 	if err := st.RecordConsoleIssuerQ(ctx, tx, issuer, replica); err != nil {
 		return err
@@ -134,4 +142,32 @@ func recordConsoleIssuer(ctx context.Context, pool *pgxpool.Pool, issuer, replic
 		return fmt.Errorf("record the console issuer: %w", err)
 	}
 	return nil
+}
+
+// portalRegistrationMax bounds how many registrations the boot refusal names.
+const portalRegistrationMax = 5
+
+// portalRegistrationsOn names, by id and name, the portal registrations on the bindings whose keys are given,
+// revoked ones marked, at most portalRegistrationMax of them and a count of the rest.
+func portalRegistrationsOn(keys map[string]bool, all []types.Delegate) string {
+	var regs []string
+	for _, d := range all {
+		if d.IssuerKey == "" || !keys[d.IssuerKey] {
+			continue
+		}
+		r := fmt.Sprintf("%s %q", d.ID, d.Name)
+		if d.RevokedAt != nil {
+			r += " (revoked)"
+		}
+		regs = append(regs, r)
+	}
+	if len(regs) == 0 {
+		return "no portal registration names it"
+	}
+	sort.Strings(regs)
+	out := "portal registrations: " + strings.Join(regs[:min(len(regs), portalRegistrationMax)], ", ")
+	if more := len(regs) - portalRegistrationMax; more > 0 {
+		out += fmt.Sprintf(" and %d more", more)
+	}
+	return out
 }
