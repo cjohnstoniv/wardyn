@@ -107,3 +107,45 @@ func TestKeptMachineRefusesBadArgsAndAPlainSubstrate(t *testing.T) {
 		t.Fatal("a substrate that keeps no machines answered a delete")
 	}
 }
+
+// expiringKeptFake is keptFake that also deletes only an expired machine, and records that those were the calls.
+type expiringKeptFake struct {
+	*keptFake
+	expired []uuid.UUID
+	err     error
+}
+
+func (f *expiringKeptFake) DeleteExpiredKeptMachine(_ context.Context, id uuid.UUID, _ string) (string, error) {
+	f.expired = append(f.expired, id)
+	return f.keptFake.outcome, f.err
+}
+
+// delete_expired reaches only the substrate's conditional delete, never its plain one; a substrate that cannot
+// run the conditional delete refuses it before any delete runs, and its own refusal of an unexpired machine
+// comes back as an error.
+func TestKeptMachineDeleteExpiredReachesOnlyTheConditionalDelete(t *testing.T) {
+	base := &keptFake{Fake: runnertest.NewFake(), outcome: runnerwire.KeptMachineDeleted}
+	sub := &expiringKeptFake{keptFake: base}
+	call, done := keptDispatcher(t, sub)
+	defer done()
+	id := uuid.New()
+	args := runnerwire.KeptMachineArgs{Op: runnerwire.KeptMachineOpDeleteExpired, ID: id.String(), By: runnerwire.KeptMachineByExpiry}
+	if res, err := call(args); err != nil || res != (runnerwire.KeptMachineResult{Outcome: runnerwire.KeptMachineDeleted}) {
+		t.Fatalf("delete_expired: %v %v", res, err)
+	}
+	if len(sub.expired) != 1 || sub.expired[0] != id || len(base.asked) != 0 {
+		t.Fatalf("conditional calls %v, plain calls %v; want one conditional and no plain", sub.expired, base.asked)
+	}
+	sub.err = runnerwire.Refuse("not expired")
+	if _, err := call(args); err == nil {
+		t.Fatal("a refused conditional delete answered success")
+	}
+
+	plain, done2 := keptDispatcher(t, &keptFake{Fake: runnertest.NewFake(), outcome: runnerwire.KeptMachineDeleted})
+	defer done2()
+	_, err := plain(args)
+	var we *runnerwire.Error
+	if !errors.As(err, &we) || we.Code != runnerwire.CodeRefused {
+		t.Fatalf("a substrate with no conditional delete: %v; want a refusal", err)
+	}
+}

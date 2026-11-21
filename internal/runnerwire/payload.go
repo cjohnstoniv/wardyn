@@ -338,6 +338,10 @@ type MacVMCaps struct {
 	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
 	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
 	KeptMachines bool `json:"kept_machines,omitempty"`
+	// KeptConditionalDelete says the runner executes kept_machine's delete_expired op, which rechecks the
+	// machine's own deadline under its lock. The organisation starts no expiry-driven delete on a runner
+	// that does not say so; such a Mac still removes its own expired machines in its sweep.
+	KeptConditionalDelete bool `json:"kept_conditional_delete,omitempty"`
 	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
 	// not counted yet.
 	Kept *MacVMKept `json:"kept,omitempty"`

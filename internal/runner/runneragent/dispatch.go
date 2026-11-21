@@ -201,8 +201,15 @@ type KeptMachineDeleter interface {
 	DeleteKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
 }
 
-// keptMachine acts on one kept machine's folder on this Mac. Its one op is delete, of a machine named
-// by its full id.
+// KeptMachineExpiredDeleter is a KeptMachineDeleter that also runs the expiry-driven delete: it removes the
+// machine only if the Mac's own record, read under the machine's lock, says it has expired. It refuses (a
+// refused reply, nothing removed) when the record's deadline is later or a session holds the machine.
+type KeptMachineExpiredDeleter interface {
+	DeleteExpiredKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
+// keptMachine acts on one kept machine's folder on this Mac. Its ops are delete and delete_expired, of a
+// machine named by its full id.
 func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any, error) {
 	var a runnerwire.KeptMachineArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
@@ -210,7 +217,7 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	}
 	id, err := uuid.Parse(a.ID)
 	switch {
-	case a.Op != runnerwire.KeptMachineOpDelete:
+	case a.Op != runnerwire.KeptMachineOpDelete && a.Op != runnerwire.KeptMachineOpDeleteExpired:
 		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
 	case err != nil || id == uuid.Nil || id.String() != a.ID:
 		return nil, runnerwire.Refuse("kept_machine needs a machine's full id")
@@ -219,7 +226,15 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	if !ok {
 		return nil, runnerwire.Refuse("this runner keeps no machines")
 	}
-	outcome, err := km.DeleteKeptMachine(ctx, id, a.By)
+	del := km.DeleteKeptMachine
+	if a.Op == runnerwire.KeptMachineOpDeleteExpired {
+		ex, ok := d.cfg.Substrate.(KeptMachineExpiredDeleter)
+		if !ok {
+			return nil, runnerwire.Refuse("this runner cannot delete only an expired machine")
+		}
+		del = ex.DeleteExpiredKeptMachine
+	}
+	outcome, err := del(ctx, id, a.By)
 	switch {
 	case err != nil:
 		return nil, err

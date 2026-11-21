@@ -92,7 +92,14 @@ func TestKeptMachineObservesStopOf(t *testing.T) {
 	if b, _ = json.Marshal(MacVMKeptMachine{ID: "m"}); strings.Contains(string(b), "stop_run_id") {
 		t.Fatalf("an unversioned report names a stop: %s", b)
 	}
-	if KeptMachineByExpiry != "expiry" {
-		t.Fatalf("KeptMachineByExpiry = %q", KeptMachineByExpiry)
+	if KeptMachineByExpiry != "expiry" || KeptMachineOpDelete != "delete" || KeptMachineOpDeleteExpired != "delete_expired" {
+		t.Fatalf("kept_machine names %q %q %q", KeptMachineByExpiry, KeptMachineOpDelete, KeptMachineOpDeleteExpired)
+	}
+	b, _ = json.Marshal(MacVMCaps{KeptMachines: true, KeptConditionalDelete: true})
+	if !strings.Contains(string(b), `"kept_conditional_delete":true`) {
+		t.Fatalf("caps JSON %s", b)
+	}
+	if b, _ = json.Marshal(MacVMCaps{KeptMachines: true}); strings.Contains(string(b), "kept_conditional_delete") {
+		t.Fatalf("an older runner's caps name the conditional delete: %s", b)
 	}
 }
