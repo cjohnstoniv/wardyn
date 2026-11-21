@@ -1343,61 +1343,31 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 // logTail (`wardyn run logs`)
 // --------------------------------------------------------------------------
 
-// TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
-// exists to prevent: the server's Since filter round-trips through RFC3339
-// (1-second resolution), so re-polling with since=<last event's second> can
-// legitimately return that same event again. filter must drop it, not
-// re-print it, while still admitting a genuinely new event landing in that
-// same second.
-func TestLogTail_Filter_DedupesSameSecondBoundary(t *testing.T) {
+// TestLogTail_Filter_DedupesAndCountsTheTrailRead: a reply that repeats events (a server that leaves rows
+// out makes the offset trail the rows read) must not print one twice, and the offset counts every row read.
+func TestLogTail_Filter_DedupesAndCountsTheTrailRead(t *testing.T) {
 	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	e1 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.dispatch"}
-	e2 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.allow"} // same second, different event
+	e2 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.allow"} // same time, different event
 
 	var tail logTail
 	first, tail := tail.filter([]types.AuditEvent{e1})
-	if len(first) != 1 || first[0].ID != e1.ID {
-		t.Fatalf("first poll = %v, want just e1", first)
+	if len(first) != 1 || first[0].ID != e1.ID || tail.offset != 1 {
+		t.Fatalf("first poll = %v offset %d, want just e1 at offset 1", first, tail.offset)
 	}
-
-	// Re-poll returns the server's whole since-inclusive page: e1 again
-	// (same second) plus the genuinely new e2.
 	second, tail := tail.filter([]types.AuditEvent{e1, e2})
-	if len(second) != 1 || second[0].ID != e2.ID {
-		t.Fatalf("second poll = %v, want just the new event e2 (e1 must be deduped)", second)
+	if len(second) != 1 || second[0].ID != e2.ID || tail.offset != 3 {
+		t.Fatalf("second poll = %v offset %d, want just the new event e2 (e1 deduped) at offset 3", second, tail.offset)
 	}
-
-	// A third poll with nothing new yields nothing.
 	third, _ := tail.filter([]types.AuditEvent{e1, e2})
 	if len(third) != 0 {
 		t.Errorf("third poll = %v, want no events (both already seen)", third)
 	}
 }
 
-// TestLogTail_Filter_AdvancesPastSecondBoundary: a later-second event resets
-// the dedup set to just that event, so an even-later re-poll of the SAME
-// later event is also correctly deduped (not just the original second).
-func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
-	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	t1 := t0.Add(time.Second)
-	e1 := types.AuditEvent{ID: uuid.New(), Time: t0}
-	e2 := types.AuditEvent{ID: uuid.New(), Time: t1}
-
-	var tail logTail
-	_, tail = tail.filter([]types.AuditEvent{e1, e2})
-	if !tail.since.Equal(t1) {
-		t.Fatalf("tail.since = %v, want %v (the later event's time)", tail.since, t1)
-	}
-	again, _ := tail.filter([]types.AuditEvent{e1, e2})
-	if len(again) != 0 {
-		t.Errorf("re-poll of the same page = %v, want nothing new", again)
-	}
-}
-
-// TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime: the server pages by
-// chain seq, and an event's time is stamped before it waits for the chain
-// lock, so seq order can run against time order. The earlier-time event that
-// follows must still be emitted, now and on a later poll.
+// TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime: the server pages by chain seq, and an event's time
+// is stamped before it waits for the chain lock, so seq order can run against time order. The earlier-time
+// event must still be emitted, now and when it arrives on a later poll.
 func TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Second)
 	b := types.AuditEvent{ID: uuid.New(), Time: t0.Add(2 * time.Millisecond), Action: "credential.mint"}
@@ -1408,15 +1378,67 @@ func TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime(t *testing.T) {
 	if len(got) != 2 || got[1].ID != a.ID {
 		t.Fatalf("one page = %v, want both events with the earlier-time one kept", got)
 	}
-
-	// A late-draining event with an older time than the newest one seen.
 	late := types.AuditEvent{ID: uuid.New(), Time: t0.Add(-time.Second), Action: "run.dispatch"}
-	got, tail = tail.filter([]types.AuditEvent{b, a, late})
-	if len(got) != 1 || got[0].ID != late.ID {
-		t.Fatalf("later poll = %v, want just the late event", got)
+	got, tail = tail.filter([]types.AuditEvent{late})
+	if len(got) != 1 || got[0].ID != late.ID || tail.offset != 3 {
+		t.Fatalf("later poll = %v offset %d, want just the late event at offset 3", got, tail.offset)
 	}
-	if want := tail.since.Add(-logTailMargin); !tail.sinceFilter().Equal(want) {
-		t.Errorf("sinceFilter = %v, want %v (newest event time less the margin)", tail.sinceFilter(), want)
+}
+
+// TestLogsCmd_FollowFindsAReplayedEventOlderThanTheNewestOne: an audit event the daemon spooled and stored
+// after newer ones keeps its original time. Twenty seconds separate it from the newest event already printed,
+// so a time window behind that event would have passed it for good; following from the trail's position
+// finds it on the next poll. The server applies since and offset as the real one does.
+func TestLogsCmd_FollowFindsAReplayedEventOlderThanTheNewestOne(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	first := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.dispatch", Outcome: "success"}
+	newest := types.AuditEvent{ID: uuid.New(), Time: t0.Add(20 * time.Second), Action: "egress.decision", Outcome: "success"}
+	replayed := types.AuditEvent{ID: uuid.New(), Time: t0.Add(time.Second), Action: "credential.mint", Outcome: "success"}
+	var mu sync.Mutex
+	trail := []types.AuditEvent{first, newest}
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mu.Lock()
+		defer mu.Unlock()
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			state := types.RunRunning
+			if polls >= 3 {
+				state = types.RunCompleted
+			}
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: state})
+			return
+		}
+		polls++
+		if polls == 2 {
+			trail = append(trail, replayed) // the spool drains: stored last, stamped long ago
+		}
+		var since time.Time
+		if v := r.URL.Query().Get("since"); v != "" {
+			since, _ = time.Parse(time.RFC3339, v)
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		var match []types.AuditEvent
+		for _, e := range trail {
+			if !e.Time.Before(since) {
+				match = append(match, e)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(match[min(offset, len(match)):])
+	}))
+	t.Cleanup(srv.Close)
+
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("run logs returned error: %v", err)
+	}
+	for _, want := range []string{"run.dispatch", "egress.decision", "credential.mint"} {
+		if n := strings.Count(out, want); n != 1 {
+			t.Errorf("%s printed %d times, want once:\n%s", want, n, out)
+		}
 	}
 }
 
@@ -2371,7 +2393,7 @@ func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 
 // TestLogsCmd_NonFollowFollowsTruncatedPages: the per-run audit page caps at
 // 1000 events server-side. --follow recovers from that for free on its next
-// poll (`since` has advanced); one-shot mode returned after the first page and
+// poll (the offset has advanced); one-shot mode returned after the first page and
 // printed a silently cut-off log.
 func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	runID := uuid.New()
@@ -2410,8 +2432,7 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	}
 }
 
-// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped within one second, more than a page and
-// all within logTailMargin, against a server that applies since and offset as the real one does.
+// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped in one second, more than a page, against a server that applies since and offset as the real one does.
 // Each poll pages on by offset under one filter, so every event prints once; restarting from since
 // alone re-read the first page and stopped there.
 func TestLogsCmd_PagesADenseTrailByOffset(t *testing.T) {

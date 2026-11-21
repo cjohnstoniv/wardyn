@@ -723,29 +723,20 @@ func parseDecisionUntil(s string) (time.Time, error) {
 	return t, nil
 }
 
-// logTailMargin backs the server-side Since filter off the newest event time.
-// The server pages by chain seq, not time, and an event's time is stamped
-// before it waits for the chain lock (up to db.AuditChainLockTimeout, 5s), so
-// a lower-seq event can carry a later time than a higher-seq one.
-const logTailMargin = 10 * time.Second
-
-// logTail dedupes a run's audit-event stream across repeated polls for
-// runLogsCmd. Progress is tracked by event ID, never by time: the Since filter
-// is only a coarse, margin-backed server-side bound, so each poll re-returns
-// recent events and the seen set drops the ones already printed.
+// logTail follows a run's audit-event stream across repeated polls for
+// runLogsCmd. The trail is read in seq order and only ever appended to, so the
+// position already read is a durable cursor: each poll asks for the events from
+// that offset on. A time filter cannot serve here, because an event keeps the
+// time it was stamped with when it is stored late (a spooled event replayed
+// after newer events), and a window anchored on the newest time printed would
+// have passed it for good. Events are also deduped by ID, since a reply that
+// leaves rows out (the server hides a few records from some callers) makes the
+// offset trail the rows read and the next poll re-reads a few.
 // ponytail: seen grows with the run's events (UUIDs only); prune by age if a
 // follow session ever runs long enough to matter.
 type logTail struct {
-	since time.Time // newest event time emitted
-	seen  map[uuid.UUID]bool
-}
-
-// sinceFilter is the Since value for the next poll; zero before any event.
-func (t logTail) sinceFilter() time.Time {
-	if t.since.IsZero() {
-		return t.since
-	}
-	return t.since.Add(-logTailMargin)
+	offset int // events of the trail read so far; the next poll starts here
+	seen   map[uuid.UUID]bool
 }
 
 // filter returns the events in page that were not emitted by an earlier call,
@@ -754,6 +745,7 @@ func (t logTail) sinceFilter() time.Time {
 // I/O.
 func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 	next := t
+	next.offset += len(page)
 	if next.seen == nil {
 		next.seen = map[uuid.UUID]bool{}
 	}
@@ -763,9 +755,6 @@ func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
 			continue
 		}
 		next.seen[e.ID] = true
-		if e.Time.After(next.since) {
-			next.since = e.Time
-		}
 		newEvents = append(newEvents, e)
 	}
 	return newEvents, next
@@ -828,17 +817,12 @@ only at the end.`,
 			// comes back with nothing new.
 			drains := 0
 			for {
-				var f sdk.AuditFilter
-				if since := tail.sinceFilter(); !since.IsZero() {
-					f.Since = since.UTC().Format(time.RFC3339)
-				}
 				// A truncated page is the server's per-run cap (1000 events), not the end of the trail:
-				// page on under the same filter (Offset += the page's length) until the end is reached.
-				// The next poll's Since moves only then; restarting from Since alone re-reads the same
-				// page whenever its events fall within logTailMargin of each other.
+				// page on from the tail's offset until the end is reached. The offset is where the next
+				// poll starts too, so an event stored late is found wherever its time falls.
 				fresh := 0
-				for offset := 0; ; {
-					page, truncated, err := c.AuditEventsPage(cmd.Context(), id, f, sdk.ListOpts{Offset: offset})
+				for {
+					page, truncated, err := c.AuditEventsPage(cmd.Context(), id, sdk.AuditFilter{}, sdk.ListOpts{Offset: tail.offset})
 					if err != nil {
 						return err
 					}
@@ -851,7 +835,6 @@ only at the end.`,
 					if !truncated || len(page) == 0 {
 						break
 					}
-					offset += len(page)
 				}
 				if !follow {
 					return nil
