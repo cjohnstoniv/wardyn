@@ -20,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -32,9 +33,18 @@ import (
 type issuerAttachStore struct {
 	*authorityUnits
 	store.PortalGrantStore
-	pg        store.PG
-	reads     *runReadHook
-	grantHang *atomic.Bool // while set, a grant read waits for its context to end
+	pg         store.PG
+	reads      *runReadHook
+	grantHang  *atomic.Bool // while set, a grant read waits for its context to end
+	runnerHang *atomic.Bool // while set, a runner read waits for its context to end
+}
+
+func (s issuerAttachStore) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
+	if s.runnerHang != nil && s.runnerHang.Load() {
+		<-ctx.Done()
+		return types.Runner{}, ctx.Err()
+	}
+	return types.Runner{}, store.ErrNotFound
 }
 
 func (s issuerAttachStore) GetPortalGrantByID(ctx context.Context, id uuid.UUID, now time.Time) (types.PortalGrant, error) {
@@ -112,16 +122,18 @@ func (a *issuerAttachAudit) Record(ctx context.Context, ev types.AuditEvent) err
 }
 
 type issuerAttachRig struct {
-	env       *authorityEnv
-	srv       *Server
-	ts        *httptest.Server
-	runner    *holderTestRunner
-	audit     *issuerAttachAudit
-	run       types.AgentRun
-	via       types.DelegationVia
-	person    string
-	reads     *runReadHook
-	grantHang *atomic.Bool
+	env        *authorityEnv
+	srv        *Server
+	ts         *httptest.Server
+	runner     *holderTestRunner
+	audit      *issuerAttachAudit
+	run        types.AgentRun
+	via        types.DelegationVia
+	person     string
+	reads      *runReadHook
+	grantHang  *atomic.Bool
+	runnerHang *atomic.Bool
+	ast        *authzStore // the rig's runs
 }
 
 func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
@@ -134,13 +146,13 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 		t.Fatalf("read the seeded grant: %v", err)
 	}
 	ast := newAuthzStore()
-	reads, grantHang := &runReadHook{}, &atomic.Bool{}
+	reads, grantHang, runnerHang := &runReadHook{}, &atomic.Bool{}, &atomic.Bool{}
 	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st,
-		reads: reads, grantHang: grantHang}
+		reads: reads, grantHang: grantHang, runnerHang: runnerHang}
 	cfg := baseTestConfig(newHarness(t), st)
 	rig := &issuerAttachRig{env: e, runner: &holderTestRunner{}, person: principal,
 		audit: &issuerAttachAudit{held: make(chan time.Time, 1), detached: make(chan time.Time, 4)},
-		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads, grantHang: grantHang}
+		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads, grantHang: grantHang, runnerHang: runnerHang, ast: ast}
 	cfg.Audit, cfg.Runner, cfg.SessionRevocations = rig.audit, rig.runner, newAttachRevocations()
 	rig.srv = New(cfg)
 	rig.srv.authorityTest = attachAuthorityTimings{every: relayEvery, lookup: relayBound}
@@ -360,13 +372,32 @@ func TestAttachIssuerPortal_OpeningWaitsOnRunLock_PG(t *testing.T) {
 	}
 }
 
-// TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG: the thaw waits on the run's lock for part of the
-// opening bound, and once it frees the grant can no longer be read in time. The socket still opens, at the grant
-// end redemption read: setup that spends the bound never turns a live grant into an ended one.
+// runOpLockSeen is a Locker that reports each wait begun on one key, before it waits.
+type runOpLockSeen struct {
+	db.Locker
+	key     db.LockKey
+	waiting chan struct{}
+}
+
+func (l runOpLockSeen) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
+	if k == l.key {
+		select {
+		case l.waiting <- struct{}{}:
+		default:
+		}
+	}
+	return l.Locker.Lock(ctx, k, wait)
+}
+
+// TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG: past redemption, the terminal's thaw is seen waiting on
+// the run's lock; only then do grant reads start to hang, and the lock frees after part of the opening bound. The
+// socket still opens, at the grant end redemption read: setup that spends the bound never turns a live grant
+// into an ended one.
 func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
 	const bound = 2 * time.Second
 	setSupportWatch(t, time.Hour, bound)
 	rig := newIssuerAttachRig(t)
+	rig.srv.authorityTest.every = time.Hour // no re-check while the grant reads hang: only the open decides
 	_, unlock, err := rig.srv.lockRunOp(context.Background(), rig.run.ID)
 	if err != nil {
 		t.Fatalf("hold the run's lock: %v", err)
@@ -377,11 +408,18 @@ func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
 			unlock()
 		}
 	}()
+	waits := runOpLockSeen{Locker: rig.srv.locker(), key: db.NewLockKey(db.RunOpLockClass, rig.run.ID.String()), waiting: make(chan struct{}, 1)}
+	rig.srv.locks.override = waits
 	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
 		rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
 	if err != nil {
 		t.Fatalf("mint a ticket: %v", err)
 	}
+	var redeemed atomic.Bool // the terminal's own run read, after redemption's
+	rig.reads.mu.Lock()
+	rig.reads.n = 0
+	rig.reads.hook = func(context.Context) error { redeemed.Store(true); return nil }
+	rig.reads.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	type dialed struct {
@@ -394,8 +432,23 @@ func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
 		c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tok, nil)
 		got <- dialed{c, resp, err}
 	}()
-	time.Sleep(bound / 3) // redemption is done; the thaw waits on the lock
-	rig.grantHang.Store(true)
+	select {
+	case <-waits.waiting:
+	case d := <-got:
+		t.Fatalf("the terminal answered before its thaw waited on the run's lock: %v %v", d.resp, d.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the terminal's thaw never waited on the run's lock")
+	}
+	if !redeemed.Load() {
+		t.Fatal("the lock wait came before the terminal's run read: not the stage after redemption")
+	}
+	rig.grantHang.Store(true) // every later grant read hangs: none may decide the socket's end
+	time.Sleep(bound / 3)     // the thaw spends part of the bound waiting
+	select {
+	case d := <-got:
+		t.Fatalf("the terminal answered while the run's lock was held: %v %v", d.resp, d.err)
+	default:
+	}
 	unlock()
 	unlocked = true
 	select {
@@ -406,5 +459,44 @@ func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
 		_ = d.c.CloseNow()
 	case <-time.After(5 * time.Second):
 		t.Fatal("the terminal never answered")
+	}
+}
+
+// TestAttachIssuerPortal_LocalRunnerReadHeld_PG: a portal person's own local-placement run asks for transport=local
+// and its runner read hangs. The terminal answers the retryable 503 within the opening bound, not the 409 a
+// runner that is not theirs gets, and not when the store answers.
+func TestAttachIssuerPortal_LocalRunnerReadHeld_PG(t *testing.T) {
+	const bound = time.Second
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerAttachRig(t)
+	rig.srv.cfg.AttachLocal = true
+	runner := uuid.New()
+	rig.run.Placement, rig.run.RunnerID = types.PlacementLocal, &runner
+	rig.ast.mu.Lock()
+	rig.ast.runs[rig.run.ID] = rig.run
+	rig.ast.mu.Unlock()
+	rig.runnerHang.Store(true)
+	tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
+		rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
+	if err != nil {
+		t.Fatalf("mint a ticket: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?transport=local&ticket="+tok, nil)
+	took := time.Since(start)
+	if err == nil {
+		_ = c.CloseNow()
+		t.Fatal("the terminal opened while its runner could not be read")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a held runner read: %v %v, want the retryable 503", resp, err)
+	}
+	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), attachUnverifiableMsg) {
+		t.Fatalf("a held runner read answered %s, want %s", body, attachUnverifiableMsg)
+	}
+	if took > bound+400*time.Millisecond {
+		t.Fatalf("the open waited %v on the runner read, want within %v", took, bound+400*time.Millisecond)
 	}
 }

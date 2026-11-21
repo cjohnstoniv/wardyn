@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -656,10 +657,11 @@ func TestUIIssuerPortal_EntryPolicyReadAnswers(t *testing.T) {
 		kept   bool // the rule is on the run's row
 		hook   func(ctx context.Context) error
 		reason string
+		msg    string // the answering read's own message: the declared-apps lookup's, not a shared door's
 	}{
-		{"data-out rule stalls", false, stall, reasonDataOutUnreadable},
-		{"declared apps stall", true, stall, uiDeniedReasonRevocationUnavailable},
-		{"declared apps fail", true, func(context.Context) error { return errors.New("store down") }, uiDeniedReasonRevocationUnavailable},
+		{"data-out rule stalls", false, stall, reasonDataOutUnreadable, dataOutUnreadableMsg},
+		{"declared apps stall", true, stall, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg},
+		{"declared apps fail", true, func(context.Context) error { return errors.New("store down") }, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newIssuerUIRig(t, closingBackend("app"))
@@ -688,8 +690,8 @@ func TestUIIssuerPortal_EntryPolicyReadAnswers(t *testing.T) {
 			if policyReads == 0 {
 				t.Fatalf("%s: no policy read after the entry's run read: %d %s", tc.name, rec.Code, rec.Body.String())
 			}
-			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), tc.reason) {
-				t.Fatalf("%s: %d %s, want 503 %s", tc.name, rec.Code, rec.Body.String(), tc.reason)
+			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), tc.reason) || !strings.Contains(rec.Body.String(), tc.msg) {
+				t.Fatalf("%s: %d %s, want 503 %s: %s", tc.name, rec.Code, rec.Body.String(), tc.reason, tc.msg)
 			}
 			if took > bound+400*time.Millisecond {
 				t.Errorf("%s: answered %v after the enter, want within the %v bound", tc.name, took, bound)
@@ -776,5 +778,120 @@ func TestUIIssuerPortal_OpeningReadsShareOneBound(t *testing.T) {
 	}
 	if took < first || took > bound+200*time.Millisecond {
 		t.Fatalf("answered %v after the enter, want after the %v identity read and within the one %v bound", took, first, bound)
+	}
+}
+
+// issuerDoorStore is the background watch harness's store with its roster read (the second site read; the first
+// is the site's own limit) and its policy rows answered by site and audit when set.
+type issuerDoorStore struct {
+	*desktopSiteStore
+	siteReads   atomic.Int32
+	site, audit func(ctx context.Context) error
+}
+
+func (s *issuerDoorStore) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	if s.siteReads.Add(1) >= 2 && s.site != nil {
+		if err := s.site(ctx); err != nil {
+			return types.SiteConfig{}, err
+		}
+	}
+	return s.desktopSiteStore.GetSiteConfig(ctx)
+}
+
+func (s *issuerDoorStore) QueryAuditEvents(ctx context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {
+	if s.audit != nil {
+		if err := s.audit(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return s.desktopSiteStore.QueryAuditEvents(ctx, runID, limit)
+}
+
+// TestUIIssuerPortal_BackgroundDoorReadsAnswer503: a background Mac run's door, entered with the watch's ticket,
+// meets a sign-in roster or an inbound-app policy it cannot read, failed or held past the request's deadline. On
+// an issuer portal's opening each is the retryable 503. Any other ticket keeps its answer: the roster refuses as
+// sign-ins off (403), and an unreadable policy is no inbound app.
+func TestUIIssuerPortal_BackgroundDoorReadsAnswer503(t *testing.T) {
+	stall := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	outage := func(context.Context) error { return errors.New("store down") }
+	for _, tc := range []struct {
+		name        string
+		site, audit func(context.Context) error
+	}{
+		{"roster outage", outage, nil},
+		{"roster stall", stall, nil},
+		{"inbound policy outage", nil, outage},
+		{"inbound policy stall", nil, stall},
+	} {
+		for _, issuer := range []bool{true, false} {
+			name := tc.name + "/other ticket"
+			if issuer {
+				name = tc.name + "/issuer ticket"
+			}
+			t.Run(name, func(t *testing.T) {
+				h, st := bgWatchHarness(t)
+				h.srv.cfg.Store = &issuerDoorStore{desktopSiteStore: st, site: tc.site, audit: tc.audit}
+				ta := ticketActor{actorType: types.ActorHuman, principal: h.owner, role: oidc.RoleUser, app: uiDesktopAppName}
+				if issuer {
+					ta.admitBy = time.Now().Add(200 * time.Millisecond)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond) // the opening's, or the request's end
+				defer cancel()
+				req := httptest.NewRequestWithContext(ctx, http.MethodGet, uiEnterPath, nil)
+				rec := httptest.NewRecorder()
+				answered := h.srv.uiBackgroundDoorRefused(rec, req, backgroundOnlyRefusal(h.run, "web application gateway"), h.run, uiDesktopAppName, ta)
+				unverifiable := answered && rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), uiDeniedReasonRevocationUnavailable)
+				switch {
+				case issuer && !unverifiable:
+					t.Fatalf("answered %v: %d %s, want the retryable 503", answered, rec.Code, rec.Body.String())
+				case !issuer && unverifiable:
+					t.Fatalf("another ticket's answer changed to the issuer's 503: %s", rec.Body.String())
+				case !issuer && tc.site != nil && (!answered || rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), reasonDesktopSignInsOff)):
+					t.Fatalf("another ticket's unreadable roster: %v %d %s, want 403 %s", answered, rec.Code, rec.Body.String(), reasonDesktopSignInsOff)
+				}
+			})
+		}
+	}
+}
+
+// TestUIRenewal_CookieReadsShareOneBound: a renewing session's relay request reads its run slowly, taking most of
+// the opening bound, and then its chain read hangs. The request answers within one bound of its start, not one
+// bound per read.
+func TestUIRenewal_CookieReadsShareOneBound(t *testing.T) {
+	const bound, first = 500 * time.Millisecond, 400 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig, _, c := renewingRig(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	var slowed bool
+	rig.is.mu.Lock()
+	rig.is.runReads = 0
+	rig.is.runHook = func(ctx context.Context, n int) error {
+		if n != 1 {
+			return nil
+		}
+		slowed = true // read after the request has returned
+		select {
+		case <-time.After(first):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	rig.is.mu.Unlock()
+	rig.is.hold(hang)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	rec := rig.uiHarness.relay("/", c, func(r *http.Request) { *r = *r.WithContext(ctx) })
+	took := time.Since(start)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("%d %s, want 503", rec.Code, rec.Body.String())
+	}
+	if !slowed {
+		t.Fatal("the relay's run read was never asked: the slow read did not take part of the bound")
+	}
+	if took < first || took > bound+200*time.Millisecond {
+		t.Fatalf("answered %v after the request, want after the %v run read and within the one %v bound", took, first, bound)
 	}
 }
