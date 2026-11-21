@@ -49,26 +49,33 @@ func (f *svcFix) replica() *Server {
 
 func TestServiceGrant_SecretWriteRefusesChangedDestination_PG(t *testing.T) {
 	f := newSvcFix(t)
-	for name, edit := range map[string]func(*putServiceGrantSecretRequest){
-		"token_url": func(b *putServiceGrantSecretRequest) { b.TokenURL = "https://other-idp.example.test/token" },
-		"client_id": func(b *putServiceGrantSecretRequest) { b.ClientID = "another-client" },
-		"base_url":  func(b *putServiceGrantSecretRequest) { b.BaseURL = "https://other-gw.corp.example" },
-	} {
+	cases := []struct {
+		name  string
+		edit  func(*putServiceGrantSecretRequest)
+		wants []string // what the new audit row must name: both hosts of the changed pair
+	}{
+		{"token_url", func(b *putServiceGrantSecretRequest) { b.TokenURL = "https://other-idp.example.test/token" },
+			[]string{"body_token_host", "other-idp.example.test", "token_host", "idp.example.test"}},
+		{"client_id", func(b *putServiceGrantSecretRequest) { b.ClientID = "another-client" }, []string{"client_id"}},
+		{"base_url", func(b *putServiceGrantSecretRequest) { b.BaseURL = "https://other-gw.corp.example" },
+			[]string{"body_base_host", "other-gw.corp.example", "base_host"}},
+	}
+	for i, c := range cases {
 		body := f.putSecretBody(svcClientSecret)
-		edit(&body)
+		c.edit(&body)
 		w := f.serve(http.MethodPut, f.secretPath(), body)
 		if w.Code != http.StatusConflict || svcBody(t, w)["reason"] != reasonServiceGrantDestinationChanged || f.sec.has(f.secretName()) {
-			t.Fatalf("%s: %d %s, record stored %v; want 409 and nothing stored", name, w.Code, w.Body.String(), f.sec.has(f.secretName()))
+			t.Fatalf("%s: %d %s, record stored %v; want 409 and nothing stored", c.name, w.Code, w.Body.String(), f.sec.has(f.secretName()))
 		}
-	}
-	rows := f.audit.find("model_provider.service_grant.secret_write")
-	if len(rows) != 3 {
-		t.Fatalf("audit rows = %d, want one per refusal", len(rows))
-	}
-	d := string(rows[0].Data)
-	for _, want := range []string{"body_token_host", "token_host", "body_base_host", "base_host", "other-idp.example.test", "idp.example.test"} {
-		if !strings.Contains(d, want) {
-			t.Errorf("refusal row %s lacks %q", d, want)
+		rows := f.audit.find("model_provider.service_grant.secret_write")
+		if len(rows) != i+1 {
+			t.Fatalf("%s: audit rows = %d, want %d, one new row per refusal", c.name, len(rows), i+1)
+		}
+		d := string(rows[len(rows)-1].Data) // this case's own row, whatever order the cases ran in
+		for _, want := range c.wants {
+			if !strings.Contains(d, want) {
+				t.Errorf("%s: its audit row %s lacks %q", c.name, d, want)
+			}
 		}
 	}
 	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcClientSecret)); w.Code != http.StatusNoContent || !f.sec.has(f.secretName()) {

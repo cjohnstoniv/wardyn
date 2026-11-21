@@ -94,7 +94,9 @@ func (s *Server) resolveServiceGrantInjection(w http.ResponseWriter, r *http.Req
 	if refusal == nil {
 		refusal = s.serviceGrantRowRefusal(rec, again)
 	}
-	if refusal != nil {
+	// A decisive token result (drift, or a definitive refusal such as a retiring predecessor) stands when only
+	// the final read failed: the proxy must not be told to keep a header the grant has withdrawn.
+	if refusal != nil && !(err != nil && refusal.status == http.StatusServiceUnavailable && serviceGrantDecisive(err)) {
 		return fail(refusal.status, refusal.reason, refusal.body, refusal.extra)
 	}
 	if err != nil {
@@ -116,6 +118,13 @@ func (s *Server) resolveServiceGrantInjection(w http.ResponseWriter, r *http.Req
 		CredentialExpiresAt: credentialExpiry(tok.expiresAt),
 	})
 	return true
+}
+
+// serviceGrantDecisive reports whether a failed mint is a verdict that a retry would not change: drift, or a
+// definitive refusal.
+func serviceGrantDecisive(err error) bool {
+	var se *serviceGrantError
+	return errors.Is(err, errServiceGrantDrift) || (errors.As(err, &se) && se.definitive)
 }
 
 // serviceGrantRowRefusal repeats the owner and the grant checks against a row: the owner is a service

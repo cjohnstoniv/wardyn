@@ -356,17 +356,22 @@ func (s *Server) serviceGrantFailure(ctx context.Context, p types.ModelProvider,
 		liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, serviceGrantSecretName(p.UID))
 		liveDigest, found, derr := s.liveServiceGrantDigest(ctx, p.UID)
 		_, retiring, gerr := s.serviceGrantGate(ctx, p.UID)
+		// Independent read outcomes combine so that a confirmed withdrawal is never replaced by a read that failed:
+		// only when nothing decisive was seen does an unreadable read answer as a retryable unavailable.
 		switch {
-		case derr != nil || gerr != nil:
-			// An unreadable configuration is not a withdrawal: retryable, and nothing from the cache is served.
-			return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
-		case !found || liveDigest != digest:
+		case derr == nil && (!found || liveDigest != digest):
 			return serviceGrantMinted{}, errServiceGrantDrift
-		case retiring:
+		case gerr == nil && retiring:
 			// A replacement committed with its predecessor's claim while this attempt ran: whatever the
 			// provider said, nothing from the old generation is served and the refusal is definitive.
 			s.dropServiceGrantCache(p.UID)
 			e = svcFail(svcReasonSecretGone, true)
+		case rerr == nil && liveOK && liveRev == "":
+			s.dropServiceGrantCache(p.UID)
+			e = svcFail(svcReasonSecretGone, true)
+		case derr != nil || gerr != nil:
+			// An unreadable configuration is not a withdrawal: retryable, and nothing from the cache is served.
+			return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
 		case rerr != nil:
 			return serviceGrantMinted{}, e
 		case liveOK && liveRev == "":
@@ -464,15 +469,15 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 	_, retiring, gerr := s.serviceGrantGate(ctx, p.UID)
 	superseded := func() { s.auditServiceGrantMint(ctx, p, trigger, sent, &tok, nil, true) }
 	switch {
+	case derr == nil && (!found || liveDigest != digest):
+		superseded()
+		return serviceGrantMinted{}, errServiceGrantDrift
+	case gerr == nil && retiring:
+		superseded()
+		return serviceGrantMinted{}, svcFail(svcReasonSecretGone, true)
 	case derr != nil || gerr != nil:
 		superseded()
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
-	case retiring:
-		superseded()
-		return serviceGrantMinted{}, svcFail(svcReasonSecretGone, true)
-	case !found || liveDigest != digest:
-		superseded()
-		return serviceGrantMinted{}, errServiceGrantDrift
 	case rerr != nil:
 		superseded()
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)

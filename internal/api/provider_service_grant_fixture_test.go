@@ -370,7 +370,7 @@ func (s *svcStore) PutSiteConfigGrants(ctx context.Context, cfg types.SiteConfig
 }
 
 func (s *svcStore) ServiceGrantDoc(ctx context.Context) (store.ServiceGrantDoc, error) {
-	sc, _ := s.GetSiteConfig(ctx)
+	sc, _ := s.azA3Store.GetSiteConfig(ctx) // the grant keys read separately from the roster: getErr does not fail them
 	doc := store.ServiceGrantDoc{Grants: map[string]types.ProviderServiceGrant{}, Cleanups: map[string]store.ServiceGrantCleanup{}}
 	if sc.ModelProviders != nil {
 		for _, p := range sc.ModelProviders.Providers {

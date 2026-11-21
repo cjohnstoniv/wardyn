@@ -8,8 +8,12 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -302,5 +307,224 @@ func TestServiceGrant_FailedFlightRecordsOneFailure(t *testing.T) {
 	}
 	if f.idp.count() != 1 || writes.Load() != 1 {
 		t.Fatalf("requests %d, failure status writes %d; want one flight and one write", f.idp.count(), writes.Load())
+	}
+}
+
+// CX-372, mixed outcomes: a pending claim that was read is decisive evidence against the old credential, and
+// an unreadable roster beside it, at settlement or at the final resolve, changes nothing about the answer.
+func TestServiceGrant_ConfirmedWithdrawalSurvivesAFailedRead(t *testing.T) {
+	// (a) The claim read finds the claim, the roster read fails: the settlement is definitive.
+	f := newSvcFixWithSecret(t)
+	f.mustToken(serviceGrantTriggerRefresh)
+	f.clock.Advance(55 * time.Minute)
+	var broken atomic.Bool
+	f.st.getErr = func() error {
+		if broken.Load() {
+			return errSvcDown
+		}
+		return nil
+	}
+	f.idp.respond = func(int, svcReq) svcAnswer {
+		f.putClaim(f.uid)
+		broken.Store(true)
+		return svcAnswer{Status: 503, Body: `{}`}
+	}
+	got, err := f.token(serviceGrantTriggerRefresh)
+	var se *serviceGrantError
+	if !errors.As(err, &se) || !se.definitive || got.token != "" || f.cached() {
+		t.Fatalf("(a) token = %q, %v, cached %v; want the definitive refusal and nothing cached", got.token, err, f.cached())
+	}
+	// (b) A definitive token result, then an unreadable final row and run: the resolve stays definitive.
+	g := newSvcFixWithSecret(t)
+	plan, _, _, ok := g.dispatch(t)
+	if !ok {
+		t.Fatal("dispatch refused")
+	}
+	g.srv.dropServiceGrantCache(g.uid)
+	var down atomic.Bool
+	g.st.getErr = func() error {
+		if down.Load() {
+			return errSvcDown
+		}
+		return nil
+	}
+	g.idp.respond = func(int, svcReq) svcAnswer {
+		g.putClaim(g.uid)
+		down.Store(true)
+		return svcOAuthError(401, "invalid_client")
+	}
+	if code, body := g.svcResolve(plan); code != http.StatusFailedDependency || body["reason"] != reasonServiceGrantRefused {
+		t.Fatalf("(b) resolve = %d %v, want 424 %s", code, body, reasonServiceGrantRefused)
+	}
+	// (c) Control: only an unreadable roster answers 503.
+	h := newSvcFixWithSecret(t)
+	plan, _, _, _ = h.dispatch(t)
+	h.clock.Advance(55 * time.Minute)
+	var off atomic.Bool
+	h.st.getErr = func() error {
+		if off.Load() {
+			return errSvcDown
+		}
+		return nil
+	}
+	h.idp.respond = func(int, svcReq) svcAnswer { off.Store(true); return svcAnswer{Status: 503, Body: `{}`} }
+	if code, body := h.svcResolve(plan); code != http.StatusServiceUnavailable {
+		t.Fatalf("(c) resolve = %d %v, want 503", code, body)
+	}
+}
+
+// C: a disable, or a change of the lane's auth format, while a renewal is failing is a 403 refusal, and the
+// last good header is not kept.
+func TestServiceGrant_DisableAndFormatChangeDuringRenewalRefused(t *testing.T) {
+	for name, edit := range map[string]func(*types.ModelProvider){
+		"disabled": func(p *types.ModelProvider) { p.Disabled = true },
+		"auth format": func(p *types.ModelProvider) {
+			p.Auth = &types.ProviderAuth{Header: "Authorization", Format: "Token %s"}
+		},
+	} {
+		f := newSvcFixWithSecret(t)
+		plan, _, _, ok := f.dispatch(t)
+		if !ok {
+			t.Fatal("dispatch refused")
+		}
+		if code, _ := f.svcResolve(plan); code != http.StatusOK {
+			t.Fatalf("%s: first resolve %d", name, code)
+		}
+		f.clock.Advance(55 * time.Minute)
+		f.idp.respond = func(int, svcReq) svcAnswer {
+			f.setRow(edit)
+			return svcAnswer{Status: 503, Body: `{}`}
+		}
+		code, body := f.svcResolve(plan)
+		if code != http.StatusForbidden {
+			t.Fatalf("%s: resolve during a failing renewal = %d %v, want 403", name, code, body)
+		}
+		if v, _ := body["value"].(string); v != "" {
+			t.Errorf("%s: a header came back with the refusal", name)
+		}
+	}
+}
+
+// J: a paced answer from a failure is a plain nil error when it serves a live cached token, never a typed nil.
+func TestServiceGrant_PacedAnswerIsAPlainNilError(t *testing.T) {
+	f := newSvcFixWithSecret(t)
+	f.mustToken(serviceGrantTriggerRefresh)
+	f.clock.Advance(55 * time.Minute)
+	f.idp.respond = func(int, svcReq) svcAnswer { return svcAnswer{Status: 503, Body: `{}`} }
+	for i, trigger := range []string{serviceGrantTriggerRefresh, serviceGrantTriggerResolve, serviceGrantTriggerDispatch} {
+		tok, err := f.token(trigger)
+		if err != nil || tok.token != svcToken(1) {
+			t.Fatalf("call %d (%s): %q, %v; want the live cached token and an untyped nil error", i, trigger, tok.token, err)
+		}
+	}
+	if n := f.idp.count(); n != 2 {
+		t.Fatalf("requests = %d, want the first mint and one failed renewal; the later calls are paced", n)
+	}
+}
+
+// L: a status write that is held does not delay another provider's pass or the heartbeat.
+func TestServiceGrant_HeldStatusWriteDelaysNoOtherProvider(t *testing.T) {
+	f := newSvcFixWithSecret(t)
+	uid2 := f.addSecondProvider()
+	release := make(chan struct{})
+	f.st.upsertGate = func(r store.ServiceGrantStatusRow) {
+		if r.ProviderUID == f.uid {
+			<-release
+		}
+	}
+	go f.srv.serviceGrantPass(context.Background())
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if row, ok := f.st.statusOf(uid2, f.srv.svcGrant.replica()); ok && row.Outcome == "ok" {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatal("the healthy provider's status was not written while another's status write was held")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	hb := make(chan struct{})
+	go func() { f.srv.serviceGrantHeartbeat(context.Background()); close(hb) }()
+	select {
+	case <-hb:
+	case <-time.After(2 * time.Second):
+		t.Error("the heartbeat waited for a held status write")
+	}
+	close(release)
+}
+
+// addSecondProvider adds a second grant row with its own secret and returns its uid.
+func (f *svcFix) addSecondProvider() string {
+	f.t.Helper()
+	f.site.mu.Lock()
+	rows := append([]types.ModelProvider(nil), f.site.sc.ModelProviders.Providers...)
+	p := rows[0]
+	o := *p.OIDC
+	p.ID, p.Name, p.UID, p.OIDC = "second", "second", uuid.NewString(), &o
+	p.BaseURL = "https://second.corp.example"
+	rows = append(rows, p)
+	f.site.sc.ModelProviders = &types.ModelProviders{Providers: rows}
+	f.site.mu.Unlock()
+	raw := mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: p.BaseURL, ClientSecret: svcSecretTwo})
+	f.sec.set(serviceGrantSecretName(p.UID), raw)
+	return p.UID
+}
+
+// M: a scheduled service run whose grant deteriorates between scheduling and promotion meets the grant's own
+// refusal at its start; it is not held to wait for a person's sign-in. A person's expired sign-in still waits.
+func TestServiceGrant_ScheduledRunDeteriorationIsNotASignInWait(t *testing.T) {
+	t.Setenv(envScheduledRuns, "true")
+	f := newSvcFixWithSecret(t)
+	at := f.clock.Now().Add(time.Hour)
+	launch := func() queuedLaunch {
+		req, _ := json.Marshal(createRunRequest{Agent: "claude-code"})
+		return queuedLaunch{Request: req, ProviderID: f.provider().ID}
+	}
+	entry := func(owner string) store.RunQueueEntry { return store.RunQueueEntry{Owner: owner, StartAt: &at} }
+	ctx := context.Background()
+	// The grant's mint fails definitively after the run was scheduled.
+	f.idp.respond = func(int, svcReq) svcAnswer { return svcOAuthError(401, "invalid_client") }
+	f.token(serviceGrantTriggerRefresh) //nolint:errcheck // the failure is the point
+	if got := f.srv.queueOwnerSignIn(ctx, entry(svcOwner), launch()); got != "" {
+		t.Fatalf("a service run with a failing grant waits as %q, want no sign-in wait", got)
+	}
+	// Control: a person with no sign-in waits for it.
+	if got := f.srv.queueOwnerSignIn(ctx, entry(oidcPersonSub), launch()); got != runnerpool.WaitOwnerSignIn {
+		t.Fatalf("a person with no sign-in waits as %q, want %q", got, runnerpool.WaitOwnerSignIn)
+	}
+}
+
+// The existing token callers are unchanged by the shared request: an ID token comes back, a changed refresh
+// token is returned as the new one, and a consent refusal is classified from error_description alone.
+func TestPostToken_ExistingCallersUnchanged(t *testing.T) {
+	answer := ""
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, answer)
+	}))
+	defer ts.Close()
+	s := &Server{cfg: Config{}}
+	ta := tokenAuthority{tokenURL: ts.URL, clientID: "c", clientSecret: "s"}
+	form := func() url.Values {
+		return url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"old-refresh"}}
+	}
+
+	answer = `{"access_token":"at-0123456789","id_token":"idt-0123456789","refresh_token":"new-refresh","expires_in":3600,"scope":"openid api.read"}`
+	out, err := s.postToken(context.Background(), ta, form())
+	if err != nil || out.IDToken != "idt-0123456789" || out.RefreshToken != "new-refresh" || out.Scope != "openid api.read" {
+		t.Fatalf("postToken = %+v, %v; want the ID token, the changed refresh token and the scope kept", out, err)
+	}
+	answer = `{"error":"invalid_grant","error_description":"AADSTS65001: The user or administrator has not consented"}`
+	if _, err = s.postToken(context.Background(), ta, form()); !errors.Is(err, ErrADOEntraConsentRequired) {
+		t.Fatalf("a consent refusal named only in error_description = %v, want ErrADOEntraConsentRequired", err)
+	}
+	answer = `{"error":"invalid_grant","error_description":"expired"}`
+	if _, err = s.postToken(context.Background(), ta, form()); !errors.Is(err, ErrADOEntraDeadCredential) {
+		t.Fatalf("invalid_grant = %v, want a dead credential", err)
+	}
+	answer = `{"error":"invalid_client"}`
+	if _, err = s.postToken(context.Background(), ta, form()); !errors.Is(err, ErrADOEntraUnavailable) {
+		t.Fatalf("invalid_client = %v, want unavailable, the sign-ins kept", err)
 	}
 }
