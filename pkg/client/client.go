@@ -380,6 +380,9 @@ type AuditFilter struct {
 	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
+	// Order "desc" reads a run's trail newest window first, newest event first, as ?order=desc does; empty keeps
+	// the default, oldest first. It narrows nothing.
+	Order string
 }
 
 // queryValues renders f as the query params the server's parseAuditFilter
@@ -403,6 +406,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.Outcome != "" {
 		q.Set("outcome", f.Outcome)
+	}
+	if f.Order != "" {
+		q.Set("order", f.Order)
 	}
 	return q
 }

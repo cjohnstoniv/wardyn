@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -724,40 +725,59 @@ func parseDecisionUntil(s string) (time.Time, error) {
 }
 
 // logTail follows a run's audit-event stream across repeated polls for
-// runLogsCmd. The trail is read in seq order and only ever appended to, so the
-// position already read is a durable cursor: each poll asks for the events from
-// that offset on. A time filter cannot serve here, because an event keeps the
-// time it was stamped with when it is stored late (a spooled event replayed
-// after newer events), and a window anchored on the newest time printed would
-// have passed it for good. Events are also deduped by ID, since a reply that
-// leaves rows out (the server hides a few records from some callers) makes the
-// offset trail the rows read and the next poll re-reads a few.
+// runLogsCmd. What it keeps is the set of events already printed, never a
+// position: a time filter misses an event the daemon stored late (a spooled
+// event keeps the time it was stamped with), and an offset into the trail runs
+// ahead when retention drops its oldest rows between polls and skips the next
+// event for good. Each poll instead reads the trail newest first, which only
+// ever gains rows at the front and loses them at the far end, and stops at the
+// first event it printed before: everything past that point is older and was
+// printed with it.
 // ponytail: seen grows with the run's events (UUIDs only); prune by age if a
 // follow session ever runs long enough to matter.
 type logTail struct {
-	offset int // events of the trail read so far; the next poll starts here
-	seen   map[uuid.UUID]bool
+	seen map[uuid.UUID]bool
 }
 
-// filter returns the events in page that were not emitted by an earlier call,
-// plus the tail's updated state. A value receiver/return (not a pointer
-// method) so a unit test can assert the before/after state directly with no
-// I/O.
-func (t logTail) filter(page []types.AuditEvent) ([]types.AuditEvent, logTail) {
-	next := t
-	next.offset += len(page)
-	if next.seen == nil {
-		next.seen = map[uuid.UUID]bool{}
+// logFetch reads one page of a run's audit trail newest first, from offset events in.
+type logFetch func(offset int) (page []types.AuditEvent, truncated bool, err error)
+
+// poll returns the events no earlier poll returned, oldest first, and marks them. A truncated page is the
+// server's per-run cap (1000 events), not the end of the trail: it pages on until it reaches an event it has
+// seen or the end of the trail. An event that appears on two pages because rows were appended between them is
+// returned once.
+func (t *logTail) poll(fetch logFetch) ([]types.AuditEvent, error) {
+	if t.seen == nil {
+		t.seen = map[uuid.UUID]bool{}
 	}
-	var newEvents []types.AuditEvent
-	for _, e := range page {
-		if next.seen[e.ID] {
-			continue
+	var fresh []types.AuditEvent // newest first
+	got := map[uuid.UUID]bool{}
+	for offset := 0; ; {
+		page, truncated, err := fetch(offset)
+		if err != nil {
+			return nil, err
 		}
-		next.seen[e.ID] = true
-		newEvents = append(newEvents, e)
+		reached := false
+		for _, e := range page {
+			if t.seen[e.ID] {
+				reached = true
+				break
+			}
+			if !got[e.ID] {
+				got[e.ID] = true
+				fresh = append(fresh, e)
+			}
+		}
+		if reached || !truncated || len(page) == 0 {
+			break
+		}
+		offset += len(page)
 	}
-	return newEvents, next
+	slices.Reverse(fresh)
+	for _, e := range fresh {
+		t.seen[e.ID] = true
+	}
+	return fresh, nil
 }
 
 // logLine renders one audit event as a single human-readable log line.
@@ -817,25 +837,16 @@ only at the end.`,
 			// comes back with nothing new.
 			drains := 0
 			for {
-				// A truncated page is the server's per-run cap (1000 events), not the end of the trail:
-				// page on from the tail's offset until the end is reached. The offset is where the next
-				// poll starts too, so an event stored late is found wherever its time falls.
-				fresh := 0
-				for {
-					page, truncated, err := c.AuditEventsPage(cmd.Context(), id, sdk.AuditFilter{}, sdk.ListOpts{Offset: tail.offset})
-					if err != nil {
-						return err
-					}
-					var newEvents []types.AuditEvent
-					newEvents, tail = tail.filter(page)
-					for _, e := range newEvents {
-						fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
-					}
-					fresh += len(newEvents)
-					if !truncated || len(page) == 0 {
-						break
-					}
+				newEvents, err := tail.poll(func(offset int) ([]types.AuditEvent, bool, error) {
+					return c.AuditEventsPage(cmd.Context(), id, sdk.AuditFilter{Order: "desc"}, sdk.ListOpts{Offset: offset})
+				})
+				if err != nil {
+					return err
 				}
+				for _, e := range newEvents {
+					fmt.Fprintln(cmd.OutOrStdout(), logLine(e))
+				}
+				fresh := len(newEvents)
 				if !follow {
 					return nil
 				}
