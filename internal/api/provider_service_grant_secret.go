@@ -71,7 +71,7 @@ func (s *Server) readServiceGrantRecord(ctx context.Context, name string) (servi
 	raw, err := st.Get(secretstore.WithPurpose(ctx, secretstore.PurposeServiceGrant), name)
 	if errors.Is(err, secretstore.ErrNotFound) {
 		s.evictServiceGrantSecretMask(name)
-		return serviceGrantRecord{}, svcFail(svcReasonSecretGone, true)
+		return serviceGrantRecord{}, svcGone() // authoritative absence: no later failed read weakens it
 	}
 	if err != nil {
 		return serviceGrantRecord{}, svcFail(svcReasonUnavailable, false)

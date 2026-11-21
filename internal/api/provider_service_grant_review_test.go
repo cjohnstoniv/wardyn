@@ -678,3 +678,53 @@ func TestServiceGrant_WithdrawalSeenAtPublicationSurvivesFailedConfirmationReads
 		t.Fatalf("empty revision at publication = %q, %v, cached %v; want the final secret_gone", got.token, err, g.cached())
 	}
 }
+
+// The record is gone at its read, and every read after it is inconclusive: the roster cannot be read, and the
+// revision either fails or is not kept by the store. The absence the record read saw is the verdict: no
+// request is sent, the cached token is dropped, and the proxy is refused with the definitive 424.
+func TestServiceGrant_RecordGoneAtReadStaysFinalOverInconclusiveRereads(t *testing.T) {
+	for _, noRev := range []bool{false, true} {
+		t.Run(fmt.Sprintf("noRevision=%v", noRev), func(t *testing.T) {
+			f := newSvcFixWithSecret(t)
+			f.sec.noRev = noRev
+			plan, _, _, ok := f.dispatch(t)
+			if !ok || !f.cached() {
+				t.Fatalf("dispatch ok=%v cached=%v; want a minted, cached token", ok, f.cached())
+			}
+			sent := f.idp.count()
+			f.clock.Advance(55 * time.Minute) // under the reuse margin, so the resolve reads the record again
+			var armed, broken atomic.Bool
+			armed.Store(true)
+			f.st.getErr = func() error {
+				if broken.Load() {
+					return errSvcDown
+				}
+				return nil
+			}
+			f.sec.hold = func(op, name string) {
+				if op != "get" || name != f.secretName() || !armed.CompareAndSwap(true, false) {
+					return
+				}
+				f.sec.mu.Lock()
+				delete(f.sec.m, name)
+				f.sec.rev[name]++
+				f.sec.revErr = errSvcDown
+				f.sec.mu.Unlock()
+				broken.Store(true)
+			}
+			code, body := f.svcResolve(plan)
+			if armed.Load() {
+				t.Fatal("the record was never read; the case did not run")
+			}
+			if code != http.StatusFailedDependency || body["reason"] != reasonServiceGrantRefused {
+				t.Fatalf("resolve = %d %v, want 424 %s", code, body, reasonServiceGrantRefused)
+			}
+			if n := f.idp.count() - sent; n != 0 {
+				t.Fatalf("%d requests sent to the identity provider after the record was gone, want 0", n)
+			}
+			if f.cached() {
+				t.Fatal("the cached token survived the record's absence")
+			}
+		})
+	}
+}
