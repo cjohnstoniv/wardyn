@@ -287,7 +287,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	// An issuer portal's socket is cut from beside it (attachIssuerCut): the upgrade goes through the cut's
+	// writer, so the switched connection registers with it, and its watch runs from here, before the audit
+	// write below.
+	ctx, aw, cut, stopCut := s.attachIssuerCut(r, w, id)
+	defer stopCut()
+	c, err := websocket.Accept(aw, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -424,7 +429,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	go s.attachKeepalive(pumpCtx, id)
 	// Started before the exec is opened, so a fence ends an attach in flight too. The credential that
 	// opened this socket is checked again while it is open (attachEnders, attach_authority.go).
-	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel)
+	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel, cut)
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the

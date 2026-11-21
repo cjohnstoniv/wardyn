@@ -225,9 +225,18 @@ type wsCloser interface {
 // and the re-check of the credential that opened the socket, and returns what the close reason is once
 // the pump has returned: the fence's or the authority's when either ended it (the authority's last, as
 // the handler read them before), else the pump's own.
-func (s *Server) attachEnders(ctx context.Context, r *http.Request, runID uuid.UUID, c *websocket.Conn, holder *attachHolder, cancel context.CancelFunc) func(pumped string) string {
+//
+// An issuer portal's socket has its authority on cut (attachIssuerCut) instead: a cut stops the holder driving
+// the PTY and reads as the authority's end.
+func (s *Server) attachEnders(ctx context.Context, r *http.Request, runID uuid.UUID, c *websocket.Conn, holder *attachHolder, cancel context.CancelFunc, cut *streamCut) func(pumped string) string {
 	maskFenced := s.endAttachOnMaskFence(ctx, runID, c, cancel)
-	authEnded := s.holdAttachAuthority(ctx, s.attachAuthority(r, runID), func() { endAttachAuthority(c, holder, cancel) })
+	var authEnded func() bool
+	if cut != nil {
+		cut.addCloser(func() { holder.evicted.Store(true) })
+		authEnded = cut.isCut
+	} else {
+		authEnded = s.holdAttachAuthority(ctx, s.attachAuthority(r, runID), func() { endAttachAuthority(c, holder, cancel) })
+	}
 	return func(reason string) string {
 		if maskFenced() {
 			reason = maskFencedReason
@@ -250,4 +259,34 @@ func endAttachAuthority(c wsCloser, holder *attachHolder, cancel context.CancelF
 		_ = c.Close(attachAuthEndedCode, attachAuthEndedReason)
 		cancel()
 	}()
+}
+
+// attachIssuerCut is the guarded cut over an issuer portal's terminal socket, and r's context, w and a no-op
+// stop for any other socket. It is made before the upgrade, so the hijack registers with it. The socket ends at
+// its ticket's grant end, and the ticket's authority (attachAuthority: the grant, the person's identity and the
+// portal's pin included) is asked every attachAuthorityEvery from the moment redemption began
+// (ticketActor.checkStart), each lookup bounded by attachAuthorityLookupBound. A check that fails cuts the
+// socket, both directions at once, so it ends within one re-check of the event (35 s).
+func (s *Server) attachIssuerCut(r *http.Request, w http.ResponseWriter, runID uuid.UUID) (context.Context, http.ResponseWriter, *streamCut, func()) {
+	ta, ok := ticketActorFromContext(r.Context())
+	if !ok || !issuerPortalPerson(ta.via, ta.principal) {
+		return r.Context(), w, nil, func() {}
+	}
+	check := s.attachAuthority(r, runID)
+	ctx, cancel := context.WithCancel(r.Context())
+	hardEnd := time.Now() // a grant no longer live: the socket ends before it opens
+	if end, v := s.delegationLive(ctx, *ta.via); v == verdictOK {
+		hardEnd = time.Now().Add(end.Sub(s.cfg.Now()))
+	}
+	cut := newStreamCut(w, hardEnd, cancel)
+	start := ta.checkStart
+	if start.IsZero() {
+		start = time.Now()
+	}
+	every := s.attachAuthorityEvery()
+	cut.watch(ctx, start.Add(every), every, s.attachAuthorityLookupBound(), check)
+	return ctx, cut.Writer(w), cut, func() {
+		defer cancel()
+		cut.End()
+	}
 }
