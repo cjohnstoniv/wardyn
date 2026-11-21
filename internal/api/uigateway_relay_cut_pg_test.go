@@ -115,8 +115,8 @@ func (c chunkLines) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// waitFor polls cond until it holds, failing after within.
-func waitFor(t *testing.T, within time.Duration, what string, cond func() bool) {
+// waitWithin polls cond until it holds, failing after within.
+func waitWithin(t *testing.T, within time.Duration, what string, cond func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(within); !cond(); time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
@@ -161,9 +161,9 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 				}
 				// Admitted and flowing in every claimed direction, before any successor or event.
 				opened := time.Now()
-				waitFor(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(opened.Add(-time.Minute)) > 0 })
+				waitWithin(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(opened.Add(-time.Minute)) > 0 })
 				if out != nil {
-					waitFor(t, time.Second, "the backend's output reached the viewer", func() bool { return out.after(opened.Add(-time.Minute)) > 0 })
+					waitWithin(t, time.Second, "the backend's output reached the viewer", func() bool { return out.after(opened.Add(-time.Minute)) > 0 })
 				}
 				stop := make(chan struct{})
 				go func() { // the portal keeps exchanging
@@ -191,7 +191,7 @@ func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
 				if in.sentAfter(end.Add(-time.Minute)) == 0 {
 					t.Fatal("no viewer input crossed the stream at all")
 				}
-				waitFor(t, 5*time.Second, "the backend's reader returned", in.finished)
+				waitWithin(t, 5*time.Second, "the backend's reader returned", in.finished)
 				limit := at // a revoke's cut lands somewhere inside its window: the handler's end bounds it
 				if by == "end" {
 					limit = earlier(at, end.Add(inputGrace)) // the end is the cut point

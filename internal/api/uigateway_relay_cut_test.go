@@ -657,7 +657,7 @@ func TestUIRelayIssuerPortal_CutDuringStalledTLSShutdownStopsInput(t *testing.T)
 			case <-time.After(5 * time.Second):
 				t.Error("the client could still send 5 s after the cut: the socket is open")
 			}
-			waitFor(t, 5*time.Second, "the backend's reader returned", in.finished)
+			waitWithin(t, 5*time.Second, "the backend's reader returned", in.finished)
 			limit := cutAt
 			if by == "end" {
 				limit = earlier(cutAt, event.Add(inputGrace))
@@ -696,10 +696,10 @@ func TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd(t *testing.T) {
 	}
 	end := rig.wall(a.ExpiresAt) // as the gateway converted it at admission
 	go sendLines(conn)
-	waitFor(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(time.Now().Add(-time.Minute)) > 0 })
+	waitWithin(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(time.Now().Add(-time.Minute)) > 0 })
 	at := waitEnded(t, ended, 10*time.Second, "quiet 101")
 	cutWithin(t, "quiet 101 (end): the stream ended", at, end, relaySlack)
-	waitFor(t, 5*time.Second, "the backend's reader returned", in.finished)
+	waitWithin(t, 5*time.Second, "the backend's reader returned", in.finished)
 	if n := in.sentAfter(earlier(at, end.Add(inputGrace))); n != 0 {
 		t.Errorf("the backend received %d lines the viewer sent after the end", n)
 	}
