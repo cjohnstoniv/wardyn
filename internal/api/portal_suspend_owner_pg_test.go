@@ -119,14 +119,11 @@ func TestPortalSuspend_KillClaimBelongsToItsAcquisition_PG(t *testing.T) {
 	}
 }
 
-// A run that left the queue is repaired as a queued kill: a worker that moved a waiting run out of its queue and
-// stopped leaves the run KILLED with its queue row gone, and the repair, which sees an ordinary KILLED run, still
-// writes the queued kill's receipt under the pinned id, with no sandbox to stop, and drops the drive the run kept
-// its work folder in. The run and its drive are made as an enqueue makes them.
-func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
-	l := newPortalLife(t)
+// enqueueWithDrive enqueues a run for principal as the enqueue path does: its run row, its queue row and the member
+// drive it keeps its work folder in, in one transaction.
+func enqueueWithDrive(t *testing.T, l *portalLife, principal string) (types.AgentRun, types.UserDrive) {
+	t.Helper()
 	ctx := context.Background()
-	principal, _ := l.signIn(t, "u1")
 	maxRuns := 4
 	pool, err := l.st.CreateRunnerPool(ctx, types.RunnerPool{ID: uuid.New(), Name: "Queue " + uuid.NewString()[:8], Scope: types.RunnerPoolOrganization,
 		Limits: &types.RunnerPoolLimits{
@@ -146,6 +143,18 @@ func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
 	if _, err := l.st.CreateQueuedRun(ctx, run, store.RunQueueEntry{PoolID: pool.ID, Owner: principal, QueuedAt: now, DeadlineAt: now.Add(time.Hour), KeptDrive: &drive, KeptDriveLimit: 10}, 0); err != nil {
 		t.Fatalf("enqueue a run with its kept drive: %v", err)
 	}
+	return run, drive
+}
+
+// A run that left the queue is repaired as a queued kill: a worker that moved a waiting run out of its queue and
+// stopped leaves the run KILLED with its queue row gone, and the repair, which sees an ordinary KILLED run, still
+// writes the queued kill's receipt under the pinned id, with no sandbox to stop, and drops the drive the run kept
+// its work folder in. The run and its drive are made as an enqueue makes them.
+func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, _ := l.signIn(t, "u1")
+	run, drive := enqueueWithDrive(t, l, principal)
 	c := killRowOf(t, l, principal, run.ID)
 	live := func(q string) int { return l.count(t, q, run.ID, drive.ID) }
 	if live(`SELECT count(*) FROM run_queue WHERE run_id = $1 AND $2::uuid IS NOT NULL`) != 1 || live(`SELECT count(*) FROM user_drives WHERE $1::uuid IS NOT NULL AND id = $2 AND delete_started_at IS NULL`) != 1 {
@@ -289,4 +298,78 @@ func TestPortalSuspend_OwedRefusalSettlesFromAnotherRecorder_PG(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A waiting run leaves its queue in the claim's own transaction, which holds the suspension's ledger row. While that
+// claim is stalled on the run's row, a replacement suspension's step one, which deletes that ledger row, waits for
+// the claim to commit rather than getting ahead of the departure; once the run's row is free the run is KILLED with no
+// queue row, and the replacement then goes through. A departure made after the claim's transaction would let the
+// replacement return while the claim is still stalled.
+func TestPortalSuspend_QueueDepartureHoldsTheLedgerRow_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	principal, _ := l.signIn(t, "u1")
+	run, _ := enqueueWithDrive(t, l, principal)
+	second := portalOrigin(types.ActorHuman, "second-admin")
+	c := killRowOf(t, l, principal, run.ID)
+	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != 200 {
+		t.Fatalf("reactivate = %d", w.Code)
+	}
+	// The run's row is held by someone else, so the claim's UPDATE of it waits after it has locked the ledger row.
+	hold, err := l.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			if err := hold.Commit(ctx); err != nil {
+				t.Errorf("release the run's row: %v", err)
+			}
+		}
+	}
+	defer release()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	claimDone := make(chan error, 1)
+	go func() {
+		_, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+		claimDone <- err
+	}()
+	pollTrue(t, "the claim to wait on the run's row", func() bool {
+		return l.count(t, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE agent_runs%'`) > 0
+	})
+	replaced := make(chan error, 1)
+	go func() {
+		_, _, _, err := l.h.srv.portalSuspendStepOne(withActor(ctx, second.actorType, second.actor), l.st, c.id, second, 0, nil)
+		replaced <- err
+	}()
+	select {
+	case err := <-replaced:
+		t.Fatalf("the replacement suspension went ahead of the stalled claim (%v)", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	release()
+	if err := <-claimDone; err != nil {
+		t.Fatalf("the claim: %v", err)
+	}
+	if err := <-replaced; err != nil {
+		t.Fatalf("the replacement's step one after the claim: %v", err)
+	}
+	if got := l.runState(t, run.ID); got != types.RunKilled || l.count(t, `SELECT count(*) FROM run_queue WHERE run_id = $1`, run.ID) != 0 {
+		t.Errorf("run = %s with %d queue rows, want KILLED with none", got, l.count(t, `SELECT count(*) FROM run_queue WHERE run_id = $1`, run.ID))
+	}
+}
+
+// pollTrue polls cond for up to ten seconds.
+func pollTrue(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
