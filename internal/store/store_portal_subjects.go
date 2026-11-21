@@ -100,7 +100,7 @@ const userCallerPrefix = "user:"
 // task or a description is never read. A caller that names a portal person but has no well-formed issuer key
 // is ErrDelegatePersonUnknownPortal.
 func uiAppCallerKeys(docs ...[]byte) ([]string, error) {
-	var keys []string
+	var scan callerScan
 	for _, d := range docs {
 		if len(bytes.TrimSpace(d)) == 0 {
 			continue
@@ -109,51 +109,68 @@ func uiAppCallerKeys(docs ...[]byte) ([]string, error) {
 		if err := json.Unmarshal(d, &doc); err != nil {
 			return nil, fmt.Errorf("store: read a policy document for its callers: %w", err)
 		}
-		var walkErr error
-		var walk func(v any)
-		walk = func(v any) {
-			switch t := v.(type) {
-			case map[string]any:
-				for k, child := range t {
-					if strings.EqualFold(k, "ui_apps") {
-						if apps, ok := child.([]any); ok {
-							for _, a := range apps {
-								if app, ok := a.(map[string]any); ok {
-									for ak, av := range app {
-										callers, ok := av.([]any)
-										if !ok || !strings.EqualFold(ak, "callers") {
-											continue
-										}
-										for _, c := range callers {
-											if str, ok := c.(string); ok {
-												key, err := portalKeyOfCaller(str)
-												if err != nil {
-													walkErr = err
-												} else if key != "" {
-													keys = append(keys, key)
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-					walk(child)
-				}
-			case []any:
-				for _, child := range t {
-					walk(child)
-				}
-			}
-		}
-		walk(doc)
-		if walkErr != nil {
-			return nil, walkErr
+		scan.walk(doc)
+		if scan.err != nil {
+			return nil, scan.err
 		}
 	}
-	slices.Sort(keys)
-	return slices.Compact(keys), nil
+	slices.Sort(scan.keys)
+	return slices.Compact(scan.keys), nil
+}
+
+// callerScan collects the issuer keys of the portal people named as UI-app callers in decoded documents. err
+// is the last caller that named a portal person without a well-formed issuer key.
+type callerScan struct {
+	keys []string
+	err  error
+}
+
+// walk visits every value of a decoded document and reads the apps under each "ui_apps" key.
+func (s *callerScan) walk(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if apps, ok := child.([]any); ok && strings.EqualFold(k, "ui_apps") {
+				s.apps(apps)
+			}
+			s.walk(child)
+		}
+	case []any:
+		for _, child := range t {
+			s.walk(child)
+		}
+	}
+}
+
+// apps reads the callers of each entry of one ui_apps array.
+func (s *callerScan) apps(apps []any) {
+	for _, a := range apps {
+		app, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		for ak, av := range app {
+			if callers, ok := av.([]any); ok && strings.EqualFold(ak, "callers") {
+				s.callers(callers)
+			}
+		}
+	}
+}
+
+// callers records the issuer key of each string caller that names a portal person.
+func (s *callerScan) callers(callers []any) {
+	for _, c := range callers {
+		str, ok := c.(string)
+		if !ok {
+			continue
+		}
+		key, err := portalKeyOfCaller(str)
+		if err != nil {
+			s.err = err
+		} else if key != "" {
+			s.keys = append(s.keys, key)
+		}
+	}
 }
 
 // portalKeyOfCaller is the issuer key of a user caller that names a portal person, "" for any other caller.
