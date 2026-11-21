@@ -585,6 +585,9 @@ func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, i
 	}
 	ev := s.auditEvent(nil, o.actorType, o.actor, "person.deprovision", id.String(), "success", mustJSON(data))
 	rctx, err := s.pinStepEvent(ctx, o, st, s.cfg.Now().UTC(), id, store.JobKindPurge, key, &ev)
+	if errors.Is(err, errStepSettled) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

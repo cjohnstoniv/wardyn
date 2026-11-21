@@ -30,6 +30,10 @@ type killGuard struct {
 type killReceipt struct {
 	id uuid.UUID
 	at time.Time
+	// claim is the acquisition this attempt holds (zero until it has acquired one); queued says the claim, the first
+	// one of the occurrence, killed the run from the queue, so a repair tears down as a queued kill.
+	claim  uuid.UUID
+	queued bool
 }
 
 type killGuardKey struct{}
@@ -42,6 +46,20 @@ func withKillGuard(ctx context.Context, g killGuard) context.Context {
 func killGuardOf(ctx context.Context) (killGuard, bool) {
 	g, ok := ctx.Value(killGuardKey{}).(killGuard)
 	return g, ok
+}
+
+// killClaimOf is the ownership handle the attempt holding g acquired, zero if it acquired none.
+func killClaimOf(g killGuard) uuid.UUID {
+	if g.rcpt == nil {
+		return uuid.Nil
+	}
+	return g.rcpt.claim
+}
+
+// killWasQueued reports whether the kill under ctx is one of a run that left the queue, the repair of one included.
+func killWasQueued(ctx context.Context) bool {
+	g, ok := killGuardOf(ctx)
+	return ok && g.rcpt != nil && g.rcpt.queued
 }
 
 // killReceiptOf rewrites the run.kill event of a kill made under a claimed killGuard into the occurrence's one event
@@ -65,7 +83,7 @@ func killReceiptOf(ctx context.Context, ev types.AuditEvent) (context.Context, t
 // already KILLED is claimed for repair without being written again, and not while another claim of the occurrence is
 // live (store.ErrKillHeld).
 func (s *Server) claimGuardedKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, g killGuard) (bool, store.KeptMachineDeletion, error) {
-	kill := store.RunKill{RunID: run.ID, From: run.State, ReceiptID: uuid.New(), ReceiptAt: s.cfg.Now().UTC()}
+	kill := store.RunKill{RunID: run.ID, From: run.State, ReceiptID: uuid.New(), ReceiptAt: s.cfg.Now().UTC(), ClaimID: uuid.New()}
 	_, hasKept := s.cfg.Store.(store.KeptMachineStore)
 	nonOwner := killerType == serviceActorType || killerType == types.ActorHuman && killer != run.CreatedBy
 	if hasKept && nonOwner && !run.State.IsTerminal() && run.State != types.RunQueued {
@@ -83,7 +101,7 @@ func (s *Server) claimGuardedKill(ctx context.Context, run types.AgentRun, kille
 			s.runStateMoved(run.ID, run.State, types.RunKilled, c.Applied)
 		}
 		if c.Applied {
-			g.rcpt.id, g.rcpt.at = c.ReceiptID, c.ReceiptAt
+			g.rcpt.id, g.rcpt.at, g.rcpt.claim, g.rcpt.queued = c.ReceiptID, c.ReceiptAt, c.ClaimID, c.From == types.RunQueued
 		}
 		intent = c.Intent
 		return c.Applied, err

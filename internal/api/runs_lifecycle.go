@@ -848,7 +848,7 @@ func (s *Server) claimKillTransitionWith(ctx context.Context, run types.AgentRun
 // runner.action.refuse. The login supersede still reads it as a failure.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
-	if run.State == types.RunQueued {
+	if run.State == types.RunQueued || killWasQueued(ctx) {
 		return s.killQueuedTail(ctx, run, killerType, killer, extra)
 	}
 	killData := map[string]any{}

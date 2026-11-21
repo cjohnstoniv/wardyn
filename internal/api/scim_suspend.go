@@ -99,6 +99,9 @@ func (o leaverOrigin) portalLedger(ctx context.Context, st any, id uuid.UUID) (s
 	return led, b.at, true
 }
 
+// errStepSettled is a step another worker finished while this one went to pin its event: nothing is left to write.
+var errStepSettled = errors.New("the step was finished by another worker")
+
 // pinStepEvent fixes the audit event a portal step writes on the step's ledger row, the first attempt's winning
 // whole: its id, time, actor and data. ev is rewritten to what the row holds, and ctx is marked as a replay, so a
 // second writer of the same step, on any replica, writes the same event and adds no row. key names the row the
@@ -127,11 +130,24 @@ func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore,
 	if err != nil {
 		return ctx, err
 	}
+	if held.Done {
+		return ctx, errStepSettled
+	}
 	ev.ID, ev.Time = held.ID, held.At
-	if p, ok, err := s.openPinned(ctx, held.Payload); err != nil {
+	p, state, err := s.openPinned(ctx, held.Payload)
+	if err != nil {
 		return ctx, err
-	} else if ok {
+	}
+	switch state {
+	case pinOpen:
 		ev.ActorType, ev.Actor, ev.Data = p.ActorType, p.Actor, p.Data
+	case pinErased:
+		// The first attempt's actor is gone with their key. The event keeps its id and time, which are the first
+		// attempt's, so it is not credited to the retrying caller, who did not act then; their own request has its own
+		// receipt at its own time.
+		ev.ActorType, ev.Actor = types.ActorSystem, pinnedErasedActor
+	default:
+		ev.ActorType, ev.Actor = types.ActorSystem, portalLifecycleActor
 	}
 	return store.WithAuditReplay(ctx), nil
 }
@@ -371,6 +387,11 @@ func (s *Server) drainRefusalAudits(ctx context.Context, o leaverOrigin, st scim
 			unproved = j.Target
 		}
 		key := store.JobKey{Step: j.Step, Target: j.Target}
+		if o.portal {
+			// A portal person's owed row is its own occurrence: its pin and finish name it, and the finish needs
+			// the pinned event in the shared audit table, not only in one replica's spool.
+			key.ID = j.ID
+		}
 		id, at := j.EventID, j.EventAt
 		if id == uuid.Nil {
 			var err error
@@ -820,14 +841,18 @@ func (s *Server) killStep(ctx context.Context, o leaverOrigin, st scimStore, id 
 			failed := errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindSuspend, key, err))
 			if g, ok := killGuardOf(tctx); ok && !errors.Is(err, store.ErrSuperseded) {
 				// A teardown that failed after its claim leaves the claim for its retry to take at once.
-				failed = errors.Join(failed, g.led.ReleaseSuspensionKillAt(ctx, id, key))
+				failed = errors.Join(failed, g.led.ReleaseSuspensionKillAt(ctx, id, key, killClaimOf(g)))
 			}
 			errs = append(errs, failed)
 			continue
 		}
-		ferr := finishStep(ctx, st, id, key, map[string]int{"runs_killed": 1})
+		fkey := key
+		if g, ok := killGuardOf(tctx); ok {
+			fkey.Claim = killClaimOf(g) // a finish by a worker whose claim another took over is refused
+		}
+		ferr := finishStep(ctx, st, id, fkey, map[string]int{"runs_killed": 1})
 		if g, ok := killGuardOf(tctx); ok && errors.Is(ferr, store.ErrReceiptNotStored) {
-			ferr = errors.Join(ferr, g.led.ReleaseSuspensionKillAt(ctx, id, key)) // the receipt is not stored: the retry writes it
+			ferr = errors.Join(ferr, g.led.ReleaseSuspensionKillAt(ctx, id, key, killClaimOf(g))) // the receipt is not stored: the retry writes it
 		}
 		errs = append(errs, ferr)
 	}
@@ -943,6 +968,9 @@ func (s *Server) auditSuspension(ctx context.Context, o leaverOrigin, st scimSto
 		}
 		ev := s.auditEvent(nil, o.actorType, o.actor, row.action, id.String(), "success", mustJSON(row.data))
 		rctx, err := s.pinStepEvent(ctx, o, st, s.cfg.Now().UTC(), id, store.JobKindSuspend, key, &ev)
+		if errors.Is(err, errStepSettled) {
+			continue
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue
