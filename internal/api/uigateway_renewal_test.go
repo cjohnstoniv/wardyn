@@ -34,6 +34,7 @@ type issuerUIStore struct {
 	reads   int // grant and chain reads
 
 	hang           chan struct{}             // while set, a chain read waits for it to close
+	hangIdentity   chan struct{}             // while set, an identity read waits for it to close
 	afterChainRead func()                    // runs once, after the next chain read answers
 	stallTouch     func(ctx context.Context) // replaces the idle clock's write when set
 }
@@ -112,7 +113,17 @@ func (s *issuerUIStore) SweepExpiredPortalGrants(context.Context, time.Time) (in
 	return 0, nil
 }
 
-func (s *issuerUIStore) IdentityBlocked(_ context.Context, principal string, _ int64) (bool, error) {
+func (s *issuerUIStore) IdentityBlocked(ctx context.Context, principal string, _ int64) (bool, error) {
+	s.mu.Lock()
+	hang := s.hangIdentity
+	s.mu.Unlock()
+	if hang != nil {
+		select {
+		case <-hang:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.blocked[principal], nil
@@ -470,5 +481,45 @@ func TestPortalRegistration_RenewalWithheldRefused(t *testing.T) {
 	rig.clock.advance(6 * time.Minute)
 	if r := rig.relay(c); r.Code != http.StatusForbidden {
 		t.Fatalf("renewal withheld, past the grant with a successor live: %d, want 403", r.Code)
+	}
+}
+
+// TestUIIssuerPortal_AdmissionReadHeldPastBound: the store holds the opening check's portal read; the request
+// is answered 503 at the bound, not held with the store.
+func TestUIIssuerPortal_AdmissionReadHeldPastBound(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig, _, c := renewingRig(t)
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	rig.is.hold(hang)
+	start := time.Now()
+	r := rig.relay(c)
+	if r.Code != http.StatusServiceUnavailable {
+		t.Fatalf("an opening check held by the store: %d %s, want 503", r.Code, r.Body.String())
+	}
+	if d := time.Since(start); d > bound+400*time.Millisecond {
+		t.Errorf("answered %v after the request, want at the %v bound", d, bound)
+	}
+}
+
+// TestUIIssuerPortal_TicketAdmissionReadHeldPastBound: the store holds the redemption's identity read; the enter
+// is answered 503 at the bound, not held with the store.
+func TestUIIssuerPortal_TicketAdmissionReadHeldPastBound(t *testing.T) {
+	const bound = 200 * time.Millisecond
+	setSupportWatch(t, time.Hour, bound)
+	rig := newIssuerUIRig(t, closingBackend("app"))
+	tok := rig.ticket(rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(5*time.Minute)))
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	rig.is.mu.Lock()
+	rig.is.hangIdentity = hang
+	rig.is.mu.Unlock()
+	start := time.Now()
+	if rec := rig.enterWith(tok); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a redemption held by the store: %d %s, want 503", rec.Code, rec.Body.String())
+	}
+	if d := time.Since(start); d > bound+400*time.Millisecond {
+		t.Errorf("answered %v after the enter, want at the %v bound", d, bound)
 	}
 }

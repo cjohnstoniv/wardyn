@@ -261,7 +261,9 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		return
 	}
 	checkStart := time.Now() // an issuer portal's open stream is re-checked from here (desktopIssuerCut)
-	end, de := s.uiReassertRelayEnd(r.Context(), sess)
+	actx, acancel := issuerAdmitCtx(r.Context(), sess)
+	end, de := s.uiReassertRelayEnd(actx, sess)
+	acancel()
 	if de != nil {
 		writeErrorReason(w, de.status, de.reason, de.msg)
 		return

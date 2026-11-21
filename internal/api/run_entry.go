@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
@@ -197,6 +198,13 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 // asks it again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
 // minted through a portal.
 func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
+	// An issuer portal's ticket is answered within the watch bound, at redemption as on every re-check: a store
+	// that hangs is a 503, never a held request.
+	if issuerPortalPerson(ta.via, ta.principal) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
+		defer cancel()
+	}
 	// The credential the ticket was minted under (a personal token, or a CLI sign-in's session) is asked after
 	// by id, as a Mac window's is: its revoke, expiry or sign-out ends the terminal though no person-level cut
 	// was written. A store that cannot say refuses.

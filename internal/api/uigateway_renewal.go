@@ -137,7 +137,9 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// Re-assert the human here as well as in uiDial, debounced but for a helper and an issuer portal's
 	// person: net/http dials only when its pool has nothing reusable, so most requests of a busy session
 	// never reach uiDial at all (uiReassertRelay).
-	end, de := s.uiReassertRelayEnd(r.Context(), sess)
+	actx, acancel := issuerAdmitCtx(r.Context(), sess)
+	end, de := s.uiReassertRelayEnd(actx, sess)
+	acancel()
 	if de != nil {
 		writeErrorReason(w, de.status, de.reason, de.msg)
 		return
@@ -189,6 +191,16 @@ func (s *Server) relayWatchCtx(ctx context.Context, w http.ResponseWriter, sess 
 		defer cancel()
 		cut.End()
 	}
+}
+
+// issuerAdmitCtx bounds an issuer portal's foreground authorization reads (a request's re-check, a desktop's
+// Closed-set read) by supportWatchWait, apart from the life of the stream they admit: a store that hangs answers
+// 503 within it rather than holding the request. Any other session keeps ctx.
+func issuerAdmitCtx(ctx context.Context, sess uiSession) (context.Context, context.CancelFunc) {
+	if !issuerPortalPerson(sess.Via, sess.Principal) {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
 }
 
 // uiStreamEnd is an issuer-portal stream's known end on the wall clock: the earliest of sess's signed

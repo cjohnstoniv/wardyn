@@ -329,8 +329,14 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 		return uiSession{}, false
 	}
 	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosed reads the shared set.
-	if sess.Desktop && s.uiDesktopClosed(r.Context(), sess, now) {
-		return uiSession{}, false
+	// An issuer portal's read is bounded, as its whole opening check is (issuerAdmitCtx).
+	if sess.Desktop {
+		ctx, cancel := issuerAdmitCtx(r.Context(), sess)
+		closed := s.uiDesktopClosed(ctx, sess, now)
+		cancel()
+		if closed {
+			return uiSession{}, false
+		}
 	}
 	return sess, true
 }
