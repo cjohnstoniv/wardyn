@@ -1462,6 +1462,18 @@ audit row carries one of these reasons:
 | `actor_token_unsupported` | (400): an issuer portal takes no actor token. |
 | `portal_unavailable` | (503): the portal's stores, verifier or issuer set are not available on this server. |
 
+The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/purge`; `GET /people/portal-person`; `GET /people/{principal}/portals`) answer with:
+
+| Reason | Meaning |
+|---|---|
+| `portal_person_only` | (422): the principal is not a portal person's. |
+| `portal_issuer_not_bound` | (404): no portal is bound to that exact issuer. Check its spelling. |
+| `person_not_found` | (404): the issuer is bound and no portal introduced that person. |
+| `person_not_suspended` | (409): a purge needs a suspended person. |
+| `person_purged` | (409): the purge is permanent; suspend and reactivate are refused. |
+| `portal_lifecycle_incomplete` | (503): steps are still pending. Retry; the portal sweep also finishes them. |
+| `portal_person_param_invalid` | (400, 422): `issuer` or `person_id` is missing, or `purge_after_seconds` is out of range. |
+
 ## Pending approval (governance writes)
 
 A deployment can require a second approver for governance writes: a covered write is

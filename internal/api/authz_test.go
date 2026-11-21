@@ -507,6 +507,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// 0.8.6: the SCIM card's read (scim-a7): who is deactivated, which leaver steps are stuck on what
 	// error, and which purged people's drives are still to reclaim. Names, steps and errors, read-only.
 	"GET /api/v1/scim/status": {class: classSecurity},
+	// The portal's own lifecycle (person_suspend.go, person_purge.go, portal_lifecycle.go): suspending a person
+	// issuer portals introduced, the reads that find one and the portal's status view are the security tier; the
+	// undo of a cut and the permanent purge are the super admin's alone.
+	"GET /api/v1/people/portal-person":           {class: classSecurity},
+	"GET /api/v1/people/{principal}/portals":     {class: classSecurity},
+	"POST /api/v1/people/{principal}/suspend":    {class: classSecurity},
+	"POST /api/v1/people/{principal}/reactivate": {class: classAdmin},
+	"POST /api/v1/people/{principal}/purge":      {class: classAdmin},
+	"GET /api/v1/admin/portal-lifecycle/status":  {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},

@@ -77,6 +77,12 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	out.Configured = true
+	// The portal's synthetic issuer is never a SCIM issuer: whatever the setting says, this page lists no portal
+	// person (they have /admin/portal-lifecycle/status).
+	if strings.HasPrefix(s.cfg.SCIM.Issuer, types.PortalPersonPrefix) {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	// SweepSCIMPurge purges for any delay above zero, so one under a second reads as one second, never as 0.
 	if d := s.cfg.SCIM.PurgeAfter; d > 0 {
 		out.PurgeAfterSeconds = max(1, int64(d/time.Second))
