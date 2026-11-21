@@ -7,11 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -184,86 +186,159 @@ func TestPortalSubjectRuling_OldInvalidGrantRemovable_PG(t *testing.T) {
 	}
 }
 
-// Every store write of a stored document that can name a UI-app caller rules the callers inside it: a caller
-// of a portal person whose binding does not exist is refused, one whose binding exists is stored.
-func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
-	st, pool := isolatedStore(t)
+// uiWriter is one durable write of a stored document that can name a UI-app caller, driven with the caller of
+// a person under the issuer key it is given, and the census column that must then find the stored row.
+type uiWriter struct {
+	name, census string
+	write        func(key string) error
+}
+
+// uiCallerJSON is a UI-app caller of a portal person under key, spelled with JSON escapes the way a client
+// that escapes every character spells it: "user" and "delegate" as \u escapes, which a text search for the
+// prefix does not see and the decoder reads back.
+func uiCallerJSON(key string) string {
+	caller := "user:" + types.PortalPrincipal(key, "alice")
+	return strings.Replace(caller, "user:delegate", `\u0075ser:\u0064elegate`, 1)
+}
+
+func uiAppsJSON(key string) string {
+	return `{"ui_apps":[{"name":"app","port":8080,"inbound":true,"callers":["` + uiCallerJSON(key) + `"]}]}`
+}
+
+// uiWriters are the durable writers of the policy documents the ruling reads: a policy's spec on create and
+// on update, a preset's inline policy and its policy overlay, a template's intent inline policy, a standalone
+// unit's ceiling, and a composed unit's overlay. The first two and the unit documents go through the real
+// marshalling of their types, whose caller carries a character Go escapes ("&" as \u0026); the preset and
+// template documents are raw JSON with the prefix itself escaped.
+func uiWriters(st store.PG, pool *pgxpool.Pool) []uiWriter {
 	ctx := context.Background()
-	p := newIssuerPortal(t, st, "")
-	unbound := types.PortalIssuerKey("https://never-bound.example.com")
-	callerOf := func(key string) string { return "user:" + types.PortalPrincipal(key, "alice") }
+	now := time.Now().UTC()
+	callerAmp := func(key string) string { return "user:" + types.PortalPrincipal(key, "alice") + "&x" }
 	specWith := func(caller string) types.RunPolicySpec {
 		return types.RunPolicySpec{UIApps: []types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{caller}}}}
 	}
-	refused := func(what string, err error) {
-		t.Helper()
-		if !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
-			t.Errorf("%s with an unbound caller = %v, want ErrDelegatePersonUnknownPortal", what, err)
-		}
+	preset := func(request string) types.LaunchPreset {
+		return types.LaunchPreset{Name: "preset-" + uuid.NewString(), UserTypes: []string{}, Request: json.RawMessage(request), CreatedBy: "admin@example.com"}
 	}
-	now := time.Now().UTC()
-
-	// run_policies: create and update.
-	_, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "bad-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: specWith(callerOf(unbound))})
-	refused("CreatePolicy", err)
-	good, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "good-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: specWith(callerOf(p.Key))})
-	if err != nil {
-		t.Fatalf("CreatePolicy with a bound caller = %v", err)
-	}
-	_, err = st.UpdatePolicy(ctx, good.ID, good.UpdatedAt, good.Name, specWith(callerOf(unbound)))
-	refused("UpdatePolicy", err)
-	if _, err = st.UpdatePolicy(ctx, good.ID, good.UpdatedAt, good.Name, specWith(callerOf(p.Key))); err != nil {
-		t.Fatalf("UpdatePolicy with a bound caller = %v", err)
-	}
-
-	// launch_presets.
-	preset := func(caller string) types.LaunchPreset {
-		req, _ := json.Marshal(map[string]any{"policy": specWith(caller)})
-		return types.LaunchPreset{Name: "preset-" + uuid.NewString(), UserTypes: []string{}, Request: req, CreatedBy: "admin@example.com"}
-	}
-	_, _, err = st.PutLaunchPreset(ctx, preset(callerOf(unbound)))
-	refused("PutLaunchPreset", err)
-	if _, _, err = st.PutLaunchPreset(ctx, preset(callerOf(p.Key))); err != nil {
-		t.Fatalf("PutLaunchPreset with a bound caller = %v", err)
-	}
-
-	// run_template_revisions: create and update.
-	tmpl := func(caller string) types.RunTemplate {
-		doc, _ := json.Marshal(map[string]any{"policy": specWith(caller)})
+	template := func(document string) types.RunTemplate {
 		return types.RunTemplate{ID: uuid.New(), Owner: types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"},
-			Kind: types.TemplateKindTemplate, Name: "t-" + uuid.NewString(), Document: doc, CreatedBy: "alice"}
+			Kind: types.TemplateKindTemplate, Name: "t-" + uuid.NewString(), Document: json.RawMessage(document), CreatedBy: "alice"}
 	}
-	_, err = st.CreateTemplate(ctx, tmpl(callerOf(unbound)), nil)
-	refused("CreateTemplate", err)
-	okTmpl, err := st.CreateTemplate(ctx, tmpl(callerOf(p.Key)), nil)
-	if err != nil {
-		t.Fatalf("CreateTemplate with a bound caller = %v", err)
-	}
-	upd := okTmpl
-	upd.Document = tmpl(callerOf(unbound)).Document
-	_, err = st.UpdateTemplate(ctx, upd, okTmpl.Revision, nil)
-	refused("UpdateTemplate", err)
-	if n := rowCount(t, pool, `SELECT count(*) FROM run_template_revisions WHERE template_id = $1`, okTmpl.ID); n != 1 {
-		t.Errorf("a refused update left %d revisions, want 1", n)
-	}
-
-	// governance_units: the standalone ceiling.
-	writeUnit := func(caller string) error {
+	unit := func(u types.GovernanceUnit) error {
 		tx, err := pool.Begin(ctx)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
+		u.Name, u.CreatedBy = "unit-"+uuid.NewString(), "admin@example.com"
 		if _, err := store.WriteGovernanceUnitQ(ctx, tx, uuid.New(), func(_ []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
-			return types.GovernanceUnit{Name: "unit-" + uuid.NewString(), Ceiling: specWith(caller), CreatedBy: "admin@example.com"}, nil
+			return u, nil
 		}); err != nil {
 			return err
 		}
 		return tx.Commit(ctx)
 	}
-	refused("WriteGovernanceUnitQ", writeUnit(callerOf(unbound)))
-	if err := writeUnit(callerOf(p.Key)); err != nil {
-		t.Fatalf("WriteGovernanceUnitQ with a bound caller = %v", err)
+	return []uiWriter{
+		{"CreatePolicy", "run_policies.spec", func(key string) error {
+			_, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "p-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: specWith(callerAmp(key))})
+			return err
+		}},
+		{"UpdatePolicy", "run_policies.spec", func(key string) error {
+			base, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "p-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now})
+			if err != nil {
+				return err
+			}
+			_, err = st.UpdatePolicy(ctx, base.ID, base.UpdatedAt, base.Name, specWith(callerAmp(key)))
+			return err
+		}},
+		{"PutLaunchPreset inline_policy", "launch_presets.request", func(key string) error {
+			_, _, err := st.PutLaunchPreset(ctx, preset(`{"task":"x","inline_policy":`+uiAppsJSON(key)+`}`))
+			return err
+		}},
+		{"PutLaunchPreset policy_overlay", "launch_presets.request", func(key string) error {
+			_, _, err := st.PutLaunchPreset(ctx, preset(`{"task":"x","policy_overlay":`+uiAppsJSON(key)+`}`))
+			return err
+		}},
+		{"CreateTemplate intent.inline_policy", "run_template_revisions.document", func(key string) error {
+			_, err := st.CreateTemplate(ctx, template(`{"kind":"template","intent":{"inline_policy":`+uiAppsJSON(key)+`}}`), nil)
+			return err
+		}},
+		{"WriteGovernanceUnitQ ceiling", "governance_units.ceiling", func(key string) error {
+			return unit(types.GovernanceUnit{Ceiling: specWith(callerAmp(key))})
+		}},
+		{"WriteGovernanceUnitQ composed overlay", "governance_units.overlay", func(key string) error {
+			return unit(types.GovernanceUnit{Overlay: &types.CeilingOverlay{UIApps: &[]types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{callerAmp(key)}}}}})
+		}},
+	}
+}
+
+// Every durable write of a stored document that can name a UI-app caller rules the callers inside it: a caller
+// of a portal person whose binding does not exist is refused, one whose binding exists is stored. Against a
+// retirement of that binding each write is driven in the orders that matter, with two transactions and explicit
+// sequencing: the retirement commits first and the write is refused; the retirement is in flight when the
+// write starts, the write waits on the binding row and is refused when the retirement commits; the write
+// commits first and the retirement's census finds its row (ErrIssuerInUse).
+func TestPortalSubjectRuling_UICallersRuledAtEverySpecWrite_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	unbound := types.PortalIssuerKey("https://never-bound.example.com")
+	revokedPortal := func() issuerPortal {
+		p := newIssuerPortal(t, st, "")
+		if _, _, err := st.RevokeDelegate(ctx, p.Delegate.ID, time.Now().UTC(), false); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, w := range uiWriters(st, pool) {
+		t.Run(w.name, func(t *testing.T) {
+			if err := w.write(unbound); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
+				t.Errorf("a caller of an unbound issuer = %v, want ErrDelegatePersonUnknownPortal", err)
+			}
+
+			// The write commits first: the retirement's census finds the row it wrote.
+			first := revokedPortal()
+			if err := w.write(first.Key); err != nil {
+				t.Fatalf("a caller of a bound issuer = %v", err)
+			}
+			if err := st.RetirePortalIssuerQ(ctx, pool, first.Key); !errors.Is(err, store.ErrIssuerInUse) {
+				t.Errorf("retirement after the write = %v, want ErrIssuerInUse", err)
+			}
+			if hits, err := store.NamespaceCensusQ(ctx, pool, first.Key); err != nil || hits[w.census] < 1 {
+				t.Errorf("census after the write = %v, %v; want %s found", hits, err, w.census)
+			}
+
+			// The retirement is in flight when the write starts: the write waits for its commit.
+			inflight := revokedPortal()
+			retire, err := pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = retire.Rollback(ctx) })
+			if err := st.RetirePortalIssuerQ(ctx, retire, inflight.Key); err != nil {
+				t.Fatalf("retirement with no row: %v", err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- w.write(inflight.Key) }()
+			untilBlocked(t, pool)
+			if err := retire.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
+				t.Errorf("a write behind a retirement = %v, want ErrDelegatePersonUnknownPortal", err)
+			}
+			if hits, err := store.NamespaceCensusQ(ctx, pool, inflight.Key); err != nil || hits[w.census] != 0 {
+				t.Errorf("census after the refused write = %v, %v; want %s empty", hits, err, w.census)
+			}
+
+			// The retirement commits first: the write is refused.
+			gone := revokedPortal()
+			if err := st.RetirePortalIssuerQ(ctx, pool, gone.Key); err != nil {
+				t.Fatalf("retirement with no row: %v", err)
+			}
+			if err := w.write(gone.Key); !errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
+				t.Errorf("a write after the retirement = %v, want ErrDelegatePersonUnknownPortal", err)
+			}
+		})
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -116,66 +117,105 @@ func TestNamespaceCensus_FindsEveryColumn_PG(t *testing.T) {
 	}
 }
 
-// The census reads the policy documents a write stores (a policy, a unit's ceiling, a preset, a template
-// revision) and the resolved policy of a run that is still running, and not the same of a run that ended.
+// historicalSource is one place a policy document naming a portal person can sit from before the issuer was
+// bound: how to seed one real-shaped record naming key, and the census column that must report it.
+type historicalSource struct {
+	name, column string
+	seed         func(t *testing.T, key string)
+}
+
+// seedPolicyAudit writes one audit row of action for run, whose data holds a resolved policy naming key.
+func seedPolicyAudit(t *testing.T, pool *pgxpool.Pool, run types.AgentRun, action, key string) {
+	t.Helper()
+	id := run.ID
+	data := `{"policy":` + uiAppsJSON(key) + `}`
+	if err := store.InsertAuditEvent(context.Background(), pool, &types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &id,
+		ActorType: types.ActorSystem, Actor: "test", Action: action, Outcome: "success", Data: json.RawMessage(data)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The census reports every historical source of a policy document naming a portal person on its own, for a
+// key no binding holds: each record is written while the key is bound, by the real writer (or, for the two
+// run records no writer rules, shaped as one) and the binding is then removed, as in a database an older
+// release wrote. A running run's resolved policy and a queued run's launch are found; the same rows of a run
+// that ended, and a running run's other audit rows, are not. So a registration blocks on each source alone
+// and succeeds when only an ended run names the key.
 func TestNamespaceCensus_SpecColumnsAndRunningRunPolicy_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
-	p := newIssuerPortal(t, st, "") // binds the key, so the writes below are accepted
-	caller := "user:" + types.PortalPrincipal(p.Key, "alice")
-	spec := types.RunPolicySpec{UIApps: []types.UIApp{{Name: "app", Port: 8080, Inbound: true, Callers: []string{caller}}}}
-	now := time.Now().UTC()
-
-	if _, err := st.CreatePolicy(ctx, types.RunPolicy{ID: uuid.New(), Name: "census-" + uuid.NewString(), CreatedAt: now, UpdatedAt: now, Spec: spec}); err != nil {
-		t.Fatal(err)
-	}
-	req, _ := json.Marshal(map[string]any{"policy": spec})
-	if _, _, err := st.PutLaunchPreset(ctx, types.LaunchPreset{Name: "census-" + uuid.NewString(), UserTypes: []string{}, Request: req, CreatedBy: "admin@example.com"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.CreateTemplate(ctx, types.RunTemplate{ID: uuid.New(), Owner: types.TemplateOwner{Scope: types.TemplateScopePerson, Person: "alice"},
-		Kind: types.TemplateKindTemplate, Name: "census-" + uuid.NewString(), Document: req, CreatedBy: "alice"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.WriteGovernanceUnitQ(ctx, tx, uuid.New(), func(_ []types.GovernanceUnit, _ []types.GovernanceMembership) (types.GovernanceUnit, error) {
-		return types.GovernanceUnit{Name: "census-" + uuid.NewString(), Ceiling: spec, CreatedBy: "admin@example.com"}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	resolved, _ := json.Marshal(map[string]any{"policy": spec})
-	auditFor := func(run types.AgentRun, action string) {
+	unboundKey := func(name string) string {
 		t.Helper()
-		id := run.ID
-		if err := store.InsertAuditEvent(ctx, pool, &types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &id,
-			ActorType: types.ActorSystem, Actor: "test", Action: action, Outcome: "success", Data: resolved}); err != nil {
+		issuer := "https://census-" + name + "-" + uuid.NewString() + ".example.com"
+		bound, err := st.BindPortalIssuerQ(ctx, pool, issuer, "https://internal-"+uuid.NewString()+".example.com", "uid", "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bound.IssuerKey
+	}
+	unbind := func(key string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `DELETE FROM portal_issuers WHERE issuer_key = $1`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
-	running := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	auditFor(running, "run.policy.resolve")
-	ended := persistRun(t, ctx, pool, newRun(types.RunCompleted))
-	auditFor(ended, "run.policy.generation")
-	other := persistRun(t, ctx, pool, newRun(types.RunRunning))
-	auditFor(other, "run.started") // not a policy action
 
-	hits, err := store.NamespaceCensusQ(ctx, pool, p.Key)
-	if err != nil {
-		t.Fatal(err)
+	var sources []historicalSource
+	for _, w := range uiWriters(st, pool) {
+		sources = append(sources, historicalSource{w.name, w.census, func(t *testing.T, key string) {
+			if err := w.write(key); err != nil {
+				t.Fatalf("seed %s: %v", w.name, err)
+			}
+		}})
 	}
-	for _, want := range []string{"run_policies.spec", "governance_units.ceiling", "launch_presets.request", "run_template_revisions.document"} {
-		if hits[want] != 1 {
-			t.Errorf("%s = %d, want 1 (all hits: %v)", want, hits[want], hits)
+	sources = append(sources,
+		historicalSource{"a queued run's launch", "run_queue.launch", func(t *testing.T, key string) {
+			poolID := uuid.New()
+			if _, err := pool.Exec(ctx, `INSERT INTO runner_pools (id, name, scope, owner) VALUES ($1, $2, 'user', 'sub-census')`, poolID, "pool-"+uuid.NewString()); err != nil {
+				t.Fatal(err)
+			}
+			run := persistRun(t, ctx, pool, newRun(types.RunQueued))
+			if _, err := pool.Exec(ctx, `INSERT INTO run_queue (run_id, pool_id, owner, deadline_at, launch) VALUES ($1, $2, $3, now() + interval '1 hour', $4::jsonb)`,
+				run.ID, poolID, run.CreatedBy, `{"task":"x","inline_policy":`+uiAppsJSON(key)+`}`); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		historicalSource{"a running run's resolved policy", "audit_events.data", func(t *testing.T, key string) {
+			seedPolicyAudit(t, pool, persistRun(t, ctx, pool, newRun(types.RunRunning)), "run.policy.resolve", key)
+		}},
+		historicalSource{"a running run's policy generation", "audit_events.data", func(t *testing.T, key string) {
+			seedPolicyAudit(t, pool, persistRun(t, ctx, pool, newRun(types.RunRunning)), "run.policy.generation", key)
+		}},
+	)
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			key := unboundKey("source")
+			src.seed(t, key)
+			unbind(key)
+			hits, err := store.NamespaceCensusQ(ctx, pool, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(hits) != 1 || hits[src.column] != 1 {
+				t.Errorf("census = %v, want only %s once", hits, src.column)
+			}
+			other := unboundKey("other")
+			unbind(other)
+			if hits, err := store.NamespaceCensusQ(ctx, pool, other); err != nil || len(hits) != 0 {
+				t.Errorf("another key's census = %v, %v; want nothing", hits, err)
+			}
+		})
+	}
+
+	t.Run("only an ended run", func(t *testing.T) {
+		key := unboundKey("ended")
+		ended := persistRun(t, ctx, pool, newRun(types.RunCompleted))
+		seedPolicyAudit(t, pool, ended, "run.policy.resolve", key)
+		seedPolicyAudit(t, pool, ended, "run.policy.generation", key)
+		seedPolicyAudit(t, pool, persistRun(t, ctx, pool, newRun(types.RunRunning)), "run.started", key) // not a policy action
+		unbind(key)
+		if hits, err := store.NamespaceCensusQ(ctx, pool, key); err != nil || len(hits) != 0 {
+			t.Errorf("census = %v, %v; want nothing blocking: an ended run's rows and a running run's other rows are not read", hits, err)
 		}
-	}
-	if hits["audit_events.data"] != 1 {
-		t.Errorf("audit_events.data = %d, want 1: the running run's resolved policy only (all hits: %v)", hits["audit_events.data"], hits)
-	}
+	})
 }

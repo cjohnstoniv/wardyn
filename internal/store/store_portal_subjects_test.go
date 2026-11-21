@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -93,11 +94,59 @@ func TestPortalSubjectRuling_EveryStoreWriteRules(t *testing.T) {
 var ruleCalls = map[string]bool{"ruleDelegatePersonSubject": true, "ruleUIAppCallersQ": true, "RefuseDelegatePersonSubject": true}
 
 // ruledTables are the tables whose writes carry a person list or a UI-app caller document, from the lists
-// the ruling names and the policy documents ruleUIAppCallersQ reads.
+// the ruling names and the policy documents ruleUIAppCallersQ reads, and key_domain_assignments, whose writer
+// lives outside this package and refuses a portal person by its prefix alone.
 var ruledTables = []string{
 	"governance_unit_admins", "template_group_admins", "role_mappings", "remote_runners", "service_identities",
 	"capability_grants", "governance_memberships", "governance_restriction_members", "user_drive_grants",
 	"runner_pool_use_policies", "run_policies", "governance_units", "launch_presets", "run_template_revisions",
+	"key_domain_assignments",
+}
+
+// moduleGoSources is every non-test Go file of the module with its source, found from the directory that holds
+// go.mod, skipping vendored code, testdata and dot or node_modules directories.
+func moduleGoSources(t *testing.T) map[string][]byte {
+	t.Helper()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			t.Fatal("no go.mod above the test's directory")
+		}
+		root = parent
+	}
+	out := map[string][]byte{}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if n := d.Name(); path != root && (n == "vendor" || n == "testdata" || n == "node_modules" || strings.HasPrefix(n, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		out[rel] = src
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // unruledWrites are the functions that write a ruled table and need no ruling, each with the reason. A
@@ -117,26 +166,26 @@ var unruledWrites = map[string]string{
 	"replaceUserDriveGrantOn":           "repoints the drive of a subject's existing row, then writes the grant through upsertUserDriveGrant, which rules it",
 }
 
-// Every statement that writes a ruled table sits in a function that rules the write, or is named in
-// unruledWrites with its reason; every ruled list has a call site naming it.
+// Every statement that writes a ruled table, in any non-test Go file of the module, sits in a function that
+// rules the write, or is named in unruledWrites with its reason; every ruled list has a call site naming it.
 func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
 	write := regexp.MustCompile(`(?is)\b(insert\s+into|update)\s+(` + strings.Join(ruledTables, "|") + `)\b`)
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
+	sources := moduleGoSources(t)
+	files := make([]string, 0, len(sources))
+	for f := range sources {
+		files = append(files, f)
 	}
+	sort.Strings(files)
 	seenUnruled := map[string]bool{}
+	ruledIn := map[string]bool{}
 	var allSource strings.Builder
 	for _, f := range files {
-		if strings.HasSuffix(f, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if f != "store_portal_subjects.go" {
+		src := sources[f]
+		if f != filepath.Join("internal", "store", "store_portal_subjects.go") {
 			allSource.Write(src)
+		}
+		if !write.Match(src) {
+			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), f, src, 0)
 		if err != nil {
@@ -181,8 +230,13 @@ func TestPortalSubjectRuling_EveryWriteStatementRuled(t *testing.T) {
 			}
 			if !ruled {
 				t.Errorf("%s (%s) writes %s and calls no portal person ruling", name, f, m[2])
+			} else {
+				ruledIn[f] = true
 			}
 		}
+	}
+	if f := filepath.Join("internal", "secretstore", "keydomain", "service.go"); !ruledIn[f] {
+		t.Errorf("the key_domain_assignments writer in %s was not found among the ruled writes: the scan does not reach it", f)
 	}
 	var stale []string
 	for name := range unruledWrites {

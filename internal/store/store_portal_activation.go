@@ -28,7 +28,7 @@ import (
 const PortalIssuersActivatedKey = "portal_issuers_activated_at"
 
 // PortalSessionUnknown is the label and address UntaggedClientSessions reports for a client session whose
-// details the calling role cannot read.
+// application name the calling role cannot read (NULL).
 const PortalSessionUnknown = "unknown"
 
 // PortalActivationStore is the activation's store surface, optional like the other portal stores.
@@ -72,13 +72,15 @@ func (s PG) ActivatePortalIssuers(ctx context.Context, by string, override []str
 }
 
 // UntaggedClientSessions is every other client session on this database that does not carry a wardynd label of
-// at least 0.10.2: an empty label, an older version, any other label, or a session whose label the caller
-// cannot read. It reads pg_stat_activity, so it sees only the connections that exist when it runs, and a label
-// is only what the client chose; the activation's veto and the hourly alarm are a report, not a proof.
+// at least 0.10.2: an empty label, an older version, any other label, or a session whose label comes back
+// NULL. It reads pg_stat_activity, so it sees only the connections that exist when it runs, and a label is
+// only what the client chose; the activation's veto and the hourly alarm are a report, not a proof.
 //
-// A role without pg_read_all_stats sees another role's session with its backend type, application name and
-// address masked. Such a session is still a client, and nothing about it shows it is current, so it counts as
-// untagged and is reported with the label and address "unknown" (PortalSessionUnknown).
+// A role without pg_read_all_stats sees another role's session with its backend type and address masked, but
+// still reads its application name (PostgreSQL fills it in before its statistics-privilege check). Such a
+// session is still a client and is judged by that label, reported with no address when it is not a current
+// wardynd label. Only a session whose label comes back NULL is reported with the label and address "unknown"
+// (PortalSessionUnknown); a client that sets no application name has an empty label and is reported with it.
 func (s PG) UntaggedClientSessions(ctx context.Context) ([]types.ClientSession, error) {
 	all, err := collect(ctx, s.Pool, "list", "client sessions", `
 		SELECT COALESCE(application_name, $1), CASE WHEN application_name IS NULL THEN $1 ELSE COALESCE(client_addr::text, '') END
@@ -108,8 +110,15 @@ var (
 	toolLabelRE   = regexp.MustCompile(`^wardynd-[a-z0-9][a-z0-9-]*/(` + labelVersion + `)$`)
 )
 
-// labelVersion is a version as internal/version.Version spells it: three numbers and an optional prerelease.
-const labelVersion = `[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?`
+// labelVersion is a version as internal/version.Version spells it, by the SemVer 2.0 grammar: three numbers
+// with no leading zeros and an optional prerelease of dot-separated identifiers, none empty, a numeric one
+// with no leading zero.
+const labelVersion = semverNum + `\.` + semverNum + `\.` + semverNum + `(?:-` + semverPre + `(?:\.` + semverPre + `)*)?`
+
+const (
+	semverNum = `(?:0|[1-9][0-9]*)`
+	semverPre = `(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)`
+)
 
 // wardydLabelAtLeast0102 reports whether label is exactly one of the two shapes above with a version of
 // 0.10.2 or later. A prerelease of 0.10.2 counts as 0.10.2.
