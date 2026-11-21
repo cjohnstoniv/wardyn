@@ -259,10 +259,12 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 
 // delegatedOutputStore keeps memRunOutputs' rows while still offering the
 // portal capability: memRunOutputs embeds only store.Store, so on its own it
-// would hide store.DelegateStore from the delegated lane.
+// would hide store.DelegateStore from the delegated lane, and the portal read
+// by id (store.DelegateReader) the unit pin check makes.
 type delegatedOutputStore struct {
 	*memRunOutputs
 	store.DelegateStore
+	store.DelegateReader
 	store.RunsByCreatorPager
 }
 
@@ -273,7 +275,8 @@ func newDelegatedOutputServer(t *testing.T, person string, shape ...func(*Config
 	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
 		ast = c.Store.(*authzStore)
 		mem = newMemRunOutputs(c.Store)
-		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, RunsByCreatorPager: ast}
+		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, DelegateReader: ast.fakeDelegateStore,
+			RunsByCreatorPager: ast}
 		for _, f := range shape {
 			f(c)
 		}
