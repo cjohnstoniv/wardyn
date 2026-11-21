@@ -196,8 +196,7 @@ func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, 
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $3 THEN now() ELSE ended_at END,
 				admitted_at=COALESCE($4::timestamptz, admitted_at)
 			WHERE id=$1 AND state=$5 RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id),
-		owed AS (`+keptDriveReclaimOwedSQL+` AND $3)
+		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT count(*) FROM moved`,
 		id, string(to), to.IsTerminal(), admittedAt, string(types.RunQueued)).Scan(&moved); err != nil {
 		return false, fmt.Errorf("store: leave run queue: %w", err)

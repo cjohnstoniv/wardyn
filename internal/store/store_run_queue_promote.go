@@ -815,8 +815,7 @@ func (s PG) ExitQueuedRun(ctx context.Context, id uuid.UUID, to types.RunState, 
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
 			WHERE id=$1 AND state=$5 RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id),
-		owed AS (`+keptDriveReclaimOwedSQL+`)
+		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
 		SELECT count(*) FROM moved`,
 		id, string(to), detail, hint, string(types.RunQueued)).Scan(&moved); err != nil {
 		return false, fmt.Errorf("store: exit queued run: %w", err)
@@ -832,8 +831,7 @@ func cancelPoolQueue(ctx context.Context, q Querier, poolID uuid.UUID, detail, h
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=now(), status_detail=$3, failure_hint=$4
 			WHERE state=$5 AND id IN (SELECT run_id FROM run_queue WHERE pool_id=$1) RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id),
-		owed AS (`+keptDriveReclaimOwedSQL+`)
+		gone AS (DELETE FROM run_queue WHERE pool_id=$1 RETURNING run_id)
 		SELECT id FROM moved`,
 		poolID, string(types.RunKilled), detail, hint, string(types.RunQueued))
 	if err != nil {

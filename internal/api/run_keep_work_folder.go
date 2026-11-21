@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"path"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -225,11 +224,8 @@ const memberDriveByRunEnd = "run_never_started"
 // the owner-starting check, then the substrate's reclaim. The drive is a member drive like any other and
 // the owner's other runs can attach it, so a drive one of them holds is left in place, and the refusal is
 // audited by that delete as it audits its own, never as an already-absent object. A run that has no kept
-// drive, a drive some other run kept, and a drive another delete holds are left alone.
-//
-// A run that left the queue owes the reclaim in its own transition (store.KeptDriveReclaimStore), so this
-// is the first attempt and sweepKeptDriveReclaims the retry: a failure here, or a process that stops
-// before it, leaves the drive for the sweep. A drive that is held stays and its debt is cleared.
+// drive, a drive some other run kept, and a drive another delete holds are left alone. Best effort: a
+// failure is logged and the drive stays, as it did before.
 func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
@@ -244,116 +240,22 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 		}
 		return
 	}
-	s.settleKeptDriveReclaim(ctx, d, s.reclaimUnstartedKeptDrive(ctx, ms, d))
-}
-
-// keptDriveReclaimRetry is how long a failed reclaim waits for its next attempt.
-const keptDriveReclaimRetry = 10 * time.Minute
-
-// keptDriveReclaimBatch bounds one sweep pass.
-const keptDriveReclaimBatch = 50
-
-// keptDriveVerdict is how one reclaim attempt of a never-started run's kept drive ended.
-type keptDriveVerdict int
-
-const (
-	keptDriveGone  keptDriveVerdict = iota // the drive is deleted, or already was
-	keptDriveHeld                          // the drive stays: another run holds or may have it, or its Mac finishes the delete
-	keptDriveRetry                         // not done: a read or the substrate failed
-)
-
-// reclaimUnstartedKeptDrive is one attempt at deleting d, the drive a run that never started kept, through the
-// delete a person's own takes: the owner-starting check, the tombstone, the substrate's reclaim.
-func (s *Server) reclaimUnstartedKeptDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive) keptDriveVerdict {
-	runID := d.ID.String()
-	if d.KeptFromRun != nil {
-		runID = d.KeptFromRun.String()
-	}
-	// A run of the owner's that is starting may attach the drive, and once one has the drive is hers to keep, so
-	// the refusal is final, not a wait.
 	if refused, serr := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByRunEnd); serr != nil || refused {
 		if serr != nil {
-			slog.WarnContext(ctx, "api: read the owner's starting runs for a kept drive", slog.String("run_id", runID), slog.Any("err", serr))
-			return keptDriveRetry
+			slog.WarnContext(ctx, "api: read the owner's starting runs for a kept drive", slog.String("run_id", runID.String()), slog.Any("err", serr))
 		}
-		return keptDriveHeld
-	}
-	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, d.ID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return keptDriveGone
-	case errors.Is(err, store.ErrMemberDriveBusy):
-		return keptDriveRetry
-	case err != nil:
-		slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID), slog.Any("err", err))
-		return keptDriveRetry
-	}
-	res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd)
-	switch {
-	case res.err != nil:
-		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID), slog.Any("err", res.err))
-		return keptDriveRetry
-	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
-		return keptDriveGone
-	case res.reason == reasonMemberDriveInUse || res.reason == reasonMemberDriveDeleteDeferred:
-		return keptDriveHeld
-	}
-	return keptDriveRetry
-}
-
-// settleKeptDriveReclaim records how an attempt ended: a deleted drive's debt went with its row, a held one is
-// cleared, and one to retry is deferred, so a drive the substrate keeps refusing is tried and audited every
-// keptDriveReclaimRetry and not on every sweep.
-func (s *Server) settleKeptDriveReclaim(ctx context.Context, d types.UserDrive, v keptDriveVerdict) {
-	rs, ok := s.cfg.Store.(store.KeptDriveReclaimStore)
-	if !ok || v == keptDriveGone {
 		return
 	}
-	var err error
-	if v == keptDriveHeld {
-		err = rs.ClearKeptDriveReclaim(ctx, d.ID)
-	} else {
-		err = rs.DeferKeptDriveReclaim(ctx, d.ID, keptDriveReclaimRetry)
-	}
+	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
 	if err != nil {
-		slog.WarnContext(ctx, "api: record the outcome of a kept drive reclaim", slog.String("drive_id", d.ID.String()), slog.Any("err", err))
-	}
-}
-
-// sweepKeptDriveReclaims retries the reclaim of each kept drive whose run left the queue without starting and
-// whose first attempt did not finish it, against the same owner-starting and in-use checks as the first.
-// A drive whose run is not known to have ended is left alone for a later pass: the debt is written only with
-// that run's end, so this is a guard, not a path.
-func (s *Server) sweepKeptDriveReclaims(ctx context.Context) error {
-	rs, ok := s.cfg.Store.(store.KeptDriveReclaimStore)
-	ms, mok := s.cfg.Store.(store.MemberDriveStore)
-	if !ok || !mok {
-		return nil
-	}
-	due, err := rs.ListDueKeptDriveReclaims(ctx, keptDriveReclaimBatch)
-	if err != nil {
-		return err
-	}
-	ctx = context.WithoutCancel(ctx)
-	for _, d := range due {
-		if d.KeptFromRun == nil || !s.keptRunEnded(ctx, *d.KeptFromRun) {
-			s.settleKeptDriveReclaim(ctx, d, keptDriveRetry)
-			continue
+		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
+			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
-		// A drive offered to the owner's other runs once its run ended, so a retry made after one of them was
-		// created may find a drive that run wrote to: that is the owner's now, and stays.
-		attached, aerr := rs.KeptDriveMayBeAttached(ctx, d.ID)
-		switch {
-		case aerr != nil:
-			slog.WarnContext(ctx, "api: read whether a kept drive may have been attached", slog.String("drive_id", d.ID.String()), slog.Any("err", aerr))
-			s.settleKeptDriveReclaim(ctx, d, keptDriveRetry)
-		case attached:
-			s.settleKeptDriveReclaim(ctx, d, keptDriveHeld)
-		default:
-			s.settleKeptDriveReclaim(ctx, d, s.reclaimUnstartedKeptDrive(ctx, ms, d))
-		}
+		return
 	}
-	return nil
+	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
+		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
+	}
 }
 
 // dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, is

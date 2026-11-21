@@ -467,7 +467,7 @@ func (s *Server) sweepResidentErase(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(abandonErr, err)
 	}
-	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx), s.sweepKeptMachines(ctx), s.sweepKeptDriveReclaims(ctx)}
+	errs := []error{abandonErr, s.finishMacDiskDeletes(ctx), s.sweepKeptMachines(ctx)}
 	for _, id := range runners {
 		if s.runnerOnline(id) {
 			errs = append(errs, s.eraseResidentOn(ctx, st, id))
