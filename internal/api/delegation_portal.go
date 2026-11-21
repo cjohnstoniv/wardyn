@@ -180,21 +180,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 	}
 	subj, refusal := s.cfg.PortalIssuers.VerifyDetail(ctx, portalRegistration(d), subjectToken, r.PostForm.Get("subject_token_type"))
 	if !refusal.OK() {
-		status, code := portalRefusalStatus(refusal.Class)
-		extra := map[string]any{}
-		switch {
-		case refusal.Cause != "":
-			extra["cause"] = refusal.Cause
-		case refusal.Reason == oidc.SubjectTokenClaimMismatch && d.RequiredClaim != nil:
-			extra["claim"] = d.RequiredClaim.Claim
-		}
-		if refusal.Reason == oidc.PortalRegistrationInvalid {
-			slog.ErrorContext(ctx, "api: an issuer portal's own registration cannot be verified against", "portal", d.ID, "reason", reasonPortalRegistrationInvalid)
-		}
-		if refusal.RetryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
-		}
-		deny(status, code, "", refusal.Reason, extra)
+		denyPortalRefusal(ctx, w, d, refusal, deny)
 		return
 	}
 	// A person never takes the name of the local operator's seat, whatever shape the operator was given.
@@ -290,6 +276,28 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		// The grant's remaining life, never a constant: it ends by the token's own cutoff.
 		"expires_in": int(grant.ExpiresAt.Sub(dbnow) / time.Second),
 	})
+}
+
+// denyPortalRefusal answers a subject token the portal's issuer refused: the refusal class's status and code,
+// the cause or the required claim's name, a Retry-After hint when the refusal gives one, and a log line when
+// the portal's own registration is what cannot be verified against.
+func denyPortalRefusal(ctx context.Context, w http.ResponseWriter, d types.Delegate, refusal oidc.PortalRefusal,
+	deny func(status int, code, target, reason string, extra map[string]any)) {
+	status, code := portalRefusalStatus(refusal.Class)
+	extra := map[string]any{}
+	switch {
+	case refusal.Cause != "":
+		extra["cause"] = refusal.Cause
+	case refusal.Reason == oidc.SubjectTokenClaimMismatch && d.RequiredClaim != nil:
+		extra["claim"] = d.RequiredClaim.Claim
+	}
+	if refusal.Reason == oidc.PortalRegistrationInvalid {
+		slog.ErrorContext(ctx, "api: an issuer portal's own registration cannot be verified against", "portal", d.ID, "reason", reasonPortalRegistrationInvalid)
+	}
+	if refusal.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((refusal.RetryAfter+time.Second-1)/time.Second)))
+	}
+	deny(status, code, "", refusal.Reason, extra)
 }
 
 // portalMaxAge is the portal's maximum subject-token age, 300 s when the row names none.
