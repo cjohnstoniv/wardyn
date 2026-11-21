@@ -13,7 +13,7 @@ import { HeartPulse } from "lucide-react";
 import type { RunDetail, RunService, RunServiceProbe, RunServiceStatus } from "../../../lib/types";
 import { cn } from "../../ui/utils";
 import {
-  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews, shownProbeHealth,
+  DEFAULT_HEALTH_FAILURES, DEFAULT_HEALTH_INTERVAL_SEC, SERVICE_HEALTH, SERVICE_PANEL as T, agoText, probeOn, serviceHealthRenews, shownProbeHealth, shownSandboxHealth,
 } from "../../wardyn/copy/run-service";
 import { Chip, WidgetCard } from "../../wardyn/primitives";
 import { keptUntilText } from "./run-ends-row";
@@ -76,7 +76,7 @@ export function ServicePanel({ run, now = Date.now() }: { run: RunDetail; now?: 
   const s = run.service;
   if (!s || run.state !== "RUNNING") return null;
   const st = run.service_status;
-  const health = SERVICE_HEALTH[st?.health ?? "starting"] ?? SERVICE_HEALTH.unknown;
+  const health = SERVICE_HEALTH[shownSandboxHealth(run, now)] ?? SERVICE_HEALTH.unknown;
   const reason = reasonOf(s, st);
   const checked = probeOn(s);
   const probe = st?.probe;

@@ -78,7 +78,7 @@ describe("service canon strings", () => {
 describe("serviceBadge", () => {
   const at = new Date().toISOString();
   const run = (service_status?: { health: "starting" | "healthy" | "unhealthy" | "unknown"; restarts: number }) =>
-    ({ state: "RUNNING", service: { restart: "on_failure" }, service_status: service_status && { ...service_status, observed_at: at } }) as Parameters<typeof serviceBadge>[0];
+    ({ state: "RUNNING", service: { restart: "on_failure" }, created_at: at, service_status: service_status && { ...service_status, observed_at: at } }) as Parameters<typeof serviceBadge>[0];
 
   it("says each health word with its tone, and the restart count in the board's suffix", () => {
     expect(serviceBadge(run())).toEqual({ word: "Starting", tone: "info", pulse: true });
@@ -86,6 +86,18 @@ describe("serviceBadge", () => {
     expect(serviceBadge(run({ health: "healthy", restarts: 3 }))?.word).toBe("Healthy · 3 restarts");
     expect(serviceBadge(run({ health: "unhealthy", restarts: 1 }))).toEqual({ word: "Unhealthy · 1 restart", tone: "warning", pulse: true });
     expect(serviceBadge(run({ health: "unknown", restarts: 0 }))).toEqual({ word: "Health unknown", tone: "neutral", pulse: false });
+  });
+
+  it("a service with no reading yet is Starting inside the grace from its admission and Health unknown after it", () => {
+    const NOW = Date.now();
+    const at = (agoMs: number) => new Date(NOW - agoMs).toISOString();
+    const unread = (startedAgo: number, admitted = true) =>
+      ({ state: "RUNNING", service: { restart: "on_failure" }, created_at: at(startedAgo + 3_600_000), ...(admitted ? { admitted_at: at(startedAgo) } : {}) }) as Parameters<typeof serviceBadge>[0];
+    expect(serviceBadge(unread(SERVICE_SUPERVISOR_GRACE_MS - 1000), NOW)?.word).toBe("Starting");
+    expect(serviceBadge(unread(SERVICE_SUPERVISOR_GRACE_MS + 1000), NOW)?.word).toBe("Health unknown");
+    // never admitted: the grace runs from creation
+    expect(serviceBadge({ ...unread(0, false), created_at: at(SERVICE_SUPERVISOR_GRACE_MS - 1000) }, NOW)?.word).toBe("Starting");
+    expect(serviceBadge({ ...unread(0, false), created_at: at(SERVICE_SUPERVISOR_GRACE_MS + 1000) }, NOW)?.word).toBe("Health unknown");
   });
 
   it("is absent for a run that is not a live service", () => {

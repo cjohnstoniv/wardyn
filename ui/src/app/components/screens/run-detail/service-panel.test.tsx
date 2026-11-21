@@ -49,9 +49,20 @@ describe("ServicePanel", () => {
   });
 
   it("starting with no read yet: waits for the first check", () => {
-    show(WITH_PATH, undefined);
+    show(WITH_PATH, undefined, { created_at: new Date(NOW - 60_000).toISOString() });
     expect(row(T.HEALTH)).toHaveTextContent("Starting · waiting for the first check");
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
+  it("no read yet: Starting just inside ten minutes from admission, Health unknown just after, as renewal reads it", () => {
+    const admitted = (agoMs: number) => ({ created_at: new Date(NOW - agoMs - 3_600_000).toISOString(), admitted_at: new Date(NOW - agoMs).toISOString() });
+    const { unmount } = show(WITH_PATH, undefined, admitted(10 * 60_000 - 1000));
+    expect(row(T.HEALTH)).toHaveTextContent(/^Starting/);
+    expect(row(T.LEASE)).toHaveTextContent("Renewed");
+    unmount();
+    show(WITH_PATH, undefined, admitted(10 * 60_000 + 1000));
+    expect(row(T.HEALTH)).toHaveTextContent(/^Health unknown/);
+    expect(row(T.HEALTH)).not.toHaveTextContent(/Starting/);
   });
 
   it("unhealthy and restarting: the exit reason and the restart count with the last exit code", () => {

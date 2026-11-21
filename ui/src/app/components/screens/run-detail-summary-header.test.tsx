@@ -983,8 +983,14 @@ describe("SummaryHeader — a live service's badge", () => {
   });
 
   it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
-    show(svc({ service_status: undefined }));
+    const fresh = { created_at: aheadByHours(-0.05), admitted_at: aheadByHours(-0.05) };
+    show(svc({ service_status: undefined, ...fresh }));
     expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    // ten minutes past admission with no reading, the grace is over: renewal reads it as unknown
+    show(svc({ service_status: undefined, created_at: aheadByHours(-0.2), admitted_at: aheadByHours(-0.2) }));
+    expect(screen.getByText("Health unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Starting")).not.toBeInTheDocument();
     cleanup();
     show(svc({ service: undefined, service_status: undefined }));
     expect(screen.getByText("Running")).toBeInTheDocument();

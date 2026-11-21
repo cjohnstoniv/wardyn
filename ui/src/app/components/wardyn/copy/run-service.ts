@@ -109,6 +109,11 @@ function missingHealth(run: ServiceRunTimes, now: number): ServiceHealthState {
   return now - since < SERVICE_SUPERVISOR_GRACE_MS ? "starting" : "unknown";
 }
 
+/** The sandbox's own reading as it is shown: what it reported, or with none yet the grace rule renewal reads (Go's renewalHealth). */
+export function shownSandboxHealth(run: ServiceRunTimes & Pick<AgentRun, "service_status">, now: number): ServiceHealthState {
+  return run.service_status ? run.service_status.health : missingHealth(run, now);
+}
+
 /**
  * Wardyn's check as it is shown, for a spec that opted in: its reading, or with none yet the grace rule renewal reads
  * (Go's probeRenewalHealth). Undefined when the spec did not opt in.
@@ -180,7 +185,7 @@ export const SERVICE_HEALTH: Record<"starting" | "healthy" | "unhealthy" | "unkn
 export function serviceBadge(run: ServiceRunTimes & Pick<AgentRun, "state" | "service" | "service_status">, now = Date.now()): ServiceBadge | undefined {
   if (run.state !== "RUNNING" || !run.service) return undefined;
   const st = run.service_status;
-  const sandbox = st ? st.health : "starting";
+  const sandbox = shownSandboxHealth(run, now);
   const base = SERVICE_HEALTH[worseHealth(sandbox, probeOn(run.service) ? shownProbeHealth(run, now) : st?.probe?.health)];
   const n = st?.restarts ?? 0;
   return n > 0 ? { ...base, word: `${base.word} · ${n} ${n === 1 ? "restart" : "restarts"}` } : base;
