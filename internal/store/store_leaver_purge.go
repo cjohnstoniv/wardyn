@@ -302,12 +302,17 @@ func (s PG) ListDeprovisionFailures(ctx context.Context, limit int) ([]Deprovisi
 // PendingRefusalAudits is every identity and kind with an owed refusal row that no attempt has touched for
 // idleFor, at most limit. Unlike PendingLeavers and PendingGroupRemovals it does not ask whether the person is
 // still a leaver or out of the group: a row owed before a reactivation or a re-add is owed all the same.
-func (s PG) PendingRefusalAudits(ctx context.Context, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error) {
+// Only an identity of the given issuer, and of the tenant when one is given and the row records one, is
+// listed, of every kind, and that is decided before the limit: another issuer's owed row is not this
+// sweeper's to write, pin or finish, and must not fill the batch.
+func (s PG) PendingRefusalAudits(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingRefusalAudit, error) {
 	return collect(ctx, s.Pool, "list", "pending refusal audits", `
-		SELECT DISTINCT identity_id, kind FROM deprovision_jobs
-		 WHERE state = 'pending' AND starts_with(step, $1)
-		   AND updated_at <= now() - $2::bigint * interval '1 microsecond'
-		 ORDER BY 1, 2 LIMIT $3`, []any{JobStepRefusalAudit, idleFor.Microseconds(), limit}, func(r pgx.Row) (PendingRefusalAudit, error) {
+		SELECT DISTINCT j.identity_id, j.kind FROM deprovision_jobs j
+		  JOIN principal_identities i ON i.id = j.identity_id
+		 WHERE j.state = 'pending' AND starts_with(j.step, $1)
+		   AND j.updated_at <= now() - $2::bigint * interval '1 microsecond'
+		   AND i.issuer = $4 AND ($5::text = '' OR i.tenant_id = '' OR i.tenant_id = $5::text)
+		 ORDER BY 1, 2 LIMIT $3`, []any{JobStepRefusalAudit, idleFor.Microseconds(), limit, issuer, tenant}, func(r pgx.Row) (PendingRefusalAudit, error) {
 		var p PendingRefusalAudit
 		return p, r.Scan(&p.IdentityID, &p.Kind)
 	})

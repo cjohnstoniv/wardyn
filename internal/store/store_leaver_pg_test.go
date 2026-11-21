@@ -531,10 +531,18 @@ func TestMarkIdentityPurged_RefusesForeignRow(t *testing.T) {
 	ctx := context.Background()
 	leaver := signedIn(t, st, "sub-foreign", "foreign@corp.example", leaverOID)
 	if _, err := st.SuspendIdentity(ctx, store.SuspendPlan{IdentityID: leaver.ID, Principal: "sub-foreign", Principals: []string{"sub-foreign"},
-		PurgePrincipals: []string{"sub-foreign"}, PurgeAfter: time.Hour}); err != nil {
+		PurgePrincipals: []string{"sub-foreign"}, PurgeAfter: time.Hour, PendingJobs: []store.JobKey{{Step: "audit_deactivate"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Pool.Exec(ctx, `UPDATE principal_identities SET purge_after = now() - interval '1 minute' WHERE id = $1`, leaver.ID); err != nil {
+		t.Fatal(err)
+	}
+	// An owed refusal row, idle, beside the pending suspension step.
+	if _, err := st.Pool.Exec(ctx, `INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, attempts, last_error, updated_at)
+		VALUES ($1, 'suspend', $2, '', 'pending', 1, $3, now() - interval '1 hour')`, leaver.ID, store.JobStepRefusalAudit+"denied/test_reason", store.RefusalAuditOwedMsg); err != nil {
+		t.Fatal(err)
+	}
+	if err := idleLedger(ctx, st, leaver.ID); err != nil {
 		t.Fatal(err)
 	}
 	const otherIssuer, otherTenant = "https://other-issuer.example/v2.0", "99999999-2222-3333-4444-555555555555"
@@ -549,8 +557,11 @@ func TestMarkIdentityPurged_RefusesForeignRow(t *testing.T) {
 		if due, err := st.PurgeDueIdentities(ctx, c.issuer, c.tenant, 10); err != nil || len(due) != 0 {
 			t.Errorf("%s: due = %+v (%v), want none listed", c.name, due, err)
 		}
-		if pending, err := st.PendingLeavers(ctx, c.issuer, c.tenant, 0, 10); err != nil || len(pending) != 0 {
+		if pending, err := st.PendingLeavers(ctx, c.issuer, c.tenant, time.Minute, 10); err != nil || len(pending) != 0 {
 			t.Errorf("%s: pending leavers = %+v (%v), want none listed", c.name, pending, err)
+		}
+		if owed, err := st.PendingRefusalAudits(ctx, c.issuer, c.tenant, time.Minute, 10); err != nil || len(owed) != 0 {
+			t.Errorf("%s: owed refusal rows = %+v (%v), want none listed", c.name, owed, err)
 		}
 	}
 	got, err := st.GetIdentity(ctx, leaver.ID)
@@ -559,6 +570,12 @@ func TestMarkIdentityPurged_RefusesForeignRow(t *testing.T) {
 	}
 	if jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindPurge); err != nil || len(jobs) != 0 {
 		t.Fatalf("purge ledger after the refusals = %+v (%v), want none", jobs, err)
+	}
+	if pending, err := st.PendingLeavers(ctx, idIssuer, idTenant, time.Minute, 10); err != nil || len(pending) != 1 || pending[0].ID != leaver.ID {
+		t.Fatalf("control: pending leavers for the own issuer and tenant = %+v (%v), want the identity", pending, err)
+	}
+	if owed, err := st.PendingRefusalAudits(ctx, idIssuer, idTenant, time.Minute, 10); err != nil || len(owed) != 1 || owed[0].IdentityID != leaver.ID {
+		t.Fatalf("control: owed refusal rows for the own issuer and tenant = %+v (%v), want the identity", owed, err)
 	}
 	if due, err := st.PurgeDueIdentities(ctx, idIssuer, idTenant, 10); err != nil || len(due) != 1 || due[0].ID != leaver.ID {
 		t.Fatalf("control: due for the own issuer and tenant = %+v (%v), want the identity", due, err)
@@ -569,4 +586,10 @@ func TestMarkIdentityPurged_RefusesForeignRow(t *testing.T) {
 	if jobs, err := st.ListDeprovisionJobs(ctx, leaver.ID, store.JobKindPurge); err != nil || len(jobs) != 1 {
 		t.Fatalf("control: purge ledger = %+v (%v), want its one pending step", jobs, err)
 	}
+}
+
+// idleLedger ages every ledger row of identity id past the idle time the sweeper's reads ask for.
+func idleLedger(ctx context.Context, st store.PG, id uuid.UUID) error {
+	_, err := st.Pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id)
+	return err
 }

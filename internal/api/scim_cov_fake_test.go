@@ -694,7 +694,7 @@ func (s *scimCovStore) PurgeDueIdentities(_ context.Context, issuer, tenant stri
 }
 
 // PendingRefusalAudits: no fake test owes a refusal row past a request, so the sweeper finds none.
-func (s *scimCovStore) PendingRefusalAudits(context.Context, time.Duration, int) ([]store.PendingRefusalAudit, error) {
+func (s *scimCovStore) PendingRefusalAudits(context.Context, string, string, time.Duration, int) ([]store.PendingRefusalAudit, error) {
 	return nil, nil
 }
 

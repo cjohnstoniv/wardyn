@@ -598,6 +598,10 @@ func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.Pe
 	if err != nil {
 		return err
 	}
+	if !s.scimOwns(ident) {
+		s.warnNotSCIMOwned(ctx, o.IdentityID)
+		return nil
+	}
 	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
 	if err != nil {
 		return err
@@ -663,7 +667,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
 	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
 	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
-	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
+	owed, err := st.PendingRefusalAudits(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, o := range owed {
 		errs = append(errs, s.drainOwedRefusals(ctx, st, o))

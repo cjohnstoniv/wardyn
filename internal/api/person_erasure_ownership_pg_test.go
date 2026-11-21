@@ -327,6 +327,14 @@ func TestSCIMSweeperLeavesAScheduleWithNoSuspensionOfItsOwn(t *testing.T) {
 	if jobs, err := e.st.ListDeprovisionJobs(ctx, p.ID, store.JobKindSuspend); err != nil || len(jobs) != 0 {
 		t.Fatalf("control: %q's suspension ledger = %+v (%v), want none of its own", o.p, jobs, err)
 	}
+	// The store's guard under the pair P belongs to: listed as not suspended, and the mark is refused.
+	due, err := e.st.PurgeDueIdentities(ctx, o.issuer, e.tenant, 50)
+	if err != nil || !slices.ContainsFunc(due, func(d store.DueIdentity) bool { return d.ID == p.ID && !d.Suspended }) {
+		t.Fatalf("control: the candidate read for %q's own issuer = %+v (%v), want P listed as not suspended", o.p, due, err)
+	}
+	if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true, o.issuer, e.tenant); err != nil || marked {
+		t.Fatalf("the mark on %q = %v (%v), want it refused under the row lock", o.p, marked, err)
+	}
 
 	if err := e.sweepPastThePurgeDelay(); err != nil {
 		t.Errorf("sweep: %v", err)
@@ -387,17 +395,30 @@ func TestSCIMSweeperLeavesAScheduleAfterAnOldSuspensionOfItsOwn(t *testing.T) {
 				t.Fatalf("control: %q's suspension ledger = %+v (%v), want its old rows kept", o.p, jobs, err)
 			}
 
-			due, err := e.st.PurgeDueIdentities(ctx, e.issuer, e.tenant, 50)
+			// The store's own guard, asked under the pair P belongs to: the candidate read lists P and does not
+			// count its old suspension as proof, and the mark under the row lock refuses it. Under the sweeper's
+			// own pair P is another issuer's and is neither listed nor marked.
+			due, err := e.st.PurgeDueIdentities(ctx, o.issuer, e.tenant, 50)
 			if err != nil {
 				t.Fatal(err)
 			}
+			listed := false
 			for _, d := range due {
-				if d.ID == p.ID && d.Suspended {
-					t.Errorf("the candidate read counts %q's old suspension as proof of its current deactivation", o.p)
+				if d.ID == p.ID {
+					listed = true
+					if d.Suspended {
+						t.Errorf("the candidate read counts %q's old suspension as proof of its current deactivation", o.p)
+					}
 				}
 			}
-			if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true, e.issuer, e.tenant); err != nil || marked {
-				t.Fatalf("the sweeper's mark on %q = %v (%v), want it refused under the row lock", o.p, marked, err)
+			if !listed {
+				t.Fatalf("control: the candidate read for %q's own issuer = %+v, want P listed", o.p, due)
+			}
+			if marked, err := e.st.MarkIdentityPurged(ctx, p.ID, true, o.issuer, e.tenant); err != nil || marked {
+				t.Fatalf("the mark on %q = %v (%v), want it refused under the row lock", o.p, marked, err)
+			}
+			if due, err := e.st.PurgeDueIdentities(ctx, e.issuer, e.tenant, 50); err != nil || slices.ContainsFunc(due, func(d store.DueIdentity) bool { return d.ID == p.ID }) {
+				t.Errorf("the sweeper's candidate read = %+v (%v), want another issuer's %q left out", due, err, o.p)
 			}
 			if err := e.sweepPastThePurgeDelay(); err != nil {
 				t.Errorf("sweep: %v", err)
