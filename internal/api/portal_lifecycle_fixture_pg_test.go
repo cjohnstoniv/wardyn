@@ -10,12 +10,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -39,6 +41,9 @@ func newPortalLife(t *testing.T) *portalLife {
 	l := &portalLife{exchPG: e, run: &scimRunner{fakeRunner: &fakeRunner{}}}
 	e.h.srv.cfg.Runner = l.run
 	e.h.srv.cfg.SessionRevocations = &pgTestRevocations{pool: e.pool, st: e.st}
+	// A portal step settles only once its pinned event is in the audit table, so every row the recorder takes is written
+	// there too; each event is on the in-memory recorder once, however often it is replayed.
+	e.h.srv.cfg.Audit = &tableTee{inner: e.h.srv.cfg.Audit, table: store.Recorder{Pool: e.pool}, seen: map[uuid.UUID]bool{}}
 	l.d, l.cred = e.portal(t, portalTestIssuer, nil)
 	if _, err := e.st.ActivatePortalIssuers(context.Background(), "test", nil); err != nil {
 		t.Fatalf("switch issuer portals on: %v", err)
@@ -239,4 +244,26 @@ func (l *portalLife) freshBearer(t *testing.T, uid string) string {
 	l.ver.subj.IssuedAt = time.Now()
 	tok, _ := portalToken(t, l.exchange(t, l.d.ID, l.cred, "subject-token"))
 	return tok
+}
+
+// tableTee records on the audit table first and then, once per event id, on inner.
+type tableTee struct {
+	inner audit.Recorder
+	table store.Recorder
+	mu    sync.Mutex
+	seen  map[uuid.UUID]bool
+}
+
+func (t *tableTee) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := t.table.Record(ctx, ev); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	first := !t.seen[ev.ID]
+	t.seen[ev.ID] = true
+	t.mu.Unlock()
+	if !first || t.inner == nil {
+		return nil
+	}
+	return t.inner.Record(ctx, ev)
 }
