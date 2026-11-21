@@ -149,6 +149,8 @@ type svcSecrets struct {
 	putPartial bool
 	// revDeadlines are the context deadlines Revision was called with, in order (zero when none).
 	revDeadlines []time.Time
+	// afterRev runs after a Revision call has its answer, outside the store's lock; it may block.
+	afterRev func()
 	// revDelay makes the next Revision call under a context with a deadline take this long, or end at the deadline.
 	revDelay time.Duration
 	// hold runs before each operation, outside the store's lock; it may block.
@@ -246,14 +248,17 @@ func (s *svcSecrets) Revision(ctx context.Context, name string) (string, error) 
 		}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	rev, err, after := s.revOf(name), s.revErr, s.afterRev
 	if s.noRev {
-		return "", secretstore.ErrNoRevision
+		rev, err = "", secretstore.ErrNoRevision
+	} else if err != nil {
+		rev = ""
 	}
-	if s.revErr != nil {
-		return "", s.revErr
+	s.mu.Unlock()
+	if after != nil {
+		after() // the read has its answer; the caller has not yet seen it
 	}
-	return s.revOf(name), nil
+	return rev, err
 }
 
 func (s *svcSecrets) List(context.Context) ([]string, error) {

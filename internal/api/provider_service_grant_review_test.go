@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -766,7 +767,7 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 		f.sec.mu.Unlock()
 		tok := serviceGrantMinted{token: svcToken(9), expiresAt: f.clock.Now().Add(time.Hour)}
 		_, err := f.srv.publishServiceGrantToken(ctx, p, serviceGrantDigest(p), rev, true, serviceGrantTriggerRefresh,
-			f.clock.Now(), f.srv.nextServiceGrantGen(), tok)
+			f.clock.Now(), f.srv.nextServiceGrantGen(), f.srv.serviceGrantCacheGen(p.UID), tok)
 		return err
 	}
 
@@ -817,4 +818,96 @@ func TestServiceGrant_LateTokenAnswerIsPublished(t *testing.T) {
 			t.Fatalf("the mint took %v, want it to end at the publish bound (about %v)", took, answerAt+serviceGrantPublishBound)
 		}
 	})
+}
+
+// A rotation that completes after an attempt's last revision read never lets that attempt publish: the attempt is
+// held after the read inside its publish, the rotation is written through the route, and the attempt then resumes.
+// With a newer-revision attempt published in between, and with none, the old token is never cached or returned, the
+// old attempt writes one superseded row and no success row, and its caller gets the new revision's token.
+func TestServiceGrant_RotationAfterLastRevisionReadNeverPublishesOldToken(t *testing.T) {
+	for _, newerFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("newer attempt publishes first=%v", newerFirst), func(t *testing.T) {
+			f := newSvcFixWithSecret(t)
+			var oldSent, held atomic.Bool
+			paused, resume := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(resume) }) }
+			t.Cleanup(release)
+			f.idp.mu.Lock()
+			f.idp.respond = func(n int, _ svcReq) svcAnswer {
+				if n == 1 {
+					oldSent.Store(true)
+				}
+				return svcOK(n, 3600)
+			}
+			f.idp.mu.Unlock()
+			f.sec.mu.Lock()
+			f.sec.afterRev = func() { // the old attempt's publish read, the first revision read after its request
+				if oldSent.Load() && held.CompareAndSwap(false, true) {
+					close(paused)
+					select {
+					case <-resume:
+					case <-time.After(10 * time.Second):
+					}
+				}
+			}
+			f.sec.mu.Unlock()
+			type result struct {
+				tok serviceGrantMinted
+				err error
+			}
+			old := make(chan result, 1)
+			go func() {
+				tok, err := f.token(serviceGrantTriggerRefresh)
+				old <- result{tok, err}
+			}()
+			svcAwait(t, paused, "the old attempt to pass its last revision read")
+			if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code != http.StatusNoContent {
+				t.Fatalf("rotation: %d %s", w.Code, w.Body.String())
+			}
+			if newerFirst {
+				if tok, err := f.token(serviceGrantTriggerRefresh); err != nil || tok.token != svcToken(2) {
+					t.Fatalf("the newer attempt = %q, %v; want the second token", tok.token, err)
+				}
+			}
+			release()
+			var r result
+			select {
+			case r = <-old:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the old attempt never returned")
+			}
+			if r.tok.token == svcToken(1) {
+				t.Fatal("the old attempt returned its token after the rotation")
+			}
+			var se *serviceGrantError
+			if r.err != nil && (!errors.As(r.err, &se) || se.reason != svcReasonUnavailable || se.definitive) {
+				t.Fatalf("the old attempt's caller got %v, want the new revision's token or the transient error", r.err)
+			}
+			if r.err == nil && r.tok.token != svcToken(2) {
+				t.Fatalf("the old attempt's caller got %q, want the new revision's token", r.tok.token)
+			}
+			f.srv.svcGrant.mu.Lock()
+			c, ok := f.srv.svcGrant.cache[f.uid]
+			f.srv.svcGrant.mu.Unlock()
+			if !ok || c.token != svcToken(2) {
+				t.Fatalf("the cache holds %q (present %v), want the second token", c.token, ok)
+			}
+			var superseded, success int
+			for _, ev := range f.mintRows() {
+				var d map[string]any
+				_ = json.Unmarshal(ev.Data, &d)
+				switch {
+				case d["superseded"] == true:
+					superseded++
+				case ev.Outcome == "success":
+					success++
+				}
+			}
+			if f.idp.count() != 2 || superseded != 1 || success != 1 {
+				t.Fatalf("%d token requests, %d superseded and %d success rows; want 2, 1 (the old) and 1 (the new)",
+					f.idp.count(), superseded, success)
+			}
+		})
+	}
 }
