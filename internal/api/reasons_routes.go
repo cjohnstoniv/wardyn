@@ -983,25 +983,3 @@ const (
 	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
 	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
 )
-
-// portal authority reasons
-const (
-	reasonDelegatePersonUnknownPortal = "delegate_person_unknown_portal" // a person list names a portal person whose issuer has no binding (shared with the store-ruling mapping)
-
-	reasonPortalIssuersStatementRequired  = "portal_issuers_statement_required"   // the activation needs old_servers_stopped: true
-	reasonPortalIssuersOldServerSuspected = "portal_issuers_old_server_suspected" // another client of the database is not a 0.10.2 wardynd; the answer lists it
-	reasonPortalIssuersSampleWarming      = "portal_issuers_sample_warming"       // this replica has not sampled the database for two minutes yet
-	reasonPortalIssuerInUse               = "portal_issuer_in_use"                // a binding that a portal, a person, a grant or a stored rule names cannot be retired
-	reasonPortalIssuerNotFound            = "portal_issuer_not_found"             // no binding has that key
-	reasonDelegateAdmissionStale          = "delegate_admission_stale"            // the portal's admission rule is no longer the one the change expected
-
-	// Shared with the registration lane, which refuses the same cases at registration (D5).
-	reasonDelegateGroupOrPortalManaged     = "delegate_group_or_portal_managed"     // no group needs portal_managed_admission
-	reasonDelegatePortalManagedWithGroup   = "delegate_portal_managed_with_group"   // portal_managed_admission with a group
-	reasonDelegatePortalManagedNeedsIssuer = "delegate_portal_managed_needs_issuer" // an admission rule on a console portal
-	reasonDelegateClaimReserved            = "delegate_claim_reserved"              // the claim name already has a meaning
-	reasonDelegateClaimIncomplete          = "delegate_claim_incomplete"            // a claim without a value or a value without a claim
-)
-
-// delegatePersonUnknownPortalMsg is the sentence of reasonDelegatePersonUnknownPortal.
-const delegatePersonUnknownPortalMsg = "A portal person is named whose issuer no portal is registered for."

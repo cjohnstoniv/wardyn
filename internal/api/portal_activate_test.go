@@ -58,7 +58,7 @@ func TestPortalIssuersActivate_LoserOfARaceIsAlreadyActivated(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, fake))
 	for i := 0; i < 14; i++ {
-		srv.portalActivation.record(time.Now().Add(time.Duration(i-14)*portalSampleEvery), fake.sessions)
+		srv.portalMonitor().record(time.Now().Add(time.Duration(i-14)*portalSampleEvery), fake.sessions)
 	}
 	w := do(t, srv, http.MethodPost, "/api/v1/admin/portal-issuers/activate", adminToken, `{"old_servers_stopped":true,"confirm_listed_sessions":true}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"already_activated":true`) {

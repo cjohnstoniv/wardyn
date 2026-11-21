@@ -6,7 +6,7 @@ name: Mixed version (0.10.1 replica beside this tree)
 # tree's own, in one kind cluster. The job proves what the activation barrier promises:
 #   1. the operator's activation is vetoed (409 portal_issuers_old_server_suspected) once the new replica's
 #      rolling sample has seen the old one, and nothing is switched on;
-#   2. the same call with confirm_listed_sessions succeeds, names the old session in portal_issuers.activate_override,
+#   2. the same call with confirm_listed_sessions succeeds, and its audit row names the old replica's own session;
 #      and the veto stays refused for the unconfirmed call until then.
 # It is not a supported runtime, it only shows the fence. Dispatch it, or call it from the train.
 
@@ -64,6 +64,15 @@ jobs:
           tags: wardyn/wardynd:kind-test
           load: true
           cache-from: type=gha,scope=wardynd
+      - name: Build wardyn-proxy (the k8s runner refuses to construct without k8s.proxyImage)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: deploy/compose/Dockerfile.proxy
+          tags: wardyn/wardyn-proxy:local
+          load: true
+          cache-from: type=gha,scope=wardyn-proxy
       - uses: ./.github/actions/kind-binary
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with:
@@ -72,7 +81,7 @@ jobs:
       - name: Load the new image into kind, pull the old one
         run: |
           set -euo pipefail
-          kind load docker-image wardyn/wardynd:kind-test --name wardyn-mixed
+          kind load docker-image wardyn/wardynd:kind-test wardyn/wardyn-proxy:local --name wardyn-mixed
           docker pull "${OLD_IMAGE}:${OLD_TAG}"
           kind load docker-image "${OLD_IMAGE}:${OLD_TAG}" --name wardyn-mixed
       - name: Postgres, one age key and one admin token for both replicas
@@ -93,20 +102,32 @@ jobs:
         run: |
           set -euo pipefail
           helm install new ./deploy/helm/wardyn --namespace "$NS" \
+            -f .github/mixed-version/values.yaml \
             --set image.repository=wardyn/wardynd --set image.tag=kind-test \
-            --set secrets.ageKeyFromSecret=true --set ha.enabled=true \
             --set auth.adminToken.value="$ADMIN_TOKEN"
           kubectl -n "$NS" rollout status deployment/new-wardyn --timeout=180s
       - name: Install the old replica (published image, break-glass migration check, WARDYN_HA)
         run: |
           set -euo pipefail
           helm install old ./deploy/helm/wardyn --namespace "$NS" \
+            -f .github/mixed-version/values.yaml \
             --set image.repository="$OLD_IMAGE" --set image.tag="$OLD_TAG" \
-            --set secrets.ageKeyFromSecret=true --set ha.enabled=true \
             --set auth.adminToken.value="$ADMIN_TOKEN" \
             --set 'extraEnv[0].name=WARDYN_ALLOW_UNKNOWN_MIGRATIONS' --set-string 'extraEnv[0].value=true'
           kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=180s || {
             kubectl -n "$NS" logs deployment/old-wardyn --tail=100; exit 1; }
+      - name: Find the old replica's database session
+        run: |
+          set -euo pipefail
+          old_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/instance=old -o jsonpath='{.items[0].status.podIP}')
+          new_ip=$(kubectl -n "$NS" get pod -l app.kubernetes.io/instance=new -o jsonpath='{.items[0].status.podIP}')
+          [ -n "$old_ip" ] && [ -n "$new_ip" ] && [ "$old_ip" != "$new_ip" ]
+          # The old replica holds at least one session from its own pod address, the new one's are its own.
+          n=$(kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc \
+            "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$old_ip' AND datname = current_database()")
+          [ "$n" -ge 1 ] || { echo "::error::the old replica ($old_ip) has no session on the database"; exit 1; }
+          echo "OLD_IP=$old_ip" >> "$GITHUB_ENV"
+          echo "NEW_IP=$new_ip" >> "$GITHUB_ENV"
       - name: The activation is vetoed beside the old replica, then runs with the audited override
         shell: bash
         run: |
@@ -127,16 +148,23 @@ jobs:
           done
           [ "$vetoed" = 1 ] || { echo "::error::the activation was never vetoed beside the old replica"; exit 1; }
           echo "vetoed: $(cat /tmp/out.json)"
-          # No statement, no activation.
+          # The veto lists the old replica's session by its pod address, and not the new replica's.
+          jq -e --arg ip "$OLD_IP" '[.sessions[] | select(.client_addr | startswith($ip + "/") or . == $ip)] | length >= 1' /tmp/out.json >/dev/null \
+            || { echo "::error::the veto does not list the old replica's session ($OLD_IP)"; exit 1; }
+          jq -e --arg ip "$NEW_IP" '[.sessions[] | select(.client_addr | startswith($ip + "/") or . == $ip)] | length == 0' /tmp/out.json >/dev/null \
+            || { echo "::error::the veto lists the new replica's own session ($NEW_IP)"; exit 1; }
+          # No statement, no activation; and the unconfirmed call is still vetoed.
           [ "$(call '{}')" = 422 ] || { echo "::error::an activation without the statement was not 422"; exit 1; }
-          # The operator's override succeeds and is audited with the old session named.
+          [ "$(call '{"old_servers_stopped":true}')" = 409 ] || { echo "::error::the unconfirmed call was not still vetoed"; exit 1; }
+          # The operator's override succeeds, and its audit row names the old replica's session.
           code=$(call '{"old_servers_stopped":true,"confirm_listed_sessions":true}')
           [ "$code" = 200 ] || { echo "::error::the override answered $code $(cat /tmp/out.json)"; exit 1; }
           curl -fsS -H "Authorization: Bearer $ADMIN_TOKEN" 'http://127.0.0.1:18080/api/v1/audit?action=portal_issuers.activate_override' | tee /tmp/audit.json
-          grep -q 'wardynd' /tmp/audit.json || grep -q '"sessions"' /tmp/audit.json || { echo "::error::no portal_issuers.activate_override row names the old session"; exit 1; }
+          jq -e --arg ip "$OLD_IP" '[.[] | select(.action == "portal_issuers.activate_override") | .data.sessions[]? | select(endswith("@" + $ip + "/32") or endswith("@" + $ip))] | length >= 1' /tmp/audit.json >/dev/null \
+            || { echo "::error::no portal_issuers.activate_override row names the old replica's session ($OLD_IP)"; exit 1; }
           # A second call finds it already on.
           code=$(call '{"old_servers_stopped":true}')
-          [ "$code" = 200 ] && grep -q already_activated /tmp/out.json || { echo "::error::a repeat activation answered $code $(cat /tmp/out.json)"; exit 1; }
+          [ "$code" = 200 ] && jq -e '.already_activated == true' /tmp/out.json >/dev/null || { echo "::error::a repeat activation answered $code $(cat /tmp/out.json)"; exit 1; }
       - name: Logs on failure
         if: failure()
         run: |

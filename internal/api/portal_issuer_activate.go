@@ -48,6 +48,15 @@ type portalAlarmKey struct {
 	label, addr, day string
 }
 
+// portalMonitors holds each Server's monitor, so the Server struct (at the file-size gate) gains no field.
+var portalMonitors sync.Map
+
+// portalMonitor is this server's monitor, created on first use.
+func (s *Server) portalMonitor() *portalActivationMonitor {
+	v, _ := portalMonitors.LoadOrStore(s, &portalActivationMonitor{})
+	return v.(*portalActivationMonitor)
+}
+
 // portalActivationMonitor is one replica's rolling sample and its alarm's memory. The zero value is ready to
 // use. started is when the current continuous run of successful samples began and last is its newest sample;
 // a replica that never samples has neither, and one whose samples stopped (reads failing) has a stale last,
@@ -161,10 +170,10 @@ func (s *Server) portalMonitorStep(ctx context.Context, now time.Time) (bool, er
 		return activated, err
 	}
 	if !activated {
-		s.portalActivation.record(now, sessions)
+		s.portalMonitor().record(now, sessions)
 		return false, nil
 	}
-	for _, c := range s.portalActivation.newSightings(now, sessions) {
+	for _, c := range s.portalMonitor().newSightings(now, sessions) {
 		slog.WarnContext(ctx, "portal activation: a database client without a 0.10.2 label", slog.String("label", c.Label), slog.String("client_addr", c.ClientAddr))
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd", "portal_issuers.old_client_seen", c.Label, "success",
 			mustJSON(map[string]any{"application_name": c.Label, "client_addr": c.ClientAddr})))
@@ -224,7 +233,7 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusOK, map[string]any{"activated": true, "already_activated": true})
 		return
 	}
-	suspects, wait := s.portalActivation.suspects(s.cfg.Now().UTC())
+	suspects, wait := s.portalMonitor().suspects(s.cfg.Now().UTC())
 	if wait > 0 { // warming, or the sample has gone stale: either way retryable, never clean
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeErrorReason(w, http.StatusConflict, reasonPortalIssuersSampleWarming, portalSampleWarmingMsg)
