@@ -270,8 +270,15 @@ func (s PG) AuditRetentionStatus(ctx context.Context) (AuditRetentionStatus, err
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
 
 	var st AuditRetentionStatus
-	if err := tx.QueryRow(ctx, `SELECT retention_days, audit_retention_window(), pending_days, pending_effective_at, cutover
-		FROM audit_partition_meta`).
+	// The effective window and the pending pair come from one database time, the same rule audit_retention_window()
+	// applies: a decrease whose date has passed is the window now and no longer pending, though the sweeper has not
+	// rewritten the stored row.
+	if err := tx.QueryRow(ctx, `SELECT m.retention_days,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at <= c.t THEN m.pending_days ELSE m.retention_days END,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at > c.t THEN m.pending_days END,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at > c.t THEN m.pending_effective_at END,
+			m.cutover
+		FROM audit_partition_meta m, (SELECT clock_timestamp() AS t) c`).
 		Scan(&st.Policy.Days, &st.Policy.EffectiveDays, &st.Policy.PendingDays, &st.Policy.PendingEffectiveAt, &st.Cutover); err != nil {
 		return AuditRetentionStatus{}, fmt.Errorf("store: read audit retention policy: %w", err)
 	}

@@ -254,6 +254,51 @@ func TestPG_ListRunsFiltered_Workspace(t *testing.T) {
 	}
 }
 
+// TestPG_ListRunsFiltered_ServiceOnlyBeforePaging pins that ServiceOnly narrows the rows before LIMIT: one old
+// service behind more than a full page of newer ordinary runs is on page 1 with it, and absent without it.
+func TestPG_ListRunsFiltered_ServiceOnlyBeforePaging(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	owner := "service-only-" + uuid.NewString()
+
+	svc := newFilterRun(owner, types.RunRunning)
+	svc.CreatedAt = svc.CreatedAt.Add(-2 * time.Hour)
+	svc.UpdatedAt = svc.CreatedAt
+	svc.Repo = "acme/widgets"
+	svc.Service = &types.RunService{Restart: types.ServiceRestartOnFailure}
+	svc = persistRun(t, ctx, pool, svc)
+	for i := 0; i < 1001; i++ {
+		r := newFilterRun(owner, types.RunRunning)
+		r.Repo = "acme/widgets"
+		persistRun(t, ctx, pool, r)
+	}
+
+	f := store.RunFilter{Owner: owner, Workspace: "acme/widgets"}
+	page := store.Page{Limit: 1000}
+	got, err := pg.ListRunsFiltered(ctx, f, page)
+	if err != nil {
+		t.Fatalf("ListRunsFiltered: %v", err)
+	}
+	for _, r := range got {
+		if r.ID == svc.ID {
+			t.Fatalf("without ServiceOnly the old service is on page 1: the fixture does not crowd it out")
+		}
+	}
+
+	f.ServiceOnly = true
+	got, err = pg.ListRunsFiltered(ctx, f, page)
+	if err != nil {
+		t.Fatalf("ListRunsFiltered ServiceOnly: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != svc.ID {
+		t.Fatalf("ServiceOnly page 1 = %d rows, want exactly the old service", len(got))
+	}
+	if _, _, err := pg.CountHiddenRuns(ctx, f); err != nil {
+		t.Fatalf("CountHiddenRuns ServiceOnly: %v", err)
+	}
+}
+
 // TestPG_ListRunsFiltered_QueryEscaping pins that a literal '%'/'_' in ?q=
 // matches literally rather than as a LIKE wildcard, and that the match is a
 // case-insensitive substring over title/task/repo/created_by.

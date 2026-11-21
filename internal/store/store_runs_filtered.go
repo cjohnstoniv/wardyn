@@ -43,6 +43,9 @@ type RunFilter struct {
 	// NoEnd keeps only live runs with no end (ends_at NULL): the ones nothing will
 	// stop but a person, an idle stop or a kill (#1319).
 	NoEnd bool
+	// ServiceOnly keeps only service runs (the service column is set). Applied with the other filters, before
+	// paging, so a segment's first page holds only its own runs and the hidden counts count only them.
+	ServiceOnly bool
 	// Workspace exact-matches COALESCE(NULLIF(repo,''), workspace_path).
 	Workspace string
 	// Query ILIKE-searches title/task/repo/created_by. Raw — the store
@@ -154,6 +157,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 		// its start writes the end. So "No end" holds only the runs that hold a slot, and not one whose
 		// lease already ended (lost_reason 'ended', as runLiveSQL reads it).
 		clauses = append(clauses, "(ends_at IS NULL AND state = ANY("+bindArg(args, slotHoldingStateNames())+") AND lost_reason IS DISTINCT FROM 'ended')")
+	}
+	if f.ServiceOnly {
+		clauses = append(clauses, "service IS NOT NULL")
 	}
 	if f.Workspace != "" {
 		clauses = append(clauses, "COALESCE(NULLIF(repo,''), workspace_path) = "+bindArg(args, f.Workspace))

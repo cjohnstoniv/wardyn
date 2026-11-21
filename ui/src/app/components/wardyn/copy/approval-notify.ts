@@ -9,7 +9,7 @@
 // values render mono and nothing else does.
 export const APPROVAL_NOTIFY = {
   TITLE: "Approval notifications",
-  SUMMARY_OK: (n: number) => `${n} channels · all delivering`,
+  SUMMARY_OK: (n: number) => `${n} channels · No deliveries marked failed in the past hour`,
   SUMMARY_FAILED: (n: number, f: number) => `${n} channels · ${f} failed in the last hour`,
   SUMMARY_OFF: "Not set up",
   ENV_NAME: "WARDYN_APPROVAL_NOTIFY",
