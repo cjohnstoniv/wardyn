@@ -156,7 +156,6 @@ df="$ROOT/deploy/compose/Dockerfile.wardynd"
 [ "$(grep -c 'internal/version.buildRevision=\${REVISION}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp buildRevision into wardynd and every wardyn build"
 [ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
 grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the linux/amd64 host CLI from the image"
-grep -q -- '--network none' "$PI" || fail "the image check does not run the image's binaries without a network"
 
 # Publisher guard: a job that holds packages or id-token write (its own permissions block, or the workflow's when it has
 # none) must not execute a file taken out of the image on the runner. The image is unsigned until that job signs it, so
@@ -174,8 +173,35 @@ publisher_host_exec_guard() {
     injobs && own && /^      (packages|id-token): write/ { ownwrite = 1 }
     injobs { priv = ownwrite || (!own && wfwrite) }
     /^[[:space:]]*#/ { next }
-    injobs && (/chmod[[:space:]]+\+x/ || /\$RUNNER_TEMP\/[A-Za-z0-9._\/-]*"?[[:space:]]+(version|--)/ || /\$\("?\$RUNNER_TEMP\//) { if (bad == "") bad = $0 }
+    # A command word that is a variable ("$f" version, $(...$f...), a copied-out file run through a loop variable), an
+    # interpreter or wrapper run on a file, a chmod, or a path under RUNNER_TEMP run directly.
+    injobs && (/chmod[[:space:]]+\+x/ || /\$RUNNER_TEMP\/[A-Za-z0-9._\/-]*"?[[:space:]]+(version|--)/ || /\$\("?\$RUNNER_TEMP\// \
+      || /(^|;|&&|\|\||\||\$\(|`)[[:space:]]*"?\$[{]?[A-Za-z_][A-Za-z0-9_]*[}]?"?([[:space:]]+[^=[:space:]]|[[:space:]]*($|;|&|\||\)))/ \
+      || /(^|;|&&|\|\||\||\$\(|`)[[:space:]]*(bash|sh|env|exec|xargs|nohup|timeout|setsid|sudo)[[:space:]]/) { if (bad == "") bad = $0 }
     END { flush(); exit found }
+  '
+}
+# What makes run_in_image safe is the flags it runs the image's own binary with, so each is pinned and nothing
+# that reaches the host (a mount, the docker socket, an env var, a wider network, an added capability) is allowed.
+# `docker run` appears only inside it. Prints each problem and exits 1; reads the workflow on stdin.
+publisher_docker_run_guard() {
+  awk '
+    /^[[:space:]]*#/ { next }
+    /^[[:space:]]*run_in_image\(\)[[:space:]]*\{/ { inbody = 1; seen = 1; next }
+    inbody && /^[[:space:]]*\}/ { inbody = 0; next }
+    /docker[[:space:]]+run/ { total++; if (inbody) inrun++ }
+    inbody { body = body "\n" $0 }
+    END {
+      if (!seen) { print "no run_in_image function"; exit 1 }
+      if (total != inrun) { print "a docker run outside run_in_image"; bad = 1 }
+      n = split("--network none|--read-only|--cap-drop ALL|no-new-privileges|--entrypoint", need, "|")
+      for (i = 1; i <= n; i++) if (index(body, need[i]) == 0) { print "run_in_image lacks " need[i]; bad = 1 }
+      if (body ~ /(^|[[:space:]])(-v|--volume|--mount|--privileged|--pid|--ipc|--uts|--userns|--device|--cap-add|--env-file|-e|--env|--net|--add-host|--group-add|-u|--user)([[:space:]=]|$)/) { print "run_in_image has a flag that reaches the host or widens the container"; bad = 1 }
+      if (body ~ /docker\.sock|\$HOME|RUNNER_TEMP|GITHUB_|secrets\./) { print "run_in_image names the docker socket, the home directory, the runner temp directory or a credential"; bad = 1 }
+      if (body ~ /--network[ =][^n]|--network none[^[:space:]\\]/) { print "run_in_image has a network other than none"; bad = 1 }
+      if (body ~ /--security-opt[ =][^n]/) { print "run_in_image sets a security option other than no-new-privileges"; bad = 1 }
+      exit bad
+    }
   '
 }
 publisher_host_exec_guard < "$PI" || fail "publish-image.yml has a publishing job that executes a file taken from the image on the runner (lines above)"
@@ -198,6 +224,40 @@ OLD
 if publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null; then fail "the publisher guard accepts a runner-side run of an extracted CLI"; fi
 sed -i '/^    runs-on/a\    permissions:\n      contents: read' "$WORK/old-shape.yml"
 publisher_host_exec_guard < "$WORK/old-shape.yml" >/dev/null || fail "the publisher guard refuses a job that holds no write permission"
+publisher_docker_run_guard < "$PI" || fail "run_in_image in publish-image.yml is not pinned to the container flags that keep it safe (lines above)"
+# One fixture per way the unsigned image's bytes could reach the runner again; each must fail its guard, and the
+# workflow as it stands must pass both (above).
+mkfix() { # NAME BODY: a workflow whose publishing job runs BODY
+  { printf 'permissions:\n  contents: read\n  packages: write\n  id-token: write\njobs:\n  publish-image:\n    runs-on: ubuntu-26.04\n    steps:\n      - name: Check the image reports its revision\n        run: |\n'; cat; } > "$WORK/fix-$1.yml"
+}
+GOOD_RUN='          run_in_image() {
+            docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \\
+              --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
+          }'
+mkfix good <<<"$GOOD_RUN"
+publisher_docker_run_guard < "$WORK/fix-good.yml" >/dev/null && publisher_host_exec_guard < "$WORK/fix-good.yml" >/dev/null || fail "the guards refuse the safe shape"
+mkfix loopvar <<<"$GOOD_RUN
+          for f in \"\$RUNNER_TEMP\"/host/wardyn*; do
+            \"\$f\" version >/dev/null 2>&1 || true
+          done"
+if publisher_host_exec_guard < "$WORK/fix-loopvar.yml" >/dev/null; then fail "the exec guard accepts a copied-out file run through a loop variable"; fi
+mkfix interp <<<"$GOOD_RUN
+          bash \"\$f\""
+if publisher_host_exec_guard < "$WORK/fix-interp.yml" >/dev/null; then fail "the exec guard accepts an interpreter run on a copied-out file"; fi
+for shape in 'mount|-v /var/run/docker.sock:/var/run/docker.sock' 'home|-v "$HOME:/h"' 'volumeflag|--volume /tmp:/t' 'env|-e GITHUB_TOKEN' 'privileged|--privileged' 'hostnet|--network host' 'capadd|--cap-add SYS_ADMIN'; do
+  name="${shape%%|*}"; flag="${shape#*|}"
+  mkfix "$name" <<<"${GOOD_RUN/--network none/--network none $flag}"
+  if publisher_docker_run_guard < "$WORK/fix-$name.yml" >/dev/null; then fail "the docker run guard accepts run_in_image with: $flag"; fi
+done
+for dropped in '--read-only ' '--cap-drop ALL ' '--network none '; do
+  mkfix dropped <<<"${GOOD_RUN/$dropped/}"
+  if publisher_docker_run_guard < "$WORK/fix-dropped.yml" >/dev/null; then fail "the docker run guard accepts run_in_image without: $dropped"; fi
+done
+mkfix nonew <<<"${GOOD_RUN/--security-opt no-new-privileges /}"
+if publisher_docker_run_guard < "$WORK/fix-nonew.yml" >/dev/null; then fail "the docker run guard accepts run_in_image without no-new-privileges"; fi
+mkfix second <<<"$GOOD_RUN
+          docker run --rm -v /:/host \"\$IMAGE_REF\""
+if publisher_docker_run_guard < "$WORK/fix-second.yml" >/dev/null; then fail "the docker run guard accepts a second docker run outside run_in_image"; fi
 
 # The image check itself, run with a stub docker: a failing version command and an empty answer each fail it, on a branch
 # and on a tag, and a tag must report exactly its release version.
