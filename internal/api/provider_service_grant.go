@@ -121,9 +121,10 @@ type serviceGrantMinted struct {
 
 type serviceGrantCached struct {
 	serviceGrantMinted
-	digest string
-	rev    string
-	revOK  bool
+	digest  string
+	rev     string
+	revOK   bool
+	attempt uint64 // the attempt that published it
 }
 
 type serviceGrantFailed struct {
@@ -136,8 +137,11 @@ type serviceGrantFailed struct {
 
 // serviceGrantRuntime is one replica's service-grant state. The zero value is ready to use.
 type serviceGrantRuntime struct {
-	mu      sync.Mutex
-	cache   map[string]serviceGrantCached // by provider uid
+	mu    sync.Mutex
+	cache map[string]serviceGrantCached // by provider uid
+	// gen is each row's cache generation, moved by every eviction (a rotation, a removal, a withdrawal seen): an
+	// attempt publishes only while the generation it started under is still the row's.
+	gen     map[string]uint64
 	failed  map[string]serviceGrantFailed // each row's latest failed attempt
 	seq     uint64                        // attempt generations, in the order attempts start on this replica
 	succGen map[string]uint64             // the generation of each row's latest published success
@@ -278,6 +282,7 @@ func (s *Server) serviceGrantToken(ctx context.Context, p types.ModelProvider, s
 func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvider, digest, trigger string) (serviceGrantMinted, error) {
 	started := s.cfg.Now() // the attempt's one timestamp: a failure is recorded at it, never at the time it ends
 	attempt := s.nextServiceGrantGen()
+	gen := s.serviceGrantCacheGen(p.UID) // read before the revision, so an eviction after it is always seen at publish
 	active, retiring, err := s.serviceGrantGate(ctx, p.UID)
 	if err != nil {
 		return serviceGrantMinted{}, svcFail(svcReasonUnavailable, false)
@@ -307,7 +312,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	// The elected flight publishes the one result, a failure included, so a waiter never records the same
 	// failed request again after a newer attempt has succeeded.
 	v, err, _ := s.svcGrant.flights.Do(key, func() (any, error) {
-		tok, merr := s.serviceGrantMint(ctx, p, digest, rev, revOK, trigger, attempt)
+		tok, merr := s.serviceGrantMint(ctx, p, digest, rev, revOK, trigger, attempt, gen)
 		var se *serviceGrantError
 		if errors.As(merr, &se) {
 			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), adoEntraRedeemTimeout)
@@ -345,10 +350,22 @@ func (s *Server) cachedServiceGrantToken(uid, digest, rev string, revOK bool, ma
 	return c.serviceGrantMinted, true
 }
 
+// dropServiceGrantCache evicts uid's token and moves its cache generation, so no attempt that started before the
+// eviction publishes afterwards.
 func (s *Server) dropServiceGrantCache(uid string) {
 	s.svcGrant.mu.Lock()
 	defer s.svcGrant.mu.Unlock()
 	delete(s.svcGrant.cache, uid)
+	if s.svcGrant.gen == nil {
+		s.svcGrant.gen = map[string]uint64{}
+	}
+	s.svcGrant.gen[uid]++
+}
+
+func (s *Server) serviceGrantCacheGen(uid string) uint64 {
+	s.svcGrant.mu.Lock()
+	defer s.svcGrant.mu.Unlock()
+	return s.svcGrant.gen[uid]
 }
 
 // serviceGrantPacedFailure returns the failed attempt this one would repeat, under the same digest and
@@ -434,7 +451,7 @@ func (s *Server) serviceGrantFallback(uid, digest, rev string, revOK bool, f ser
 
 // serviceGrantMint is one token request: the record's read, the request, and the checks of its answer, then
 // the publish. It holds no database lock and runs under the single-flight on (uid, digest, revision).
-func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt uint64) (serviceGrantMinted, error) {
+func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool, trigger string, attempt, gen uint64) (serviceGrantMinted, error) {
 	g := p.OIDC.ServiceGrant
 	name := serviceGrantSecretName(p.UID)
 	mctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantTokenBound)
@@ -476,13 +493,13 @@ func (s *Server) serviceGrantMint(ctx context.Context, p types.ModelProvider, di
 	// the request's window is still checked, never discarded for the time the request used.
 	pctx, pcancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantPublishBound)
 	defer pcancel()
-	return s.publishServiceGrantToken(pctx, p, digest, rev, revOK, trigger, sent, attempt, tok)
+	return s.publishServiceGrantToken(pctx, p, digest, rev, revOK, trigger, sent, attempt, gen, tok)
 }
 
 // publishServiceGrantToken re-reads the revision and the live digest before the token is cached or returned.
 // A token the provider issued but that is not published is audited as superseded and stays masked.
 func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProvider, digest, rev string, revOK bool,
-	trigger string, sent time.Time, attempt uint64, tok serviceGrantMinted,
+	trigger string, sent time.Time, attempt, gen uint64, tok serviceGrantMinted,
 ) (serviceGrantMinted, error) {
 	name := serviceGrantSecretName(p.UID)
 	liveRev, liveOK, rerr := s.serviceGrantRevision(ctx, name)
@@ -509,23 +526,32 @@ func (s *Server) publishServiceGrantToken(ctx context.Context, p types.ModelProv
 		superseded()
 		return serviceGrantMinted{}, errServiceGrantRevisionMoved
 	}
-	// One success row per request sent, written before the token is published to any waiter.
-	s.auditServiceGrantMint(ctx, p, trigger, sent, &tok, nil, false)
+	// Published only while the attempt's cache generation is the row's and no later attempt has published: the
+	// decision, the cache write and the value returned are one critical section, so an eviction after the reads
+	// above is never overwritten. The one row for the request is written after it, labelled by the decision.
 	s.svcGrant.mu.Lock()
-	if s.svcGrant.cache == nil {
-		s.svcGrant.cache = map[string]serviceGrantCached{}
-	}
-	s.svcGrant.cache[p.UID] = serviceGrantCached{serviceGrantMinted: tok, digest: digest, rev: rev, revOK: revOK}
-	if f, ok := s.svcGrant.failed[p.UID]; ok && f.gen < attempt {
-		delete(s.svcGrant.failed, p.UID)
-	}
-	if s.svcGrant.succGen == nil {
-		s.svcGrant.succGen = map[string]uint64{}
-	}
-	if s.svcGrant.succGen[p.UID] < attempt {
-		s.svcGrant.succGen[p.UID] = attempt
+	prev, held := s.svcGrant.cache[p.UID]
+	published := s.svcGrant.gen[p.UID] == gen && (!held || prev.attempt < attempt)
+	if published {
+		if s.svcGrant.cache == nil {
+			s.svcGrant.cache = map[string]serviceGrantCached{}
+		}
+		s.svcGrant.cache[p.UID] = serviceGrantCached{serviceGrantMinted: tok, digest: digest, rev: rev, revOK: revOK, attempt: attempt}
+		if f, ok := s.svcGrant.failed[p.UID]; ok && f.gen < attempt {
+			delete(s.svcGrant.failed, p.UID)
+		}
+		if s.svcGrant.succGen == nil {
+			s.svcGrant.succGen = map[string]uint64{}
+		}
+		if s.svcGrant.succGen[p.UID] < attempt {
+			s.svcGrant.succGen[p.UID] = attempt
+		}
 	}
 	s.svcGrant.mu.Unlock()
+	s.auditServiceGrantMint(ctx, p, trigger, sent, &tok, nil, !published)
+	if !published {
+		return serviceGrantMinted{}, errServiceGrantRevisionMoved // asked once more under the row's current state
+	}
 	s.writeServiceGrantStatus(ctx, p, digest, sent, &tok, nil)
 	return tok, nil
 }
