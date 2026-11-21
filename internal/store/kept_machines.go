@@ -382,21 +382,8 @@ func (s PG) KillRunMarkingKeptMachine(ctx context.Context, runID uuid.UUID, from
 	var applied bool
 	var d KeptMachineDeletion
 	err := s.inTx(ctx, func(q Querier) error {
-		tag, err := q.Exec(ctx, `UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = now() WHERE id = $2 AND state = $3`,
-			string(types.RunKilled), runID, string(fromState))
-		if err != nil {
-			return fmt.Errorf("store: claim a run's kill: %w", err)
-		}
-		if applied = tag.RowsAffected() > 0; !applied {
-			return nil
-		}
-		d, err = scanKeptMachineDeletion(q.QueryRow(ctx, `UPDATE kept_machines
-			SET delete_intent_at = now(), delete_intent_by = $2, delete_intent_killer = $3
-			WHERE run_id = $1 AND state <> 'deleting' AND delete_intent_at IS NULL AND owner_subject <> $4
-			RETURNING `+keptMachineDeletionCols, runID, by, killer, exempt))
-		if errors.Is(err, ErrNotFound) {
-			d, err = KeptMachineDeletion{}, nil
-		}
+		var err error
+		applied, d, err = killRunMarkingKeptMachineQ(ctx, q, runID, fromState, by, killer, exempt)
 		return err
 	})
 	if err != nil {
@@ -458,4 +445,25 @@ func keptMachineExec(ctx context.Context, s PG, verb, q string, args ...any) err
 		return ErrNotFound
 	}
 	return nil
+}
+
+// killRunMarkingKeptMachineQ is KillRunMarkingKeptMachine's two writes in the caller's transaction: the run's
+// KILLED compare-and-swap from fromState and, when it lands, the delete intent of the run's kept machine.
+func killRunMarkingKeptMachineQ(ctx context.Context, q Querier, runID uuid.UUID, fromState types.RunState, by, killer, exempt string) (bool, KeptMachineDeletion, error) {
+	tag, err := q.Exec(ctx, `UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = now() WHERE id = $2 AND state = $3`,
+		string(types.RunKilled), runID, string(fromState))
+	if err != nil {
+		return false, KeptMachineDeletion{}, fmt.Errorf("store: claim a run's kill: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, KeptMachineDeletion{}, nil
+	}
+	d, err := scanKeptMachineDeletion(q.QueryRow(ctx, `UPDATE kept_machines
+		SET delete_intent_at = now(), delete_intent_by = $2, delete_intent_killer = $3
+		WHERE run_id = $1 AND state <> 'deleting' AND delete_intent_at IS NULL AND owner_subject <> $4
+		RETURNING `+keptMachineDeletionCols, runID, by, killer, exempt))
+	if errors.Is(err, ErrNotFound) {
+		return true, KeptMachineDeletion{}, nil
+	}
+	return true, d, err
 }

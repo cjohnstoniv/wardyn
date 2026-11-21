@@ -6,11 +6,14 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // SuspensionBounds is what a SCIM suspension's tail reads to reach only what it owed: the database's own
@@ -38,6 +41,20 @@ type PortalSuspensionLedger interface {
 	// ClaimSuspensionJobAt is the check a tail makes before it acts outside the database for a row: the row is
 	// still the one it read, still pending, under the current suspension.
 	ClaimSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error
+	// ClaimSuspensionKillAt is the run's KILLED transition, and the delete intent of a kept machine when kill
+	// asks for one, made in one transaction that first locks the named row: pending, of the identity's current
+	// suspension, with the id the tail read. A row it may not claim is ErrSuperseded and nothing is written, so a
+	// replacement cannot land between the check and the transition, and the intent is the one of the claim that won.
+	ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time, kill RunKill) (bool, KeptMachineDeletion, error)
+}
+
+// RunKill is the transition ClaimSuspensionKillAt makes: run RunID from state From to KILLED. With MarkKept the run's
+// kept machine is marked for delete by By, as killed by Killer, unless Exempt owns it (KillRunMarkingKeptMachine).
+type RunKill struct {
+	RunID              uuid.UUID
+	From               types.RunState
+	MarkKept           bool
+	By, Killer, Exempt string
 }
 
 // suspensionCurrentSQL is the test FinishSuspensionJobAt applies, with the identity as $1 and the bound as the
@@ -157,7 +174,7 @@ func (s PG) EnsureSuspensionJobsAt(ctx context.Context, identity uuid.UUID, keys
 // ReopenSuspensionJobAt — see PortalSuspensionLedger.
 func (s PG) ReopenSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time) error {
 	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4)
 		   AND `+suspensionCurrentSQL("$5"), identity, k.Step, k.Target, k.occurrence(), at)
 	if err != nil {
@@ -182,4 +199,83 @@ func (s PG) ClaimSuspensionJobAt(ctx context.Context, identity uuid.UUID, k JobK
 		return ErrSuperseded
 	}
 	return nil
+}
+
+// ClaimSuspensionKillAt — see PortalSuspensionLedger.
+func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k JobKey, at time.Time, kill RunKill) (bool, KeptMachineDeletion, error) {
+	if kill.From == types.RunQueued {
+		return false, KeptMachineDeletion{}, errQueuedLeave
+	}
+	if kill.MarkKept && kill.By == "" {
+		return false, KeptMachineDeletion{}, errKeptMachineNoBy
+	}
+	var applied bool
+	var d KeptMachineDeletion
+	err := s.inTx(ctx, func(q Querier) error {
+		var one int
+		err := q.QueryRow(ctx, `
+			SELECT 1 FROM deprovision_jobs
+			 WHERE identity_id = $1 AND kind = 'suspend' AND step = $2 AND target = $3 AND ($4::uuid IS NULL OR id = $4) AND state = 'pending'
+			   AND `+suspensionCurrentSQL("$5")+` FOR UPDATE`, identity, k.Step, k.Target, k.occurrence(), at).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrSuperseded
+		}
+		if err != nil {
+			return fmt.Errorf("store: lock suspension job: %w", err)
+		}
+		if kill.MarkKept {
+			applied, d, err = killRunMarkingKeptMachineQ(ctx, q, kill.RunID, kill.From, kill.By, kill.Killer, kill.Exempt)
+			return err
+		}
+		tag, err := q.Exec(ctx, `UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = COALESCE(ended_at, now()) WHERE id = $2 AND state = $3`,
+			string(types.RunKilled), kill.RunID, string(kill.From))
+		if err != nil {
+			return fmt.Errorf("store: claim a run's kill: %w", err)
+		}
+		applied = tag.RowsAffected() > 0
+		return nil
+	})
+	if err != nil {
+		return false, KeptMachineDeletion{}, err
+	}
+	return applied, d, nil
+}
+
+// PinnedEvent is the audit event a portal step writes, as its ledger row holds it: the id and time the first
+// attempt fixed and the payload it fixed with them.
+type PinnedEvent struct {
+	ID      uuid.UUID
+	At      time.Time
+	Payload []byte
+}
+
+// PortalEventPinner pins a portal step's audit event on its ledger row.
+type PortalEventPinner interface {
+	// PinPortalEvent stores id, at and payload on the row k names (k.ID is required: the row's own id) where it has
+	// none, and returns what the row holds, the first attempt's. With bound set (a suspension step) the row must
+	// also belong to the suspension that deactivated the identity at bound, in the same statement. A row it may not
+	// pin is ErrSuperseded and nothing is written.
+	PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (PinnedEvent, error)
+}
+
+// PinPortalEvent — see PortalEventPinner.
+func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (PinnedEvent, error) {
+	if k.ID == uuid.Nil {
+		return PinnedEvent{}, ErrSuperseded
+	}
+	var out PinnedEvent
+	err := s.Pool.QueryRow(ctx, `
+		UPDATE deprovision_jobs SET audit_event_id = COALESCE(audit_event_id, $5), audit_event_at = COALESCE(audit_event_at, $6),
+		       audit_event_payload = COALESCE(audit_event_payload, $7::jsonb)
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND id = $8
+		   AND ($9::timestamptz IS NULL OR `+suspensionCurrentSQL("$9")+`)
+		RETURNING audit_event_id, audit_event_at, audit_event_payload`,
+		identity, kind, k.Step, k.Target, id, at, payload, k.ID, bound).Scan(&out.ID, &out.At, &out.Payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PinnedEvent{}, ErrSuperseded
+	}
+	if err != nil {
+		return PinnedEvent{}, fmt.Errorf("store: pin portal event: %w", err)
+	}
+	return out, nil
 }

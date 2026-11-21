@@ -615,7 +615,7 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 // found live once more.
 func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target); err != nil {
 		return fmt.Errorf("store: reopen deprovision job: %w", err)
 	}
