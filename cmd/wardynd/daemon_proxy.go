@@ -222,10 +222,24 @@ func classifyProxyURLShape(rawURL string) (u *url.URL, classification string) {
 	if pu.Scheme != "http" && pu.Scheme != "https" {
 		return nil, "an unsupported scheme"
 	}
-	if pu.Hostname() == "" {
+	if proxyHostEmpty(pu) {
 		return nil, "missing a host"
 	}
 	return pu, ""
+}
+
+// proxyHostEmpty reports whether a proxy URL names no host once the host is converted the way
+// net/http converts it before it dials: a host made only of characters the conversion drops
+// (a soft hyphen) is empty there, and the dial goes to the local machine. A host that does not
+// convert is judged as given, which is what net/http dials.
+func proxyHostEmpty(u *url.URL) bool {
+	h := u.Hostname()
+	if strings.ContainsFunc(h, func(r rune) bool { return r >= 0x80 }) {
+		if c, err := idna.Lookup.ToASCII(h); err == nil {
+			h = c
+		}
+	}
+	return h == ""
 }
 
 // wireDaemonProxy is installDaemonProxy's and installDaemonProxySecret's
@@ -434,7 +448,7 @@ func parseEnvironmentProxy(raw string) (*url.URL, bool) {
 			u, err = u2, nil
 		}
 	}
-	if err != nil || u.Hostname() == "" || !proxyPortUsable(u) {
+	if err != nil || proxyHostEmpty(u) || !proxyPortUsable(u) {
 		return nil, false
 	}
 	switch u.Scheme {

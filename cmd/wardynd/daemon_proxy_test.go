@@ -154,7 +154,9 @@ func TestInstallDaemonProxy_GarbageRefusesBoot(t *testing.T) {
 	// clean (Scheme "http", Host ":3128" is non-empty) and the scheme is
 	// supported, so only Hostname() == "" catches it — the other three cases
 	// all fail earlier (empty scheme or empty Host).
-	cases := []string{"not a url at all", "ftp://proxy.corp.example", "http://", "://bad", "http://:3128"}
+	// "http://\u00ad:3128" has a host net/http converts to nothing (a soft hyphen is dropped), so it
+	// would dial the local machine; it is refused as a missing host too.
+	cases := []string{"not a url at all", "ftp://proxy.corp.example", "http://", "://bad", "http://:3128", "http://\u00ad:3128"}
 	for _, raw := range cases {
 		tr := freshTransport()
 		_, err := installDaemonProxy(tr, raw, "")

@@ -197,7 +197,7 @@ func TestDaemonProxyAlways_OtherCallsUnchanged(t *testing.T) {
 // httpproxy drops an HTTPS_PROXY it cannot parse and then answers "direct", so a listed host would
 // bypass the proxy it was listed for. Boot refuses instead, and never prints the value.
 func TestDaemonProxyAlways_RefusesUnparsableEnvironmentProxy(t *testing.T) {
-	for _, bad := range []string{"http://bad host:3128", "://proxy", "%zz", "http://proxy:notaport", "ftp://proxy.corp.example:21"} {
+	for _, bad := range []string{"http://bad host:3128", "://proxy", "%zz", "http://proxy:notaport", "ftp://proxy.corp.example:21", "http://\u00ad:3128"} {
 		clearProxyEnv(t)
 		t.Setenv("HTTPS_PROXY", bad)
 		grant, _, err := bootDaemonProxy(freshTransport(), alwaysFlags("", "", "login.corp.example"))
