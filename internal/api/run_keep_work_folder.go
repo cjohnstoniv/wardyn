@@ -227,12 +227,9 @@ const memberDriveByRunEnd = "run_never_started"
 // drive and a drive some other run kept are left alone. Best effort: a failure is logged and the drive stays,
 // as it did before.
 //
-// A run that left the queue ended with the drive's delete already begun, in the statement that ended it
-// (store.keptDriveHoldSQL), so no run of the owner was offered the drive between that end and this cleanup, which
-// can be long after it: a pool removal ends every waiting run at once and cleans them up one at a time. The
-// cleanup then finishes that delete, past the owner-starting check deleteMemberDrive makes, and a drive it keeps
-// has its tombstone cleared, which is when it is first offered. A run that ended another way (aborted on the
-// direct path) has no tombstone yet, and takes the delete from the start.
+// This is the delete for a run that never was in the queue to end there: one aborted on the direct path, and
+// one a dispatch refused. A run that left the queue is cleaned up by finishQueuedKeptDrive, which never takes
+// this path.
 func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
@@ -240,17 +237,8 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	}
 	ctx = context.WithoutCancel(ctx)
 	id := keptWorkFolderDriveID(runID)
-	d, err := ms.GetMemberDrive(ctx, id)
-	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
-		return
-	}
-	if d.DeleteStartedAt != nil {
-		if res := s.deleteMemberDrive(ctx, ms, d, *d.DeleteStartedAt, memberDriveByRunEnd); res.err != nil {
-			slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
-		}
+	d, ok := s.keptDriveOfRun(ctx, ms, runID)
+	if !ok {
 		return
 	}
 	if refused, serr := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByRunEnd); serr != nil || refused {
@@ -267,6 +255,53 @@ func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
 		return
 	}
 	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
+		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
+	}
+}
+
+// keptDriveOfRun is the drive run kept its work folder in, false when it has none or the drive is some other run's.
+func (s *Server) keptDriveOfRun(ctx context.Context, ms store.MemberDriveStore, runID uuid.UUID) (types.UserDrive, bool) {
+	d, err := ms.GetMemberDrive(ctx, keptWorkFolderDriveID(runID))
+	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return types.UserDrive{}, false
+	}
+	return d, true
+}
+
+// finishQueuedKeptDrive is the cleanup of the drive a run kept when it left the queue without starting (cancelled,
+// timed out, aborted by the component fence, or ended by its pool's removal). It can run long after the run ended:
+// a pool removal ends every waiting run at once and cleans them up one at a time. The statement that ended the
+// run began the delete of the drive in the same statement (store.keptDriveHoldSQL), and the tombstone it set is the
+// run's claim: it carries the instant the run ended, which no other delete of the drive can. Only that claim is
+// finished, past the owner-starting check deleteMemberDrive makes, and a drive it keeps has its tombstone cleared,
+// which is when the drive is first offered to the owner's other runs.
+//
+// A drive with no such claim is kept, and is never taken through the direct path's delete: the statement found the
+// owner's own delete already holding the drive and left it, and when that delete fails and clears its tombstone the
+// drive is the owner's, and a later run may have attached it and written to it. The owner's request is what deletes
+// it, or keeps it.
+func (s *Server) finishQueuedKeptDrive(ctx context.Context, runID uuid.UUID) {
+	ms, ok := s.cfg.Store.(store.MemberDriveStore)
+	if !ok {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	d, ok := s.keptDriveOfRun(ctx, ms, runID)
+	if !ok || d.DeleteStartedAt == nil {
+		return
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		slog.WarnContext(ctx, "api: read the run a kept drive was kept from", slog.String("run_id", runID.String()), slog.Any("err", err))
+		return
+	}
+	if run.EndedAt == nil || !d.DeleteStartedAt.Equal(*run.EndedAt) {
+		return
+	}
+	if res := s.deleteMemberDrive(ctx, ms, d, *d.DeleteStartedAt, memberDriveByRunEnd); res.err != nil {
 		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
 	}
 }

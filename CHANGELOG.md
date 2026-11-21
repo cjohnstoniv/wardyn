@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Fixed
 
-- A delayed clean-up no longer deletes a kept folder that a later run used. When a run that asked to keep its work folder ends without starting (cancelled or timed out in the queue, or its runner pool removed), its folder is offered to the person's other runs from then on, and the clean-up that deletes it can run well after, because a pool removal ends every waiting run at once and cleans them up one at a time. The folder now begins its delete in the statement that ends the run, so it is out of reach of every run until the clean-up has deleted it or, when the runner has it in use or the person has a run starting, cleared that mark and kept it. A kept folder is no longer attachable for the moments between a run's end and its clean-up.
+- A delayed clean-up no longer deletes a kept folder that a later run used. When a run that asked to keep its work folder ends without starting (cancelled or timed out in the queue, or its runner pool removed), the statement that ends it also begins the delete of its folder, so no other run is offered the folder before the clean-up has deleted it or, when the runner has it in use or the person has a run starting, cleared that mark and kept it. A folder whose delete the person had already begun is left to that delete: if it fails the folder is the person's, and the clean-up of the run does not delete it. A run that asks for the folder as its source run ends is refused it as one still held, and is not left holding a folder it cannot mount.
 
 ## [0.10.1] — 2026-11-21
 

@@ -134,6 +134,48 @@ func (s PG) ListMacDiskDeletes(ctx context.Context) ([]types.UserDrive, error) {
 		nil, scanDriveRow)
 }
 
+// HeldMemberDriveStore is the optional store capability that reads a person's drives together with whether each
+// kept drive's source run is still going, in one statement and so one snapshot. A drive's run ending and the
+// drive's tombstone (keptDriveHoldSQL) commit together, so a read of both at once cannot see the run ended and
+// the drive unmarked, which two reads can when the end lands between them.
+type HeldMemberDriveStore interface {
+	// ListMemberDrivesOfWithHeld is ListMemberDrivesOf and, for each drive kept from a run that has not ended, its
+	// id in the returned set. A run that is gone has ended.
+	ListMemberDrivesOfWithHeld(ctx context.Context, owner string) ([]types.UserDrive, map[uuid.UUID]bool, error)
+}
+
+var _ HeldMemberDriveStore = PG{}
+
+func (s PG) ListMemberDrivesOfWithHeld(ctx context.Context, owner string) ([]types.UserDrive, map[uuid.UUID]bool, error) {
+	if owner == "" {
+		return nil, nil, errMemberDriveNoOwner
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT `+driveRowCols+`,
+		d.kept_from_run IS NOT NULL AND EXISTS (SELECT 1 FROM agent_runs k WHERE k.id = d.kept_from_run AND k.state IN (`+nonTerminalRunStates+`))
+		FROM user_drives d WHERE d.owner_subject = $1 ORDER BY d.name, d.id`, owner)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: list member drives: %w", err)
+	}
+	defer rows.Close()
+	var out []types.UserDrive
+	held := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var d types.UserDrive
+		var h bool
+		if err := rows.Scan(append(driveRowDest(&d), &h)...); err != nil {
+			return nil, nil, fmt.Errorf("store: scan member drive: %w", err)
+		}
+		out = append(out, d)
+		if h {
+			held[d.ID] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: list member drives: %w", err)
+	}
+	return out, held, nil
+}
+
 // GetMemberDriveOf returns drive id if owner owns it, else ErrNotFound.
 func (s PG) GetMemberDriveOf(ctx context.Context, owner string, id uuid.UUID) (types.UserDrive, error) {
 	if owner == "" {

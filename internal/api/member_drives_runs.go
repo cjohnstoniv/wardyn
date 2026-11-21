@@ -38,15 +38,30 @@ func (s *Server) memberReachableDrives(ctx context.Context, out []reachableDrive
 	if _, actor := actorFromContext(ctx, ""); !ok || owner == "" || types.CanonicalUserSubject(actor) != owner {
 		return out, nil
 	}
-	drives, err := ms.ListMemberDrivesOf(ctx, owner)
+	// A kept drive's run ending and the drive's tombstone commit together (store.keptDriveHoldSQL), so the drive
+	// and whether its run has ended are read in one statement where the store can: read apart, an end that lands
+	// between the two reads offers a drive that was just marked, and the run it is given to cannot mount it.
+	var heldIDs map[uuid.UUID]bool
+	var drives []types.UserDrive
+	var err error
+	if hs, ok := s.cfg.Store.(store.HeldMemberDriveStore); ok {
+		drives, heldIDs, err = hs.ListMemberDrivesOfWithHeld(ctx, owner)
+	} else {
+		drives, err = ms.ListMemberDrivesOf(ctx, owner)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("api: list member drives: %w", err)
 	}
+	_, oneSnapshot := s.cfg.Store.(store.HeldMemberDriveStore)
 	for _, d := range drives {
 		if d.OwnerSubject != owner || d.DeleteStartedAt != nil {
 			continue
 		}
-		r := reachableDrive{owned: true, held: d.KeptFromRun != nil && !s.keptRunEnded(ctx, *d.KeptFromRun), winner: store.UserDriveWinner{Drive: d, Grant: types.UserDriveGrant{
+		held := heldIDs[d.ID]
+		if !oneSnapshot {
+			held = d.KeptFromRun != nil && !s.keptRunEnded(ctx, *d.KeptFromRun)
+		}
+		r := reachableDrive{owned: true, held: held, winner: store.UserDriveWinner{Drive: d, Grant: types.UserDriveGrant{
 			SubjectType: types.CapabilitySubjectUser, Subject: owner, DriveID: d.ID, Enabled: true,
 		}}}
 		r.resolved, r.err = newResolvedDrive(&r.winner.Drive, &r.winner.Grant, types.CapabilitySubjectUser, []string{owner}, ceiling)
