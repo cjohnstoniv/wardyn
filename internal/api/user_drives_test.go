@@ -130,7 +130,8 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 			switch {
 			case g.SubjectType == types.DriveSubjectPortal:
 			case before.Team:
-				moves = moves || (d.Backend == types.DriveBackendHostPath && before.HostRoot != d.HostRoot) || slugMoves
+				named := before.Backend != types.DriveBackendHostPath || d.Backend != types.DriveBackendHostPath
+				moves = moves || (d.Backend == types.DriveBackendHostPath && before.HostRoot != d.HostRoot) || (slugMoves && named)
 			default:
 				moves = moves || before.HostRoot != d.HostRoot || before.HomeTemplate != d.HomeTemplate || slugMoves
 			}

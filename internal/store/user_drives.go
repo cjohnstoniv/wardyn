@@ -58,14 +58,16 @@ var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClash
 // and name slug. It is the store's under-lock form of the re-home guard's rule (driveRehomedAllocations in the api): a
 // portal's folder is named by the portal and drive ids, so only the backend moves it; a group's on a team drive is the
 // team folder, named by the drive id, so the template never reaches it, the host root only on a host path and the name
-// only under the slug scheme; any other allocation is named by all of them.
+// only under the slug scheme and only where some place of the drive is an object Wardyn names (a host path is the root and
+// the home; the second place is a host path by schema, so only the first place and the written backend decide); any other allocation is named by all of them.
 const driveMovesAnAllocationPred = `EXISTS (
 			SELECT 1 FROM user_drive_grants g JOIN user_drives p ON p.id = g.drive_id
 			WHERE g.drive_id = %[1]s::uuid AND CASE
 				WHEN g.subject_type = '` + string(types.DriveSubjectPortal) + `' THEN p.backend IS DISTINCT FROM %[2]s::text
 				WHEN p.team THEN p.backend IS DISTINCT FROM %[2]s::text
 					OR (%[2]s::text = '` + shareBackend + `' AND p.host_root IS DISTINCT FROM %[3]s::text)
-					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text)
+					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text
+						AND (p.backend <> '` + shareBackend + `' OR %[2]s::text <> '` + shareBackend + `' OR COALESCE(p.alt_backend, '` + shareBackend + `') <> '` + shareBackend + `'))
 				ELSE p.backend IS DISTINCT FROM %[2]s::text OR p.host_root IS DISTINCT FROM %[3]s::text
 					OR p.home_template IS DISTINCT FROM %[4]s::text
 					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text)

@@ -298,11 +298,77 @@ func TestPortalDriveRehome_AllocationsThatMove(t *testing.T) {
 		{"team, portals only, backend", item(true, types.DriveBackendDockerVolume, 0, 2), same(types.DriveBackendK8sPVCStatic), []string{backend, template}, 2, []string{backend}},
 		{"team on a docker volume, a group, host root", item(true, types.DriveBackendDockerVolume, 1, 0), same(types.DriveBackendDockerVolume), []string{root}, 0, nil},
 		{"team on a host path, a group, host root", item(true, types.DriveBackendHostPath, 1, 0), same(types.DriveBackendHostPath), []string{root}, 1, []string{root}},
+		{"team on a host path, a group, name (slug scheme)", item(true, types.DriveBackendHostPath, 1, 0), same(types.DriveBackendHostPath), []string{name}, 0, nil},
+		{"team on a host path, a group, name and host root", item(true, types.DriveBackendHostPath, 1, 0), same(types.DriveBackendHostPath), []string{name, root}, 1, []string{root}},
+		{"team on a host path with a second place, a group, name", func() types.UserDriveListItem {
+			it := item(true, types.DriveBackendHostPath, 1, 0)
+			it.AltBackend = types.DriveBackendHostPath
+			return it
+		}(), same(types.DriveBackendHostPath), []string{name}, 0, nil},
+		{"team on a docker volume, a group, name (slug scheme)", item(true, types.DriveBackendDockerVolume, 1, 0), same(types.DriveBackendDockerVolume), []string{name}, 1, []string{name}},
+		{"ordinary drive on a host path, people, name", item(false, types.DriveBackendHostPath, 2, 0), same(types.DriveBackendHostPath), []string{name}, 2, []string{name}},
 		{"ordinary drive, people, template", item(false, types.DriveBackendDockerVolume, 2, 0), same(types.DriveBackendDockerVolume), []string{template}, 2, []string{template}},
 	} {
 		moved, changes := driveRehomedAllocations(c.before, c.after, c.changes)
 		if moved != c.wantMoved || !reflect.DeepEqual(changes, c.wantChanges) {
 			t.Errorf("%s: moved %d %v, want %d %v", c.label, moved, changes, c.wantMoved, c.wantChanges)
+		}
+	}
+}
+
+// A legacy slug-scheme team drive on one host-path place is the root and the team home whatever it is called, so
+// renaming it moves no group's folder: it is written with no confirmation and an audit row that claims no move. The same
+// rename of the same legacy drive on a Docker volume, where the name is in the volume's name, still moves the group's
+// folder, and the refusal and the confirmed audit row count it.
+func TestTeamDriveRehome_LegacyRenameMovesOnlyANamedObject(t *testing.T) {
+	root := t.TempDir()
+	for _, c := range []struct {
+		label, backend string
+		rehomes        bool
+	}{{"host path", "host_path", false}, {"docker volume", "docker_volume", true}} {
+		srv, st, d := portalAdminFixture(t)
+		d.Backend, d.ObjectScheme = types.DriveBackend(c.backend), types.DriveObjectSchemeSlug
+		if c.backend == "host_path" {
+			d.HostRoot = root
+		}
+		st.drives[d.ID] = d
+		srv.cfg.UserDriveHostRoots = []string{root}
+		rec := &recRecorder{}
+		srv.cfg.Audit = rec
+		for i := range 2 {
+			g := types.UserDriveGrant{ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: fmt.Sprintf("grp-%d", i), DriveID: d.ID, Enabled: true}
+			st.grants[g.ID] = g
+		}
+		hostRoot := ""
+		if c.backend == "host_path" {
+			hostRoot = `,"host_root":"` + root + `"`
+		}
+		put := func(query string) *httptest.ResponseRecorder {
+			return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String()+query,
+				`{"name":"Team Data Renamed","backend":"`+c.backend+`","team":true`+hostRoot+`}`, map[string]string{"id": d.ID.String()})
+		}
+		if !c.rehomes {
+			if w := put(""); w.Code != http.StatusOK {
+				t.Errorf("%s: rename = %d %s, want 200 with no confirmation", c.label, w.Code, w.Body)
+				continue
+			}
+			data := driveAuditData(t, rec, "drive.write")
+			if data["rehomed"] != false || data["rehomed_subjects"] != nil || data["rehomed_fields"] != nil {
+				t.Errorf("%s: drive.write = %v, want rehomed false with no subjects or fields", c.label, data)
+			}
+			continue
+		}
+		if w := put(""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "allocated to 2 subjects") {
+			t.Errorf("%s: rename = %d %s, want 409 naming 2 subjects", c.label, w.Code, w.Body)
+			continue
+		}
+		if w := put("?confirm=rehome"); w.Code != http.StatusOK {
+			t.Errorf("%s: confirmed rename = %d %s, want 200", c.label, w.Code, w.Body)
+			continue
+		}
+		data := driveAuditData(t, rec, "drive.write")
+		if data["rehomed"] != true || data["rehomed_subjects"] != float64(2) {
+			t.Errorf("%s: drive.write = %v, want rehomed true for 2 subjects", c.label, data)
 		}
 	}
 }
