@@ -64,8 +64,10 @@ func (e *regPG) countPending(t *testing.T) int {
 	return n
 }
 
-// sidePool is a second pool on the test database for the transactions a test holds open itself, so they never
-// take a connection the server under test needs.
+// sidePool is a pool of its own on the test database, for one transaction a test holds open or for the
+// observer that reads pg_stat_activity. The pool guard (WARDYN_TEST_POOL_GUARD) stops the process when a
+// goroutine asks a pool for a connection while it holds one from that same pool, so every connection the test
+// goroutine holds at once comes from a different pool, and none from the server's.
 func (e *regPG) sidePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	p, err := pgxpool.NewWithConfig(context.Background(), e.pool.Config().Copy())
@@ -89,12 +91,12 @@ func backendPID(t *testing.T, tx pgx.Tx) int32 {
 // waitBlockedBy waits until the database reports a backend waiting on holder's locks, other than skip, and
 // returns that backend's process id: it is the database's own report that a request is blocked, not a guess
 // from elapsed time.
-func waitBlockedBy(t *testing.T, side *pgxpool.Pool, holder int32, skip ...int32) int32 {
+func waitBlockedBy(t *testing.T, observer *pgxpool.Pool, holder int32, skip ...int32) int32 {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		var pid int32
-		err := side.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity
+		err := observer.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity
 			WHERE $1::int = ANY(pg_blocking_pids(pid)) AND NOT (pid = ANY($2::int[])) ORDER BY pid LIMIT 1`, holder, append([]int32{0}, skip...)).Scan(&pid)
 		switch {
 		case err == nil:
@@ -108,13 +110,27 @@ func waitBlockedBy(t *testing.T, side *pgxpool.Pool, holder int32, skip ...int32
 	}
 }
 
+// receiveWithin receives from ch, failing the test if nothing arrives in 30 s, so a request that never returns ends the
+// test instead of hanging it.
+func receiveWithin[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s did not finish within 30 s", what)
+		var zero T
+		return zero
+	}
+}
+
 // waitWaitsOn waits until the database reports that waiter is blocked by holder.
-func waitWaitsOn(t *testing.T, side *pgxpool.Pool, waiter, holder int32) {
+func waitWaitsOn(t *testing.T, observer *pgxpool.Pool, waiter, holder int32) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		var on bool
-		if err := side.QueryRow(context.Background(), `SELECT $2::int = ANY(pg_blocking_pids($1::int))`, waiter, holder).Scan(&on); err != nil {
+		if err := observer.QueryRow(context.Background(), `SELECT $2::int = ANY(pg_blocking_pids($1::int))`, waiter, holder).Scan(&on); err != nil {
 			t.Fatal(err)
 		}
 		if on {
@@ -234,7 +250,7 @@ func TestPortalRegistration_ConfiguredReferenceRefusedDirectHeldAndApproved_PG(t
 func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T) {
 	e := newRegPG(t)
 	ctx := context.Background()
-	side := e.sidePool(t)
+	observer := e.sidePool(t)
 	t.Setenv(envGovernanceSecondHuman, "true")
 	n := 0
 	newRefs := func(t *testing.T) (unit uuid.UUID, ut string) {
@@ -280,7 +296,7 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 		t.Run(name+" removal commits first", func(t *testing.T) {
 			unit, ut := newRefs(t)
 			change, issuer := propose(t, unit, ut)
-			tx, err := side.Begin(ctx)
+			tx, err := e.sidePool(t).Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -289,11 +305,11 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 				t.Fatal(err)
 			}
 			got := approve(change)
-			waitBlockedBy(t, side, backendPID(t, tx)) // the decision waits on the uncommitted removal's row lock
+			waitBlockedBy(t, observer, backendPID(t, tx)) // the decision waits on the uncommitted removal's row lock
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
-			w := <-got
+			w := receiveWithin(t, got, "the approval")
 			if w.Code != http.StatusConflict || reasonOf(t, w) != rm.reason {
 				t.Errorf("approval after the removal committed = %d %s, want 409 %s", w.Code, w.Body.String(), rm.reason)
 			}
@@ -309,7 +325,7 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 			change, issuer := propose(t, unit, ut)
 			// An uncommitted binding of the same issuer parks the decision at its own binding insert, after it
 			// has locked the pin and the type and before it commits.
-			park, err := side.Begin(ctx)
+			park, err := e.sidePool(t).Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -318,8 +334,8 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 				t.Fatal(err)
 			}
 			got := approve(change)
-			decider := waitBlockedBy(t, side, backendPID(t, park))
-			rtx, err := side.Begin(ctx)
+			decider := waitBlockedBy(t, observer, backendPID(t, park))
+			rtx, err := e.sidePool(t).Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,14 +349,14 @@ func TestPortalRegistration_ApprovalHoldsPinAndTypeThroughCommit_PG(t *testing.T
 				}
 				removed <- err
 			}()
-			waitWaitsOn(t, side, remover, decider) // the removal waits on the decision's row lock
+			waitWaitsOn(t, observer, remover, decider) // the removal waits on the decision's row lock
 			if err := park.Rollback(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if w := <-got; w.Code != http.StatusOK {
+			if w := receiveWithin(t, got, "the approval"); w.Code != http.StatusOK {
 				t.Fatalf("approval = %d %s, want 200", w.Code, w.Body.String())
 			}
-			if err := <-removed; err != nil {
+			if err := receiveWithin(t, removed, "the removal"); err != nil {
 				t.Errorf("the removal after the decision committed = %v, want it to commit", err)
 			}
 			if e.portals(t, issuer) != 1 {

@@ -375,7 +375,7 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 	// A held approval against a conflicting direct registration of the same issuer at another internal address,
 	// in both orders. A transaction of the test holds the registry lock until both requests are queued behind
 	// it, as the database reports, so the one queued first takes the lock first.
-	side := e.sidePool(t)
+	observer := e.sidePool(t)
 	ctx := context.Background()
 	heldRace := func(name, issuer string, approvalFirst bool) {
 		t.Setenv(envGovernanceSecondHuman, "true")
@@ -384,7 +384,7 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 			t.Fatalf("%s: proposal = %d %s, want 202", name, w.Code, w.Body.String())
 		}
 		t.Setenv(envGovernanceSecondHuman, "") // the direct registration is not held
-		gate, err := side.Begin(ctx)
+		gate, err := e.sidePool(t).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -406,13 +406,13 @@ func TestPortalRegistry_ConcurrentRegistrationsSerialised_PG(t *testing.T) {
 			start[0], start[1] = start[1], start[0]
 		}
 		start[0]()
-		first := waitBlockedBy(t, side, gatePID)
+		first := waitBlockedBy(t, observer, gatePID)
 		start[1]()
-		waitBlockedBy(t, side, gatePID, first)
+		waitBlockedBy(t, observer, gatePID, first)
 		if err := gate.Rollback(ctx); err != nil {
 			t.Fatal(err)
 		}
-		wa, wd := <-approved, <-direct
+		wa, wd := receiveWithin(t, approved, name+": the approval"), receiveWithin(t, direct, name+": the direct registration")
 		winner, loser, wantNorm := wa, wd, "https://a.internal.example.com"
 		if !approvalFirst {
 			winner, loser, wantNorm = wd, wa, "https://b.internal.example.com"
