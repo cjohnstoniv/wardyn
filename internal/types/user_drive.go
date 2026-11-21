@@ -326,6 +326,10 @@ type UserDriveGrant struct {
 type UserDriveListItem struct {
 	UserDrive
 	GrantCount int `json:"grant_count"`
+	// PortalGrantCount is how many of GrantCount are allocations to a portal (DriveSubjectPortal). It is read by the
+	// re-home guard alone, because a portal's folder is named by the drive and the portal ids only, so most edits of an
+	// identity field move none of them. Never on the wire.
+	PortalGrantCount int `json:"-"`
 	// SingleHost is set on a team drive whose folder is a Docker volume: it
 	// lives on one Docker host, so runs on another host see a different folder.
 	SingleHost bool `json:"single_host,omitempty"`

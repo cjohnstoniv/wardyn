@@ -660,16 +660,24 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	if before.GrantCount == 0 {
 		return 0, "", "", driveRehome{}, true
 	}
+	// Only the allocations whose storage object really changes are re-homed. A portal's folder is named by the portal
+	// and the drive ids alone, so of the five fields only a backend change (a Docker volume becoming a claim) moves
+	// it; every other allocation is named by all five. An edit that moves none is acknowledged without a claim of a
+	// move, still guarded against a person's allocation arriving before the write lands.
+	moved, changes := driveRehomedAllocations(*before, changes)
+	if moved == 0 {
+		return 0, "", "", driveRehome{}, true
+	}
 	// Confirmed, and the audit row has to say so: `drive.write` covers a
 	// cosmetic edit and one that moved every allocated member's storage, and
 	// without this flag an auditor cannot tell them apart after the fact.
 	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
 		// The refusal this confirmation overrode named both facts; the audit row
 		// now carries them, so the log can answer which objects were orphaned.
-		return 0, "", "", driveRehome{confirmed: true, fields: changes, subjects: before.GrantCount}, false
+		return 0, "", "", driveRehome{confirmed: true, fields: changes, subjects: moved}, false
 	}
 	them := "it"
-	if before.GrantCount > 1 {
+	if moved > 1 {
 		them = "them"
 	}
 	// Names an action its reader can take. The console has no confirm affordance
@@ -684,7 +692,31 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
-		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
+		pluralDriveSubjects(moved), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
+}
+
+// driveRehomedAllocations is how many of the drive's allocations an edit with these identity changes moves, and the
+// changes that move them. Allocations to a person or group are named by all five fields, so they move on any change; a
+// portal's is named by the portal and drive ids only, so it moves only when the backend does.
+func driveRehomedAllocations(before types.UserDriveListItem, changes []string) (int, []string) {
+	people := before.GrantCount - before.PortalGrantCount
+	moved := 0
+	if people > 0 {
+		moved += people
+	}
+	var backend []string
+	for _, c := range changes {
+		if strings.HasPrefix(c, "backend ") {
+			backend = []string{c}
+		}
+	}
+	if before.PortalGrantCount > 0 && len(backend) > 0 {
+		moved += before.PortalGrantCount
+	}
+	if people <= 0 {
+		return moved, backend
+	}
+	return moved, changes
 }
 
 // driveRehome is what the re-home guard decided, carried to the audit row: a

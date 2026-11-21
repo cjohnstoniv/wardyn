@@ -67,7 +67,9 @@ var userDriveUpsertSQL = `
 		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean,
 			NULLIF($14::text, ''),NULLIF($15::text, ''),$16::uuid
 		WHERE (NOT $12::boolean OR NOT EXISTS (
-			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
+			SELECT 1 FROM user_drive_grants g WHERE g.drive_id = $1::uuid
+			  AND (g.subject_type <> '` + string(types.DriveSubjectPortal) + `'
+			       OR $3::text IS DISTINCT FROM (SELECT p.backend FROM user_drives p WHERE p.id = $1::uuid))
 		))
 		  AND ($3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT ` +
 	fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$4", "$6") + `)
@@ -214,7 +216,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 			if namespacePossible && s.driveHomeNamespaceClash(ctx, q, d) {
 				return types.UserDrive{}, ErrDriveHomeNamespaceConflict
 			}
-			if refuseIfAllocated && s.driveHasGrants(ctx, q, d.ID) {
+			if refuseIfAllocated && s.driveHasGrants(ctx, q, d) {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			// If only one guard applied, that's the answer regardless of the re-read (both fail
@@ -229,13 +231,15 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 	return out, nil
 }
 
-// driveHasGrants reports whether any allocation points at this drive. A
-// failed read answers false so the caller falls back to the other 409's
-// message — never the write.
-func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, id uuid.UUID) bool {
+// driveHasGrants reports whether an allocation that refuseIfAllocated counts points at this drive: any allocation to a
+// person or group, and one to a portal only when the write moves the drive's backend (a portal's folder is named by
+// the portal and drive ids alone). A failed read answers false so the caller falls back to the other 409's message,
+// never the write.
+func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, d types.UserDrive) bool {
 	var exists bool
-	if err := q.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM user_drive_grants WHERE drive_id = $1)`, id).Scan(&exists); err != nil {
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM user_drive_grants g WHERE g.drive_id = $1
+		AND (g.subject_type <> '`+string(types.DriveSubjectPortal)+`'
+		     OR $2::text IS DISTINCT FROM (SELECT p.backend FROM user_drives p WHERE p.id = $1)))`, d.ID, string(d.Backend)).Scan(&exists); err != nil {
 		return false
 	}
 	return exists
@@ -287,15 +291,16 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
 			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
-			d.owner_subject, d.delete_started_at, d.kept_from_run, d.home_runner_id, COALESCE(c.n, 0)
+			d.owner_subject, d.delete_started_at, d.kept_from_run, d.home_runner_id, COALESCE(c.n, 0), COALESCE(c.portals, 0)
 		FROM user_drives d
-		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
+		LEFT JOIN (SELECT drive_id, COUNT(*) AS n, COUNT(*) FILTER (WHERE subject_type = 'portal') AS portals
+			FROM user_drive_grants GROUP BY drive_id) c
 			ON c.drive_id = d.id
 		ORDER BY d.name`
 	return collect(ctx, s.Pool, "list", "user drives", q, nil,
 		func(row pgx.Row) (types.UserDriveListItem, error) {
 			var item types.UserDriveListItem
-			dest := append(driveRowDest(&item.UserDrive), &item.GrantCount)
+			dest := append(driveRowDest(&item.UserDrive), &item.GrantCount, &item.PortalGrantCount)
 			if err := row.Scan(dest...); err != nil {
 				return types.UserDriveListItem{}, fmt.Errorf("store: scan user drive: %w", err)
 			}
