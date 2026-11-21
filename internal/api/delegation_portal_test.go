@@ -44,6 +44,9 @@ type fakePortalVerifier struct {
 	subj    oidc.PortalSubject
 	refusal oidc.PortalRefusal
 	asks    []portalAsk
+	// enforceAge makes the fake apply the registration's maximum token age as the verifier does: a token at or
+	// past it is refused stale, and the grant's signed end is the earlier of iat + age and the token's expiry.
+	enforceAge bool
 }
 
 func (f *fakePortalVerifier) VerifyDetail(_ context.Context, reg oidc.PortalRegistration, raw, declared string) (oidc.PortalSubject, oidc.PortalRefusal) {
@@ -53,7 +56,22 @@ func (f *fakePortalVerifier) VerifyDetail(_ context.Context, reg oidc.PortalRegi
 	if !f.refusal.OK() {
 		return oidc.PortalSubject{}, f.refusal
 	}
-	return f.subj, oidc.PortalRefusal{}
+	subj := f.subj
+	if f.enforceAge {
+		age := reg.MaxSubjectTokenAge
+		if age <= 0 {
+			age = 300 * time.Second
+		}
+		end := subj.IssuedAt.Add(age)
+		if !time.Now().Before(end) {
+			return oidc.PortalSubject{}, oidc.PortalRefusal{Reason: oidc.SubjectTokenStale, Class: oidc.PortalRefusedToken}
+		}
+		if subj.Expiry.Before(end) {
+			end = subj.Expiry
+		}
+		subj.GrantEnd = end
+	}
+	return subj, oidc.PortalRefusal{}
 }
 
 func (f *fakePortalVerifier) asked() int {
