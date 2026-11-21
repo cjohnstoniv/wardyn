@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -102,20 +103,64 @@ func TestPortalSuspend_KillClaimBelongsToItsAcquisition_PG(t *testing.T) {
 	}
 	late := c.key
 	late.Claim = a.ClaimID
+	ledgerOf := func() string {
+		var out string
+		if err := l.pool.QueryRow(ctx, `SELECT state || '|' || attempts || '|' || last_error FROM deprovision_jobs WHERE id = $1`, c.key.ID).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
 	if err := l.st.FinishSuspensionJobAt(ctx, c.id, late, nil, c.bound); !errors.Is(err, store.ErrKillHeld) {
 		t.Errorf("the expired worker's finish = %v, want ErrKillHeld", err)
 	}
+	// While the successor owns the row, a failure of the expired worker's, and one from a worker that acquired no
+	// claim at all (it failed before the claim), mark nothing.
+	before := ledgerOf()
+	for who, key := range map[string]store.JobKey{"expired": late, "unclaimed": c.key} {
+		if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, key, errors.New("late")); !errors.Is(err, store.ErrKillHeld) {
+			t.Errorf("the %s worker's failure beside the live claim = %v, want ErrKillHeld", who, err)
+		}
+	}
+	if got := ledgerOf(); got != before {
+		t.Errorf("a failure that did not own the row changed it: %q -> %q", before, got)
+	}
+	// The successor's attempt fails and releases its claim: the row is unowned, which is no one's to finish.
 	own := c.key
 	own.Claim = b.ClaimID
-	if err := l.st.FinishSuspensionJobAt(ctx, c.id, own, nil, c.bound); !errors.Is(err, store.ErrReceiptNotStored) {
-		t.Errorf("the successor's finish before the receipt is stored = %v, want ErrReceiptNotStored", err)
+	if err := l.st.ReleaseSuspensionKillAt(ctx, c.id, c.key, b.ClaimID); err != nil || held() {
+		t.Fatalf("the successor's release = %v, still held: %v", err, held())
 	}
-	ev := types.AuditEvent{ID: b.ReceiptID, Time: b.ReceiptAt, RunID: &run, ActorType: types.ActorSystem, Actor: portalLifecycleActor, Action: "run.kill", Target: run.String(), Outcome: "success"}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, late, nil, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("the expired worker's finish after the successor released = %v, want ErrKillHeld", err)
+	}
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, own, nil, c.bound); !errors.Is(err, store.ErrKillHeld) {
+		t.Errorf("the released attempt's own finish = %v, want ErrKillHeld", err)
+	}
+	// The retry takes a new claim, stores the receipt and finishes.
+	retry := claim(types.RunKilled, uuid.New())
+	if !retry.Applied || retry.ReceiptID != b.ReceiptID {
+		t.Fatalf("the retry's claim = %+v, want applied under the occurrence's receipt", retry)
+	}
+	own.Claim = retry.ClaimID
+	if err := l.st.FinishSuspensionJobAt(ctx, c.id, own, nil, c.bound); !errors.Is(err, store.ErrReceiptNotStored) {
+		t.Errorf("the retry's finish before the receipt is stored = %v, want ErrReceiptNotStored", err)
+	}
+	ev := types.AuditEvent{ID: retry.ReceiptID, Time: retry.ReceiptAt, RunID: &run, ActorType: types.ActorSystem, Actor: portalLifecycleActor, Action: "run.kill", Target: run.String(), Outcome: "success"}
 	if err := (store.Recorder{Pool: l.pool}).Record(store.WithAuditReplay(ctx), ev); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.st.FinishSuspensionJobAt(ctx, c.id, own, nil, c.bound); err != nil {
-		t.Errorf("the successor's finish with the receipt stored = %v, want nil", err)
+		t.Errorf("the retry's finish with the receipt stored = %v, want nil", err)
+	}
+	// After the finish, a late failure from either worker writes nothing.
+	done := ledgerOf()
+	for who, key := range map[string]store.JobKey{"expired": late, "unclaimed": c.key} {
+		if err := l.st.FailDeprovisionJob(ctx, c.id, store.JobKindSuspend, key, errors.New("late")); err != nil {
+			t.Errorf("the %s worker's failure after the finish = %v, want nil and no write", who, err)
+		}
+	}
+	if got := ledgerOf(); got != done {
+		t.Errorf("a failure after the finish changed the row: %q -> %q", done, got)
 	}
 }
 
@@ -194,22 +239,49 @@ func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
 }
 
 // A pin on a step another worker already finished writes nothing: the finish cleared the payload, and a worker
-// that read the step pending and pinned late neither restores a payload nor changes the event the row names.
+// that read the step pending and pinned late neither restores a payload nor changes the event the row names. The
+// finished row either names the event it was pinned to or, when a legacy finish left no receipt (0196 allows the
+// state), names none; both come back Done, and neither takes the retry's payload.
 func TestPortalSuspend_PinOnAFinishedStepStoresNothing_PG(t *testing.T) {
-	l := newPortalLife(t)
-	ctx := context.Background()
-	principal, _ := l.signIn(t, "u1")
-	run := l.seedRun(t, principal, types.RunRunning)
-	c := killRowOf(t, l, principal, run)
-	if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET state = 'done', audit_event_payload = NULL WHERE id = $1`, c.key.ID); err != nil {
-		t.Fatal(err)
-	}
-	held, err := l.st.PinPortalEvent(ctx, c.id, store.JobKindSuspend, c.key, uuid.New(), time.Now().UTC(), []byte(`{"actor":"late-admin"}`), &c.bound)
-	if err != nil || !held.Done || len(held.Payload) != 0 {
-		t.Fatalf("a pin on a done step = %+v, %v; want Done and no payload", held, err)
-	}
-	if n := l.count(t, `SELECT count(*) FROM deprovision_jobs WHERE id = $1 AND audit_event_payload IS NOT NULL`, c.key.ID); n != 0 {
-		t.Errorf("a finished step holds a payload again (%d rows)", n)
+	for _, tc := range []struct {
+		name   string
+		pinned bool
+	}{{"pinned finish", true}, {"legacy receiptless finish", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newPortalLife(t)
+			ctx := context.Background()
+			principal, _ := l.signIn(t, "u1")
+			run := l.seedRun(t, principal, types.RunRunning)
+			c := killRowOf(t, l, principal, run)
+			at := time.Now().UTC().Truncate(time.Microsecond)
+			pinnedID := uuid.New()
+			set := `state = 'done', audit_event_payload = NULL, audit_event_id = NULL, audit_event_at = NULL`
+			args := []any{c.key.ID}
+			if tc.pinned {
+				set = `state = 'done', audit_event_payload = NULL, audit_event_id = $2, audit_event_at = $3`
+				args = append(args, pinnedID, at)
+			}
+			if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET `+set+` WHERE id = $1`, args...); err != nil {
+				t.Fatal(err)
+			}
+			held, err := l.st.PinPortalEvent(ctx, c.id, store.JobKindSuspend, c.key, uuid.New(), time.Now().UTC(), []byte(`{"actor":"late-admin"}`), &c.bound)
+			if err != nil || !held.Done || len(held.Payload) != 0 {
+				t.Fatalf("a pin on a done step = %+v, %v; want Done and no payload", held, err)
+			}
+			if tc.pinned && (held.ID != pinnedID || !held.At.Equal(at)) {
+				t.Errorf("a pin on a pinned finish names %s at %s, want the finish's %s at %s", held.ID, held.At, pinnedID, at)
+			}
+			if n := l.count(t, `SELECT count(*) FROM deprovision_jobs WHERE id = $1 AND audit_event_payload IS NOT NULL`, c.key.ID); n != 0 {
+				t.Errorf("a finished step holds a payload again (%d rows)", n)
+			}
+			want := 0
+			if tc.pinned {
+				want = 1
+			}
+			if n := l.count(t, `SELECT count(*) FROM deprovision_jobs WHERE id = $1 AND audit_event_id IS NOT NULL`, c.key.ID); n != want {
+				t.Errorf("rows naming an event after the late pin = %d, want %d", n, want)
+			}
+		})
 	}
 }
 
@@ -305,7 +377,7 @@ func TestPortalSuspend_OwedRefusalSettlesFromAnotherRecorder_PG(t *testing.T) {
 // the claim to commit rather than getting ahead of the departure; once the run's row is free the run is KILLED with no
 // queue row, and the replacement then goes through. A departure made after the claim's transaction would let the
 // replacement return while the claim is still stalled.
-func TestPortalSuspend_QueueDepartureHoldsTheLedgerRow_PG(t *testing.T) {
+func TestPG_PortalSuspendConcurrentReplacementWaitsForTheQueueDeparture(t *testing.T) {
 	l := newPortalLife(t)
 	ctx := context.Background()
 	principal, _ := l.signIn(t, "u1")
@@ -330,6 +402,10 @@ func TestPortalSuspend_QueueDepartureHoldsTheLedgerRow_PG(t *testing.T) {
 		}
 	}
 	defer release()
+	var holderPID int
+	if err := hold.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := hold.Exec(ctx, `SELECT 1 FROM agent_runs WHERE id = $1 FOR UPDATE`, run.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -338,8 +414,20 @@ func TestPortalSuspend_QueueDepartureHoldsTheLedgerRow_PG(t *testing.T) {
 		_, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
 		claimDone <- err
 	}()
+	// The held transaction is on l.pool; the claim's wait is observed from a pool of its own, on the one connection the
+	// claim's UPDATE waits on, which is blocked by the connection holding the run's row.
+	watch, err := pgxpool.NewWithConfig(ctx, l.pool.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watch.Close()
 	pollTrue(t, "the claim to wait on the run's row", func() bool {
-		return l.count(t, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE agent_runs%'`) > 0
+		var n int
+		if err := watch.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
+			AND state = 'active' AND $1 = ANY(pg_blocking_pids(pid)) AND query LIKE 'UPDATE agent_runs%'`, holderPID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
 	})
 	replaced := make(chan error, 1)
 	go func() {
