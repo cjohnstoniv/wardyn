@@ -437,6 +437,36 @@ func TestSCIMCovPatchRemoveAllRemovesEveryoneAndStillRefusesTheExternalID(t *tes
 	}
 }
 
+// A refused externalId change answers 400 after the removals are applied, and applies neither the additions nor
+// the rename in the same request; the same request without the externalId change applies all three.
+func TestSCIMCovRefusedExternalIDStillRemovesButNeitherAddsNorRenames(t *testing.T) {
+	st := newSCIMCovStore()
+	member, newcomer := scimCovPerson(st, "sub-1"), scimCovPerson(st, "sub-2")
+	g := st.addGroup(scimCovGroupExternal, "Engineering", member.ID)
+	e := newSCIMCovEnv(t, st)
+	path := "/scim/v2/Groups/" + g.ID.String()
+	ops := []string{scimCovGroupAdd(newcomer.ID.String()), scimCovGroupRemove(member.ID.String()), scimCovReplace("displayName", `"Renamed"`)}
+
+	w := e.scim(http.MethodPatch, path, scimCovPatch(append(slices.Clone(ops), scimCovReplace("externalId", `"moved"`))...))
+	scimCovWantError(t, w, http.StatusBadRequest, scim.TypeInvalidValue)
+	got, err := st.GetScimGroup(context.Background(), g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := st.groupMembers(g.ID); len(m) != 0 || got.DisplayName != "Engineering" || len(e.auditRows("scim.group.member_remove")) != 1 {
+		t.Errorf("after the refusal: members %v, name %q, remove rows %d; want the removal applied, no addition, no rename", m, got.DisplayName, len(e.auditRows("scim.group.member_remove")))
+	}
+
+	st.members[g.ID] = []uuid.UUID{member.ID}
+	if w := e.scim(http.MethodPatch, path, scimCovPatch(ops...)); w.Code != http.StatusOK {
+		t.Fatalf("PATCH without the externalId change = %d %s", w.Code, w.Body.String())
+	}
+	got, _ = st.GetScimGroup(context.Background(), g.ID)
+	if m := st.groupMembers(g.ID); !slices.Equal(m, []uuid.UUID{newcomer.ID}) || got.DisplayName != "Renamed" {
+		t.Errorf("without the refusal: members %v, name %q; want the newcomer added, the member removed, renamed", m, got.DisplayName)
+	}
+}
+
 func TestSCIMCovDeleteGroupRemovesEveryoneThenTheGroup(t *testing.T) {
 	st := newSCIMCovStore()
 	m1, m2, pending := scimCovPerson(st, "sub-1"), scimCovPerson(st, "sub-2"), scimCovPerson(st, "sub-3")

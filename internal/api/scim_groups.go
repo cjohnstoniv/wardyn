@@ -218,7 +218,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	slot := scimSlot(ctx)
 	// The whole request is read before any of it is applied, except that removals are never held back
-	// by a refusal: a refused externalId change answers 400 after the members have been removed.
+	// by a refusal: a refused externalId change answers 400 after the members have been removed, and
+	// adds no one and renames nothing.
 	externalIDRefused := false
 	displayName := ""
 	for _, op := range ops {
@@ -239,6 +240,9 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		members, _ := op.Value.([]scim.Member)
 		switch op.Kind {
 		case scim.OpAdd:
+			if externalIDRefused {
+				continue // the request is refused: it adds no one, and renames nothing below
+			}
 			own, err := s.ownMembers(ctx, st, memberIdentities(members))
 			if err == nil {
 				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
