@@ -102,6 +102,7 @@ type fakeIssuer struct {
 	sni      []string
 	delay    time.Duration
 	servedAt time.Time
+	drop     bool // finish the TLS handshake, read the request, then close with no response
 }
 
 func newFakeIssuer(t *testing.T, cert tls.Certificate) *fakeIssuer {
@@ -112,8 +113,14 @@ func newFakeIssuer(t *testing.T, cert tls.Certificate) *fakeIssuer {
 		fi.hits++
 		fi.hosts = append(fi.hosts, r.Host)
 		fi.headers = append(fi.headers, r.Header.Clone())
-		delay := fi.delay
+		delay, drop := fi.delay, fi.drop
 		fi.mu.Unlock()
+		if drop {
+			if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = c.Close()
+			}
+			return
+		}
 		time.Sleep(delay)
 		fi.mu.Lock()
 		fi.servedAt = time.Now()
@@ -144,6 +151,7 @@ type fakeProxyAction struct {
 	refuse int           // http: the CONNECT status; socks5: the reply code
 	phrase string        // http: the refusal's reason phrase and body
 	hang   bool          // never answer
+	drop   bool          // http: close the connection after the CONNECT request, with no status line
 	delay  time.Duration // answer after this long
 	to     string        // the tunnel's destination; "" is the proxy's backend
 }
@@ -354,6 +362,8 @@ func (fp *fakeProxy) serve(raw net.Conn, pc *fakeProxyConn) {
 	a := fp.action(req.RequestURI)
 	time.Sleep(a.delay)
 	switch {
+	case a.drop:
+		return
 	case a.hang:
 		drain(br, pc)
 		return
@@ -810,6 +820,50 @@ func TestPortalProxyFetch_ConnectTargetIsCheckedAddress(t *testing.T) {
 		conns := fp.connList()
 		if closed := conns[0].waitClosed(7 * time.Second); closed.IsZero() || closed.Sub(start) > 5100*time.Millisecond {
 			t.Fatalf("the proxy socket closed %v after the start, want by the attempt's 5 s deadline", closed.Sub(start))
+		}
+	})
+
+	for _, kind := range []string{"http", "https"} {
+		t.Run(kind+" proxy drops the CONNECT on the IPv6 address", func(t *testing.T) {
+			t.Parallel()
+			fp := newFakeProxy(t, kind)
+			fp.set(func(fp *fakeProxy) { fp.route = refuseV6(fakeProxyAction{drop: true}) })
+			fi := newFakeIssuer(t, issuerCert(t, ca))
+			if took, err := run(t, fp, fi); err != nil {
+				t.Fatalf("fetch failed after %v: %v", took, err)
+			}
+			if targets, _ := fp.targetList(); !slices.Equal(targets, []string{proxyTestV6At, proxyTestV4At}) {
+				t.Fatalf("CONNECT targets %v, want the IPv6 address and then the IPv4 one", targets)
+			}
+			if fi.count() != 1 {
+				t.Fatalf("the issuer served %d requests, want 1", fi.count())
+			}
+		})
+	}
+
+	t.Run("http proxy drops the CONNECT on the only address", func(t *testing.T) {
+		t.Parallel()
+		fp := newFakeProxy(t, "http")
+		fp.set(func(fp *fakeProxy) { fp.route = func(string) fakeProxyAction { return fakeProxyAction{drop: true} } })
+		fp.set(func(fp *fakeProxy) { fp.backend = newFakeIssuer(t, issuerCert(t, ca)).addr() })
+		client := proxyTestClient(proxyFetchNet(fp, ca.pool(), answers(proxyTestV4)), "login.corp.example:443")
+		wantFetchDetail(t, proxyFetch(context.Background(), client, proxyTestIssuer), portalCauseUnreachable, portalDetailProxyTarget)
+		if targets, _ := fp.targetList(); !slices.Equal(targets, []string{proxyTestV4At}) {
+			t.Fatalf("CONNECT targets %v, want the one address", targets)
+		}
+	})
+
+	t.Run("issuer completes TLS and then closes is terminal", func(t *testing.T) {
+		t.Parallel()
+		fp := newFakeProxy(t, "http")
+		fi := newFakeIssuer(t, issuerCert(t, ca))
+		fi.mu.Lock()
+		fi.drop = true
+		fi.mu.Unlock()
+		_, err := run(t, fp, fi)
+		wantFetchDetail(t, err, portalCauseUnreachable, "request failed")
+		if targets, _ := fp.targetList(); !slices.Equal(targets, []string{proxyTestV6At}) {
+			t.Fatalf("CONNECT targets %v, want one attempt", targets)
 		}
 	})
 

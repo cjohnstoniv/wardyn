@@ -324,9 +324,11 @@ func (pp *portalProxyTransport) mapAttempt(ctx context.Context, a *portalProxyAt
 		return &portalFetchError{cause: portalCauseUnreachable, detail: portalDetailProxyTarget}
 	case shareOut:
 		return &portalFetchError{cause: portalCauseUnreachable, detail: portalDetailProxyConnect}
-	case pp.socks && dialed && !issuerTLS:
-		// Go's SOCKS dialer returns a failed target connect, and a failed SOCKS login, as plain error text: the
-		// label comes from the route and the stage, never from that text.
+	case dialed && !issuerTLS:
+		// Between our connection to the proxy and the issuer's handshake, neither route says why the target was
+		// not reached: Go's SOCKS dialer returns a failed target connect, and a failed SOCKS login, as plain error
+		// text, and an http proxy that drops the CONNECT gives only a closed connection. The label comes from the
+		// route and the stage, never from that text. No issuer byte has been read, so a retry hides no identity failure.
 		return &portalFetchError{cause: portalCauseUnreachable, detail: portalDetailProxyTarget}
 	case tlsFailed:
 		return &portalFetchError{cause: portalCauseUnreachable, detail: portalDetailTLSHandshake}
