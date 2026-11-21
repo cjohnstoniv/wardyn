@@ -7,6 +7,7 @@ package foldersync
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -856,6 +857,16 @@ func TestMakeCheckedBundle_SendsExactlyTheCommitItChecked(t *testing.T) {
 			t.Fatal("the branch did not move; the test proves nothing")
 		}
 	})
+	t.Run("a clean history is bundled at the checked tip", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := listHeads(g, bundle), g.head+" refs/heads/feature/x"; got != want {
+			t.Fatalf("bundle heads = %q, want %q", got, want)
+		}
+	})
 	t.Run("a denied path in the checked commit's history", func(t *testing.T) {
 		g := newGitRig(t)
 		g.write(g.lap, "old.pem", "synthetic\n")
@@ -868,4 +879,99 @@ func TestMakeCheckedBundle_SendsExactlyTheCommitItChecked(t *testing.T) {
 			t.Fatalf("got %v; want a refusal naming old.pem", err)
 		}
 	})
+}
+
+// historyRepo is a repository whose history holds, besides main.go: a root-commit file removed later, a file
+// renamed away, and a file an evil merge adds that no parent has, removed by the next commit.
+func (g *gitRig) historyRepo() (dir, tip string) {
+	g.t.Helper()
+	dir = g.t.TempDir()
+	g.run(dir, "init", "-q", "-b", "feature/x")
+	g.write(dir, "root.pem", "synthetic\n")
+	g.write(dir, "base.txt", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "root")
+	g.run(dir, "branch", "side")
+	g.run(dir, "rm", "-q", "root.pem")
+	g.write(dir, "moved.pem", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "second")
+	g.run(dir, "mv", "moved.pem", "kept.txt")
+	g.run(dir, "commit", "-q", "-m", "rename")
+	g.run(dir, "checkout", "-q", "side")
+	g.write(dir, "s.txt", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "side")
+	g.run(dir, "checkout", "-q", "feature/x")
+	g.run(dir, "merge", "-q", "--no-ff", "--no-commit", "side")
+	g.write(dir, "evil.pem", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "merge")
+	g.run(dir, "rm", "-q", "evil.pem")
+	g.run(dir, "commit", "-q", "-m", "drop")
+	return dir, g.run(dir, "rev-parse", "HEAD")
+}
+
+// The history scan names every path the old full listing did (the additions of each commit, a merge against
+// each parent, are enough), and a user's git config cannot hide a merge's or the root's files from it.
+func TestCheckHistoryAllowed_AdditionsNameEveryPathAndConfigCannotHideOne(t *testing.T) {
+	g := newGitRig(t)
+	dir, tip := g.historyRepo()
+	names := func(args ...string) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range strings.Split(g.run(dir, args...), "\x00") {
+			if n = strings.TrimSpace(n); n != "" {
+				out[n] = true
+			}
+		}
+		return out
+	}
+	full := names("log", "-z", "--format=", "--name-only", "-m", "--no-renames", tip, "--")
+	adds := names("log", "-z", "--format=", "--name-only", "-m", "--root", "--diff-filter=A", "--no-renames", tip, "--")
+	for _, want := range []string{"root.pem", "moved.pem", "evil.pem", "base.txt", "s.txt", "kept.txt"} {
+		if !full[want] || !adds[want] {
+			t.Errorf("%s: in the full listing %v, in the additions %v; want both", want, full[want], adds[want])
+		}
+	}
+	for n := range full {
+		if !adds[n] {
+			t.Errorf("%s is in the full listing but not in the additions", n)
+		}
+	}
+	g.run(dir, "config", "log.diffMerges", "off")
+	g.run(dir, "config", "log.showRoot", "false")
+	for _, path := range []string{"evil.pem", "root.pem", "moved.pem"} {
+		err := checkHistoryAllowed(t.Context(), dir, "feature/x", tip, []string{path})
+		var denied *HistoryDeniedError
+		if !errors.As(err, &denied) || denied.Path != path {
+			t.Errorf("deny %s with log.diffMerges=off and log.showRoot=false: got %v; want a refusal naming it", path, err)
+		}
+	}
+	if err := checkHistoryAllowed(t.Context(), dir, "feature/x", tip, []string{"*.nothing"}); err != nil {
+		t.Errorf("a pattern nothing matches: %v; want the history sent", err)
+	}
+}
+
+// SendGit itself refuses before anything is uploaded or recorded: a nil sftp client would fail the test if
+// the refusal were skipped, and the state keeps its last sent commit.
+func TestSendGit_RefusesADeniedHistoryBeforeUploadOrRecord(t *testing.T) {
+	g := newGitRig(t)
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "pem")
+	g.run(g.lap, "rm", "-q", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "drop")
+	dir := t.TempDir()
+	sy := &Syncer{State: &State{}, StateFile: filepath.Join(dir, "state.json"), StateRoot: dir, Opts: Options{OrgDeny: []string{"*.pem"}}}
+	err := SendGit(t.Context(), io.Discard, sy, nil, "run", g.lap)
+	var denied *HistoryDeniedError
+	if !errors.As(err, &denied) || denied.Path != "old.pem" || denied.Pattern != "*.pem" {
+		t.Fatalf("SendGit = %v; want a refusal naming old.pem and *.pem", err)
+	}
+	if sy.State.GitSent != nil {
+		t.Errorf("GitSent = %+v after a refusal; want none", sy.State.GitSent)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "laptop-*.bundle")); len(left) != 0 {
+		t.Errorf("a refused send left %v", left)
+	}
 }

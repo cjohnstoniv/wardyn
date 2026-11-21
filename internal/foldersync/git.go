@@ -4,6 +4,7 @@
 package foldersync
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -45,12 +46,6 @@ type GitSent struct {
 
 // laptopGit runs git in the laptop's synced directory.
 func laptopGit(ctx context.Context, root string, args ...string) (string, error) {
-	out, err := laptopGitRaw(ctx, root, args...)
-	return strings.TrimSpace(out), err
-}
-
-// laptopGitRaw is laptopGit with the output as git wrote it, for NUL-separated names.
-func laptopGitRaw(ctx context.Context, root string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	cmd.Env = cliutil.ScrubChildEnv(os.Environ())
 	cmd.Env = append(cmd.Env, "GIT_TERMINAL_PROMPT=0")
@@ -59,7 +54,56 @@ func laptopGitRaw(ctx context.Context, root string, args ...string) (string, err
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", args[0], err, Shown(strings.TrimSpace(errb.String())))
 	}
-	return out.String(), nil
+	return strings.TrimSpace(out.String()), nil
+}
+
+// laptopGitNames runs git in the laptop's synced directory and hands visit each NUL-terminated name it
+// prints, as it prints it, so a long history is never held whole. A visit error stops git and is returned.
+func laptopGitNames(ctx context.Context, root string, visit func(name string) error, args ...string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
+	cmd.Env = append(cliutil.ScrubChildEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0")
+	var errb strings.Builder
+	cmd.Stderr = &errb
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	sc := bufio.NewScanner(out)
+	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+	sc.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, 0); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
+	var verr error
+	for verr == nil && sc.Scan() {
+		if name := sc.Text(); name != "" {
+			verr = visit(name)
+		}
+	}
+	if verr != nil {
+		cancel()
+	}
+	serr := sc.Err()
+	werr := cmd.Wait()
+	switch {
+	case verr != nil:
+		return verr
+	case serr != nil:
+		return fmt.Errorf("git %s: %w", args[0], serr)
+	case werr != nil:
+		return fmt.Errorf("git %s: %w: %s", args[0], werr, Shown(strings.TrimSpace(errb.String())))
+	}
+	return nil
 }
 
 // sandboxGit runs script in the sandbox over a gateway exec channel and returns
@@ -189,25 +233,21 @@ func (e *HistoryDeniedError) Error() string {
 // checkHistoryAllowed refuses to send branch, at the commit tip, when any path in its history, in
 // any commit or in the tip's tree, is one the organisation's patterns deny,
 // tested as a pass tests it: each directory above the file, then the file.
+//
+// Every path in any commit's tree was added by some commit against a parent (or sits in the root), so the
+// additions of each commit, a merge against each parent, name them all, a removed or renamed-away one
+// included (--no-renames keeps a rename as a delete and an add); the tip's tree is read as a second net.
+// log.diffMerges and log.showRoot are pinned because the user's git config changes what a merge or the
+// root lists.
 func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny []string) error {
 	if len(orgDeny) == 0 {
 		return nil
 	}
-	// -m diffs a merge against each parent and --no-renames keeps a rename's old
-	// name, so a path a commit removed or moved is listed too.
-	changed, err := laptopGitRaw(ctx, root, "log", "-z", "--format=", "--name-only", "-m", "--no-renames", tip, "--")
-	if err != nil {
-		return err
-	}
-	tree, err := laptopGitRaw(ctx, root, "ls-tree", "-r", "-z", "--name-only", tip, "--")
-	if err != nil {
-		return err
-	}
 	ig := newSyncIgnore(orgDeny)
 	seen := map[string]bool{}
-	for _, name := range strings.Split(changed+"\x00"+tree, "\x00") {
-		if name == "" || seen[name] {
-			continue
+	visit := func(name string) error {
+		if seen[name] {
+			return nil
 		}
 		seen[name] = true
 		for i, c := range name {
@@ -220,8 +260,13 @@ func checkHistoryAllowed(ctx context.Context, root, branch, tip string, orgDeny 
 		if pat, denied := ig.orgDeniedBy(name, false); denied {
 			return &HistoryDeniedError{Branch: branch, Path: name, Pattern: pat}
 		}
+		return nil
 	}
-	return nil
+	if err := laptopGitNames(ctx, root, visit, "-c", "log.diffMerges=separate", "-c", "log.showRoot=true",
+		"log", "-z", "--format=", "--name-only", "-m", "--root", "--diff-filter=A", "--no-renames", tip, "--"); err != nil {
+		return err
+	}
+	return laptopGitNames(ctx, root, visit, "ls-tree", "-r", "-z", "--name-only", tip, "--")
 }
 
 // sendGitIncomplete marks a .git a send is still setting up: it is made before
