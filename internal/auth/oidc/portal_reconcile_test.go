@@ -653,3 +653,135 @@ func TestPortalRefresh_DiscoveryFailureEnforcedBeforeReport(t *testing.T) {
 		})
 	}
 }
+
+func TestPortalRefresh_RuleRefusalStandsThroughFailedRetry(t *testing.T) {
+	var timedOut atomic.Bool
+	var mu sync.Mutex
+	var reported []string
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {
+		o.fetchTimeout = 500 * time.Millisecond
+		o.OnRefreshFailure = func(f PortalRefreshFailure) { mu.Lock(); reported = append(reported, f.Cause); mu.Unlock() }
+	})
+	h.idp.set(func(f *fakeIdP) {
+		f.override = func(w http.ResponseWriter, r *http.Request) bool {
+			if timedOut.Load() && strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
+				<-r.Context().Done() // answered only once the request's own bound has cut it off
+				return true
+			}
+			return false
+		}
+	})
+	lastReport := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(reported) == 0 {
+			return ""
+		}
+		return reported[len(reported)-1]
+	}
+	warmPortal(h)
+	h.clock.Advance(time.Hour)
+	h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+	// The retry times out: the timeout is reported, the refusal is what every caller is shown.
+	h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer })
+	timedOut.Store(true)
+	h.clock.Advance(portalKeyCooldown + time.Second)
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+	if got := lastReport(); got != portalCauseUnreachable {
+		t.Fatalf("last reported cause %q, want the retry's %q", got, portalCauseUnreachable)
+	}
+	h.clock.Advance(5 * time.Second)
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+	// A refresh that passes reopens the verifier.
+	timedOut.Store(false)
+	h.clock.Advance(portalKeyCooldown)
+	h.mustAdmit(h.token(h.accessClaims()))
+}
+
+func TestPortalPrepare_RefusedAndRecoveringConcurrently(t *testing.T) {
+	// A refused exchange reads the standing cause in prepare while a recovering refresh rewrites it. The clock
+	// seam signals from inside prepare's critical section, so the refresh's write always follows prepare's unlock
+	// with no other ordering between them: under -race a read of the cause after the unlock is always reported.
+	var armed atomic.Bool
+	var calls atomic.Int32
+	inPrepare := make(chan struct{})
+	var h *portalHarness
+	h = newPortalHarness(t, "example.com", true, "/oauth2/a", func(o *PortalIssuersOptions) {
+		o.clock = func() time.Time {
+			if armed.Load() && calls.Add(1) == 2 { // 1: verifierFor, 2: prepare, under the verifier lock
+				close(inPrepare)
+			}
+			return h.clock.Now()
+		}
+	})
+	warmPortal(h)
+	h.clock.Advance(time.Hour)
+	h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+	h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer })
+	v, _ := h.pi.verifierFor(h.reg)
+	tok := h.token(h.accessClaims())
+	refused := make(chan PortalRefusal, 1)
+	armed.Store(true)
+	go func() {
+		_, r := h.pi.VerifyDetail(context.Background(), h.reg, tok, PortalTokenTypeAccess)
+		refused <- r
+	}()
+	select {
+	case <-inPrepare:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exchange never reached prepare")
+	}
+	// A recovery runs concurrently with that prepare: a fresh discovery passes and reopens the verifier.
+	if cause, _, _ := v.refresh(h.clock.Now()); cause != "" {
+		t.Fatalf("the recovering refresh failed: %q", cause)
+	}
+	select {
+	case r := <-refused:
+		if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseIssuerMismatch {
+			t.Fatalf("the exchange that decided before the recovery got %+v, want 503 %q", r, portalCauseIssuerMismatch)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refused exchange never answered")
+	}
+	h.mustAdmit(h.token(h.accessClaims()))
+}
+
+func TestPortalRecheck_KeysCooldownRetryAfterIsTheKeyBudget(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	warmPortal(h)
+	h.idp.publish(t, "k2", 1)
+	h.clock.Advance(59*time.Minute + 50*time.Second)
+	h.mustAdmit(h.kidToken("k2", 1)) // the key budget starts 10 s before the hour
+	v, _ := h.pi.verifierFor(h.reg)
+	selected, resume := make(chan struct{}), make(chan struct{})
+	var selOnce, resumeOnce sync.Once
+	releaseSel := func() { resumeOnce.Do(func() { close(resume) }) }
+	t.Cleanup(releaseSel)
+	v.ks.afterSelect = func() { selOnce.Do(func() { close(selected); <-resume }) }
+	held := make(chan PortalRefusal, 1)
+	tok := h.token(h.accessClaims())
+	go func() {
+		_, r := h.pi.VerifyDetail(context.Background(), h.reg, tok, PortalTokenTypeAccess)
+		held <- r
+	}()
+	select {
+	case <-selected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exchange never selected its key")
+	}
+	h.idp.set(func(f *fakeIdP) { f.jwksURI = h.reg.Issuer + "/v2/keys" })
+	h.clock.Advance(20 * time.Second)
+	// Discovery runs now (its clock restarts: 30 s) and moves the keys address; 10 s are left on the key budget.
+	h.wantUnavailable(h.token(h.accessClaims()), portalCauseKeysCooldown)
+	releaseSel()
+	select {
+	case r := <-held:
+		if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseKeysCooldown || r.RetryAfter != 10*time.Second {
+			t.Fatalf("the held exchange got %+v, want 503 %q with Retry-After 10s", r, portalCauseKeysCooldown)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held exchange never answered")
+	}
+}

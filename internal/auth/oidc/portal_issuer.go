@@ -443,9 +443,9 @@ func (v *portalVerifier) prepare(ctx context.Context) (string, time.Duration) {
 		cooling := now.Before(last.Add(portalKeyCooldown))
 		switch {
 		case v.disc == nil:
-			if v.standing != "" && cooling {
+			if standing := v.standing; standing != "" && cooling {
 				v.mu.Unlock()
-				return v.standing, 0
+				return standing, 0
 			}
 		case v.discFailed || keysFailed:
 			if cooling {
@@ -512,21 +512,27 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 		// The failure is enforced first, under the lock, and only then reported: an exchange already through
 		// prepare is refused at its success point even while the report is still running.
 		cause := portalFetchCause(err)
+		shown := cause
 		v.mu.Lock()
-		if cause == portalCauseUnreachable {
+		switch {
+		case cause == portalCauseUnreachable && v.disc == nil && v.standing != "" && v.standing != portalCauseUnreachable:
+			// A rule refusal stands until a refresh passes: an outage on the retry is reported, never shown, and
+			// the verifier stays closed under the refusal's cause.
+			shown = v.standing
+		case cause == portalCauseUnreachable:
 			v.discFailed = true
 			if v.disc == nil {
 				v.standing = cause
 			}
 			v.setDown(portalCauseIssuerDown)
-		} else {
+		default:
 			v.disc, v.discFailed, v.standing = nil, false, cause
 			v.ks.drop()
 			v.setDown(cause)
 		}
 		v.mu.Unlock()
 		v.reportFailure("scheduled", cause)
-		return cause, 0, 0
+		return shown, 0, 0
 	}
 	// The document and its keys address are published together. A changed keys address drops the keys and every
 	// fetch still in flight for the old one.
@@ -627,10 +633,15 @@ func (v *portalVerifier) recheck(box *portalBox) PortalRefusal {
 	if cause == "" {
 		return PortalRefusal{}
 	}
-	last := time.Unix(0, v.attemptNano.Load())
-	if _, ksAttempt, _ := v.ks.state(); ksAttempt.After(last) {
-		last = ksAttempt
+	var wait time.Duration
+	if cause == portalCauseKeysCooldown {
+		wait = v.ks.cooldownLeft() // the keys wait for the key budget alone
+	} else {
+		last := time.Unix(0, v.attemptNano.Load())
+		if _, ksAttempt, _ := v.ks.state(); ksAttempt.After(last) {
+			last = ksAttempt
+		}
+		wait = max(last.Add(portalKeyCooldown).Sub(v.clock()), 0)
 	}
-	wait := max(last.Add(portalKeyCooldown).Sub(v.clock()), 0)
 	return PortalRefusal{Reason: PortalIssuerUnavailable, Cause: cause, Class: PortalRefusedUnavailable, RetryAfter: wait}
 }
