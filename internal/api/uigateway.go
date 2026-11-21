@@ -63,7 +63,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -445,38 +444,6 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relayUISession(w, r, sess)
-}
-
-// relayUISession serves one request of an authenticated session, a cookie's or an inbound token's.
-func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiSession) {
-	// Re-assert the human here as well as in uiDial, debounced but for a helper: net/http dials
-	// only when its pool has nothing reusable, so most requests of a busy
-	// session never reach uiDial at all (uiReassertRelay).
-	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
-		writeErrorReason(w, de.status, de.reason, de.msg)
-		return
-	}
-	if sess.Inbound && !s.admitInbound(w, r, sess) {
-		return
-	}
-	// Keep the run's idle clock alive for the life of the session, debounced
-	// exactly like the decision-ingest and attach keepalives: a human reading
-	// code in an editor is not idle, and the reaper must not stop the run under
-	// them.
-	// A human relaying UI traffic is always real presence, so only the debounce applies.
-	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
-		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
-	}
-	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
-	if sess.Via != nil {
-		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
-	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
-	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	ctx, stop := s.supportWatchCtx(ctx, sess)
-	defer stop()
-	s.serveUIRelay(w, r.WithContext(ctx))
 }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane

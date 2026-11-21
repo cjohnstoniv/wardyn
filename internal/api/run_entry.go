@@ -151,11 +151,15 @@ const (
 	verdictRevocationUnavailable entryVerdict = uiDeniedReasonRevocationUnavailable
 	verdictDelegationEnded       entryVerdict = uiDeniedReasonDelegationEnded
 	verdictDelegationUnavailable entryVerdict = uiDeniedReasonDelegationUnavailable
+	// verdictPortalUnitScope and verdictPortalUnitUnavailable: an issuer portal's ticket on a run outside its
+	// pin, and a pin that could not be read (issuerPortalTicketHolds).
+	verdictPortalUnitScope       entryVerdict = reasonPortalUnitScope
+	verdictPortalUnitUnavailable entryVerdict = reasonPortalUnitUnavailable
 )
 
 // unavailable reports a verdict that is a failed lookup rather than a refusal.
 func (v entryVerdict) unavailable() bool {
-	return v == verdictRevocationUnavailable || v == verdictDelegationUnavailable
+	return v == verdictRevocationUnavailable || v == verdictDelegationUnavailable || v == verdictPortalUnitUnavailable
 }
 
 // redeemAttachTicket is the one redemption of an attach ticket, for the terminal
@@ -169,6 +173,7 @@ func (v entryVerdict) unavailable() bool {
 // The returned actor is empty for verdictInvalid and names the ticket's
 // principal for every other verdict, so the caller audits who was refused.
 func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.UUID) (ticketActor, entryVerdict, error) {
+	start := time.Now()
 	ta, ok, err := consumeAttachTicket(ctx, s.cfg.Store, tok, runID, s.cfg.Now())
 	if err != nil {
 		return ticketActor{}, verdictOK, err
@@ -176,15 +181,20 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 	if !ok || ta.authorizedAt.IsZero() {
 		return ticketActor{}, verdictInvalid, nil
 	}
+	ta.checkStart = start
 	expires, v := s.ticketAuthority(ctx, ta, runID)
 	ta.grantExpires = expires
+	if v == verdictOK {
+		ta.renewChain = s.uiRenewalChain(ctx, ta)
+	}
 	return ta, v, nil
 }
 
 // ticketAuthority asks whether the authority a redeemed ticket carries still holds: the revocation cuts
 // (session-only ones included) against the ticket's own issue time and sequence, never the redemption's,
-// and the portal grant it was minted through. Redemption asks it once; an open terminal socket asks it
-// again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
+// and the portal grant it was minted through, never a later one; for an issuer portal's ticket also the
+// person's identity and the pin (issuerPortalTicketHolds). Redemption asks it once; an open terminal socket
+// asks it again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
 // minted through a portal.
 func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
 	// The credential the ticket was minted under (a personal token, or a CLI sign-in's session) is asked after
@@ -211,7 +221,11 @@ func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid
 		}
 	}
 	if ta.via != nil {
-		return s.delegationLive(ctx, *ta.via)
+		expires, v := s.delegationLive(ctx, *ta.via)
+		if v == verdictOK && issuerPortalPerson(ta.via, ta.principal) {
+			v = s.issuerPortalTicketHolds(ctx, ta, runID)
+		}
+		return expires, v
 	}
 	return time.Time{}, verdictOK
 }
@@ -247,7 +261,8 @@ func (s *Server) delegationLive(ctx context.Context, via types.DelegationVia) (t
 }
 
 // sessionExpiry is when a UI session opened from this ticket ends: the
-// configured lifetime, or the portal grant's expiry if that comes first.
+// configured lifetime, or the portal grant's expiry if that comes first, unless
+// the session renews (renewChain), when its chain bounds every request instead.
 func (a ticketActor) sessionExpiry(now time.Time, ttl time.Duration) time.Time {
 	exp := now.Add(ttl)
 	if a.support != uuid.Nil {
@@ -258,7 +273,7 @@ func (a ticketActor) sessionExpiry(now time.Time, ttl time.Duration) time.Time {
 			exp = a.supportExpires // a helper's session ends with its grant
 		}
 	}
-	if a.via != nil && a.grantExpires.Before(exp) {
+	if a.via != nil && a.grantExpires.Before(exp) && a.renewChain == uuid.Nil {
 		return a.grantExpires
 	}
 	return exp

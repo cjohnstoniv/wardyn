@@ -34,5 +34,6 @@ const (
 	reasonDelegateClaimReserved            = "delegate_claim_reserved"                    // required_claim names a claim that already has a meaning
 	reasonDelegateClaimInvalid             = "delegate_claim_invalid"                     // required_claim's name or value breaks its shape
 	reasonDelegateRenewalNeedsIssuer       = "delegate_renewal_needs_issuer"              // ui_session_renewal on a console-issuer portal
+	reasonDelegateRenewalWithheld          = "delegate_renewal_withheld"                  // ui_session_renewal while this release withholds it
 	reasonDelegateIssuerFieldNeedsIssuer   = "delegate_issuer_field_needs_issuer"         // a field only an issuer portal has, on a console-issuer registration
 )

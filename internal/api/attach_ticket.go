@@ -132,6 +132,11 @@ type ticketActor struct {
 	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
 	support        uuid.UUID
 	supportExpires time.Time
+	// renewChain is the chain of the issuer-portal grant the ticket was minted under when its portal renews
+	// browser-app sessions (uiRenewalChain), uuid.Nil otherwise; checkStart is when redemption began, the
+	// anchor an issuer-portal terminal's re-checks are timed from. Both are set by redeemAttachTicket.
+	renewChain uuid.UUID
+	checkStart time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {

@@ -170,6 +170,9 @@ func unprocessable(reason, field, format string, args ...any) *registrationRefus
 // deployment's host list, in the order a caller can fix them. A held registration's approval runs it again.
 // It does not read the pin or the user type, which need the store.
 func validatePortalRow(d types.Delegate) *registrationRefusal {
+	if d.UISessionRenewal && !uiSessionRenewalShips {
+		return unprocessable(reasonDelegateRenewalWithheld, "ui_session_renewal", "ui_session_renewal: longer browser sessions are not available in this release")
+	}
 	access := d.TokenProfile == oidc.PortalProfileAccessToken
 	// The verifier refuses a registration it cannot verify against, on every exchange. The same predicate
 	// refuses it here: no client id, no issuer, or an access-token profile with no audience or no scopes.
