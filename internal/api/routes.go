@@ -683,8 +683,9 @@ func (s *Server) routes() chi.Router {
 		s.mountRunnerRegistrationRoutes(r)
 		s.mountCLISignInRoutes(r) // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
 		s.mountRunnerStreamRoutes(r)
-		s.mountDelegationRoutes(r) // a portal acting for a person (delegation*.go, #1142)
-		s.mountBrandingRoutes(r)   // console branding: anonymous reads, SUPER writes (branding.go)
+		s.mountDelegationRoutes(r)   // a portal acting for a person (delegation*.go, #1142)
+		s.mountPortalIssuerRoutes(r) // the issuer-portal registry's admin routes (portal_issuer_*.go)
+		s.mountBrandingRoutes(r)     // console branding: anonymous reads, SUPER writes (branding.go)
 	})
 
 	s.mountUI(r)

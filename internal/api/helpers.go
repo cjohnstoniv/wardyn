@@ -518,6 +518,10 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 		return types.AgentRun{}, false
 	}
 	if allow(r, run) {
+		// An issuer portal's pin, after the owner predicate has passed (portal_pin.go).
+		if s.portalRunInPin(r.Context(), run).write(s, w, r) {
+			return types.AgentRun{}, false
+		}
 		return run, true
 	}
 	// Audited AFTER confirming the run genuinely exists — a truly-missing

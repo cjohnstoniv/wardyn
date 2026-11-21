@@ -174,9 +174,15 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		// A sponsor also reads the runs of the service identities they sponsor (F3), on the filtered path
 		// too (runs_list_filter.go). A store that cannot widen the list, and a portal's delegated token,
 		// list the caller's own runs only: never more.
-		// The console path is unscoped by unit (nil scope); a unit scope is a portal's, set where its pin applies.
+		// The console path is unscoped by unit (nil scope). An issuer portal's list is limited, in SQL before
+		// the page limit, to the units under its pin (portal_pin.go).
+		pin, refused := s.portalPinOf(r.Context())
+		if refused.write(s, w, r) {
+			return
+		}
+		scope := pin.scope()
 		listByCreator := func(ctx context.Context, who string, p store.Page) ([]types.AgentRun, error) {
-			return creatorPager.ListRunsPageByCreator(ctx, who, p, nil)
+			return creatorPager.ListRunsPageByCreator(ctx, who, p, scope)
 		}
 		if sp, ok := s.cfg.Store.(store.RunsByCreatorOrSponsorPager); ok && !delegatedRequest(r.Context()) {
 			listByCreator = sp.ListRunsPageByCreatorOrSponsor

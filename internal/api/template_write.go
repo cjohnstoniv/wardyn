@@ -132,6 +132,9 @@ func writeTemplateStoreErr(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeTemplateNotFound(w)
 	default:
+		if writePortalRulingError(w, err) { // a UI-app caller naming a portal person of an unbound issuer
+			return
+		}
 		writeServerError(w, r, "write template", err)
 	}
 }

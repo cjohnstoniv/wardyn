@@ -227,6 +227,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
+	startPortalActivationMonitor(rootCtx, srv)
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
