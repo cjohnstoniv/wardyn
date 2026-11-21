@@ -7,11 +7,15 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -68,81 +72,291 @@ func TestPortalSuspend_AdminSuspendCutsExchangeAndGrants_PG(t *testing.T) {
 	}
 }
 
-// The window the exchange leaves between committing the person's identity and committing their grant: a
-// suspension that lands inside it leaves no live grant, whichever commit it follows.
+// auditHook is a recorder that calls before for each event and then records it on inner.
+type auditHook struct {
+	inner  audit.Recorder
+	before func(types.AuditEvent)
+}
+
+func (h *auditHook) Record(ctx context.Context, ev types.AuditEvent) error {
+	if h.before != nil {
+		h.before(ev)
+	}
+	return h.inner.Record(ctx, ev)
+}
+
+// waitFor answers true when ch yields or is closed within d.
+func waitFor(ch <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// The window the exchange leaves between committing the person's identity and committing their grant, in the
+// order that matters: the exchange pauses once the identity has committed (at its introduction row, which is
+// written after that commit and before the grant is minted); the person is suspended; the exchange resumes and
+// finishes; the person is reactivated. The bearer the exchange made, if it made one, is refused, and a fresh
+// exchange works.
 func TestPortalSuspend_BetweenIdentityAndGrantCommits_PG(t *testing.T) {
 	l := newPortalLife(t)
-	ctx := context.Background()
-	const lockKey = 7770042
-	for _, q := range []string{
-		`CREATE FUNCTION test_hold_grant() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-			PERFORM pg_advisory_lock_shared(7770042); PERFORM pg_advisory_unlock_shared(7770042); RETURN NEW; END $$`,
-		`CREATE TRIGGER test_hold_grant BEFORE INSERT ON portal_grants FOR EACH ROW EXECUTE FUNCTION test_hold_grant()`,
-	} {
-		if _, err := l.pool.Exec(ctx, q); err != nil {
-			t.Fatalf("install the test hold: %v", err)
-		}
-	}
-	conn, err := l.pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockKey); err != nil {
-		t.Fatal(err)
-	}
-	unlocked := false
-	unlock := func() {
-		if !unlocked {
-			unlocked = true
-			if _, err := conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockKey); err != nil {
-				t.Errorf("release the hold: %v", err)
-			}
-		}
-	}
-	defer unlock()
-
 	l.ver.subj = l.person("u-race", "")
 	principal := l.ver.subj.Principal
-	exchanged := make(chan *struct {
-		code int
-		body string
-	}, 1)
-	go func() {
-		w := l.exchange(t, l.d.ID, l.cred, "subject-token")
-		exchanged <- &struct {
-			code int
-			body string
-		}{w.Code, w.Body.String()}
-	}()
-	// The identity row has committed and the grant insert waits on the hold.
-	lifeEventually(t, "the identity row to commit and the grant insert to wait", func() bool {
-		return l.count(t, `SELECT count(*) FROM principal_identities WHERE principal = $1`, principal) == 1 &&
-			l.count(t, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`) == 1
-	})
-	suspended := make(chan int, 1)
-	go func() { suspended <- l.post(t, l.admin, principal, "suspend", "").Code }()
-	var suspendCode int
-	select {
-	case suspendCode = <-suspended:
-	case <-time.After(2 * time.Second):
-		// The suspension waits on the grant's transaction (it holds the identity row): release the grant.
-		unlock()
-		suspendCode = <-suspended
+	held, release := make(chan struct{}), make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer releaseOnce()
+	var once sync.Once
+	l.h.srv.cfg.Audit = &auditHook{inner: l.h.srv.cfg.Audit, before: func(ev types.AuditEvent) {
+		if ev.Action != "person.create" || ev.Target != principal {
+			return
+		}
+		once.Do(func() {
+			close(held)
+			waitFor(release, 30*time.Second)
+		})
+	}}
+	exchanged := make(chan *httptest.ResponseRecorder, 1)
+	go func() { exchanged <- l.exchange(t, l.d.ID, l.cred, "subject-token") }()
+	if !waitFor(held, 10*time.Second) {
+		t.Fatal("the exchange never reached its introduction row")
 	}
-	unlock()
-	ex := <-exchanged
-	if suspendCode != http.StatusOK {
-		t.Fatalf("suspend = %d, want 200", suspendCode)
+	// The identity has committed and the grant has not: the control for the order.
+	if n := l.count(t, `SELECT count(*) FROM principal_identities WHERE principal = $1`, principal); n != 1 {
+		t.Fatalf("control: identity rows = %d, want 1", n)
 	}
 	if n := l.count(t, `SELECT count(*) FROM portal_grants WHERE principal = $1`, principal); n != 0 {
-		t.Errorf("portal_grants rows after both commits = %d, want 0 (the exchange answered %d %s)", n, ex.code, ex.body)
+		t.Fatalf("control: portal_grants rows = %d before the grant commits, want 0", n)
 	}
-	if ident := l.ident(t, principal); ident.DeactivatedAt == nil {
-		t.Error("the person is not deactivated after the suspension")
+	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK {
+		t.Fatalf("suspend = %d %s, want 200", w.Code, w.Body.String())
 	}
-	if got := l.exchangeFor(t, "u-race"); got != http.StatusBadRequest {
-		t.Errorf("exchange after the race = %d, want 400", got)
+	releaseOnce()
+	var ex *httptest.ResponseRecorder
+	select {
+	case ex = <-exchanged:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the paused exchange did not finish after the hold was released")
+	}
+	var stale string
+	if ex.Code == http.StatusOK {
+		stale, _ = portalToken(t, ex)
+		if got := l.meCode(t, stale); got != http.StatusUnauthorized {
+			t.Errorf("the bearer the exchange made after the suspension answers %d while the person is suspended, want 401", got)
+		}
+	}
+	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if stale != "" {
+		if got := l.meCode(t, stale); got != http.StatusUnauthorized {
+			t.Errorf("the stale bearer answers %d after the reactivation, want 401", got)
+		}
+	}
+	l.ver.subj = l.person("u-race", "")
+	fresh := l.token(t, l.d, l.cred)
+	if got := l.meCode(t, fresh); got != http.StatusOK {
+		t.Errorf("a fresh exchange's bearer after the reactivation answers %d, want 200", got)
+	}
+	if ident := l.ident(t, principal); ident.DeactivatedAt != nil {
+		t.Errorf("the person is still deactivated after the reactivation (%v)", ident.DeactivatedAt)
+	}
+}
+
+// cutCounter is the revocation store that remembers every session cut it was asked to write.
+type cutCounter struct {
+	*pgTestRevocations
+	cmu  sync.Mutex
+	subs []string
+}
+
+func (c *cutCounter) RevokeSub(ctx context.Context, sub string) error {
+	c.cmu.Lock()
+	c.subs = append(c.subs, sub)
+	c.cmu.Unlock()
+	return c.pgTestRevocations.RevokeSub(ctx, sub)
+}
+
+func (c *cutCounter) cuts() []string {
+	c.cmu.Lock()
+	defer c.cmu.Unlock()
+	return slices.Clone(c.subs)
+}
+
+// killHook is the runner that calls on before each sandbox kill.
+type killHook struct {
+	*scimRunner
+	on func()
+}
+
+func (k *killHook) KillSandbox(ctx context.Context, ref string) error {
+	if k.on != nil {
+		k.on()
+	}
+	return k.scimRunner.KillSandbox(ctx, ref)
+}
+
+// A suspension's tail writes no session cut of its own: the one cut of the person's principal is step one's, in
+// the transaction that deactivated them, so a reactivation and a fresh exchange that land inside the tail are not
+// ended by a late write. Here they land at the kill, and the fresh bearer outlives the suspension's remaining
+// steps while the bearer from before it stays refused.
+func TestPortalSuspend_TailWritesNoCutAndFreshGrantSurvives_PG(t *testing.T) {
+	l := newPortalLife(t)
+	counter := &cutCounter{pgTestRevocations: l.h.srv.cfg.SessionRevocations.(*pgTestRevocations)}
+	l.h.srv.cfg.SessionRevocations = counter
+	principal, old := l.signIn(t, "u1")
+	run := l.seedRun(t, principal, types.RunRunning)
+	var fresh string
+	var once sync.Once
+	l.h.srv.cfg.Runner = &killHook{scimRunner: l.run, on: func() {
+		once.Do(func() {
+			if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
+				t.Errorf("reactivate inside the tail = %d %s", w.Code, w.Body.String())
+			}
+			fresh = l.token(t, l.d, l.cred)
+		})
+	}}
+	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK && w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+	}
+	if got := counter.cuts(); len(got) != 0 {
+		t.Errorf("the tail wrote session cuts for %v, want none (step one's transaction holds the cut)", got)
+	}
+	if fresh == "" {
+		t.Fatal("the fresh exchange inside the tail did not run")
+	}
+	if got := l.meCode(t, fresh); got != http.StatusOK {
+		t.Errorf("the grant made after the reactivation answers %d once the suspension's tail finished, want 200", got)
+	}
+	if got := l.meCode(t, old); got != http.StatusUnauthorized {
+		t.Errorf("the grant made before the suspension answers %d, want 401", got)
+	}
+	if st := l.runState(t, run); st != types.RunKilled {
+		t.Errorf("the run the suspension owed = %s, want KILLED", st)
+	}
+}
+
+// A tail bound to an earlier suspension tears nothing down once a later one owns the identity, whatever the person
+// has made since: the later suspension's own tail does that, under its own attribution.
+func TestPortalSuspend_StaleTailLeavesLaterSuspensionsRunAlone_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := withActor(context.Background(), types.ActorSystem, portalLifecycleActor)
+	principal, _ := l.signIn(t, "u1")
+	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK {
+		t.Fatalf("first suspend = %d", w.Code)
+	}
+	id := l.ident(t, principal).ID
+	first := *l.ident(t, principal).DeactivatedAt
+	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d", w.Code)
+	}
+	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK {
+		t.Fatalf("second suspend = %d", w.Code)
+	}
+	second := *l.ident(t, principal).DeactivatedAt
+	if second.Equal(first) {
+		t.Fatalf("control: both suspensions deactivated at %v", first)
+	}
+	// A run the second suspension's ledger will owe: made while the person is suspended for the second time.
+	run := l.seedRun(t, principal, types.RunRunning)
+	kills := l.run.killCount()
+	o := portalOrigin(types.ActorSystem, portalLifecycleActor)
+	err := l.h.srv.killStep(withPortalSuspensionBound(ctx, id, first), o, l.st, id, []string{principal})
+	if !errors.Is(err, store.ErrSuperseded) {
+		t.Errorf("the first suspension's kill step = %v, want ErrSuperseded", err)
+	}
+	if st := l.runState(t, run); st != types.RunRunning || l.run.killCount() != kills {
+		t.Errorf("the stale tail touched the later suspension's run: state %s, kills %d -> %d", st, kills, l.run.killCount())
+	}
+	// The same step bound to the suspension that is current does tear it down.
+	if err := l.h.srv.killStep(withPortalSuspensionBound(ctx, id, second), o, l.st, id, []string{principal}); err != nil {
+		t.Errorf("the second suspension's kill step = %v, want nil", err)
+	}
+	if st := l.runState(t, run); st != types.RunKilled {
+		t.Errorf("the run after the current tail's kill step = %s, want KILLED", st)
+	}
+	for _, ev := range l.rows("run.kill") {
+		if ev.Actor != portalLifecycleActor {
+			t.Errorf("run.kill actor = %q, want %q", ev.Actor, portalLifecycleActor)
+		}
+	}
+}
+
+// Each audit step of a suspension is one event, whoever writes it and however often: a request and the sweep that
+// both run the step, and a retry after the row was written but before the step closed, add no second row, and the
+// row keeps its first writer's actor.
+func TestPortalSuspend_AuditStepsRecordOnce_PG(t *testing.T) {
+	l := newPortalLife(t)
+	ctx := context.Background()
+	l.h.srv.cfg.Audit = store.Recorder{Pool: l.pool}
+	principal, _ := l.signIn(t, "u1")
+	id := l.ident(t, principal).ID
+	admin := portalOrigin(types.ActorHuman, "root")
+	sweep := portalSweepOrigin()
+	if _, _, _, err := l.h.srv.portalSuspendStepOne(withActor(ctx, admin.actorType, admin.actor), l.st, id, admin, 0, nil); err != nil {
+		t.Fatalf("step one: %v", err)
+	}
+	rows := func(action string) (n int) {
+		return l.count(t, `SELECT count(*) FROM audit_events WHERE action = $1 AND target = $2`, action, id.String())
+	}
+	runAudit := func(o leaverOrigin) error {
+		return l.h.srv.auditSuspension(withActor(ctx, o.actorType, o.actor), o, l.st, id, portalSlot(o), nil)
+	}
+	// The request and the sweep run the step at once.
+	errs := make(chan error, 2)
+	for _, o := range []leaverOrigin{admin, sweep} {
+		go func() { errs <- runAudit(o) }()
+	}
+	for range 2 {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Errorf("auditSuspension = %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("an audit step did not finish")
+		}
+	}
+	for _, action := range []string{"identity.deactivate", "person.deprovision"} {
+		if n := rows(action); n != 1 {
+			t.Errorf("%s rows after an overlap = %d, want 1", action, n)
+		}
+	}
+	actors := map[string]string{}
+	for _, action := range []string{"identity.deactivate", "person.deprovision"} {
+		var actor string
+		if err := l.pool.QueryRow(ctx, `SELECT actor FROM audit_events WHERE action = $1 AND target = $2`, action, id.String()).Scan(&actor); err != nil {
+			t.Fatal(err)
+		}
+		actors[action] = actor
+	}
+	// The ledger's pinned event is the row's own id.
+	if n := l.count(t, `SELECT count(*) FROM deprovision_jobs j JOIN audit_events a ON a.id = j.audit_event_id AND a."time" = j.audit_event_at
+	                     WHERE j.identity_id = $1 AND j.kind = $2 AND j.step IN ($3, $4)`, id, store.JobKindSuspend, jobStepAuditDeact, jobStepAuditDeprov); n != 2 {
+		t.Errorf("audit rows that carry their ledger row's pinned id and time = %d, want 2", n)
+	}
+	// A crash after the write and before the step closed: the step reopens and a third writer runs it.
+	if _, err := l.pool.Exec(ctx, `UPDATE deprovision_jobs SET state = 'pending' WHERE identity_id = $1 AND kind = $2 AND step IN ($3, $4)`,
+		id, store.JobKindSuspend, jobStepAuditDeact, jobStepAuditDeprov); err != nil {
+		t.Fatal(err)
+	}
+	if err := runAudit(portalOrigin(types.ActorHuman, "someone-else")); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	for action, actor := range actors {
+		if n := rows(action); n != 1 {
+			t.Errorf("%s rows after a retry = %d, want 1", action, n)
+		}
+		var got string
+		if err := l.pool.QueryRow(ctx, `SELECT actor FROM audit_events WHERE action = $1 AND target = $2`, action, id.String()).Scan(&got); err != nil || got != actor {
+			t.Errorf("%s actor after a retry = %q, %v; want the first writer's %q", action, got, err, actor)
+		}
+	}
+	var open int
+	if err := l.pool.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2 AND state <> 'done' AND step IN ($3, $4)`,
+		id, store.JobKindSuspend, jobStepAuditDeact, jobStepAuditDeprov).Scan(&open); err != nil || open != 0 {
+		t.Errorf("audit steps still open after the retry: %d, %v", open, err)
 	}
 }
 
