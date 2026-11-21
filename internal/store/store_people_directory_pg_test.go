@@ -672,4 +672,17 @@ func TestPG_PeopleDirectory_FirstSignInIsNotProvisioning(t *testing.T) {
 	if h := listingByPrincipal(t, page.People, hPrincipal); h.FirstSignInAt != nil || h.LastSignInAt == nil {
 		t.Errorf("historical provisioned row: first sign-in %v, last %v; want an unknown first and a known last", h.FirstSignInAt, h.LastSignInAt)
 	}
+	// Its next sign-in, on the new build, still shows an unknown first one: a populated last sign-in means an
+	// earlier one happened, whether before the column or by a replica that does not write it yet.
+	next := second.Add(24 * time.Hour)
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: hPrincipal, Issuer: idIssuer, TenantID: idTenant, ObjectID: hOID, Email: "old@corp.example"}, next); err != nil {
+		t.Fatalf("historical row's next sign-in: %v", err)
+	}
+	page, err = st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := listingByPrincipal(t, page.People, hPrincipal); h.FirstSignInAt != nil || h.LastSignInAt == nil || !h.LastSignInAt.Equal(next) {
+		t.Errorf("historical row after its next sign-in: first %v, last %v; want an unknown first and the last at %v", h.FirstSignInAt, h.LastSignInAt, next)
+	}
 }
