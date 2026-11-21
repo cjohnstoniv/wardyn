@@ -436,6 +436,8 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         renderScreen(undefined, "/runs?segment=services");
         await screen.findByText("Old service");
         expect(screen.queryByText("No runs match these filters")).toBeNull();
+        // The hidden counts under the rows are the service page's (the plain page here hides nothing).
+        expect(screen.getByText(/7 older runs and 2 killed runs are hidden\./)).toBeInTheDocument();
       });
 
       describe("under a status, search or owner filter", () => {
