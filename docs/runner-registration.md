@@ -185,6 +185,7 @@ curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v<version>/in
 
 - The script installs only `wardyn`, for you and without sudo, into the first writable directory of `/usr/local/bin`, `~/.local/bin` and `~/bin` (Windows: `%LOCALAPPDATA%\Wardyn\bin`, added to your user `PATH`). It refuses root.
 - It writes a sibling file and renames it over the old one, so re-running it upgrades.
+- On Windows a running `wardyn.exe` cannot be replaced, so the script renames it to `wardyn.exe.old`, moves the new one in, then deletes the `.old` file. If that second move fails or is interrupted, the script renames `wardyn.exe.old` back and reports the error. If the computer stopped mid-swap and `wardyn.exe` is missing, rename `wardyn.exe.old` in `%LOCALAPPDATA%\Wardyn\bin` back to `wardyn.exe`, then run the script again.
 - It never signs in and never writes a token or `cli.json`; it ends with `wardyn login <your organisation's URL>`.
 - The release asset `install.sh` is the platform installer, not this script. The runner wrapper ships only inside `wardyn-runner-units.tar.gz`, as `runner/install.sh`.
 - An operator whose computers cannot reach GitHub sets `WARDYN_CLI_ARTIFACT_BASE` on the server ([ENV.md](ENV.md#wardyn_cli_artifact_base)). The console's install line then uses that mirror, and `/healthz` shows its host name to anyone who reaches the console.
