@@ -124,11 +124,17 @@ type historicalSource struct {
 	seed         func(t *testing.T, key string)
 }
 
-// seedPolicyAudit writes one audit row of action for run, whose data holds a resolved policy naming key.
+// seedPolicyAudit writes one audit row of action (run.policy.resolve or run.policy.generation) for run, in the
+// payload shape its producer writes, with a UI-app caller naming key.
 func seedPolicyAudit(t *testing.T, pool *pgxpool.Pool, run types.AgentRun, action, key string) {
 	t.Helper()
 	id := run.ID
-	data := `{"policy":` + uiAppsJSON(key) + `}`
+	// As the producers marshal them: the dispatch's resolved policy has the policy's own keys at the root of the
+	// payload; a policy generation is the generation number with the policy nested under "policy".
+	data := uiAppsJSON(key)
+	if action == "run.policy.generation" {
+		data = `{"generation":2,"policy":` + uiAppsJSON(key) + `}`
+	}
 	if err := store.InsertAuditEvent(context.Background(), pool, &types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), RunID: &id,
 		ActorType: types.ActorSystem, Actor: "test", Action: action, Outcome: "success", Data: json.RawMessage(data)}); err != nil {
 		t.Fatal(err)
