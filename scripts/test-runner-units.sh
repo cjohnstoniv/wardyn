@@ -147,6 +147,30 @@ RC=$?
 set -e
 [ "$RC" -eq 0 ] && [ ! -e "$X/xdg/systemd/user/wardyn-runnerd.service" ] || fail "uninstall left the unit under XDG_CONFIG_HOME (rc=$RC): $OUT"
 
+# The service manager cannot be reached: the service may still run, so nothing is removed and the exit is nonzero.
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; echo "Failed to connect to user scope bus" >&2; exit 1'
+U="$WORK/home-nomgr"
+mkdir -p "$U/.config/systemd/user" "$U/.config/wardyn" "$U/.local/share/wardyn/bin"
+: >"$U/.config/systemd/user/wardyn-runnerd.service"; : >"$U/.config/wardyn/runnerd.json"; : >"$U/.local/share/wardyn/bin/wardyn-runnerd"
+run_install nomgr --uninstall
+[ "$RC" -ne 0 ] && grep -q 'cannot reach the systemd user manager' <<<"$OUT" || fail "uninstall with no reachable manager did not fail with a diagnostic (rc=$RC): $OUT"
+for kept in .config/systemd/user/wardyn-runnerd.service .config/wardyn/runnerd.json .local/share/wardyn/bin/wardyn-runnerd; do
+  [ -e "$U/$kept" ] || fail "uninstall with no reachable manager removed $kept"
+done
+! grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "uninstall with no reachable manager still reported success: $OUT"
+
+# The manager answers but the stop fails: same refusal, files kept.
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=loaded\nActiveState=active\n" ;; *) exit 1 ;; esac'
+run_install stopfail --uninstall
+[ "$RC" -ne 0 ] && [ -e "$U/.config/wardyn/runnerd.json" ] || fail "uninstall removed files after a failed stop (rc=$RC): $OUT"
+
+# Already uninstalled (the manager knows no such unit, nothing is active): idempotent success, and no stop is attempted.
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"; case "$2" in show) printf "LoadState=not-found\nActiveState=inactive\n" ;; daemon-reload) ;; *) exit 1 ;; esac'
+run_install gone --uninstall
+[ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "uninstall of an absent service was not a success (rc=$RC): $OUT"
+! grep -q 'disable' "$WORK/home-gone/stub.log" || fail "uninstall tried to stop a service the manager does not know: $(cat "$WORK/home-gone/stub.log")"
+stub systemctl 'echo "systemctl $*" >>"$STUB_LOG"'
+
 stub uname 'echo Darwin'
 M="$WORK/home-mac"
 mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
@@ -156,5 +180,16 @@ mkdir -p "$M/Library/LaunchAgents" "$M/Library/Application Support/wardyn/bin"
 run_install mac --uninstall
 [ "$RC" -eq 0 ] && [ ! -e "$M/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd" ] && [ ! -e "$M/Library/Application Support/wardyn/bin/wardyn-runnerd.previous" ] && [ ! -e "$M/Library/Application Support/wardyn/runnerd.json" ] || fail "macOS uninstall left the agent, binary, rollback copy or runnerd.json (rc=$RC): $OUT"
 [ -e "$M/Library/Application Support/wardyn/bin/wardyn" ] && [ -e "$M/Library/Application Support/wardyn/cli.json" ] || fail "macOS uninstall removed the person's wardyn CLI or cli.json"
+
+# macOS: a bootout that fails with the login's launchd domain unreachable keeps every file; with the domain reachable and the agent unknown, the service is already gone and uninstall succeeds.
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; exit 1'
+N="$WORK/home-macno"
+mkdir -p "$N/Library/LaunchAgents" "$N/Library/Application Support/wardyn/bin"
+: >"$N/Library/LaunchAgents/com.wardyn.runnerd.plist"; : >"$N/Library/Application Support/wardyn/bin/wardyn-runnerd"
+run_install macno --uninstall
+[ "$RC" -ne 0 ] && grep -q 'cannot reach this login' <<<"$OUT" && [ -e "$N/Library/LaunchAgents/com.wardyn.runnerd.plist" ] && [ -e "$N/Library/Application Support/wardyn/bin/wardyn-runnerd" ] || fail "macOS uninstall with no reachable launchd did not fail and keep the files (rc=$RC): $OUT"
+stub launchctl 'echo "launchctl $*" >>"$STUB_LOG"; case "$1 $2" in "print gui/"*"/com.wardyn.runnerd") exit 113 ;; "print gui/"*) exit 0 ;; *) exit 3 ;; esac'
+run_install macgone --uninstall
+[ "$RC" -eq 0 ] && grep -q 'Removed the wardyn-runnerd service' <<<"$OUT" || fail "macOS uninstall of an absent agent was not a success (rc=$RC): $OUT"
 
 echo "test-runner-units: PASS"

@@ -57,7 +57,13 @@ uninstall() {
       [ -n "$kept" ] || kept="$(sed -n 's/^WARDYN_RUNNER_STATE_DIR=//p' "$HOME/.config/wardyn/runnerd.env" 2>/dev/null | tail -n 1)" || true
       kept="${kept#\'}"; kept="${kept%\'}"
       [ -z "$kept" ] || identity_dir="$kept"
-      systemctl --user disable --now "$UNIT" 2>/dev/null || true
+      # A service that is already gone is success; one that cannot be confirmed stopped leaves every file in place.
+      state="$(systemctl --user show -p LoadState -p ActiveState "$UNIT" 2>/dev/null)" \
+        || die "cannot reach the systemd user manager from this shell, so the service may still be running. Nothing was removed. Run this from a login session of the person who owns the runner, or stop it yourself (systemctl --user disable --now $UNIT), then run --uninstall again."
+      if ! { grep -qx 'LoadState=not-found' <<<"$state" && grep -qx 'ActiveState=inactive' <<<"$state"; }; then
+        systemctl --user disable --now "$UNIT" 2>/dev/null \
+          || die "systemctl --user disable --now $UNIT failed, so the service may still be running. Nothing was removed. Check: systemctl --user status $UNIT"
+      fi
       # Setup puts the unit where the user manager looks, which can be a custom XDG_CONFIG_HOME.
       rm -f "$HOME/.config/systemd/user/$UNIT" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT" "$HOME/.config/wardyn/runnerd.env" "$config"
       systemctl --user daemon-reload 2>/dev/null || true
@@ -65,7 +71,14 @@ uninstall() {
     Darwin)
       data_dir="$HOME/Library/Application Support/wardyn"
       identity_dir="$data_dir/runner"
-      launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+      # A service that is already gone is success; one that cannot be confirmed stopped leaves every file in place.
+      if ! launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null; then
+        if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+          die "launchctl bootout $LABEL failed and the agent is still loaded, so it may still be running. Nothing was removed. Check: launchctl print gui/$(id -u)/$LABEL"
+        fi
+        launchctl print "gui/$(id -u)" >/dev/null 2>&1 \
+          || die "cannot reach this login's launchd domain (gui/$(id -u)), so the agent may still be running. Nothing was removed. Run this from the Mac's own login session, then run --uninstall again."
+      fi
       rm -f "$HOME/Library/LaunchAgents/$LABEL.plist" "$data_dir/runnerd.json"
       ;;
     *) die "unsupported OS: $(uname -s)" ;;
