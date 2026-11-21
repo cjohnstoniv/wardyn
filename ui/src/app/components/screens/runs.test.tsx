@@ -421,12 +421,14 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         expect(screen.getByRole("button", { name: "Services 1" })).toBeTruthy();
       });
 
-      it("finds the old service under a workspace filter", async () => {
+      it("finds the old service under a workspace filter, and the header keeps the plain page's total", async () => {
         serverSide({ hiddenOlder: 3, hiddenKilled: 2 });
         renderScreen(undefined, "/runs?segment=services&workspace=acme%2Fwidgets");
         await screen.findByText("Old service");
         expect(listRunsFilteredMock).toHaveBeenCalledWith(expect.objectContaining({ service: true, workspace: "acme/widgets" }));
         expect(screen.queryByText("No runs match these filters")).toBeNull();
+        // 1000 plain rows, cut short, no plain hidden runs: the service page's hidden counts and flag are not mixed in
+        expect(screen.getByText("Your runs · 1000+")).toBeInTheDocument();
       });
 
       it("finds the old service when older runs are hidden", async () => {

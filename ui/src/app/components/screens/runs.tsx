@@ -103,6 +103,9 @@ export function RunsScreen() {
   const [truncated, setTruncated] = React.useState(false);
   // Whether the plain page (the one the segment counts read) was cut short, apart from the service page's own flag.
   const [plainTruncated, setPlainTruncated] = React.useState(false);
+  // The plain page's own hidden counts: the header's total is built from the plain rows, so it reads the plain
+  // page's counts and limit, never the service page's.
+  const [plainHidden, setPlainHidden] = React.useState(0);
   // The Services segment's own page: the server keeps only service runs before it pages, so an old service
   // is found under any other filter. Null on every other segment. Set in the same step as runsList.
   const [serviceRuns, setServiceRuns] = React.useState<AgentRun[] | null>(null);
@@ -163,6 +166,7 @@ export function RunsScreen() {
           setHiddenKilled((svc ?? res).hiddenKilled);
           setTruncated((svc ?? res).truncated);
           setPlainTruncated(res.truncated);
+          setPlainHidden(res.hiddenOlder + res.hiddenKilled);
           if (!adminView && filters.q === "" && filters.status === "all" && filters.workspace === "all") {
             setOwned({ n: res.runs.length + res.hiddenOlder + res.hiddenKilled, more: res.truncated });
           }
@@ -300,7 +304,7 @@ export function RunsScreen() {
   // example (13 shown + 4 older + 1 killed = "Your runs · 18").
   const description = adminView
     ? "Every run, live — each confined behind its own barrier."
-    : `Your runs · ${owned?.n ?? runsList.length + hiddenOlder + hiddenKilled}${(owned?.more ?? truncated) ? "+" : ""}`;
+    : `Your runs · ${owned?.n ?? runsList.length + plainHidden}${(owned?.more ?? plainTruncated) ? "+" : ""}`;
 
   const clearFilters = () => setFilters(DEFAULT_RUNS_FILTERS);
 
