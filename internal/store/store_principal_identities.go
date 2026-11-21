@@ -108,8 +108,8 @@ func upsertLoginIdentityTx(ctx context.Context, tx pgx.Tx, in LoginIdentity, now
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
-		INSERT INTO principal_identities (principal, issuer, tenant_id, object_id, email_lower, created_at, last_login_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $6)
+		INSERT INTO principal_identities (principal, issuer, tenant_id, object_id, email_lower, created_at, last_login_at, first_login_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
 		ON CONFLICT DO NOTHING
 		RETURNING id`, in.Principal, in.Issuer, in.TenantID, in.ObjectID, email, now).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -137,7 +137,8 @@ func upsertLoginIdentityTx(ctx context.Context, tx pgx.Tx, in LoginIdentity, now
 		}
 		if _, err = tx.Exec(ctx, `
 			UPDATE principal_identities
-			   SET email_lower = CASE WHEN $2 <> '' THEN $2 ELSE email_lower END, last_login_at = $3
+			   SET email_lower = CASE WHEN $2 <> '' THEN $2 ELSE email_lower END, last_login_at = $3,
+			       first_login_at = COALESCE(first_login_at, $3)
 			 WHERE id = $1`, id, email, now); err != nil {
 			return PrincipalIdentity{}, fmt.Errorf("store: stamp login identity: %w", err)
 		}

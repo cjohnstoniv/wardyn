@@ -27,6 +27,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
   grant's token request outcome is recorded.
 
+### Fixed
+
+- The people list no longer reports the day a SCIM user was provisioned as their first sign-in. Migration `0296_identity_first_login` adds the column that records a person's first sign-in when it happens, and a person whose first sign-in cannot be established now shows no date. It adds no table, so split-role installs need no new grant. WORDING PENDING
+
 ## [0.10.1] — 2026-11-21
 
 ### Added

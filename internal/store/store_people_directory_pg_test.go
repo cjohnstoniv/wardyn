@@ -616,3 +616,60 @@ func TestPG_PeopleDirectory_PortalPersonLastSignInIsLatestUse_PG(t *testing.T) {
 		t.Errorf("console sign-in after the revoke: active sessions = %d, want 1 (the count follows the console time, not the use at %v)", cl.ActiveSessions, useAt)
 	}
 }
+
+// First sign-in is the person's first sign-in, never the moment SCIM provisioned them. A provisioned
+// person who has not signed in is not listed with a sign-in date; the date is the first sign-in's and a later
+// one leaves it; and a historical provisioned row that already signed in (before the column existed) has no date
+// to give, so it shows none rather than the provisioning time.
+func TestPG_PeopleDirectory_FirstSignInIsNotProvisioning(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	provisioned := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Microsecond)
+	first := provisioned.Add(48 * time.Hour)
+	second := first.Add(24 * time.Hour)
+	oid := uuid.NewString()
+	principal := "entra:" + idTenant + ":" + oid
+
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, oid, store.IdentityUpdate{Emails: []string{"lee@corp.example"}}, provisioned); err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "lee@corp.example"}, first); err != nil {
+		t.Fatalf("first sign-in: %v", err)
+	}
+	signIn := func() *time.Time {
+		t.Helper()
+		page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return listingByPrincipal(t, page.People, principal).FirstSignInAt
+	}
+	if got := signIn(); got == nil || !got.Equal(first) {
+		t.Fatalf("first sign-in = %v, want %v (not the provisioning time %v)", got, first, provisioned)
+	}
+	if _, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: principal, Issuer: idIssuer, TenantID: idTenant, ObjectID: oid, Email: "lee@corp.example"}, second); err != nil {
+		t.Fatalf("second sign-in: %v", err)
+	}
+	if got := signIn(); got == nil || !got.Equal(first) {
+		t.Errorf("first sign-in after a second = %v, want it kept at %v", got, first)
+	}
+
+	// A historical row: provisioned over SCIM, signed in before the column existed, so it has a last sign-in and
+	// no first one. It shows no first sign-in.
+	hOID := uuid.NewString()
+	hPrincipal := "entra:" + idTenant + ":" + hOID
+	if _, _, err := st.CreateScimIdentity(ctx, idIssuer, idTenant, hOID, store.IdentityUpdate{Emails: []string{"old@corp.example"}}, provisioned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET principal = $1, last_login_at = $2, scim_external_id = 'ext-old' WHERE object_id = $3`, hPrincipal, second, hOID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := listingByPrincipal(t, page.People, hPrincipal); h.FirstSignInAt != nil || h.LastSignInAt == nil {
+		t.Errorf("historical provisioned row: first sign-in %v, last %v; want an unknown first and a known last", h.FirstSignInAt, h.LastSignInAt)
+	}
+}
