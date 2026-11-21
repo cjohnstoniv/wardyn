@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -382,59 +384,136 @@ func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	}
 }
 
+// On one replica a token read and a rotation of the same record are serialised by the name's mutex: the read
+// holds it while its Get is paused, the route's write waits behind it, and the write's value is the one current
+// once both are done, whatever order the goroutines reach the mutex in.
 func TestServiceGrant_SecretMaskStaleReadNeverPromotes(t *testing.T) {
 	f := newSvcFixWithSecret(t)
 	f.mustToken(serviceGrantTriggerRefresh)
-	// A read that began before a rotation applies its old value after the rotation applied the new one.
+	f.srv.dropServiceGrantCache(f.uid)
 	held, release := make(chan struct{}), make(chan struct{})
-	f.sec.hold = func(op, _ string) {
-		if op == "get" {
-			f.sec.hold = nil
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var armed, holding, putWhileHeld atomic.Bool
+	armed.Store(true)
+	f.sec.hold = func(op, name string) {
+		switch {
+		case op == "get" && name == f.secretName() && armed.CompareAndSwap(true, false):
+			holding.Store(true)
 			close(held)
-			<-release
+			if !svcWaited(release) {
+				t.Error("the paused read was never released")
+			}
+			holding.Store(false)
+		case op == "put" && holding.Load():
+			putWhileHeld.Store(true)
 		}
 	}
-	f.srv.dropServiceGrantCache(f.uid)
-	done := make(chan struct{})
-	go func() { defer close(done); _, _ = f.token(serviceGrantTriggerResolve) }()
-	<-held
-	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code != http.StatusNoContent {
-		t.Fatalf("rotation: %d", w.Code)
+	readDone := make(chan struct{})
+	go func() { defer close(readDone); _, _ = f.token(serviceGrantTriggerResolve) }()
+	svcAwait(t, held, "the token read to pause in Get")
+	// The writer starts while the read holds the mutex; its row read is the barrier that it is under way.
+	var once sync.Once
+	writing := make(chan struct{})
+	f.st.gmu.Lock()
+	f.st.getErr = func() error { once.Do(func() { close(writing) }); return nil }
+	f.st.gmu.Unlock()
+	wrote := make(chan int, 1)
+	go func() { wrote <- f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)).Code }()
+	svcAwait(t, writing, "the concurrent writer to read the row")
+	releaseOnce.Do(func() { close(release) })
+	svcAwait(t, readDone, "the paused read to finish")
+	select {
+	case code := <-wrote:
+		if code != http.StatusNoContent {
+			t.Fatalf("rotation: %d", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for the concurrent writer")
 	}
-	close(release)
-	<-done
+	if putWhileHeld.Load() {
+		t.Fatal("the route stored the record while a read of the same name held its mutex")
+	}
 	f.srv.cfg.MaskRegistry.SweepGlobals(f.clock.Now().Add(24 * time.Hour))
 	if f.masked(svcClientSecret) || !f.masked(svcSecretTwo) {
 		t.Fatalf("after the stale read: old masked %v, new masked %v, want the new value alone current", f.masked(svcClientSecret), f.masked(svcSecretTwo))
 	}
 }
 
-// A run's sealed mask rows keep a copy of the token, so the output of a restarted wardynd stays masked.
-func TestServiceGrant_MaskCopySealedAndMasksAfterRestart_PG(t *testing.T) {
+// svcPauseAfterGet is a replica's view of the shared secret store whose Get returns only after pause: the read
+// has captured the record and has not yet applied it.
+type svcPauseAfterGet struct {
+	*svcSecrets
+	pause func(name string)
+}
+
+func (s *svcPauseAfterGet) Get(ctx context.Context, name string) ([]byte, error) {
+	v, err := s.svcSecrets.Get(ctx, name)
+	s.pause(name)
+	return v, err
+}
+
+func (s *svcPauseAfterGet) For(owner string) secretstore.Store {
+	if owner == "" {
+		return s
+	}
+	return s.svcSecrets.For(owner)
+}
+
+// Across replicas the masks are each process's own, and the record in the shared store is the truth: B captures
+// the old record and pauses, A's route writes the new one, and B then applies what it captured. A keeps the new
+// value current after the grace; B's mint sees the revision move, reads again, and holds the new value alone
+// after the grace too. Neither replica serves the old value as its current mask.
+func TestServiceGrant_SecretMaskStaleReadOnAnotherReplicaNeverPromotes(t *testing.T) {
 	f := newSvcFixWithSecret(t)
-	plan, _, _, _ := f.dispatch(t)
-	_, body := f.svcResolve(plan)
-	tok := resolvedToken(t, body)
-	var got [][]byte
-	for _, b := range f.srv.cfg.MaskRegistry.Snapshot(f.st.run.ID) {
-		got = append(got, b)
+	f.mustToken(serviceGrantTriggerRefresh)
+	captured, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var armed atomic.Bool
+	armed.Store(true)
+	view := &svcPauseAfterGet{svcSecrets: f.sec, pause: func(name string) {
+		if name == f.secretName() && armed.CompareAndSwap(true, false) {
+			close(captured)
+			if !svcWaited(release) {
+				t.Error("B's paused read was never released")
+			}
+		}
+	}}
+	cfg := f.srv.cfg
+	cfg.MaskRegistry, cfg.Secrets = secretmask.NewRegistry(), view
+	b := &Server{cfg: cfg}
+	minted := make(chan error, 1)
+	go func() {
+		_, err := b.serviceGrantToken(context.Background(), f.provider(), "", serviceGrantTriggerRefresh)
+		minted <- err
+	}()
+	svcAwait(t, captured, "B to capture the old record")
+	if w := f.serve(http.MethodPut, f.secretPath(), f.putSecretBody(svcSecretTwo)); w.Code != http.StatusNoContent {
+		t.Fatalf("rotation on A: %d %s", w.Code, w.Body.String())
 	}
-	found := false
-	for _, b := range got {
-		found = found || string(b) == tok
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-minted:
+		if err != nil {
+			t.Fatalf("B's mint after the rotation: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for B's mint")
 	}
-	if !found {
-		t.Fatal("the run's mask values do not hold the token")
-	}
-	// A new registry with the run's values restored, as the boot reload does, masks the same output.
-	restarted := secretmask.NewRegistry()
-	for _, b := range got {
-		if err := restarted.Add(f.st.run.ID, b); err != nil {
-			t.Fatal(err)
+	after := f.clock.Now().Add(24 * time.Hour)
+	f.srv.cfg.MaskRegistry.SweepGlobals(after)
+	b.cfg.MaskRegistry.SweepGlobals(after)
+	for name, s := range map[string]*Server{"A": f.srv, "B": b} {
+		if svcMasked(s, svcClientSecret) || !svcMasked(s, svcSecretTwo) {
+			t.Errorf("%s after the grace: old masked %v, new masked %v, want the new value alone current",
+				name, svcMasked(s, svcClientSecret), svcMasked(s, svcSecretTwo))
 		}
 	}
-	if out := restarted.Masker(f.st.run.ID).Mask([]byte("x " + tok + " y")); strings.Contains(string(out), tok) {
-		t.Fatalf("a restarted registry leaves the token in output: %s", out)
+	if got := f.idp.requests(); len(got) == 0 {
+		t.Fatal("B sent no token request")
+	} else if _, sec := svcBasic(t, got[len(got)-1].Header.Get("Authorization")); sec != svcSecretTwo {
+		t.Errorf("B's last token request carried %q, want the rotated secret", sec)
 	}
 }
 

@@ -602,3 +602,21 @@ func svcBasic(t *testing.T, h string) (id, secret string) {
 }
 
 var errSvcDown = errors.New("svc: store down")
+
+// svcAwait waits for ch to close and fails the test after ten seconds: no wait in these tests is unbounded.
+// It runs on the test's goroutine; a double's hook uses svcWaited and reports with t.Errorf.
+func svcAwait(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	if !svcWaited(ch) {
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func svcWaited(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	case <-time.After(10 * time.Second):
+		return false
+	}
+}
