@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,18 +125,20 @@ func TestPortalSuspend_OverlappingAndCrashedKillClaims_PG(t *testing.T) {
 		}
 		bound := *ident.DeactivatedAt
 		var sweepErr error
-		var once sync.Once
+		var entered atomic.Bool
 		sweeps := 0
 		l.h.srv.cfg.Runner = &killHook{scimRunner: l.run, on: func() {
-			once.Do(func() {
-				sweeps++
-				kills := l.run.killCount()
-				sctx := withPortalSuspensionBound(withActor(ctx, sweep.actorType, sweep.actor), id, bound)
-				sweepErr = l.h.srv.killStep(sctx, sweep, l.st, id, forms.targets)
-				if got := l.run.killCount(); got != kills {
-					t.Errorf("the overlapping worker called the runner %d times, want 0", got-kills)
-				}
-			})
+			if !entered.CompareAndSwap(false, true) {
+				t.Error("a second runner call was made for the one run")
+				return
+			}
+			sweeps++
+			kills := l.run.killCount()
+			sctx := withPortalSuspensionBound(withActor(ctx, sweep.actorType, sweep.actor), id, bound)
+			sweepErr = l.h.srv.killStep(sctx, sweep, l.st, id, forms.targets)
+			if got := l.run.killCount(); got != kills {
+				t.Errorf("the overlapping worker called the runner %d times, want 0", got-kills)
+			}
 		}}
 		if err := l.h.srv.killStep(withPortalSuspensionBound(fctx, id, bound), first, l.st, id, forms.targets); err != nil {
 			t.Fatalf("first worker's kill step: %v", err)
@@ -181,7 +184,7 @@ func TestPortalSuspend_OverlappingAndCrashedKillClaims_PG(t *testing.T) {
 		j, _ := jobByKey(jobs, key.Step, key.Target)
 		key.ID = j.ID
 		receipt := uuid.New()
-		c, err := l.st.ClaimSuspensionKillAt(ctx, id, key, bound, store.RunKill{RunID: run, From: types.RunRunning, ReceiptID: receipt, ReceiptAt: time.Now().UTC()})
+		c, err := l.st.ClaimSuspensionKillAt(ctx, id, key, bound, store.RunKill{RunID: run, From: types.RunRunning, ReceiptID: receipt, ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
 		if err != nil || !c.Applied {
 			t.Fatalf("the crashed worker's claim = %+v, %v", c, err)
 		}
@@ -384,7 +387,7 @@ func TestPortalSuspend_UnstoredReceiptSettlesFromAnotherReplica_PG(t *testing.T)
 				}
 				want := "first-admin"
 				if erased {
-					want = portalLifecycleActor
+					want = pinnedErasedActor
 				}
 				for _, action := range actions {
 					var n int
