@@ -20,7 +20,7 @@ import (
 func TestAuditEventsStored_MatchesTimeAndIDTogether_PG(t *testing.T) {
 	st, pool := isolatedStore(t)
 	ctx := context.Background()
-	at := time.Date(2026, 12, 1, 9, 0, 0, 123456000, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second).Add(123456 * time.Microsecond)
 	ev := types.AuditEvent{ID: uuid.New(), Time: at, ActorType: types.ActorSystem, Actor: "test", Action: "test.present", Target: "t", Outcome: "success"}
 	if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
 		t.Fatal(err)

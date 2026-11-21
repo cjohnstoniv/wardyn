@@ -337,12 +337,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
-	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	if msg != "" {
+	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
@@ -443,6 +438,16 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 	}
 	warns := s.unitWriteWarnings(r.Context(), saved, effective)
 	writeJSON(w, status, governanceUnitResponse{Unit: newUnitView(saved, effective, nil, s.specReadTierFor(r.Context())), Warnings: warns})
+}
+
+// unitRequiredSignersRefusal is why req names a required_image_signers signer the site does not define, or "": on
+// the profile's own limits and on its overlay.
+func (s *Server) unitRequiredSignersRefusal(ctx context.Context, req governanceUnitRequest) string {
+	msg := s.requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)
+	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
+		msg = s.requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
+	}
+	return msg
 }
 
 // unitWriteSuccessData is a stored write's governance.unit.write row data, with the unit admin's scope when one

@@ -41,7 +41,7 @@ func (s *activationStore) ActivatePortalIssuersAs(_ context.Context, a store.Por
 		return false, nil
 	}
 	s.on = true
-	a.ActivateEventID, a.EventAt = uuid.New(), time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+	a.ActivateEventID, a.EventAt = uuid.New(), time.Now().UTC().Truncate(time.Microsecond)
 	if len(a.Sessions) > 0 {
 		a.OverrideEventID = uuid.New()
 	}
@@ -155,13 +155,13 @@ func TestPortalIssuersActivate_BodyNamingMarkRefused(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, audit := newSiteConfigHarness(t, fake)
 	for _, key := range []string{store.PortalIssuersActivatedKey, store.PortalActivationKey} {
-		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+key+`":"2026-01-01T00:00:00Z"}`)
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, `{"`+key+`":"x"}`)
 		if w.Code != http.StatusBadRequest || errorReason(w) != reasonSiteConfigRequestInvalid {
 			t.Fatalf("a body naming %s = %d %s, want 400 %s", key, w.Code, w.Body, reasonSiteConfigRequestInvalid)
 		}
 	}
-	if fake.putSeen != nil || len(audit.events) != 0 {
-		t.Errorf("the refused body reached the store (%+v) or the audit (%d rows)", fake.putSeen, len(audit.events))
+	if rows := audit.snapshot(); fake.putSeen != nil || len(rows) != 0 {
+		t.Errorf("the refused body reached the store (%+v) or the audit (%d rows)", fake.putSeen, len(rows))
 	}
 }
 
@@ -220,7 +220,7 @@ func TestPortalActivationDelivery_SettlesOnlyWhatTheSharedTableHolds(t *testing.
 	for _, nilBack := range []bool{false, true} {
 		fake := &activationStore{}
 		h := newHarness(t)
-		clock := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+		clock := time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)
 		table := &sharedAudit{}
 		fake.stored = table.timeOf
 		newServer := func(rec audit.Recorder) *Server {
