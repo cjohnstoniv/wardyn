@@ -18,10 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -75,7 +71,7 @@ func newSvcLaunchPG(t *testing.T) *svcLaunchPG {
 	admin(http.MethodPut, "/model-providers/corp-a/service-grant/secret", putServiceGrantSecretRequest{
 		Value: svcClientSecret, TokenURL: row.OIDC.ServiceGrant.TokenURL, ClientID: row.OIDC.ServiceGrant.ClientID, BaseURL: row.BaseURL})
 	preset := client.PresetRequest{Request: client.CreateRunRequest{
-		Agent: "claude-code", Task: "run the checks", ModelProvider: "corp-a",
+		Agent: "claude-code", ModelProvider: "corp-a",
 		InlinePolicy: &types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}, MinConfinementClass: types.CC2},
 	}}
 	if w := do(t, e.h.srv, http.MethodPut, "/api/v1/presets/"+svcPresetName, adminToken, string(mustJSON(preset))); w.Code/100 != 2 {
@@ -95,11 +91,11 @@ func newSvcLaunchPG(t *testing.T) *svcLaunchPG {
 	return f
 }
 
-// launch is the service's POST /runs naming only the preset; it waits for the server's own dispatch to bring
+// launch is the service's POST /runs naming the preset and the per-launch task; it waits for the server's own dispatch to bring
 // the run to RUNNING and returns the persisted run and the sandbox spec the runner was given.
 func (f *svcLaunchPG) launch(t *testing.T) (types.AgentRun, runner.SandboxSpec) {
 	t.Helper()
-	w := f.as(t, f.token, http.MethodPost, "/api/v1/runs", `{"preset":"`+svcPresetName+`"}`)
+	w := f.as(t, f.token, http.MethodPost, "/api/v1/runs", `{"preset":"`+svcPresetName+`","task":"run the checks"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("the service's preset launch = %d %s, want 201", w.Code, w.Body.String())
 	}
@@ -131,26 +127,19 @@ func (f *svcLaunchPG) injection(t *testing.T, spec runner.SandboxSpec) runner.In
 	return runner.InjectionGrant{}
 }
 
-// resolveRaw is the proxy's resolve of inj through the sink handler, on the persisted run and the grant dispatch
-// stored. It never fails the test, so it may run off the test's goroutine; a sink that does not handle the
-// injection answers 0.
-func (f *svcLaunchPG) resolveRaw(run types.AgentRun, inj runner.InjectionGrant) *httptest.ResponseRecorder {
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/internal/injection/"+inj.GrantID.String(), nil)
-	rule := inj.Rule
-	if !f.h.srv.resolveEndpointOIDCInjection(w, r, &identity.Claims{RunID: run.ID, Sub: svcOwner, SPIFFEID: run.SPIFFEID},
-		broker.Minted{JTI: "jti-" + uuid.NewString(), Injection: &rule}, inj.GrantID, &run) {
-		w.Code = 0
-	}
-	return w
+// resolveRaw is the proxy's resolve of inj as the sidecar makes it: GET /internal/injection/{grant} on the
+// authenticated route, with the run token dispatch handed the sandbox. It needs no *testing.T of its own beyond
+// do's panic guard, so it may run off the test's goroutine.
+func (f *svcLaunchPG) resolveRaw(t *testing.T, spec runner.SandboxSpec, inj runner.InjectionGrant) *httptest.ResponseRecorder {
+	return do(t, f.h.srv, http.MethodGet, "/api/v1/internal/injection/"+inj.GrantID.String(), spec.ProxyConfig.RunToken, "")
 }
 
 func (f *svcLaunchPG) resolve(t *testing.T, run types.AgentRun, spec runner.SandboxSpec) (int, map[string]any) {
 	t.Helper()
-	w := f.resolveRaw(run, f.injection(t, spec))
-	if w.Code == 0 {
-		t.Fatal("the sink did not handle the service-grant injection")
+	if spec.ProxyConfig.RunToken == "" {
+		t.Fatalf("run %s's sandbox spec carries no run token", run.ID)
 	}
+	w := f.resolveRaw(t, spec, f.injection(t, spec))
 	return w.Code, svcBody(t, w)
 }
 
@@ -169,15 +158,12 @@ func (f *svcLaunchPG) pendingResolve(t *testing.T, run types.AgentRun, spec runn
 	f.idp.mu.Unlock()
 	before := f.idp.count()
 	out := make(chan *httptest.ResponseRecorder, 1)
-	go func() { out <- f.resolveRaw(run, inj) }()
+	go func() { out <- f.resolveRaw(t, spec, inj) }()
 	waitFor(t, "the resolve's token request", func() bool { return f.idp.count() > before })
 	edit()
 	once.Do(func() { close(release) })
 	select {
 	case w := <-out:
-		if w.Code == 0 {
-			t.Fatal("the sink did not handle the service-grant injection")
-		}
 		return w.Code, svcBody(t, w)
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for the held resolve")
