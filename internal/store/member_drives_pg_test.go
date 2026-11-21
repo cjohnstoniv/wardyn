@@ -423,3 +423,131 @@ func TestCreateQueuedRunInsertsItsKeptDrive(t *testing.T) {
 		t.Errorf("the refused run's drive: %v, want ErrNotFound", err)
 	}
 }
+
+// Every exit from the queue that ends a waiting run owes the drive it kept a reclaim in the statement that moves
+// the run, and no other write does: a promotion leaves the drive its run is about to mount, and a drive another
+// run kept is not touched. Catches an exit that ends a run without recording the debt, which a process that
+// stops after the transition then strands against the person's drive limit.
+func TestPG_QueueExitsOweTheKeptDriveItsReclaim(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	queueKeep := func(p types.RunnerPool) (types.AgentRun, types.UserDrive) {
+		t.Helper()
+		r := poolRun(p, types.RunQueued, "alice")
+		d := memberDrive("alice", "Kept "+r.ID.String()[:8])
+		d.ID, d.KeptFromRun = uuid.New(), &r.ID
+		created, err := pg.CreateQueuedRun(ctx, r, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), KeptDrive: &d, KeptDriveLimit: 10}, 0)
+		if err != nil {
+			t.Fatalf("CreateQueuedRun: %v", err)
+		}
+		return created, d
+	}
+	owed := func(d types.UserDrive) bool {
+		t.Helper()
+		return scalar[bool](t, pool, `SELECT reclaim_due_at IS NOT NULL FROM user_drives WHERE id = $1`, d.ID)
+	}
+	p := cappedPool(t, pg, 1)
+	bystander, err := pg.CreateMemberDrive(ctx, memberDrive("alice", "By hand"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r, d := queueKeep(p)
+	if owed(d) {
+		t.Fatal("a drive owes a reclaim while its run still waits")
+	}
+	if ok, err := pg.UpdateRunStateIf(ctx, r.ID, types.RunQueued, types.RunPending); err != nil || !ok {
+		t.Fatalf("a non-terminal leave of the queue = %v, %v", ok, err)
+	}
+	if owed(d) {
+		t.Error("a run that left the queue for PENDING made its drive owe a reclaim")
+	}
+
+	for name, exit := range map[string]func(types.AgentRun) (bool, error){
+		"a kill": func(r types.AgentRun) (bool, error) {
+			return pg.UpdateRunStateIf(ctx, r.ID, types.RunQueued, types.RunKilled)
+		},
+		"a leave": func(r types.AgentRun) (bool, error) { return pg.LeaveRunQueue(ctx, r.ID, types.RunFailed, nil) },
+		"an expiry": func(r types.AgentRun) (bool, error) {
+			return pg.ExitQueuedRun(ctx, r.ID, types.RunFailed, "queue: queue_timeout", "timed out")
+		},
+	} {
+		r, d := queueKeep(p)
+		if ok, err := exit(r); err != nil || !ok {
+			t.Fatalf("%s: %v, %v", name, ok, err)
+		}
+		if !owed(d) {
+			t.Errorf("%s ended the run and the drive it kept owes no reclaim", name)
+		}
+	}
+
+	gone := cappedPool(t, pg, 1)
+	r, d = queueKeep(gone)
+	if _, err := pg.DeleteRunnerPool(ctx, gone.ID); err != nil {
+		t.Fatalf("DeleteRunnerPool: %v", err)
+	}
+	if got := runState(t, pg, r.ID); got.State != types.RunKilled || !owed(d) {
+		t.Errorf("the run a pool's removal ended is %s and its drive owes %v; want KILLED and a reclaim", got.State, owed(d))
+	}
+	if owed(bystander) {
+		t.Error("a drive no run kept owes a reclaim")
+	}
+}
+
+// The reclaim a drive owes is listed once due, deferred past a failed attempt, and cleared when settled; and a
+// drive whose owner has made another run since its run ended may have been attached, so is reported so.
+func TestPG_KeptDriveReclaimLifecycle(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	p := cappedPool(t, pg, 1)
+	r := poolRun(p, types.RunQueued, "alice")
+	d := memberDrive("alice", "Kept "+r.ID.String()[:8])
+	d.ID, d.KeptFromRun = uuid.New(), &r.ID
+	if _, err := pg.CreateQueuedRun(ctx, r, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour), KeptDrive: &d, KeptDriveLimit: 10}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.ExitQueuedRun(ctx, r.ID, types.RunFailed, "queue: queue_timeout", "timed out"); err != nil || !ok {
+		t.Fatalf("exit: %v, %v", ok, err)
+	}
+	due := func() int {
+		t.Helper()
+		got, err := pg.ListDueKeptDriveReclaims(ctx, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	if due() != 0 {
+		t.Error("a reclaim is due the moment its run ends; the exit's own attempt comes first")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE user_drives SET reclaim_due_at = now() - interval '1 second' WHERE id = $1`, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if due() != 1 {
+		t.Error("a reclaim past its time is not listed")
+	}
+	if err := pg.DeferKeptDriveReclaim(ctx, d.ID, 10*time.Minute); err != nil || due() != 0 {
+		t.Errorf("a deferred reclaim is still due (err %v)", err)
+	}
+	if may, err := pg.KeptDriveMayBeAttached(ctx, d.ID); err != nil || may {
+		t.Errorf("KeptDriveMayBeAttached with no later run = %v, %v; want false", may, err)
+	}
+	later := poolRun(p, types.RunQueued, "alice")
+	later.CreatedAt = time.Now().UTC().Add(time.Second)
+	if _, err := pg.CreateQueuedRun(ctx, later, store.RunQueueEntry{QueuedAt: now, DeadlineAt: now.Add(time.Hour)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if may, err := pg.KeptDriveMayBeAttached(ctx, d.ID); err != nil || !may {
+		t.Errorf("KeptDriveMayBeAttached after the owner made another run = %v, %v; want true", may, err)
+	}
+	if err := pg.ClearKeptDriveReclaim(ctx, d.ID); err != nil {
+		t.Fatal(err)
+	}
+	if scalar[bool](t, pool, `SELECT reclaim_due_at IS NOT NULL FROM user_drives WHERE id = $1`, d.ID) {
+		t.Error("a cleared reclaim is still owed")
+	}
+}
