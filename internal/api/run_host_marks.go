@@ -4,8 +4,12 @@
 package api
 
 import (
+	"net"
+	"strconv"
+
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
@@ -51,4 +55,58 @@ func hostMarksOf(pc runner.ProxyConfig, allowed []string) *hostMarks {
 		}
 	}
 	return marks
+}
+
+// scopedHostMarks is marks as a run's view serves them. An envelope recorded before partial existed marked a
+// wildcard, or a host with no port, Inspected when the proxy opened any host or port it names. Each such
+// entry is moved to Partial with the destinations the envelope's own terminated list shows it opens: a
+// wildcard always (it names hosts the proxy never opens), a host with no port unless terminated lists the
+// host on every port. An entry the list cannot place gets an empty list: some of it is opened, which ones
+// is not known. An envelope that has partial is returned as it is.
+func scopedHostMarks(m *hostMarks) *hostMarks {
+	if m == nil || m.Partial != nil {
+		return m
+	}
+	out := *m
+	out.Inspected = []string{}
+	for _, entry := range m.Inspected {
+		exact, wild, port := domainmatch.Classify(entry)
+		if wild == "" && port != 0 {
+			out.Inspected = append(out.Inspected, entry) // a host and port named: opened whole
+			continue
+		}
+		subset, whole := []string{}, false
+		for _, t := range m.Terminated {
+			host, tport := splitTerminatedHost(t)
+			switch {
+			case wild != "":
+				if domainmatch.MatchWild(host, []string{wild}) && (port == 0 || tport == 0 || tport == port) {
+					subset = append(subset, t)
+				}
+			case host == exact && tport == 0:
+				whole = true
+			case host == exact:
+				subset = append(subset, t)
+			}
+		}
+		if whole {
+			out.Inspected = append(out.Inspected, entry)
+			continue
+		}
+		if out.Partial == nil {
+			out.Partial = map[string][]string{}
+		}
+		out.Partial[entry] = subset
+	}
+	return &out
+}
+
+// splitTerminatedHost is a terminated entry as TerminatedHosts lists it: host, host:port or [v6]:port.
+func splitTerminatedHost(t string) (string, int) {
+	if h, p, err := net.SplitHostPort(t); err == nil {
+		if n, err := strconv.Atoi(p); err == nil {
+			return h, n
+		}
+	}
+	return t, 0
 }

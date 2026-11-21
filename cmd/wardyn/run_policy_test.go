@@ -320,6 +320,20 @@ func TestRunPolicy_HostMarks(t *testing.T) {
 			t.Errorf("a wildcard opened in part was marked Inspected:\n%s", head)
 		}
 	})
+	t.Run("a wildcard in an older server's Inspected list is not claimed whole", func(t *testing.T) {
+		head, _ := run(t, func(v *sdk.RunPolicyView) {
+			v.Spec.AllowedDomains = []string{"*.corp.example", "artifacts.corp.example"}
+			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{"*.corp.example", "artifacts.corp.example"}, Terminated: []string{"artifacts.corp.example"}}
+		})
+		for _, want := range []string{"# *.corp.example: Partly inspected\n", "# artifacts.corp.example: Inspected\n", "# Partly inspected: Wardyn opens only"} {
+			if !strings.Contains(head, want) {
+				t.Errorf("missing %q in:\n%s", want, head)
+			}
+		}
+		if strings.Contains(head, "# *.corp.example: Inspected") {
+			t.Errorf("a wildcard from an older envelope was marked Inspected:\n%s", head)
+		}
+	})
 	t.Run("a host the proxy opens outside the allowlist comes after the allowlist, as Inspected", func(t *testing.T) {
 		head, _ := run(t, func(v *sdk.RunPolicyView) {
 			v.HostMarks = &sdk.RunPolicyHostMarks{Inspected: []string{}, Terminated: []string{"api.github.com"}, Outside: []string{"api.github.com"}}

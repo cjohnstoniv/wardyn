@@ -69,3 +69,38 @@ func TestHostMarksOf(t *testing.T) {
 		})
 	}
 }
+
+// TestScopedHostMarks: an envelope from before partial claimed a wildcard or a host with no port was Inspected
+// on any overlap. Read back, it names what its terminated list shows is opened, says "some, not known which"
+// where that list cannot place the entry, and leaves a host and port, or an envelope with partial, as it is.
+func TestScopedHostMarks(t *testing.T) {
+	legacy := &hostMarks{
+		Inspected:  []string{"*.corp.example", "*.corp.example:443", "git.corp.example", "artifacts.corp.example", "pkg.corp.example:8443", "unlisted.example", "*.unlisted.example"},
+		Terminated: []string{"artifacts.corp.example:8443", "git.corp.example", "pkg.corp.example:8443", "[fd00::1]:6443"},
+		Outside:    []string{},
+	}
+	got := scopedHostMarks(legacy)
+	if want := []string{"git.corp.example", "pkg.corp.example:8443"}; !slices.Equal(got.Inspected, want) {
+		t.Errorf("inspected = %v, want %v", got.Inspected, want)
+	}
+	for entry, want := range map[string][]string{
+		"*.corp.example":         {"artifacts.corp.example:8443", "git.corp.example", "pkg.corp.example:8443"},
+		"*.corp.example:443":     {"git.corp.example"},
+		"artifacts.corp.example": {"artifacts.corp.example:8443"},
+		"unlisted.example":       {},
+		"*.unlisted.example":     {},
+	} {
+		if sub, ok := got.Partial[entry]; !ok || sub == nil || !slices.Equal(sub, want) {
+			t.Errorf("partial[%q] = %#v (present %v), want %v", entry, sub, ok, want)
+		}
+	}
+	if len(legacy.Inspected) != 7 || legacy.Partial != nil {
+		t.Error("the stored envelope was changed")
+	}
+	if again := scopedHostMarks(got); again != got {
+		t.Error("an envelope that has partial was changed")
+	}
+	if scopedHostMarks(nil) != nil {
+		t.Error("nil marks became something")
+	}
+}

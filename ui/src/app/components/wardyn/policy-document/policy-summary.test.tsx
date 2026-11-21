@@ -393,6 +393,20 @@ describe("PolicySummary host marks", () => {
     for (const s of [PARTLY_MEANING, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.getByText(s)).toBeInTheDocument();
   });
 
+  it("a wildcard in an older server's inspected list is not claimed whole, and a host with a list of none is partial", () => {
+    const old = { allowed_domains: ["*.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    const { unmount } = render(
+      <PolicySummary spec={old} hostMarks={{ inspected: ["*.corp.example", "artifacts.corp.example"], terminated: ["artifacts.corp.example"], outside: [] }} />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.queryByText(/^Opens /)).toBeNull(); // which destinations is not known
+    unmount();
+    render(<PolicySummary spec={old} hostMarks={{ inspected: [], partial: { "*.corp.example": [] }, terminated: [], outside: [] }} />);
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+  });
+
   it("a host named like an inherited object key is not read as partial", () => {
     const keys = { allowed_domains: ["constructor", "toString", "pypi.org"] } as RunPolicySpec;
     render(<PolicySummary spec={keys} hostMarks={{ inspected: [], partial: { "pypi.org": ["pypi.org:8443"] }, terminated: [], outside: [] }} />);

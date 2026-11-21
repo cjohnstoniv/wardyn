@@ -219,7 +219,13 @@ function summarize(
     const hosts = entries(allowed ?? [], "allowed_domains").flatMap((v): Value[] => {
       if (!hostMarks || !v.text || v.mark === "removed") return [v];
       const subset = Object.prototype.hasOwnProperty.call(partial, v.text) ? partial[v.text] : undefined;
-      if (subset && subset.length > 0) return [{ ...v, end: partlyChip }, text(SUMMARY.opens(subset.join(", ")), { note: true })];
+      // A wildcard in an older server's inspected list (it recorded no partial) names hosts the proxy may not
+      // open, so it reads as opened in part, which destinations unknown.
+      const legacyWildcard = hostMarks.partial === undefined && inspected.has(v.text) && v.text.startsWith("*");
+      if (subset || legacyWildcard) {
+        const opened = subset?.length ? [text(SUMMARY.opens(subset.join(", ")), { note: true })] : [];
+        return [{ ...v, end: partlyChip }, ...opened];
+      }
       return [{ ...v, end: hostChip(inspected.has(v.text)) }];
     });
     network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)], "allow_all_egress", "allowed_domains"));

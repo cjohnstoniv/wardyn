@@ -172,11 +172,22 @@ func runPolicyHostLines(v sdk.RunPolicyView) []string {
 	var inspected, partly, tunnel bool
 	for _, host := range v.Spec.AllowedDomains {
 		mark := runPolicyTunnelOnly
-		if subset, ok := v.HostMarks.Partial[host]; ok && len(subset) > 0 {
-			mark, partly = runPolicyPartlyInspected+" (opens "+strings.Join(subset, ", ")+")", true
-		} else if slices.Contains(v.HostMarks.Inspected, host) {
+		subset, partial := v.HostMarks.Partial[host]
+		isInspected := slices.Contains(v.HostMarks.Inspected, host)
+		// A wildcard in an older server's Inspected list (it recorded no partial) names hosts the proxy may
+		// not open, so it is read as opened in part, which destinations unknown.
+		if isInspected && v.HostMarks.Partial == nil && strings.HasPrefix(host, "*") {
+			partial = true
+		}
+		switch {
+		case partial:
+			mark, partly = runPolicyPartlyInspected, true
+			if len(subset) > 0 {
+				mark += " (opens " + strings.Join(subset, ", ") + ")"
+			}
+		case isInspected:
 			mark, inspected = runPolicyInspected, true
-		} else {
+		default:
 			tunnel = true
 		}
 		lines = append(lines, host+": "+mark)
