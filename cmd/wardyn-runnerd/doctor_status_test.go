@@ -207,3 +207,65 @@ func TestServiceStage(t *testing.T) {
 		}
 	})
 }
+
+// A start refused with no stage (an invalid --local-attach value) is a failure at rest, not a clean stop
+// after an old connection error: doctor fails it in text and JSON, finishDoctor returns the error that makes
+// the command exit non-zero, and it stays failed until a start connects.
+func TestStatusStageStartRefusedWithoutAStageFailsUntilAStartSucceeds(t *testing.T) {
+	r := newRig(t)
+	state := filepath.Join(r.home, ".config", "wardyn", "runner")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, refusal := (serveOptions{localAttach: "maybe"}).localAttachEnabled()
+	if refusal == nil {
+		t.Fatal("--local-attach=maybe was accepted")
+	}
+	refuse := func() {
+		w := newStatusWriter(state)
+		l := newOfflineLog(state, nil)
+		l.reportTo(w)
+		l.startFailed(refusal)
+		w.stopped()
+	}
+	refuse()
+	if st, err := loadStatus(statusPath(state)); err != nil || st.State != "stopped" || !st.StartRefused || st.Stage != "" {
+		t.Fatalf("status at rest = %+v, %v, want stopped with start_refused and no stage", st, err)
+	}
+
+	rep := r.run(doctorOptions{})
+	s := stage(t, rep, "status")
+	if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, "start refused") || !strings.Contains(s.Detail, "local attach must be on or off") {
+		t.Fatalf("status = %s %q, want FAIL naming the refusal", s.Status, s.Detail)
+	}
+	for _, asJSON := range []bool{false, true} {
+		var out strings.Builder
+		err := finishDoctor(&out, rep, asJSON)
+		if err == nil {
+			t.Errorf("json=%v: finishDoctor returned nil, want the error that exits non-zero", asJSON)
+		}
+		want := "FAIL  status"
+		if asJSON {
+			want = `"status": "FAIL"`
+		}
+		if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "local attach must be on or off") {
+			t.Errorf("json=%v: output lacks the failed status stage (%q):\n%s", asJSON, want, out.String())
+		}
+	}
+
+	// An old drop followed by a clean stop is still no failure: only the refusal flag makes one.
+	hist := runnerStatus{State: "stopped", Since: statusAt, LastError: "link down", LastErrorAt: &statusAt}
+	r.writeStatus(t, "", hist)
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a clean stop after an old error failed: %q", s.Detail)
+	}
+
+	// A start that connects clears it, and the stop after it stays clean.
+	refuse()
+	w := newStatusWriter(state)
+	w.linkChanged(true, "")
+	w.stopped()
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a refusal outlived a successful start: %q", s.Detail)
+	}
+}

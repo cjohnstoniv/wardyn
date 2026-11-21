@@ -36,6 +36,10 @@ type runnerStatus struct {
 	// when. Both are empty once connected, and after a clean shutdown unless a refusal at start set them.
 	Stage   string     `json:"stage,omitempty"`
 	StageAt *time.Time `json:"stage_at,omitempty"`
+	// StartRefused is set when the last start was refused with no stage to name (a bad flag), so a clean
+	// stop after a refusal reads differently from one after an old connection error. It is cleared once a
+	// connection is made, or a refusal at a stage replaces it.
+	StartRefused bool `json:"start_refused,omitempty"`
 	// Relay is types.RelayReachable or types.RelayUnreachable; empty when no relay is probed.
 	Relay     string    `json:"relay,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -113,7 +117,7 @@ func (w *statusWriter) linkChanged(up bool, reason string) {
 		w.cur.LastError, w.cur.LastErrorAt = cleanStatusError(reason), &at
 	}
 	if up {
-		w.cur.Stage, w.cur.StageAt, w.refused = "", nil, nil
+		w.cur.Stage, w.cur.StageAt, w.cur.StartRefused, w.refused = "", nil, false, nil
 		w.set("connected")
 	} else {
 		w.set("offline")
@@ -131,7 +135,7 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 	defer w.mu.Unlock()
 	at = at.UTC()
 	w.cur.LastError, w.cur.LastErrorAt = reason, &at
-	w.cur.Stage, w.cur.StageAt = stage, &at
+	w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = stage, &at, false
 	if refusal {
 		w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at, Stage: stage, StageAt: &at}
 	}
@@ -149,8 +153,8 @@ func (w *statusWriter) startError(reason string, at time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	at = at.UTC()
-	w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = reason, &at, "", nil
-	w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at}
+	w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = reason, &at, "", nil, true
+	w.refused = &runnerStatus{LastError: reason, LastErrorAt: &at, StartRefused: true}
 	w.cur.UpdatedAt = w.now()
 	w.write()
 }
@@ -200,9 +204,9 @@ func (w *statusWriter) retryAt(next *time.Time) {
 func (w *statusWriter) stopped() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.cur.Stage, w.cur.StageAt, w.cur.NextRetryAt = "", nil, nil
+	w.cur.Stage, w.cur.StageAt, w.cur.NextRetryAt, w.cur.StartRefused = "", nil, nil, false
 	if r := w.refused; r != nil {
-		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt = r.LastError, r.LastErrorAt, r.Stage, r.StageAt
+		w.cur.LastError, w.cur.LastErrorAt, w.cur.Stage, w.cur.StageAt, w.cur.StartRefused = r.LastError, r.LastErrorAt, r.Stage, r.StageAt, r.StartRefused
 	}
 	w.set("stopped")
 }
