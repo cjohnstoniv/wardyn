@@ -228,3 +228,15 @@ func lifeEventually(t *testing.T, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// freshBearer is the bearer of an exchange whose subject token was issued after everything the test did so far
+// (after any cutoff it wrote), as a person who signs in at the provider again would hold. It fails the test unless
+// the exchange answers 200.
+func (l *portalLife) freshBearer(t *testing.T, uid string) string {
+	t.Helper()
+	time.Sleep(50 * time.Millisecond)
+	l.ver.subj = l.person(uid, "")
+	l.ver.subj.IssuedAt = time.Now()
+	tok, _ := portalToken(t, l.exchange(t, l.d.ID, l.cred, "subject-token"))
+	return tok
+}

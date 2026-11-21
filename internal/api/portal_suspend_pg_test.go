@@ -139,23 +139,28 @@ func TestPortalSuspend_BetweenIdentityAndGrantCommits_PG(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the paused exchange did not finish after the hold was released")
 	}
-	var stale string
-	if ex.Code == http.StatusOK {
-		stale, _ = portalToken(t, ex)
-		if got := l.meCode(t, stale); got != http.StatusUnauthorized {
-			t.Errorf("the bearer the exchange made after the suspension answers %d while the person is suspended, want 401", got)
-		}
+	// The resumed exchange committed its grant: the pinned store checks only a permanent purge before the insert,
+	// so the order under test is a grant that exists for a suspended person.
+	if ex.Code != http.StatusOK {
+		t.Fatalf("the resumed exchange = %d %s, want 200 (its grant commits)", ex.Code, ex.Body.String())
+	}
+	stale, _ := portalToken(t, ex)
+	if n := l.count(t, `SELECT count(*) FROM portal_grants WHERE principal = $1`, principal); n != 1 {
+		t.Errorf("portal_grants rows after the resumed exchange = %d, want 1", n)
+	}
+	if got := l.meCode(t, stale); got != http.StatusUnauthorized {
+		t.Errorf("the committed grant answers %d while the person is suspended, want 401", got)
 	}
 	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
 		t.Fatalf("reactivate = %d %s, want 200", w.Code, w.Body.String())
 	}
-	if stale != "" {
-		if got := l.meCode(t, stale); got != http.StatusUnauthorized {
-			t.Errorf("the stale bearer answers %d after the reactivation, want 401", got)
-		}
+	if got := l.meCode(t, stale); got != http.StatusUnauthorized {
+		t.Errorf("the grant that committed during the suspension answers %d after the reactivation, want 401", got)
 	}
-	l.ver.subj = l.person("u-race", "")
-	fresh := l.token(t, l.d, l.cred)
+	fresh := l.freshBearer(t, "u-race")
+	if fresh == stale {
+		t.Fatal("control: the fresh exchange returned the stale bearer")
+	}
 	if got := l.meCode(t, fresh); got != http.StatusOK {
 		t.Errorf("a fresh exchange's bearer after the reactivation answers %d, want 200", got)
 	}
@@ -214,7 +219,7 @@ func TestPortalSuspend_TailWritesNoCutAndFreshGrantSurvives_PG(t *testing.T) {
 			if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
 				t.Errorf("reactivate inside the tail = %d %s", w.Code, w.Body.String())
 			}
-			fresh = l.token(t, l.d, l.cred)
+			fresh = l.freshBearer(t, "u1")
 		})
 	}}
 	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK && w.Code != http.StatusServiceUnavailable {
