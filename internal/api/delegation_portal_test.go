@@ -117,6 +117,8 @@ type portalStore struct {
 	stamped   int
 	swept     int
 	mintErr   error
+	// audit is the recorder whose rows stand for the shared audit table.
+	audit *recRecorder
 }
 
 var (
@@ -131,6 +133,27 @@ func (p *portalStore) GetUserType(_ context.Context, id string) (types.UserType,
 		return types.UserType{ID: id, Name: id}, nil
 	}
 	return types.UserType{}, store.ErrNotFound
+}
+
+// AuditEventsStored answers from the recorder's rows, as the shared audit table, by normalised (time, id).
+func (p *portalStore) AuditEventsStored(_ context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error) {
+	norm := func(id uuid.UUID, at time.Time) store.AuditEventKey {
+		return store.AuditEventKey{ID: id, At: at.UTC().Truncate(time.Microsecond)}
+	}
+	asked := map[store.AuditEventKey]bool{}
+	for _, k := range want {
+		asked[norm(k.ID, k.At)] = true
+	}
+	out := map[store.AuditEventKey]bool{}
+	if p.audit == nil {
+		return out, nil
+	}
+	for _, ev := range p.audit.snapshot() {
+		if k := norm(ev.ID, ev.Time); asked[k] {
+			out[k] = true
+		}
+	}
+	return out, nil
 }
 
 func (p *portalStore) GetIssuerDelegateByRaw(_ context.Context, raw string) (types.Delegate, error) {
@@ -349,6 +372,7 @@ func newExchHarness(t *testing.T, shape ...func(*Config)) *exchHarness {
 	}
 	srv, _, _, _ := newAuthzMatrixServer(t, append([]func(*Config){wire}, shape...)...)
 	h := &exchHarness{srv: srv, ps: ps, ver: ver, rec: srv.cfg.Audit.(*recRecorder)}
+	ps.audit = h.rec
 	h.ver.subj = h.subject(portalTestUID)
 	return h
 }

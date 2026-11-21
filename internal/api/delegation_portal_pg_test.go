@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -28,10 +31,25 @@ type exchPG struct {
 	ver *fakePortalVerifier
 }
 
+// storedRecorder writes each event to the shared audit table, as the production chain does, so an owed
+// introduction can settle, and keeps a copy in mem for the assertions.
+type storedRecorder struct {
+	pool *pgxpool.Pool
+	mem  *recRecorder
+}
+
+func (s storedRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := store.InsertAuditEvent(ctx, s.pool, &ev); err != nil {
+		return err
+	}
+	return s.mem.Record(ctx, ev)
+}
+
 func newExchPG(t *testing.T) *exchPG {
 	t.Helper()
 	e := &exchPG{delegationPG: newDelegationPG(t), ver: &fakePortalVerifier{enforceAge: true}}
 	e.h.srv.cfg.PortalIssuers = e.ver
+	e.h.srv.cfg.Audit = storedRecorder{pool: e.pool, mem: e.h.audit}
 	e.ver.subj = e.person("u1", "")
 	return e
 }
@@ -223,16 +241,17 @@ func TestPortalExchange_IntroductionCrashBetweenCommitAndAudit_PG(t *testing.T) 
 	}
 }
 
-// introChainOn makes the first audit write of failOnce fail on srv, for the tests that run on a store.
+// introChainOn makes the first audit write of failOnce fail on srv, for the tests that run on a store; the
+// others go through the server's recorder, which records into rec.
 func introChainOn(t *testing.T, rec *recRecorder, srv *Server, failOnce string) (*failOnceRecorder, *Server, error) {
 	t.Helper()
-	f := &failOnceRecorder{inner: rec, action: failOnce}
+	f := &failOnceRecorder{inner: srv.cfg.Audit, action: failOnce}
 	srv.cfg.Audit = f
 	return f, srv, nil
 }
 
 type failOnceRecorder struct {
-	inner  *recRecorder
+	inner  audit.Recorder
 	action string
 	failed bool
 }

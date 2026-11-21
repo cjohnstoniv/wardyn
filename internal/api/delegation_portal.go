@@ -48,6 +48,14 @@ type portalIntroductionFinder interface {
 	PendingPortalIntroductionFor(ctx context.Context, identity uuid.UUID) (store.PortalIntroduction, bool, error)
 }
 
+// auditPresence is the read of the shared audit table that settles an owed event: which (time, id) pairs the
+// table holds. store.PG has it; a store without it never settles an introduction, which stays owed.
+type auditPresence interface {
+	AuditEventsStored(ctx context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error)
+}
+
+var _ auditPresence = store.PG{}
+
 // portalIntroductionBatch bounds how many owed introduction events one exchange looks through for the
 // identity it just touched. The portal leaver sweep delivers the rest.
 const portalIntroductionBatch = 100
@@ -332,15 +340,32 @@ func (s *Server) deliverPortalIntroductions(ctx context.Context, ps store.Portal
 	}
 }
 
-// deliverPortalIntroduction appends one owed introduction as person.create and marks it delivered. The data
-// is read from the identity row alone, never recomputed, and carries no email in any form. A row that could
-// not be durably accepted is left owed for the next delivery.
+// deliverPortalIntroduction appends one owed introduction as person.create and marks it delivered once the
+// shared audit table holds it. The data is read from the identity row alone, never recomputed, and carries no
+// email in any form. A recorder's acceptance is not enough: an event that only reached this replica's local
+// spool is lost with the replica, so the mark waits until a read of the shared table finds the event's id with
+// its recorded time. Until then it stays owed, and every later delivery replays it; the replay is keyed by
+// that id and time, so the table keeps one row.
 func (s *Server) deliverPortalIntroduction(ctx context.Context, ps store.PortalIdentityStore, p store.PortalIntroduction) {
 	ev := s.auditEvent(nil, types.ActorSystem, delegateActor(p.PortalID), "person.create", p.Principal, "success", mustJSON(map[string]any{
 		"source": "portal", "portal": p.PortalID, "issuer": p.Issuer, "k": p.IssuerKey, "identity": p.IdentityID,
 	}))
 	ev.ID, ev.Time = p.EventID, p.EventAt
 	if !s.recordAuditDurably(store.WithAuditReplay(ctx), ev) {
+		return
+	}
+	ap, ok := ps.(auditPresence)
+	if !ok {
+		return
+	}
+	key := store.AuditEventKey{ID: p.EventID, At: p.EventAt.UTC().Truncate(time.Microsecond)}
+	stored, err := ap.AuditEventsStored(ctx, []store.AuditEventKey{key})
+	if err != nil {
+		slog.WarnContext(ctx, "api: read whether a portal introduction is stored failed; it stays owed", "error", err)
+		return
+	}
+	if !stored[key] {
+		slog.WarnContext(ctx, "api: a portal introduction is not in the shared audit table yet; it stays owed", "identity", p.IdentityID)
 		return
 	}
 	if _, err := ps.MarkPortalIntroductionAudited(ctx, p.IdentityID); err != nil {

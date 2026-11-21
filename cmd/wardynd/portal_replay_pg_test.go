@@ -34,6 +34,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -379,5 +380,67 @@ func TestPortalIntroduction_StopAfterAppendReplaysSameIDToEverySink_PG(t *testin
 	}
 	if bytes.Contains(otlp[0], []byte(rowID.String())) {
 		t.Errorf("otlp record %s carries the row id", otlp[0])
+	}
+}
+
+// TestPortalIntroduction_SpooledReceiptSettlesOnAnotherReplica_PG: one replica's audit chain cannot reach the
+// database, so its recorder spools the introduction locally and answers with the production spool result.
+// The introduction stays owed and no shared row exists. A later exchange on another replica, whose chain
+// reaches the database, appends the one row with the identity's stored id and time, and settles it. The
+// first replica's spool is never drained, as when its pod is replaced.
+func TestPortalIntroduction_SpooledReceiptSettlesOnAnotherReplica_PG(t *testing.T) {
+	pool := portalBootPool(t, "spool")
+	ctx := context.Background()
+	dead, err := db.Connect(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.Close()
+	spoolPath := t.TempDir() + "/audit-spool.jsonl"
+	recA, _, spoolA, _, err := buildAuditChain(t.Context(), "", spoolPath, "", dead, secretmask.NewRegistry(), newAuditSealSource(audit.SealOff))
+	if err != nil || spoolA == nil {
+		t.Fatalf("the first replica's chain: spool %v, %v", spoolA, err)
+	}
+	recB, _, _, _, err := buildAuditChain(t.Context(), "", "", "", pool, secretmask.NewRegistry(), newAuditSealSource(audit.SealOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const issuer = "https://idp.spool.example/oauth2/default"
+	p, cred := registerIssuerPortal(t, pool, bindIssuerAs(t, pool, issuer), "spool-portal")
+	principal := oidc.PortalPrincipal(issuer, "u1")
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(pool), recA, pool, "u1"), p, cred); w.Code != http.StatusOK {
+		t.Fatalf("exchange on the replica that cannot reach the audit table = %d %s", w.Code, w.Body)
+	}
+	var eventID uuid.UUID
+	var eventAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT introduction_event_id, introduction_event_at FROM principal_identities WHERE principal = $1 AND introduction_audited_at IS NULL`, principal).Scan(&eventID, &eventAt); err != nil {
+		t.Fatalf("after a spooled receipt the introduction is not owed: %v", err)
+	}
+	if n := count(`SELECT count(*) FROM audit_events WHERE action = 'person.create' AND target = $1`, principal); n != 0 {
+		t.Fatalf("person.create rows after a spooled receipt = %d, want 0", n)
+	}
+	spooled, err := os.ReadFile(spoolPath)
+	if err != nil || !strings.Contains(string(spooled), eventID.String()) {
+		t.Fatalf("the first replica's spool does not hold the introduction (%v)", err)
+	}
+	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(pool), recB, pool, "u1"), p, cred); w.Code != http.StatusOK {
+		t.Fatalf("exchange on the other replica = %d %s", w.Code, w.Body)
+	}
+	if n := count(`SELECT count(*) FROM audit_events WHERE action = 'person.create' AND target = $1`, principal); n != 1 {
+		t.Fatalf("person.create rows after the retry = %d, want 1", n)
+	}
+	if n := count(`SELECT count(*) FROM audit_events WHERE id = $1 AND time = $2 AND action = 'person.create'`, eventID, eventAt); n != 1 {
+		t.Fatalf("rows with the identity's introduction id and time = %d, want 1", n)
+	}
+	if n := count(`SELECT count(*) FROM principal_identities WHERE principal = $1 AND introduction_audited_at IS NOT NULL`, principal); n != 1 {
+		t.Fatal("the introduction was not settled once the shared row existed")
 	}
 }
