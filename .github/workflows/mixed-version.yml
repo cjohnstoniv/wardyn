@@ -1,7 +1,7 @@
 name: Mixed version (0.10.1 replica beside this tree)
 
-# Case 2 of PLAN-0102 "Three different old-binary cases": an old replica that is still running when the first
-# new replica migrates, isolated in CI. The published v0.10.1 wardynd boots over the schema this tree migrated
+# The case of an old replica that is still running when the first new replica migrates, isolated in CI. The
+# published v0.10.1 wardynd boots over the schema this tree migrated
 # (WARDYN_ALLOW_UNKNOWN_MIGRATIONS=true is the break-glass for exactly that) as a WARDYN_HA replica beside this
 # tree's own, in one kind cluster. The job proves what the activation barrier promises:
 #   1. the operator's activation is vetoed (409 portal_issuers_old_server_suspected) once the new replica's
@@ -58,7 +58,7 @@ jobs:
       - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
-          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|postgres:16)@'
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5
         with:
           version: latest
@@ -115,12 +115,15 @@ jobs:
       - name: Postgres, one age key and one admin token for both replicas
         run: |
           set -euo pipefail
+          kind load docker-image postgres:16 --name wardyn-mixed
           kubectl create namespace "$NS"
           age_key=$(docker run --rm wardyn/wardynd:kind-test -gen-age-key)
           kubectl -n "$NS" create secret generic wardyn-postgres-dsn \
             --from-literal=dsn="postgres://wardyn:wardyn@postgres:5432/wardyn?sslmode=disable" \
             --from-literal=age-key="$age_key"
-          echo "ADMIN_TOKEN=$(openssl rand -hex 20)" >> "$GITHUB_ENV"
+          t=$(openssl rand -hex 20)
+          echo "::add-mask::$t"
+          echo "ADMIN_TOKEN=$t" >> "$GITHUB_ENV"
           kubectl -n "$NS" create deployment postgres --image=postgres:16
           kubectl -n "$NS" set env deployment/postgres POSTGRES_USER=wardyn POSTGRES_PASSWORD=wardyn POSTGRES_DB=wardyn
           kubectl -n "$NS" expose deployment postgres --port=5432

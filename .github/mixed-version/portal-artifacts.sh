@@ -53,7 +53,7 @@ diag() {
 
 cleanup() {
 	local rc=$?
-	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null
+	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null || :
 	[ "$rc" -eq 0 ] || diag
 	exit "$rc"
 }
@@ -243,7 +243,7 @@ launch() {
 old_worker() {
 	load
 	pf new-wardyn 18080
-	local pool prev rrev filler portal_run legacy_run g n code state
+	local pool prev rrev filler portal_run legacy_run g n code state new_pods sandbox_ref legacy_hint
 	# The organization pool and the server's own Kubernetes runner, both made at first boot. Their limits go in
 	# through the admin API: the runner's (a runner with none never fits a run), and the pool's, whose cap makes
 	# every launch queue. One slot holder (a row that names no runner and no sandbox) fills that cap.
@@ -290,7 +290,8 @@ SQL
 	kubectl -n "$NS" scale deployment/new-wardyn --replicas=0
 	local gone=0
 	for _ in $(seq 1 60); do
-		if [ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)" ] && [ "$(no_other_sessions)" = 0 ]; then gone=1; break; fi
+		new_pods=$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)
+		if [ -z "$new_pods" ] && [ "$(no_other_sessions)" = 0 ]; then gone=1; break; fi
 		sleep 2
 	done
 	[ "$gone" = 1 ] || fail "the new replica's pods or database sessions did not go within 120 s"
@@ -317,7 +318,8 @@ SQL
 	done
 	[ "$state" = FAILED ] || fail "run $portal_run is $state after 300 s, want FAILED"
 	[ "$(no_other_sessions)" = 0 ] || fail "a session other than the old replica's joined the database during the wait"
-	[ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)" ] || fail "a new-replica pod came back"
+	new_pods=$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)
+	[ -z "$new_pods" ] || fail "a new-replica pod came back"
 	# 0.10.1 writes the terminal state before the hint, and the refusal's audit row after both, so each is
 	# waited for on its own.
 	local hint=""
@@ -329,7 +331,8 @@ SQL
 	[ "$hint" = "$START_FAILED_HINT" ] || fail "run $portal_run failure_hint is '$hint' after 60 s, want '$START_FAILED_HINT'"
 	echo "ok: run $portal_run is FAILED with the start-failed hint"
 	[ "$(psqlc "SELECT count(*) FROM run_queue WHERE run_id = '$portal_run'")" = 0 ] || fail "run $portal_run still has a queue row"
-	[ "$(psqlc "SELECT sandbox_ref FROM agent_runs WHERE id = '$portal_run'")" = "" ] || fail "run $portal_run has a sandbox_ref"
+	sandbox_ref=$(psqlc "SELECT sandbox_ref FROM agent_runs WHERE id = '$portal_run'")
+	[ "$sandbox_ref" = "" ] || fail "run $portal_run has a sandbox_ref"
 	# Nothing was dispatched for it: no pod, job or other workload anywhere names the run.
 	n=$(kubectl get pods,jobs,deployments,statefulsets,replicasets -A -o json | jq --arg r "$portal_run" '[.items[] | select(tostring | contains($r))] | length')
 	[ "$n" = 0 ] || fail "$n cluster object(s) name run $portal_run"
@@ -362,7 +365,8 @@ SQL
 		 and ([.[] | select(.outcome == "failure")] | length == 0)'
 	state=$(psqlc "SELECT state FROM agent_runs WHERE id = '$legacy_run'")
 	[ "$state" != QUEUED ] || fail "run $legacy_run is still QUEUED after its start"
-	[ "$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$legacy_run'")" != "$START_FAILED_HINT" ] || fail "run $legacy_run ended with the start-failed hint"
+	legacy_hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$legacy_run'")
+	[ "$legacy_hint" != "$START_FAILED_HINT" ] || fail "run $legacy_run ended with the start-failed hint"
 	echo "ok: run $legacy_run left the queue as $state"
 }
 
