@@ -469,7 +469,7 @@ func TestPortalKeySet_StaleURLFetchCannotRepopulate(t *testing.T) {
 		ks := newPortalKeySet(clk.Now, 5*time.Second, g.fetch)
 		var failed []string
 		var fm sync.Mutex
-		ks.onFail = func(source string, err error) { fm.Lock(); failed = append(failed, source); fm.Unlock() }
+		ks.onFail = func(source string, err error, _ portalKeyAt) { fm.Lock(); failed = append(failed, source); fm.Unlock() }
 		return ks, g, clk, &failed
 	}
 	t.Run("the old fetch finishes after the address changed", func(t *testing.T) {

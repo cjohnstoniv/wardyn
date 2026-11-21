@@ -91,14 +91,20 @@ type portalKeyFetch struct {
 	stale  bool // the address changed while it ran: its answer was discarded
 }
 
+// portalKeyAt names a state of the key set: the keys address generation and the key map generation.
+type portalKeyAt struct{ urlGen, gen uint64 }
+
 // portalKeySet is Wardyn's own key set for one verifier. It fetches only on an unknown kid it has not seen
 // removed, at most once per cooldown however many requests ask, and a successful fetch replaces the set.
 type portalKeySet struct {
 	clock   func() time.Time
 	timeout time.Duration // the bound of one key fetch
 	fetch   func(ctx context.Context, keysURL string) ([]jose.JSONWebKey, error)
-	// onFail is told of every failed fetch, with where it came from ("scheduled" or "unknown_kid").
-	onFail func(source string, err error)
+	// onFail is told of every failed fetch of the current address, with where it came from ("scheduled" or
+	// "unknown_kid") and the state the failure was recorded against, for dropAt.
+	onFail func(source string, err error, at portalKeyAt)
+	// onOK is told of every successful fetch of the current address, whichever path made it.
+	onOK func()
 	// afterSelect is a test hook, called once a key is selected and before the signature is checked.
 	afterSelect func()
 
@@ -143,8 +149,10 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 		return
 	}
 	ks.seq++
+	var at portalKeyAt
 	if err != nil {
 		ks.lastErr, ks.failed = err, true
+		at = portalKeyAt{urlGen: ks.urlGen, gen: ks.gen}
 	} else {
 		next := make(map[string]jose.JSONWebKey, len(keys))
 		for _, k := range keys {
@@ -164,8 +172,11 @@ func (ks *portalKeySet) run(f *portalKeyFetch, source string) {
 	}
 	ks.mu.Unlock()
 	f.err = err
-	if err != nil && ks.onFail != nil {
-		ks.onFail(source, err)
+	switch {
+	case err != nil && ks.onFail != nil:
+		ks.onFail(source, err, at)
+	case err == nil && ks.onOK != nil:
+		ks.onOK()
 	}
 	close(f.done)
 }
@@ -234,6 +245,20 @@ func (ks *portalKeySet) drop() {
 	defer ks.mu.Unlock()
 	ks.url = ""
 	ks.dropLocked()
+}
+
+// dropAt is drop for a failure recorded at at: it forgets the keys only if neither the keys address nor the key
+// map has changed since, so an old failure never drops a newer address or newer keys. The check and the drop are
+// one critical section. It reports whether it dropped.
+func (ks *portalKeySet) dropAt(at portalKeyAt) bool {
+	ks.mu.Lock()
+	defer ks.mu.Unlock()
+	if ks.urlGen != at.urlGen || ks.gen != at.gen {
+		return false
+	}
+	ks.url = ""
+	ks.dropLocked()
+	return true
 }
 
 func (ks *portalKeySet) dropLocked() {
