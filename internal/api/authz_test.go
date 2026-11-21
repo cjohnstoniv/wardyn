@@ -3246,7 +3246,6 @@ func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, t
 func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
 	return nil, nil
 }
-func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
 
 // authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
 // discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key
