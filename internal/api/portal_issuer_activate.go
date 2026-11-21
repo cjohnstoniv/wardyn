@@ -25,12 +25,15 @@ import (
 const (
 	portalSampleEvery  = 10 * time.Second
 	portalSampleWindow = 2 * time.Minute
+	// portalSampleMaxGap is the longest silence between two successful samples that still counts as one
+	// continuous window. A longer one (reads failing, a stalled replica) restarts the window.
+	portalSampleMaxGap = 3 * portalSampleEvery
 	portalAlarmEvery   = time.Hour
 )
 
 const (
 	portalActivateStatementMsg  = "State that every pre-0.10.2 wardynd is stopped (old_servers_stopped: true) to switch issuer portals on."
-	portalSampleWarmingMsg      = "This replica started less than two minutes ago and has not seen enough database sessions to check for older servers. Try again shortly."
+	portalSampleWarmingMsg      = "This replica has not watched the database's sessions for a full two minutes (it just started, or its checks failed lately), so it cannot check for older servers yet. Try again shortly."
 	portalOldServerSuspectedMsg = "Another client of this database does not carry a wardynd label of 0.10.2 or later. Stop it, or check each listed session and confirm with confirm_listed_sessions."
 )
 
@@ -46,11 +49,13 @@ type portalAlarmKey struct {
 }
 
 // portalActivationMonitor is one replica's rolling sample and its alarm's memory. The zero value is ready to
-// use. started is the time of its first sample, which a replica that never samples never sets, so such a
-// replica answers the activation as still warming.
+// use. started is when the current continuous run of successful samples began and last is its newest sample;
+// a replica that never samples has neither, and one whose samples stopped (reads failing) has a stale last,
+// so both answer the activation as still warming. A window that is expired or has a gap is never clean.
 type portalActivationMonitor struct {
 	mu      sync.Mutex
 	started time.Time
+	last    time.Time
 	samples []portalSample
 	seen    map[portalAlarmKey]bool
 }
@@ -59,19 +64,24 @@ type portalActivationMonitor struct {
 func (m *portalActivationMonitor) record(now time.Time, sessions []types.ClientSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.started.IsZero() {
+	if m.started.IsZero() || now.Sub(m.last) > portalSampleMaxGap {
+		// The first sample, or the first one after a gap: what was seen before the gap no longer counts and
+		// the window starts over.
 		m.started = now
+		m.samples = nil
 	}
+	m.last = now
 	m.samples = append(m.samples, portalSample{at: now, sessions: sessions})
 	m.samples = slices.DeleteFunc(m.samples, func(p portalSample) bool { return now.Sub(p.at) > portalSampleWindow })
 }
 
 // suspects is the distinct sessions of the samples in the window ending at now, and how long the replica
-// still has to wait before the window is full (zero when it is).
+// still has to wait before the window is full (zero when it is). A window whose newest sample is older than
+// portalSampleMaxGap is not full: the replica has not observed the database lately, so it waits a whole window.
 func (m *portalActivationMonitor) suspects(now time.Time) ([]types.ClientSession, time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.started.IsZero() {
+	if m.started.IsZero() || now.Sub(m.last) > portalSampleMaxGap {
 		return nil, portalSampleWindow
 	}
 	if wait := portalSampleWindow - now.Sub(m.started); wait > 0 {
@@ -215,7 +225,7 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	suspects, wait := s.portalActivation.suspects(s.cfg.Now().UTC())
-	if wait > 0 {
+	if wait > 0 { // warming, or the sample has gone stale: either way retryable, never clean
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeErrorReason(w, http.StatusConflict, reasonPortalIssuersSampleWarming, portalSampleWarmingMsg)
 		return
@@ -227,8 +237,14 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	actorType, actor := actorFromRequest(r)
-	if err := ps.ActivatePortalIssuers(r.Context(), actor, names); err != nil {
+	won, err := ps.ActivatePortalIssuers(r.Context(), actor, names)
+	if err != nil {
 		writeServerError(w, r, "switch issuer portals on", err)
+		return
+	}
+	if !won {
+		// Another call set the mark between the read above and this write: it is the one the audit names.
+		writeJSON(w, http.StatusOK, map[string]any{"activated": true, "already_activated": true})
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "portal_issuers.activate", "portal_issuers", "success",

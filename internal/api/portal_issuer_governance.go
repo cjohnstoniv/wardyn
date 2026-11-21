@@ -53,11 +53,35 @@ const (
 // portalRetireView is the reviewer's view of a held retirement.
 type portalRetireView struct {
 	IssuerKey string `json:"issuer_key"`
+	Issuer    string `json:"issuer"`
+}
+
+// portalRetirePayload is a held retirement: the key and the binding as the proposer saw it. The apply passes the
+// record to the store, which refuses the retirement of a different binding that has the same key since (a
+// binding retired and bound again meanwhile is not the one reviewed).
+type portalRetirePayload struct {
+	IssuerKey string             `json:"issuer_key"`
+	Binding   types.PortalIssuer `json:"binding"`
+}
+
+// portalBindingQ is the binding for key as the transaction sees it, or store.ErrNotFound.
+func portalBindingQ(r *http.Request, q store.Querier, key string) (types.PortalIssuer, error) {
+	all, err := store.PortalIssuersQ(r.Context(), q)
+	if err != nil {
+		return types.PortalIssuer{}, err
+	}
+	for _, b := range all {
+		if b.IssuerKey == key {
+			return b, nil
+		}
+	}
+	return types.PortalIssuer{}, store.ErrNotFound
 }
 
 // retirePortalIssuer is the one transaction a retirement runs in: the registry lock first, then the store's
-// checks under the binding row's lock.
-func retirePortalIssuer(s *Server, r *http.Request, q store.Querier, key string) error {
+// checks under the binding row's lock. want is the binding a held change was proposed against (nil for a direct
+// write). The configured sources (the default policy this process holds) are censused beside the store's, which cannot see them.
+func retirePortalIssuer(s *Server, r *http.Request, q store.Querier, key string, want *types.PortalIssuer) error {
 	if err := store.LockPortalIssuerRegistry(r.Context(), q); err != nil {
 		return err
 	}
@@ -65,7 +89,10 @@ func retirePortalIssuer(s *Server, r *http.Request, q store.Querier, key string)
 	if !ok {
 		return errGovernanceTxUnsupported
 	}
-	return pg.RetirePortalIssuerQ(r.Context(), q, key)
+	if len(s.configuredNamespaceCensus(key)) > 0 {
+		return store.ErrIssuerInUse
+	}
+	return pg.RetirePortalIssuerQ(r.Context(), q, key, want)
 }
 
 // portalRetireRefusal maps a retirement's store error to the refusal a direct write answers and a decision
@@ -93,7 +120,14 @@ func (s *Server) handleRetirePortalIssuer(w http.ResponseWriter, r *http.Request
 	}
 	if mode == govQueue {
 		// A dry run first: a key nobody bound, or one in use, is the direct write's own refusal and is never held.
-		err := s.readGovernanceState(r, func(q store.Querier) error { return retirePortalIssuer(s, r, q, key) })
+		var binding types.PortalIssuer
+		err := s.readGovernanceState(r, func(q store.Querier) error {
+			var err error
+			if binding, err = portalBindingQ(r, q, key); err != nil {
+				return err
+			}
+			return retirePortalIssuer(s, r, q, key, nil)
+		})
 		if ref := portalRetireRefusal(err); ref != nil {
 			writeErrorReason(w, ref.status, ref.reason, ref.msg)
 			return
@@ -102,14 +136,14 @@ func (s *Server) handleRetirePortalIssuer(w http.ResponseWriter, r *http.Request
 			writeServerError(w, r, "check the issuer binding retirement", err)
 			return
 		}
-		before := portalRetireView{IssuerKey: key}
+		before := portalRetireView{IssuerKey: key, Issuer: binding.Issuer}
 		s.proposeGovernanceChange(w, r, govProposal{
-			kind: govKindPortalIssuerRetire, op: "delete", key: key, payload: before,
+			kind: govKindPortalIssuerRetire, op: "delete", key: key, payload: portalRetirePayload{IssuerKey: key, Binding: binding},
 			before: before, changed: []string{"binding"}, baseState: before,
 		})
 		return
 	}
-	err := s.writeGovernance(r.Context(), func(q store.Querier) error { return retirePortalIssuer(s, r, q, key) })
+	err := s.writeGovernance(r.Context(), func(q store.Querier) error { return retirePortalIssuer(s, r, q, key, nil) })
 	if ref := portalRetireRefusal(err); ref != nil {
 		writeErrorReason(w, ref.status, ref.reason, ref.msg)
 		return
@@ -130,7 +164,14 @@ func (s *Server) handleRetirePortalIssuer(w http.ResponseWriter, r *http.Request
 // re-checks every condition under the binding row's lock; a binding that went in use meanwhile is a 409 that
 // leaves the change pending.
 func applyPortalIssuerRetire(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
-	if err := retirePortalIssuer(s, r, q, ch.TargetKey); err != nil {
+	var p portalRetirePayload
+	if err := decodeHeldPayload(ch.Payload, &p); err != nil {
+		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonInvalidRequestBody, "invalid retirement change: %v", err)
+	}
+	if err := retirePortalIssuer(s, r, q, ch.TargetKey, &p.Binding); err != nil {
+		if errors.Is(err, store.ErrStaleCompare) {
+			return govApplied{}, store.ErrGovernanceChangeStale
+		}
 		if ref := portalRetireRefusal(err); ref != nil {
 			return govApplied{}, ref
 		}
