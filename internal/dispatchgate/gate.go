@@ -152,6 +152,15 @@ func (g *Gate) Write(p []byte) (int, error) {
 	}
 	select {
 	case r := <-j.res:
+		// A write cut by the hard stop is ErrExpired whichever case select took: a Write that reaches this select
+		// after both the expiry and the cut result are ready must answer as one that waited here would.
+		if r.err != nil {
+			select {
+			case <-g.done:
+				return 0, ErrExpired
+			default:
+			}
+		}
 		return r.n, r.err
 	case <-g.done:
 		return 0, ErrExpired
