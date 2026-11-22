@@ -224,6 +224,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `@solid-primitives/refs` | 1.1.3 | MIT |
 | `@solid-primitives/transition-group` | 1.1.2 | MIT |
 | `@solid-primitives/utils` | 6.4.0 | MIT |
+| `@tanstack/query-core` | 5.107.1 | MIT |
+| `@tanstack/react-query` | 5.107.1 | MIT |
 | `@types/react` | 19.3.0 | MIT |
 | `@types/react-dom` | 19.3.0 | MIT |
 | `@xterm/addon-clipboard` | 0.2.0 | MIT |
