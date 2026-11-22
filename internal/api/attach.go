@@ -379,6 +379,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,
+		recheck:    s.attachPromotionCheck(r, id, cut),
 		notify:     wa.notify,
 		displace:   wa.displace,
 		ping:       c.Ping,

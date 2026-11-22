@@ -121,7 +121,7 @@ func (s *Server) localAttachCheck(r *http.Request, run types.AgentRun) (localAtt
 	}
 	ta, ok := ticketActorFromContext(r.Context())
 	if ok && issuerPortalPerson(ta.via, ta.principal) {
-		return localAttachTarget{}, localAttachIssuerPortal
+		return localAttachTarget{}, localAttachIssuerPortal, nil
 	}
 	if !ok || s.cfg.LocalMode || run.OperatorOwned || ta.actorType != types.ActorHuman || ta.principal == "" ||
 		ta.principal != run.CreatedBy || run.Placement != types.PlacementLocal || run.RunnerID == nil {

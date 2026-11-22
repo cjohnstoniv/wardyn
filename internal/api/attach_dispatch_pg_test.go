@@ -283,3 +283,207 @@ func TestAttachIssuerPortal_LocalTransportRefused_PG(t *testing.T) {
 		t.Fatalf("a plain ticket's local attach was refused as an issuer portal's: %+v", eb)
 	}
 }
+
+// TestAttachIssuerPortal_PromotionRechecksAuthority_PG: a promoted issuer-portal observer's writer exec is a new
+// opening, whether the promotion lands after its first opening or while that is still pending. Its socket's
+// authority is asked again first, a refusal cuts the socket with no writer opened and no input delivered, and the
+// writer's Runner.Attach is bounded by that re-check's start plus the dispatch bound, never by the ticket's.
+func TestAttachIssuerPortal_PromotionRechecksAuthority_PG(t *testing.T) {
+	open := func(t *testing.T, rig *issuerAttachRig) (writer, observer *websocket.Conn) {
+		t.Helper()
+		writer = rig.dial(t)
+		if readAttachMode(t, writer).ReadOnly {
+			t.Fatal("the first socket opened read-only")
+		}
+		observer = rig.dial(t)
+		if !readAttachMode(t, observer).ReadOnly {
+			t.Fatal("the second socket opened as the writer")
+		}
+		waitWithin(t, 5*time.Second, "both openings", func() bool {
+			rig.runner.mu.Lock()
+			defer rig.runner.mu.Unlock()
+			return len(rig.runner.sessions) == 2
+		})
+		return writer, observer
+	}
+	attaches := func(dr *dispatchAttachRunner) []time.Time {
+		dr.mu.Lock()
+		defer dr.mu.Unlock()
+		return append([]time.Time(nil), dr.attaches...)
+	}
+	promoted := func(rig *issuerAttachRig) bool {
+		for _, ev := range rig.audit.snapshot() {
+			if ev.Action == "session.promote" {
+				return true
+			}
+		}
+		return false
+	}
+	written := func(rig *issuerAttachRig) int {
+		rig.runner.mu.Lock()
+		defer rig.runner.mu.Unlock()
+		n := 0
+		for _, s := range rig.runner.sessions {
+			n += s.writtenBytes()
+		}
+		return n
+	}
+
+	t.Run("suspended before the promotion", func(t *testing.T) {
+		rig, dr := newDispatchAttachRig(t)
+		rig.srv.authorityTest = attachAuthorityTimings{every: time.Minute, lookup: relayBound} // the watch never ticks here
+		writer, observer := open(t, rig)
+		_ = rig.suspend(t)
+		closed := make(chan time.Time, 1)
+		go func() {
+			for {
+				if _, _, err := observer.Read(context.Background()); err != nil {
+					closed <- time.Now()
+					return
+				}
+			}
+		}()
+		at := time.Now()
+		_ = writer.Close(websocket.StatusNormalClosure, "")
+		waitWithin(t, 5*time.Second, "the session.promote row", func() bool { return promoted(rig) })
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = observer.Write(ctx, websocket.MessageBinary, []byte("k")) // held until a writer exec is ready, which never comes
+		select {
+		case got := <-closed:
+			cutBy(t, "terminal promoted after a suspend", at, got, 2*time.Second)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the promoted socket outlived a suspend that came before its promotion")
+		}
+		if n := len(attaches(dr)); n != 2 {
+			t.Fatalf("%d openings, want 2: a writer exec was opened for a suspended person", n)
+		}
+		if n := written(rig); n != 0 {
+			t.Fatalf("%d bytes of input reached an exec after the suspend, want 0", n)
+		}
+	})
+
+	t.Run("live, promoted after the ticket's dispatch time", func(t *testing.T) {
+		rig, dr := newDispatchAttachRig(t)
+		by := time.Now().Add(dispatchFresh)
+		writer, observer := open(t, rig)
+		time.Sleep(time.Until(by) + dispatchFresh)
+		_ = writer.Close(websocket.StatusNormalClosure, "")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for {
+			typ, data, err := observer.Read(ctx)
+			if err != nil {
+				t.Fatalf("the promoted socket before its writer frame: %v", err)
+			}
+			var m attachModeMsg
+			if typ == websocket.MessageText && json.Unmarshal(data, &m) == nil && m.Type == "attach-mode" && !m.ReadOnly {
+				break
+			}
+		}
+		if n := len(attaches(dr)); n != 3 {
+			t.Fatalf("%d openings, want 3: the writer exec of a promotion past the ticket's dispatch time", n)
+		}
+		if err := observer.Write(ctx, websocket.MessageBinary, []byte("k")); err != nil {
+			t.Fatalf("the promoted writer's keystroke: %v", err)
+		}
+		waitWithin(t, 5*time.Second, "the keystroke at the writer exec", func() bool { return written(rig) > 0 })
+	})
+
+	t.Run("the re-open outlives its own dispatch time", func(t *testing.T) {
+		rig, dr := newDispatchAttachRig(t)
+		writer, observer := open(t, rig)
+		release := make(chan struct{})
+		dr.mu.Lock()
+		dr.stall = func(context.Context) { <-release } // returns its session late, whatever its context
+		dr.mu.Unlock()
+		_ = writer.Close(websocket.StatusNormalClosure, "")
+		waitWithin(t, 5*time.Second, "the re-open's Runner.Attach", func() bool { return len(attaches(dr)) == 3 })
+		// The re-check started before this Attach did, so its dispatch time lies before started + dispatchFresh.
+		started := attaches(dr)[2]
+		time.Sleep(time.Until(started.Add(dispatchFresh)) + 200*time.Millisecond)
+		close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = observer.Write(ctx, websocket.MessageBinary, []byte("k"))
+		rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer rcancel()
+		for {
+			_, _, err := observer.Read(rctx)
+			if err == nil {
+				continue
+			}
+			if rctx.Err() != nil {
+				t.Fatal("the socket was still open 10s after its writer exec came back past its dispatch time")
+			}
+			if code := websocket.CloseStatus(err); code != websocket.StatusInternalError {
+				t.Fatalf("the socket ended with %v (close %d), want the attach-failed close %d", err, code, websocket.StatusInternalError)
+			}
+			break
+		}
+		dr.mu.Lock()
+		late := append([]*countingShellSession(nil), dr.late...)
+		dr.mu.Unlock()
+		if len(late) != 1 {
+			t.Fatalf("%d late sessions, want the re-open's 1", len(late))
+		}
+		waitWithin(t, 5*time.Second, "the late writer exec closed by its identity", late[0].isClosed)
+		if n := late[0].writtenBytes(); n != 0 {
+			t.Fatalf("%d bytes of input reached a writer exec returned after its dispatch time, want 0", n)
+		}
+	})
+
+	t.Run("suspended while the first opening is pending", func(t *testing.T) {
+		rig, dr := newDispatchAttachRig(t)
+		rig.srv.authorityTest = attachAuthorityTimings{every: time.Minute, lookup: relayBound} // the watch never ticks here
+		// The ticket's bound alone would not refuse the writer exec here.
+		setDispatchFresh(t, 10*time.Second)
+		writer := rig.dial(t)
+		if readAttachMode(t, writer).ReadOnly {
+			t.Fatal("the first socket opened read-only")
+		}
+		waitWithin(t, 5*time.Second, "the writer's opening", func() bool {
+			rig.runner.mu.Lock()
+			defer rig.runner.mu.Unlock()
+			return len(rig.runner.sessions) == 1
+		})
+		release := make(chan struct{})
+		dr.mu.Lock()
+		dr.stall = func(context.Context) { <-release } // the observer's first opening is still pending at its promotion
+		dr.mu.Unlock()
+		observer := rig.dial(t)
+		if !readAttachMode(t, observer).ReadOnly {
+			t.Fatal("the second socket opened as the writer")
+		}
+		waitWithin(t, 5*time.Second, "the observer's pending opening", func() bool { return len(attaches(dr)) == 2 })
+		_ = rig.suspend(t)
+		closed := make(chan time.Time, 1)
+		go func() {
+			for {
+				if _, _, err := observer.Read(context.Background()); err != nil {
+					closed <- time.Now()
+					return
+				}
+			}
+		}()
+		_ = writer.Close(websocket.StatusNormalClosure, "")
+		waitWithin(t, 5*time.Second, "the session.promote row", func() bool { return promoted(rig) })
+		at := time.Now()
+		close(release) // the observer's session comes back; the promotion's writer exec would be next
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = observer.Write(ctx, websocket.MessageBinary, []byte("k")) // held until a writer exec is ready, which never comes
+		select {
+		case got := <-closed:
+			cutBy(t, "terminal promoted during its first opening after a suspend", at, got, 2*time.Second)
+		case <-time.After(10 * time.Second):
+			t.Fatal("the socket promoted during its first opening outlived a suspend that came before the promotion")
+		}
+		if n := len(attaches(dr)); n != 2 {
+			t.Fatalf("%d openings, want 2: a writer exec was opened for a suspended person", n)
+		}
+		if n := written(rig); n != 0 {
+			t.Fatalf("%d bytes of input reached an exec after the suspend, want 0", n)
+		}
+	})
+}

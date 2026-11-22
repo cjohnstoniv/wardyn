@@ -244,6 +244,11 @@ type Session struct {
 	done   chan struct{}
 	code   int
 	err    error
+
+	// closeBody closes the exec's response body, once: that resets this exec's HTTP/2 stream and no other,
+	// which wakes a request-body writer parked on the guest's flow control. A second Body.Close would hand
+	// the connection's window back again for the same unread bytes.
+	closeBody func()
 }
 
 // Exec starts an attached exec. The session lives until it exits or Close.
@@ -280,9 +285,10 @@ func (c *Client) Exec(ctx context.Context, er ExecRequest) (*Session, error) {
 		cancel()
 		return nil, err
 	}
+	s.closeBody = sync.OnceFunc(func() { _ = res.Body.Close() })
 	go func() {
 		defer close(s.done)
-		defer res.Body.Close()
+		defer s.closeBody()
 		s.code, s.err = demux(res.Body, outW, errW)
 		outW.CloseWithError(s.err)
 		errW.CloseWithError(s.err)
@@ -344,14 +350,17 @@ func (s *Session) Wait() (int, error) {
 	return s.code, s.err
 }
 
-// Close ends the session; the guest kills the process when its stream is cancelled. It does not wait
+// Close ends the session; the guest kills the process when its stream is reset. It does not wait
 // on anyone reading Stdout or Stderr: the output pipes are unbuffered, so demux can be parked writing
-// to a reader that is gone, and only closing the read ends frees it.
+// to a reader that is gone, and only closing the read ends frees it. Nor does it wait on the guest: a
+// cancelled context does not wake HTTP/2's request-body writer parked on flow control, so only closing
+// the response body resets the stream (after cancel, so that close does not wait for the stream's end).
 func (s *Session) Close() error {
 	s.cancel()
 	_ = s.up.Close()
 	_ = s.outR.Close()
 	_ = s.errR.Close()
+	s.closeBody()
 	<-s.done
 	return nil
 }

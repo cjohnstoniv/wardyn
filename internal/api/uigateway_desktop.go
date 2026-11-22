@@ -472,39 +472,9 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 	defer release()
-	// The display is dialed under the run's start lock, on the run as it stands there, a watch's too: a run that
-	// ended since the check above opens no display.
-	sctx, budget := ctx, execStartBudget
-	if gated {
-		sctx = runner.WithStartCutoff(ctx, by) // the lock's wait ends then, and a runner's start CALL is refused after it
-	}
-	h, err := s.lockStart(sctx, sess.Run)
-	if err != nil {
-		_ = c.Close(desktopCloseUnreachable, lockUnavailableMsg)
-		return
-	}
-	if run, code, why = s.desktopBoundedRunCheck(h.ctx, sess); code != 0 {
-		h.release()
+	display, run, code, why := s.openDesktopDisplay(ctx, sess, dd, gated, by)
+	if code != 0 {
 		_ = c.Close(code, why)
-		return
-	}
-	if gated {
-		if past() { // no dial is started with no time left
-			h.release()
-			_ = c.Close(desktopCloseUnreachable, uiSessionUnverifiableMsg)
-			return
-		}
-		budget = min(budget, time.Until(by))
-	}
-	display, err := startAdmitted(s, sctx, h, budget,
-		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
-		func(d io.ReadWriteCloser) { _ = d.Close() })
-	switch {
-	case startCut(err):
-		_ = c.Close(desktopCloseUnreachable, err.Error())
-		return
-	case err != nil:
-		_ = c.Close(desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err))
 		return
 	}
 	defer func() { _ = display.Close() }()
@@ -548,6 +518,43 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
 	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened, cut != nil)
+}
+
+// openDesktopDisplay dials the run's display under its start lock, on the run as it stands there (returned), a
+// watch's too: a run that ended since serveDesktopRFB's check opens no display. A gated stream's (an issuer
+// portal's) lock wait and dial end at its dispatch time by. A display not opened comes back as a close code and why.
+func (s *Server) openDesktopDisplay(ctx context.Context, sess uiSession, dd runner.DesktopDialer, gated bool,
+	by time.Time) (io.ReadWriteCloser, types.AgentRun, websocket.StatusCode, string) {
+	sctx, budget := ctx, execStartBudget
+	if gated {
+		sctx = runner.WithStartCutoff(ctx, by) // the lock's wait ends then, and a runner's start CALL is refused after it
+	}
+	h, err := s.lockStart(sctx, sess.Run)
+	if err != nil {
+		return nil, types.AgentRun{}, desktopCloseUnreachable, lockUnavailableMsg
+	}
+	run, code, why := s.desktopBoundedRunCheck(h.ctx, sess)
+	if code != 0 {
+		h.release()
+		return nil, run, code, why
+	}
+	if gated {
+		if !time.Now().Before(by) { // no dial is started with no time left
+			h.release()
+			return nil, run, desktopCloseUnreachable, uiSessionUnverifiableMsg
+		}
+		budget = min(budget, time.Until(by))
+	}
+	display, err := startAdmitted(s, sctx, h, budget,
+		func(ctx context.Context) (io.ReadWriteCloser, error) { return dd.DialDesktop(ctx, run.SandboxRef) },
+		func(d io.ReadWriteCloser) { _ = d.Close() })
+	switch {
+	case startCut(err):
+		return nil, run, desktopCloseUnreachable, err.Error()
+	case err != nil:
+		return nil, run, desktopCloseUnreachable, uiExecFailMsg(ctx, "open the desktop", err)
+	}
+	return display, run, 0, ""
 }
 
 // relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
