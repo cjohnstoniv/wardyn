@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -65,25 +66,37 @@ func (s *Server) handleListPeople(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "list people", err)
 		return
 	}
-	roleOf, err := s.personRoleResolver(r)
-	if err != nil {
-		writeServerError(w, r, "list people", err)
-		return
-	}
+	roleOf := s.lazyPersonRoleResolver(r)
 	out := types.PersonList{People: make([]types.PersonSummary, len(page.People))}
 	for i, p := range page.People {
+		role, err := personRole(p, roleOf)
+		if err != nil {
+			writeServerError(w, r, "list people", err)
+			return
+		}
 		out.People[i] = types.PersonSummary{
 			Principal: p.Principal, Email: p.Email, IssuerKind: personIssuerKind(p),
 			PreCreated: p.PreCreated, FirstSignedInAt: p.FirstSignInAt, LastSignedInAt: p.LastSignInAt,
-			DeactivatedAt: p.DeactivatedAt, Role: roleOf(p),
+			DeactivatedAt: p.DeactivatedAt, Role: role,
 			ActiveSessions: p.ActiveSessions, APITokens: p.APITokens, SSHKeys: p.SSHKeys,
 			Credentials: p.Credentials, ActiveRuns: p.ActiveRuns,
+			Issuer: p.PortalIssuer, InternalAddress: p.PortalInternalIssuer,
 		}
 	}
 	if page.Next != "" {
 		out.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(page.Next))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// personRole is a person's role in the list. A portal person is always a user: no role mapping is read for
+// one, since none applies to a person the portal's own provider vouches for, and the mappings are not even
+// loaded for a page that holds only portal people.
+func personRole(p store.PersonListing, roleOf func(store.PersonListing) (string, error)) (string, error) {
+	if p.PortalIssuer != "" {
+		return oidc.RoleUser, nil
+	}
+	return roleOf(p)
 }
 
 // personIssuerKind names where a person's identity comes from. A local-mode seat ("local:" is
@@ -97,6 +110,27 @@ func personIssuerKind(p store.PersonListing) string {
 		return issuerKindEntra
 	}
 	return issuerKindOIDC
+}
+
+// lazyPersonRoleResolver is personRoleResolver loaded on the first workforce row that needs a role, so a
+// failing mapping read never fails a page that has none. A failed load is kept and answered for every
+// later row.
+func (s *Server) lazyPersonRoleResolver(r *http.Request) func(store.PersonListing) (string, error) {
+	var (
+		loaded bool
+		fn     func(store.PersonListing) string
+		err    error
+	)
+	return func(p store.PersonListing) (string, error) {
+		if !loaded {
+			fn, err = s.personRoleResolver(r)
+			loaded = true
+		}
+		if err != nil {
+			return "", err
+		}
+		return fn(p), nil
+	}
 }
 
 // personRoleResolver reads the role mappings and user types once and returns the role each email

@@ -83,6 +83,12 @@ var queryIDMatrix = map[string]queryIDRoute{
 		entity: entityRun, readers: []string{"parseReceiptRequest"},
 		foreign: 403, pinnedBy: "TestAuditReceipt_MemberRefused",
 	},
+	// The portal-person lookup is the security tier's, which reads the people table whole: a member naming any
+	// person, themselves included, gets the router's constant 403 before the handler reads the id.
+	"GET /api/v1/people/portal-person?person_id": {
+		entity: entityPrincipal, readers: []string{"handlePortalPersonLookup"},
+		foreign: 403, pinnedBy: "TestPortalPersonLookup_ByIssuerAndUid_PG",
+	},
 	// ?owner= is admin-only: a member naming it at all gets a constant 403.
 	"GET /api/v1/secrets?owner": {
 		entity: entityPrincipal, readers: []string{"secretOwnerParam", "handleListSecrets"},
@@ -221,6 +227,7 @@ var queryParamNotAnID = map[string]string{
 	"offset":                    "page window (parseListPage)",
 	"sponsored":                 "GET /runs: a run-list switch (\"\" or exclude) that only turns off the addition of the caller's sponsored service identities' runs to their own list; it never widens a scoped listing and names no entity",
 	"survey":                    "GET /me/runners/{id}/folders: 1 asks the caller's own runner to count what a run would get from the folder; it names no entity",
+	"issuer":                    "GET /people/portal-person (security tier): the exact issuer of a bound issuer portal, a deployment record and not a principal's entity; a session below the security tier is refused before it is read, and the person it narrows to is the ?person_id row's",
 	"cursor":                    "GET /people (security tier): the opaque last-principal marker of the previous page of a listing that tier already reads whole; it picks where the page starts and widens nothing",
 	"uid":                       "GET /model-providers-entra/signin: the azure_foundry provider row the sign-in is for, a deployment record and not a principal's entity; the capture is bound to the caller's own session subject and stored in their own namespace whatever the row, and a uid that is not an azure_foundry row is refused",
 	"component":                 "GET /components-entra/signin: the organisation's Azure CLI component the sign-in is for, a deployment record and not a principal's entity; a row the caller may not attach answers as the run doors answer it, and the capture is bound to the caller's own session subject and stored in their own namespace",
@@ -285,6 +292,7 @@ var queryParamNotAnID = map[string]string{
 	"ended_within":   "run list end-time window filter, a closed enum; narrows an already-scoped listing, never widens it",
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
 	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
+	"service":        "run list filter for service runs; narrows an already-scoped listing, never widens it",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",

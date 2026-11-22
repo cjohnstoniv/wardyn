@@ -23,15 +23,15 @@ import (
 // and name ("Server.sshAuth"), with the door it guards. Every mention of the arm is a call: the arm is called
 // where it is named, so a method value (the arm passed or stored as a value) is refused in any unit.
 var supportCallList = map[string]string{
-	"Server.handleAttachTicket":       "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
-	"Server.refuseAttachEntry":        "the terminal's WebSocket entry, its ticket branch only",
-	"Server.attachAuthority":          "the open terminal's re-check, its ticket branch only",
-	"Server.handleRunExec":            "POST /exec, and the open command's re-check",
-	"Server.uiTicketMayEnter":         "the UI gateway's ticket entry, inside ta.caller == \"\"",
-	"Server.uiSessionStillAuthorized": "the UI session's re-check",
-	"Server.desktopRun":               "the Files panel",
-	"Server.sshAuth":                  "the SSH gateway's authentication, inside the operator-owned rule's branch",
-	"Server.sshCurrentKey":            "the SSH gateway's re-check of an open connection",
+	"Server.handleAttachTicket": "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
+	"Server.refuseAttachEntry":  "the terminal's WebSocket entry, its ticket branch only",
+	"Server.attachAuthority":    "the open terminal's re-check, its ticket branch only",
+	"Server.handleRunExec":      "POST /exec, and the open command's re-check",
+	"Server.uiTicketMayEnter":   "the UI gateway's ticket entry, inside ta.caller == \"\"",
+	"Server.uiSessionArms":      "the UI session's re-check, after the portal's arm (uiSessionAuthority)",
+	"Server.desktopRun":         "the Files panel",
+	"Server.sshAuth":            "the SSH gateway's authentication, inside the operator-owned rule's branch",
+	"Server.sshCurrentKey":      "the SSH gateway's re-check of an open connection",
 }
 
 // supportNeverList is every function that must never call supportMayEnter, nor any function of the call list,

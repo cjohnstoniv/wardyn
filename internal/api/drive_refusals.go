@@ -3,7 +3,11 @@
 
 package api
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
 
 // The sentences of the drives[] refusals. The console uses the same bytes
 // (ui/src/app/lib/drive-refusals.ts); TestDriveRefusalSentencesMatchGolden pins
@@ -21,6 +25,15 @@ func driveTooManyMsg(max int) string { return fmt.Sprintf("drives: attach at mos
 // driveNotFoundMsg echoes the id as sent: the same bytes for another person's
 // drive and for an id that names nothing.
 func driveNotFoundMsg(id string) string { return fmt.Sprintf("No drive %s is available to you.", id) }
+
+// legacyDriveHeldMsg says why a person's drive from before the upgrade is listed but cannot be attached yet: a
+// Docker volume waits for an administrator to release it, a Mac disk for its Mac to be upgraded and restarted.
+func legacyDriveHeldMsg(d types.UserDrive) string {
+	if d.Backend == types.DriveBackendMacDisk {
+		return fmt.Sprintf("Drive %s is waiting for its Mac to be upgraded and restarted.", d.Name)
+	}
+	return fmt.Sprintf("Drive %s is waiting for an administrator to finish the upgrade and cannot be used yet.", d.Name)
+}
 
 func driveNotInPoolMsg(name string) string {
 	return fmt.Sprintf("%s: not available in this pool's runners.", name)

@@ -285,6 +285,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | Client secret of that dedicated app registration (flag `-directory-client-secret`); `WARDYN_DIRECTORY_PROVIDER=entra` is refused at boot when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set. [Details](#wardyn_directory_client_secret) |
+| `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` | CSV (`host[:port]`) | (unset = none) | hosts an issuer portal's `internal_issuer` may name (flag `-portal-internal-issuer-hosts`), and the only ones reached at a private address, for discovery and keys only. Another host is refused `delegate_internal_issuer_not_allowed`; no portal field lifts this |
+| `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` | string (path) | (unset) | PEM CA bundle added to the system roots for `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` only (flag `-portal-internal-issuer-ca-file`). An unreadable file refuses boot, as does a non-empty one with no certificate. No setting skips verification |
+| `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` | string (path) | (unset) | PEM bundle of the only roots an issuer portal's issuer is trusted under when `WARDYN_DAEMON_PROXY_ALWAYS` lists its host (flag `-portal-proxied-issuer-ca-file`); unset, such a portal is refused. [Details](#wardyn_portal_proxied_issuer_ca_file) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire; `0` or negative turns the sweeper off (boot warning). It then expires nothing: a pending approval stays pending past its run's wait budget unless the client that raised it withdraws it (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
 | `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
@@ -333,7 +336,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
 | `WARDYN_SUPPORT_SESSIONS` | bool | off | Lets a super admin ask to help inside a person's running run, and its owner accept for 15, 30 or 60 minutes. Off: a request or accept is refused with `409` `support_disabled`, and open help sessions close. [Details](#wardyn_support_sessions) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
-| `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on Azure DevOps capability escalations and one MCP call's approval: the human who DECIDES one must not be the human who created the run. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
+| `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on capability escalations and on one MCP call, held kubectl write or held host call: the human who DECIDES must not be the run's creator. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
 | `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `true` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
@@ -366,7 +369,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
-| `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
+| `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`), and `--git` refuses a branch whose history holds a matching path. [Details](#wardyn_sync_deny) |
 | `WARDYN_LOCAL_FOLDER_SEED_WAIT` | duration | `10m` | how long a run holds its agent for its `local_folder`'s first sync (flag `-local-folder-seed-wait`). [Details](#wardyn_local_folder_seed_wait) |
 | `WARDYN_COMPUTER_FOLDERS` | bool | `false` | let a run take a folder from its creator's own folder-only runner (flag `-computer-folders`). [Details](#wardyn_computer_folders) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
@@ -403,6 +406,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
+| `WARDYN_DAEMON_PROXY_ALWAYS` | string (CSV) | (unset) | host names whose service grant token request and issuer portal fetches (with no internal issuer address) always use the daemon proxy (flag `-daemon-proxy-always`), past a no-proxy list: `WARDYN_DAEMON_PROXY_URL` or `_SECRET` (http, https), else `HTTPS_PROXY` (also socks5, socks5h, host:port). [Details](#wardyn_daemon_proxy_always) |
 | `WARDYN_DEMO_VIDEO_BASE_URL` | string (URL) | (unset) | operator-run mirror base URL re-pointing the Getting Started demo episodes (flag `-demo-video-base-url`; `ValidateDemoVideoBaseURL`, [`internal/api/llm_gateway.go`](../internal/api/llm_gateway.go)) for an air-gapped deployment; unset downloads from GitHub directly. [Details](#wardyn_demo_video_base_url) |
 | `WARDYN_CLI_ARTIFACT_BASE` | string (URL) | (unset) | internal mirror of the release assets, published on the anonymous `/healthz` as `cli_artifact_base` (flag `-cli-artifact-base`; `ValidateCLIArtifactBase`, [`internal/api/cli_artifact_base.go`](../internal/api/cli_artifact_base.go)). The console's install line and `wardyn runner setup` fetch from it; unset publishes nothing. [Details](#wardyn_cli_artifact_base) |
 | `WARDYN_ORG_CA_FINGERPRINTS` | string (CSV) | (unset) | SHA-256 fingerprints of the organisation's CA certificates, published on the anonymous `/healthz` as `org_ca_fingerprints` (flag `-org-ca-fingerprints`; `ParseOrgCAFingerprints`, [`internal/api/org_ca_fingerprints.go`](../internal/api/org_ca_fingerprints.go)) for people to compare with what `wardyn ca add` prints; unset publishes none. [Details](#wardyn_org_ca_fingerprints) |
@@ -863,7 +867,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_K8S_WARM_POOLS`
 
 - Experimental, empty by default (`-tags k8s`). A JSON array of pools: `name` (a DNS label, at most 30 characters), `image`, `class` (`CC1`, `CC2` or `CC3`), `cpu`, `memory` and `size` (0 to 20; at most 50 across all pools).
-- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials and, where the namespace enforces NetworkPolicy, no network. Each reserves `cpu` and `memory` plus a proxy's share.
+- Wardyn keeps `size` placeholder pods per pool in the default runs namespace. Each runs the pool's image idle, with no settings, secrets, files or credentials. Where the namespace enforces NetworkPolicy, Wardyn adds a policy that allows no traffic for placeholders. Other matching policies and the platform's network exceptions still apply. Each reserves `cpu` and `memory` plus a proxy's share.
 - A run whose image and class match a pool, and whose requests fit, removes one placeholder and prefers its node. The run's own pods are made fresh and checked as always.
 - Boot refuses a malformed value, a `CC2` or `CC3` pool whose RuntimeClass is not pinned, and any value under `wardyn-runnerd`. `WARDYN_K8S_WARM_PRIORITY_CLASS` names the PriorityClass placeholders take.
 - How placeholders are kept and claimed, and what they cost: [Kubernetes: warm pools](operations/kubernetes-warm-pools.md).
@@ -1584,7 +1588,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Only a run a helper can enter takes a request: running, not lost, owned by a person, not a service identity's, not a background, sign-in or workspace task, and not in local mode.
 - A helper enters governed. The run's profile, the channel switches and the data-out rule apply as for its owner.
 - A request left unanswered for 15 minutes lapses. The run ending, the helper signing out and the owner being revoked each end the grant.
-- Every request, answer and end is audited as `support.request`, `support.accept`, `support.decline` and `support.end`.
+- Requests, answers and ends are audited as `support.request`, `support.accept`, `support.decline` and `support.end`. The grant ends even when its `support.end` row is not written: a row lost because wardynd stopped, or because the audit sink and spool refused it, right after the end is not retried.
 - `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
 - Needs migration `0293_run_support_grants`.
 - A value that is not a bool exits 2 at boot.
@@ -1638,7 +1642,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Each one writes `approval.second_human.bypass`, on the decision's own outcome.
 - `success` when the decision it was spent on was made, `failure` (with an `error` class of `already_decided`, `not_found` or `error`) when the bypass got past the gate and the decision then failed.
 - A deployment that wants this gate to bind must treat the admin token accordingly (SSO configured, token held out of band).
-- Scoped to `egress_domain` approvals and host rule holds (Azure DevOps capability escalations have their own switch, `WARDYN_CAPABILITY_SECOND_HUMAN`, below). A host rule hold is four-eyes when either switch is on.
+- Scoped to `egress_domain` approvals and host rule holds (capability escalations, single MCP calls and held kubectl writes follow `WARDYN_CAPABILITY_SECOND_HUMAN`, below). A host rule hold is four-eyes when either switch is on.
 - A value that is not a bool exits 2 at boot in every mode (`#202`; before that it was silently read as unset).
 - A unit's [deciders](operations/deciders.md) can turn the same rule on for its kind with `second_human`; it is never weaker than this switch, and the bypass row's `switch` then reads `unit deciders (<unit id>)`.
 - See [`docs/OPERATIONS.md`](OPERATIONS.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) §5.
@@ -1649,10 +1653,13 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The human who DECIDES one (a `tool_call` approval raised by the control plane for an Azure DevOps capability, known structurally by its grant id) must not be the human who created the run.
 - Without it ownership is the whole member rule, so a run's creator can approve their own escalation, admin-class capabilities included.
 - It also governs one MCP call's approval (a `tool_call` approval known by its `call_sha256`, raised for a tool rule's `approve_each`), which the run's owner or an administrator decides.
+- And one held kubectl write (a `tool_call` approval known by `call_sha256` and cluster) and one held host call (known by `call_sha256` and host): `secondHumanGate`, `approvals_second_human.go`.
 - Same rules as `WARDYN_EGRESS_SECOND_HUMAN` above, applied to that kind.
 - Both verbs refused for the creator (`403`, `authz.denied` with `reason: second_human_required`, approval left `PENDING`), a different administrator decides, **local mode REFUSES it** with a `503` and warns at boot.
 - And **the `admin-token` principal BYPASSES it** with an `approval.second_human.bypass` row naming this switch.
-- Independent of the egress switch: each governs only its own kind.
+- The two switches overlap on one kind only. A held host call is four-eyes when either is on, and the capability switch is the one named when both are.
+- Egress approvals follow the egress switch alone. Capability escalations, single MCP calls and held kubectl writes follow this switch alone.
+- A reviewed download (`desktop.download` set to `review`) is always held to a second person, with no switch. The run's own people and the asker never decide it, and an `admin-token` decision writes a break-glass row.
 - A value that is not a bool exits 2 at boot in every mode.
 - It governs escalation decisions during a run only.
 - A standing capability list an admin-tier creator sets at launch (`azure_devops_capabilities`) is out of its scope and bounded by the row's ceiling.
@@ -1931,6 +1938,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_SYNC_DENY`
 
 - Gitignore-syntax patterns, e.g. `.env*,*.pem`, served as `sync.deny` on `GET /runs/{id}`. No ignore file can re-include one.
+- `wardyn sync --git` sends whole commits. With these patterns set, it reads the bundle in a repository of its own. It checks every path any commit adds (even one later removed or renamed) and the tip's tree; with none set it skips this. A match refuses the send and names the path and pattern.
 - Boot refuses over 64 patterns, one over 256 bytes, or a control character. See [SSH.md](SSH.md#sync-a-directory-wardyn-sync).
 
 ### `WARDYN_LOCAL_FOLDER_SEED_WAIT`
@@ -2245,6 +2253,34 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - That value is a chart-render-time default, not a boot-time guarantee; `daemonProxySecretMode` still independently refuses only a group- or world-**writable** file regardless of what `defaultMode` renders.
 - A Kubernetes Secret volume is always root-owned, never wardynd's own uid, so the other-readable refusal above never fires on it either.
 - `0440`, `0400` and even a wider `0644`/`0444` all boot — only a writable `defaultMode` (e.g. `0660`) is caught.
+
+### `WARDYN_DAEMON_PROXY_ALWAYS`
+
+- Host names whose **service grant token request** and **issuer portal discovery and key fetches** always go to the daemon proxy, past `WARDYN_DAEMON_NO_PROXY` and `NO_PROXY` (flag `-daemon-proxy-always`; `serviceGrantTransport`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go); `newPortalProxyClient`, [`internal/auth/oidc/portal_fetch_proxy.go`](../internal/auth/oidc/portal_fetch_proxy.go)). List the token URL's host as well when it differs from the issuer's.
+- Only those calls, each on its own transport. A portal fetch counts only for a registration with no internal issuer address; one with an internal issuer address stays direct. Every other call routes as it did without the list, and a portal fetch for a host not on the list stays direct.
+- For a proxied portal fetch, wardynd resolves the issuer host itself, refuses a private, loopback, link-local or metadata answer, and asks the proxy to connect to the address it checked, never to the name.
+- A proxied portal fetch checks the issuer's certificate through the tunnel against `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` only, so the proxy must pass that host's TLS through uninspected and allow a CONNECT to an address. A name wardynd cannot resolve is an outage.
+- The proxy is `WARDYN_DAEMON_PROXY_URL` or `_SECRET`, else `HTTPS_PROXY`.
+- Match: the exact host, case-insensitive; a trailing dot and a port are ignored.
+- A non-ASCII token address matches in its IDNA-ASCII form, so list `xn--` names.
+- Subdomains are **not** included: `login.corp.example` never covers `x.login.corp.example` or `corp.example`.
+- `WARDYN_DAEMON_NO_PROXY` matches as `x/net/http/httpproxy` does: `corp.example` covers it and its subdomains, `.corp.example` or `*.corp.example` only the subdomains, `*` all.
+- Boot refuses an entry that is an IP address, a numeric name such as `127.1`, `localhost`, or not a host name.
+- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a portal internal issuer host, a link-local endpoint. It is compared in its IDNA-ASCII form, so a Unicode spelling of either side matches; one that does not convert refuses boot.
+- A refusal names the variable and the entry's position, never its text.
+- Boot also refuses with no proxy, or an `HTTPS_PROXY` that is not usable, or a proxy port outside 1 to 65535, so a listed host is never sent direct.
+- Every mode that installs the daemon transport refuses too, key rotation, rewrap and recovery rehearsal included, as for a malformed `WARDYN_DAEMON_PROXY_URL`.
+
+### `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`
+
+- A PEM file of the root certificates that sign the certificates of the issuer hosts `WARDYN_DAEMON_PROXY_ALWAYS` lists, read at boot into a fresh pool (flag `-portal-proxied-issuer-ca-file`; `portalProxiedIssuerRoots`, [`cmd/wardynd/boot_portal.go`](../cmd/wardynd/boot_portal.go)). It is the only trust a proxied issuer portal's discovery and key fetches use.
+- It never uses the system roots or `WARDYN_TRUSTED_CA_FILE`, so a certificate authority the image or the operator added for a TLS-inspecting proxy cannot stand in for the issuer.
+- One pool for the whole installation. Every root in this file is trusted for every listed issuer host, so if two issuers use different private authorities, either authority can vouch for either host. Include only roots you trust for all of them.
+- Boot refuses an unreadable file, an empty one, one with no certificate, and one holding a certificate whose public key is also in a certificate in `WARDYN_TRUSTED_CA_FILE`.
+- That check refuses a shared public key only. An inspection intermediate in `WARDYN_TRUSTED_CA_FILE`, signed by a root in this file, passes, and the pool then accepts what it issues.
+- The key is compared as encoded, algorithm identifier included, so one RSA key under `rsaEncryption` and again under `RSASSA-PSS` is not matched.
+- Name the provider's own roots, never the proxy's inspection CA; include every root your provider publishes for the issuer host.
+- Unset while `WARDYN_DAEMON_PROXY_ALWAYS` is set: boot logs a warning, and each registration without an internal issuer address whose issuer host is listed is refused at its exchanges, with `no proxied issuer roots` in the log.
 
 ### `WARDYN_DEMO_VIDEO_BASE_URL`
 
@@ -2594,7 +2630,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_HARNESSES` | string | (unset) | the harnesses a run launched with the harness set carries, space-separated in set order (`applyHarnessSetEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). Unset for a run launched without the set |
 | `WARDYN_START_HARNESS` | string | (unset) | the one harness of `WARDYN_HARNESSES` that starts with the run; empty when none does. Set together with `WARDYN_HARNESSES`. `agent-run --tasks` passes each agent its own `WARDYN_TASK_PREPPED` mark, touched once its prep is done |
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
-| `WARDYN_CODEX_MODEL` | string | (unset) | **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release", so no run sets this yet (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). [Details](#wardyn_codex_model) |
+| `WARDYN_CODEX_MODEL` | string | (unset) | the model a `codex-cli` run starts on, from the stored harness model: `local_model` always, `custom_endpoint` and `openai_api_key` when one is stored. `azure_foundry` is switched off: it answers `400` "the azure_foundry kind is not available in this release". [Details](#wardyn_codex_model) |
 | `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
 | `WARDYN_MCP_STDIO_TOML` | string (TOML) | (unset) | a `codex-cli` run's MCP servers that run in the sandbox, as the `[mcp_servers.<key>]` tables its agent-run adds to `config.toml`; set only when such a server is on for Codex CLI ([`WARDYN_MCP_LOCAL_SERVERS`](#wardyn_mcp_local_servers)). No credential, so plain env (`codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_stdio_toml) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
@@ -2610,7 +2646,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
-| `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. With `WARDYN_AWS_SSO_PROXY_INJECT` on (the default) it is a placeholder in plain env with no token; secret (🔒) only when proxy-inject is off |
+| `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. Always a placeholder in plain env with no token; the sign-in token stays at the proxy. The resident form that made it a secret was removed in 0.10.0 |
 | `WARDYN_AZURE_CLI_CONFIG_B64` | base64 | (unset) | an Azure CLI component's generated `~/.azure`, materialized by `agent-run`: the profile listing its subscriptions and a token cache whose access token is an inert placeholder. It carries no credential (`authorAzureCLI`, [`internal/api/runs_dispatch_cli_azure.go`](../internal/api/runs_dispatch_cli_azure.go)) |
 | `WARDYN_KUBECTL_CONFIG_B64` | base64 | (unset) | a kubectl component's generated `~/.kube/config`, materialized by `agent-run`: the API server, the run's own CA and an inert token. It carries no credential (`authorKubectlCLI`, [`internal/api/cli_kubectl.go`](../internal/api/cli_kubectl.go)) |
 | `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. Set together with the role below, or not at all. [Details](#wardyn_aws_sso_account_id) |
@@ -2661,14 +2697,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_CODEX_MODEL`
 
-- **Switched off in 0.8.6:** a provider write of the `azure_foundry` kind answers `400` "the azure_foundry kind is not available in this release"
-- So no run sets this yet; the rest of this row describes the design a later release turns on.
-- The deployment a `codex-cli` run on an `azure_foundry` provider is pinned to (`ProviderHarness.Model`; `providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)).
-- Set by dispatch for that provider only, beside `WARDYN_CODEX_BASE_URL` (the endpoint plus `/openai/v1`) and `CODEX_API_KEY=wardyn-proxy-injected`.
-- The codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes it into `config.toml` as the one top-level `model`, replacing a person's own
-- And passes `-m <it>` to the boot-seeded `codex` and to `codex exec`, each only when the variable is non-empty
-- So every other codex run is unchanged.
-- A repo config or the interactive model picker can still ask for another model; the proxy's route gate then refuses that request.
+- The model a `codex-cli` run starts on, set by dispatch from the model stored on the provider's `codex-cli` harness entry (`applyProviderEnv`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)).
+- A `local_model` provider: set to the harness entry's model. The proxy's local-model route gate also checks each request's model against that provider's allowlist.
+- A `custom_endpoint` or `openai_api_key` provider: set only when the admin stored a model on the entry. With none stored it is left unset and codex keeps its own default. It is a starting model, not a pin: this variable does not restrict a later request for another model.
+- The `azure_foundry` kind sets it from its deployment, beside `WARDYN_CODEX_BASE_URL` (the endpoint plus `/openai/v1`) and `CODEX_API_KEY=wardyn-proxy-injected` (`providerAzureLane.env`, [`internal/api/provider_azure.go`](../internal/api/provider_azure.go)). That kind is switched off in this release: a provider write of it answers `400` "the azure_foundry kind is not available in this release", so this case is dormant. The limit belongs to that kind alone.
+- Every other codex run, including a run no provider serves, has it unset.
+- The codex image's `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) writes it into `config.toml` as the one top-level `model`, replacing a person's own.
+- And passes `-m <it>` to the boot-seeded `codex` and to `codex exec`, each only when the variable is non-empty.
+- A repo config or the interactive model picker can still ask for another model. Whether that request is refused depends on the provider's route rules: the local-model gate refuses a model off its allowlist.
 - No real credential is in the sandbox.
 
 ### `WARDYN_MCP_SERVERS_JSON`
@@ -2729,7 +2765,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ## Compose / scripts (shell-only — not read by Go)
 
-- Read by [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml) and the operator scripts, never by Go, so they carry no flag and are exempted from the reverse ratchet by name (`envDocShellOnly` in [`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)).
+- Read by [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml) and the operator scripts, and by Go only for `WARDYN_WORKSPACES_ROOT` and `WARDYN_MANAGED_DIR`. They carry no flag and are exempted from the reverse ratchet by name (`envDocShellOnly` in [`cmd/wardynd/envdoc_guard_test.go`](../cmd/wardynd/envdoc_guard_test.go)).
 - The first table is the compose stack itself — mostly scoping, so several stacks can coexist on one host (see [docs/CI.md](CI.md#concurrent-jobs-on-a-shared-host)); the second is the `make setup` installer.
 
 | Variable | Type | Default | Notes |
@@ -2749,7 +2785,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `GOPROXY` | string | (unset ⇒ `https://proxy.golang.org,direct`) | build arg forwarded into every Go builder stage's `ARG GOPROXY=` / `ENV GOPROXY=${GOPROXY}` — an alternate Go module mirror (Athens/Artifactory/Nexus) for `go mod download`. Empty is identical to unset: the go command falls back to `$GOROOT/go.env` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | string | (unset) | forwarded from the operator's shell as **build args** so image builds traverse a corporate proxy, and read by [`scripts/up.sh`](../scripts/up.sh) for its corp-CA preflight. Never set as wardynd runtime env. [Details](#http_proxy--https_proxy--no_proxy) |
 | `WARDYN_HOST_GOOS` / `WARDYN_HOST_GOARCH` | string | derived from `uname` | build target for the host-native `wardyn` used by host-side proxy detection. Override only when cross-building for a different host |
-| `WARDYN_CI_PROJECT` | string | `wardyn-ci-$$` (unique per invocation) | [`scripts/ci-run.sh`](../scripts/ci-run.sh) only: the one name used for **both** `COMPOSE_PROJECT_NAME` and `WARDYN_NS`. Pin it to the CI job id for a greppable stack name. See [below](#four-variables-that-need-more-than-a-table-cell) |
+| `WARDYN_CI_PROJECT` | string | `wardyn-ci-` plus 12 random hex characters (unique per invocation) | [`scripts/ci-run.sh`](../scripts/ci-run.sh) only: the one name used for **both** `COMPOSE_PROJECT_NAME` and `WARDYN_NS`. Pin it to the CI job id for a greppable stack name; an override must be unique among the jobs that share one container engine. See [below](#four-variables-that-need-more-than-a-table-cell) |
 | `WARDYN_CI_TOOLS_DIR` | string (path) | (set per invocation) | **Not operator-settable — an output, not a knob.** [`scripts/ci-run.sh`](../scripts/ci-run.sh) `export`s it to a fresh `mktemp -d` it stages the runner tools into, overwriting any value you export; [`deploy/compose/docker-compose.ci.yaml`](../deploy/compose/docker-compose.ci.yaml) consumes it (`${WARDYN_CI_TOOLS_DIR:?exported by scripts/ci-run.sh}`) |
 | `WARDYN_DOCKER_SOCK` | string (path) | `/var/run/docker.sock` | which host Docker socket `wardynd` binds and drives. The driver probes CC2/CC3 runtimes against this socket's daemon and fails closed when they are absent, so a runc-only daemon caps the whole stack at CC1. [Details](#wardyn_docker_sock) |
 | `WARDYN_WORKSPACES_ROOT` | string (path) | (unset = no host path exposed) | compose only — bind-mounts this host directory READ-ONLY at the *same path* inside the `wardynd` container so `local_dir` workspace onboarding ([`internal/api/workspaces.go`](../internal/api/workspaces.go)) can see host source. Point it at the narrowest project directory, **never** your home directory. [Details](#wardyn_workspaces_root) |
@@ -2811,6 +2847,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Point it at the narrowest project directory you have — **never** your home directory (wardynd could then read `~/.ssh`, `~/.aws`, `~/.claude`).
 - The interactive prompt below enforces this itself — typing your home directory (or `~`) is refused with a warning and reverts to whatever was set before, not merely discouraged in copy.
 - Unset means local-directory import stays unavailable rather than silently exposing anything.
+- wardynd's source scan reads it only to word its failure detail when a `local_dir` source's path cannot be read (`scanLocalDirSource`, [`internal/api/source_scan.go`](../internal/api/source_scan.go)). Setting it grants no access by itself: the bind-mount and the source-admission checks stay separate.
 - [`scripts/setup.sh`](../scripts/setup.sh)'s containerized path prompts for it interactively (TTY only, and only when it is unset) and persists a non-empty answer into `deploy/compose/.env`.
 - An already-exported env var wins silently and is persisted UNCHECKED — skipping the prompt (and its guard) entirely — and a bare Enter with no prior `.env` value leaves it unset/sealed — never the current directory.
 - It is singular for the same reason `WARDYN_USER_DRIVE_HOST_ROOT` below is.
@@ -2837,6 +2874,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - OR a private Sigstore trusted root for image admission: site setting `images.admission.trusted_roots[].path` must name a file in `/etc/wardyn/sigstore` (on Kubernetes, mount it there with `extraVolumes` and `extraVolumeMounts`). A path anywhere else, or a link that leads out of that directory, refuses the write.
 - Unlike `WARDYN_WORKSPACES_ROOT` above, only the HOST side varies — the container side is the literal `/etc/wardyn`.
 - A deployment needing neither leaves it unset and mounts a harmless empty path.
+- `wardynd -recovery-inventory` reads it, and treats a non-empty value on a non-Kubernetes runner as the managed desktop deployment rather than Compose (`recoveryDeployment`, [`cmd/wardynd/recovery_inventory.go`](../cmd/wardynd/recovery_inventory.go)). The managed desktop exports it. For that report it is a label for that report only: it grants no access to the directory by itself, and the mount stays separate.
 
 ### Setup / operator scripts (shell-only)
 
@@ -2853,7 +2891,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_UP_NO_BROWSER` | bool | (unset = open one) | `1` stops [`scripts/up.sh`](../scripts/up.sh) and [`scripts/setup.sh`](../scripts/setup.sh) opening the console in a browser when they finish. Set it on headless boxes, in recorded demos, and anywhere `up` is driven by another script |
 | `WARDYN_SETUP_RUNNER_DISK_GB` | int (GB) | (unset = measured on this host, else asked at a terminal) | GB of disk free for runs on the server's Docker host when nothing measures it (Docker Desktop). [`scripts/lib/runner-limits.sh`](../scripts/lib/runner-limits.sh) proposes the runner's limits from it. Read by `make setup`, `make demo`, `make test-drive` and [`scripts/ci-run.sh`](../scripts/ci-run.sh) |
 | `WARDYN_SETUP_RUNNER_LIMITS` | string | (unset = the proposal) | the server runner's whole limit set as `wardyn runner set` flags, set instead of the proposal when the runner has none; the walk scripts set their own. Same readers as `WARDYN_SETUP_RUNNER_DISK_GB` |
-| `WARDYN_UP_SKIP_RUN_IMAGES` | bool | (unset = build them) | `1` makes [`scripts/up.sh`](../scripts/up.sh) skip building the agent + proxy run images, for a console-only look. Runs then fail until you build them: `make agent-images-core && docker compose -f deploy/compose/docker-compose.yaml --profile build-only build proxy-image` |
+| `WARDYN_UP_SKIP_RUN_IMAGES` | bool | (unset = build them) | `1` makes [`scripts/up.sh`](../scripts/up.sh) skip its final run-image build, for a console-only look. Images the pull-first step already fetched stay; a run fails only for one still missing, such as the Claude sign-in image: `make agent-images-core` |
 | `WARDYN_SCM_SSH_HOSTS` | string (space-separated) | `github.com` | hosts [`scripts/setup.sh`](../scripts/setup.sh) fetches SSH host keys for while importing SCM credentials, e.g. `"github.com dev.azure.com"` |
 | `WARDYN_GEN_DEPLOY_KEY` | bool | (unset = ask) | `1` makes [`scripts/setup.sh`](../scripts/setup.sh) generate a per-repo deploy key headlessly instead of prompting for one |
 | `WARDYN_DEPLOY_KEY_HOST` | string | `github.com` | the host that deploy key is generated for ([`scripts/setup.sh`](../scripts/setup.sh)); read only when a key is actually being generated |
@@ -2928,7 +2966,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **`WARDYN_NS`** — compose sets wardynd's `WARDYN_INTERNAL_NETWORK` from the same value; they **must** stay equal or each run's proxy sidecar joins the wrong bridge.
 - **`WARDYN_UI_STAGE`** — when the in-image build fails, [`scripts/up.sh`](../scripts/up.sh) builds the UI on the host and retries with `ui-prebuilt` automatically.
 - Setting it explicitly forces one stage *and disables that retry*.
-- **`WARDYN_CI_PROJECT`** — the per-PID default guarantees concurrent invocations never collide, and that one job's `down --volumes` cannot tear down another's.
+- **`WARDYN_CI_PROJECT`** — the default is `wardyn-ci-` plus 6 random bytes in hex, not a process id. A PID repeats across the PID namespaces of jobs sharing one engine, so random keeps one job's `down --volumes` from tearing down another's.
+- An override carries no such protection: two jobs on one engine that pick the same name destroy each other's stack, so make it unique per job.
 
 ## Test / internal-only (not operator configuration)
 

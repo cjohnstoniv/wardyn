@@ -13,7 +13,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 )
 
-var _ secretstore.Revisioned = (*Store)(nil)
+var (
+	_ secretstore.Revisioned  = (*Store)(nil)
+	_ secretstore.RevisionRow = (*Store)(nil)
+)
 
 // revisionExpr names a row's current value: value_rev (migration 0191) takes a
 // fresh number on every write of the value (an insert, or `value_rev = DEFAULT`
@@ -36,6 +39,10 @@ func (s *Store) Revision(ctx context.Context, name string) (string, error) {
 	}
 	return rev, nil
 }
+
+// RevisionRowOwner names this view's owner: its revision of a name is the value_rev (revisionExpr) of the row
+// (owner, name) in the secrets table, so a transaction on the same database can share-lock that row.
+func (s *Store) RevisionRowOwner() (string, bool) { return s.owner, true }
 
 // putIfRevision is the local-mode guarded upsert: one statement, so the check
 // and the write are atomic. rev "" requires an absent row.

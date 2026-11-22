@@ -43,6 +43,7 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
 - The fingerprint returned (and shown in the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public by design** — it identifies the server/key, it authenticates no one, so showing it is not a disclosure.
 - Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message:
   - it does not confirm the key exists under a DIFFERENT account, only that this exact `POST` didn't take.
+- The quota is checked before the duplicate check: a caller already holding 20 keys gets the `422` quota refusal for any otherwise valid add, a duplicate included.
 
 ### Reclaiming a squatted fingerprint
 
@@ -190,8 +191,9 @@ Host wardyn-<run-id>
   connect to, and no "try anyway" affordance that would just fail.
 - **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
   that session is in now.
-  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
-    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) tries to start in `$HOME`,
+    and an sftp session starts in the sandbox account's home directory. If that directory cannot be entered, they
+    keep the image's working directory. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 
@@ -268,6 +270,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - A laptop delete or rename reaches the sandbox only for a file this sync sent and the sandbox left unchanged. A sandbox edit is kept and listed as a conflict. An empty, unreadable or ignored laptop directory deletes nothing.
 - A sandbox delete removes a laptop file only under `--pull-deletes`, if the laptop copy is unchanged. Deletes are listed first, capped by `--max-pull-deletes` (20; over it, none), and moved into `~/.local/state/wardyn/sync/<run-id>-deleted/`.
 - `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
+- With `WARDYN_SYNC_DENY` patterns set, `--git` reads the bundle in a repository of its own (with none set it skips this). It refuses the branch if a commit adds a path (even one later removed or renamed), or the tip holds one, that matches. The error names that path and pattern. Remove the path from history or change the pattern.
 - `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
 - A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed. Only a runner's pass back keeps a conflict copy ([hybrid laptops](operations/hybrid-laptops.md)).
@@ -349,7 +352,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 - **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`, [`test/editors/`](../test/editors/)). Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
   - JetBrains: an sftp upload of the IDE, an exec unpack, the headless `remote-dev-server.sh`, and a TLS handshake with the backend through `-L`. Gateway's GUI thin client is not run.
   - Mutagen: `sync create`, a flush each way, a byte compare.
-- **Mutagen needs one link.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory, so the agent is not found. Once per sandbox, before `mutagen sync create`:
+- **Mutagen finds its agent through `$HOME`.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. Commands start in `$HOME`, as under `sshd`, so it is found. Only where `$HOME` is unset or cannot be entered do they keep the image's working directory and miss it; in such a sandbox, once, before `mutagen sync create`:
 
 ```sh
 ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'

@@ -471,19 +471,64 @@ func TestCheckpointLoop_OtherSignerAdvancedSignsLoneRow(t *testing.T) {
 	a, _ := newTestSigner(t, st)
 	a.Tick(ctx)
 	st.appendRows(2)
-	a.Tick(ctx) // C1 over seq 1-2; its own row lands at seq 3
+	a.Tick(ctx)      // C1 over seq 1-2; its own row lands at seq 3
+	st.appendRows(1) // seq 4, a real event after a's announcement
 	b, _ := newTestSigner(t, st)
 	b.Key, b.Record = a.Key, failingRecorder{}
-	b.Tick(ctx) // C2 over seq 3 (b has no own row to skip); its own row is lost
-	if st.inserts != 2 || st.cps[1].SeqLo != 3 {
+	b.Tick(ctx) // C2 over seq 3-4: a's announcement is skipped only when it is alone; its own row is lost
+	if st.inserts != 2 || st.cps[1].SeqLo != 3 || st.cps[1].SeqHi != 4 {
 		t.Fatalf("replica b did not advance: %+v", st.cps)
 	}
-	st.appendRows(1) // seq 4, a real event alone after C2
+	st.appendRows(1) // seq 5, a real event alone after C2, whose announcement was lost
 	a.Tick(ctx)
-	if st.inserts != 3 || st.cps[2].SeqLo != 4 || st.cps[2].SeqHi != 4 {
+	if st.inserts != 3 || st.cps[2].SeqLo != 5 || st.cps[2].SeqHi != 5 {
 		t.Fatalf("a lone real row after another replica's checkpoint was not signed: %+v", st.cps)
 	}
 	checkSigned(t, a, st)
+}
+
+// Two replicas, each its own signer, alternate ticks after one real event. Each sees the other's announcement
+// as the only new row, and neither signs it: an idle install writes nothing, however the ticks interleave. A
+// real event after that is signed, by whichever replica ticks next.
+func TestCheckpointLoop_AlternatingReplicasStayIdleAfterARealEvent(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	st.appendRows(5) // history before signing was on
+	a, rec := newTestSigner(t, st)
+	b, _ := newTestSigner(t, st)
+	b.Key, b.Record = a.Key, rec // two processes of one install: one key, one audit chain
+	a.Tick(ctx)
+	b.Tick(ctx)
+	if st.inserts != 0 {
+		t.Fatalf("idle start wrote %d checkpoints", st.inserts)
+	}
+
+	st.appendRows(1) // the one real event, seq 6
+	a.Tick(ctx)
+	if st.inserts != 1 || st.cps[0].SeqLo != 6 || st.cps[0].SeqHi != 6 || len(rec.events) != 1 {
+		t.Fatalf("the real event was not signed once: checkpoints %+v, %d rows", st.cps, len(rec.events))
+	}
+	for i := range 6 {
+		for _, s := range []*Signer{b, a, b, a} {
+			s.Tick(ctx)
+		}
+		if st.inserts != 1 || len(rec.events) != 1 || len(st.rows) != 7 {
+			t.Fatalf("idle round %d: %d checkpoints, %d announcements, %d rows; want 1, 1 and 7", i, st.inserts, len(rec.events), len(st.rows))
+		}
+	}
+
+	st.appendRows(1) // a real event after the idle stretch, seq 8
+	b.Tick(ctx)
+	if st.inserts != 2 || st.cps[1].SeqLo != 7 || st.cps[1].SeqHi != 8 {
+		t.Fatalf("the real event after the idle ticks was not signed: %+v", st.cps)
+	}
+	checkSigned(t, a, st)
+	for _, s := range []*Signer{a, b, a, b} {
+		s.Tick(ctx)
+	}
+	if st.inserts != 2 || len(rec.events) != 2 {
+		t.Fatalf("idle again after the second checkpoint: %d checkpoints, %d announcements", st.inserts, len(rec.events))
+	}
 }
 
 // retireScenario signs a checkpoint with a key, then rotates with -retire-previous and returns the signer now

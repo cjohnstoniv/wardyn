@@ -2446,7 +2446,7 @@ jobs:
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
         run: |
           set -euo pipefail
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
             echo "$f: minos $mins"
@@ -3160,14 +3160,15 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
-    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    # 40 dates from when staticcheck ran here: a cold pass was killed at 25. It now has its own job (below); this
+    # limit was left as it was.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
-    steps:
+        # staticcheck runs in the staticcheck job below, one cell per tag set; `gates (staticcheck)` aggregates it.
+        gate: [govulncheck, licenses, license-headers, gitleaks]
+    steps: &gate_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -3201,15 +3202,16 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+            go-gates-${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
       # The gate's own `go run tool@version` dependencies, fetched here so a network
       # stall fails fast under this name instead of eating the job timeout. The
       # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
       - name: Fetch gate tools
         timeout-minutes: 4
-        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+        run: scripts/fetch-gate-tools.sh ${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}
       # See go-lint: staticcheck's whole-tree pass.
       - name: Add swap for the memory peak
-        if: matrix.gate == 'staticcheck'
+        if: startsWith(matrix.gate, 'staticcheck')
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -3234,6 +3236,33 @@ jobs:
             ~/.cache/staticcheck
           key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # staticcheck's three whole-tree passes (tagless, -tags docker, -tags docker,k8s), one runner each: in one job they
+  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's.
+  staticcheck:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [staticcheck-tagless, staticcheck-docker, staticcheck-k8s]
+    steps: *gate_steps
+
+  # The required context `gates (staticcheck)`: it passes only when every staticcheck pass did. A failed, cancelled or
+  # skipped pass fails it.
+  gates-staticcheck:
+    name: gates (staticcheck)
+    needs: staticcheck
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every staticcheck pass passed
+        env:
+          PASSES: ${{ needs.staticcheck.result }}
+        run: |
+          [ "$PASSES" = success ] || { echo "::error::a staticcheck pass did not pass (result: $PASSES); see the staticcheck (…) checks"; exit 1; }
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-26.04
@@ -3439,8 +3468,8 @@ jobs:
   # A train/* or prep/* pull request merges a whole wave, and a nightly suite has
   # gone red on a train whose pull request CI was green. On those heads
   # train-gate passes only when train-suites (the nightly's candidate scope)
-  # passed. On any other head, and on push, train-suites skips and train-gate
-  # passes at once, so the one name can be required everywhere. A fork's
+  # and mixed-version passed. On any other head, and on push, both skip and
+  # train-gate passes at once, so the one name can be required everywhere. A fork's
   # train/* branch never runs train-suites, so train-gate stays red there.
   #
   # train-suites dispatches the nightly rather than calling it: GitHub checks a
@@ -3488,8 +3517,21 @@ jobs:
           # failed reads in a row (see ci-wait-run.sh).
           ./scripts/ci-wait-run.sh "$id"
 
+  # mixed-version calls the workflow rather than dispatching it: a called
+  # workflow runs from the pull request head, so it works before its file is on
+  # main, which a dispatch does not. It needs only contents: read, so the
+  # caller's token covers it. Same train-head condition as train-suites.
+  mixed-version:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
+    uses: ./.github/workflows/mixed-version.yml
+    permissions:
+      contents: read
+
   train-gate:
-    needs: train-suites
+    needs: [train-suites, mixed-version]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -3499,14 +3541,16 @@ jobs:
           EVENT: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
           SUITES: ${{ needs.train-suites.result }}
+          MIXED: ${{ needs.mixed-version.result }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             case "$HEAD_REF" in
               train/*|prep/*)
-                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; } ;;
+                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; }
+                [ "$MIXED" = success ] || { echo "::error::mixed-version did not pass (result: $MIXED)"; exit 1; } ;;
             esac
           fi
-          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES"
+          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES, mixed-version $MIXED"
 
   # ── every flaky e2e test gets an issue ─────────────────────────────────────
   # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
@@ -3609,6 +3653,7 @@ jobs:
       - trivy-agent-novnc-signin
       - notices
       - gates
+      - staticcheck
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
@@ -3733,7 +3778,7 @@ jobs:
   # created before this run's. A family this run did not save, because its job
   # failed or its entry already existed, keeps its older entry.
   go-cache-prune:
-    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates, staticcheck]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10

@@ -5,6 +5,7 @@ package api
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -74,16 +75,17 @@ func TestDispatchRecordsTheMarksOfTheConfigSent_ArtifactMirror(t *testing.T) {
 }
 
 // A file_secret placeholder adds its host to MITMHosts after the policy is snapshotted, so the host
-// is Inspected only if the marks are computed from the config dispatch finally sends. With the
-// switch off the same grant is delivered as a file value and no host is terminated.
+// is marked opened only if the marks are computed from the config dispatch finally sends. The proxy
+// opens the host on 443 alone, so the portless allowlist entry is partly inspected, with that one
+// destination. With the switch off the same grant is delivered as a file value and no host is terminated.
 func TestDispatchRecordsTheMarksOfTheConfigSent_FilePlaceholder(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		on   bool
-		want []string
+		part map[string][]string
 	}{
-		{"placeholders on", true, []string{placeholderHost}},
-		{"placeholders off", false, []string{}},
+		{"placeholders on", true, map[string][]string{placeholderHost: {placeholderHost + ":443"}}},
+		{"placeholders off", false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, sent, events, runID := runWalledDispatch(t, walledDispatch{
@@ -99,8 +101,11 @@ func TestDispatchRecordsTheMarksOfTheConfigSent_FilePlaceholder(t *testing.T) {
 				},
 			})
 			_, marks := assertMarksAreThoseOfTheConfigSent(t, events, runID, sent)
-			if !slices.Equal(marks.Inspected, tc.want) {
-				t.Errorf("inspected = %v, want %v", marks.Inspected, tc.want)
+			if len(marks.Inspected) != 0 {
+				t.Errorf("inspected = %v, want none (no entry is opened on every destination)", marks.Inspected)
+			}
+			if !maps.EqualFunc(marks.Partial, tc.part, slices.Equal[[]string]) {
+				t.Errorf("partial = %v, want %v", marks.Partial, tc.part)
 			}
 			if tc.on != terminatesHost(marks.Terminated, placeholderHost) {
 				t.Errorf("terminated = %v, placeholders on = %v", marks.Terminated, tc.on)

@@ -118,7 +118,7 @@ describe("the people table", () => {
     expect(within(ana).getByText("1 session · 2 tokens · 1 SSH key")).toBeInTheDocument();
     const fresh = screen.getByText("new@example.com").closest("tr")!;
     expect(within(fresh).getByText("Never signed in")).toBeInTheDocument();
-    expect(within(fresh).getAllByText("—")).toHaveLength(2);
+    expect(within(fresh).getAllByText("—")).toHaveLength(4);
     const left = screen.getByText("left@example.com").closest("tr")!;
     expect(within(left).getByText("Deactivated")).toBeInTheDocument();
     expect(within(left).getByText("3 credentials")).toBeInTheDocument();

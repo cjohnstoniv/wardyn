@@ -309,7 +309,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
-		resp.HostMarks = envelope.HostMarks
+		resp.HostMarks = scopedHostMarks(envelope.HostMarks)
 	}
 	resp.InspectionLeftTo = s.inspectionLeftTo(ctx, run.ID, sc)
 	writeJSON(w, http.StatusOK, resp)

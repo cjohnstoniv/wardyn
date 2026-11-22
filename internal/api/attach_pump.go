@@ -363,7 +363,7 @@ func (p *attachPumpState) resizeWorker() {
 			if !p.holder.ready.wait(p.ctx) {
 				return
 			}
-			if !p.holder.canWrite() {
+			if !p.holder.canDeliver() {
 				continue
 			}
 			if err := p.sess.Resize(p.ctx, m.Cols, m.Rows); err != nil {

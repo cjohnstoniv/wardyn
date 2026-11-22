@@ -533,6 +533,8 @@ What the check does and does not settle:
 |---|---|
 | `always_deny` | Hard-deny the unknown domain and log it. No approval is ever raised. |
 | `deny_with_review` | Raise a pending approval **and** deny the in-flight request. Once approved, a retry passes. The connection is never held; a stalled control plane delays the request by at most 5 s. |
+| | While an approval is pending, a retry waits for a rate-limited status check. A request that joins a check already in progress can still see the earlier pending state; retry again after that response. |
+| | With the control plane responding, starting a new check waits at most about a quarter second. Waiting and the check share the existing timeout. |
 | `wait_for_review` | Raise a pending approval and **hold the connection** until it is decided or the hold deadline passes (`first_use_hold_seconds`, default 30s; at most `max_holds` concurrent holds, default 16). |
 | | Approved in time, the same in-flight request completes; on deadline it fails closed (403) with the approval still pending. |
 
@@ -843,7 +845,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The proxy raises a `tool_call` approval for the request's host, method and path. The path is in the normal form host rules match, without its query, and the body is not part of it. The approval's `requested_scope` is `{"host", "method", "path", "call_sha256", "hold_seconds"}`, and `"accepts_once": true` when the proxy can keep a `once` decision.
 - The open request waits up to 90 seconds. If nobody decides in time, it is answered with the approval-pending `403` (`X-Wardyn-Egress: approval-pending`), and the approval stays pending. Send the request again once it is approved.
 - An approval for the run lets every request with that host, method and path through for the rest of the run, whatever query or body it carries. A decline for the run refuses them all. The answer lives in the run's proxy, so a new proxy asks again.
-- A decision `once` answers only the request waiting, or the next one sent if none waits. The next request with that host, method and path asks again.
+- An approval decided `once` is spent by one waiting request, or by the next one sent if none waits; any other waiting request asks again. A decline decided `once` refuses every request already waiting on that approval. The next request with that host, method and path asks again.
 - On a host a `via_org` route serves, the answer lives in the organisation's engine for the run instead. The call is asked about again once that engine is let go, which happens:
   - when it has had nothing open for 10 minutes;
   - when the run is kept, its runner goes offline, or two reads of the run fail in a row;
@@ -1234,9 +1236,10 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 
 **It narrows; it never widens.**
 
-- A rule never makes a supervised run autonomous: a run on the gated lane keeps its hold default. A routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
-- The worst a mistaken rule can do is ask a human more often, or refuse a call the agent wanted.
-- That holds across the member seam too: a member's `inline_policy` may narrow the operator's rules, never widen them.
+- Routing a run to the gated lane never loosens it: a routed run keeps the policy's own `*` rule and is never looser than the ungated run it replaces.
+- An explicit `allow` runs that tool without asking, so a rule that allows too much removes the human decision for that tool.
+- Tools no rule names on a supervised run keep their hold default unless the policy sets a different default.
+- A member's `inline_policy` may narrow the operator's rules, never widen them: a member's rules cannot weaken the operator's ceiling.
 - The composer clamp raises any weaker effect to the operator's (`allow` < `hold` < `deny`) and carries the operator's own rules into the run.
 - So a tool the operator denies stays denied in a run whose policy never mentioned it.
 
@@ -1665,9 +1668,9 @@ So an entry a pattern matches is judged one of two ways:
 - Bounded at write time to **0..32**, the most a pack can carry.
 - A file whose size the pack does not carry is cleared against the forge like a matched entry (see the refusals above)
   - and refused, as "size not carried by the pack", when it cannot be shown unchanged;
-  - on a lane that cannot read the forge (every host but github.com), that is every file the push did not itself change,
+  - on a connection whose code host cannot be read (every host but github.com and Azure DevOps), a file the push does not carry is refused when Wardyn cannot establish its size;
   - so the push is refused whatever the sizes;
-  - set it to `0` on that lane, or push through a GitHub lane.
+  - use a supported connection or change the size rule: set it to `0` on that lane, or push through a GitHub or Azure DevOps lane.
 - A complete clone does not help: git never sends objects the remote already holds.
 - A file past `max_inspect_pack_mib`, or past `internal/gitpack`'s own compiled-in ceilings, is refused as too large before this rule sees it.
 - A deny, like a `deny_paths` match (`403`, `brokered:git:push-rules`).

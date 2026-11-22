@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,8 +46,6 @@ type CLISignInStore interface {
 	EndCLISession(ctx context.Context, id uuid.UUID, principal, reason string, now time.Time) (CLISessionRow, error)
 	// ListCLISessions is principal's live sessions, newest first.
 	ListCLISessions(ctx context.Context, principal string, now time.Time) ([]CLISessionRow, error)
-	// CountLiveCLISessions counts the live sessions a cut naming name ends ("" = every one).
-	CountLiveCLISessions(ctx context.Context, name string) (int, error)
 }
 
 var _ CLISignInStore = PG{}
@@ -378,23 +377,62 @@ func (s PG) CreateCLIAdminToken(ctx context.Context, sessionID uuid.UUID, tok ty
 
 // endCLISessionsSQL ends every live CLI session a cut naming $1 reaches ("" = every one), matched as
 // the cut's own check matches (the subject exactly, the email ignoring case), and revokes the tokens of
-// those sessions, stamping $2 as the reason. Every writer of oidc_session_revocations and
-// oidc_session_cuts runs it in the same transaction as its cut (cmd/wardynd's census guard pins that),
+// those sessions, stamping $2 as the reason. It returns one row: how many sessions THIS statement ended,
+// which a concurrent cut that got there first does not count again. Every writer of oidc_session_revocations
+// and oidc_session_cuts runs it in the same transaction as its cut (cmd/wardynd's census guard pins that),
 // so a revoke or a sign-out ends the person's CLI sessions at once rather than at their next refresh.
 const endCLISessionsSQL = `
 	WITH ended AS (
 		UPDATE cli_sessions SET ended_at = clock_timestamp(), end_reason = $2
 		WHERE ended_at IS NULL AND ($1 = '' OR principal = $1 OR lower(email) = lower($1))
-		RETURNING id)
-	UPDATE api_tokens SET revoked_at = clock_timestamp()
-	WHERE revoked_at IS NULL AND cli_session_id IN (SELECT id FROM ended)`
+		RETURNING id),
+	revoked AS (
+		UPDATE api_tokens SET revoked_at = clock_timestamp()
+		WHERE revoked_at IS NULL AND cli_session_id IN (SELECT id FROM ended)
+		RETURNING 1)
+	SELECT count(*) FROM ended`
 
-// endCLISessionsOf runs endCLISessionsSQL on q, the cut's own transaction.
+// endCLISessionsOf runs endCLISessionsSQL on q, the cut's own transaction. It does not report the count to
+// a CLIEnded: the transaction is the caller's, and may still roll back.
 func endCLISessionsOf(ctx context.Context, q Querier, name, reason string) error {
-	if _, err := q.Exec(ctx, endCLISessionsSQL, name, reason); err != nil {
+	var n int64
+	if err := q.QueryRow(ctx, endCLISessionsSQL, name, reason).Scan(&n); err != nil {
 		return fmt.Errorf("store: end cli sessions: %w", err)
 	}
 	return nil
+}
+
+// CLIEnded counts the CLI sessions the session cuts made under one context ended. A request that answers
+// with a receipt of its cuts puts one on its context (WithCLIEnded) before it cuts, and reads Count after.
+type CLIEnded struct{ n atomic.Int64 }
+
+type cliEndedKey struct{}
+
+// WithCLIEnded is ctx with a CLIEnded that the cuts made with the returned context add to.
+func WithCLIEnded(ctx context.Context) (context.Context, *CLIEnded) {
+	c := &CLIEnded{}
+	return context.WithValue(ctx, cliEndedKey{}, c), c
+}
+
+// CLIEndedFrom is the CLIEnded on ctx, or nil.
+func CLIEndedFrom(ctx context.Context) *CLIEnded {
+	c, _ := ctx.Value(cliEndedKey{}).(*CLIEnded)
+	return c
+}
+
+// Count is the sessions ended so far; a nil c has ended none.
+func (c *CLIEnded) Count() int {
+	if c == nil {
+		return 0
+	}
+	return int(c.n.Load())
+}
+
+// noteCLIEnded adds n, the sessions a committed cut ended, to the CLIEnded on ctx, if there is one.
+func noteCLIEnded(ctx context.Context, n int64) {
+	if c := CLIEndedFrom(ctx); c != nil {
+		c.n.Add(n)
+	}
 }
 
 // EndCLISession ends id and revokes its tokens.
@@ -430,15 +468,4 @@ func (s PG) ListCLISessions(ctx context.Context, principal string, now time.Time
 		r.AdminExpiresAt = admin
 		return r, err
 	})
-}
-
-// CountLiveCLISessions counts what endCLISessionsSQL would end for name.
-func (s PG) CountLiveCLISessions(ctx context.Context, name string) (int, error) {
-	var n int
-	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM cli_sessions
-		WHERE ended_at IS NULL AND ($1 = '' OR principal = $1 OR lower(email) = lower($1))`, name).Scan(&n)
-	if err != nil {
-		return 0, fmt.Errorf("store: count cli sessions: %w", err)
-	}
-	return n, nil
 }

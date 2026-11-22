@@ -120,6 +120,12 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // month must not queue behind (or hold up) an append.
 const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 
+// PortalIssuerRegistryLockKey serializes every issuer-portal registry decision across replicas: a direct
+// registration, the approval of a held registration, the retirement of an unused issuer binding and the
+// boot-time record of the console issuer. It is taken as a transaction lock (pg_advisory_xact_lock) before
+// any conflict read, so two decisions that each read "no conflict" cannot both commit.
+const PortalIssuerRegistryLockKey int64 = 0x5741524459_504952 // ASCII "WARDYPIR"
+
 // AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey.
 // Since 0056 the trigger takes it on every audit_events insert, including
 // from outside this repo, so a stray open transaction (an operator's psql

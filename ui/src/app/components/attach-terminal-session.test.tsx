@@ -310,15 +310,18 @@ describe("AttachTerminal — close codes", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  it("a 4401 close tells the owner to sign in again, and a helper that help has ended", async () => {
+  it("a 4401 close tells the owner to sign in again", () => {
     written.length = 0;
-    const owner = render(<AttachTerminal runId="run_1" />);
+    render(<AttachTerminal runId="run_1" />);
     const ws = FakeWebSocket.instances[0];
     act(() => ws.open());
     act(() => ws.drop(4401, "session ended"));
     expect(written.join("")).toContain("[session ended: sign in again to reconnect]");
-    owner.unmount();
+  });
 
+  // The server closes a helper's socket with 4401 whenever the grant stops authorizing it, a failed grant read
+  // included, so the close alone does not say the help ended.
+  it("a helper's 4401 while the page still reads the grant as open says the connection ended, not that help did", async () => {
     written.length = 0;
     const before = FakeWebSocket.instances.length;
     const helper = render(
@@ -332,7 +335,29 @@ describe("AttachTerminal — close codes", () => {
     const hws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
     act(() => hws.open());
     act(() => hws.drop(4401, "session ended"));
+    expect(written.join("")).toContain("This terminal connection ended. Reconnect to check access.");
+    expect(written.join("")).not.toContain("Help on this run has ended.");
+    expect(written.join("")).not.toContain("sign in again");
+    helper.unmount();
+  });
+
+  it("a helper's 4401 once the page has read the grant as ended says that help has ended", async () => {
+    written.length = 0;
+    const before = FakeWebSocket.instances.length;
+    const view = (open: boolean) => (
+      <SupportHelperContext.Provider value={open}>
+        <AttachTerminal runId="run_1" />
+      </SupportHelperContext.Provider>
+    );
+    const helper = render(view(true));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(FakeWebSocket.instances.length).toBeGreaterThan(before);
+    const hws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    act(() => hws.open());
+    helper.rerender(view(false)); // the page's poll read the grant as ended
+    act(() => hws.drop(4401, "session ended"));
     expect(written.join("")).toContain("Help on this run has ended.");
+    expect(written.join("")).not.toContain("Reconnect to check access");
     expect(written.join("")).not.toContain("sign in again");
     helper.unmount();
   });

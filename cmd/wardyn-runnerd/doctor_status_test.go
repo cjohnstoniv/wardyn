@@ -207,3 +207,134 @@ func TestServiceStage(t *testing.T) {
 		}
 	})
 }
+
+// A start refused with no stage (an invalid --local-attach value) is a failure at rest, not a clean stop
+// after an old connection error: doctor fails it in text and JSON, finishDoctor returns the error that makes
+// the command exit non-zero, and it stays failed until a start connects, through a retry, a failed connect
+// and a hard kill.
+func TestStatusStageStartRefusedWithoutAStageFailsUntilAStartSucceeds(t *testing.T) {
+	r := newRig(t)
+	state := filepath.Join(r.home, ".config", "wardyn", "runner")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, refusal := (serveOptions{localAttach: "maybe"}).localAttachEnabled()
+	if refusal == nil {
+		t.Fatal("--local-attach=maybe was accepted")
+	}
+	now := statusAt
+	tick := func() *time.Time { now = now.Add(time.Minute); return &now }
+	// start is serve's paired initialisation: the offline log (which reads the startup summary an earlier
+	// start kept) reports to a new status writer (which reads the previous status.json).
+	start := func() (*statusWriter, *offlineLog) { return stageFixture(t, state, tick()) }
+	status := func() runnerStatus {
+		t.Helper()
+		st, err := loadStatus(statusPath(state))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	fails := func(what, want string) doctor.Report {
+		t.Helper()
+		rep := r.run(doctorOptions{})
+		s := stage(t, rep, "status")
+		if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, want) {
+			t.Fatalf("%s: status = %s %q, want FAIL naming %q", what, s.Status, s.Detail, want)
+		}
+		return rep
+	}
+
+	// A: a staged refusal; its summary stays in the startup file.
+	w, l := start()
+	l.startFailed(atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	w.stopped()
+	fails("staged refusal A", "stage engine")
+
+	// B: a newer refusal with no stage. The pending A is replayed first, then B replaces it.
+	w, l = start()
+	l.startFailed(refusal)
+	w.stopped()
+	if st := status(); st.StartRefusal == nil || st.Stage != "" || st.State != "stopped" {
+		t.Fatalf("status at rest after B = %+v, want stopped, no stage, a start refusal", st)
+	}
+	rep := fails("B at rest", "local attach must be on or off")
+	for _, asJSON := range []bool{false, true} {
+		var out strings.Builder
+		if err := finishDoctor(&out, rep, asJSON); err == nil {
+			t.Errorf("json=%v: finishDoctor returned nil, want the error that exits non-zero", asJSON)
+		}
+		want := "FAIL  status"
+		if asJSON {
+			want = `"status": "FAIL"`
+		}
+		if !strings.Contains(out.String(), want) || !strings.Contains(out.String(), "local attach must be on or off") {
+			t.Errorf("json=%v: output lacks the failed status stage (%q):\n%s", asJSON, want, out.String())
+		}
+	}
+
+	// C: a retry that has not connected, and one interrupted before it connects. The summary of A is still
+	// on disk but older than B: it must not be replayed over it.
+	w, l = start()
+	_ = l
+	if st := status(); st.State != "starting" || st.StartRefusal == nil || st.Stage != "" {
+		t.Fatalf("a new writer's file = %+v, want starting with B carried and no stage", st)
+	}
+	fails("C starting", "local attach must be on or off")
+	w.stopped()
+	if st := status(); st.State != "stopped" || st.StartRefusal == nil || st.Stage != "" {
+		t.Fatalf("C interrupted before it connected = %+v, want a stop that keeps B", st)
+	}
+	if d := stage(t, fails("C stopped", "local attach"), "status").Detail; strings.Contains(d, "no socket") || strings.Contains(d, "stage engine") {
+		t.Errorf("B's remedy was replaced by A's: %q", d)
+	}
+
+	// A retry whose connect fails keeps B on disk; a hard kill (no stop) and the next start still show it.
+	w, l = start()
+	l.connectFailed(dnsFailure())
+	if st := status(); st.StartRefusal == nil || st.Stage != types.RunnerStageDNS {
+		t.Fatalf("after a failed connect = %+v, want B kept beside the connection failure's stage", st)
+	}
+	fails("after a failed connect", "local attach")
+	_ = w // killed: no stopped()
+	start()
+	if st := status(); st.State != "starting" || st.StartRefusal == nil {
+		t.Fatalf("after a hard restart = %+v, want B carried", st)
+	}
+	fails("after a hard restart", "local attach")
+
+	// An old drop followed by a clean stop is still no failure: only a start refusal makes one.
+	r.writeStatus(t, "", runnerStatus{State: "stopped", Since: statusAt, LastError: "link down", LastErrorAt: &statusAt})
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a clean stop after an old error failed: %q", s.Detail)
+	}
+	_ = os.Remove(statusPath(state))
+
+	// A newer refusal at a stage replaces B.
+	w, l = start()
+	l.startFailed(refusal)
+	w.stopped()
+	w, l = start()
+	l.startFailed(atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	w.stopped()
+	if st := status(); st.StartRefusal != nil || st.Stage != types.RunnerStageEngine || strings.Contains(st.LastError, "local attach") {
+		t.Errorf("a staged refusal after B: %+v, want only the stage's", st)
+	}
+
+	// A start that connects clears it, and the stop after it stays clean.
+	w, l = start()
+	l.startFailed(refusal)
+	w.stopped()
+	w, _ = start()
+	w.linkChanged(true, "")
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a connected start still fails: %q", s.Detail)
+	}
+	w.stopped()
+	if s := stage(t, r.run(doctorOptions{}), "status"); s.Status == doctor.StatusFail {
+		t.Errorf("a refusal outlived a successful start: %q", s.Detail)
+	}
+	if st := status(); st.StartRefusal != nil {
+		t.Errorf("the start refusal stayed after a connect: %+v", st)
+	}
+}

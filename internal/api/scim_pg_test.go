@@ -769,7 +769,7 @@ func TestSCIMSuspendOfAnUnresolvedOwnerCutsOnlyTheProvenForms(t *testing.T) {
 		if e.tokenRevoked(tok1) || e.tokenRevoked(tok2) || !e.tokenWorks(e.b, raw1) || !e.tokenWorks(e.b, raw2) || e.runState(run1) != types.RunRunning {
 			t.Error("a principal the address names was reached")
 		}
-		if fails, err := e.st.ListDeprovisionFailures(context.Background(), 10); err != nil || len(fails) != 1 || fails[0].Step != store.JobStepCutoff || fails[0].LastError != reasonOwnerAmbiguous {
+		if fails, err := e.st.ListDeprovisionFailures(context.Background(), e.issuer, e.tenant, 10); err != nil || len(fails) != 1 || fails[0].Step != store.JobStepCutoff || fails[0].LastError != reasonOwnerAmbiguous {
 			t.Errorf("failures = %+v (%v), want step 1 pending with %s", fails, err, reasonOwnerAmbiguous)
 		}
 		if len(e.rows(e.a, "scim.user.deactivate")) != 0 {
@@ -1152,7 +1152,7 @@ func TestPG_SCIMSuspend_PendingWorkSurvivesCrashAfterCommit(t *testing.T) {
 	if _, err := e.pool.Exec(ctx, `UPDATE deprovision_jobs SET updated_at = now() - interval '1 hour' WHERE identity_id = $1`, id); err != nil {
 		t.Fatal(err)
 	}
-	pending, err := e.st.PendingLeavers(ctx, scimResumeIdle, 10)
+	pending, err := e.st.PendingLeavers(ctx, e.issuer, e.tenant, scimResumeIdle, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -253,7 +253,7 @@ func TestPG_RunWorkspaceIDsRoundTrip(t *testing.T) {
 	if _, err := pg.ListRunsPage(ctx, store.Page{Limit: 50}); err != nil {
 		t.Fatalf("ListRunsPage: %v", err)
 	}
-	if _, err := pg.ListRunsPageByCreator(ctx, "op@example.com", store.Page{Limit: 50}); err != nil {
+	if _, err := pg.ListRunsPageByCreator(ctx, "op@example.com", store.Page{Limit: 50}, nil); err != nil {
 		t.Fatalf("ListRunsPageByCreator: %v", err)
 	}
 }

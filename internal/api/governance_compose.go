@@ -143,6 +143,14 @@ func (s *Server) unitOutlines(ctx context.Context) ([]types.GovernanceUnit, erro
 	return out, nil
 }
 
+// unitRowsForWrite is every stored unit row, for the readers that stand in for a profile write without
+// making it (a held change's review and its impact's stand-in). They hand the rows to the write's own
+// build, whose walls are composed here, and hash what units state for a change's base; no reader takes
+// authority from a row it returns.
+func (s *Server) unitRowsForWrite(ctx context.Context) ([]types.GovernanceUnit, error) {
+	return s.cfg.Store.ListGovernanceUnits(ctx)
+}
+
 // unitResolution is one profile of the whole list with what composing it gave. Err is why it
 // has no effective content (a cycle, a depth overflow, an unsatisfiable overlay), shown to admins
 // rather than failing the list.

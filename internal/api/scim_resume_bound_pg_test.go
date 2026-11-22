@@ -407,33 +407,30 @@ func TestSCIMEarlierSuspensionLeavesALaterOnesFailedKillAfterAnotherReactivation
 	}
 }
 
-// A request's suspension of P, another issuer's sign-in, spares a run its probe read as made after a reactivation.
-// Before it closes that run's kill row, the step 1 of the SCIM leaver whose entra:<tenant>:<object> form is P's
-// principal deactivates P without resetting P's ledger, P's own pass bound to that deactivation fails the run's
-// kill, and P is reactivated again. The earlier pass reads P active, as when it spared the run, but P's ledger no
+// A request's suspension of P, a second sign-in of the SCIM issuer bound to the principal that is the SCIM leaver's
+// entra:<tenant>:<object> form, spares a run its probe read as made after a reactivation (P has no object id, so
+// this endpoint owns it and the store's (issuer, principal) key holds). Before it closes that run's kill row, the
+// step 1 of the SCIM leaver whose form is P's principal deactivates P without resetting P's ledger, P's own pass
+// bound to that deactivation fails the run's kill, and P is reactivated again. The earlier pass reads P active, as when it spared the run, but P's ledger no
 // longer records its deactivation: the kill row stays pending with its failure, and the earlier pass writes no
 // audit row. Guarded by WARDYN_TEST_PG (newSCIMEnv).
 func TestSCIMEarlierSuspensionLeavesAFailedKillAfterAnotherIdentitysSuspension(t *testing.T) {
 	e := newSCIMEnv(t)
 	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
-	o := e.seedOtherIssuersPrincipal("entra:"+e.tenant+":"+purgeOID, purgeOID)
-	p, err := e.st.GetIdentityByObject(context.Background(), o.issuer, e.tenant, purgeOID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := p.ID.String()
+	pp := "entra:" + e.tenant + ":" + purgeOID
+	id := e.seedSignIn(pp, "").ID.String()
 	var later uuid.UUID
 	paused := &pausedSuspension{PG: e.st}
 	paused.afterStep1 = func() {
 		if w := e.patch(e.b, id, patchOf("true")); w.Code != http.StatusOK {
 			t.Errorf("reactivate = %d %s", w.Code, w.Body.String())
 		}
-		later = e.seedRun(o.p, types.RunRunning)
+		later = e.seedRun(pp, types.RunRunning)
 	}
 	paused.afterRunProbe = func() {
 		y := e.identity(f.id)
 		if _, err := e.st.SuspendIdentity(context.Background(), store.SuspendPlan{IdentityID: y.ID, Principal: y.Principal,
-			Principals: []string{y.Principal, o.p}}); err != nil {
+			Principals: []string{y.Principal, pp}}); err != nil {
 			t.Errorf("the leaver's step 1 = %v", err)
 		}
 		if got := e.identity(id); got.DeactivatedAt == nil {

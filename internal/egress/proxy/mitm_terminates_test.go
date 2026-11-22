@@ -402,3 +402,44 @@ func splitTerminated(tok string) (string, int) {
 	}
 	return tok, 0
 }
+
+// TestInspectedSubset: an Inspected entry is partial when it allows destinations the proxy tunnels beside the
+// ones it opens, and then names the ones it opens. The same config has an inspected destination and a tunneled
+// sibling under one wildcard, and a portless host opened on one port.
+func TestInspectedSubset(t *testing.T) {
+	c := &Config{MITMHosts: []string{"artifacts.corp.example:8443", "git.corp.example"}, MITMLLM: true, MITMCACertPEM: "cert", MITMCAKeyPEM: "key"}
+	c.ViaOrgRoutes = []ViaOrgRoute{{GrantID: uuid.New(), Host: "pkg.corp.example"}}
+	for _, tc := range []struct {
+		entry   string
+		partial bool
+		subset  []string
+	}{
+		// A wildcard: build.corp.example is allowed by it and tunneled, the others are opened.
+		{"*.corp.example", true, []string{"artifacts.corp.example:8443", "git.corp.example", "pkg.corp.example"}},
+		{"*.corp.example:8443", true, []string{"artifacts.corp.example:8443", "git.corp.example", "pkg.corp.example"}},
+		{"*.anthropic.com", true, []string{"api.anthropic.com"}},
+		// A host with no port opened on one port only: other ports are tunneled.
+		{"artifacts.corp.example", true, []string{"artifacts.corp.example:8443"}},
+		// Every destination opened: the port is named, the host is opened on any port, or via_org.
+		{"artifacts.corp.example:8443", false, nil},
+		{"git.corp.example", false, nil},
+		{"pkg.corp.example", false, nil},
+		{"api.anthropic.com", false, nil},
+		// Not inspected at all.
+		{"*.pypi.org", false, nil},
+		{"pypi.org", false, nil},
+		{"*.corp.example:443", true, []string{"git.corp.example", "pkg.corp.example"}},
+	} {
+		got, partial := c.InspectedSubset(tc.entry)
+		if partial != tc.partial || !slices.Equal(got, tc.subset) {
+			t.Errorf("InspectedSubset(%q) = %v, %v; want %v, %v", tc.entry, got, partial, tc.subset, tc.partial)
+		}
+		if tc.partial && !c.InspectsEntry(tc.entry) {
+			t.Errorf("%q is partial but not Inspected", tc.entry)
+		}
+	}
+	noCA := &Config{MITMHosts: []string{"artifacts.corp.example:8443"}}
+	if got, partial := noCA.InspectedSubset("*.corp.example"); partial || got != nil {
+		t.Errorf("no CA: InspectedSubset = %v, %v; want none", got, partial)
+	}
+}

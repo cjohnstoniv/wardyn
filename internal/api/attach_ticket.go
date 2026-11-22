@@ -98,6 +98,9 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 type ticketActorCtxKey struct{}
 
 type ticketActor struct {
+	// admitBy is an issuer portal's opening deadline, set at redemption: every read that admits the ticket's
+	// session or socket runs under it (admitCtx), the stream after them under its own life. Zero for any other.
+	admitBy   time.Time
 	actorType types.ActorType
 	principal string
 	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleUser) at
@@ -132,6 +135,11 @@ type ticketActor struct {
 	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
 	support        uuid.UUID
 	supportExpires time.Time
+	// renewChain is the chain of the issuer-portal grant the ticket was minted under when its portal renews
+	// browser-app sessions (uiRenewalChain), uuid.Nil otherwise; checkStart is when redemption began, the
+	// anchor an issuer-portal terminal's re-checks are timed from. Both are set by redeemAttachTicket.
+	renewChain uuid.UUID
+	checkStart time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -405,4 +413,12 @@ func (s *Server) auditAttachRefused(r *http.Request, runID uuid.UUID, actor, lan
 	ev := s.auditEvent(&runID, types.ActorHuman, actor, "session.attach", runID.String(), "failure", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
+}
+
+// admitCtx is ctx bounded by an issuer portal's opening deadline (admitBy), and ctx itself for any other ticket.
+func (ta ticketActor) admitCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ta.admitBy.IsZero() {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, ta.admitBy)
 }

@@ -22,8 +22,8 @@ const (
 	// scimStatusListCap caps each list GET /scim/status returns: the card is a glance, and a
 	// backlog past this is read in Audit.
 	scimStatusListCap = 200
-	// scimStatusAuditScan is how many of the newest audit rows are read to find the token slot that
-	// last matched and the purges that listed drives.
+	// scimStatusAuditScan is how many of the newest audit rows are read for the token slot and for the
+	// purges that listed drives.
 	scimStatusAuditScan = 200
 )
 
@@ -32,8 +32,9 @@ const (
 type scimStatus struct {
 	// Configured is whether wardynd mounts the SCIM routes. When false every other field is empty.
 	Configured bool `json:"configured"`
-	// LastTokenSlot is the bearer slot of the newest SCIM write ("primary" or "next"), or "" before
-	// the first one.
+	// LastTokenSlot is the bearer slot of the newest SCIM user write or group member removal that names one
+	// ("primary" or "next"), or "" before the first one. It is the latest update only: another provisioning job
+	// may use the other slot.
 	LastTokenSlot string `json:"last_token_slot"`
 	// PurgeAfterSeconds is WARDYN_SCIM_PURGE_AFTER; zero means only a DELETE purges.
 	PurgeAfterSeconds int64 `json:"purge_after_seconds"`
@@ -77,6 +78,12 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	out.Configured = true
+	// The portal's synthetic issuer is never a SCIM issuer: whatever the setting says, this page lists no portal
+	// person (they have /admin/portal-lifecycle/status).
+	if strings.HasPrefix(s.cfg.SCIM.Issuer, types.PortalPersonPrefix) {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	// SweepSCIMPurge purges for any delay above zero, so one under a second reads as one second, never as 0.
 	if d := s.cfg.SCIM.PurgeAfter; d > 0 {
 		out.PurgeAfterSeconds = max(1, int64(d/time.Second))
@@ -96,7 +103,7 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		return labels[id], nil
 	}
 
-	deactivated, err := st.ListDeactivatedIdentities(ctx, scimStatusListCap)
+	deactivated, err := st.ListDeactivatedIdentities(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimStatusListCap)
 	if err != nil {
 		writeServerError(w, r, "list deactivated identities", err)
 		return
@@ -108,7 +115,7 @@ func (s *Server) handleSCIMStatus(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	failures, err := st.ListDeprovisionFailures(ctx, scimStatusListCap)
+	failures, err := st.ListDeprovisionFailures(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimStatusListCap)
 	if err != nil {
 		writeServerError(w, r, "list deprovision failures", err)
 		return
@@ -169,14 +176,23 @@ func (s *Server) scimAuditRows(ctx context.Context, f store.AuditFilter) ([]type
 	return pager.QueryAuditEventsFilteredPage(ctx, nil, f, store.Page{Limit: scimStatusAuditScan})
 }
 
-// scimLastTokenSlot is the bearer slot of the newest scim.user.* row that names one; the sweeper's own
-// rows name no bearer.
+// scimLastTokenSlot is the bearer slot of the newest audit row that names one: a scim.user.* row or a group
+// member removal, both of which record the slot of the request that caused them. One query reads the rows
+// whose data names either bearer, newest first by audit sequence, so the scan limit applies only to rows that
+// name a bearer and the sweeper's rows (which name the sweeper) can never crowd a real update out of it, and
+// two rows with the same timestamp are told apart by the order they were written in. Empty means no row of
+// the scan names either bearer.
 func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
-	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.user."})
+	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.", DataContainsAny: string(mustJSON([]map[string]string{
+		{"slot": scimSlotPrimary}, {"slot": scimSlotNext},
+	}))})
 	if err != nil {
 		return "", err
 	}
 	for _, ev := range rows { // newest first
+		if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
+			continue
+		}
 		var d struct {
 			Slot string `json:"slot"`
 		}

@@ -126,10 +126,14 @@ export interface MacVMCaps {
   base: MacVMBase;
   /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
   disk_drives?: boolean;
+  /** How many sessions this runner process completed with the organisation before this one; 0 says the process is new. Absent from a runner that does not count. */
+  prior_sessions?: number;
   /** The runner opens an attended window (keyboard and pointer) onto a macOS VM run it holds. */
   window?: boolean;
   /** The runner keeps a person's kept machines and deletes them. */
   kept_machines?: boolean;
+  /** The runner executes kept_machine's delete_expired op, which rechecks the machine's own deadline under its lock. Wardyn starts no expiry-driven delete on a runner that does not say so. */
+  kept_conditional_delete?: boolean;
   /** The Mac's kept machines and the disk they may take; absent when it keeps none or has not counted yet. */
   kept?: MacVMKept;
   /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */

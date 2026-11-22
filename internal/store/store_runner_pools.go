@@ -789,6 +789,14 @@ func (s PG) PutRunnerPoolUsePolicy(ctx context.Context, id uuid.UUID, revision *
 // PutRunnerPoolUsePolicyQ is PutRunnerPoolUsePolicy's statement on q (a pgx.Tx, the pool row locked
 // here). ErrNotFound: no such live organization pool.
 func PutRunnerPoolUsePolicyQ(ctx context.Context, q Querier, id uuid.UUID, revision *int64, subjects []types.RunnerPoolSubject, by string) (types.RunnerPoolUsePolicy, error) {
+	for _, sub := range subjects {
+		if sub.SubjectType != types.CapabilitySubjectUser {
+			continue
+		}
+		if err := ruleDelegatePersonSubject(ctx, q, "runner_pool_use_policies.subjects", sub.Subject); err != nil {
+			return types.RunnerPoolUsePolicy{}, err
+		}
+	}
 	p, err := livePoolForUpdate(ctx, q, id)
 	if err != nil || p.Scope != types.RunnerPoolOrganization {
 		return types.RunnerPoolUsePolicy{}, errOrNotFound(err)

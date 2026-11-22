@@ -428,7 +428,9 @@ What the plist actually runs. In order, it:
   - The payload lands at `/usr/local/lib/wardyn/deploy/desktop/` (with [`scripts/lib/common.sh`](../scripts/lib/common.sh) beside it at `/usr/local/lib/wardyn/scripts/lib/`, which is why the `deploy/` level in that path is load-bearing), and the CLI at `/usr/local/bin/wardyn`.
   - Both shapes run the same `install.sh`; only the path it registers differs.
 - **Enrolment runs one container image, as root.**
-  - `install.sh` mints `age.key` by running `wardynd -gen-age-key`, and the image it pulls for that defaults to `ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) pushes after CI passes on `main` and signs by digest after pushing it.
+  - `install.sh` mints `age.key` by running `wardynd -gen-age-key`, and the image it pulls for that defaults to `ghcr.io/cjohnstoniv/wardynd:latest` — the CONTINUOUS, main-tip tag.
+  - [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) moves it after CI passes on `main`.
+  - It pushes `:sha-<short>` first, checks that the image reports its commit, signs that digest, and only then points `:latest` at it.
   - Nothing in this lane verifies that signature, and the tag is not the digest the envelope then pins.
   - That is the one place on this page where a tag does move under the fleet, and it is bounded to first-device enrolment.
   - A fleet that will not accept it resolves a digest, verifies **that digest** with the `publish-image.yml` identity ([VERIFY.md](VERIFY.md#the-continuous-lane)), and passes it via **`WARDYN_INSTALL_IMAGE`** ([ENV.md](ENV.md))
@@ -669,8 +671,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.0|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.10.2|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.10.2|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

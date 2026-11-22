@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -47,17 +48,7 @@ func newDoctorCommand() *cobra.Command {
 			return err
 		}
 		report := runDoctor(cmd.Context(), host, o, os.Getenv, doctor.Network{})
-		write := report.WriteText
-		if o.json {
-			write = report.WriteJSON
-		}
-		if err := write(cmd.OutOrStdout()); err != nil {
-			return err
-		}
-		if !report.OK() {
-			return errors.New("doctor: one or more stages failed")
-		}
-		return nil
+		return finishDoctor(cmd.OutOrStdout(), report, o.json)
 	}
 	fl := cmd.Flags()
 	fl.StringVar(&o.org, "org", "", "organisation public HTTPS URL (default: the OrgURL managed preference, else the service's setting)")
@@ -73,6 +64,21 @@ func newDoctorCommand() *cobra.Command {
 	_ = cmd.Flags().MarkHidden("runner-only")
 	_ = cmd.Flags().MarkHidden("server-version")
 	return cmd
+}
+
+// finishDoctor writes the report as text or JSON and fails, so the command exits non-zero, when a stage failed.
+func finishDoctor(out io.Writer, report doctor.Report, asJSON bool) error {
+	write := report.WriteText
+	if asJSON {
+		write = report.WriteJSON
+	}
+	if err := write(out); err != nil {
+		return err
+	}
+	if !report.OK() {
+		return errors.New("doctor: one or more stages failed")
+	}
+	return nil
 }
 
 // doctorSettings reads each setting the way the service does, and says where it came from. file is runnerd.json,
@@ -368,6 +374,16 @@ func statusStage(path string) doctor.Stage {
 		last += "; waiting for the proxy image; next try at " + st.NextRetryAt.UTC().Format(time.RFC3339)
 	}
 	since := st.Since.UTC().Format(time.RFC3339)
+	// A start the runner refused with no stage to name (a bad flag, an invalid local-attach value) is a
+	// failure that stays until a start succeeds: this runner has not connected on its latest configuration.
+	if r := st.StartRefusal; r != nil && st.State != "connected" {
+		detail := fmt.Sprintf("%s since %s (start refused at %s: %s)", st.State, since, r.At.UTC().Format(time.RFC3339), r.Error)
+		if st.LastError != "" && st.LastError != r.Error && st.LastErrorAt != nil {
+			detail += fmt.Sprintf("; last connection error at %s: %s", st.LastErrorAt.UTC().Format(time.RFC3339), st.LastError)
+		}
+		return doctor.FailStage("status", detail, "",
+			"fix the setting the error names and start the runner again; this stays failed until a start succeeds")
+	}
 	// A failure is a runner that is not connected and either stopped at a stage or is offline. An error left
 	// from an earlier drop, on a runner that has since started or stopped cleanly, is history.
 	if st.State == "connected" || (st.Stage == "" && st.State != "offline") {

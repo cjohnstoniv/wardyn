@@ -434,6 +434,9 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
 		return
 	}
+	if s.ruleUIAppCallersHTTP(w, r, req.Spec) {
+		return
+	}
 	// Authoring fail-fast: a policy's user-workspace mounts/repos must be onboarded
 	// (the run-create chokepoint is the load-bearing gate; this surfaces the error
 	// at author time instead of at launch).
@@ -501,6 +504,9 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	})
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
+		return
+	}
+	if s.ruleUIAppCallersHTTP(w, r, req.Spec) {
 		return
 	}
 	if code, reason, err := s.validateWorkspaceSources(r.Context(), req.Spec, runCarrierRule{}); err != nil {

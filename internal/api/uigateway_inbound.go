@@ -941,8 +941,14 @@ func uiCallerHeaders(h http.Header, sess uiSession) {
 // runner_offline (the run is fine; retry once it reconnects), a start refused at its last read is answered as
 // uiDial's first read answers that run (uiRunRefusal), a start lock that cannot be taken is the lock's 503, the
 // start fence's other refusals say what they are in their fixed words, and anything else is a 502 under reason.
+// For an issuer portal's request at or after its dispatch time, a start refused at the runner link's writer
+// (runner.ErrStartCutoff), one cut at its budget and an error not named here are the dispatch 503.
 func uiExecFailure(ctx context.Context, reason, action string, err error) error {
 	var refused startRefused
+	if uiDispatchPast(ctx) && (errors.Is(err, runner.ErrStartCutoff) || errors.Is(err, errStartTooSlow) ||
+		!errors.Is(err, runner.ErrRunnerOffline) && !errors.As(err, &refused) && !db.LockRefused(err) && !errors.Is(err, errStartLockLost)) {
+		return uiDispatchRefusal(ctx)
+	}
 	switch {
 	case errors.Is(err, runner.ErrRunnerOffline):
 		return uiFail(ctx, http.StatusServiceUnavailable, string(placement.ReasonRunnerOffline), uiRunnerOfflineMsg)

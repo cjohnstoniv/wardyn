@@ -21,7 +21,10 @@
   - (never for an existing one — see the [Quick start](#quick-start) SSO section)
 - So the two Dex users land in the right role automatically on a new stack.
 - Set your own map (or fall back to the legacy `WARDYN_OIDC_OPERATOR_EMAILS` allowlist) and an unlisted signer-in becomes a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login):
-  - 403 on the policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image
+  - 403 on the policy and site-config writes, admin-only approval decisions, and bringing a custom image
+  - 403 on another person's or an operator-owned workspace, and on the workspace routes that bind credentials, widen egress or write the host
+  - 403 on another person's secrets, on shared secrets and on the reserved platform and retired model-credential names; a member writes and deletes their own secrets
+  - a member creates, edits and deletes their own workspaces (the daemon stamps them as owner)
   - reading and launching/killing stay open
   - and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling).
 - For the admin/member model with owner scoping, see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md).
@@ -37,13 +40,14 @@
 > raw-compose variant.
 
 ```sh
-./scripts/up.sh up    # doctor preflight, build, mint a secret key, bring up postgres+wardynd, open the UI
+./scripts/up.sh up    # doctor preflight, images, mint a secret key, bring up postgres+wardynd, open the UI
 ```
 
-- `scripts/up.sh up` is THE one command for the compose stack: it runs a read-only preflight (`make doctor`), builds the `wardynd` image, mints/persists a `WARDYN_AGE_KEY`, auto-picks a confinement policy
+- `scripts/up.sh up` is THE one command for the compose stack: it runs a read-only preflight (`make doctor`), gets the `wardynd` image, mints/persists a `WARDYN_AGE_KEY`, auto-picks a confinement policy
   - starts `postgres` + `wardynd` in **local mode** (no SSO/Dex, no bearer token)
   - and opens <http://localhost:8080> in your browser as soon as it's healthy (`WARDYN_UP_NO_BROWSER=1` to skip)
-  - THEN builds the per-run images (sandbox proxy + agent images) in the background so first light is fast
+  - it pulls the published images for the checkout's version first, and builds from the checkout if any pull fails (`WARDYN_BUILD_LOCAL=1` always builds)
+  - THEN finishes the per-run images (sandbox proxy + agent images). Pulled ones are kept, and the Claude Code agent image is always built
   - a run can't launch until those finish (skip them with `WARDYN_UP_SKIP_RUN_IMAGES=1`).
 - Run `make doctor` any time on its own — it's read-only.
 - Tear down with `make compose-down`.

@@ -86,7 +86,7 @@ func TestPersonEraseNamesWhatWasNotErased(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"person":"p","scopes":["credentials"],"outcome":{"credentials":"done"},"detail":{},` +
-			`"not_erased":{"subjects":["y\u001b[2J"],"note":"not erased: erase by subject"}}`))
+			`"not_erased":{"subjects":["y\u001b[2J","Ana Example"],"note":"not erased: erase by subject"}}`))
 	}))
 	t.Cleanup(srv.Close)
 	run := func(args ...string) (string, string) {
@@ -102,11 +102,13 @@ func TestPersonEraseNamesWhatWasNotErased(t *testing.T) {
 		return out.String(), errOut.String()
 	}
 	out, errOut := run("erase", "p", "--scope", "credentials")
-	if !strings.Contains(out, "erased credentials for p") || !strings.Contains(errOut, `warning: not erased: "y\x1b[2J"`) {
-		t.Errorf("stdout %q, stderr %q: want the erasure and then the principal left alone, escaped", out, errOut)
+	// An ambiguous unbound name ("Ana Example") comes back beside a principal: neither is called a principal.
+	if !strings.Contains(out, "erased credentials for p") || !strings.Contains(errOut, `warning: not erased: "y\x1b[2J", "Ana Example"; Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately`) ||
+		strings.Contains(errOut, "principal of its own") {
+		t.Errorf("stdout %q, stderr %q: want the erasure and then the names left out, escaped, with no claim that each is a principal", out, errOut)
 	}
 	out, _ = run("erase", "p", "--scope", "credentials", "--json")
-	if !strings.Contains(out, `"not_erased":{"subjects":["y\u001b[2J"]`) {
+	if !strings.Contains(out, `"not_erased":{"subjects":["y\u001b[2J","Ana Example"]`) {
 		t.Errorf("--json = %s, want not_erased kept", out)
 	}
 }

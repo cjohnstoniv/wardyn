@@ -79,6 +79,35 @@ type AuditRetention interface {
 
 var _ AuditRetention = PG{}
 
+// AuditRetentionMarker is the OPTIONAL read behind the audit export's check that retention did not run under it.
+// The mark changes whenever a partition is dropped and in no other case, so an export that reads it before its
+// first page and after each one knows whether a drop committed between its reads. The export does not hold one
+// snapshot instead: an open read of audit_events makes every drop wait for its detach lock and fail, and a slow
+// client could hold it for as long as it likes.
+type AuditRetentionMarker interface {
+	AuditRetentionMark(ctx context.Context) (int64, error)
+}
+
+var _ AuditRetentionMarker = PG{}
+
+// AuditRetentionMark is the id of the newest retention drop anchor, 0 with none (and always when audit_events was
+// never partitioned, which has no anchors). Every drop writes its anchor in the transaction that removes the
+// partition, so the mark moves exactly when rows can have disappeared.
+func (s PG) AuditRetentionMark(ctx context.Context) (int64, error) {
+	var partitioned bool
+	if err := s.Pool.QueryRow(ctx, `SELECT relkind = 'p' FROM pg_class WHERE oid = 'audit_events'::regclass`).Scan(&partitioned); err != nil {
+		return 0, fmt.Errorf("store: read audit_events kind: %w", err)
+	}
+	if !partitioned {
+		return 0, nil
+	}
+	var mark int64
+	if err := s.Pool.QueryRow(ctx, `SELECT COALESCE(max(id), 0) FROM audit_chain_anchors WHERE kind = 'drop'`).Scan(&mark); err != nil {
+		return 0, fmt.Errorf("store: read audit retention mark: %w", err)
+	}
+	return mark, nil
+}
+
 // retentionAnnotate turns a database refusal into the typed error.
 func retentionAnnotate(err error, partition string) error {
 	var pgErr *pgconn.PgError
@@ -270,8 +299,15 @@ func (s PG) AuditRetentionStatus(ctx context.Context) (AuditRetentionStatus, err
 	defer tx.Rollback(ctx) //nolint:errcheck // read-only: nothing to undo
 
 	var st AuditRetentionStatus
-	if err := tx.QueryRow(ctx, `SELECT retention_days, audit_retention_window(), pending_days, pending_effective_at, cutover
-		FROM audit_partition_meta`).
+	// The effective window and the pending pair come from one database time, the same rule audit_retention_window()
+	// applies: a decrease whose date has passed is the window now and no longer pending, though the sweeper has not
+	// rewritten the stored row.
+	if err := tx.QueryRow(ctx, `SELECT m.retention_days,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at <= c.t THEN m.pending_days ELSE m.retention_days END,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at > c.t THEN m.pending_days END,
+			CASE WHEN m.pending_days IS NOT NULL AND m.pending_effective_at > c.t THEN m.pending_effective_at END,
+			m.cutover
+		FROM audit_partition_meta m, (SELECT clock_timestamp() AS t) c`).
 		Scan(&st.Policy.Days, &st.Policy.EffectiveDays, &st.Policy.PendingDays, &st.Policy.PendingEffectiveAt, &st.Cutover); err != nil {
 		return AuditRetentionStatus{}, fmt.Errorf("store: read audit retention policy: %w", err)
 	}

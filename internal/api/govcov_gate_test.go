@@ -255,7 +255,7 @@ func TestGovCovProposeGovernanceChange(t *testing.T) {
 	if ch.BaseHash != computeETag(map[string]any{"base": 1}) || ch.DeploymentHash != computeETag(s.cfg.DefaultPolicy) {
 		t.Errorf("hashes = %q / %q, want the base state's and the deployment default's", ch.BaseHash, ch.DeploymentHash)
 	}
-	if !reflect.DeepEqual(ch.Diff, renderGovernanceDiff(map[string]any{"v": 1}, map[string]any{"v": 2}, []string{"v"}, nil)) {
+	if !reflect.DeepEqual(ch.Diff, renderGovernanceDiff(map[string]any{"v": 1}, map[string]any{"v": 2}, []string{"v"}, nil, heldReads{review: notCheckedReview()})) {
 		t.Errorf("diff = %s", ch.Diff)
 	}
 	if st.proposedTTL != 5*time.Hour {

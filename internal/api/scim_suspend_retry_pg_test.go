@@ -87,7 +87,7 @@ func TestSCIMSuspendWhileTheDirectoryIsUnreadableCutsTheExactRow(t *testing.T) {
 			if refused, err := e.st.IdentityRefused(context.Background(), e.issuer, e.tenant, oidPat, sub); err != nil || !refused {
 				t.Errorf("sign-in = refused %v (%v), want refused", refused, err)
 			}
-			if fails, err := e.st.ListDeprovisionFailures(context.Background(), 10); err != nil || len(fails) != 1 ||
+			if fails, err := e.st.ListDeprovisionFailures(context.Background(), e.issuer, e.tenant, 10); err != nil || len(fails) != 1 ||
 				fails[0].Step != store.JobStepCutoff || fails[0].LastError != reasonIdentityDirectoryUnreadable {
 				t.Errorf("failures = %+v (%v), want step 1 pending with %s", fails, err, reasonIdentityDirectoryUnreadable)
 			}
@@ -361,7 +361,7 @@ func TestSCIMSweeperWritesAnOwedRefusalRowAfterReactivation(t *testing.T) {
 	if w := e.patch(e.a, id, patchOf("true")); w.Code != http.StatusOK {
 		t.Fatalf("reactivate = %d %s", w.Code, w.Body.String())
 	}
-	fails, err := e.st.ListDeprovisionFailures(context.Background(), 10)
+	fails, err := e.st.ListDeprovisionFailures(context.Background(), e.issuer, e.tenant, 10)
 	if err != nil || !slices.ContainsFunc(fails, func(f store.DeprovisionFailure) bool { return strings.HasPrefix(f.Step, store.JobStepRefusalAudit) }) {
 		t.Errorf("failures = %+v (%v), want the owed refusal row listed", fails, err)
 	}

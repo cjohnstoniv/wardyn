@@ -475,7 +475,7 @@ func TestPass_APartialCopyThatCannotBeMovedAsideIsNamed(t *testing.T) {
 		}
 	})
 	reason := refusedFor(pass(t, sy), name)
-	if temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*")); len(temps) != 0 || !strings.Contains(reason, "its partial copy is left at "+name) {
+	if temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*")); len(temps) != 0 || !strings.Contains(reason, "the file is kept at "+name) {
 		t.Errorf("temps %v, refusal %q, want no temp and the partial copy named", temps, reason)
 	}
 }
