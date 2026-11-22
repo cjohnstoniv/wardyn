@@ -539,7 +539,7 @@ func TestPortalSuspend_PinOwnerIsErasedByTheErasureSelector_PG(t *testing.T) {
 	sweep := portalSweepOrigin()
 	l.seedRun(t, person, types.RunRunning)
 
-	l.h.srv.cfg.Audit = &heldAudit{inner: store.Recorder{Pool: l.pool}, mode: "nil"}
+	l.h.srv.cfg.Audit = &heldClaimAudit{inner: store.Recorder{Pool: l.pool}, mode: "nil"}
 	if err := l.h.srv.runPortalSuspension(withActor(ctx, first.actorType, first.actor), l.st, id, first, 0, nil); err == nil {
 		t.Fatal("control: the first replica's suspension reported done with no stored receipt")
 	}
@@ -592,7 +592,7 @@ func TestPortalSuspend_OwedRefusalSettlesFromAnotherRecorder_PG(t *testing.T) {
 			rows := func() int {
 				return l.count(t, `SELECT count(*) FROM audit_events WHERE action = 'person.deprovision' AND target = $1 AND outcome = 'failure' AND data->>'reason' = 'test'`, id.String())
 			}
-			l.h.srv.cfg.Audit = &heldAudit{inner: store.Recorder{Pool: l.pool}, mode: mode}
+			l.h.srv.cfg.Audit = &heldClaimAudit{inner: store.Recorder{Pool: l.pool}, mode: mode}
 			if err := l.h.srv.drainPortalOwedRefusals(sctx, l.st, owed); err == nil {
 				t.Fatal("the first drain reported the owed row settled with its event in no shared table")
 			}

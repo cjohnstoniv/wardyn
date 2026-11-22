@@ -275,18 +275,18 @@ func TestPortalSuspend_ReplacementBeforeListWritesNothing_PG(t *testing.T) {
 	}
 }
 
-// heldAudit is the recorder of a replica that never writes the portal lifecycle's two completion rows to the shared
+// heldClaimAudit is the recorder of a replica that never writes the portal lifecycle's two completion rows to the shared
 // table: in "spool" mode its store write failed and its spool took them (audit.ErrSpooled); in "nil" mode it answers
 // success having appended them to a local spool only, as a sealing recorder does while a subject key is pending.
 // Every other row is written.
-type heldAudit struct {
+type heldClaimAudit struct {
 	inner store.Recorder
 	mode  string
 	mu    sync.Mutex
 	held  int
 }
 
-func (h *heldAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+func (h *heldClaimAudit) Record(ctx context.Context, ev types.AuditEvent) error {
 	if ev.Action != "identity.deactivate" && ev.Action != "person.deprovision" {
 		return h.inner.Record(ctx, ev)
 	}
@@ -339,7 +339,7 @@ func TestPortalSuspend_UnstoredReceiptSettlesFromAnotherReplica_PG(t *testing.T)
 				sweep := portalSweepOrigin()
 				l.seedRun(t, principal, types.RunRunning)
 
-				held := &heldAudit{inner: store.Recorder{Pool: l.pool}, mode: mode}
+				held := &heldClaimAudit{inner: store.Recorder{Pool: l.pool}, mode: mode}
 				l.h.srv.cfg.Audit = held
 				if err := l.h.srv.runPortalSuspension(withActor(ctx, first.actorType, first.actor), l.st, id, first, 0, nil); err == nil {
 					t.Fatal("the first replica's suspension reported done with its receipts in no shared table")
