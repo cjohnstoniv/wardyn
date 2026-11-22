@@ -3160,8 +3160,8 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
-    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    # 40 dates from when staticcheck ran here: a cold pass was killed at 25. It now has its own job (below); this
+    # limit was left as it was.
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -3653,6 +3653,7 @@ jobs:
       - trivy-agent-novnc-signin
       - notices
       - gates
+      - staticcheck
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04

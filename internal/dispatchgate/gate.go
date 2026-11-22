@@ -18,7 +18,7 @@ import (
 )
 
 // ErrExpired is a Write refused, or cut, because the request's dispatch time passed or its connection closed
-// before its first write returned.
+// before its first write returned. A later write that returns after the connection closed also gets it.
 var ErrExpired = errors.New("dispatchgate: the request's dispatch time passed")
 
 // Kinds of Outcome. Refused: no driver write had started, so zero bytes passed. Interrupted: the first driver
