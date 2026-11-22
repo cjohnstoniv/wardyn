@@ -443,6 +443,7 @@ export const CHANGES = {
     capability_availability: "Capability availability",
     user_type_priority: "User type priority",
     role_mapping: "Role mapping",
+    delegate: "Portal registration",
     key_domain_assignment: "Key domain assignment",
     egress_baseline: "Egress baseline",
     runner_pool_use_policy: "Runner pool use policy",

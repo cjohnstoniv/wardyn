@@ -16,8 +16,9 @@ import { getErrorMessage, relativeTime } from "../../../lib/format";
 import type { PersonSummary, PersonToken } from "../../../lib/types";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
+import { Chip } from "../../wardyn/primitives";
 import { answeredSentence, STATES } from "../../wardyn/states";
-import { roleLabel } from "./people-format";
+import { personState, roleLabel, STATE_LABEL, STATE_TONE } from "./people-format";
 import { Button } from "../../ui/button";
 import {
   AlertDialog,
@@ -137,9 +138,31 @@ export function PersonDrawer({
             <SheetTitle className="break-words">
               {label}
               {person.role ? ` · ${roleLabel(person.role)}` : ""}
+              {person.issuer && (
+                <>
+                  {" "}
+                  <Chip tone="neutral">{P.PORTAL_PERSON}</Chip>
+                </>
+              )}
             </SheetTitle>
           </SheetHeader>
           <div className="px-4">
+            <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 border-b border-border py-3 text-body">
+              <dt className="text-muted-foreground">{P.COL_STATE}</dt>
+              <dd>
+                <Chip tone={STATE_TONE[personState(person)]}>{STATE_LABEL[personState(person)]}</Chip>
+              </dd>
+            </dl>
+            {person.issuer && (
+              <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1 border-b border-border py-3 text-body">
+                <dt className="text-muted-foreground">{P.COL_ISSUER}</dt>
+                <dd className="select-text break-all font-mono text-xs">{person.issuer}</dd>
+                <dt className="text-muted-foreground">{P.COL_INTERNAL}</dt>
+                <dd className="select-text break-all font-mono text-xs">
+                  {person.internal_address || <span className="font-sans text-sm text-muted-foreground">{P.INTERNAL_UNSET}</span>}
+                </dd>
+              </dl>
+            )}
             <Section label={P.SESSIONS} value={P.SESSIONS_ACTIVE(person.active_sessions)}>
               <Button size="sm" variant="outline" onClick={() => setConfirm("sign_out")}>
                 {P.SIGN_OUT}
@@ -172,9 +195,12 @@ export function PersonDrawer({
                 </ul>
               )}
             </Section>
-            <p className="border-b border-border py-2 text-meta text-muted-foreground">
-              {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
-            </p>
+            {/* A portal person cannot hold a personal API token: the invitation would be refused. */}
+            {!person.issuer && (
+              <p className="border-b border-border py-2 text-meta text-muted-foreground">
+                {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
+              </p>
+            )}
             <Section label={P.SSH} value={person.ssh_keys}>
               <Button size="sm" variant="outline" disabled={person.ssh_keys === 0} onClick={() => setConfirm("ssh")}>
                 {P.SSH_REMOVE}
