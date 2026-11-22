@@ -325,10 +325,10 @@ type Store interface {
 	// included) and returns ErrConflict when UNIQUE(name) rejects the write. DeleteUserDrive returns
 	// ErrConflict while the drive is still ALLOCATED (ON DELETE RESTRICT).
 	//
-	// refuseIfAllocated is a PRECONDITION: the write applies only while the
-	// drive has no allocations (ErrDriveAllocated otherwise) — the API's
-	// re-home guard re-asserts, inside the writing statement, the read
-	// decision that permitted the write.
+	// refuseIfAllocated is a PRECONDITION: the write applies only while no
+	// allocation's storage object would move (ErrDriveAllocated otherwise) —
+	// the API's re-home guard re-asserts, inside the writing statement, the
+	// read decision that permitted the write.
 	UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllocated bool) (types.UserDrive, error)
 	GetUserDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error)
 	DeleteUserDrive(ctx context.Context, id uuid.UUID) error

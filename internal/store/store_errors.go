@@ -36,8 +36,8 @@ var ErrDriveSlugConflict = fmt.Errorf(
 	"%w: another user drive's name folds to the same storage-object name", ErrConflict)
 
 // ErrDriveAllocated is returned by UpsertUserDrive when the caller asked for the
-// write to apply only while the drive has no allocations (refuseIfAllocated)
-// and the row has some. It is the statement-level half of the API's re-home
+// write to apply only while it moves no allocation's storage object
+// (refuseIfAllocated) and it would move one. It is the statement-level half of the API's re-home
 // guard: since a plain read-then-write would let a grant created in between
 // get silently re-homed, the precondition rides the writing statement under a
 // FOR UPDATE on the drive row in the same transaction, making it race-free.
