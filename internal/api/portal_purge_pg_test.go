@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -375,7 +376,7 @@ func TestPortalPurge_ExplicitRetryOnPurgedFinishes_PG(t *testing.T) {
 	}
 }
 
-// A reactivated person signs in again, and their suspension's deadline and cutoff are gone.
+// A reactivated person signs in again, and their suspension's deadline is gone. The suspension's session cutoff stays.
 func TestPortalReactivate_PG(t *testing.T) {
 	l := newPortalLife(t)
 	principal, _ := l.signIn(t, "u1")
@@ -402,6 +403,80 @@ func TestPortalReactivate_PG(t *testing.T) {
 	}
 	if rows := l.rows("person.reactivate"); len(rows) != 1 || rows[0].Outcome != "success" || rows[0].Target != principal {
 		t.Errorf("person.reactivate rows = %+v, want one success", rows)
+	}
+}
+
+// A provider token issued before a suspension stays refused after the reactivation: the cutoff the suspension wrote
+// is inclusive and reactivation never lowers it. This reuses the old subject token, not a grant; only a token issued
+// afterwards exchanges.
+func TestPortalReactivate_PreSuspensionTokenStaysRefused_PG(t *testing.T) {
+	l := newPortalLife(t)
+	principal, _ := l.signIn(t, "u1")
+	old := l.person("u1", "")
+	old.IssuedAt = time.Now()
+	time.Sleep(50 * time.Millisecond)
+	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK {
+		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
+	}
+	cutoff := func() time.Time {
+		var at time.Time
+		if err := l.pool.QueryRow(context.Background(), `SELECT MAX(revoked_at) FROM (
+				SELECT sub, revoked_at FROM oidc_session_revocations
+				UNION ALL SELECT sub, cut_at FROM oidc_session_cuts) r WHERE sub = $1`, principal).Scan(&at); err != nil {
+			t.Fatalf("read the suspension cutoff: %v", err)
+		}
+		return at
+	}
+	suspended := cutoff()
+	if w := l.post(t, l.admin, principal, "reactivate", ""); w.Code != http.StatusOK {
+		t.Fatalf("reactivate = %d %s", w.Code, w.Body.String())
+	}
+	if after := cutoff(); !after.Equal(suspended) {
+		t.Fatalf("cutoff after the reactivation = %v, want the suspension's %v", after, suspended)
+	}
+	revoked := func() (n int) {
+		for _, r := range l.deniedReasons() {
+			if r == "session_revoked" {
+				n++
+			}
+		}
+		return n
+	}
+	grants := func() int {
+		return l.count(t, `SELECT count(*) FROM portal_grants WHERE principal = $1`, principal)
+	}
+	wasRevoked, wasGrants := revoked(), grants()
+	if wasGrants != 0 {
+		t.Fatalf("portal_grants rows after the suspension = %d, want 0", wasGrants)
+	}
+
+	// The same pre-suspension identity and issue time as before the suspension.
+	l.ver.subj = old
+	w := l.exchange(t, l.d.ID, l.cred, "subject-token")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid_grant") {
+		t.Fatalf("old subject token after the reactivation = %d %s, want 400 invalid_grant", w.Code, w.Body.String())
+	}
+	if got := revoked(); got != wasRevoked+1 {
+		t.Errorf("session_revoked denials = %d, want %d: the refusal is newly audited", got, wasRevoked+1)
+	}
+	if got := grants(); got != wasGrants {
+		t.Errorf("portal_grants rows = %d, want %d: a refused exchange mints no grant", got, wasGrants)
+	}
+
+	// A token issued exactly at the cutoff is refused too: the cutoff is inclusive.
+	edge := old
+	edge.IssuedAt = suspended
+	l.ver.subj = edge
+	if w := l.exchange(t, l.d.ID, l.cred, "subject-token"); w.Code != http.StatusBadRequest {
+		t.Errorf("subject token issued at the cutoff = %d %s, want 400", w.Code, w.Body.String())
+	}
+
+	// Only the age of the token was in the way: a token issued afterwards exchanges.
+	if got := l.freshExchange(t, "u1"); got != http.StatusOK {
+		t.Errorf("fresh token after the reactivation = %d, want 200", got)
+	}
+	if got := grants(); got != 1 {
+		t.Errorf("portal_grants rows after the fresh exchange = %d, want 1", got)
 	}
 }
 
