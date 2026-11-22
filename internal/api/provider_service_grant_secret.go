@@ -110,7 +110,9 @@ func (s *Server) putServiceGrantRecord(ctx context.Context, name string, rec ser
 	if err != nil {
 		return err
 	}
-	if perr := st.Put(ctx, name, raw); perr != nil {
+	// The record is the operator's, so putOwned's owner is "": no person's erase reaches it, and the write
+	// still takes the one credential-write path.
+	if perr := s.putOwned(ctx, "", func(wctx context.Context) error { return st.Put(wctx, name, raw) }); perr != nil {
 		s.applyLiveServiceGrantRecord(ctx, st, name, gen)
 		return perr
 	}

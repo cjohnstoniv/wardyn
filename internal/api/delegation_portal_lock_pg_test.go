@@ -187,13 +187,14 @@ func runOn[T any](r *lockRig, f func(ctx context.Context) T) (<-chan T, <-chan s
 // backend, the exchange's result and a channel closed when it ends.
 func (r *lockRig) parkExchange(e *exchPG, h *lockHold, d types.Delegate, cred string) (int32, <-chan *httptest.ResponseRecorder, <-chan struct{}) {
 	r.t.Helper()
+	handler := panicFails(r.t, e.h.srv.Handler())
 	out, done := runOn(r, func(ctx context.Context) *httptest.ResponseRecorder {
 		form := url.Values{"grant_type": {grantTypeTokenExchange}, "subject_token": {"subject-token"}, "subject_token_type": {tokenTypeAccessToken}}
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/token", strings.NewReader(form.Encode())).WithContext(ctx)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.SetBasicAuth(d.ID.String(), cred)
 		w := httptest.NewRecorder()
-		e.h.srv.Handler().ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		return w
 	})
 	pid, ok := r.waiterOn(h, h.pid, done, lockWait)
