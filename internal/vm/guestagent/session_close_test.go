@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"runtime"
@@ -17,7 +18,7 @@ import (
 // A Stdin.Write blocked on a guest that reads nothing is woken by Session.Close, which returns within
 // 1 s and resets only that exec's stream: the guest sees its request end (it kills the process then),
 // the client keeps its one connection, a second Session on it still passes bytes, and no goroutine is
-// left. The graceful Stdin.Close is not a stop: it waits behind that write for the frame lock.
+// left. A graceful Stdin.Close started during the stall returns once Close has run.
 func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 	stuckEnded := make(chan struct{})
 	c := rawGuest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,25 +103,25 @@ func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 		t.Fatalf("Stdin.Write returned %v before Close with nothing read", w.err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	// The write has stalled once the other session's input cannot pass either: the stuck exec's unread input
-	// then holds the shared connection's window, so the write is parked inside a frame, holding the frame
-	// lock. Until then it may still be moving (a slow runner), and a graceful Stdin.Close can pass between
-	// its frames. A timeout (the stall) is recorded; any other error fails below.
+	// The stall: the other session's input no longer passes, the stuck exec's unread input holding the shared
+	// connection's window. Until then the write may still be moving (a slow runner).
 	var during chan error
-	var duringErr error
-	for until := time.Now().Add(10 * time.Second); ; {
+	for until := time.Now().Add(20 * time.Second); ; {
 		during = echoStart("during")
-		if duringErr = wait(during, time.Second); duringErr != nil || time.Now().After(until) {
+		err := wait(during, time.Second)
+		if errors.Is(err, context.DeadlineExceeded) {
 			break
 		}
+		if err != nil {
+			t.Fatalf("the other session's input before the stall failed: %v", err)
+		}
+		if time.Now().After(until) {
+			t.Fatal("the stuck exec's write never stalled the connection within 20s")
+		}
 	}
+	// Whether it waits behind the write for the frame lock is TestStdinClose_WaitsBehindAHeldFrame's.
 	graceful := make(chan error, 1)
 	go func() { graceful <- s.Stdin.Close() }()
-	select {
-	case err := <-graceful:
-		t.Fatalf("the graceful Stdin.Close returned %v while the write held the frame lock", err)
-	case <-time.After(200 * time.Millisecond):
-	}
 
 	start := time.Now()
 	closed := make(chan struct{})
@@ -157,16 +158,9 @@ func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 		t.Fatal("demux still running after Close")
 	}
 
-	t.Logf("the other session during the stall: %v", duringErr)
-	switch duringErr {
-	case nil:
-	case context.DeadlineExceeded:
-		// The stalled exec's unread input can hold the shared connection's window; its reset hands it back.
-		if err := wait(during, time.Second); err != nil {
-			t.Fatalf("the other session's input from the stall did not pass within 1s of Close: %v", err)
-		}
-	default:
-		t.Fatalf("the other session's input during the stall failed: %v", duringErr)
+	// The stalled exec's reset hands the connection's window back.
+	if err := wait(during, time.Second); err != nil {
+		t.Fatalf("the other session's input from the stall did not pass within 1s of Close: %v", err)
 	}
 	if err := echo("after", 2*time.Second); err != nil {
 		t.Fatalf("the other session after Close: %v", err)
@@ -185,4 +179,74 @@ func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 		t.Fatalf("%d goroutines after Close, %d before the stuck exec", n, base)
 	}
 	_ = other.Close()
+}
+
+// A graceful Stdin.Close waits behind a Stdin.Write parked inside a frame: the write holds the frame lock
+// from the frame's header to the end of its payload, so the close frame cannot land inside it.
+func TestStdinClose_WaitsBehindAHeldFrame(t *testing.T) {
+	upR, upW := io.Pipe()
+	t.Cleanup(func() { _ = upR.Close() })
+	in := stdinWriter{&Session{up: upW}}
+	wrote := make(chan error, 1)
+	go func() { _, err := in.Write(make([]byte, 2*MaxFrame)); wrote <- err }()
+	// The first frame's header is read and its payload withheld: the write is parked inside that frame.
+	var hdr [5]byte
+	if _, err := io.ReadFull(upR, hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	if hdr[0] != FrameStdin {
+		t.Fatalf("the first frame is 0x%02x, want stdin", hdr[0])
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- in.Close() }()
+	select {
+	case err := <-closed:
+		t.Fatalf("the graceful Stdin.Close returned %v while the write held the frame lock", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	// Reading the rest frees both, and every frame arrives whole: the held payload, then the second stdin
+	// frame and the close, in either order.
+	got := make(chan []byte, 1)
+	go func() {
+		var kinds []byte
+		if _, err := io.ReadFull(upR, make([]byte, MaxFrame)); err == nil {
+			for len(kinds) < 2 {
+				typ, _, err := ReadFrame(upR)
+				if err != nil {
+					break
+				}
+				kinds = append(kinds, typ)
+			}
+		}
+		got <- kinds
+		_, _ = io.Copy(io.Discard, upR) // a frame's empty payload is a write too, and the transport reads on
+	}()
+	for _, c := range []chan error{wrote, closed} {
+		select {
+		case err := <-c:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("the write or the graceful close stayed blocked once the frames were read")
+		}
+	}
+	_ = upW.Close()
+	select {
+	case kinds := <-got:
+		stdin, closes := 0, 0
+		for _, k := range kinds {
+			switch k {
+			case FrameStdin:
+				stdin++
+			case FrameStdinClose:
+				closes++
+			}
+		}
+		if stdin != 1 || closes != 1 {
+			t.Fatalf("after the held frame the guest read frames %x, want one more stdin and the close", kinds)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the frames after the held one were not read")
+	}
 }
