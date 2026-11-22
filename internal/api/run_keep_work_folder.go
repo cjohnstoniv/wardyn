@@ -8,9 +8,10 @@
 // and the store's own count cap. Only the work folder is kept: home, agent
 // settings and /tmp stay the sandbox's. Nothing happens at run end: no
 // teardown reclaims a drive's volume or claim, only a drive delete does. The one
-// exception is a run that ends without ever starting: nothing was mounted by it, so
-// dropUnstartedKeptDrive deletes its drive, through the delete a person's own drive takes, and frees the person's count.
-// A macOS VM run its Mac refused when it started is one (dropUncreatedMacKeptDrive).
+// exception is a run that ends without ever starting: nothing was mounted by it, so the statement that ends it
+// claims its drive and finishQueuedKeptDrive deletes it, through the delete a person's own drive takes, and frees
+// the person's count. A macOS VM run that ended before its Mac was asked to create the sandbox is one
+// (dropUncreatedMacKeptDrive); one whose create was asked and failed keeps its drive.
 package api
 
 import (
@@ -217,56 +218,66 @@ func (s *Server) auditKeptDrive(r *http.Request, k *keptWorkFolder, run types.Ag
 // memberDriveByRunEnd is the "by" of the drive.member.delete row of a kept drive whose run never started.
 const memberDriveByRunEnd = "run_never_started"
 
-// dropUnstartedKeptDrive deletes the drive run kept its work folder in, for a run that ended without ever
-// starting (cancelled or timed out in the queue, aborted by the component fence, or aborted after its
-// insert on the direct path). The drive was made with the run and nothing was mounted by it, so it would
-// only count against the person's max_per_person. It goes through the same delete as the person's own:
-// the owner-starting check, then the substrate's reclaim. The drive is a member drive like any other and
-// the owner's other runs can attach it, so a drive one of them holds is left in place, and the refusal is
-// audited by that delete as it audits its own, never as an already-absent object. A run that has no kept
-// drive, a drive some other run kept, and a drive another delete holds are left alone. Best effort: a
-// failure is logged and the drive stays, as it did before.
-func (s *Server) dropUnstartedKeptDrive(ctx context.Context, runID uuid.UUID) {
+// keptDriveOfRun is the drive run kept its work folder in, false when it has none or the drive is some other run's.
+func (s *Server) keptDriveOfRun(ctx context.Context, ms store.MemberDriveStore, runID uuid.UUID) (types.UserDrive, bool) {
+	d, err := ms.GetMemberDrive(ctx, keptWorkFolderDriveID(runID))
+	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
+		}
+		return types.UserDrive{}, false
+	}
+	return d, true
+}
+
+// finishQueuedKeptDrive is the cleanup of the drive a run kept when it ended without starting: it left the queue
+// (cancelled, timed out, aborted by the component fence, ended by its pool's removal), or was ended before any
+// sandbox was asked for (the pending abort, a macOS VM dispatch's returns). It can run long after the run ended: a
+// pool removal ends every waiting run at once and cleans them up one at a time. The statement that ended the run
+// took the claim on the drive in the same statement (store.keptDriveHoldSQL, EndUnstartedRun), and the claim is
+// the run's: it carries the instant the run ended, which no other delete of the drive can, and the issue count
+// the drive had, which must be even (nothing issued). Only that initial claim is finished, past the
+// owner-starting check deleteMemberDrive makes, and a drive it keeps has its claim cleared, which is when the drive
+// is first offered to the owner's other runs. After the first issue the count is odd and a second call finds
+// nothing to act on: only an owner's, an administrator's or the sweep's takeover issues again.
+//
+// A drive with no such claim is kept: the statement found the owner's own delete already holding the drive and
+// left it, or no claim was taken (a failed create, a run that ran). When the owner's delete fails and clears its
+// claim the drive is the owner's, and a later run may have attached it and written to it. The owner's request
+// is what deletes it, or keeps it.
+func (s *Server) finishQueuedKeptDrive(ctx context.Context, runID uuid.UUID) {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	id := keptWorkFolderDriveID(runID)
-	d, err := ms.GetMemberDrive(ctx, id)
-	if err != nil || d.KeptFromRun == nil || *d.KeptFromRun != runID {
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			slog.WarnContext(ctx, "api: read the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
+	d, ok := s.keptDriveOfRun(ctx, ms, runID)
+	if !ok || d.DeleteStartedAt == nil || d.DeleteIssues%2 != 0 {
 		return
 	}
-	if refused, serr := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByRunEnd); serr != nil || refused {
-		if serr != nil {
-			slog.WarnContext(ctx, "api: read the owner's starting runs for a kept drive", slog.String("run_id", runID.String()), slog.Any("err", serr))
-		}
-		return
-	}
-	d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, id)
+	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
-		if !errors.Is(err, store.ErrNotFound) && !errors.Is(err, store.ErrMemberDriveBusy) {
-			slog.WarnContext(ctx, "api: delete the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
+		slog.WarnContext(ctx, "api: read the run a kept drive was kept from", slog.String("run_id", runID.String()), slog.Any("err", err))
 		return
 	}
-	if res := s.deleteMemberDrive(ctx, ms, d, started, memberDriveByRunEnd); res.err != nil {
+	if run.EndedAt == nil || !d.DeleteStartedAt.Equal(*run.EndedAt) {
+		return
+	}
+	if res := s.deleteMemberDrive(ctx, ms, d, *d.DeleteStartedAt, memberDriveByRunEnd); res.err != nil {
 		slog.WarnContext(ctx, "api: finish the delete of the kept drive of a run that never started", slog.String("run_id", runID.String()), slog.Any("err", res.err))
 	}
 }
 
-// dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, is
-// dropUnstartedKeptDrive for a macOS VM run the dispatch created no sandbox for and that has ended: a run
-// its Mac refused when it started (#3900). Until the lease is gone the drop would count the run itself as
-// one still starting, and leave the drive.
+// dropUncreatedMacKeptDrive, deferred by a dispatch so it runs after the dispatch's lease is released, finishes
+// the claim a macOS VM run's end took on its kept drive when the dispatch created no sandbox: a run its Mac
+// refused before it was asked, or that failed first (#3900's cases that left no disk). Until the lease is gone the
+// delete would count the run itself as one still starting, and leave the drive. A run whose create was asked and
+// failed took no claim, and its drive stays.
 func (s *Server) dropUncreatedMacKeptDrive(ctx context.Context, run types.AgentRun, created *bool) {
 	if *created || !run.MachineKind.IsMacOSVM() || !s.keptRunEnded(ctx, run.ID) {
 		return
 	}
-	s.dropUnstartedKeptDrive(ctx, run.ID)
+	s.finishQueuedKeptDrive(ctx, run.ID)
 }
 
 // keptRunEnded reports whether runID, the run a kept drive was kept from, has ended or is gone. Until then
@@ -299,7 +310,7 @@ func (s *Server) keptWorkFolderMount(ctx context.Context, run types.AgentRun) (t
 	if err == nil {
 		mount, err = memberDriveMount(d)
 	}
-	if err != nil || d.DeleteStartedAt != nil {
+	if err != nil || d.Deleting() {
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"reason": string(authz.ReasonDriveNotFound)})))
 		s.failAndRevoke(ctx, run.ID, run.State, driveNotFoundMsg(id.String()))

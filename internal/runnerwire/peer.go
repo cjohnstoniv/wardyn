@@ -81,6 +81,10 @@ type Peer struct {
 
 	connSend *Credit
 
+	// prior is how many sessions this process had completed before this one (Client.prior); 0 for a peer made
+	// any other way.
+	prior int
+
 	mu        sync.Mutex
 	ids       *IDAllocator
 	calls     map[uint32]*pendingCall
@@ -150,6 +154,9 @@ func (p *Peer) Err() error {
 	defer p.mu.Unlock()
 	return p.err
 }
+
+// PriorSessions is how many sessions this runner process had completed with an organisation before this one.
+func (p *Peer) PriorSessions() int { return p.prior }
 
 // Online is true until the link is down.
 func (p *Peer) Online() bool {

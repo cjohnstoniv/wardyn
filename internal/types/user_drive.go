@@ -285,6 +285,19 @@ type UserDrive struct {
 	// HomeRunnerID is the Mac a mac_disk drive's disk is kept on, set on that backend and no other
 	// (migration 0246): only macOS VM runs on that Mac attach it.
 	HomeRunnerID *uuid.UUID `json:"home_runner_id,omitempty"`
+	// DeleteIssues counts the physical deletes issued for a member drive: it only grows, and goes back to 0 only
+	// with the row's own delete (migration 0299). Odd means a call to the storage may still be outstanding, which
+	// the tombstone alone does not say.
+	DeleteIssues int `json:"-"`
+	// LegacyUnsettled marks a person's Mac disk or Docker volume that existed when migration 0299 ran: listed, but
+	// not attachable until its Mac's runner proves it is a new process or an administrator releases the Docker ones.
+	LegacyUnsettled bool `json:"-"`
+}
+
+// Deleting reports whether a member drive's delete has started: the tombstone is set, or a physical delete may be
+// outstanding (an odd issue count). A drive that is deleting is treated as absent.
+func (d UserDrive) Deleting() bool {
+	return d.DeleteStartedAt != nil || d.DeleteIssues%2 == 1
 }
 
 // UserDriveGrant allocates one drive to one subject (migration 0054's

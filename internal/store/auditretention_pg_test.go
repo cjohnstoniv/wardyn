@@ -530,3 +530,29 @@ func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
 		t.Errorf("0162 treats %v as live, types.NonTerminalRunStates is %v", got, want)
 	}
 }
+
+// The retention mark an audit export reads between pages moves when a partition is dropped and not when rows are
+// only appended: a drop placed between two reads is seen, ordinary traffic is not mistaken for one.
+func TestPG_AuditRetentionMarkMovesOnlyOnADrop(t *testing.T) {
+	c := newRetChain(t)
+	ctx := context.Background()
+	pg := store.NewPG(c.pool)
+	before, err := pg.AuditRetentionMark(ctx)
+	if err != nil {
+		t.Fatalf("AuditRetentionMark: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("mark before any drop = %d, want 0", before)
+	}
+	appendAuditRow(t, c.pool, "test.mark.append")
+	if got, err := pg.AuditRetentionMark(ctx); err != nil || got != before {
+		t.Fatalf("mark after an append = %d, %v; want it unchanged at %d", got, err, before)
+	}
+	if _, err := c.drop("audit_events_legacy", c.digest(t, "audit_events_legacy"), "ops@example.com"); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	after, err := pg.AuditRetentionMark(ctx)
+	if err != nil || after == before {
+		t.Fatalf("mark after a drop = %d, %v; want it moved from %d", after, err, before)
+	}
+}

@@ -33,6 +33,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` lists the hosts an issuer portal's `internal_issuer` may name, and `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` adds a CA bundle for those hosts only. A failed refresh of an issuer's discovery or keys counts on `wardyn_portal_issuer_refresh_failures_total`.
 - The audit log has rows for these: `portal_issuers.activate`, `portal_issuers.activate_override`, `portal_issuers.old_client_seen`, `portal_issuer.retire`, `delegate.admission.change`, and `model_provider.service_grant.mint`, `.secret_write` and `.secret_delete`. A portal person's first exchange writes one `person.create` row, which carries no email.
 - `GET /runs?service=1` returns only the runs started with Keep it running, and the Runs page's Services segment uses it, so the segment no longer depends on which page of runs was loaded.
+- `POST /api/v1/admin/drives/legacy-docker/release` (administrators) releases Docker drives created before the upgrade, which 0.10.2 holds until released; the call is audited as `drive.legacy_docker.release`.
 
 ### Changed
 
@@ -40,6 +41,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A person-erasure `credentials` count, `delegated_deleted`, now includes issuer-portal grants, and the erasure deletes the record of which portals a portal person used.
 - A run's policy view marks an allow entry that Wardyn opens only some destinations of as Partly inspected, and the answer's `host_marks.partial` lists those entries. A Tunnel only entry says Wardyn leaves the TLS connection intact, though a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.
 - The Mac recovery steps copy a `mac_disk` image with `cp -c` on the same APFS volume, and with `rsync --sparse` otherwise.
+- A macOS VM run whose create fails after the Mac was asked now keeps its kept work folder (unmarked and attachable) instead of dropping it; delete it from the drive list if it is not wanted.
 
 ### Fixed
 
@@ -64,6 +66,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An expired kept machine on a Mac that is away stays kept until the Mac returns.
 - A SCIM group delete now removes every member who joined while it ran, cutting their sessions and revoking the API tokens that carry the group before it answers 204. A member add that reaches a group being deleted answers 404, where it answered 500, and a PATCH whose earlier member operation failed answers that failure first.
 - `audit.receipt.create` counts in `redacted` only the events the receipt carries, so an event withheld for the next page of a run's receipt is no longer counted.
+- A delayed clean-up no longer deletes a kept folder that a later run used. When a run that asked to keep its work folder ends without starting (cancelled or timed out in the queue, or its runner pool removed), the statement that ends it also begins the delete of its folder, so no other run is offered the folder before the clean-up has deleted it or, when the runner has it in use or the person has a run starting, cleared that mark and kept it. A folder whose delete the person had already begun is left to that delete: if it fails the folder is the person's, and the clean-up of the run does not delete it. A run that asks for the folder as its source run ends is refused it as one still held, and is not left holding a folder it cannot mount.
 
 ### Before you upgrade
 

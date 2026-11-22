@@ -181,8 +181,11 @@ jobs:
             tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
           fi
           {
-            echo "tags<<TAGEOF"
-            printf '%s\n' "${tags[@]}"
+            # The build pushes only the per-commit tag. The moving and release-named tags are applied after the
+            # image has been checked and signed, so a bad image never becomes :latest.
+            echo "first_tag=${tags[0]}"
+            echo "later_tags<<TAGEOF"
+            printf '%s\n' "${tags[@]:1}"
             echo "TAGEOF"
             # The commit stamped into the binaries; empty on a tag ref, which keeps the bare version.
             if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
@@ -202,28 +205,67 @@ jobs:
           # then report <version>+<commit>. Empty on a tag ref, which keeps the bare version.
           build-args: |
             REVISION=${{ steps.tags.outputs.revision }}
-          tags: ${{ steps.tags.outputs.tags }}
-      # The per-commit image must report the commit it was built from, in the CLI and in the daemon (the
-      # daemon's /healthz reads the same internal/version string). A tag ref keeps the bare version.
+          tags: ${{ steps.tags.outputs.first_tag }}
+      # The per-commit image must report the commit it was built from, in every binary a person can run: the
+      # in-container CLI, the daemon (its /healthz reads the same internal/version string) and the host CLIs
+      # that scripts/up.sh installs as bin/wardyn. A tag ref keeps the bare version.
       - name: Check the image reports its revision
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
           REVISION: ${{ steps.tags.outputs.revision }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          got="$(docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/wardyn "$IMAGE_REF" version)"
-          if [ -n "$REVISION" ]; then
-            case "$got" in *"+${REVISION::9}") ;; *) echo "::error::wardyn version printed '$got', want it to end in +${REVISION::9}"; exit 1;; esac
-          else
-            case "$got" in *+*) echo "::error::wardyn version printed '$got', want the bare version on a tag ref"; exit 1;; esac
-          fi
-          if [ -n "$REVISION" ]; then
-            cid="$(docker create --platform linux/amd64 "$IMAGE_REF")"
-            docker cp "$cid:/wardynd" "$RUNNER_TEMP/wardynd"
+          # reports NAME VERSION: a branch build's version ends in +<9 characters of the commit>; a tag ref
+          # (empty REVISION) reports exactly the release version its tag names. Empty never passes.
+          reports() {
+            if [ -n "$REVISION" ]; then
+              case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '$2', want it to end in +${REVISION::9}"; exit 1;; esac
+            elif [ "$2" != "${REF_NAME#v}" ]; then
+              echo "::error::$1 printed '$2', want the release version ${REF_NAME#v}"; exit 1
+            fi
+          }
+          # Every binary is run inside the image it came from, pulled by digest, with no network, no host
+          # mount and no credentials: this job is logged in to the registry and holds the packages and signing
+          # permissions, so nothing taken from the unsigned image may run on the runner itself.
+          run_in_image() {
+            docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
+          }
+          # Each command is captured on its own, so its exit status stops the step.
+          cli="$(run_in_image /usr/local/bin/wardyn)" || { echo "::error::wardyn version failed in the image"; exit 1; }
+          got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI's version command failed in the image"; exit 1; }
+          reports "wardyn in the image" "$cli"
+          reports "the linux/amd64 host CLI in the image" "$got"
+          # The files are copied out of the image of each Linux platform in the index and read as data only, never
+          # executed here: the other platform's binaries cannot run on this runner, and the unsigned image's
+          # bytes must not. A tag ref is checked for the files too, though it carries no commit to look for. The
+          # host CLIs are built with -trimpath, which leaves the linker flags out of the build info, so the stamp
+          # is the commit itself: nothing but the stamp puts those 40 characters in a binary.
+          for arch in amd64 arm64; do
+            cid="$(docker create --platform "linux/$arch" "$IMAGE_REF")"
+            mkdir -p "$RUNNER_TEMP/$arch/host"
+            docker cp "$cid:/host/." "$RUNNER_TEMP/$arch/host"
+            docker cp "$cid:/wardynd" "$RUNNER_TEMP/$arch/wardynd"
             docker rm "$cid" >/dev/null
-            grep -aqF "internal/version.buildRevision=${REVISION}" "$RUNNER_TEMP/wardynd" \
-              || { echo "::error::the wardynd binary was not stamped with revision ${REVISION}"; exit 1; }
-          fi
+            # Every file the image is built to carry is checked, so one that is missing fails here rather than
+            # dropping out of a glob: the daemon, the generic host CLI that `make setup` falls back to, and one
+            # host CLI for each of the four supported platforms (deploy/compose/Dockerfile.wardynd). A symbolic
+            # link is not a copied-out file, so only regular files are read.
+            expected=("$RUNNER_TEMP/$arch/wardynd" "$RUNNER_TEMP/$arch/host/wardyn")
+            for platform in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+              expected+=("$RUNNER_TEMP/$arch/host/wardyn-$platform")
+            done
+            for f in "${expected[@]}"; do
+              if [ -L "$f" ] || [ ! -f "$f" ]; then
+                echo "::error::$(basename "$f") is missing from the linux/$arch image or is not a regular file"; exit 1
+              fi
+              if [ -n "$REVISION" ]; then
+                grep -aqF "$REVISION" "$f" \
+                  || { echo "::error::$(basename "$f") in the linux/$arch image was not stamped with revision ${REVISION}"; exit 1; }
+              fi
+            done
+          done
           echo "image reports: $got"
       # Sign by DIGEST, the same way release.yml does, so :latest and :sha-<n>
       # carry a verifiable signature rather than being the one publishing lane
@@ -232,3 +274,18 @@ jobs:
         env:
           IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE_REF}"
+      # Only now do :latest and the other names move, each pointing at the digest that was checked and signed.
+      # Copying an index by digest keeps its digest, which is asserted so the signature covers every name.
+      - name: Point the remaining tags at the signed image
+        env:
+          IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          LATER_TAGS: ${{ steps.tags.outputs.later_tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            docker buildx imagetools create --tag "$t" "$IMAGE_REF"
+            now="$(docker buildx imagetools inspect "$t" --format '{{.Manifest.Digest}}')"
+            [ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
+          done <<< "$LATER_TAGS"

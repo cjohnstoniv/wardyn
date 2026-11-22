@@ -636,7 +636,7 @@ func (s *Server) exitQueued(ctx context.Context, runID uuid.UUID, to types.RunSt
 	if applied {
 		s.metrics.runTerminal(to)
 		s.runEvents.moved(runID, types.RunQueued, to)
-		s.dropUnstartedKeptDrive(ctx, runID)
+		s.finishQueuedKeptDrive(ctx, runID)
 	}
 	return applied, nil
 }
@@ -649,7 +649,7 @@ func (s *Server) killQueuedTail(ctx context.Context, run types.AgentRun, killerT
 	maps.Copy(data, extra)
 	s.metrics.queueWait(queueOutcomeCancelled, s.cfg.Now().Sub(run.CreatedAt))
 	s.recordAudit(ctx, s.auditEvent(&run.ID, killerType, killer, "run.kill", run.ID.String(), "success", mustJSON(data)))
-	s.dropUnstartedKeptDrive(ctx, run.ID)
+	s.finishQueuedKeptDrive(ctx, run.ID)
 	return map[string]any{}
 }
 
@@ -661,7 +661,7 @@ func (s *Server) auditPoolRemovalCancels(ctx context.Context, ids []uuid.UUID) {
 		s.runEvents.moved(id, types.RunQueued, types.RunKilled)
 		s.recordAudit(ctx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.kill", id.String(), "success",
 			mustJSON(map[string]any{"queued": true, "reason": string(types.RunEndRunnerPoolRemoved)})))
-		s.dropUnstartedKeptDrive(ctx, id)
+		s.finishQueuedKeptDrive(ctx, id)
 	}
 }
 
@@ -706,6 +706,12 @@ func (s *Server) cancelQueuedRunsOf(ctx context.Context, owner, reason string) (
 		run, err := s.cfg.Store.GetRun(ctx, e.RunID)
 		if err != nil {
 			return n, err
+		}
+		// Only a run still waiting is this batch's to cancel. One that timed out, started or was cancelled since the
+		// listing keeps its own end: the kill's claim below is QUEUED to KILLED and nothing else, so a run that
+		// leaves QUEUED between this read and the claim is lost to it and counts zero.
+		if run.State != types.RunQueued {
+			continue
 		}
 		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": reason})
 		if err != nil {

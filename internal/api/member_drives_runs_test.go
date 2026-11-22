@@ -221,19 +221,23 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 	at := time.Now()
 	tomb := row
 	tomb.DeleteStartedAt = &at
+	held := row
+	held.LegacyUnsettled = true
 	cases := []struct {
 		name     string
 		drives   map[uuid.UUID]types.UserDrive // nil: the store cannot re-read
 		owner    string
 		runOwner string
 		mounts   bool
+		hint     string // the refusal's sentence when it is not drive_not_found's
 	}{
-		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, aliceSub, true},
-		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, aliceSub, false},
-		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, aliceSub, false},
-		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, aliceSub, false},
-		{"another person's run", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, bobSub, false},
-		{"store cannot re-read", nil, aliceSub, aliceSub, false},
+		{"present", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, aliceSub, true, ""},
+		{"deleted", map[uuid.UUID]types.UserDrive{}, aliceSub, aliceSub, false, ""},
+		{"being deleted", map[uuid.UUID]types.UserDrive{id: tomb}, aliceSub, aliceSub, false, ""},
+		{"another owner", map[uuid.UUID]types.UserDrive{id: row}, bobSub, aliceSub, false, ""},
+		{"another person's run", map[uuid.UUID]types.UserDrive{id: row}, aliceSub, bobSub, false, ""},
+		{"store cannot re-read", nil, aliceSub, aliceSub, false, ""},
+		{"held since the upgrade", map[uuid.UUID]types.UserDrive{id: held}, aliceSub, aliceSub, false, legacyDriveHeldMsg(held)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,8 +262,12 @@ func TestMemberDriveDispatchRecheck(t *testing.T) {
 			if fr.createCalls != 0 {
 				t.Fatalf("CreateSandbox ran %d time(s) for a gone member drive", fr.createCalls)
 			}
-			if st.State() != types.RunFailed || st.FailureHint() != driveNotFoundMsg(id.String()) {
-				t.Errorf("run = %s %q, want FAILED with the drive_not_found sentence", st.State(), st.FailureHint())
+			wantHint := driveNotFoundMsg(id.String())
+			if tc.hint != "" {
+				wantHint = tc.hint
+			}
+			if st.State() != types.RunFailed || st.FailureHint() != wantHint {
+				t.Errorf("run = %s %q, want FAILED with %q", st.State(), st.FailureHint(), wantHint)
 			}
 			ev := findAudit(audit.events, run.ID, "run.create", "failure")
 			if ev == nil || !strings.Contains(string(ev.Data), `"reason":"drive_not_found"`) {
@@ -361,23 +369,23 @@ func (r *cancellingReclaim) ReclaimDrive(context.Context, types.DriveMount) (run
 // a database call would.
 type ctxMemberDriveStore struct{ *memberDriveStore }
 
-func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.FinishMemberDriveDelete(ctx, id, started, n)
 }
 
-func (s ctxMemberDriveStore) AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error {
+func (s ctxMemberDriveStore) ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.memberDriveStore.AbortMemberDriveDelete(ctx, id, started)
+	return s.memberDriveStore.ClearMemberDriveClaim(ctx, id, started, n)
 }
 
 // TestMemberDriveDeleteOutlivesTheRequest: a delete whose caller goes away
-// mid-reclaim still finishes. A failed reclaim clears the tombstone, so the
-// drive is the owner's again; a successful one removes the row.
+// mid-reclaim still finishes. A reclaim whose answer is not known leaves the drive held (deleting, out of the
+// owner's catalogue) for a later delete to settle; a successful one removes the row.
 func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 	for name, tc := range map[string]struct {
 		outcome runner.DriveReclaimOutcome
@@ -405,10 +413,10 @@ func TestMemberDriveDeleteOutlivesTheRequest(t *testing.T) {
 			switch {
 			case ok != tc.kept:
 				t.Fatalf("row kept = %v, want %v", ok, tc.kept)
-			case tc.kept && d.DeleteStartedAt != nil:
-				t.Fatal("the tombstone stayed set after the caller went away")
-			case tc.kept && len(meDrivesOf(t, srv, alice).Drives) != 1:
-				t.Error("the kept drive is not back in its owner's catalogue")
+			case tc.kept && d.DeleteStartedAt == nil:
+				t.Fatal("the claim was cleared after an answer that is not known")
+			case tc.kept && len(meDrivesOf(t, srv, alice).Drives) != 0:
+				t.Error("a drive held after an unknown answer is in its owner's catalogue")
 			}
 		})
 	}
