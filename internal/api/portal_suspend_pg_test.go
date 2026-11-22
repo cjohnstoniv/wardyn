@@ -44,11 +44,16 @@ func TestPortalSuspend_AdminSuspendCutsExchangeAndGrants_PG(t *testing.T) {
 	if got := l.meCode(t, bearer); got != http.StatusUnauthorized {
 		t.Errorf("GET /me with the old grant = %d, want 401", got)
 	}
+	// A subject token issued before the suspension is refused as session_revoked, before the identity is read.
+	l.ver.subj = l.person("u1", "")
+	if got := l.exchange(t, l.d.ID, l.cred, "subject-token").Code; got != http.StatusBadRequest {
+		t.Errorf("exchange with a token issued before the suspension = %d, want 400", got)
+	}
 	if got := l.exchangeFor(t, "u1"); got != http.StatusBadRequest {
 		t.Errorf("exchange after the suspension = %d, want 400", got)
 	}
-	if got := l.deniedReasons(); len(got) != 1 || got[0] != string(oidc.DenialIdentityDeactivated) {
-		t.Errorf("denied exchange reasons = %v, want one %s", got, oidc.DenialIdentityDeactivated)
+	if got := l.deniedReasons(); !slices.Equal(got, []string{"session_revoked", string(oidc.DenialIdentityDeactivated)}) {
+		t.Errorf("denied exchange reasons = %v, want [session_revoked %s]", got, oidc.DenialIdentityDeactivated)
 	}
 	if !l.allDone(t, ident.ID) {
 		t.Errorf("ledger not done after a successful suspension:\n%s", ledgerText(t, l.pool, ident.ID))

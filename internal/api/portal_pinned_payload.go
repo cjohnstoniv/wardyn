@@ -46,11 +46,25 @@ type pinnedEnvelope struct {
 
 const pinnedAADLabel = "wardyn.deprovision.pin"
 
+// pinnedRow names the ledger row a pinned payload belongs to: the deprovision job's id, its kind and the id of the
+// event pinned on it. A sealed payload is bound to all three, so one copied onto another step's row, or another
+// event, does not open.
+type pinnedRow struct {
+	jobID   uuid.UUID
+	kind    string
+	eventID uuid.UUID
+}
+
+// aad is the associated data of a payload sealed under the key generation handle for step.
+func (p pinnedRow) aad(handle uuid.UUID) []byte {
+	return kek.Encode(pinnedAADLabel, handle.String(), p.jobID.String(), p.kind, p.eventID.String())
+}
+
 // sealPinned is the form of p the ledger row holds. A human actor's payload, which names a person, is sealed under
 // that person's audit key, the key person erasure destroys; so a pending payload leaves no readable name behind
 // once they are erased, and a database copy is no more readable than the audit table's own sealed rows. Without a key
-// service (the audit_personal_fields scope is off then) it is held as it is.
-func (s *Server) sealPinned(ctx context.Context, p pinnedPayload) ([]byte, error) {
+// service (the audit_personal_fields scope is off then) it is held as it is. The seal is bound to step.
+func (s *Server) sealPinned(ctx context.Context, step pinnedRow, p pinnedPayload) ([]byte, error) {
 	if p.ActorType != types.ActorHuman || s.cfg.SubjectKeys == nil {
 		return json.Marshal(pinnedEnvelope{ActorType: p.ActorType, Actor: p.Actor, Data: p.Data})
 	}
@@ -67,7 +81,7 @@ func (s *Server) sealPinned(ctx context.Context, p pinnedPayload) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	ct, err := kek.Seal(key, plain, kek.Encode(pinnedAADLabel, handle.String()))
+	ct, err := kek.Seal(key, plain, step.aad(handle))
 	if err != nil {
 		return nil, fmt.Errorf("seal a pinned audit event: %w", err)
 	}
@@ -99,8 +113,10 @@ const (
 	pinErased                 // sealed under a key that was destroyed: the person it names was erased
 )
 
-// openPinned is the payload a ledger row holds, and what became of it.
-func (s *Server) openPinned(ctx context.Context, raw []byte) (p pinnedPayload, st pinState, err error) {
+// openPinned is the payload a ledger row holds, and what became of it. step is the row it was sealed for. With a key
+// service configured a human actor's payload is always sealed, so an unsealed one is not what sealPinned wrote and
+// is refused, as a payload that fails to open is.
+func (s *Server) openPinned(ctx context.Context, step pinnedRow, raw []byte) (p pinnedPayload, st pinState, err error) {
 	if len(raw) == 0 {
 		return p, pinAbsent, nil
 	}
@@ -111,6 +127,9 @@ func (s *Server) openPinned(ctx context.Context, raw []byte) (p pinnedPayload, s
 	if env.Sealed == nil {
 		if env.Actor == "" {
 			return p, pinAbsent, nil
+		}
+		if env.ActorType == types.ActorHuman && s.cfg.SubjectKeys != nil {
+			return p, pinAbsent, errors.New("a pinned audit event names a human actor and is not sealed")
 		}
 		return pinnedPayload{ActorType: env.ActorType, Actor: env.Actor, Data: env.Data}, pinOpen, nil
 	}
@@ -129,7 +148,7 @@ func (s *Server) openPinned(ctx context.Context, raw []byte) (p pinnedPayload, s
 	if err != nil {
 		return p, pinAbsent, fmt.Errorf("read a pinned audit event: %w", err)
 	}
-	plain, err := kek.Open(key, ct, kek.Encode(pinnedAADLabel, env.Sealed.Handle.String()))
+	plain, err := kek.Open(key, ct, step.aad(env.Sealed.Handle))
 	if err != nil {
 		return p, pinAbsent, fmt.Errorf("open a pinned audit event: %w", err)
 	}
@@ -162,7 +181,8 @@ func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore,
 	if !ok {
 		return ctx, errors.New("the store cannot pin a portal step's audit event")
 	}
-	payload, err := s.sealPinned(ctx, pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
+	step := pinnedRow{jobID: key.ID, kind: kind, eventID: uuid.New()}
+	payload, err := s.sealPinned(ctx, step, pinnedPayload{ActorType: ev.ActorType, Actor: ev.Actor, Data: ev.Data})
 	if err != nil {
 		return ctx, err
 	}
@@ -170,7 +190,7 @@ func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore,
 	if b, in := suspensionBound(ctx); in && kind == store.JobKindSuspend && b.id == id {
 		bound = &b.at
 	}
-	held, err := pinner.PinPortalEvent(ctx, id, kind, key, uuid.New(), now, payload, bound)
+	held, err := pinner.PinPortalEvent(ctx, id, kind, key, step.eventID, now, payload, bound)
 	if err != nil {
 		return ctx, err
 	}
@@ -178,7 +198,8 @@ func (s *Server) pinStepEvent(ctx context.Context, o leaverOrigin, st scimStore,
 		return ctx, errStepSettled
 	}
 	ev.ID, ev.Time = held.ID, held.At
-	p, state, err := s.openPinned(ctx, held.Payload)
+	step.eventID = held.ID
+	p, state, err := s.openPinned(ctx, step, held.Payload)
 	if err != nil {
 		return ctx, err
 	}
