@@ -77,6 +77,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn sync --git` now reads the git bundle it is about to send, in a repository of its own. It refuses the branch if a commit in it adds a path (even one later removed or renamed away), or its tip holds one, that matches one of your organisation's `WARDYN_SYNC_DENY` patterns. If your patterns name build output or other paths that were ever committed, such as `node_modules/`, `*.log` or `dist/`, every branch that ever committed one is refused. The error names the first path and pattern, and the working-tree sync is unaffected. Rewrite the branch history or change the patterns. A refused history does not stop `--pull-commits`, and under `--watch` it is a warning. A shallow clone is refused with an error until you run `git fetch --unshallow`, and a SHA-256 repository is checked as one. With no patterns set, Wardyn skips the history scan and its shallow-clone check.
 - Update each Mac runner to 0.10.2. A Mac on an older release is sent no expiry delete for a kept machine and removes expired ones in its own sweep only.
 
+### Fixed
+
+- The people list no longer reports the day a SCIM user was provisioned as their first sign-in. Migration `0296_identity_first_login` adds the column that records a person's first sign-in when it happens, and a person whose first sign-in cannot be established now shows no date. It adds no table, so split-role installs need no new grant. WORDING PENDING
+
 ## [0.10.1] — 2026-11-21
 
 ### Added

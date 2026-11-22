@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -231,5 +232,91 @@ func TestPortalPurge_ExplicitRefusedAfterConcurrentReactivate_PG(t *testing.T) {
 	}
 	if n := rowCount(t, pool, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1`, id); n != 0 {
 		t.Fatalf("a refused purge left %d jobs", n)
+	}
+}
+
+// dueMalformedPerson inserts a person row under a bound portal's issuer prefix with the given principal and issuer
+// (each call a row of its own), gives it portal history and a ledger, and makes it suspended and due under its own
+// suspension: deactivated an hour ago with a deadline that has passed and the done cutoff step that proves it.
+func dueMalformedPerson(t *testing.T, st store.PG, pool *pgxpool.Pool, p issuerPortal, issuer, principal string) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	var id uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer) VALUES ($1, $2) RETURNING id`, principal, issuer).Scan(&id); err != nil {
+		t.Fatalf("insert %s: %v", principal, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO portal_person_portals (identity_id, delegate_id) VALUES ($1, $2)`, id, p.Delegate.ID); err != nil {
+		t.Fatalf("history: %v", err)
+	}
+	if err := markedExec(t, pool, `UPDATE principal_identities SET deactivated_at = now() - interval '2 hours', purge_after = now() - interval '1 hour' WHERE id = $1`, id); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO deprovision_jobs (identity_id, kind, step, target, state, detail)
+		SELECT id, 'suspend', 'cutoff', '', 'done', jsonb_build_object('deactivated_at_us', (extract(epoch FROM deactivated_at) * 1000000)::bigint)
+		  FROM principal_identities WHERE id = $1`, id); err != nil {
+		t.Fatalf("ledger: %v", err)
+	}
+	return id
+}
+
+// A row that carries the portal issuer prefix but is not a bound portal's person is never marked: the locked mark
+// requires the bound issuer and a principal of that issuer before any write, in both modes, and says so
+// (ErrNotPortalPerson). Each case and mode has a row of its own, suspended and due under its own suspension, with
+// portal history and its first ledger row: the scheduled mode would mark it were it a bound portal's person, and
+// all of it is as found after the refusal. A bound portal's person with the same suspension is marked, in both modes.
+func TestPortalPurge_MarkRefusedForMalformedRows_PG(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	p := newIssuerPortal(t, st, "")
+	unboundKey := "dddddddddddddddddddddddddd"
+	cases := map[string]func() (issuer, principal string){
+		"an issuer no binding names": func() (string, string) {
+			return "delegate:person:" + unboundKey, "delegate:person:" + unboundKey + ":" + uuid.NewString()
+		},
+		"a principal of another issuer": func() (string, string) {
+			return "delegate:person:" + p.Key, "delegate:person:" + unboundKey + ":" + uuid.NewString()
+		},
+		"a principal that is not a portal's": func() (string, string) {
+			return "delegate:person:" + p.Key, "workforce-" + uuid.NewString()
+		},
+	}
+	for name, mk := range cases {
+		for _, mode := range []store.PortalPurgeMode{store.PortalPurgeScheduled, store.PortalPurgeExplicit} {
+			issuer, principal := mk()
+			id := dueMalformedPerson(t, st, pool, p, issuer, principal)
+			type snap struct {
+				Deactivated, PurgeAfter, Purged bool
+				History, Ledger                 int
+			}
+			read := func() (out snap) {
+				if err := pool.QueryRow(ctx, `SELECT deactivated_at IS NOT NULL, purge_after IS NOT NULL, purged_at IS NOT NULL,
+					(SELECT count(*) FROM portal_person_portals WHERE identity_id = $1), (SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1)
+					FROM principal_identities WHERE id = $1`, id).Scan(&out.Deactivated, &out.PurgeAfter, &out.Purged, &out.History, &out.Ledger); err != nil {
+					t.Fatal(err)
+				}
+				return out
+			}
+			before := read()
+			if before != (snap{Deactivated: true, PurgeAfter: true, History: 1, Ledger: 1}) {
+				t.Fatalf("%s, mode %v: control: the fixture is %+v", name, mode, before)
+			}
+			if marked, err := st.MarkPortalIdentityPurged(ctx, id, mode); marked || !errors.Is(err, store.ErrNotPortalPerson) {
+				t.Errorf("%s, mode %v: mark = %v, %v; want false, ErrNotPortalPerson", name, mode, marked, err)
+			}
+			if after := read(); after != before {
+				t.Errorf("%s, mode %v: the row changed: %+v -> %+v", name, mode, before, after)
+			}
+		}
+	}
+	// The control: a bound portal's person in the same state (a real one, suspended and due) is marked in both modes.
+	for _, mode := range []store.PortalPurgeMode{store.PortalPurgeScheduled, store.PortalPurgeExplicit} {
+		person := "ctl-" + uuid.NewString()
+		id := dueMalformedPerson(t, st, pool, p, "delegate:person:"+p.Key, types.PortalPrincipal(p.Key, person))
+		if marked, err := st.MarkPortalIdentityPurged(ctx, id, mode); err != nil || !marked {
+			t.Errorf("control, mode %v: a bound portal person's mark = %v, %v; want true", mode, marked, err)
+		}
+		if n := rowCount(t, pool, `SELECT count(*) FROM principal_identities WHERE id = $1 AND purged_at IS NOT NULL`, id); n != 1 {
+			t.Errorf("control, mode %v: the person is not tombstoned", mode)
+		}
 	}
 }

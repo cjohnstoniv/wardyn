@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,9 +93,16 @@ func (s *Server) handleSCIMListGroups(w http.ResponseWriter, r *http.Request) {
 		writeSCIMError(w, perr)
 		return
 	}
-	rows, err := st.SearchScimGroups(r.Context(), f.Attr, f.Value, scimListLimit)
+	// One row past the cap is read, so an overflow is told from a list that is exactly full: the response never
+	// claims the cap's worth of groups is the whole set a name selects.
+	rows, err := st.SearchScimGroups(r.Context(), f.Attr, f.Value, scimListLimit+1)
 	if err != nil {
 		s.scimServerError(w, r, "search groups", err)
+		return
+	}
+	if len(rows) > scimListLimit {
+		writeSCIMError(w, scim.NewError(http.StatusBadRequest, scim.TypeTooMany,
+			"the filter selects more than "+strconv.Itoa(scimListLimit)+" groups; narrow it, for example by externalId"))
 		return
 	}
 	groups := make([]scim.Group, 0, len(rows))
@@ -396,7 +404,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 		return st.FinishDeprovisionJob(ctx, identityID, store.JobKindGroupRemove, key, detail)
 	}
 	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the removal.
-	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindGroupRemove, jobs); err != nil {
+	if err := s.drainRefusalAudits(ctx, s.scimOrigin(), st, ident, store.JobKindGroupRemove, jobs); err != nil {
 		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", identityID.String()), slog.Any("err", err))
 	}
 	forms, err := s.leaverForms(ctx, st, ident)
@@ -408,7 +416,7 @@ func (s *Server) removeGroupMember(ctx context.Context, st scimStore, g store.Sc
 			return nil
 		}
 		j, _ := jobByKey(jobs, store.GroupRemovalSteps[i], g.ID.String())
-		owed, refused := s.refuseDeprovision(ctx, ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
+		owed, refused := s.refuseDeprovision(ctx, s.scimOrigin(), ident, store.JobKindGroupRemove, forms.refusal, err, j.LastError == forms.refusal)
 		marker := errors.New(forms.refusal)
 		if owed != "" {
 			if oweErr := oweRefusalAudit(ctx, st, identityID, store.JobKindGroupRemove, store.JobKey{Step: owed, Target: g.ID.String()}); oweErr != nil {

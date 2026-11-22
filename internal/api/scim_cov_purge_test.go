@@ -352,7 +352,7 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
 		st.failNext("ListWorkspaces", errSCIMCovBoom, 1)
-		if _, err := e.srv.reassignWorkspaces(ctx, []string{"sub-pat"}); !errors.Is(err, errSCIMCovBoom) || len(st.ownerWrites) != 0 {
+		if _, err := e.srv.reassignWorkspaces(ctx, e.srv.scimOrigin(), []string{"sub-pat"}); !errors.Is(err, errSCIMCovBoom) || len(st.ownerWrites) != 0 {
 			t.Errorf("err = %v owner writes %v", err, st.ownerWrites)
 		}
 	})
@@ -361,7 +361,7 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
 		st.failNext("SetWorkspaceOwner", errSCIMCovBoom, 1)
-		if _, err := e.srv.reassignWorkspaces(ctx, scimCovTargets); !errors.Is(err, errSCIMCovBoom) {
+		if _, err := e.srv.reassignWorkspaces(ctx, e.srv.scimOrigin(), scimCovTargets); !errors.Is(err, errSCIMCovBoom) {
 			t.Errorf("err = %v, want the store's error", err)
 		}
 		rows := e.auditRows("workspace.reassign")
@@ -374,7 +374,7 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		scimCovSeedPurgee(st)
 		st.workspaces = append(st.workspaces, types.Workspace{ID: uuid.New(), Name: "one"})
 		e := newSCIMCovEnv(t, st)
-		got, err := e.srv.reassignWorkspaces(ctx, scimCovTargets)
+		got, err := e.srv.reassignWorkspaces(ctx, e.srv.scimOrigin(), scimCovTargets)
 		if err != nil || got["workspaces_reassigned"] != 2 {
 			t.Fatalf("got %v %v, want both of the person's workspaces reassigned", got, err)
 		}
@@ -398,7 +398,7 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		suffixed := "one (" + scimCovWsSub.String()[:8] + ")"
 		st.workspaces = append(st.workspaces, types.Workspace{ID: uuid.New(), Name: "one"}, types.Workspace{ID: uuid.New(), Name: suffixed})
 		e := newSCIMCovEnv(t, st)
-		got, err := e.srv.reassignWorkspaces(ctx, scimCovTargets)
+		got, err := e.srv.reassignWorkspaces(ctx, e.srv.scimOrigin(), scimCovTargets)
 		if err != nil || got["workspaces_reassigned"] != 2 {
 			t.Fatalf("got %v %v, want both of the person's workspaces reassigned", got, err)
 		}
@@ -411,7 +411,7 @@ func TestSCIMCovReassignWorkspaces(t *testing.T) {
 		st := newSCIMCovStore()
 		scimCovSeedPurgee(st)
 		e := newSCIMCovEnv(t, st)
-		got, err := e.srv.reassignWorkspaces(ctx, []string{"pat@corp.example"})
+		got, err := e.srv.reassignWorkspaces(ctx, e.srv.scimOrigin(), []string{"pat@corp.example"})
 		if err != nil || got["workspaces_reassigned"] != 1 || len(st.ownerWrites) != 1 || st.ownerWrites[0].ID != scimCovWsEmail {
 			t.Errorf("got %v %v owner writes %v, want only the workspace owned under the email", got, err, st.ownerWrites)
 		}

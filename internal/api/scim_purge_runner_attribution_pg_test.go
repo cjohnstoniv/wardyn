@@ -32,7 +32,7 @@ func TestPG_LeaverPurgeClearsTheRunnerAttributionOfTheLeaver(t *testing.T) {
 	}
 	forSomeone, forSelf := mint("carol@example.com"), mint(leaver)
 
-	detail, err := f.srv.revokeLeaverRunners(f.ctx, []string{leaver})
+	detail, err := f.srv.revokeLeaverRunners(f.ctx, f.srv.scimOrigin(), []string{leaver})
 	if err != nil {
 		t.Fatal(err)
 	}

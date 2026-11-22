@@ -51,6 +51,22 @@ func (s *Server) mountPeopleRoutes(securityOps chi.Router) {
 	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/tokens", s.handleMintPersonAPIToken)
 	securityOps.With(s.refuseSubjectPrincipalParam).Get("/people/{principal}/tokens", s.handleListPersonAPITokens)
 	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/erasure", s.handleErasePerson)
+	s.mountPortalPersonRoutes(securityOps)
+}
+
+// mountPortalPersonRoutes is the lifecycle of a person an issuer portal introduced (person_suspend.go,
+// person_purge.go, portal_lifecycle.go). Suspend and the reads are security tier; reactivate and purge are
+// super admin, which securityOps.With(requireOperator) narrows to: the permanent acts and the undo of a cut
+// stay with the operator. A suspend that asks for a purge deadline is the permanent act scheduled, and the
+// handler holds it to the same authority.
+func (s *Server) mountPortalPersonRoutes(securityOps chi.Router) {
+	operatorOnly := securityOps.With(s.requireOperator)
+	securityOps.Get("/people/portal-person", s.handlePortalPersonLookup)
+	securityOps.With(s.refuseSubjectPrincipalParam).Get("/people/{principal}/portals", s.handlePortalPersonPortals)
+	securityOps.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/suspend", s.handleSuspendPortalPerson)
+	operatorOnly.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/reactivate", s.handleReactivatePortalPerson)
+	operatorOnly.With(s.refuseSubjectPrincipalParam).Post("/people/{principal}/purge", s.handlePurgePortalPerson)
+	s.mountPortalLifecycleStatusRoute(securityOps)
 }
 
 func (s *Server) personStoreOr501(w http.ResponseWriter) (store.PersonStore, bool) {

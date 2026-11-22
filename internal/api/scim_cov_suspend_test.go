@@ -532,7 +532,7 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 			run := st.addRun("sub-pat", types.RunRunning, "sbx")
 			e := newSCIMCovEnv(t, st)
 			c.arm(st)
-			err := e.srv.teardownRun(context.Background(), st, run)
+			err := e.srv.teardownRun(context.Background(), e.srv.scimOrigin(), st, run)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) || !strings.Contains(err.Error(), run.String()) {
 				t.Fatalf("err = %v, want %q naming the run", err, c.wantErr)
 			}
@@ -553,7 +553,7 @@ func TestSCIMCovTeardownRefusals(t *testing.T) {
 	run := st.addRun("sub-pat", types.RunRunning, "sbx")
 	e := newSCIMCovEnv(t, st)
 	st.casLost = 1
-	if err := e.srv.teardownRun(context.Background(), st, run); err != nil {
+	if err := e.srv.teardownRun(context.Background(), e.srv.scimOrigin(), st, run); err != nil {
 		t.Fatal(err)
 	}
 	if st.runState(run) != types.RunKilled || st.callCount("GetRun") < 2 || e.runner.killCount() != 1 {

@@ -581,7 +581,8 @@ func (s *scimCovStore) FinishDeprovisionJob(_ context.Context, id uuid.UUID, kin
 	if err := s.enter("FinishDeprovisionJob", kind); err != nil {
 		return err
 	}
-	if j := s.findJob(id, kind, k); j != nil {
+	// Like the database: a row already finished is not written again.
+	if j := s.findJob(id, kind, k); j != nil && !j.Done {
 		if detail == nil {
 			detail = map[string]int{}
 		}
@@ -838,7 +839,7 @@ func (s *scimCovStore) GetScimGroup(_ context.Context, id uuid.UUID) (store.Scim
 	return store.ScimGroup{}, store.ErrNotFound
 }
 
-func (s *scimCovStore) SearchScimGroups(_ context.Context, attr, value string, _ int) ([]store.ScimGroup, error) {
+func (s *scimCovStore) SearchScimGroups(_ context.Context, attr, value string, limit int) ([]store.ScimGroup, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("SearchScimGroups"); err != nil {
@@ -851,6 +852,11 @@ func (s *scimCovStore) SearchScimGroups(_ context.Context, attr, value string, _
 			(attr == store.SearchDisplayName && strings.ToLower(g.DisplayName) == v) {
 			out = append(out, *g)
 		}
+	}
+	// The real store caps the rows it returns at limit, so a handler that asks for no more than it will serve is
+	// told nothing about an overflow.
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

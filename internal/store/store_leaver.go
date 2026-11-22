@@ -124,9 +124,21 @@ type DeprovisionJob struct {
 // JobKey names a ledger row within one identity and kind. ID, when set, is the row's own id
 // (DeprovisionJob.ID): a finish or a failure then applies to that occurrence only, and one whose row a newer
 // occurrence replaced is ErrSuperseded.
+//
+// Claim is the ownership handle a kill claim returned (KillClaim.ClaimID), zero for a worker that holds none: a
+// finish or a failure of a named row applies only while the row's claim is exactly this one (none for none), so a
+// worker whose claim was taken over, or released, cannot finish or mark the successor's row.
 type JobKey struct {
 	Step, Target string
 	ID           uuid.UUID
+	Claim        uuid.UUID
+}
+
+func (k JobKey) claim() *uuid.UUID {
+	if k.Claim == uuid.Nil {
+		return nil
+	}
+	return &k.Claim
 }
 
 // occurrence is k.ID as a statement argument: nil, which matches any row, when k names no occurrence.
@@ -573,21 +585,57 @@ func (s PG) ListDeprovisionJobs(ctx context.Context, identityID uuid.UUID, kind 
 		})
 }
 
-// FinishDeprovisionJob marks a step done, storing the counts it produced.
+// FinishDeprovisionJob marks a step done, storing the counts it produced. A step with the named row id (a portal
+// step) is done only once the audit event its row pinned is in the shared audit table, in the same statement, which
+// also drops the pinned payload; a row a later occurrence replaced is ErrSuperseded.
 func (s PG) FinishDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int) error {
+	return s.finishJob(ctx, identityID, kind, k, detail, nil, k.ID != uuid.Nil)
+}
+
+// ErrReceiptNotStored is a portal step's finish refused because the audit event its row pinned is not in the shared
+// audit table: the step stays pending, and any replica's retry writes the same event.
+var ErrReceiptNotStored = errors.New("store: the step's pinned audit event is not in the shared audit table")
+
+// leaseRanOutSQL is true of a row whose kill claim has run out its lease, for a caller that names no claim of its own.
+// Only a failure uses it: recording that an attempt failed before it acquired a claim changes nothing a claim guards.
+// A finish never does, since an expired lease says nothing about whether the dead worker's kill was applied.
+var leaseRanOutSQL = fmt.Sprintf(`($7::uuid IS NULL AND kill_claim_id IS NOT NULL AND kill_claimed_at <= now() - make_interval(secs => %d))`, int(KillClaimLease.Seconds()))
+
+// finishJob is the done write of a step. Named by row id, it needs the pinned event stored (matched by id and time)
+// and clears the pinned payload; with at, it also needs the suspension to be the identity's current one. strict says
+// whether no row is ErrSuperseded.
+func (s PG) finishJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, detail map[string]int, at *time.Time, strict bool) error {
 	if detail == nil {
 		detail = map[string]int{}
 	}
 	raw, _ := json.Marshal(detail)
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
-		identityID, kind, k.Step, k.Target, raw, k.occurrence())
+	args := []any{identityID, kind, k.Step, k.Target, raw, k.occurrence(), k.claim()}
+	current := ""
+	if at != nil {
+		current = " AND " + suspensionCurrentSQL("$8")
+		args = append(args, *at)
+	}
+	var found, done, lost, open int
+	err := s.Pool.QueryRow(ctx, `
+		WITH j AS (SELECT id, state = 'pending' AS pending,
+		                  ($6::uuid IS NULL OR audit_event_id IS NULL OR EXISTS (SELECT 1 FROM audit_events a WHERE a.id = audit_event_id AND a.time = audit_event_at)) AS stored,
+		                  (kill_claim_id IS NOT DISTINCT FROM $7::uuid AND ($7::uuid IS NOT NULL OR kill_from IS NULL)) AS owned
+		             FROM deprovision_jobs
+		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`+current+` FOR UPDATE),
+		     u AS (UPDATE deprovision_jobs d SET state = 'done', attempts = attempts + 1, last_error = '', detail = $5,
+		                  audit_event_payload = CASE WHEN $6::uuid IS NULL THEN d.audit_event_payload END, updated_at = now()
+		            FROM j WHERE d.id = j.id AND j.pending AND j.stored AND j.owned RETURNING 1)
+		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u), (SELECT count(*) FROM j WHERE NOT owned), (SELECT count(*) FROM j WHERE pending)`, args...).Scan(&found, &done, &lost, &open)
 	if err != nil {
 		return fmt.Errorf("store: finish deprovision job: %w", err)
 	}
-	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+	switch {
+	case found == 0 && strict:
 		return ErrSuperseded
+	case lost > 0:
+		return ErrKillHeld
+	case open > 0 && done == 0:
+		return ErrReceiptNotStored
 	}
 	return nil
 }
@@ -598,15 +646,25 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 	if len(msg) > 512 {
 		msg = strings.ToValidUTF8(msg[:512], "")
 	}
-	tag, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET attempts = attempts + 1, last_error = $5, updated_at = now()
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6)`,
-		identityID, kind, k.Step, k.Target, msg, k.occurrence())
+	// A row named by its id is marked only while it is pending and the failing attempt owns it (finishJob), so a
+	// worker that lost its claim, or one that failed after the row was finished, writes nothing.
+	var found, marked int
+	var pending bool
+	err := s.Pool.QueryRow(ctx, `
+		WITH j AS (SELECT id, state = 'pending' AS pending, (kill_claim_id IS NOT DISTINCT FROM $7::uuid OR `+leaseRanOutSQL+`) AS owned FROM deprovision_jobs
+		            WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($6::uuid IS NULL OR id = $6) FOR UPDATE),
+		     u AS (UPDATE deprovision_jobs d SET attempts = attempts + 1, last_error = $5, updated_at = now()
+		            FROM j WHERE d.id = j.id AND ($6::uuid IS NULL OR (j.pending AND j.owned)) RETURNING 1)
+		SELECT (SELECT count(*) FROM j), (SELECT count(*) FROM u), COALESCE((SELECT bool_or(pending) FROM j), false)`,
+		identityID, kind, k.Step, k.Target, msg, k.occurrence(), k.claim()).Scan(&found, &marked, &pending)
 	if err != nil {
 		return fmt.Errorf("store: fail deprovision job: %w", err)
 	}
-	if k.ID != uuid.Nil && tag.RowsAffected() == 0 {
+	switch {
+	case k.ID != uuid.Nil && found == 0:
 		return ErrSuperseded
+	case k.ID != uuid.Nil && found > 0 && marked == 0 && pending:
+		return ErrKillHeld // another attempt's claim owns the row
 	}
 	return nil
 }
@@ -615,21 +673,26 @@ func (s PG) FailDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind s
 // found live once more.
 func (s PG) ReopenDeprovisionJob(ctx context.Context, identityID uuid.UUID, kind string, k JobKey) error {
 	if _, err := s.Pool.Exec(ctx, `
-		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, updated_at = now()
+		UPDATE deprovision_jobs SET state = 'pending', audit_event_id = NULL, audit_event_at = NULL, audit_event_payload = NULL, kill_claimed_at = NULL, kill_claim_id = NULL, kill_from = NULL, updated_at = now()
 		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4`, identityID, kind, k.Step, k.Target); err != nil {
 		return fmt.Errorf("store: reopen deprovision job: %w", err)
 	}
 	return nil
 }
 
-// PinDeprovisionEvent — see LeaverStore. A reopened row is a new occurrence and holds no pin.
+// PinDeprovisionEvent — see LeaverStore. A reopened row is a new occurrence and holds no pin. With k.ID set, the pin
+// is made on that row only: a row a later suspension replaced is ErrSuperseded and nothing is pinned.
 func (s PG) PinDeprovisionEvent(ctx context.Context, identityID uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time) (uuid.UUID, time.Time, error) {
 	var gotID uuid.UUID
 	var gotAt time.Time
-	if err := s.Pool.QueryRow(ctx, `
+	err := s.Pool.QueryRow(ctx, `
 		UPDATE deprovision_jobs SET audit_event_id = COALESCE(audit_event_id, $5), audit_event_at = COALESCE(audit_event_at, $6)
-		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4
-		RETURNING audit_event_id, audit_event_at`, identityID, kind, k.Step, k.Target, id, at).Scan(&gotID, &gotAt); err != nil {
+		 WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND ($7::uuid IS NULL OR id = $7)
+		RETURNING audit_event_id, audit_event_at`, identityID, kind, k.Step, k.Target, id, at, k.occurrence()).Scan(&gotID, &gotAt)
+	if errors.Is(err, pgx.ErrNoRows) && k.ID != uuid.Nil {
+		return uuid.Nil, time.Time{}, ErrSuperseded
+	}
+	if err != nil {
 		return uuid.Nil, time.Time{}, fmt.Errorf("store: pin deprovision event: %w", err)
 	}
 	return gotID, gotAt, nil

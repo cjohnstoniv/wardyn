@@ -231,6 +231,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	go goSafe("legacy.docker.release.retry", func() { srv.RunLegacyDockerReleaseRetry(rootCtx) })
 	startPortalActivationMonitor(rootCtx, srv)
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
+	startPortalLifecycleSweeper(rootCtx, leader, srv, portalLifecycleSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot

@@ -99,7 +99,7 @@ WITH ident AS (
            (array_agg(COALESCE(NULLIF(email_lower, ''), display_email) ORDER BY last_login_at DESC NULLS LAST, id)
                FILTER (WHERE email_lower <> '' OR display_email <> ''))[1] AS email,
            (array_agg(introduced_issuer ORDER BY id) FILTER (WHERE starts_with(issuer, 'delegate:person:')))[1] AS portal_issuer,
-           min(created_at) AS first_seen,
+           min(CASE WHEN starts_with(issuer, 'delegate:person:') THEN created_at ELSE first_login_at END) AS first_seen,
            max(last_login_at) AS last_login_at,
            max(pu.used_at) AS portal_used_at,
            CASE WHEN bool_and(deactivated_at IS NOT NULL) THEN max(deactivated_at) END AS deactivated_at
