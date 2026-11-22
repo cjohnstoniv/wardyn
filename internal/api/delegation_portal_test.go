@@ -740,8 +740,8 @@ func TestPortalExchange_IssuerOutageColdAndWarm(t *testing.T) {
 	}{
 		{"cold: discovery down at the first request", "issuer_unreachable", 0, ""},
 		{"warm: a never-seen kid inside the cooldown", "keys_cooldown", 20 * time.Second, "20"},
-		{"warm: the key set is down", "keys_unreachable", 0, ""},
-		{"warm: a refused address", "address_refused", 0, ""},
+		{"warm: the key set is down", "keys_unreachable", 30 * time.Second, "30"}, // the verifier answers an outage with the rest of the retry interval
+		{"warm: a refused address", "address_refused", 0, ""},                     // a rule refusal: the verifier returns 0, so no header
 	} {
 		h.ver.refusal = oidc.PortalRefusal{Reason: oidc.PortalIssuerUnavailable, Cause: c.cause, Class: oidc.PortalRefusedUnavailable, RetryAfter: c.retry}
 		w := h.exchange(t, d.ID, cred, "subject-token", nil)
@@ -770,7 +770,7 @@ func TestPortalExchange_ProxiedRefreshOutageStatusAndAudit(t *testing.T) {
 		want  string
 	}{
 		{"unreachable", 30 * time.Second, "30"},
-		{"keys_unreachable", 0, ""},
+		{"keys_unreachable", 30 * time.Second, "30"},
 		{"issuer_unreachable", 20 * time.Second, "20"},
 	}
 	for _, c := range causes {
