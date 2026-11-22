@@ -71,7 +71,7 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			deleted++ // its Mac is no longer registered, so only the record was Wardyn's to remove
 		case res.reason != "" && res.issued != 0:
 			// The delete was issued and its end is not confirmed: the drive is held and its storage may be partly or wholly gone.
-			errs = append(errs, fmt.Errorf("member drive %q was kept: Wardyn could not confirm that deleting its storage finished", d.Name))
+			errs = append(errs, fmt.Errorf("Wardyn could not confirm that deletion of storage for drive %q finished.", d.Name))
 		case res.reason != "":
 			errs = append(errs, fmt.Errorf("member drive %q was kept: deleting its storage failed", d.Name))
 		default:
