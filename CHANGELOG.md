@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A response the run's proxy relays from an upstream now reaches the sandbox as each part arrives, instead of when the proxy's write buffer fills. A model's streamed answer, on the brokered model route or on an inspected Anthropic or OpenAI connection, no longer reaches the agent late and in bursts.
+- A plain-log recording uploaded through the run's proxy now keeps the recorder's statement that it is a plain log, as a direct upload already did. The server applies the plain-log output cap and cut marker to it, instead of judging the format from the log's first bytes.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
