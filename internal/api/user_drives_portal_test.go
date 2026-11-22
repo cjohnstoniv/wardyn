@@ -316,12 +316,13 @@ func TestPortalTeamDrive_MountAuditNamesPersonPortalDrive(t *testing.T) {
 		{DriveID: drive, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-portal-x", Target: runner.SharedRoot + "/team", ReadOnly: true, Team: true},
 		{DriveID: own, Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-y", Target: runner.SharedRoot + "/team", ReadOnly: true, Team: true},
 	}, map[uuid.UUID]uuid.UUID{drive: portal})
-	if len(rec.events) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rec.events))
+	rows := rec.snapshot()
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
 	}
 	var via, plain map[string]any
-	_ = json.Unmarshal(rec.events[0].Data, &via)
-	_ = json.Unmarshal(rec.events[1].Data, &plain)
+	_ = json.Unmarshal(rows[0].Data, &via)
+	_ = json.Unmarshal(rows[1].Data, &plain)
 	if via["portal"] != portal.String() || via["mounted_by"] != "sub-alice" || via["drive_id"] != drive.String() {
 		t.Errorf("portal row = %v, want portal %s, mounted_by sub-alice and the drive", via, portal)
 	}
