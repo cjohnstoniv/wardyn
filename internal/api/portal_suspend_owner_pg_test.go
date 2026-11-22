@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -349,29 +353,105 @@ func enqueueWithDrive(t *testing.T, l *portalLife, principal string) (types.Agen
 	return run, drive
 }
 
-// A run that left the queue is repaired as a queued kill: a worker that moved a waiting run out of its queue and
-// stopped leaves the run KILLED with its queue row gone, and the repair, which sees an ordinary KILLED run, still
-// writes the queued kill's receipt under the pinned id, with no sandbox to stop, and drops the drive the run kept
-// its work folder in. The run and its drive are made as an enqueue makes them.
+// reclaimingPortalRunner is the portal fixture's runner able to delete a drive, so the repair of a queued kill can
+// finish the delete of the drive the run kept (memberDrivesDeletable).
+type reclaimingPortalRunner struct{ *scimRunner }
+
+func (*reclaimingPortalRunner) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	return runner.DriveReclaimAlreadyAbsent, nil
+}
+
+func (*reclaimingPortalRunner) CanManageDrives(context.Context) error { return nil }
+
+// A suspension's kill of a run that is still waiting leaves the queue through the one queue exit, so the run's end
+// and the claim on the drive it kept commit together (store.LeaveRunQueueIn). A claim from a stale bound or one
+// that rolls back changes nothing. Once it commits the drive is out of every run's reach, admission is refused as
+// drive_not_found, and the repair of the kill, which stops no sandbox for a run that never started, finishes the
+// drive's delete. The run and its drive are made as an enqueue makes them.
 func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
 	l := newPortalLife(t)
 	ctx := context.Background()
+	l.h.srv.cfg.Runner = &reclaimingPortalRunner{l.run}
+	l.h.srv.cfg.RunnerTarget = "docker"
 	principal, _ := l.signIn(t, "u1")
 	run, drive := enqueueWithDrive(t, l, principal)
 	c := killRowOf(t, l, principal, run.ID)
-	live := func(q string) int { return l.count(t, q, run.ID, drive.ID) }
-	if live(`SELECT count(*) FROM run_queue WHERE run_id = $1 AND $2::uuid IS NOT NULL`) != 1 || live(`SELECT count(*) FROM user_drives WHERE $1::uuid IS NOT NULL AND id = $2 AND delete_started_at IS NULL`) != 1 {
-		t.Fatal("control: the queued run has no queue row or its drive is gone")
+	queueRows := func() int { return l.count(t, `SELECT count(*) FROM run_queue WHERE run_id = $1`, run.ID) }
+	driveRows := func() int { return l.count(t, `SELECT count(*) FROM user_drives WHERE id = $1`, drive.ID) }
+	// claimOf is the drive's claim: when it was taken and the count of deletes issued, beside the run's end.
+	claimOf := func() (started *time.Time, issues int, ended *time.Time) {
+		t.Helper()
+		if err := l.pool.QueryRow(ctx, `SELECT d.delete_started_at, d.delete_issues, r.ended_at
+			FROM user_drives d JOIN agent_runs r ON r.id = d.kept_from_run WHERE d.id = $1`, drive.ID).Scan(&started, &issues, &ended); err != nil {
+			t.Fatalf("read the drive's claim: %v", err)
+		}
+		return started, issues, ended
 	}
-	receipt := uuid.New()
-	got, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: receipt, ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()})
+	admit := func() *runRefusal {
+		_, f := authorizeDrives(l.h.srv, personCtx(principal), drivesRequest(drive.ID.String()))
+		return f
+	}
+	untouched := func(what string) {
+		t.Helper()
+		started, issues, ended := claimOf()
+		if l.runState(t, run.ID) != types.RunQueued || queueRows() != 1 || started != nil || issues != 0 || ended != nil {
+			t.Errorf("%s: run %s with %d queue rows, claim %v over %d issues, ended %v; want QUEUED, 1 row, no claim, 0 issues, not ended",
+				what, l.runState(t, run.ID), queueRows(), started, issues, ended)
+		}
+	}
+	// Control: the waiting run holds its drive (listed, held) and no claim stands.
+	reach, err := l.h.srv.reachableDrives(personCtx(principal), 0)
+	if err != nil || !slices.ContainsFunc(reach, func(d reachableDrive) bool { return d.winner.Drive.ID == drive.ID && d.held }) {
+		t.Fatalf("control: the owner's reach = %d drives (%v), want the waiting run's drive held", len(reach), err)
+	}
+	untouched("control")
+	job := jobOf(t, l, c.key.ID)
+	kill := store.RunKill{RunID: run.ID, From: types.RunQueued, ReceiptID: uuid.New(), ReceiptAt: time.Now().UTC(), ClaimID: uuid.New()}
+	// A claim bound to another instant is superseded before it writes anything.
+	if _, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound.Add(-time.Microsecond), kill); !errors.Is(err, store.ErrSuperseded) {
+		t.Fatalf("a claim from a stale bound = %v, want ErrSuperseded", err)
+	}
+	untouched("a stale claim")
+	// A claim whose last write fails rolls back the queue exit with it: the run, its row and the drive's claim stay.
+	trigger := "refuse_pin_" + strings.ReplaceAll(run.ID.String(), "-", "_")
+	for _, q := range []string{
+		`CREATE FUNCTION ` + trigger + `() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test: the pin fails'; END $$`,
+		`CREATE TRIGGER ` + trigger + ` BEFORE UPDATE ON deprovision_jobs FOR EACH ROW
+			WHEN (NEW.id = '` + c.key.ID.String() + `' AND NEW.kill_claim_id IS NOT NULL) EXECUTE FUNCTION ` + trigger + `()`,
+	} {
+		if _, err := l.pool.Exec(ctx, q); err != nil {
+			t.Fatalf("plant the failing pin: %v", err)
+		}
+	}
+	_, err = l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, kill)
+	for _, q := range []string{`DROP TRIGGER ` + trigger + ` ON deprovision_jobs`, `DROP FUNCTION ` + trigger + `()`} {
+		if _, derr := l.pool.Exec(ctx, q); derr != nil {
+			t.Fatalf("remove the failing pin: %v", derr)
+		}
+	}
+	if err == nil {
+		t.Fatal("a claim whose pin failed = nil, want its error")
+	}
+	untouched("a claim that rolled back")
+	if got := jobOf(t, l, c.key.ID); got != job {
+		t.Errorf("a stale and a rolled-back claim changed the job: %q -> %q", job, got)
+	}
+	got, err := l.st.ClaimSuspensionKillAt(ctx, c.id, c.key, c.bound, kill)
 	if err != nil || !got.Applied {
 		t.Fatalf("the worker's claim from the queue = %+v, %v", got, err)
 	}
-	if live(`SELECT count(*) FROM run_queue WHERE run_id = $1 AND $2::uuid IS NOT NULL`) != 0 || l.runState(t, run.ID) != types.RunKilled {
-		t.Fatal("the claim did not take the run out of the queue in its own transaction")
+	// The committed kill left the queue and took the claim in one statement: the claim carries the run's end and
+	// the issue count is still even.
+	started, issues, ended := claimOf()
+	if queueRows() != 0 || l.runState(t, run.ID) != types.RunKilled || started == nil || ended == nil || !started.Equal(*ended) || issues%2 != 0 {
+		t.Fatalf("after the claim: %d queue rows, run %s, claim %v over %d issues, ended %v; want 0 rows, KILLED, claim equal to the end, even issues",
+			queueRows(), l.runState(t, run.ID), started, issues, ended)
 	}
-	if live(`SELECT count(*) FROM user_drives WHERE $1::uuid IS NOT NULL AND id = $2 AND delete_started_at IS NULL`) != 1 {
+	// Before the repair the drive is out of reach: the attach is refused 422 drive_not_found, the id as sent.
+	if f := admit(); f == nil || f.status != http.StatusUnprocessableEntity || f.body.Reason != string(authz.ReasonDriveNotFound) || f.body.Error != driveNotFoundMsg(drive.ID.String()) {
+		t.Errorf("admission before the repair = %+v, want 422 drive_not_found %q", f, driveNotFoundMsg(drive.ID.String()))
+	}
+	if driveRows() != 1 {
 		t.Fatal("control: the stopped worker's drive was dropped before any repair")
 	}
 	// The worker stopped; its lease is over; the sweep repairs.
@@ -385,14 +465,14 @@ func TestPortalSuspend_QueuedKillIsRepairedAsQueued_PG(t *testing.T) {
 	}
 	var data string
 	var n int
-	if err := l.pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(data->>'queued'), '') FROM audit_events WHERE action = 'run.kill' AND id = $1`, receipt).Scan(&n, &data); err != nil {
+	if err := l.pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(data->>'queued'), '') FROM audit_events WHERE action = 'run.kill' AND id = $1`, kill.ReceiptID).Scan(&n, &data); err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || data != "true" {
 		t.Errorf("run.kill rows under the pinned id = %d with queued=%q, want 1 with queued=true", n, data)
 	}
-	if got := live(`SELECT count(*) FROM user_drives WHERE $1::uuid IS NOT NULL AND id = $2 AND delete_started_at IS NULL`); got != 0 {
-		t.Errorf("the run's kept drive is untouched after the repair (%d), want it dropped", got)
+	if driveRows() != 0 {
+		t.Error("the run's kept drive is still there after the repair, want its delete finished")
 	}
 }
 

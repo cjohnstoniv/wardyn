@@ -256,10 +256,7 @@ func (s PG) ClaimSuspensionKillAt(ctx context.Context, identity uuid.UUID, k Job
 				out.From = types.RunState(*was) // killed from the state the first claim killed it from
 			}
 		case kill.From == types.RunQueued:
-			err = q.QueryRow(ctx, `
-				WITH moved AS (UPDATE agent_runs SET state = $1, updated_at = now(), ended_at = COALESCE(ended_at, now()) WHERE id = $2 AND state = $3 RETURNING id),
-				     gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
-				SELECT count(*) > 0 FROM moved`, string(types.RunKilled), kill.RunID, string(types.RunQueued)).Scan(&out.Applied)
+			out.Applied, err = LeaveRunQueueIn(ctx, q, kill.RunID, types.RunKilled, QueueExit{})
 		case kill.MarkKept:
 			out.Applied, out.Intent, err = killRunMarkingKeptMachineQ(ctx, q, kill.RunID, kill.From, kill.By, kill.Killer, kill.Exempt)
 		default:
