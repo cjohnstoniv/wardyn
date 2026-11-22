@@ -601,7 +601,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 
 **Reaching the provider.**
 
-- Wardyn fetches discovery and keys itself, directly: proxy environment variables never pick the destination. It refuses redirects and caps each answer at 1 MiB.
+- Wardyn fetches discovery and keys itself: proxy environment variables never pick the destination, and the fetch goes direct unless the issuer's host is on `WARDYN_DAEMON_PROXY_ALWAYS`. It refuses redirects and caps each answer at 1 MiB.
 - It resolves the host and dials the address it checked. Loopback, link-local, metadata and other reserved addresses are refused for every host.
 - Any host may resolve to a public address. The extra private ranges (RFC 1918, unique-local and CGNAT, no other private space) and the extra CA from `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` apply only to the host and port a registration selects with `internal_issuer` that is also listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS`. Listing a public issuer's host alone grants neither. An `internal_issuer` that is not listed is refused with `address_refused`, and nothing is resolved. Nothing skips verification.
 - Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable`; the audit reason is `portal_issuer_unavailable` and its `cause` is `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
@@ -613,6 +613,13 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 - A valid token whose keys reload after an address change gets 503 `temporarily_unavailable` (cause `keys_cooldown`), not `invalid_grant`. A key a successful fetch removed is still refused.
 - Each discovery and key request has its own 10-second bound, and a caller that leaves does not mark the issuer down.
 - A refresh failure counts on `wardyn_portal_issuer_refresh_failures_total{issuer_key,portal,source,cause}`.
+
+**Reaching the issuer through a proxy.**
+
+- A host on `WARDYN_DAEMON_PROXY_ALWAYS` is fetched through the daemon proxy. Wardyn still resolves the host and checks every address under the rules above, and asks the proxy to connect to an address it checked, never to the name.
+- The issuer is trusted only under `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. With it unset, a portal whose issuer host is listed is refused at its exchanges. The proxy must pass the issuer's TLS through uninspected.
+- The warning `portal issuer: refresh failed` names the `route` (`proxy` or `direct`) and a `detail`. A proxied fetch adds `proxy connect failed` (the proxy was not reached), `proxy target failed` (it was, and the issuer was not), `proxy status 4xx` or `5xx` (the proxy refused the connect), `proxy tls failed` (an https proxy's own handshake), `not the proxy` (cause `address_refused`) and `tls handshake failed`.
+- After the first three, Wardyn tries the next address it checked. With no CA file set, the detail is `no proxied issuer roots`.
 
 #### Switch issuer portals on
 

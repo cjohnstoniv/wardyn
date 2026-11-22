@@ -59,11 +59,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run past its lifetime cap whose files are kept no longer offers Extend and revive: the banner shows the retention date and says the run cannot be revived, and a request to move its end is refused 409 `run_end_wait_max_lifetime`, naming that date.
 - An archived approval that was cancelled because its run was lost now says so, instead of a fixed sentence.
 - A run's header shows its end time from `ended_at`, so a late teardown no longer moves it.
+- A Mac kept machine is no longer expired and deleted on a stale or cached idle report. A Mac on 0.10.2 rechecks its own deadline before an expiry delete, and one that refuses because its deadline is later makes the machine take that deadline instead of being asked every minute.
+- A resumed kept machine whose run ended without its stop being reported, because of an older runner or a lost report, is given back as kept ten minutes after the run ended instead of staying in use.
+- An expired kept machine on a Mac that is away stays kept until the Mac returns.
+- A SCIM group delete now removes every member who joined while it ran, cutting their sessions and revoking the API tokens that carry the group before it answers 204. A member add that reaches a group being deleted answers 404, where it answered 500, and a PATCH whose earlier member operation failed answers that failure first.
+- `audit.receipt.create` counts in `redacted` only the events the receipt carries, so an event withheld for the next page of a run's receipt is no longer counted.
 
 ### Before you upgrade
 
 - A `delegates` row with no issuer and an empty `scope_group` stops migration `0294`. Set a group on each, or revoke the portal and delete the row.
 - Issuer portals and model-provider service grants are off until an admin switches them on. Stop every wardynd older than 0.10.2 first: an older server does not know the new tables.
+- `wardyn sync --git` now reads the git bundle it is about to send, in a repository of its own. It refuses the branch if a commit in it adds a path (even one later removed or renamed away), or its tip holds one, that matches one of your organisation's `WARDYN_SYNC_DENY` patterns. If your patterns name build output or other paths that were ever committed, such as `node_modules/`, `*.log` or `dist/`, every branch that ever committed one is refused. The error names the first path and pattern, and the working-tree sync is unaffected. Rewrite the branch history or change the patterns. A shallow clone is refused until you run `git fetch --unshallow`, a SHA-256 repository is checked as one, and under `--watch` the refusal is a warning and `--pull-commits` still runs. With no patterns set nothing is checked.
+- Update each Mac runner to 0.10.2. A Mac on an older release is sent no expiry delete for a kept machine and removes expired ones in its own sweep only.
 
 ## [0.10.1] — 2026-11-21
 
