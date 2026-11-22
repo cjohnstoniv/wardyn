@@ -138,7 +138,7 @@ func upsertLoginIdentityTx(ctx context.Context, tx pgx.Tx, in LoginIdentity, now
 		if _, err = tx.Exec(ctx, `
 			UPDATE principal_identities
 			   SET email_lower = CASE WHEN $2 <> '' THEN $2 ELSE email_lower END, last_login_at = $3,
-			       first_login_at = COALESCE(first_login_at, CASE WHEN last_login_at IS NULL THEN $3 END)
+			       first_login_at = COALESCE(first_login_at, CASE WHEN last_login_at IS NULL THEN $3::timestamptz END)
 			 WHERE id = $1`, id, email, now); err != nil {
 			return PrincipalIdentity{}, fmt.Errorf("store: stamp login identity: %w", err)
 		}
