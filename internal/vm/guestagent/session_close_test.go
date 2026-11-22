@@ -181,8 +181,8 @@ func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 	_ = other.Close()
 }
 
-// A graceful Stdin.Close waits behind a Stdin.Write parked inside a frame: the write holds the frame lock
-// from the frame's header to the end of its payload, so the close frame cannot land inside it.
+// A graceful Stdin.Close waits behind a Stdin.Write parked inside a frame, and its frame never lands inside
+// one: the frame lock keeps each frame's header and payload together, which the frame order below checks.
 func TestStdinClose_WaitsBehindAHeldFrame(t *testing.T) {
 	upR, upW := io.Pipe()
 	t.Cleanup(func() { _ = upR.Close() })
@@ -201,7 +201,7 @@ func TestStdinClose_WaitsBehindAHeldFrame(t *testing.T) {
 	go func() { closed <- in.Close() }()
 	select {
 	case err := <-closed:
-		t.Fatalf("the graceful Stdin.Close returned %v while the write held the frame lock", err)
+		t.Fatalf("the graceful Stdin.Close returned %v while a write was parked inside a frame", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 	// Reading the rest frees both, and every frame arrives whole: the held payload, then the second stdin
