@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -300,18 +301,23 @@ func TestPG_DriveFence_CrashOnEitherSideOfTheIssue(t *testing.T) {
 
 // fenceLostSession is the store of a worker whose issue runs on a connection of its own, whose backend a second
 // connection terminates (pg_terminate_backend, as killLockHolder in locks_pg_test.go does) on one side of the
-// issue's commit. The issue is the store's own statement, run on a one-connection pool. Before the commit: the
-// backend is killed first, so the statement is never applied. After it: the statement commits, then the backend is
-// killed, and the worker never reads the reply. atLoss is what an independent connection read just after the kill.
+// issue's commit. The issue is the store's own statement, run on a one-connection pool, and the connection it uses is
+// the one the pool hands over: a PrepareConn hook (pgxpool runs it after its ping and gives that exact connection to
+// the caller) sees it. Before the commit the hook terminates that connection's backend and returns true, so the
+// statement is attempted on the dead session and the pool cannot replace it. After it the hook only notes the pid;
+// the statement commits and the backend is then terminated. atLoss is what an independent connection read just
+// after the kill.
 type fenceLostSession struct {
 	store.PG
 	t           *testing.T
 	solo        store.PG
-	soloPool    *pgxpool.Pool
 	admin       *pgxpool.Pool
 	afterCommit bool
+	armed       atomic.Bool
+	pid         uint32
 	atLoss      fenceMark
 	soloErr     error
+	drive       uuid.UUID
 }
 
 // fenceMark is a drive's mark and issue count as an independent connection reads them.
@@ -335,6 +341,10 @@ func (s *fenceLostSession) kill(ctx context.Context, pid uint32) {
 	for time.Now().Before(deadline) {
 		var n int
 		if err := s.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1`, int32(pid)).Scan(&n); err == nil && n == 0 {
+			var rerr error
+			if s.atLoss, rerr = readFenceMark(ctx, s.admin, s.drive); rerr != nil {
+				s.t.Errorf("read the drive after the kill: %v", rerr)
+			}
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -342,29 +352,36 @@ func (s *fenceLostSession) kill(ctx context.Context, pid uint32) {
 	s.t.Errorf("backend %d still listed 10 s after it was terminated", pid)
 }
 
+// prepare is the issue pool's PrepareConn: the first connection handed out while armed is the issuing session.
+func (s *fenceLostSession) prepare(ctx context.Context, c *pgx.Conn) (bool, error) {
+	if !s.armed.CompareAndSwap(true, false) {
+		return true, nil
+	}
+	s.pid = c.PgConn().PID()
+	if !s.afterCommit {
+		s.kill(ctx, s.pid)
+	}
+	return true, nil
+}
+
 func (s *fenceLostSession) IssueMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) (int, error) {
-	conn, err := s.soloPool.Acquire(ctx)
-	if err != nil {
+	s.armed.Store(true)
+	_, err := s.solo.IssueMemberDriveDelete(ctx, id, started, n)
+	if s.armed.Load() || s.pid == 0 {
+		s.t.Errorf("the issue pool never handed its connection to the issue")
+	}
+	if !s.afterCommit {
+		s.soloErr = err
 		return 0, err
 	}
-	pid := conn.Conn().PgConn().PID()
-	conn.Release()
-	if s.afterCommit {
-		if _, err := s.solo.IssueMemberDriveDelete(ctx, id, started, n); err != nil {
-			s.t.Errorf("the issue before the kill: %v", err)
-			return 0, err
-		}
+	if err != nil {
+		s.t.Errorf("the issue before the kill: %v", err)
+		return 0, err
 	}
-	s.kill(ctx, pid)
-	var rerr error
-	if s.atLoss, rerr = readFenceMark(ctx, s.admin, id); rerr != nil {
-		s.t.Errorf("read the drive after the kill: %v", rerr)
-	}
-	if s.afterCommit {
-		return 0, errors.New("the session was lost after the commit, before the reply was read")
-	}
-	_, s.soloErr = s.solo.IssueMemberDriveDelete(ctx, id, started, n)
-	return 0, s.soloErr
+	s.kill(ctx, s.pid)
+	// The store has already read the committed count; the reply is dropped here, at the worker boundary, which is
+	// what a session lost between the commit and the read looks like to the caller (a lost reply, simulated).
+	return 0, errors.New("the session was lost after the commit; the reply is dropped")
 }
 
 // The issuing session's backend is terminated on each side of the issue's commit (row 10, hosted). Before: nothing
@@ -378,14 +395,16 @@ func TestPG_DriveFence_BackendLostOnEitherSideOfTheIssue(t *testing.T) {
 		e.srv.cfg.Runner = reclaimCounts{&keepPoolRunner{e.runner}, &calls}
 		run, drive := e.fenceKeptRun(pool)
 		e.fenceEndKept(run)
+		w := &fenceLostSession{PG: e.pg, t: t, admin: e.poolEnv.pool, afterCommit: afterCommit, drive: drive}
 		cfg := e.poolEnv.pool.Config()
 		cfg.MaxConns, cfg.MinConns = 1, 0
+		cfg.PrepareConn = w.prepare
 		soloPool, err := pgxpool.NewWithConfig(ctx, cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(soloPool.Close)
-		w := &fenceLostSession{PG: e.pg, t: t, solo: store.NewPG(soloPool), soloPool: soloPool, admin: e.poolEnv.pool, afterCommit: afterCommit}
+		w.solo = store.NewPG(soloPool)
 		e.srv.cfg.Store = w
 		done := make(chan struct{})
 		go func() { defer close(done); e.srv.finishQueuedKeptDrive(ctx, run.ID) }()
