@@ -26,7 +26,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
-	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -244,14 +243,17 @@ func TestPG_UnstartedEnd_SecondCleanupMakesNoCall(t *testing.T) {
 // t2Dispatch is one way a dispatch ends before or at its create. claims is whether a macOS VM keep run's end
 // claims its drive there (the Mac was never asked to create a sandbox), and so the cleanup reclaims it once.
 type t2Dispatch struct {
-	name    string
-	claims  bool
-	grant   bool                           // the run carries a runner_resident value, handed to the runner before the create
-	policy  string                         // the credential delivery policy; residentAllClassesPolicy when empty
-	hint    string                         // part of the failure hint of the return that fails the run
-	hintFor func(types.MachineKind) string // the same, when it depends on the machine kind
-	arrange func(t *testing.T, f *residentFix, run types.AgentRun, p *dispatchParams)
+	name      string
+	claims    bool
+	grant     bool   // the run carries a runner_resident value, handed to the runner before the create
+	policy    string // the credential delivery policy; residentAllClassesPolicy when empty
+	hint      string // part of the failure hint of the return that fails the run
+	createErr error  // what the fixture runner answers a create with; the case is the one return that asks for it
+	arrange   func(t *testing.T, f *residentFix, run types.AgentRun, p *dispatchParams)
 }
+
+// errT2CreateRefused is the distinctive refusal the fixture runner gives a create it is asked for.
+var errT2CreateRefused = errors.New("t2: the driver refused the sandbox")
 
 const t2PostureRefusedPolicy = `{"classes":{"env_secret":{"mode":"runner_resident","require_posture":{"disk_encrypted":true}}}}`
 
@@ -336,15 +338,9 @@ var t2Returns = []t2Dispatch{
 				`CREATE TRIGGER t2_mark_reset BEFORE UPDATE ON kept_machines FOR EACH ROW
 					WHEN (NEW.reset_run_id IS NOT NULL AND OLD.reset_run_id IS DISTINCT FROM NEW.reset_run_id) EXECUTE FUNCTION t2_mark_reset()`)
 		}},
-	// The create was asked for, so the runner's or the substrate's own refusal of it is the failure: a macOS VM
-	// run is refused by the substrate's VM caps check before the wire (remote.CreateSandbox, checkVMCaps), a
-	// container run reaches the runner side, whose handler answers "unexpected create_sandbox".
-	{name: "the create was asked for and failed", claims: false, grant: true, hintFor: func(k types.MachineKind) string {
-		if k.IsMacOSVM() {
-			return remote.MacOSVMNotOffered("This runner")
-		}
-		return "unexpected " + runnerwire.MethodCreateSandbox
-	}},
+	// The create was asked for and the runner's driver refused it: the fixture's runner answers with createErr, so the
+	// run's hint carries that error and the runner saw exactly one create, whatever the machine kind.
+	{name: "the create was asked for and failed", claims: false, grant: true, createErr: errT2CreateRefused},
 	{name: "the masking manifest cannot be started (before the marker)", claims: false, hint: "the run's masking manifest could not be committed",
 		arrange: func(t *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {
 			dead, err := pgxpool.New(t.Context(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
@@ -369,11 +365,20 @@ func (r t2Reclaimer) ReclaimDrive(context.Context, types.DriveMount) (runner.Dri
 
 func (t2Reclaimer) CanManageDrives(context.Context) error { return nil }
 
+// errString is err's text, or "" for no error.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // t2Dispatched is a whole dispatch of a keep_work_folder run of kind and what it left: the fixture, the run and
 // the substrate reclaims asked for. The drive is a Docker volume whatever the kind, so the cleanup's reclaim
 // reaches the fixture's runner and is counted; the kind alone decides whether the dispatch installs the marker.
 type t2Dispatched struct {
 	kind     types.MachineKind
+	fake     *fakeRunner
 	f        *residentFix
 	run      types.AgentRun
 	reclaims *atomic.Int32
@@ -386,7 +391,8 @@ func t2Dispatch1(t *testing.T, kind types.MachineKind, c t2Dispatch) t2Dispatche
 	f.srv.cfg.DisableGitPATBroker = true
 	f.srv.cfg.RunnerTarget = "docker"
 	reclaims := new(atomic.Int32)
-	f.srv.cfg.Runner = t2Reclaimer{&fakeRunner{}, reclaims}
+	fake := &fakeRunner{createErr: c.createErr}
+	f.srv.cfg.Runner = t2Reclaimer{fake, reclaims}
 	f.reportCaps(t, true)
 	ctx := t.Context()
 	run := f.startingRun(t, func(r *types.AgentRun) {
@@ -409,7 +415,7 @@ func t2Dispatch1(t *testing.T, kind types.MachineKind, c t2Dispatch) t2Dispatche
 	}
 	f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), p)
 	f.srv.WaitBackground()
-	return t2Dispatched{kind, f, run, reclaims}
+	return t2Dispatched{kind, fake, f, run, reclaims}
 }
 
 // requireFailed checks that the dispatch failed the run for the reason its case names, and returns the run.
@@ -422,13 +428,20 @@ func (d t2Dispatched) requireFailed(t *testing.T, c t2Dispatch) types.AgentRun {
 	if got.State != types.RunFailed {
 		t.Fatalf("run is %s, want FAILED", got.State)
 	}
-	if want := cmp.Or(c.hint, func() string {
-		if c.hintFor != nil {
-			return c.hintFor(d.kind)
-		}
-		return ""
-	}()); want != "" && !strings.Contains(got.FailureHint, want) {
+	if want := cmp.Or(c.hint, errString(c.createErr)); want != "" && !strings.Contains(got.FailureHint, want) {
 		t.Fatalf("failure hint %q, want it to contain %q: the run failed at some other return", got.FailureHint, want)
+	}
+	// The runner is asked to create a sandbox once at the one return that asks (leaseDeliverCreate, through
+	// createSandboxAtTarget), and never at any return before it.
+	d.fake.mu.Lock()
+	creates := d.fake.createCalls
+	d.fake.mu.Unlock()
+	want := 0
+	if c.createErr != nil {
+		want = 1
+	}
+	if creates != want {
+		t.Fatalf("the runner was asked for %d creates, want %d", creates, want)
 	}
 	if c.policy == t2PostureRefusedPolicy {
 		if refusal := d.f.dispatchRefusal(t, d.run.ID); refusal["reason"] != string(placement.ReasonRunnerPostureUnmet) {
