@@ -446,7 +446,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 	// An issuer portal's stream starts nothing in the sandbox at or after its dispatch time, its check's start
 	// plus uiDispatchFresh: not the thaw, not the dial (uigateway_dispatch.go).
-	by, gated := checkStart.Add(uiDispatchFresh), issuerPortalPerson(sess.Via, sess.Principal)
+	by, gated := checkStart.Add(uiDispatchFresh()), issuerPortalPerson(sess.Via, sess.Principal)
 	past := func() bool { return gated && !time.Now().Before(by) }
 	// A watch is not a person entering: it neither resumes the run nor stamps presence nor keeps the run alive.
 	watch := sess.backgroundWatch()

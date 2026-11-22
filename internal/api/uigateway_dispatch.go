@@ -21,9 +21,15 @@ import (
 
 // uiDispatchFresh bounds when an issuer portal's relayed request may start its first write into the sandbox:
 // dispatchBy is the start of the authority check that admitted the request plus this. Nothing the request's
-// dial starts in the sandbox, and no first write of the request, starts at or after it (dispatchgate). A
-// variable, as uiConnWait is, so tests can shorten it.
-var uiDispatchFresh = 25 * time.Second
+// dial starts in the sandbox, and no first write of the request, starts at or after it (dispatchgate). Held
+// atomically so tests can shorten it while an earlier test's attach goroutines still read it.
+func uiDispatchFresh() time.Duration { return time.Duration(uiDispatchFreshNanos.Load()) }
+
+var uiDispatchFreshNanos = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(25 * time.Second))
+	return &v
+}()
 
 // uiDispatchState is the dispatch gate's process state: the single-use reverse proxy issuer portals' requests
 // go out on, the wake for dials waiting for a run's slot, and the one idle-pool close a portal dial may start.

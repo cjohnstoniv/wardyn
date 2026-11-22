@@ -170,7 +170,7 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 	// An issuer portal's request starts its first write into the sandbox, and anything its dial starts there,
 	// before checkStart plus uiDispatchFresh (uigateway_dispatch.go).
 	if issuerPortalPerson(sess.Via, sess.Principal) {
-		ctx = withUIDispatchBy(ctx, checkStart.Add(uiDispatchFresh))
+		ctx = withUIDispatchBy(ctx, checkStart.Add(uiDispatchFresh()))
 	}
 	// The same human is presence for the pause, and thaws a paused run: for an issuer portal's request, only
 	// before its dispatch time.

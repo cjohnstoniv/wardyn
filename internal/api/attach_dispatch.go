@@ -20,7 +20,7 @@ func attachDispatchBy(ctx context.Context) (time.Time, bool) {
 	if !ok || !issuerPortalPerson(ta.via, ta.principal) || ta.checkStart.IsZero() {
 		return time.Time{}, false
 	}
-	return ta.checkStart.Add(uiDispatchFresh), true
+	return ta.checkStart.Add(uiDispatchFresh()), true
 }
 
 // attachDispatchPast reports whether ctx is an issuer portal's opening at or after its dispatch time.
@@ -83,5 +83,5 @@ func (h *attachHolder) openingBy(ctx context.Context, ticketBy time.Time, gated 
 	if !ok || ctx.Err() != nil {
 		return time.Time{}, errAttachCancelled
 	}
-	return start.Add(uiDispatchFresh), nil
+	return start.Add(uiDispatchFresh()), nil
 }

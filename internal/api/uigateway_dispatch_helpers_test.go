@@ -223,9 +223,8 @@ func newDispatchRig(t *testing.T, backend http.Handler) *dispatchRig {
 // setDispatchFresh shortens uiDispatchFresh for one test.
 func setDispatchFresh(t *testing.T, d time.Duration) {
 	t.Helper()
-	old := uiDispatchFresh
-	uiDispatchFresh = d
-	t.Cleanup(func() { uiDispatchFresh = old })
+	old := uiDispatchFreshNanos.Swap(int64(d))
+	t.Cleanup(func() { uiDispatchFreshNanos.Store(old) })
 }
 
 // pausing makes the rig's store a run pauser, its run paused when paused (so the request thaws it), with
