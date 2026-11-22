@@ -380,6 +380,51 @@ describe("support strip: the banner", () => {
   });
 });
 
+describe("support strip: the consent answer shows even when the next read fails", () => {
+  async function review() {
+    const user = userEvent.setup();
+    mount({ principal: "maya" });
+    await user.click(await screen.findByRole("button", { name: "Review request" }));
+    return user;
+  }
+  const afterRead = async (n: number) => waitFor(() => expect(api.status).toHaveBeenCalledTimes(n));
+
+  it("a decline whose re-read fails drops the requested banner and shows no open help", async () => {
+    api.status.mockResolvedValueOnce({ doors_offered: OFFERED, open: grant() }).mockRejectedValue(new Error("network down"));
+    api.decline.mockResolvedValue(grant({ state: "ended", end_reason: "declined" }));
+    const user = await review();
+    await user.click(screen.getByRole("button", { name: "Decline" }));
+    await afterRead(2);
+    await waitFor(() => expect(screen.queryByTestId("support-requested")).toBeNull());
+    expect(screen.queryByTestId("support-active")).toBeNull();
+    expect(screen.queryByTestId("support-ended")).toBeNull(); // the owner is shown no line for a declined request
+  });
+
+  it("an accept whose re-read fails shows the active session", async () => {
+    api.status.mockResolvedValueOnce({ doors_offered: OFFERED, open: grant() }).mockRejectedValue(new Error("network down"));
+    api.accept.mockResolvedValue(active());
+    const user = await review();
+    await user.click(screen.getByRole("checkbox", { name: /Terminal/ }));
+    await user.click(screen.getByRole("radio", { name: "30 minutes" }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await afterRead(2);
+    expect(await screen.findByTestId("support-active")).toBeTruthy();
+    expect(screen.queryByTestId("support-requested")).toBeNull();
+  });
+
+  it("control: a decline whose re-read succeeds also drops the requested banner", async () => {
+    api.status
+      .mockResolvedValueOnce({ doors_offered: OFFERED, open: grant() })
+      .mockResolvedValue({ doors_offered: OFFERED, open: null, ended: grant({ state: "ended", end_reason: "declined" }) });
+    api.decline.mockResolvedValue(grant({ state: "ended", end_reason: "declined" }));
+    const user = await review();
+    await user.click(screen.getByRole("button", { name: "Decline" }));
+    await afterRead(2);
+    await waitFor(() => expect(screen.queryByTestId("support-requested")).toBeNull());
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+});
+
 describe("support strip: where Request help is never offered (the server always refuses)", () => {
   it.each<[string, Partial<RunDetail>]>([
     ["an operator-owned run", { operator_owned: true }],

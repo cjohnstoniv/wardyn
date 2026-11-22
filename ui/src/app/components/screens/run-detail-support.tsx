@@ -82,6 +82,8 @@ export interface RunSupport {
   refresh: () => Promise<void>;
   /** Show a grant the server just confirmed as ended, and drop any status read that started before it. */
   applyEnded: (ended: SupportGrantView) => void;
+  /** Show the grant an accept or a decline returned, so the banner follows the answer even if the next read fails. */
+  applyAnswered: (answered: SupportGrantView) => void;
 }
 
 /**
@@ -131,6 +133,14 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
       ended: prev?.ended && prev.ended.grant !== ended.grant && endedLater(prev.ended, ended) ? prev.ended : ended,
     }));
   }, []);
+  const applyAnswered = React.useCallback(
+    (answered: SupportGrantView) => {
+      if (answered.state !== "active") return applyEnded(answered);
+      appliedSeq.current = ++readSeq.current;
+      setStatus((prev) => ({ ...prev, open: answered }));
+    },
+    [applyEnded],
+  );
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -147,7 +157,7 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   const helping = viewer === "helper" && open?.state === "active";
   const helperDoors = helping ? (open?.doors ?? []) : null;
   const helperTerminal = !!helperDoors?.includes("terminal");
-  return { on: mayRead, viewer, status, open, helperTerminal, helperDoors, refresh, applyEnded };
+  return { on: mayRead, viewer, status, open, helperTerminal, helperDoors, refresh, applyEnded, applyAnswered };
 }
 
 /** The door chips of a banner, in the board's order. */
@@ -176,7 +186,7 @@ const BANNER = "mb-0 flex flex-wrap items-start justify-between gap-3 rounded-lg
 
 /** The run page's support strip: the Request help button, or the banner for the grant in front of the viewer. */
 export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport }) {
-  const { viewer, open, status, refresh, applyEnded } = sup;
+  const { viewer, open, status, refresh, applyEnded, applyAnswered } = sup;
   const operator = useOperator();
   const principal = usePrincipal();
   const [requesting, setRequesting] = React.useState(false);
@@ -273,8 +283,9 @@ export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport 
           grant={open}
           recordedDoors={open.recorded_doors ?? status?.recorded_doors ?? []}
           onClose={() => setReviewing(false)}
-          onAnswered={() => {
+          onAnswered={(answered) => {
             setReviewing(false);
+            if (answered) applyAnswered(answered);
             void refresh();
           }}
         />
