@@ -23,6 +23,7 @@ vi.mock("../../../lib/api/people", () => ({
     portalPerson: (...a: unknown[]) => lookupMock(...a),
     create: vi.fn(),
     tokens: () => Promise.resolve([]),
+    portals: () => Promise.resolve({ portals_used: [] }),
     signOutEverywhere: vi.fn(),
     removeSSHKeys: vi.fn(),
   },

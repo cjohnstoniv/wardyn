@@ -57,6 +57,12 @@ export const people = {
     return asJson<PortalPersonView>(await ok(await wfetch(`/people/portal-person?${p.toString()}`, { method: "GET" })));
   },
 
+  // GET /api/v1/people/{principal}/portals -> the portals this one portal person used, each with its assigned
+  // unit, revoked ones included.
+  async portals(principal: string): Promise<PortalPersonView> {
+    return asJson<PortalPersonView>(await ok(await wfetch(`/people/${seg(principal)}/portals`, { method: "GET" })));
+  },
+
   // GET /api/v1/people/{principal}/tokens -> all their tokens, revoked and expired ones included. The
   // route is paged newest first, so this reads every page: an older live token can sit behind a full
   // page of retired ones.

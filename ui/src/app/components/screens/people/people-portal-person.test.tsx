@@ -19,6 +19,7 @@ vi.mock("../../../lib/api/people", () => ({
     get: (...a: unknown[]) => getMock(...a),
     create: vi.fn(),
     tokens: () => Promise.resolve([]),
+    portals: () => Promise.resolve({ portals_used: [] }),
     signOutEverywhere: vi.fn(),
     removeSSHKeys: vi.fn(),
   },

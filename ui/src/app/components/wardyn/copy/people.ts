@@ -68,6 +68,13 @@ export const PEOPLE_PAGE = {
   FIND_PERSON_NOT_FOUND: "That issuer is registered, but no portal has introduced a person with that ID.",
   FIND_NOT_LISTED: "That person exists but is not in the list yet. Try again in a moment.",
   FIND_FAILED: "Wardyn couldn't look up that person.",
+  // The drawer of a portal person: each portal they used, with the unit it is assigned to.
+  PORTALS: "Portals used",
+  PORTALS_NONE: "No portal used yet",
+  PORTALS_LOAD_FAILED: "Wardyn couldn't load the portals this person used.",
+  PORTAL_UNIT: (id: string) => `Unit ${id}`,
+  PORTAL_NO_UNIT: "No unit assigned",
+  PORTAL_REVOKED: (when: string) => `Revoked ${when}`,
   SESSIONS: "Sessions",
   SESSIONS_ACTIVE: (n: number) => `${n} active`,
   SIGN_OUT: "Sign out everywhere",
