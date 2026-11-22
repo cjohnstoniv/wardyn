@@ -934,3 +934,125 @@ func TestDispatchGate_SingleUseTransport(t *testing.T) {
 		t.Fatalf("a refused GET: dials %d, GotConn %d; want 1, 1 (no retry)", dials.Load(), gotConns.Load())
 	}
 }
+
+// heldRun is one first Write on a gate whose driver write returns, all of p with no error, only when the test
+// closes release, and whose hard stop wakes nothing: the test alone orders that return against expiry and Close.
+type heldRun struct {
+	h       *harness
+	g       *Gate
+	release chan struct{}
+	resume  chan struct{} // a late caller waits for its reply only once resume closes
+	res     chan writeResult
+}
+
+func startHeld(t *testing.T, p []byte, late bool) *heldRun {
+	t.Helper()
+	ev := &events{}
+	r := &heldRun{release: make(chan struct{}), resume: make(chan struct{})}
+	m := &model{ev: ev, stop: func() { ev.add("stop") },
+		conn: newFakeConn(ev, func(p []byte) (int, error) { <-r.release; return len(p), nil }, func() {})}
+	r.h = newHarness(t, m)
+	cfg := r.h.config()
+	queued := make(chan struct{})
+	cfg.beforeWait = func() {
+		close(queued)
+		if late {
+			<-r.resume
+		}
+	}
+	r.g = New(m.conn, cfg)
+	r.res = goWrite(r.g, p)
+	<-queued
+	waitFor(t, "the driver write", func() bool { return ev.index("driver-enter") >= 0 })
+	return r
+}
+
+// TestDispatchGate_FirstWriteReply pins the first write's answer to the step that decides whether it opened the
+// gate. A driver write that returns in full after expiry or Close answers ErrExpired, and its outcome is
+// interrupted with the driver's own count; one that returned before opens the gate and answers success. A late
+// caller reaches its wait with done closed and the reply already sent, so select may take either case: those
+// orderings run many rounds, and every round must give the same answer.
+func TestDispatchGate_FirstWriteReply(t *testing.T) {
+	const rounds = 32
+	p := []byte("GET / HTTP/1.1\r\n\r\n")
+	callers := []struct {
+		name string
+		late bool
+	}{{"waiting caller", false}, {"late caller", true}}
+	for _, trigger := range []string{"expiry", "close"} {
+		for _, c := range callers {
+			late := c.late
+			t.Run("returned in full after the "+trigger+"/"+c.name, func(t *testing.T) {
+				for i := 0; i < rounds; i++ {
+					r := startHeld(t, p, late)
+					if trigger == "expiry" {
+						r.h.clock.expire(r.h.by)
+					} else {
+						_ = r.g.Close()
+					}
+					select {
+					case <-r.g.done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("done did not close")
+					}
+					var w writeResult
+					if !late { // no reply yet: the waiting Write answers at once
+						w = within(t, "the waiting Write", r.res, time.Second)
+					}
+					close(r.release)
+					o := r.h.wait() // the writer has exited, so its reply is sent
+					if late {
+						close(r.resume)
+						w = within(t, "the late Write", r.res, time.Second)
+					}
+					if w.n != 0 || !errors.Is(w.err, ErrExpired) {
+						t.Fatalf("round %d: Write = %d, %v; want 0, ErrExpired", i, w.n, w.err)
+					}
+					if o.Kind != KindInterrupted || o.BytesDone != len(p) || o.Partial || o.WriteReturned.IsZero() {
+						t.Fatalf("round %d: outcome %+v; want interrupted, bytes_done %d, not partial, write_returned set", i, o, len(p))
+					}
+					want := int32(0)
+					if trigger == "expiry" {
+						want = 1
+					}
+					if r.h.refusals.Load() != want {
+						t.Fatalf("round %d: refusals = %d, want %d", i, r.h.refusals.Load(), want)
+					}
+					checkCommon(t, r.h, o)
+				}
+			})
+		}
+	}
+
+	for _, c := range callers {
+		late := c.late
+		t.Run("returned in full, then Close/"+c.name, func(t *testing.T) {
+			for i := 0; i < rounds; i++ {
+				r := startHeld(t, p, late)
+				close(r.release)
+				waitFor(t, "the gate's opening", func() bool {
+					r.g.mu.Lock()
+					defer r.g.mu.Unlock()
+					return r.g.st == open
+				})
+				var w writeResult
+				if !late {
+					w = within(t, "the waiting Write", r.res, time.Second)
+				}
+				_ = r.g.Close()
+				o := r.h.wait()
+				if late {
+					close(r.resume)
+					w = within(t, "the late Write", r.res, time.Second)
+				}
+				if w.n != len(p) || w.err != nil {
+					t.Fatalf("round %d: Write = %d, %v; want %d, nil", i, w.n, w.err, len(p))
+				}
+				if o.Kind != KindDispatched || o.BytesDone != len(p) || o.Partial || r.h.refusals.Load() != 0 {
+					t.Fatalf("round %d: outcome %+v, refusals %d; want dispatched, bytes_done %d, 0", i, o, r.h.refusals.Load(), len(p))
+				}
+				checkCommon(t, r.h, o)
+			}
+		})
+	}
+}

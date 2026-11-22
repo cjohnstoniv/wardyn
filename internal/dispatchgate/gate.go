@@ -59,6 +59,9 @@ type Config struct {
 	// BeforeAdmit, when set, runs on the writer goroutine after a Write queued its copy and before the
 	// admission check. Nil in production; a test holds the writer there.
 	BeforeAdmit func()
+	// beforeWait, when set, runs on the Write caller's goroutine after it queued its copy and before it waits for
+	// the reply. Only this package's tests set it, to hold a caller there.
+	beforeWait func()
 }
 
 type state int
@@ -150,20 +153,22 @@ func (g *Gate) Write(p []byte) (int, error) {
 	case <-g.done:
 		return 0, ErrExpired
 	}
+	if g.cfg.beforeWait != nil {
+		g.cfg.beforeWait()
+	}
+	// The answer is serve's reply, decided under mu, the lock done is closed under: a reply sent before done closed
+	// is already in res whichever case select takes, and any later one is ErrExpired, since the gate cannot open
+	// once done is closed.
 	select {
 	case r := <-j.res:
-		// A write cut by the hard stop is ErrExpired whichever case select took: a Write that reaches this select
-		// after both the expiry and the cut result are ready must answer as one that waited here would.
-		if r.err != nil {
-			select {
-			case <-g.done:
-				return 0, ErrExpired
-			default:
-			}
-		}
 		return r.n, r.err
 	case <-g.done:
-		return 0, ErrExpired
+		select {
+		case r := <-j.res:
+			return r.n, r.err
+		default:
+			return 0, ErrExpired
+		}
 	}
 }
 
@@ -211,15 +216,21 @@ func (g *Gate) serve(j job) {
 	}
 	g.mu.Unlock()
 	n, err := g.Conn.Write(j.p)
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if firstWrite {
-		g.mu.Lock()
 		g.out.BytesDone, g.out.Partial, g.out.WriteReturned = n, err != nil, g.cfg.Now()
 		if err == nil && n == len(j.p) && !g.expired && !g.closed {
 			g.st = open
 			g.out.Kind = KindDispatched
 			g.stopTimer()
 		}
-		g.mu.Unlock()
+	}
+	// The reply is decided at the same step as the opening: a write that returns after expiry or Close, even in
+	// full, answers ErrExpired, while the outcome keeps the driver's own result. A first write that opened the gate
+	// returned before both. The send never blocks (res holds one reply).
+	if g.expired || g.closed {
+		n, err = 0, ErrExpired
 	}
 	j.res <- result{n, err}
 }
