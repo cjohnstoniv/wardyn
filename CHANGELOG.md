@@ -16,7 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - An issuer portal's person can read their own non-interactive run's command output on a runner that does not capture it, such as Kubernetes: `GET /runs/{id}/output` recovers it from the run's recording, masked, with no input and no attach session. An interactive run's output and its pane snapshot stay closed to every portal.
-- Audit action `run.output.refuse`: a portal's read of `GET /runs/{id}/output` that ends with 409 `run_output_not_captured`, `run_output_not_kept` or `run_output_interactive`, or 410 `run_output_expired`, records the same reason and status the answer carried.
+- Audit action `run.output.refuse`: a portal's read of `GET /runs/{id}/output` that ends with 409 `run_output_not_captured`, `run_output_not_kept` or `run_output_interactive`, or the retention window's 410 `run_output_expired`, records the same reason and status the answer carried.
 
 ### Changed
 
