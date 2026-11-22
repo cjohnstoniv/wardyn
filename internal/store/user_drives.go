@@ -157,8 +157,9 @@ func userDriveUniqueConflict(err error) error {
 
 // UpsertUserDrive writes one drive keyed on ID: INSERT if absent, else UPDATE in place — renaming
 // is allowed while grants still point at it, since ON DELETE RESTRICT rules out delete-and-recreate
-// for an allocated drive. A rename moves the PVC's name; existing members bind an object that no
-// longer exists until they re-mount (docs/OPERATIONS.md "User drives on Kubernetes"). Returns
+// for an allocated drive. A rename moves the PVC's name only for a slug-scheme drive (an id-scheme
+// drive's object is named from its id); there, existing members bind an object that no longer exists
+// until they re-mount (docs/OPERATIONS.md "User drives on Kubernetes"). Returns
 // ErrConflict on UNIQUE(name).
 //
 // An identity-affecting PUT on an already-allocated drive is refused 409 (ErrDriveAllocated) unless
