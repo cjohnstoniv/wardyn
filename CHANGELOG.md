@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- In the light theme, the title bar of a live terminal is now dark like the terminal under it, so its text is readable.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

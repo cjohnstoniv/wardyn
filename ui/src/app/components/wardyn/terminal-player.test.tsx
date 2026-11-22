@@ -111,4 +111,11 @@ describe("TerminalPlayer", () => {
     expect(players[2].seek).not.toHaveBeenCalled();
     expect(players[2].play).not.toHaveBeenCalled();
   });
+
+  it("uses the shared title bar on the terminal surface", () => {
+    render(<TerminalPlayer recording={rec()} />);
+    const bar = screen.getByTestId("terminal-title-bar");
+    expect(bar).toBeInTheDocument();
+    expect(bar.parentElement).toHaveClass("bg-terminal");
+  });
 });

@@ -15,8 +15,12 @@ import { render, act, screen, waitFor, within, fireEvent } from "@testing-librar
 // Mock xterm so we don't need real DOM measurement in jsdom
 const writeln = vi.fn();
 const resizeCalls: Array<[number, number]> = [];
+const termOptions: unknown[] = [];
 vi.mock("@xterm/xterm", () => {
   class Terminal {
+    constructor(o?: unknown) {
+      termOptions.push(o);
+    }
     cols = 80;
     rows = 24;
     resize(cols: number, rows: number) {
@@ -118,6 +122,7 @@ class FakeWebSocket {
 }
 
 import { AttachTerminal } from "./attach-terminal";
+import { TERMINAL_THEME } from "./terminal-theme";
 import { OperatorProvider } from "./wardyn/operator-context";
 import { RUN_COCKPIT } from "./wardyn/copy";
 import { runs } from "../lib/api/runs";
@@ -905,5 +910,40 @@ describe("AttachTerminal — a support helper", () => {
     expect(screen.queryByText(RUN_COCKPIT.heldBy("The run's owner joined"))).toBeNull();
     expect(screen.queryByRole("button", { name: RUN_COCKPIT.takeOver })).toBeNull();
     expect(screen.getByText(RUN_COCKPIT.displacedUnknownHint)).toBeInTheDocument();
+  });
+});
+
+describe("AttachTerminal — the shared title bar (#3078)", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    writeln.mockClear();
+    vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+    if (!("fonts" in document)) {
+      Object.defineProperty(document, "fonts", {
+        configurable: true,
+        value: { ready: Promise.resolve(), load: () => Promise.resolve([]) },
+      });
+    }
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("renders the shared title bar on the terminal surface, and gives xterm the one palette", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const bar = screen.getByTestId("terminal-title-bar");
+    expect(bar).toBeInTheDocument();
+    expect((termOptions.at(-1) as { theme?: unknown }).theme).toEqual(TERMINAL_THEME);
+    expect(bar.parentElement).toHaveClass("bg-terminal");
   });
 });
