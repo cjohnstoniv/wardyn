@@ -12,12 +12,16 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+
+	shippedversion "github.com/cjohnstoniv/wardyn/internal/version"
 )
 
 // changelogVersion is the one version grammar the heading and the tag share: a
@@ -202,20 +206,127 @@ func allChangelogSections(t *testing.T) map[string]changelogSection {
 	return sections
 }
 
-// changelogTagsMissingSection returns the release tags, final or candidate,
-// from v0.4.0 on that have no section in sections. Tags older than v0.4.0 live
-// in CHANGELOG-ARCHIVE.md, and anything that is not a release tag is ignored.
-func changelogTagsMissingSection(tags []string, sections map[string]changelogSection) []string {
+// changelogLine is a release's minor line, X.Y.
+type changelogLine struct{ major, minor int }
+
+// below reports whether line a is older than line b.
+func (a changelogLine) below(b changelogLine) bool {
+	return a.major < b.major || (a.major == b.major && a.minor < b.minor)
+}
+
+// changelogRelease is a parsed X.Y.Z or X.Y.Z-rc.N; rc is 0 for a final.
+type changelogRelease struct {
+	changelogLine
+	patch, rc int
+}
+
+var changelogReleaseParts = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-rc\.(\d+))?$`)
+
+// parseChangelogRelease reads a version in the changelogVersion grammar.
+func parseChangelogRelease(v string) (changelogRelease, bool) {
+	m := changelogReleaseParts.FindStringSubmatch(v)
+	if m == nil {
+		return changelogRelease{}, false
+	}
+	n := func(s string) int {
+		i, _ := strconv.Atoi(s)
+		return i
+	}
+	r := changelogRelease{changelogLine: changelogLine{n(m[1]), n(m[2])}, patch: n(m[3])}
+	if m[4] != "" {
+		r.rc = n(m[4])
+	}
+	return r, true
+}
+
+// after reports whether release a is newer than b. A final is newer than each of its candidates.
+func (a changelogRelease) after(b changelogRelease) bool {
+	if a.changelogLine != b.changelogLine {
+		return b.changelogLine.below(a.changelogLine)
+	}
+	if a.patch != b.patch {
+		return a.patch > b.patch
+	}
+	key := func(rc int) int {
+		if rc == 0 {
+			return math.MaxInt
+		}
+		return rc
+	}
+	return key(a.rc) > key(b.rc)
+}
+
+// changelogMaintainedLines are the minor lines below this tree's own that still get patch releases. A tag of such a
+// line, like a tag of the tree's own line, needs its section only once this tree has merged it or a newer tag of its
+// line: a patch tagged since the last forward-port is not ported yet. "0.10" joins in the release commit that moves
+// this tree to 0.11 (0.11.0-rc.1) and leaves when 0.10.x stops getting patches, about four weeks after 0.11.0. When
+// the tree moves to 0.12, "0.11" joins in the commit that opens 0.12, with a case in
+// TestChangelogTagGuardFollowsVersionLines. A line forgotten here is loud: its next unported tag reds the guard.
+var changelogMaintainedLines = []string{}
+
+// changelogLines parses this tree's version and the maintained list, which may name only lines below it.
+func changelogLines(own string, maintained []string) (changelogRelease, []changelogLine, error) {
+	r, ok := parseChangelogRelease(own)
+	if !ok {
+		return r, nil, fmt.Errorf("this tree's version %q is not X.Y.Z or X.Y.Z-rc.N", own)
+	}
+	var lines []changelogLine
+	for _, s := range maintained {
+		var l changelogLine
+		if n, err := fmt.Sscanf(s, "%d.%d", &l.major, &l.minor); err != nil || n != 2 || fmt.Sprintf("%d.%d", l.major, l.minor) != s {
+			return r, nil, fmt.Errorf("changelogMaintainedLines entry %q is not X.Y", s)
+		}
+		if !l.below(r.changelogLine) {
+			return r, nil, fmt.Errorf("changelogMaintainedLines entry %q is not below this tree's line %d.%d", s, r.major, r.minor)
+		}
+		lines = append(lines, l)
+	}
+	return r, lines, nil
+}
+
+// changelogTagsMissingSection returns the release tags, final or candidate, from v0.4.0 on, that need a section in
+// sections and have none. Tags older than v0.4.0 live in CHANGELOG-ARCHIVE.md, and anything that is not a release
+// tag is ignored. own is this tree's version and merged the tags HEAD has merged.
+//   - A tag of a line above own's is skipped: a newer tree released it.
+//   - A tag of own's line, or of a maintained line, needs its section at or below that line's watermark, the newest
+//     merged tag of the line. Above it the tag is not ported yet; with no merged tag of the line, none of its tags is.
+//   - A tag of any other lower line (a closed line) always needs its section, merged or not. Ancestry alone is not
+//     the rule: released tags of old release branches (v0.7.11-13, v0.8.1-9, v0.9.4-9) are not ancestors of
+//     v0.10.2, and their sections are exactly what a move could lose.
+func changelogTagsMissingSection(tags, merged []string, own changelogRelease, maintained []changelogLine, sections map[string]changelogSection) []string {
+	tracked := map[changelogLine]bool{own.changelogLine: true}
+	for _, l := range maintained {
+		tracked[l] = true
+	}
+	watermark := map[changelogLine]changelogRelease{}
+	for _, tag := range merged {
+		m := changelogTag.FindStringSubmatch(tag)
+		if m == nil {
+			continue
+		}
+		if r, ok := parseChangelogRelease(m[1]); ok {
+			if w, seen := watermark[r.changelogLine]; !seen || r.after(w) {
+				watermark[r.changelogLine] = r
+			}
+		}
+	}
 	var missing []string
 	for _, tag := range tags {
 		m := changelogTag.FindStringSubmatch(tag)
 		if m == nil {
 			continue
 		}
-		var major, minor int
-		_, _ = fmt.Sscanf(m[1], "%d.%d.", &major, &minor)
-		if major == 0 && minor < 4 {
+		r, ok := parseChangelogRelease(m[1])
+		if !ok || (r.major == 0 && r.minor < 4) {
 			continue // older than v0.4.0: CHANGELOG-ARCHIVE.md
+		}
+		if own.changelogLine.below(r.changelogLine) {
+			continue
+		}
+		if tracked[r.changelogLine] {
+			if w, ok := watermark[r.changelogLine]; !ok || r.after(w) {
+				continue
+			}
 		}
 		if _, ok := sections[m[1]]; !ok {
 			missing = append(missing, tag)
@@ -229,13 +340,25 @@ func changelogTagsMissingSection(tags []string, sections map[string]changelogSec
 // the freeze compares only the sections that are present, so a section lost in
 // a move would otherwise go unnoticed. Tags this checkout does not carry are
 // not listed, so a shallow clone checks fewer.
+// Tags of a newer line, and tags of this tree's own or a maintained line it has not merged yet, are
+// skipped (changelogTagsMissingSection).
 func TestChangelogEveryTaggedReleaseHasASection(t *testing.T) {
-	out, err := exec.Command("git", "-C", repoRoot(t), "tag", "-l", "v*").Output()
+	root := repoRoot(t)
+	all, err := exec.Command("git", "-C", root, "tag", "-l", "v*").Output()
 	if err != nil {
 		t.Fatalf("git tag -l: %v", err)
 	}
-	for _, tag := range changelogTagsMissingSection(strings.Fields(string(out)), allChangelogSections(t)) {
-		t.Errorf("tag %s has no \"## [%s]\" section in CHANGELOG.md or docs/releases/*.md — a released section was dropped", tag, tag[1:])
+	merged, err := exec.Command("git", "-C", root, "tag", "--merged", "HEAD", "-l", "v*").Output()
+	if err != nil {
+		t.Fatalf("git tag --merged HEAD: %v", err)
+	}
+	own, maintained, err := changelogLines(shippedversion.Version, changelogMaintainedLines)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range changelogTagsMissingSection(strings.Fields(string(all)), strings.Fields(string(merged)), own, maintained, allChangelogSections(t)) {
+		t.Errorf("tag %s has no \"## [%s]\" section in CHANGELOG.md or docs/releases/*.md — a released section was dropped, "+
+			"or the tag's line still gets patches and belongs in changelogMaintainedLines", tag, tag[1:])
 	}
 }
 
@@ -278,12 +401,89 @@ func TestChangelogRCSectionsAreSectionsAndFrozen(t *testing.T) {
 
 	have := map[string]changelogSection{"1.2.3": {}, "1.2.3-rc.1": {}}
 	tags := []string{"v1.2.3", "v1.2.3-rc.1", "v0.3.9", "v0.3.9-rc.1", "v1.2.3-beta.1", "latest"}
-	if missing := changelogTagsMissingSection(tags, have); len(missing) != 0 {
+	if missing := changelogTagsMissingSection(tags, tags, mustChangelogRelease(t, "1.2.3"), nil, have); len(missing) != 0 {
 		t.Errorf("tags with sections, pre-0.4.0 tags or non-release tags reported missing: %v", missing)
 	}
 	delete(have, "1.2.3-rc.1")
-	if missing := changelogTagsMissingSection(tags, have); len(missing) != 1 || missing[0] != "v1.2.3-rc.1" {
+	if missing := changelogTagsMissingSection(tags, tags, mustChangelogRelease(t, "1.2.3"), nil, have); len(missing) != 1 || missing[0] != "v1.2.3-rc.1" {
 		t.Errorf("a candidate tag without a section: missing = %v, want [v1.2.3-rc.1]", missing)
+	}
+}
+
+func mustChangelogRelease(t *testing.T, v string) changelogRelease {
+	t.Helper()
+	r, ok := parseChangelogRelease(v)
+	if !ok {
+		t.Fatalf("%q is not a release version", v)
+	}
+	return r
+}
+
+// TestChangelogTagGuardFollowsVersionLines proves the line rule and the watermark: a tag of a newer line is skipped,
+// an unported tag of the tree's own or a maintained line is skipped, and everything else still needs its section.
+func TestChangelogTagGuardFollowsVersionLines(t *testing.T) {
+	cases := []struct {
+		name       string
+		own        string
+		maintained []string
+		tags       string
+		merged     string
+		sections   string
+		want       string
+	}{
+		{"A release/0.10 with an 0.11 candidate", "0.10.4", nil, "v0.10.3 v0.10.4 v0.11.0-rc.1", "v0.10.3 v0.10.4", "0.10.3 0.10.4", ""},
+		{"B main with an unported patch", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2", "0.10.2", ""},
+		{"C the patch merged, its section lost", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2 v0.10.3", "0.10.2", "v0.10.3"},
+		{"D a closed line's non-ancestor tag with its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.9.9 0.10.4 0.11.0-rc.1", ""},
+		{"D2 the same without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.9.9"},
+		{"E a maintained line's unported tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", ""},
+		{"E2 the same tag merged without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.10.5 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
+		{"F 0.10 left off the list is loud", "0.11.0-rc.1", nil, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
+		{"G an own-line candidate below the watermark, not an ancestor, without its section", "0.10.2", nil, "v0.10.0-rc.26 v0.10.2", "v0.10.2", "0.10.2", "v0.10.0-rc.26"},
+		{"H the release commit before its tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4", "v0.10.4", "0.10.4", ""},
+		{"I a final outranks its candidates", "0.10.2", nil, "v0.10.2-rc.1 v0.10.2", "v0.10.2-rc.1", "0.10.2-rc.1", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			own, maintained, err := changelogLines(c.own, c.maintained)
+			if err != nil {
+				t.Fatal(err)
+			}
+			have := map[string]changelogSection{}
+			for _, v := range strings.Fields(c.sections) {
+				have[v] = changelogSection{}
+			}
+			got := changelogTagsMissingSection(strings.Fields(c.tags), strings.Fields(c.merged), own, maintained, have)
+			if strings.Join(got, " ") != c.want {
+				t.Errorf("missing = %v, want [%s]", got, c.want)
+			}
+		})
+	}
+}
+
+// TestChangelogMaintainedLinesAreBelowTheTree keeps the maintained list valid: only X.Y entries below the tree's line.
+func TestChangelogMaintainedLinesAreBelowTheTree(t *testing.T) {
+	for _, c := range []struct {
+		own        string
+		maintained []string
+		wantErr    bool
+	}{
+		{"0.10.2", []string{"0.10"}, true},
+		{"0.11.0-rc.1", []string{"0.10"}, false},
+		{"0.11.0-rc.1", []string{"0.1x"}, true},
+		{"0.11.0-rc.1", []string{"0.12"}, true},
+		{"0.11", nil, true},
+	} {
+		_, lines, err := changelogLines(c.own, c.maintained)
+		if (err != nil) != c.wantErr {
+			t.Errorf("changelogLines(%q, %v) error = %v, want error %v", c.own, c.maintained, err, c.wantErr)
+		}
+		if c.own == "0.11.0-rc.1" && !c.wantErr && (len(lines) != 1 || lines[0] != (changelogLine{0, 10})) {
+			t.Errorf("changelogLines(%q, %v) lines = %v, want [0.10]", c.own, c.maintained, lines)
+		}
+	}
+	if _, _, err := changelogLines(shippedversion.Version, changelogMaintainedLines); err != nil {
+		t.Errorf("the live maintained list is invalid: %v", err)
 	}
 }
 
