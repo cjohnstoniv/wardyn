@@ -203,7 +203,9 @@ func TestKeptExpiryDeleteNeedsTheMacsConditionalDelete(t *testing.T) {
 // stop (an older runner's, a cached one) changes nothing.
 func TestKeptStaleDeadlineIsRepairedFromTheMatchingStop(t *testing.T) {
 	k := newKeptFixture(t)
-	m := k.expiredKept(t)
+	// The reports that name no matching stop meet a deadline that has not passed: a passed one would be the expiry
+	// sweep's, which sends this Mac the conditional delete, and the question here is only the repair.
+	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineKept)
 	later := time.Now().Add(20 * 24 * time.Hour).UTC().Truncate(time.Second)
 	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: uuid.NewString(), ExpiresAt: later})
 	k.sweep(t)

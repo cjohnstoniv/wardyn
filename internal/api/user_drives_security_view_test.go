@@ -73,6 +73,15 @@ var (
 		"UserDrive.AltHostRoot":               true,
 		"UserDrive.AltRunnerID":               true,
 		"UserDrive.HomeRunnerID":              true,
+
+		// Internal reads that never reach the wire (json:"-"): the re-home guard's portal count, and a member
+		// drive's delete counter and legacy mark, which sit beside the delete tombstone above.
+		"UserDriveListItem.PortalGrantCount": true,
+		"UserDrive.DeleteIssues":             true,
+		"UserDrive.LegacyUnsettled":          true,
+		// The Docker volume or Kubernetes claim a portal allocation's folder is: a fact about the host and the
+		// cluster, given to the super admin who creates the claim, like HostRoot and StorageClass.
+		"UserDriveGrant.ObjectName": true,
 	}
 )
 

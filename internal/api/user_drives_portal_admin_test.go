@@ -329,7 +329,8 @@ func TestTeamDriveRehome_LegacyRenameMovesOnlyANamedObject(t *testing.T) {
 		srv, st, d := portalAdminFixture(t)
 		d.Backend, d.ObjectScheme = types.DriveBackend(c.backend), types.DriveObjectSchemeSlug
 		if c.backend == "host_path" {
-			d.HostRoot = root
+			// A share's directories are named by the directory, so a host path takes sub, never the fixture's hash.
+			d.HostRoot, d.HomeTemplate = root, types.HomeTemplateSub
 		}
 		st.drives[d.ID] = d
 		srv.cfg.UserDriveHostRoots = []string{root}
@@ -345,7 +346,7 @@ func TestTeamDriveRehome_LegacyRenameMovesOnlyANamedObject(t *testing.T) {
 		}
 		put := func(query string) *httptest.ResponseRecorder {
 			return driveCall(t, srv.handleUpdateUserDrive, http.MethodPut, "/api/v1/drives/"+d.ID.String()+query,
-				`{"name":"Team Data Renamed","backend":"`+c.backend+`","team":true`+hostRoot+`}`, map[string]string{"id": d.ID.String()})
+				`{"name":"Team Data Renamed","backend":"`+c.backend+`","home_template":"`+string(d.HomeTemplate)+`","team":true`+hostRoot+`}`, map[string]string{"id": d.ID.String()})
 		}
 		if !c.rehomes {
 			if w := put(""); w.Code != http.StatusOK {

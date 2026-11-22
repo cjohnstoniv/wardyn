@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -27,7 +28,8 @@ import (
 type fillHandler struct {
 	sub     *remote.Substrate
 	refuse  atomic.Int32
-	outputs atomic.Int32 // output OPENs that reached the org
+	outputs atomic.Int32  // output OPENs that reached the org
+	refused chan struct{} // one value per output OPEN answered with the capacity reset
 }
 
 func (h *fillHandler) HandleEvent(ev runnerwire.Event) { h.sub.HandleEvent(ev) }
@@ -38,6 +40,10 @@ func (h *fillHandler) HandleOpen(st *runnerwire.Stream, o runnerwire.Open) error
 	case runnerwire.KindOutput:
 		h.outputs.Add(1)
 		if h.refuse.Add(-1) >= 0 {
+			select {
+			case h.refused <- struct{}{}:
+			default:
+			}
 			return runnerwire.ErrOpenCapacity
 		}
 	}
@@ -49,7 +55,7 @@ func capacityRig(t *testing.T, server *Server) (*remote.Substrate, *fillHandler,
 	t.Helper()
 	link := &remote.Link{}
 	sub := remote.New("laptop", link, remote.Options{})
-	h := &fillHandler{sub: sub}
+	h := &fillHandler{sub: sub, refused: make(chan struct{}, 64)}
 	link.SetHandler(h)
 	caps, _ := json.Marshal(runnerwire.Caps{Support: runnertest.NewFake().Support})
 	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
@@ -111,7 +117,8 @@ func TestRunnerioOutput_LocalCapacityRetries(t *testing.T) {
 				t.Fatal("the local refusal sent an OPEN")
 			}
 			if full == "peer" {
-				h.refuse.Store(2) // the worker's first two OPENs are refused too
+				<-h.refused                   // the probe's
+				h.refuse.Store(math.MaxInt32) // the peer stays full until the test frees it
 			}
 
 			id := uuid.New()
@@ -121,7 +128,19 @@ func TestRunnerioOutput_LocalCapacityRetries(t *testing.T) {
 			}
 			want := []byte("output that waited for a place\n")
 			drained := drain(t, server, id, want)
-			time.Sleep(300 * time.Millisecond) // the worker tries, is refused and backs off
+			if full == "local" {
+				time.Sleep(300 * time.Millisecond) // the worker tries, is refused locally and backs off
+			} else {
+				// The worker's first two OPENs are refused: it retried after a capacity reset. Every OPEN so far
+				// was refused, so nothing can have been delivered yet.
+				for range 2 {
+					select {
+					case <-h.refused:
+					case <-ctx.Done():
+						t.Fatal("the output worker never opened its stream")
+					}
+				}
+			}
 			select {
 			case <-capture.done:
 				t.Fatal("output was delivered while the table was full")
@@ -132,6 +151,8 @@ func TestRunnerioOutput_LocalCapacityRetries(t *testing.T) {
 					t.Fatalf("%d output OPENs reached the org while the runner's table was full", n)
 				}
 				_ = fillers[0].Close() // one place frees
+			} else {
+				h.refuse.Store(0) // the peer frees a place
 			}
 			if err := waitFor(t, "the drain", drained); err != nil {
 				t.Fatal(err)
