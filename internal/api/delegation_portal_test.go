@@ -128,6 +128,19 @@ var (
 	_ store.PortalIdentityStore = (*portalStore)(nil)
 )
 
+// GetDelegateByID answers from the portals this store holds, as the Postgres read does for a portal of either kind,
+// and from the embedded store for any other id. Without it the embedded fake's console-only read would answer
+// not found for a live issuer portal.
+func (p *portalStore) GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error) {
+	p.pmu.Lock()
+	d, ok := p.portals[id]
+	p.pmu.Unlock()
+	if ok {
+		return d, nil
+	}
+	return p.authzStore.GetDelegateByID(ctx, id)
+}
+
 func (p *portalStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()

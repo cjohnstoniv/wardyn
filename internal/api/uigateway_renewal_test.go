@@ -824,43 +824,49 @@ func TestUIIssuerPortal_BackgroundDoorReadsAnswer503(t *testing.T) {
 		{"inbound policy stall", nil, stall},
 	} {
 		for _, issuer := range []bool{true, false} {
-			name := tc.name + "/other ticket"
-			if issuer {
-				name = tc.name + "/issuer ticket"
+			callers := []string{""}
+			if !issuer && tc.audit != nil {
+				callers = []string{"", "caller"} // the watch door's own ticket, and one that is not
 			}
-			t.Run(name, func(t *testing.T) {
-				h, st := bgWatchHarness(t)
-				h.srv.cfg.Store = &issuerDoorStore{desktopSiteStore: st, site: tc.site, audit: tc.audit}
-				ta := ticketActor{actorType: types.ActorHuman, principal: h.owner, role: oidc.RoleUser, app: uiDesktopAppName}
+			for _, caller := range callers {
+				name := tc.name + "/other ticket"
 				if issuer {
-					ta.admitBy = time.Now().Add(200 * time.Millisecond)
+					name = tc.name + "/issuer ticket"
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond) // the opening's, or the request's end
-				defer cancel()
-				req := httptest.NewRequestWithContext(ctx, http.MethodGet, uiEnterPath, nil)
-				rec := httptest.NewRecorder()
-				answered := h.srv.uiBackgroundDoorRefused(rec, req, backgroundOnlyRefusal(h.run, "web application gateway"), h.run, uiDesktopAppName, ta)
-				unverifiable := answered && rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), uiDeniedReasonRevocationUnavailable)
-				switch {
-				case issuer && !unverifiable:
-					t.Fatalf("answered %v: %d %s, want the retryable 503", answered, rec.Code, rec.Body.String())
-				case !issuer && unverifiable:
-					t.Fatalf("another ticket's answer changed to the issuer's 503: %s", rec.Body.String())
-				case !issuer && tc.site != nil && (!answered || rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), reasonDesktopSignInsOff)):
-					t.Fatalf("another ticket's unreadable roster: %v %d %s, want 403 %s", answered, rec.Code, rec.Body.String(), reasonDesktopSignInsOff)
-				case !issuer && tc.audit != nil:
-					// An unreadable policy is no inbound app: the answer is the one a readable policy gives the same ticket.
-					h2, st2 := bgWatchHarness(t)
-					h2.srv.cfg.Store = &issuerDoorStore{desktopSiteStore: st2}
-					want := httptest.NewRecorder()
-					wantAnswered := h2.srv.uiBackgroundDoorRefused(want, httptest.NewRequest(http.MethodGet, uiEnterPath, nil),
-						backgroundOnlyRefusal(h2.run, "web application gateway"), h2.run, uiDesktopAppName, ta)
-					if answered != wantAnswered || rec.Code != want.Code || rec.Body.String() != want.Body.String() {
-						t.Fatalf("another ticket's unreadable policy: %v %d %q, want the readable policy's %v %d %q",
-							answered, rec.Code, rec.Body.String(), wantAnswered, want.Code, want.Body.String())
+				if caller != "" {
+					name += " with a caller"
+				}
+				t.Run(name, func(t *testing.T) {
+					h, st := bgWatchHarness(t)
+					h.srv.cfg.Store = &issuerDoorStore{desktopSiteStore: st, site: tc.site, audit: tc.audit}
+					ta := ticketActor{actorType: types.ActorHuman, principal: h.owner, role: oidc.RoleUser, app: uiDesktopAppName}
+					if issuer {
+						ta.admitBy = time.Now().Add(200 * time.Millisecond)
 					}
-				}
-			})
+					// A ticket with a caller is not the watch door's.
+					ta.caller = caller
+					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond) // the opening's, or the request's end
+					defer cancel()
+					req := httptest.NewRequestWithContext(ctx, http.MethodGet, uiEnterPath, nil)
+					rec := httptest.NewRecorder()
+					answered := h.srv.uiBackgroundDoorRefused(rec, req, backgroundOnlyRefusal(h.run, "web application gateway"), h.run, uiDesktopAppName, ta)
+					unverifiable := answered && rec.Code == http.StatusServiceUnavailable && strings.Contains(rec.Body.String(), uiDeniedReasonRevocationUnavailable)
+					switch {
+					case issuer && !unverifiable:
+						t.Fatalf("answered %v: %d %s, want the retryable 503", answered, rec.Code, rec.Body.String())
+					case !issuer && unverifiable:
+						t.Fatalf("another ticket's answer changed to the issuer's 503: %s", rec.Body.String())
+					case !issuer && tc.site != nil && (!answered || rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), reasonDesktopSignInsOff)):
+						t.Fatalf("another ticket's unreadable roster: %v %d %s, want 403 %s", answered, rec.Code, rec.Body.String(), reasonDesktopSignInsOff)
+					case !issuer && tc.audit != nil && caller != "" && (!answered || rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), reasonRunBackgroundOnly)):
+						// An unreadable policy is no inbound app: a ticket that is not the watch door's takes the refusal, and is not let through as inbound.
+						t.Fatalf("another ticket's unreadable policy: %v %d %s, want 409 %s", answered, rec.Code, rec.Body.String(), reasonRunBackgroundOnly)
+					case !issuer && tc.audit != nil && caller == "" && (answered || rec.Code != http.StatusOK || rec.Body.Len() != 0):
+						// The watch door's own ticket is let through to the watch's checks, which a watchable run passes.
+						t.Fatalf("the watch ticket's unreadable policy: %v %d %s, want it let through (false, 200, empty)", answered, rec.Code, rec.Body.String())
+					}
+				})
+			}
 		}
 	}
 }

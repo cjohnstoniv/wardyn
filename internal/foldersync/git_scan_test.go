@@ -328,7 +328,7 @@ func TestCheckBundleAllowed_RefusesWhenGitCannotMakeASHA256Scanner(t *testing.T)
 }
 
 // The scan's init names SHA-1 for a 40-hex tip, its fetch carries the maintenance and gc switches, and both run
-// with HOME in the scan's own directory, not the laptop's.
+// with HOME in the scan's own directory, not the laptop's; so do the listing's rev-list, diff-tree and ls-tree.
 func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 	g := newGitRig(t)
 	log := gitProbe(t)
@@ -338,7 +338,7 @@ func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
-	var inits, fetches int
+	var inits, fetches, listed int
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		f := strings.SplitN(line, "|", 3)
 		if len(f) != 3 {
@@ -357,6 +357,8 @@ func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 					t.Errorf("fetch lacks %q: %s", want, line)
 				}
 			}
+		case strings.Contains(f[2], " rev-list "), strings.Contains(f[2], " diff-tree "), strings.Contains(f[2], " ls-tree "):
+			listed++
 		default:
 			continue
 		}
@@ -366,5 +368,8 @@ func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 	}
 	if inits != 1 || fetches != 1 {
 		t.Fatalf("saw %d init and %d fetch calls, want 1 each:\n%s", inits, fetches, b)
+	}
+	if listed == 0 {
+		t.Fatalf("saw no rev-list, diff-tree or ls-tree call:\n%s", b)
 	}
 }
