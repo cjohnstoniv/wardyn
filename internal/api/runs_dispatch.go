@@ -240,26 +240,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	adoRun := adoDecision.run
 	adoInject := adoRun.rowID != ""
 
-	var artifactPlan artifactRedirectPlan
-	if siteCfgErr == nil {
-		// Capture the run's PRE-substitution egress: it decides which redirects are
-		// in scope for THIS run (GAP-EGRESS-2), used by both the egress substitution
-		// and the token-injection plan so they can never disagree.
-		preDomains := append([]string(nil), policy.AllowedDomains...)
-		policy.AllowedDomains = substituteArtifactEgress(policy.AllowedDomains, siteCfg)
-		// Deny each network-only redirect's From host so an allow_all_egress run
-		// cannot keep reaching the public host the operator redirected away
-		// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
-		policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
-		planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, p.RedirectProbe)
-		artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
-		for k, v := range artifactPlan.env {
-			sandboxEnv[k] = v
-		}
-		if artifactPlan.configB64 != "" {
-			sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
-		}
-	}
+	artifactPlan := s.planArtifactRedirection(ctx, run, siteCfg, siteCfgErr, p.RedirectProbe, adoRun, adoInject, &policy, sandboxEnv)
 	// Apple's background boot hosts are denied quietly on a macOS VM, so the guest's first minutes raise
 	// no approval (run_macos_egress.go). A deny only: no allowed domain is added.
 	policy.DeniedDomains = appendMacOSBootDenials(run.MachineKind, policy)
@@ -819,6 +800,37 @@ func (s *Server) dispatchAdmitted(ctx context.Context, run types.AgentRun, ceili
 // The local placement parity test reads the same list, so a key added here needs a placement origin.
 func dispatchSecretEnvKeys(envSecretKeys []string, llm llmTransport) []string {
 	return slices.Concat(envSecretKeys, llm.secretEnvKeys, []string{codexMCPEnv})
+}
+
+// planArtifactRedirection is dispatch's artifact-repository redirection phase: with the site config read, it
+// substitutes the corp mirror for the public registry hosts in policy's egress, denies each network-only
+// redirect's From host, plans the redirect and puts its per-tool config in sandboxEnv. policy and sandboxEnv
+// are changed in place. A failed site-config read (siteCfgErr) plans nothing and returns the zero plan.
+func (s *Server) planArtifactRedirection(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error,
+	probe *types.EgressRedirect, adoRun adoEntraRun, adoInject bool, policy *types.RunPolicySpec, sandboxEnv map[string]string,
+) artifactRedirectPlan {
+	var artifactPlan artifactRedirectPlan
+	if siteCfgErr != nil {
+		return artifactPlan
+	}
+	// Capture the run's PRE-substitution egress: it decides which redirects are
+	// in scope for THIS run (GAP-EGRESS-2), used by both the egress substitution
+	// and the token-injection plan so they can never disagree.
+	preDomains := append([]string(nil), policy.AllowedDomains...)
+	policy.AllowedDomains = substituteArtifactEgress(policy.AllowedDomains, siteCfg)
+	// Deny each network-only redirect's From host so an allow_all_egress run
+	// cannot keep reaching the public host the operator redirected away
+	// (GAP-EGRESS-4); deny beats allow-all in the proxy's evaluator.
+	policy.DeniedDomains = appendNetworkRedirectDenials(policy.DeniedDomains, siteCfg)
+	planCfg, planDomains := redirectPlanScope(siteCfg, preDomains, probe)
+	artifactPlan = s.planArtifactRedirect(ctx, run, planCfg, planDomains, resolvedLaneHosts(adoRun, adoInject))
+	for k, v := range artifactPlan.env {
+		sandboxEnv[k] = v
+	}
+	if artifactPlan.configB64 != "" {
+		sandboxEnv["WARDYN_ARTIFACT_CONFIG_B64"] = artifactPlan.configB64
+	}
+	return artifactPlan
 }
 
 // redirectPlanScope is what planArtifactRedirect plans over: the site config
