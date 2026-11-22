@@ -38,7 +38,7 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			continue
 		}
 		if refused {
-			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", o.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: a run of its owner's is starting", o.Name))
 			continue
 		}
 		d, started, err := ms.BeginMemberDriveDeleteAdmin(ctx, o.ID)
@@ -57,15 +57,15 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 		case res.err != nil:
 			errs = append(errs, fmt.Errorf("member drive %q: %w", d.Name, res.err))
 		case res.driverErr != nil && res.untouched:
-			errs = append(errs, fmt.Errorf("member drive %q is in use or not reclaimable and was kept: %w", d.Name, res.driverErr))
+			errs = append(errs, fmt.Errorf("storage deletion was refused for drive %q: %w", d.Name, res.driverErr))
 		case res.driverErr != nil:
 			// Refused after the issue without the substrate saying nothing changed (a Kubernetes claim already
 			// terminating): the drive is held and its storage may be going, so only the underlying error is kept.
 			errs = append(errs, fmt.Errorf("Wardyn could not confirm that deletion of storage for drive %q finished: %w", d.Name, res.driverErr))
 		case res.reason == reasonMemberDriveDeleteUnavailable:
-			errs = append(errs, fmt.Errorf("member drive %q was kept: this server cannot delete its storage", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: this server cannot delete its storage", d.Name))
 		case res.reason == reasonMemberDriveInUse:
-			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: a run of its owner's is starting", d.Name))
 		case res.reason == reasonMemberDriveBusy:
 			// The claim taken above was consumed or taken over before the issue: no storage call ran.
 			errs = append(errs, fmt.Errorf("member drive %q is being deleted by another request", d.Name))
@@ -77,7 +77,7 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			// The delete was issued and its end is not confirmed: the drive is held and its storage may be partly or wholly gone.
 			errs = append(errs, fmt.Errorf("Wardyn could not confirm that deletion of storage for drive %q finished.", d.Name))
 		case res.reason != "":
-			errs = append(errs, fmt.Errorf("member drive %q was kept: deleting its storage failed", d.Name))
+			errs = append(errs, fmt.Errorf("member drive %q could not be deleted: deleting its storage failed", d.Name))
 		default:
 			deleted++
 		}
