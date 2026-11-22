@@ -86,19 +86,25 @@ type dispatchStall struct {
 	// connWait: entered is closed when the request asks the relay's transport for a connection (httptrace's
 	// GetConn), past its one authority check, not by arm.
 	connWait bool
+	// rechecked: uiDial's authority check comes after this stall, so a release before the dispatch time after
+	// the revoke is refused there (403 delegation_ended); the same stall with the grant left live is what shows
+	// the request's prompt dispatch.
+	rechecked bool
 }
 
 func dispatchStalls() []dispatchStall {
 	return []dispatchStall{
-		{name: "a before the hand-off", typed: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
+		{name: "a before the hand-off", typed: true, rechecked: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
 			rig.pausing(false, nil)
 			ps := rig.srv.cfg.Store.(pausingStore)
 			ps.touch = func(ctx context.Context) { _ = stall(entered, release)(ctx) }
 			rig.srv.cfg.Store = ps
 		}},
-		{name: "b inside the connection wait", typed: true, connWait: true, arm: func(t *testing.T, rig *dispatchRig, c *http.Cookie, _, _ chan struct{}) {
+		{name: "b inside the connection wait", typed: true, connWait: true, rechecked: true, arm: func(t *testing.T, rig *dispatchRig, c *http.Cookie, _, release chan struct{}) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
+			// The release ends the held requests, which frees their connections for this one.
+			go func() { <-release; cancel() }()
 			for i := 0; i < maxUIConnsPerRun; i++ { // the port's connections are all held: the next request waits in the transport
 				rig.relayAsync(ctx, "/hold", c)
 			}
@@ -109,7 +115,8 @@ func dispatchStalls() []dispatchStall {
 				return len(rig.dr.hs) >= maxUIConnsPerRun
 			})
 		}},
-		{name: "c a stalled thaw", typed: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
+		// Its first thaw is relayUISession's presence stamp (markPresent), before uiDial's check.
+		{name: "c a stalled thaw", typed: true, rechecked: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
 			rig.pausing(true, nil)
 			rig.dr.setHook("thaw", stall(entered, release))
 		}},
@@ -162,16 +169,23 @@ func dispatchStalls() []dispatchStall {
 }
 
 func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
+	const marker = "/zero-bytes-measured" // the measured request's path, in its request line at the driver
+	releases := []struct {
+		name          string
+		after, revoke bool
+	}{{"released after", true, true}, {"released before", false, true}, {"released before, grant live", false, false}}
 	for _, st := range dispatchStalls() {
-		for _, after := range []bool{true, false} {
-			name := st.name + "/released before"
-			if after {
-				name = st.name + "/released after"
+		for _, v := range releases {
+			if !v.revoke && !st.rechecked {
+				continue // the revoked early release is this stall's own dispatch proof
 			}
-			t.Run(name, func(t *testing.T) {
+			after := v.after
+			t.Run(st.name+"/"+v.name, func(t *testing.T) {
 				rig := newDispatchRig(t, dispatchBackend())
 				c := rig.session(rig.grant)
 				entered, release := make(chan struct{}), make(chan struct{})
+				free := sync.OnceFunc(func() { close(release) })
+				t.Cleanup(free) // a test that stops early still lets every hold go
 				st.arm(t, rig, c, entered, release)
 				_, held := rig.dr.bytesAtOrAfter(time.Now()) // the stall's own requests' bytes (b's held connections), not this request's
 				t0 := time.Now()
@@ -181,17 +195,19 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 					var once sync.Once
 					ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GetConn: func(string) { once.Do(func() { close(entered) }) }})
 				}
-				ans := rig.relayAsync(ctx, "/", c)
+				ans := rig.relayAsync(ctx, marker, c)
 				select {
 				case <-entered:
 				case <-time.After(5 * time.Second):
 					t.Fatal("the request never reached its stall")
 				}
-				rig.revokePortal(t)
+				if v.revoke {
+					rig.revokePortal(t)
+				}
 				if after {
 					time.Sleep(time.Until(by) + 200*time.Millisecond)
 				}
-				close(release)
+				free()
 				r := answerWithin(t, ans, 10*time.Second)
 				late, all := rig.dr.bytesAtOrAfter(by)
 				if late != 0 {
@@ -201,6 +217,18 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 					t.Fatalf("starts at or after the dispatch time: %+v", s)
 				}
 				if !after {
+					first, sent := rig.dr.firstWrite(marker)
+					if v.revoke && st.rechecked {
+						if sent || r.Code != http.StatusForbidden || dispatchReason(r) != uiDeniedReasonDelegationEnded {
+							t.Fatalf("released before, revoked: request written %v, answer %d %s; want nothing written and uiDial's 403 %q",
+								sent, r.Code, r.Body.String(), uiDeniedReasonDelegationEnded)
+						}
+						return
+					}
+					if !sent || !first.Before(by) || r.Code != http.StatusOK || r.Body.String() != "sandbox app" {
+						t.Fatalf("released before: request written %v, %s before the dispatch time; answer %d %s; want its first byte before the dispatch time and the app's 200",
+							sent, by.Sub(first), r.Code, r.Body.String())
+					}
 					return
 				}
 				if all-held != 0 || r.Code != http.StatusServiceUnavailable {
