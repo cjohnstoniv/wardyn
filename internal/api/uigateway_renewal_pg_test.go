@@ -81,7 +81,8 @@ func (s issuerPGStore) PruneUIDesktopClosed(ctx context.Context, now time.Time) 
 }
 
 // issuerPGRig is an issuer portal pinned to the platform unit on Postgres, one of its people with a live
-// grant, and that person's run in the platform team, served by the UI harness.
+// grant and a membership naming them on the platform team, and that person's run there, served by the UI
+// harness.
 type issuerPGRig struct {
 	*issuerUIRig
 	env   *authorityEnv
@@ -89,11 +90,24 @@ type issuerPGRig struct {
 	grant types.PortalGrant
 }
 
+// personMember seeds a membership naming principal on the platform team, as an issuer-portal person enters a
+// unit: their groups are stored empty, so the team's group row never places them there.
+func personMember(t *testing.T, e *authorityEnv, principal string) types.GovernanceMembership {
+	t.Helper()
+	m, err := e.st.UpsertGovernanceMembership(context.Background(), types.GovernanceMembership{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: principal, UnitID: e.team.ID, Priority: 1})
+	if err != nil {
+		t.Fatalf("seed the person's membership: %v", err)
+	}
+	return m
+}
+
 func newIssuerPGRig(t *testing.T, backend http.Handler, shape ...func(*types.Delegate)) *issuerPGRig {
 	t.Helper()
 	e := newAuthorityEnv(t)
 	d := e.portal(t, e.bind(t), &e.plat.ID, shape...)
 	principal, raw := e.person(t, d, "person-1")
+	personMember(t, e, principal)
 	g, err := e.st.GetPortalGrantByRaw(context.Background(), raw, time.Now())
 	if err != nil {
 		t.Fatalf("read the seeded grant: %v", err)
