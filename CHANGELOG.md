@@ -61,7 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - An answer to a help request on the run page shows at once, even when the next status read fails, and a late accept no longer brings back a grant that has since ended or been replaced.
-- A sign-in whose token names a signing key the issuer portal has not seen, while the portal's keys cannot be fetched, now answers with the same `Retry-After` as the portal's other key outages instead of 0.
+- A sign-in whose token names a signing key the issuer portal has not seen, while the portal's keys cannot be fetched, now answers with the same `Retry-After` as the portal's other key outages, where it sent none.
 - `wardyn run output` on a terminal now shows the DEL character as `\x7f`, as the help text promised.
 - `wardynd -recovery-rehearse` now reports a key fingerprint failure first when the platform key file differs from the one recorded in the set's manifest, or is unset. Manifests from older versions skip that comparison.
 - `make agent-image-claude-code-multiarch` refuses `AWS_CLI_INSTALL=staged`, since one staged zip is one architecture. Build each architecture separately, or leave it unset.
