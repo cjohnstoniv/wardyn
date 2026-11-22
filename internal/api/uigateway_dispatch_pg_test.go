@@ -116,7 +116,26 @@ func dispatchStalls() []dispatchStall {
 				t.Fatalf("hold the start lock: %v", err)
 			}
 			go func() { <-release; h.release() }()
-			close(entered)
+			// Entered once the request's start waits behind this hold at the run's start gate, past both of its
+			// authority checks (relayUISession's and uiDial's), so the revoke lands while it is held there.
+			atGate := func() int {
+				g := &rig.srv.locks.starts
+				g.mu.Lock()
+				defer g.mu.Unlock()
+				if e := g.m[rig.run.ID]; e != nil {
+					return e.users
+				}
+				return 0
+			}
+			go func() {
+				defer close(entered)
+				for end := time.Now().Add(5 * time.Second); atGate() < 2; time.Sleep(time.Millisecond) {
+					if time.Now().After(end) {
+						t.Error("the request's start never waited at the run's start gate")
+						return
+					}
+				}
+			}()
 		}},
 		{name: "c a stalled last read under the start lock", typed: true, noStart: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
 			hold := stall(entered, release)

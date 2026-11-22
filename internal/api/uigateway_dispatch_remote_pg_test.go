@@ -173,7 +173,15 @@ func newRemoteLink(t *testing.T, srv *Server, backend string) *remoteLink {
 	rl := &remoteLink{link: &remote.Link{}, org: &heldConn{Conn: org}, calls: &callLog{Conn: run},
 		side: &runnerSide{Fake: runnertest.NewFake(), backend: backend}}
 	sub := remote.New("runner-1", rl.link, remote.Options{})
-	peer := rl.link.Attach(ctx, rl.org)
+	// Attached as the hub attaches a session (AttachSession, Start, Ready), so the org's keepalive runs at its
+	// production interval and fails a link whose write stopped moving; Link.Attach runs no keepalive.
+	peer := rl.link.AttachSession(rl.org, runnerwire.PeerConfig{})
+	if err := peer.Start(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := rl.link.Ready(peer); err != nil {
+		t.Fatal(err)
+	}
 	served := runnertest.Serve(ctx, rl.calls, "runner-1", rl.side)
 	t.Cleanup(func() { rl.org.resume(); cancel(); peer.Close(); served.Peer.Close() })
 	if err := served.PublishCaps(ctx, placement.Capacity{CPUMillisMax: 4000, MemoryMiBMax: 8192}, nil, "test"); err != nil {
