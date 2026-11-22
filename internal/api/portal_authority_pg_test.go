@@ -348,7 +348,8 @@ func unmatchedLines(a, b []string) []string {
 // (one run, one workspace, no credentials, tokens or keys) and to the session cuts the database holds, and only
 // times are normalised. The fixture is the pre-origin behaviour written out; a run that disagrees prints both lists,
 // then the lines only one of them has. The kill's identity revocation is one of the events: the identity provider
-// writes it to the same recorder. The run output finish's row is not: it is written on its own goroutine, which reads
+// writes it to the same recorder. So is the key delete the credential sweep writes for each form it sweeps
+// (sweepTarget), with nothing to delete. The run output finish's row is not: it is written on its own goroutine, which reads
 // the run while the kill clears its sandbox ref, so whether this run, with no output row, gets a capture gap row
 // depends on which lands first, and that row is the output contract's, not the shared helpers'.
 func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
@@ -400,6 +401,12 @@ func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 		fmt.Sprintf(`person.deprovision|system|wardyn/scim|success|target=<person>|run=-|{"keys_deleted":0,"kind":"suspend","runs_killed":1,"sessions_cut":%d,"tokens_revoked":0}`, cuts),
 		`run.kill|system|wardyn/scim|success|target=<run>|run=<run>|{"reason":"scim_suspend"}`,
 		`scim.user.deactivate|system|wardyn/scim|success|target=<person>|run=-|{"slot":"primary"}`,
+		// The sweep's three forms. The tenant/object form's key owner is the principal the directory resolves it
+		// to, the bound one, so that line is here twice; a bound person's email is never resolved, so its row
+		// names the address as given.
+		`ssh_key.delete|system|wardyn/scim|success|target=` + sub + `|run=-|{"count":0,"scope":"sub"}`,
+		`ssh_key.delete|system|wardyn/scim|success|target=` + sub + `|run=-|{"count":0,"scope":"sub"}`,
+		`ssh_key.delete|system|wardyn/scim|success|target=` + email + `|run=-|{"count":0,"scope":"sub"}`,
 		`workspace.reassign|system|wardyn/scim|success|target=<workspace>|run=-|{"from_owner":"` + sub + `","reason":"scim_purge"}`,
 	}
 	slices.Sort(want)
