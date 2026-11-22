@@ -34,6 +34,8 @@ export function personState(p: PersonSummary): PersonState {
   return p.last_signed_in_at ? "active" : "never";
 }
 
+export const STATE_TONE: Record<PersonState, "success" | "warning" | "neutral"> = { active: "success", deactivated: "warning", never: "neutral" };
+
 export const STATE_LABEL: Record<PersonState, string> = {
   active: P.STATE_ACTIVE,
   deactivated: P.STATE_DEACTIVATED,
