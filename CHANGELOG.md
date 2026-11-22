@@ -27,7 +27,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `provider_service_grant_status` to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If
   the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
-  grant's token request outcome is recorded.
+  grant's token request outcome is recorded. They also grant `SELECT, INSERT, UPDATE` on `drive_legacy_releases` to every
+  role that was granted UPDATE on the user drives table, other than its owner. An app role outside those needs the
+  same grant on that table, or the release of Docker drives created before the upgrade fails.
 - `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) names hosts to which wardynd sends a service grant's token request, and the discovery and key fetches of an issuer portal registration with no internal issuer address, through its proxy even when `WARDYN_DAEMON_NO_PROXY` covers them; a proxied portal fetch connects to the address wardynd checked and trusts only the new `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. No other call changes.
 - A super admin can allocate a team drive to an issuer portal, and a run started through that portal can mount it. Migration `0297_portal_team_drives` adds the `portal` subject type to drive allocations and `agent_runs.portal_drives`; it creates no table, so the split-role grants above are unchanged.
 - `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` lists the hosts an issuer portal's `internal_issuer` may name, and `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` adds a CA bundle for those hosts only. A failed refresh of an issuer's discovery or keys counts on `wardyn_portal_issuer_refresh_failures_total`.
