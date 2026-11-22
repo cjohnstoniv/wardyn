@@ -16,7 +16,7 @@ const driveDeleteFenceMigration = "0299"
 // backend and a row inserted afterwards are not marked.
 func TestMigration_DriveDeleteFence_Backfill_PG(t *testing.T) {
 	pool, _ := partialSchemaPool(t, driveDeleteFenceMigration)
-	pgExec(t, pool, `INSERT INTO runners (id, owner, public_key, key_fingerprint, state) VALUES ('00000000-0000-0000-0000-0000000000a1', 'person', 'k', 'f', 'claimed')`)
+	pgExec(t, pool, `INSERT INTO runners (id, owner, public_key, key_fingerprint, state, max_runs) VALUES ('00000000-0000-0000-0000-0000000000a1', 'person', decode(repeat('ab', 32), 'hex'), 'f', 'claimed', 2)`)
 	member := `INSERT INTO user_drives (id, name, name_slug, backend, owner_subject, object_scheme, created_at, delete_started_at, home_runner_id)
 		VALUES ($1::uuid, $2, $2, $3, 'person', 'id', $4::timestamptz, $5::timestamptz, $6::uuid)`
 	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000001", "legacy-docker", "docker_volume", "2100-01-01", nil, nil)
