@@ -106,13 +106,13 @@ paths = [
     '''internal/egress/proxy/testdata/sigv4/''',
 ]
 
-# RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e sends it to open an upgrade, and
-# generic-api-key reads it as a secret. It is a published example value, never a credential. Scoped to that one rule,
-# that one file and that exact secret (all three must hold).
+# RFC 6455's sample WebSocket key, base64 of "the sample nonce": the UI-sandbox e2e and the attach dispatch PG test
+# send it to open an upgrade, and generic-api-key reads it as a secret. It is a published example value, never a
+# credential. Scoped to that one rule, those files and that exact secret (all three must hold).
 [[allowlists]]
-description = "RFC 6455 sample WebSocket key in the UI-sandbox e2e"
+description = "RFC 6455 sample WebSocket key in the UI-sandbox e2e and the attach dispatch test"
 targetRules = ["generic-api-key"]
 condition = "AND"
 regexTarget = "secret"
 regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
-paths = ['''^scripts/run-e2e-ui-sandbox\.sh$''']
+paths = ['''^(scripts/run-e2e-ui-sandbox\.sh|internal/api/attach_dispatch_pg_test\.go)$''']
