@@ -272,11 +272,19 @@ func TestRunEventsIssuerPortal_BlockedWriterCutWithin20s_PG(t *testing.T) {
 // cannot be read, and the run that is gone, cannot be read, or whose read hangs until ctx ends.
 type flakyEventsStore struct {
 	store.PG
-	identityFails, runGone, runFails, runStall *atomic.Bool
+	identityFails, runGone, runFails, runStall, grantFails *atomic.Bool
+}
+
+func (f flakyEventsStore) GetPortalGrantByID(ctx context.Context, id uuid.UUID, now time.Time) (types.PortalGrant, error) {
+	if f.grantFails.Load() {
+		return types.PortalGrant{}, errors.New("grant read failed")
+	}
+	return f.PG.GetPortalGrantByID(ctx, id, now)
 }
 
 func newFlakyEventsStore(pg store.PG) flakyEventsStore {
-	return flakyEventsStore{PG: pg, identityFails: &atomic.Bool{}, runGone: &atomic.Bool{}, runFails: &atomic.Bool{}, runStall: &atomic.Bool{}}
+	return flakyEventsStore{PG: pg, identityFails: &atomic.Bool{}, runGone: &atomic.Bool{}, runFails: &atomic.Bool{}, runStall: &atomic.Bool{},
+		grantFails: &atomic.Bool{}}
 }
 
 func (f flakyEventsStore) IdentityBlocked(ctx context.Context, principal string, epoch int64) (bool, error) {
@@ -410,4 +418,33 @@ func TestRunEventsIssuerPortal_BlockedLookupStillEnds_PG(t *testing.T) {
 		t.Fatalf("lock the grants: %v", err)
 	}
 	cutBy(t, "event stream, hung lookup", at, endedBy(t, br, 10*time.Second), eventsBeat+eventsBound+relaySlack)
+}
+
+// TestRunEventsIssuerPortal_OpeningGrantReadOutage_PG: past the read gate, the stream's opening reads the grant
+// and the read fails. The opening answers the retryable 503 with a refusal's headers, never the stream's
+// (text/event-stream, X-Accel-Buffering), and releases nothing.
+func TestRunEventsIssuerPortal_OpeningGrantReadOutage_PG(t *testing.T) {
+	e := newIssuerEventsEnv(t)
+	f := newFlakyEventsStore(e.st)
+	e.h.srv.cfg.Store = f
+	e.h.srv.runEvents.emit(e.run.ID, client.RunEvent{Type: client.RunEventPulling, At: time.Now()}) // the backlog
+	e.h.srv.runEvents.onSetup = func() { f.grantFails.Store(true) }                                 // after the read gate
+	ts := httptest.NewServer(panicFails(t, e.h.srv.Handler()))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp := openEventsAs(t, ctx, ts.URL, e.run.ID, e.raw)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), runEventsUnverifiableMsg) {
+		t.Fatalf("an unreadable grant at the opening: %d %q, want 503 %s", resp.StatusCode, body, runEventsUnverifiableMsg)
+	}
+	if strings.Contains(string(body), client.RunEventPulling) {
+		t.Fatalf("an unreadable grant at the opening released the backlog: %q", body)
+	}
+	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("the refusal carries the stream's Content-Type %q", ct)
+	}
+	if xb := resp.Header.Get("X-Accel-Buffering"); xb != "" {
+		t.Errorf("the refusal carries the stream's X-Accel-Buffering %q", xb)
+	}
 }

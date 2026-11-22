@@ -26,11 +26,14 @@ import { Mono } from "./code-block";
 // content (the workspace's own files, or a run's denied egress) and, once
 // approved, is reachable by every future run that mounts the workspace.
 export function ConfirmEgressDialog({
+  workspaceName,
   hosts,
   selectable,
   onOpenChange,
   onConfirm,
 }: {
+  // The workspace the approval writes to, named in the question so it can never read as a different one.
+  workspaceName: string;
   // null/empty = closed. One host = singular copy; more = bulk copy + list.
   hosts: string[] | null;
   // BULK ONLY: turn the read-only list into a checkbox list so the operator
@@ -68,9 +71,9 @@ export function ConfirmEgressDialog({
             {bulk ? `Approve egress to ${hosts!.length} hosts?` : `Approve egress to ${single}?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {bulk ? "These hosts aren't" : "This host isn't"} approved for this workspace yet — they
+            {bulk ? "These hosts aren't" : "This host isn't"} approved for &quot;{workspaceName}&quot; yet — they
             came from untrusted content (the workspace&apos;s own files, or a run&apos;s denied egress).
-            Approving allows every future run that mounts this workspace to reach {bulk ? "them" : "it"}.
+            Approving allows every future run that mounts &quot;{workspaceName}&quot; to reach {bulk ? "them" : "it"}.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {bulk && (

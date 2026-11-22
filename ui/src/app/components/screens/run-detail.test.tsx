@@ -568,7 +568,7 @@ describe("RunDetailScreen — a macOS VM run's recording tab", () => {
     await user.click(await screen.findByRole("tab", { name: /recording/i }));
     await waitFor(() => expect(getRecordingMock).toHaveBeenLastCalledWith("run-1", "run-1~agent-recovered"));
     const picker = screen.getByRole("combobox", { name: "Recorded session" });
-    expect(picker).toHaveTextContent(/^Agent output, re-read after a restart · ended /);
+    expect(picker).toHaveTextContent(/^Agent output, re-read after a restart · recovered /);
     await user.click(picker);
     expect(screen.queryByRole("option", { name: "Agent session" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("option")).toHaveLength(3);

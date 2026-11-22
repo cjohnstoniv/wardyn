@@ -270,6 +270,42 @@ export interface ModelProvidersRead extends ModelProviders {
   // Whether a bedrock_sso provider can send run identity on this install: only
   // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
   gateway_identity_bedrock_sso: boolean;
+  // Server facts, not stored and not in the ETag. Each provider's service grant
+  // state by provider id, and the removed grants whose secret is still to be
+  // deleted (Go's types.ServiceGrantStatus and types.ServiceGrantCleanup).
+  service_grants?: Record<string, ServiceGrantStatus>;
+  service_grant_cleanups?: ServiceGrantCleanup[];
+}
+
+export interface ServiceGrantStatus {
+  client_id: string;
+  client_secret_ref: string;
+  // ok, failing or not_yet, read from the live replicas' rows with the live digest only.
+  state: string;
+  replicas: ServiceGrantReplicaStatus[];
+}
+
+// One replica's last outcome for a service grant (Go's types.ServiceGrantReplicaStatus).
+export interface ServiceGrantReplicaStatus {
+  host: string;
+  live: boolean;
+  state: string;
+  attempted_at: string;
+  last_ok_at?: string;
+  valid_until?: string;
+  reason?: string;
+  oauth_error?: string;
+  http_status?: number;
+  egress?: string;
+}
+
+// A pending clean-up of a removed grant's secret (Go's types.ServiceGrantCleanup).
+export interface ServiceGrantCleanup {
+  uid: string;
+  provider_id: string;
+  reason: string;
+  since: string;
+  client_secret_ref: string;
 }
 
 // Closed set, server-validated.

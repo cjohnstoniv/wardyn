@@ -142,6 +142,18 @@ REFN=v0.4.4 runtags "$sha" "" tag
 [ "$rc" -eq 0 ] && grep -q 'wardynd:0.4.4$' "$out" || fail "tag ref v0.4.4 was refused (rc $rc)"
 ! grep -q 'wardynd:latest$' "$out" || fail "a tag ref was given :latest"
 
+# The per-commit image carries the commit it was built from: the tags step outputs it (empty on a tag ref, which keeps
+# the bare version), the build passes it as the REVISION build arg, and a later step runs the pushed image and checks it.
+runtags "$sha" ""
+grep -qx "revision=$sha" "$out" || fail "a branch build did not output revision=$sha: $(cat "$out")"
+REFN=v0.4.4 runtags "$sha" "" tag
+grep -qx 'revision=' "$out" || fail "a tag ref did not output an empty revision: $(cat "$out")"
+grep -Eq '^            REVISION=\$\{\{ steps\.tags\.outputs\.revision \}\}$' "$PI" || fail "publish-image.yml does not pass REVISION from the tags step to the build"
+grep -q '^      - name: Check the image reports its revision$' "$PI" || fail "publish-image.yml has no step that checks the built image's revision"
+grep -q 'buildRevision=\${REVISION}' "$PI" || fail "the image check does not look for the stamped revision"
+df="$ROOT/deploy/compose/Dockerfile.wardynd"
+[ "$(grep -c 'internal/version.buildRevision=\${REVISION}' "$df")" -eq 2 ] || fail "Dockerfile.wardynd does not stamp buildRevision into both wardynd and wardyn"
+
 # release.yml: no job that can write to the repository or mint the signing identity executes a binary built from
 # the tree, and no step whose env holds the Apple secrets executes one either.
 awk '

@@ -28,12 +28,19 @@ describe("sessionOptionLabel", () => {
 
   it("names the agent's output cast, and the one re-read after a restart, in words", () => {
     expect(sessionOptionLabel(row({ session: "agent" }))).toBe(`Agent output · ended ${clockTime(time)}`);
-    expect(sessionOptionLabel(row({ session: "agent-recovered", recovered: true }))).toBe(`Agent output, re-read after a restart · ended ${clockTime(time)}`);
+    expect(sessionOptionLabel(row({ session: "agent-recovered", recovered: true }))).toBe(`Agent output, re-read after a restart · recovered ${clockTime(time)}`);
+  });
+
+  it("labels a swept or recovered receipt by when it was recovered, never as an end of capture", () => {
+    expect(sessionOptionLabel(row({ session: "agent", swept: true }))).toBe(`Agent output · recovered ${clockTime(time)}`);
+    expect(sessionOptionLabel(row({ session: "agent-recovered", swept: true, recovered: true }))).toBe(`Agent output, re-read after a restart · recovered ${clockTime(time)}`);
+    expect(sessionOptionLabel(row({ session: "console-1", swept: true }))).toBe(`Session recovered ${clockTime(time)} · wardynd`);
+    expect(sessionOptionLabel(row({ session: "agent", swept: false }))).toBe(`Agent output · ended ${clockTime(time)}`);
   });
 
   it("keeps the incomplete suffix on every kind of label", () => {
     expect(sessionOptionLabel(row({ session: "agent", incomplete: true, read_error: true }))).toBe(`Agent output · ended ${clockTime(time)} · incomplete`);
-    expect(sessionOptionLabel(row({ session: "agent-recovered", incomplete: true }))).toBe(`Agent output, re-read after a restart · ended ${clockTime(time)} · incomplete`);
+    expect(sessionOptionLabel(row({ session: "agent-recovered", incomplete: true }))).toBe(`Agent output, re-read after a restart · recovered ${clockTime(time)} · incomplete`);
   });
 
   it("says incomplete when the session's row does, completeness unknown included", () => {

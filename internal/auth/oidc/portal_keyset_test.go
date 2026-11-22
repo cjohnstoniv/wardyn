@@ -206,7 +206,7 @@ func TestPortalKeySet_ClockIntervals(t *testing.T) {
 	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
 	disc, keys := warmPortal(h)
 	v, _ := h.pi.verifierFor(h.reg)
-	okAt, _, _ := v.ks.state()
+	warmedAt, _, _ := v.ks.state()
 
 	// Inside the hour nothing is fetched.
 	h.clock.Advance(59 * time.Minute)
@@ -221,7 +221,10 @@ func TestPortalKeySet_ClockIntervals(t *testing.T) {
 		t.Fatalf("hourly refresh made (%d,%d) fetches, want (%d,%d)", d, k, disc+1, keys+1)
 	}
 	disc, keys = disc+1, keys+1
-	okAt, _, _ = v.ks.state()
+	okAt, _, _ := v.ks.state()
+	if !okAt.After(warmedAt) {
+		t.Fatalf("the hourly refresh left keys_ok_at at %v, want it moved past %v", okAt, warmedAt)
+	}
 
 	// A failed discovery at the next hour turns a known kid into 503 until a fetch succeeds.
 	h.clock.Advance(time.Hour)

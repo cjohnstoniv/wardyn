@@ -338,6 +338,10 @@ type MacVMCaps struct {
 	// KeptMachines says the runner keeps a person's kept machines (SandboxSpec.KeptMachine) and deletes
 	// them (kept_machine). A runner without it is never sent a macOS VM run with one.
 	KeptMachines bool `json:"kept_machines,omitempty"`
+	// KeptConditionalDelete says the runner executes kept_machine's delete_expired op, which rechecks the
+	// machine's own deadline under its lock. The organisation starts no expiry-driven delete on a runner
+	// that does not say so; such a Mac still removes its own expired machines in its sweep.
+	KeptConditionalDelete bool `json:"kept_conditional_delete,omitempty"`
 	// Kept is the Mac's kept machines and the disk they may take; nil when the runner keeps none or has
 	// not counted yet.
 	Kept *MacVMKept `json:"kept,omitempty"`
@@ -382,6 +386,17 @@ type MacVMKeptMachine struct {
 	// not in use. The org releases a machine only from the run it names, so an older snapshot cannot
 	// release a newer run's hold.
 	RunID string `json:"run_id,omitempty"`
+	// StopRunID is the run whose stop wrote this machine's current deadline and scrub state, from the
+	// Mac's own record. Absent from a runner that does not record it: such a report is unversioned, and
+	// never settles a newer use.
+	StopRunID string `json:"stop_run_id,omitempty"`
+}
+
+// ObservesStopOf reports whether this idle report was produced by the stop of run: only then does it say
+// what that run left behind. A report of an older stop, or an unversioned one, is a view of a use that
+// may since have been replaced, and settles nothing.
+func (k MacVMKeptMachine) ObservesStopOf(run string) bool {
+	return !k.InUse && run != "" && k.StopRunID == run
 }
 
 // MacVMCaps.Reason values, in priority order. An unknown value is a newer runner's, and decodes as itself.

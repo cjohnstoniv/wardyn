@@ -84,6 +84,10 @@ const (
 	ReasonDriveNotFound       Reason = "drive_not_found"
 	ReasonDriveTargetConflict Reason = "drive_target_conflict"
 	ReasonDriveNotInPool      Reason = "drive_not_in_pool"
+	// ReasonDriveNotAllocatedToPortal: a run through an issuer portal named a drive that is not allocated to that
+	// portal, or asked for the legacy drive flag. 403, audited, one body for every cause: another portal's drive, a
+	// group's, the person's, nobody's, or an id that names nothing.
+	ReasonDriveNotAllocatedToPortal Reason = "drive_not_allocated_to_portal"
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
@@ -199,6 +203,7 @@ var refusals = map[Reason]Refusal{
 	ReasonDriveNotFound:                  {Effect: EffectUnprocessable, Audit: true},
 	ReasonDriveTargetConflict:            {Effect: EffectUnprocessable, Audit: true},
 	ReasonDriveNotInPool:                 {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveNotAllocatedToPortal:      {Effect: EffectDeny, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 	ReasonAuditExportPartitionFilter:     {Effect: EffectBadRequest},
 	ReasonKeyDomainUnknown:               {Effect: EffectUnprocessable, Audit: true},

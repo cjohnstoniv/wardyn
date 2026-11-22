@@ -290,8 +290,10 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
-	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock included, runs
-	// under the opening deadline; one that fails or runs out is the retryable 503.
+	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock and the runtime's
+	// thaw included, runs under what is left of the opening deadline, by design: one that fails or runs out is
+	// the retryable 503, and a thaw the deadline ends leaves the run paused with a settle record for the
+	// pause sweep (resumeRun), so the next try starts from a paused run.
 	tctx, tcancel := attachThawCtx(ctx, actx)
 	defer tcancel()
 	if err := s.thawForExec(tctx, run, principalType, principal, "presence"); err != nil {
@@ -307,8 +309,9 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// transport=local (attach_local.go) is checked only here, after every check above, thaw
-	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
-	local, ok := s.localAttachRequested(w, r, run)
+	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder. It reads under
+	// the opening deadline (ar); the socket below lives on the request.
+	local, ok := s.localAttachRequested(w, ar, run)
 	if !ok {
 		return
 	}
@@ -401,6 +404,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// release above, so a holder never outlives its exec.
 	defer func() { _ = holder.mux.Close() }()
 
+	s.finishAttachSession(ctx, finishCtx, pumpCtx, cancel, r, c, run, id, principalType, principal, opts, wa, holder, la, readOnly, releaseHolder, cut)
+}
+
+// finishAttachSession is handleAttachWS's tail: the opening session.attach row,
+// the pump, and the recording, session.detach audit and socket close after it.
+func (s *Server) finishAttachSession(ctx, finishCtx, pumpCtx context.Context, cancel context.CancelFunc, r *http.Request,
+	c *websocket.Conn, run types.AgentRun, id uuid.UUID, principalType types.ActorType, principal string,
+	opts runner.AttachOptions, wa *webAttach, holder *attachHolder, la *localAttach, readOnly bool,
+	releaseHolder func() (announce func()), cut *streamCut) {
 	// The first of two session.attach rows: the holder is registered and its exec
 	// is being opened. The audit log is append-only and hash-chained, so the
 	// outcome is a second row, never an update; this one exists before any

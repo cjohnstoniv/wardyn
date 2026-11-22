@@ -43,6 +43,9 @@ type RunFilter struct {
 	// NoEnd keeps only live runs with no end (ends_at NULL): the ones nothing will
 	// stop but a person, an idle stop or a kill (#1319).
 	NoEnd bool
+	// ServiceOnly keeps only service runs (the service column is set). Applied with the other filters, before
+	// paging, so a segment's first page holds only its own runs and the hidden counts count only them.
+	ServiceOnly bool
 	// Workspace exact-matches COALESCE(NULLIF(repo,''), workspace_path).
 	Workspace string
 	// Query ILIKE-searches title/task/repo/created_by. Raw — the store
@@ -55,18 +58,26 @@ type RunFilter struct {
 
 // RunUnitScope is a set of units a run list is limited to: the subtree a portal's pin names. A run with
 // no unit (a NULL unit_id) counts as the Default unit. An empty set matches no run.
+//
+// A non-nil Portal is the issuer portal the list is read through: a run that mounted a portal's drive
+// (portal_drives) is then listed only when that portal created it, as the route checks do.
 type RunUnitScope struct {
-	IDs []uuid.UUID
+	IDs    []uuid.UUID
+	Portal uuid.UUID
 }
 
-// sql is the scope's condition, its two values bound onto args.
+// sql is the scope's condition, its values bound onto args.
 func (c *RunUnitScope) sql(args *[]any) string {
 	ids := make([]uuid.UUID, len(c.IDs))
 	copy(ids, c.IDs)
 	hasDefault := slices.Contains(ids, DefaultUnitID)
 	idsArg := bindArg(args, ids)
 	defArg := bindArg(args, hasDefault)
-	return "(unit_id = ANY(" + idsArg + "::uuid[]) OR (unit_id IS NULL AND " + defArg + "::boolean))"
+	cond := "(unit_id = ANY(" + idsArg + "::uuid[]) OR (unit_id IS NULL AND " + defArg + "::boolean))"
+	if c.Portal != uuid.Nil {
+		cond = "(" + cond + " AND (portal_drives = false OR created_via = " + bindArg(args, c.Portal) + "::uuid))"
+	}
+	return cond
 }
 
 // runLiveSQL is TRUE for a row the end-time window must never apply to: not
@@ -154,6 +165,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 		// its start writes the end. So "No end" holds only the runs that hold a slot, and not one whose
 		// lease already ended (lost_reason 'ended', as runLiveSQL reads it).
 		clauses = append(clauses, "(ends_at IS NULL AND state = ANY("+bindArg(args, slotHoldingStateNames())+") AND lost_reason IS DISTINCT FROM 'ended')")
+	}
+	if f.ServiceOnly {
+		clauses = append(clauses, "service IS NOT NULL")
 	}
 	if f.Workspace != "" {
 		clauses = append(clauses, "COALESCE(NULLIF(repo,''), workspace_path) = "+bindArg(args, f.Workspace))

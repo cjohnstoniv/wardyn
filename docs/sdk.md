@@ -188,7 +188,7 @@ if v.State == client.RunPolicyViewRecorded {
 | `complete` | false for a run from before Wardyn recorded its starting policy: `changes` then lists only what the launch audit rows state |
 | `stored_policy_now` | for a saved-policy source: `same`, `changed`, `updated` (a run from before the record: edited since, possibly a rename only) or `deleted`, with the policy's current `name` |
 | `provenance` | per top-level `spec` key, the layer that set it (`client.PolicyProvenance`, [denials.md](operations/denials.md)) |
-| `host_marks` | `inspected` the allowed hosts Wardyn opens and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
+| `host_marks` | `inspected` the allowed entries whose every destination Wardyn opens, `partial` (absent when empty) each entry it opens only some destinations of (a wildcard, or a host with no port opened on one port) with those destinations (an empty list: some of it is opened, which is not known; a run recorded before `partial` existed has it worked out from `terminated`), and `terminated` every host it terminates once admitted, as `host` or `host:port`, and `outside` those opened on a port no entry names (all, under allow-all), from the run's proxy config (`client.RunPolicyHostMarks`); other allowed hosts are tunnels. Absent for a run recorded before marks or restarted |
 | `wall_preset` | the run's wall preset (`id`, `name`, `scope`, `group_id`, `version`) and what it `narrowed`, `removed` and `added`; only `scope` for a personal preset read by anyone but its owner |
 
 The CLI is `wardyn run policy <run-id> [--json]`.
@@ -946,6 +946,7 @@ start.
 | `preset_unknown` / `preset_field_not_per_launch` / `preset_version_changed` / `preset_version_without_preset` | A `POST /runs` naming a launch preset: no such preset (or not open to the caller's user type, `422`), a field other than `title`/`task` beside `preset` (`400`), a pinned `preset_version` that is no longer current (`409`), or `preset_version` without `preset` (`400`). See OPERATIONS.md's launch presets section. |
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_decidable_by` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
+| `invalid_service_param` | `GET /runs?service=` is present but not `1` or `0`, an empty value included. |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals` and `GET /runs`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_run_past_lifetime` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the run reached its lifetime cap first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -1330,6 +1331,11 @@ The rest reach the wire only through
 | `delegation_scope` | A portal's delegated token asked for a route outside its own delegation allow-list (#1142). |
 | `portal_unit_scope` | `POST /runs` or `POST /runs/preflight` through a portal registered with `run_in_under`, `403`: the context the run resolved to (the one named in `run_in`, or the person's default pick) is not that unit or one below it. Nothing was created. Choose a context inside the unit. |
 | `portal_unit_unavailable` | The same check, `503`: the portal's record or the unit list could not be read. The launch is refused, never treated as unpinned; retry. |
+| `portal_run_scope` | `403`: the run mounted a team drive allocated to another portal, so only the portal that created it reaches it, whether or not that allocation or portal still stands. An issuer portal's read or change of the run, its event stream (`GET /runs/{id}/events`), a ticket for it and a browser-app session on it are all refused with it, in place of the `404` another person's run gets. A queued run that would start through a different portal ends with it instead of starting. Use the portal that launched the run. |
+| `drive_portal_backend` | `POST /drives/grants` allocating a team drive to a portal, `422`, or `PUT /drives/{id}` on a drive a portal holds: a portal's folder needs a drive whose storage Wardyn names, `docker_volume` or `k8s_pvc_static`, and an edit may not move a held drive off them. Nothing was written; remove the portal's allocation first. |
+| `drive_portal_second_place` | The same two writes, `422`: a drive with a second place cannot be a portal's folder, and an edit may not add one to a drive a portal holds. Nothing was written. |
+| `drive_portal_not_issuer_portal` | `POST /drives/grants` to a portal, `422`: the portal has no identity issuer of its own, so it takes no team drive. A console portal's people use group allocations. |
+| `drive_portal_not_live` | `POST /drives/grants` to a portal, `422`: the portal is unknown or revoked. Allocate to a portal that is registered and live. |
 | `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
 | `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
@@ -1430,10 +1436,10 @@ reasons:
 |---|---|
 | `portal_issuers_not_activated` | (409): issuer portals have not been switched on for this deployment. |
 | `portal_issuers_need_sso` | (409): issuer portals need console sign-in configured, since the console issuer is the one they must not equal. |
-| `portal_registration_invalid` | (422): a registration with no client id, or an access-token registration with no audience or scopes. The token exchange refuses a stored registration that fails the same check. |
+| `portal_registration_invalid` | (422): a registration with no client id, an access-token registration with no audience or scopes, or a malformed `audience` or `required_scopes` value (an audience over 200 bytes or with a control character, too many scopes, or a scope that is not a non-empty word of at most 200 bytes). Registration enforces those size and shape limits. The token exchange repeats only the presence checks (an issuer, a client, and the audience and scopes an access-token registration requires) and then compares the token's claims to the configured values. |
 | `delegate_issuer_pin_required` | (422): an issuer portal names no unit to run in (`run_in_under`). |
 | `delegate_issuer_url_invalid` | (422): the issuer or internal address is not an `https` URL with a host and no user info, query or fragment. |
-| `delegate_internal_issuer_not_allowed` | (409): the internal address names a host the deployment does not list. |
+| `delegate_internal_issuer_not_allowed` | The internal address names a host that `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` does not list: 422 on `POST /admin/delegates`, and 409 on `POST /governance/changes/{id}/approve` when a held registration's host is no longer listed at approval. |
 | `delegate_issuer_is_console` | (409): the issuer, after normalising, is one this deployment has served as its console issuer. |
 | `delegate_issuer_spelling_conflict` / `delegate_issuer_address_conflict` / `delegate_issuer_profile_conflict` | (409): another spelling of a bound issuer is already registered, the bound issuer fetches from another internal address, or the bound issuer names a person by another claim. |
 | `delegate_namespace_in_use` | (409): stored records already name people under this issuer's key. |
@@ -1447,14 +1453,16 @@ reasons:
 | `delegate_renewal_needs_issuer` / `delegate_issuer_field_needs_issuer` | (422): `ui_session_renewal`, or another field only an issuer portal has, on a console-issuer registration. |
 | `delegate_renewal_withheld` | (422): `ui_session_renewal`, withheld in this release. |
 | `portal_issuers_statement_required` | `POST /admin/portal-issuers/activate` (422): the activation needs `old_servers_stopped: true`. |
-| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): another client of the database is not a 0.10.2 `wardynd`. The answer lists it. |
-| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database for two minutes yet. |
+| `portal_issuers_old_server_suspected` | `POST /admin/portal-issuers/activate` (409): a database client session in the sampled window has an application label that does not identify a 0.10.2 or later `wardynd`. A current client with a missing or unexpected label is listed too, not only an older server. The answer lists each session: stop it, or check it and confirm with `confirm_listed_sessions`. |
+| `portal_issuers_sample_warming` | `POST /admin/portal-issuers/activate` (409): this server has not sampled the database's sessions for a full two minutes. It warms after a start, and again from the beginning after its samples stop for more than 30 seconds. |
 | `portal_issuer_in_use` / `portal_issuer_not_found` | `DELETE /admin/portal-issuers/{k}` (409, 404): a portal, a person, a grant or a stored rule still names the binding, or no binding has that key. |
 | `delegate_admission_stale` | `PUT /admin/delegates/{id}/admission` (409): the portal's admission rule is no longer the one the change expected. |
 | `delegate_person_not_allowed` / `delegate_person_unknown_portal` | An admin-written person list (422): it gives a portal person an admin, sponsor, approver or console role, or names a portal person whose issuer no portal is registered for. |
 
-The token exchange (`POST /api/v1/token`) for an issuer portal answers with an OAuth error. Its `delegation.exchange`
-audit row carries one of these reasons:
+A refused token exchange (`POST /api/v1/token`) for an issuer portal answers the client with an OAuth error, which is
+separate from the reason its `delegation.exchange` audit row records. A successful exchange records no denial reason.
+The issuer portal adds the refusal reasons below; the `delegation.exchange` row of [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)
+lists the complete set.
 
 | Reason | Meaning |
 |---|---|
@@ -1636,10 +1644,10 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
 - repeatable `status`
   (`active`/`ended`/`failed`/`killed`/`needs`), `ended_within` (`24h`/`7d`/`30d`/`all`),
 - `include_killed=1` (a KILLED run older than 24h is hidden by default), `no_end=1`
-  (only live runs with no end), `workspace`
+  (only live runs with no end), `service=1` (only runs started with Keep it running, which carry a service spec; applied before paging), `workspace`
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
-- `sponsored=exclude` drops a sponsor's service runs from their own list; no-op where already left out.
+- `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers

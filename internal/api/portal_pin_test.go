@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -188,5 +189,27 @@ func TestPortalUnit_DeletedPinWithResolvedCeilingRefused(t *testing.T) {
 	pin, refusal := f.srv.portalPinOf(ctx)
 	if refusal != nil || !pin.applies || pin.holds(nil) || len(pin.scope().IDs) != 0 {
 		t.Errorf("an issuer portal with no pin = %+v (%v), want a pin that applies and holds nothing", pin, refusal)
+	}
+}
+
+// unreadablePortalFake is the pin fixture's store with a portal read that fails with something other than not found.
+type unreadablePortalFake struct{ *pinPortalStore }
+
+func (unreadablePortalFake) GetDelegateByID(context.Context, uuid.UUID) (types.Delegate, error) {
+	return types.Delegate{}, errors.New("portal row unreadable")
+}
+
+// A store that cannot read the portal's row refuses a delegated request 503 portal_unit_unavailable, never as if
+// the portal were unpinned.
+func TestPortalPin_UnreadablePortalRefused503(t *testing.T) {
+	f := newPinFixture(t)
+	own := f.seed(f.person, &f.child.ID)
+	if code, reason, body := f.request(t, "GET /api/v1/runs/{id}", own); code != http.StatusOK {
+		t.Fatalf("own run under the pin = %d %q %s, want 200", code, reason, body)
+	}
+	f.srv.cfg.Store = unreadablePortalFake{f.ps}
+	f.srv.router = f.srv.routes()
+	if code, reason, body := f.request(t, "GET /api/v1/runs/{id}", own); code != http.StatusServiceUnavailable || reason != "portal_unit_unavailable" {
+		t.Fatalf("unreadable portal = %d %q %s, want 503 portal_unit_unavailable", code, reason, body)
 	}
 }

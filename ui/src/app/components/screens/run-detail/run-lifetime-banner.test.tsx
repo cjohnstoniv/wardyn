@@ -15,7 +15,7 @@ import type { ApprovalRequest, RunDetail } from "../../../lib/types";
 import { HttpError, setExpectedPrincipal, TIMEOUT_STATUS } from "../../../lib/api/core";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { RunLifetimeBanner } from "./run-lifetime-banner";
-import { weekdayClock } from "./run-ends-row";
+import { keptUntilText, weekdayClock } from "./run-ends-row";
 import { shortTime } from "../../../lib/format";
 import { ELEV } from "../../wardyn/copy/elevation";
 
@@ -247,6 +247,36 @@ describe("RunLifetimeBanner — a lease-ended run", () => {
     renderBanner(detail({ lost_reason: "ended", interactive: false, kept_until: keptUntil }));
     expect(screen.getByText("It has no network.")).toBeInTheDocument();
     expect(screen.queryByText(/files are kept until/)).not.toBeInTheDocument();
+  });
+
+  it("a kept run past its maximum lifetime shows the retention deadline, no revival, and keeps End run", () => {
+    const keptUntil = new Date(NOW + 3 * 86_400_000).toISOString();
+    renderBanner(
+      detail({
+        lost_reason: "ended",
+        lost_at: new Date(NOW - 3_600_000).toISOString(),
+        interactive: true,
+        kept_until: keptUntil,
+        lifetime_cap_at: new Date(NOW - 60_000).toISOString(),
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Extend and revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-lifetime-ended")).toHaveTextContent(`Its files are kept until ${keptUntilText(keptUntil)}`);
+    expect(screen.getByTestId("run-lifetime-ended")).toHaveTextContent("cannot be revived");
+  });
+
+  it("a kept run whose cap is still ahead keeps Extend and revive (control)", () => {
+    renderBanner(
+      detail({
+        lost_reason: "ended",
+        lost_at: new Date(NOW - 60_000).toISOString(),
+        interactive: true,
+        kept_until: new Date(NOW + 86_400_000).toISOString(),
+        lifetime_cap_at: new Date(NOW + 86_400_000).toISOString(),
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Extend and revive" })).toBeInTheDocument();
   });
 
   it("Extend and revive sets a fresh future end BEFORE reviving, in order", async () => {

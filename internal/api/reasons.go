@@ -302,6 +302,7 @@ const (
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
 	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
+	reasonInvalidServiceParam       = "invalid_service_param"        // ?service= is present and not "0" or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -546,6 +547,13 @@ const (
 	reasonDelegateRunInUnderInvalid  = "delegate_run_in_under_invalid" // run_in_under names no existing governance unit
 	reasonPortalUnitScope            = "portal_unit_scope"             // a pinned portal's launch resolved outside its unit
 	reasonPortalUnitUnavailable      = "portal_unit_unavailable"       // the portal's row or the units could not be read (503)
+
+	// Team drives for an issuer portal (user_drives_portal.go, run_drives_portal.go, portal_pin.go).
+	reasonPortalRunScope             = "portal_run_scope"               // the run mounted another portal's drive, so this portal cannot reach it (403)
+	reasonDrivePortalBackend         = "drive_portal_backend"           // a portal's folder needs a drive on docker_volume or k8s_pvc_static (422)
+	reasonDrivePortalSecondPlace     = "drive_portal_second_place"      // a drive with a second place cannot be a portal's folder (422)
+	reasonDrivePortalNotIssuerPortal = "drive_portal_not_issuer_portal" // the portal has no issuer of its own, so it takes no team drive (422)
+	reasonDrivePortalNotLive         = "drive_portal_not_live"          // the portal is unknown or revoked (422)
 
 	// /api/v1/setup/integrations and /api/v1/setup/onboarding.
 	reasonIntegrationInvalid              = "integration_invalid"                // the integration write fails validation

@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -80,8 +83,8 @@ func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMintDirect(t *testing.T) {
 // The proxy's resolves and the refresher's passes across one token's life, run in phases: the sandbox's first
 // request at 0, 2.5 and 4.9 minutes after the first mint, crossed with the refresher's passes at 0, 30 and 59
 // seconds into each minute, and once with 16 slow rows queued ahead of the healthy one in the refresher. The
-// proxy side follows the injector's own rule (internal/egress/proxy/inject.go:269-273): a sandbox request reuses
-// the installed header until five minutes before the lease, then resolves again.
+// proxy side follows the injector's own rule (proxy.injector.resolveCtx with injectRefreshMargin): a sandbox
+// request reuses the installed header until five minutes before the lease, then resolves again.
 func TestServiceGrant_RunSpansTokenExpiry(t *testing.T) {
 	for _, first := range []time.Duration{0, 150 * time.Second, 294 * time.Second} {
 		for _, pass := range []time.Duration{0, 30 * time.Second, 59 * time.Second} {
@@ -97,11 +100,16 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	issued := map[string]time.Time{}
 	var mu sync.Mutex
 	release := make(chan struct{})
+	entered := make(chan struct{}, 16) // one per slow row's token request, sent before it blocks
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	f.idp.mu.Lock()
 	f.idp.respond = func(n int, r svcReq) svcAnswer {
 		if strings.Contains(r.URL, "hang-") {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
 			return svcAnswer{Status: 200, Block: release}
 		}
 		mu.Lock()
@@ -141,7 +149,11 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 			events = append(events, event{at, false})
 		}
 	}
-	sort.SliceStable(events, func(i, j int) bool { return events[i].at < events[j].at })
+	// The stuck pass starts just before the resolve of the same moment, so the workers are held when it asks.
+	sort.SliceStable(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		return a.at < b.at || (slow && a.at == b.at && !a.resolve && b.resolve)
+	})
 	var installed string // the header the proxy holds
 	var lease time.Time
 	resolves, handed := 0, map[string]bool{}
@@ -161,6 +173,13 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 					t.Error("the stuck pass did not end after its providers were released")
 				}
 			})
+			// Saturated before the clock moves on: every worker is inside a slow row's token request.
+			for w := range serviceGrantPassWorkers {
+				svcAwait(t, entered, fmt.Sprintf("pass worker %d to enter a slow row", w+1))
+			}
+			if n := f.svcHealthyRequests(); n != 1 {
+				t.Fatalf("token requests for the healthy row with every worker held = %d, want only dispatch's", n)
+			}
 			continue
 		case !ev.resolve:
 			f.srv.serviceGrantPass(context.Background())
@@ -201,12 +220,19 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	if len(handed) != 2 {
 		t.Fatalf("tokens handed to the proxy = %d, want the first and its replacement", len(handed))
 	}
-	var healthy int
-	for _, r := range f.idp.requests() {
-		if strings.Contains(r.URL, "//idp.example.test") {
-			healthy++
+	if slow {
+		// Dispatch's request, the eight held workers' slow rows, then the 50-minute resolve's renewal; the
+		// other eight slow rows wait for the release at clean-up.
+		var order []string
+		for _, r := range f.idp.requests() {
+			order = append(order, map[bool]string{true: "slow", false: "healthy"}[strings.Contains(r.URL, "hang-")])
+		}
+		want := append(append([]string{"healthy"}, slices.Repeat([]string{"slow"}, serviceGrantPassWorkers)...), "healthy")
+		if !slices.Equal(order, want) {
+			t.Fatalf("token request order = %v, want %v", order, want)
 		}
 	}
+	healthy := f.svcHealthyRequests()
 	var rows int
 	for _, ev := range f.mintRows() {
 		if strings.Contains(string(ev.Data), `"provider_uid":"`+uid+`"`) {
@@ -219,6 +245,17 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	if resolves < 2 {
 		t.Fatalf("the proxy resolved %d times, want at least the first and the renewal", resolves)
 	}
+}
+
+// svcHealthyRequests counts the token requests sent for the fixture's own row.
+func (f *svcFix) svcHealthyRequests() int {
+	var n int
+	for _, r := range f.idp.requests() {
+		if strings.Contains(r.URL, "//idp.example.test") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestServiceGrant_TwoRunsAnHourApart(t *testing.T) {
@@ -236,29 +273,6 @@ func TestServiceGrant_TwoRunsAnHourApart(t *testing.T) {
 	code, second := f.svcResolve(plan2)
 	if code != http.StatusOK || resolvedToken(t, second) == resolvedToken(t, first) {
 		t.Fatalf("second run's resolve = %d %v, want a new token", code, second)
-	}
-}
-
-// The proxy renews a header five minutes before its credential expires; here the renewal is its resolve at that
-// moment, which must return a token that outlives the old one.
-func TestServiceGrant_ProxyRenewsAcrossExpiry(t *testing.T) {
-	f := newSvcFixWithSecret(t)
-	plan, _, _, _ := f.dispatch(t)
-	code, first := f.svcResolve(plan)
-	if code != http.StatusOK {
-		t.Fatalf("first resolve: %d", code)
-	}
-	ms, _ := first["credential_expires_at"].(float64)
-	exp := time.UnixMilli(int64(ms))
-	f.clock.Advance(exp.Add(-5 * time.Minute).Sub(f.clock.Now())) // the proxy's renewal moment
-	code, renewed := f.svcResolve(plan)
-	if code != http.StatusOK || resolvedToken(t, renewed) == resolvedToken(t, first) {
-		t.Fatalf("renewal = %d %v, want a replacement token", code, renewed)
-	}
-	ms2, _ := renewed["credential_expires_at"].(float64)
-	exp2 := time.UnixMilli(int64(ms2))
-	if !exp2.After(exp) {
-		t.Errorf("the renewed credential expires %v, not after the old %v", exp2, exp)
 	}
 }
 
@@ -399,8 +413,11 @@ func TestServiceGrant_UnmaskableTokenNotHandedOut(t *testing.T) {
 	}
 }
 
+// Plant: put the token into the success row's data; the audit sweep runs after the row's sink copy arrives, so it
+// finds it.
 func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	f := newSvcFixWithSecret(t)
+	ids := f.captureRowIDs()
 	plan, env, policy, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
@@ -410,6 +427,7 @@ func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("resolve: %d", code)
 	}
+	f.awaitSink(t, ids()...) // the sweep covers each success's sink copy
 	sandbox, _ := json.Marshal(env)
 	planned, _ := json.Marshal(policy)
 	grants, _ := json.Marshal(f.st.grants)
@@ -597,8 +615,15 @@ func TestPutProviderCredential_ServiceOnServiceGrantRow409(t *testing.T) {
 		ClientID: svcClientID, ServiceIdentities: []string{svcOwner}}
 	site := credentialSite(row)
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
-	svc := ssoSession(t, svcOwner, "svc@corp.example", oidc.RoleUser)
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+row.ID+"/credential", svc, `{"value":"a-pasted-token-0123456789"}`)
+	// A service identity reaches the door by its own token, never a session cookie (the cookie lane refuses a
+	// service principal), so the request carries the context the token lane builds.
+	router := chi.NewRouter()
+	srv.mountModelProviderCredentialRoutes(router)
+	ctx := withServiceIdentity(withHumanIdentity(context.Background(), svcOwner, "", oidc.RoleUser, types.UserTypeStandard, []string{}, false), "ci-bot", "sponsor@corp.example")
+	r := httptest.NewRequest(http.MethodPut, "/model-providers/"+row.ID+"/credential", strings.NewReader(`{"value":"a-pasted-token-0123456789"}`)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonModelProviderCredentialSignsIn) || !strings.Contains(w.Body.String(), mpcServiceGrant) {
 		t.Fatalf("PUT = %d %s, want 409 with the service grant sentence", w.Code, w.Body.String())
 	}
@@ -618,6 +643,8 @@ func TestSetupStatus_ServiceIdentityServiceGrantState(t *testing.T) {
 	}
 	f.idp.respond = func(int, svcReq) svcAnswer { return svcOAuthError(401, "invalid_client") }
 	f.token(serviceGrantTriggerRefresh) //nolint:errcheck // the failure is the point
+	// The heartbeat is its own loop: only a live replica's failure grades the row.
+	f.srv.serviceGrantHeartbeat(ctx)
 	if got := grade(); got.State != modelAccessNotConfigured || got.Cause != reasonServiceGrantFailing {
 		t.Fatalf("after a definitive failure: %+v, want not_configured %s", got, reasonServiceGrantFailing)
 	}

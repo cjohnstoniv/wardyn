@@ -215,9 +215,23 @@ describe("Audit → Retention", () => {
       return screen.getByRole("dialog");
     }
 
+    it("names a cutoff in the middle of the day to the fraction, and a midnight one by its time too", async () => {
+      getRetentionMock.mockResolvedValue(
+        status({ cutover: "2026-10-03T12:34:56.789Z", partitions: [{ ...status().partitions[0], hi: "2026-10-03T12:34:56.789Z" }] }),
+      );
+      expect(within(await openDrop()).getByText("Drop every event recorded before 3 Oct 2026, 12:34:56.789 UTC?")).toBeInTheDocument();
+    });
+
+    it("a legacy partition with no upper bound uses the cutover, and a midnight cutoff still shows its time", async () => {
+      getRetentionMock.mockResolvedValue(
+        status({ cutover: "2026-10-03T00:00:00Z", partitions: [{ ...status().partitions[0], hi: undefined }] }),
+      );
+      expect(within(await openDrop()).getByText("Drop every event recorded before 3 Oct 2026, 00:00:00 UTC?")).toBeInTheDocument();
+    });
+
     it("opens with the packet's title and body, and Drop partition waits for a digest", async () => {
       const dialog = await openDrop();
-      expect(within(dialog).getByText("Drop every event before 3 Oct 2026?")).toBeInTheDocument();
+      expect(within(dialog).getByText("Drop every event recorded before 3 Oct 2026, 12:00:00 UTC?")).toBeInTheDocument();
       expect(
         within(dialog).getByText(
           "This deletes its 2,104,331 events for good. Export it first and keep the archive: after the drop, it is the only copy.",

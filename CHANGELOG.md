@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-11-21
+
 ### Added
 
 - Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
@@ -26,6 +28,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
   grant's token request outcome is recorded.
+- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) names hosts to which wardynd sends a service grant's token request, and an issuer portal's discovery and key fetches, through its proxy even when `WARDYN_DAEMON_NO_PROXY` covers them; a portal fetch connects to the address wardynd checked and trusts only the new `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. No other call changes.
+- A super admin can allocate a team drive to an issuer portal, and a run started through that portal can mount it. Migration `0297_portal_team_drives` adds the `portal` subject type to drive allocations and `agent_runs.portal_drives`; it creates no table, so the split-role grants above are unchanged.
 
 ## [0.10.1] — 2026-11-21
 

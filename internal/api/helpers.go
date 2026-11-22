@@ -527,7 +527,7 @@ func (s *Server) authorizeLoadedRun(w http.ResponseWriter, r *http.Request, run 
 	allow func(*http.Request, types.AgentRun) bool) bool {
 	if allow(r, run) {
 		// An issuer portal's pin, after the owner predicate has passed (portal_pin.go).
-		return !s.portalRunInPin(r.Context(), run).write(s, w, r)
+		return !s.portalRunReachable(r.Context(), run).write(s, w, r)
 	}
 	// Audited AFTER confirming the run genuinely exists — a truly-missing
 	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY

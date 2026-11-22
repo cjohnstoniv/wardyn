@@ -272,8 +272,8 @@ Drive roots:
 | `/Library/LaunchAgents/com.wardyn.runnerd.managed.plist` | starts the runner at login, like the agent `setup` writes |
 | `/usr/local/wardyn/bin/runnerd-managed-start` | the agent's launcher: idle until the person is registered |
 | `/usr/local/wardyn/share/wardyn-runnerd.mobileconfig` | the profile template |
-| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (the helper runs on Apple silicon only); unused unless [macOS VMs](macos-vms.md) are turned on |
-| `/Users/Shared/Wardyn/` | the shared macOS VM ledger the package creates, root-owned: see [The shared ledger](macos-vms.md#the-shared-ledger) |
+| `/usr/local/wardyn/bin/wardyn-macvm` | the macOS VM helper (it runs on Apple silicon only). An Apple silicon install runs it once to set up the shared ledger; it is otherwise unused unless [macOS VMs](macos-vms.md) are turned on |
+| `/Users/Shared/Wardyn/` | the shared macOS VM ledger, root-owned: Apple silicon installs make it at install time, Intel installs have none (that is not damage). See [The shared ledger](macos-vms.md#the-shared-ledger) |
 
 1. Fill in the profile template (`OrgURL`, two fresh UUIDs, your organisation name) and push it from your MDM as a **custom settings** profile.
 2. Push `wardyn-runnerd.pkg` with the same MDM, as a policy or script that runs `installer -pkg wardyn-runnerd.pkg -target /` as root (see above).

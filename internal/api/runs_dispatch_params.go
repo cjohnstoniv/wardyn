@@ -100,6 +100,9 @@ type dispatchParams struct {
 	Drives []types.DriveMount
 	// MemberDrives are the Drives that are people's own, id to owner, which dispatch re-reads (memberDrivesStillThere).
 	MemberDrives map[uuid.UUID]string
+	// PortalDrives are the Drives that came through the run's issuer portal, drive id to that portal, for the
+	// run.drive.mount audit row. Server-side only: never a field of a DriveMount, which goes to the substrate.
+	PortalDrives map[uuid.UUID]uuid.UUID
 	// MainDrive is the main drive create's fold decided (stepMainDrive): its size and whether it
 	// is soft. NIL for every lane that has no fold decision (scans, record, verify, logins, probes).
 	MainDrive *mainDriveDecision

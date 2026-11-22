@@ -183,16 +183,18 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
-	g, err := st.CreateScimGroup(ctx, in.ExternalID, in.DisplayName, now)
+	// The members are read before anything is written, and the group and its members commit together: a
+	// failure at either step leaves no group, so the identity provider's retry with the same externalId is
+	// not a conflict. A 409 is only a group that really exists.
+	own, err := s.ownMembers(ctx, st, memberIdentities(in.Members))
+	if err != nil {
+		s.scimServerError(w, r, "create the group", err)
+		return
+	}
+	g, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
 	if errors.Is(err, store.ErrScimGroupExists) {
 		writeSCIMError(w, scim.NewError(http.StatusConflict, "uniqueness", "a group with this externalId already exists"))
 		return
-	}
-	if err == nil {
-		var own []uuid.UUID
-		if own, err = s.ownMembers(ctx, st, memberIdentities(in.Members)); err == nil {
-			err = st.AddScimGroupMembers(ctx, g.ID, own, now)
-		}
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)
@@ -232,6 +234,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var errs []error
+	gone := false
+memberOps:
 	for _, op := range ops {
 		if op.Attr != scim.AttrMembers {
 			continue
@@ -242,6 +246,12 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 			own, err := s.ownMembers(ctx, st, memberIdentities(members))
 			if err == nil {
 				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
+			}
+			if errors.Is(err, store.ErrNotFound) {
+				// A deletion committed after the group was read: nobody is added, the rest is the deletion's,
+				// and the request is refused below, after any earlier failure.
+				gone = true
+				break memberOps
 			}
 			if err != nil {
 				errs = append(errs, err)
@@ -254,11 +264,17 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 					errs = append(errs, err)
 				}
 			}
-			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot))
+			errs = append(errs, s.removeGroupMembers(ctx, st, g, ids, slot, false))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		s.scimServerError(w, r, "update the group", err)
+		return
+	}
+	// An earlier removal that failed answers 5xx first: its ledger stays pending, and the 404 would tell the
+	// identity provider the request was settled.
+	if gone {
+		writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
 		return
 	}
 	if externalIDRefused {
@@ -281,9 +297,10 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	slot := scimSlot(ctx)
 	ids, err := st.GroupRemovalIdentities(ctx, g.ID)
 	if err == nil {
-		err = s.removeGroupMembers(ctx, st, g, ids, scimSlot(ctx))
+		err = s.removeGroupMembers(ctx, st, g, ids, slot, false)
 	}
 	if err != nil {
 		s.scimServerError(w, r, "delete the group", err)
@@ -291,19 +308,29 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only the group's own delete may find it already gone; a not-found from the removal above is a step that
 	// failed, and the 5xx lets the identity provider retry it.
-	if err := st.DeleteScimGroup(ctx, g.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := st.DeleteScimGroup(ctx, g.ID, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.scimServerError(w, r, "delete the group", err)
+		return
+	}
+	// A member added after the listing above was removed by the delete itself, which leaves their ledger
+	// pending (store.DeleteScimGroup), as it does for a deletion this one lost to. Those removals are finished
+	// here before the 204; one that fails stays pending for the sweeper, and the 5xx says so.
+	if ids, err = st.GroupRemovalIdentities(ctx, g.ID); err == nil {
+		err = s.removeGroupMembers(ctx, st, g, ids, slot, true)
+	}
+	if err != nil {
 		s.scimServerError(w, r, "delete the group", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// removeGroupMembers removes each identity from the group as a mover. Every one is attempted whether or
-// not another failed; the joined error wraps errDeprovisionIncomplete.
-func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string) error {
+// removeGroupMembers removes each identity from the group as a mover (resume as removeGroupMember takes
+// it). Every one is attempted whether or not another failed; the joined error wraps errDeprovisionIncomplete.
+func (s *Server) removeGroupMembers(ctx context.Context, st scimStore, g store.ScimGroup, ids []uuid.UUID, slot string, resume bool) error {
 	var errs []error
 	for _, id := range ids {
-		if err := s.removeGroupMember(ctx, st, g, id, slot, false); err != nil {
+		if err := s.removeGroupMember(ctx, st, g, id, slot, resume); err != nil {
 			errs = append(errs, err)
 		}
 	}

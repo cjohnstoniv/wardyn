@@ -142,7 +142,16 @@ func (s *Server) handleRegisterDelegate(w http.ResponseWriter, r *http.Request) 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"delegate.create", d.ID.String(), "success", mustJSON(created)))
 	d.Credential = raw
-	writeJSON(w, http.StatusCreated, d)
+	writeJSON(w, http.StatusCreated, servedDelegate(d))
+}
+
+// servedDelegate is a portal as the API serves it. A console portal keeps the shape 0.10.0 served: the
+// database gives every row an admission revision, but only an issuer portal has an admission rule it counts.
+func servedDelegate(d types.Delegate) types.Delegate {
+	if d.Issuer == "" {
+		d.AdmissionRev = 0
+	}
+	return d
 }
 
 // isOwnClientID reports whether id names the deployment's own client, in any
@@ -166,6 +175,9 @@ func (s *Server) handleListDelegates(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil {
 		list = []types.Delegate{}
+	}
+	for i := range list {
+		list[i] = servedDelegate(list[i])
 	}
 	writeJSON(w, http.StatusOK, list)
 }

@@ -51,7 +51,7 @@ func (s *Server) issuerPortalPersonHolds(ctx context.Context, principal string, 
 	if blocked {
 		return &uiDialError{status: http.StatusForbidden, reason: uiDeniedReasonRevoked, msg: uiSessionNoLongerAuthorizedMsg}
 	}
-	if rf := s.portalRunInPin(audit.WithDelegation(ctx, via), run); rf != nil {
+	if rf := s.portalRunReachable(audit.WithDelegation(ctx, via), run); rf != nil {
 		return &uiDialError{status: rf.status, reason: rf.body.Reason, msg: rf.body.Error}
 	}
 	return nil

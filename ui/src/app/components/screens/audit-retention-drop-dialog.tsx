@@ -21,7 +21,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Field } from "../wardyn/form-primitives";
 import { DROP, reasonKey } from "../wardyn/copy/audit-retention";
 import { ERASE } from "../wardyn/copy/credentials";
-import { downloadPartition, legacyDate, monthLabel } from "./audit-retention-util";
+import { downloadPartition, legacyCutoff, monthLabel } from "./audit-retention-util";
 
 export function AuditRetentionDropDialog({
   partition,
@@ -52,7 +52,7 @@ export function AuditRetentionDropDialog({
 
   const title = partition.lo
     ? DROP.TITLE(monthLabel(partition.lo))
-    : DROP.TITLE_LEGACY(legacyDate(partition, cutover));
+    : DROP.TITLE_LEGACY(legacyCutoff(partition, cutover));
   const rows = partition.rows.toLocaleString("en-US");
 
   const doExport = (form: PartitionExportForm) => {

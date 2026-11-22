@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -38,13 +39,17 @@ func pidOf(t *testing.T, tx pgx.Tx) int {
 
 // untilBlockedBy returns once n sessions are each waiting on the session holder, as PostgreSQL itself reports
 // (pg_blocking_pids), and gives up after ten seconds. It polls that wait, not a clock, so the test releases
-// the holder only when every write it means to order is queued behind it.
+// the holder only when every write it means to order is queued behind it. It polls from a separate session:
+// the test goroutine may hold a pool transaction here, and asking the pool again would be a nested acquire.
 func untilBlockedBy(t *testing.T, pool *pgxpool.Pool, holder, n int) {
 	t.Helper()
+	watch := testutil.PGConn(t, pool)
 	deadline := time.Now().Add(10 * time.Second)
 	got := 0
 	for time.Now().Before(deadline) {
-		got = rowCount(t, pool, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder)
+		if err := watch.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder).Scan(&got); err != nil {
+			t.Fatalf("count the sessions waiting on %d: %v", holder, err)
+		}
 		if got >= n {
 			return
 		}
@@ -71,11 +76,12 @@ func holdIdentity(t *testing.T, pool *pgxpool.Pool, principal, mode string) pgx.
 }
 
 // holdPerson opens a transaction that holds the per-person lock the mint and the credential erase share (the
-// key is the one portalPersonLockKey spells), whether or not the person has an identity row yet.
+// key is the one portalPersonLockKey spells), whether or not the person has an identity row yet. It runs on a
+// separate session, so the test can call the store while it holds the lock without a nested pool acquire.
 func holdPerson(t *testing.T, pool *pgxpool.Pool, principal string) pgx.Tx {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
+	tx, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ package auditsign
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -137,11 +138,7 @@ type Signer struct {
 	Status  *Status
 
 	// start is the chain head the first checkpoint follows, read once while no checkpoint is stored.
-	start *Row
-	// own is the audit.checkpoint.create row this signer last wrote and the checkpoint it describes. A range
-	// that holds exactly that row, found in the chain by its id, right after that checkpoint, is not signed, so
-	// an idle install writes nothing. Any other lone row is signed.
-	own     *ownRow
+	start   *Row
 	latched bool
 	// read is set by the first successful read of the newest checkpoint; first is what that read found (nil for
 	// none), kept in memory only, so a restart reads again.
@@ -162,9 +159,15 @@ type Signer struct {
 	retiredSeen *int64
 }
 
-type ownRow struct {
-	event     uuid.UUID
-	statement string // the checkpoint the row describes, which must still be the newest stored one
+// announcementNS names the audit.checkpoint.create rows: a row's id is derived from the statement it
+// announces, so any replica can tell the announcement of the newest stored checkpoint from other rows.
+// Both ids are SHA-256 name-based (UUID version 8): SHA-1 is refused under GODEBUG=fips140=only, and this
+// var is built at package init.
+var announcementNS = uuid.NewHash(sha256.New(), uuid.NameSpaceOID, []byte("wardyn audit checkpoint announcement"), 8)
+
+// announcementID is the id of the audit.checkpoint.create row for the checkpoint with this statement.
+func announcementID(statement string) uuid.UUID {
+	return uuid.NewHash(sha256.New(), announcementNS, []byte(statement), 8)
 }
 
 // Run ticks every interval until ctx ends, the first tick at once.
@@ -263,7 +266,7 @@ func (s *Signer) signOne(ctx context.Context) bool {
 	if len(rows) == 0 {
 		return false
 	}
-	if len(rows) == 1 && chained && s.isOwnRow(ctx, latest, rows[0]) {
+	if len(rows) == 1 && chained && s.isAnnouncement(ctx, latest, rows[0]) {
 		return false
 	}
 
@@ -296,27 +299,18 @@ func (s *Signer) signOne(ctx context.Context) bool {
 	}
 	s.Status.lastUnix.Store(now.UnixNano())
 	s.Status.lag.Store(max(hw-st.SeqHi, 0))
-	s.own = nil
-	if id, ok := s.recordCheckpoint(ctx, st, cp); ok {
-		s.own = &ownRow{event: id, statement: text}
-	}
+	s.recordCheckpoint(ctx, st, cp)
 	return len(rows) == s.MaxRows
 }
 
-// isOwnRow reports whether row, alone after latest, is the audit row this signer wrote for latest: latest is
-// still the checkpoint it wrote (another signer's newer one clears the claim) and the stored row with that
-// event id is this row. A lookup error signs the row: an extra checkpoint is cheaper than a missing receipt.
-func (s *Signer) isOwnRow(ctx context.Context, latest Checkpoint, row Row) bool {
-	if s.own == nil {
-		return false
-	}
-	if s.own.statement != latest.Statement {
-		s.own = nil
-		return false
-	}
-	seq, found, err := s.Store.EventSeq(ctx, s.own.event, latest.SeqHi)
+// isAnnouncement reports whether row, alone after latest, is the audit row that announces latest: the stored row
+// with the id derived from latest's statement, whichever replica wrote either. Only that exact row is skipped, so
+// an idle install writes nothing and any other lone row is signed. A lookup error signs the row: an extra
+// checkpoint is cheaper than a missing receipt.
+func (s *Signer) isAnnouncement(ctx context.Context, latest Checkpoint, row Row) bool {
+	seq, found, err := s.Store.EventSeq(ctx, announcementID(latest.Statement), latest.SeqHi)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: audit checkpoint: could not look up the last checkpoint's own row; signing the range", slog.Any("err", err))
+		slog.WarnContext(ctx, "wardynd: audit checkpoint: could not look up the last checkpoint's announcement; signing the range", slog.Any("err", err))
 		return false
 	}
 	return found && seq == row.Seq
@@ -376,9 +370,8 @@ func (s *Signer) latch(ctx context.Context, reason string, seq int64, detail str
 }
 
 // recordCheckpoint writes the audit.checkpoint.create row: a complete, self-verifying signed checkpoint for every
-// sink. It returns the row's id and whether the store accepted it now; a spooled row is not in the chain yet,
-// so it is never treated as the chain's tail.
-func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement, cp Checkpoint) (uuid.UUID, bool) {
+// sink. Its id is announcementID of the statement, so a replica that did not write it still recognises it.
+func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement, cp Checkpoint) {
 	data, _ := json.Marshal(map[string]any{
 		"seq_lo": st.SeqLo, "seq_hi": st.SeqHi, "rows": st.Rows,
 		"head_hash": st.HeadHash, "digest": st.Digest, "seq_digest": st.SeqDigest,
@@ -386,7 +379,7 @@ func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement
 		"statement": cp.Statement, "signature": base64.StdEncoding.EncodeToString(cp.Signature),
 	})
 	ev := types.AuditEvent{
-		ID:        uuid.New(),
+		ID:        announcementID(cp.Statement),
 		Time:      s.Now().UTC(),
 		ActorType: types.ActorSystem,
 		Actor:     "wardynd",
@@ -399,5 +392,4 @@ func (s *Signer) recordCheckpoint(ctx context.Context, st auditreceipt.Statement
 	if err != nil && !errors.Is(err, audit.ErrSpooled) {
 		audit.LogWriteFailure(ctx, ev, err)
 	}
-	return ev.ID, err == nil
 }

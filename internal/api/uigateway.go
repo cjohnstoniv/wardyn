@@ -325,8 +325,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 
 	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), every
-	// gate's through r, and one that fails or runs out is the retryable 503, never the wrong-owner answer or a
-	// 500. Any other ticket's actx is r's own context.
+	// gate's through r, so none holds the request past it. The run read, the governance and data_out doors, the
+	// declared apps, the roster and the background door's inbound and roster reads answer a failure or a stall
+	// with a 503 (data_out's its own, the rest the retryable one). The owner check's sponsor and inbound reads, and the sign-in display's holder
+	// read, keep their refusals for a failure. Any other ticket's actx is r's own context.
 	actx, acancel := ta.admitCtx(r.Context())
 	defer acancel()
 	r = r.WithContext(actx)
@@ -389,6 +391,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
+	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, redirectStatus)
+}
+
+// uiEnterDeclaredApp is the tail of uiEnterCommon for a declared (non-desktop) app: the run's effective policy
+// must declare app, and only then does the session cookie start. It writes every refusal itself; actx is the
+// ticket's opening-deadline context uiEnterCommon derived, and r already carries it.
+func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, redirectStatus int) {
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil && !ta.admitBy.IsZero() {
 		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"runtime/debug"
 	"slices"
 	"testing"
@@ -143,4 +145,149 @@ func TestSCIMGroupRemovalSweeperWaitsForAnAddInFlight(t *testing.T) {
 			t.Errorf("instance %s: the member's token stopped authenticating", name)
 		}
 	}
+}
+
+// waitForGroupLock waits until a statement on the scim_groups row (or a membership insert, whose foreign-key
+// check takes it) waits on a lock, and fails the test if the request on done answers first or nothing waits
+// within 10 seconds.
+func waitForGroupLock(t *testing.T, e *scimEnv, done <-chan *httptest.ResponseRecorder) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'
+			  AND (query LIKE '%FROM scim_groups WHERE id%' OR query LIKE '%INSERT INTO scim_group_members%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		select {
+		case r := <-done:
+			t.Fatalf("the request answered %d without waiting on the group row: %s", r.Code, r.Body.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("nothing waited on the group row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A member add and a group DELETE overlap. The group row orders them: an add the delete finds in flight
+// commits first and its member is removed as a mover before the 204, and an add that reaches the row while
+// a delete holds it is refused once the delete commits, leaving no member behind.
+func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
+	t.Run("the add commits first", func(t *testing.T) {
+		w := newMoverWorld(t)
+		e := w.e
+		ctx := context.Background()
+		// The mover left once; the identity provider is adding them back with a token that holds the group.
+		if r := e.patchGroup(e.a, w.group.ID, groupRemovePatch(t, "entra-doc-patch-group-remove-members.json", w.moverID)); r.Code != http.StatusOK {
+			t.Fatalf("remove = %d %s", r.Code, r.Body.String())
+		}
+		_, tid, raw := e.mintTokenAs(e.a, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{groupClaim}})
+		// A person of another issuer joins in the same add: the delete owes this endpoint no removal of them.
+		var foreign uuid.UUID
+		if err := e.pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower)
+			VALUES ('sub-foreign', 'https://idp.other.example', 'foreign@other.example') RETURNING id`).Scan(&foreign); err != nil {
+			t.Fatal(err)
+		}
+		add, err := testutil.PGConn(t, e.pool).Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = add.Rollback(ctx) }()
+		for _, id := range []any{w.moverID, foreign} {
+			if _, err := add.Exec(ctx, `INSERT INTO scim_group_members (group_id, identity_id, added_at) VALUES ($1, $2, now())`, w.group.ID, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic: %v\n%s", r, debug.Stack())
+					done <- httptest.NewRecorder()
+				}
+			}()
+			done <- e.scim(e.b, http.MethodDelete, "/scim/v2/Groups/"+w.group.ID, "")
+		}()
+		// The delete has listed the members (the add is not yet visible) and waits on the group row.
+		waitForGroupLock(t, e, done)
+		if err := add.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if r := <-done; r.Code != http.StatusNoContent {
+			t.Fatalf("DELETE = %d %s", r.Code, r.Body.String())
+		}
+
+		if !e.groupJobsDone(w.moverID, w.group.ID) {
+			t.Error("the member added while the delete ran does not have its 3 removal steps done")
+		}
+		var foreignRows int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2`,
+			foreign, store.JobKindGroupRemove).Scan(&foreignRows); err != nil {
+			t.Fatal(err)
+		}
+		if foreignRows != 0 {
+			t.Errorf("the other issuer's member has %d group_remove rows, want 0", foreignRows)
+		}
+		if !e.tokenRevoked(tid) {
+			t.Error("the token of the member added while the delete ran is not revoked")
+		}
+		for name, node := range map[string]*scimNode{"a": e.a, "b": e.b} {
+			if e.tokenWorks(node, raw) {
+				t.Errorf("instance %s: the token of the member added while the delete ran still authenticates", name)
+			}
+		}
+		if got := len(e.rows(e.b, "scim.group.member_remove")); got != 2 {
+			t.Errorf("%d scim.group.member_remove rows from the DELETE, want one per member including the late one", got)
+		}
+	})
+	t.Run("the delete wins first", func(t *testing.T) {
+		w := newMoverWorld(t)
+		e := w.e
+		ctx := context.Background()
+		if r := e.patchGroup(e.a, w.group.ID, groupRemovePatch(t, "entra-doc-patch-group-remove-members.json", w.moverID)); r.Code != http.StatusOK {
+			t.Fatalf("remove = %d %s", r.Code, r.Body.String())
+		}
+		// A deletion that holds the group row, as store.DeleteScimGroup does, and has not committed.
+		del, err := testutil.PGConn(t, e.pool).Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = del.Rollback(ctx) }()
+		if _, err := del.Exec(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR UPDATE`, w.group.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := del.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, w.group.ID); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic: %v\n%s", r, debug.Stack())
+					done <- httptest.NewRecorder()
+				}
+			}()
+			done <- e.patchGroup(e.b, w.group.ID, addMembersPatch(w.moverID))
+		}()
+		waitForGroupLock(t, e, done)
+		if err := del.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if r := <-done; r.Code != http.StatusNotFound {
+			t.Errorf("an add behind a committed delete = %d %s, want 404", r.Code, r.Body.String())
+		}
+		var left int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM scim_group_members WHERE group_id = $1`, w.group.ID).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left != 0 {
+			t.Errorf("%d membership rows of the deleted group, want none", left)
+		}
+	})
 }

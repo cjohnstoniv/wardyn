@@ -77,9 +77,24 @@ function imageRow(ws: Workspace): { mono: string; blurb: string; rebuildable: bo
   return { mono: "standard sandbox image", blurb: "Wardyn's baseline container — no project-specific build.", rebuildable: false };
 }
 
+// The screen's whole lifetime (an open confirmation, a write still outstanding, the loaded row) belongs to one
+// workspace: the router reuses this element when only the :id changes, so the key remounts it per workspace.
 export function WorkspaceDetailScreen() {
   const { id = "" } = useParams();
+  return <WorkspaceDetail key={id} id={id} />;
+}
+
+function WorkspaceDetail({ id }: { id: string }) {
   const navigate = useNavigate();
+  // False once this workspace's screen is gone, so a write that was already out reports where it landed and
+  // starts nothing further (the confirmed replay) against a workspace the operator has left.
+  const onScreen = React.useRef(true);
+  React.useEffect(() => {
+    onScreen.current = true;
+    return () => {
+      onScreen.current = false;
+    };
+  }, []);
 
   const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
   // X3-F2 / F5-F1: Delete (DELETE /workspaces/{id}) and Rebuild (POST
@@ -267,7 +282,8 @@ export function WorkspaceDetailScreen() {
     try {
       const { skipped_hosts: skipped, ...updated } = await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts);
       setWs(updated as Workspace);
-      toast.success(skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress");
+      const said = skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress";
+      toast.success(onScreen.current ? said : `${said} on "${ws.name}"`);
     } catch (e) {
       toast.error("Failed to promote egress", { description: getErrorMessage(e) });
     }
@@ -298,7 +314,8 @@ export function WorkspaceDetailScreen() {
       const next = { ...(fresh.requirements ?? {}) };
       for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
       setWs(await workspacesApi.setRequirements(ws.id, next, person));
-      toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
+      const said = hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`;
+      toast.success(onScreen.current ? said : `${said} on "${ws.name}"`);
       return true;
     } catch (e) {
       toast.error("Failed to approve host", { description: getErrorMessage(e) });
@@ -315,7 +332,7 @@ export function WorkspaceDetailScreen() {
       hosts,
       run: (approved) =>
         void approveHosts(approved).then((ok) => {
-          if (ok && replayName) void doRecord(replayName, true);
+          if (ok && replayName && onScreen.current) void doRecord(replayName, true);
         }),
     });
   const requestPromoteEgress = (taskKey: string) => {
@@ -573,6 +590,7 @@ export function WorkspaceDetailScreen() {
       <ProfileReview runId={profileRunId} suggestedName={profileName} onClose={() => setProfileRunId(null)} />
 
       <ConfirmEgressDialog
+        workspaceName={ws.name}
         hosts={pendingConfirm?.hosts?.length ? pendingConfirm.hosts : null}
         selectable={pendingConfirm?.selectable}
         onOpenChange={(o) => !o && setPendingConfirm(null)}

@@ -130,6 +130,8 @@ export interface MacVMCaps {
   window?: boolean;
   /** The runner keeps a person's kept machines and deletes them. */
   kept_machines?: boolean;
+  /** The runner executes kept_machine's delete_expired op, which rechecks the machine's own deadline under its lock. Wardyn starts no expiry-driven delete on a runner that does not say so. */
+  kept_conditional_delete?: boolean;
   /** The Mac's kept machines and the disk they may take; absent when it keeps none or has not counted yet. */
   kept?: MacVMKept;
   /** The Mac's other bases, each derived from `base` (Standard), in name order; absent when it has none. */

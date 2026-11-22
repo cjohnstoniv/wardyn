@@ -14,8 +14,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -28,10 +31,25 @@ type exchPG struct {
 	ver *fakePortalVerifier
 }
 
+// storedRecorder writes each event to the shared audit table, as the production chain does, so an owed
+// introduction can settle, and keeps a copy in mem for the assertions.
+type storedRecorder struct {
+	pool *pgxpool.Pool
+	mem  *recRecorder
+}
+
+func (s storedRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	if err := store.InsertAuditEvent(ctx, s.pool, &ev); err != nil {
+		return err
+	}
+	return s.mem.Record(ctx, ev)
+}
+
 func newExchPG(t *testing.T) *exchPG {
 	t.Helper()
 	e := &exchPG{delegationPG: newDelegationPG(t), ver: &fakePortalVerifier{enforceAge: true}}
 	e.h.srv.cfg.PortalIssuers = e.ver
+	e.h.srv.cfg.Audit = storedRecorder{pool: e.pool, mem: e.h.audit}
 	e.ver.subj = e.person("u1", "")
 	return e
 }
@@ -140,9 +158,14 @@ func TestPortalExchange_IDTokenProfileEndToEnd_PG(t *testing.T) {
 	if w := do(t, e.h.srv, http.MethodGet, "/api/v1/me", tok, ""); w.Code != http.StatusOK {
 		t.Fatalf("GET /me = %d %s", w.Code, w.Body.String())
 	}
-	var display string
-	if err := e.pool.QueryRow(context.Background(), `SELECT email FROM principal_identities WHERE principal = $1`, e.ver.subj.Principal).Scan(&display); err != nil {
+	// An ID token's email claim is kept as the display value only, never as the matching email.
+	var display, emailLower string
+	if err := e.pool.QueryRow(context.Background(), `SELECT display_email, email_lower FROM principal_identities WHERE principal = $1`,
+		e.ver.subj.Principal).Scan(&display, &emailLower); err != nil {
 		t.Fatalf("read the identity: %v", err)
+	}
+	if display != "pat@corp.example" || emailLower != "" {
+		t.Fatalf("identity display %q email_lower %q, want the email claim as display and no email", display, emailLower)
 	}
 	// A token past the maximum age is refused, and nothing more is minted.
 	n := e.count(t, `SELECT count(*) FROM portal_grants`)
@@ -151,7 +174,6 @@ func TestPortalExchange_IDTokenProfileEndToEnd_PG(t *testing.T) {
 	if w.Code != http.StatusBadRequest || e.count(t, `SELECT count(*) FROM portal_grants`) != n {
 		t.Fatalf("a token past the maximum age: %d %s (grants %d), want 400 and none minted", w.Code, w.Body.String(), n)
 	}
-	_ = display
 }
 
 func TestPortalExchange_GroupsAndEmailStoredEmpty_PG(t *testing.T) {
@@ -192,7 +214,7 @@ func TestPortalExchange_HostileConsoleConfigStillUser_PG(t *testing.T) {
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"role":"user"`) {
 		t.Fatalf("GET /me = %d %s, want the user role", w.Code, w.Body.String())
 	}
-	for _, p := range []string{"/api/v1/admin/delegates", "/api/v1/admin/user-types"} {
+	for _, p := range []string{"/api/v1/admin/delegates", "/api/v1/user-types"} {
 		if w := do(t, e.h.srv, http.MethodGet, p, tok, ""); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "delegation_scope") {
 			t.Errorf("GET %s = %d %s, want 403 delegation_scope", p, w.Code, w.Body.String())
 		}
@@ -223,16 +245,17 @@ func TestPortalExchange_IntroductionCrashBetweenCommitAndAudit_PG(t *testing.T) 
 	}
 }
 
-// introChainOn makes the first audit write of failOnce fail on srv, for the tests that run on a store.
+// introChainOn makes the first audit write of failOnce fail on srv, for the tests that run on a store; the
+// others go through the server's recorder, which records into rec.
 func introChainOn(t *testing.T, rec *recRecorder, srv *Server, failOnce string) (*failOnceRecorder, *Server, error) {
 	t.Helper()
-	f := &failOnceRecorder{inner: rec, action: failOnce}
+	f := &failOnceRecorder{inner: srv.cfg.Audit, action: failOnce}
 	srv.cfg.Audit = f
 	return f, srv, nil
 }
 
 type failOnceRecorder struct {
-	inner  *recRecorder
+	inner  audit.Recorder
 	action string
 	failed bool
 }
@@ -332,8 +355,12 @@ func TestPortalPrincipal_CaseVariantGrantsRestrictionsErasure_PG(t *testing.T) {
 	if err := e.pool.QueryRow(context.Background(), `SELECT id FROM principal_identities WHERE principal = $1`, lo.Principal).Scan(&idLo); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.MarkPortalIdentityPurged(context.Background(), idLo, 0); err != nil {
-		t.Fatalf("purge the first person: %v", err)
+	// The admin purge marks a deactivated person only (PortalPurgeExplicit), so the first person is suspended first.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE principal_identities SET deactivated_at = now() WHERE id = $1`, idLo); err != nil {
+		t.Fatal(err)
+	}
+	if marked, err := e.st.MarkPortalIdentityPurged(context.Background(), idLo, store.PortalPurgeExplicit); err != nil || !marked {
+		t.Fatalf("purge the first person = %v, %v; want marked", marked, err)
 	}
 	if w := do(t, e.h.srv, http.MethodGet, "/api/v1/me", tokUp, ""); w.Code != http.StatusOK {
 		t.Errorf("the other person after the purge = %d, want 200", w.Code)

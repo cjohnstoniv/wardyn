@@ -188,7 +188,7 @@ func run() error {
 	logTrustedCA(trustedCACount, trustedCAPEM)
 	// installTrustedCA + WARDYN_DAEMON_PROXY_URL mutate the shared http.DefaultTransport in place, and
 	// the service grant's transport comes out — see installBootTransport (kept out of run(), which is low-branching).
-	serviceGrantTr, err := installBootTransport(http.DefaultTransport, trustedCAPool, f)
+	serviceGrantTr, alwaysRt, err := installBootTransport(http.DefaultTransport, trustedCAPool, f)
 	if err != nil {
 		return err
 	}
@@ -410,13 +410,8 @@ func run() error {
 	gatewayClientCA := bootKeys.gatewayClientCA()
 	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	// Console sign-in's issuer is recorded, and refused when a portal binding already uses it, after the
-	// migrations and before this replica serves a request.
-	if feats.authn != nil {
-		if err := recordConsoleIssuer(bootCtx, pool, feats.authn.Issuer(), replicaID()); err != nil {
-			return err
-		}
-	}
-	portalIssuers, portalFailures, err := buildPortalIssuers(f, lm.operator, st)
+	// migrations and before this replica serves a request; the portal verifier set is built after that.
+	portalIssuers, portalFailures, err := bootPortalIssuers(bootCtx, pool, f, lm.operator, st, feats.authn, alwaysRt, trustedCAPEM)
 	if err != nil {
 		return err
 	}
@@ -637,14 +632,9 @@ func run() error {
 	attachLoginGrantSink(feats.authn, srv)
 	srv.LogGrantSwitches(bootCtx)
 
-	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE,
-	// before anything is served. A no-op when the file is unset.
-	if err := srv.SeedSiteConfig(bootCtx, knobs.siteConfigSeed); err != nil {
-		return err
-	}
-
-	// The remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
-	if err := srv.BootstrapRunnerPools(bootCtx); err != nil {
+	// The network settings a rebuilt database lost, from WARDYN_SITE_CONFIG_SEED_FILE (a no-op when the file is
+	// unset), then the remote-provided runner pool an upgraded deployment starts with, once. Before anything is served.
+	if err := seedBootState(bootCtx, srv, knobs.siteConfigSeed); err != nil {
 		return err
 	}
 

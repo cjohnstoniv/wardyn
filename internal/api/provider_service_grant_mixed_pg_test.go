@@ -63,7 +63,7 @@ func TestMixedVersion_ReleasedCLIGetSetKeepsServiceGrant(t *testing.T) {
 	}
 	f := newSvcPG(t, true)
 	f.seedGrant(t)
-	ts := httptest.NewServer(f.srv.Handler())
+	ts := httptest.NewServer(panicFails(t, f.srv.Handler()))
 	defer ts.Close()
 	file := filepath.Join(t.TempDir(), "site.json")
 	run := func(args ...string) []byte {
@@ -82,24 +82,34 @@ func TestMixedVersion_ReleasedCLIGetSetKeepsServiceGrant(t *testing.T) {
 	f.assertGrantSurvives(t)
 }
 
-// startReleasedServer starts the released v0.10.1 wardynd at bin on this fixture's own database, as the hosted
-// job's old replica: the schema is ahead of it, so it runs with WARDYN_ALLOW_UNKNOWN_MIGRATIONS. It returns the
-// server's base URL and admin token once /healthz answers, and stops the process at cleanup.
+// startReleasedServer starts the released v0.10.1 wardynd at bin on this fixture's own database and its sealed
+// secret store's key, as the hosted job's old replica: the schema is ahead of it, so it runs with
+// WARDYN_ALLOW_UNKNOWN_MIGRATIONS. It returns the
+// server's base URL and admin token once /healthz answers, and stops the process at cleanup. The released
+// binary takes only an address, so a port another process took between the pick and the bind makes it exit
+// at once; the ports are then picked again, up to three times.
 func (f *svcPG) startReleasedServer(t *testing.T, bin string) (string, string) {
 	t.Helper()
-	out, err := exec.Command(bin, "-gen-age-key").Output()
-	if err != nil {
-		t.Fatalf("%s -gen-age-key: %v", bin, err)
-	}
-	var ageKey string
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "AGE-SECRET-KEY-") {
-			ageKey = strings.TrimSpace(line)
+	var logs string
+	for range 3 {
+		base, token, exitedLogs := f.launchReleasedServer(t, bin)
+		if exitedLogs == "" {
+			return base, token
 		}
+		logs = exitedLogs
 	}
-	if ageKey == "" {
-		t.Fatal("the released wardynd printed no age key")
+	t.Fatalf("the released wardynd exited before serving /healthz on three port picks:\n%s", logs)
+	return "", ""
+}
+
+// launchReleasedServer is one attempt of startReleasedServer: the server's base URL and admin token, or, when the
+// process exited before /healthz answered, its log in the third result.
+func (f *svcPG) launchReleasedServer(t *testing.T, bin string) (string, string, string) {
+	t.Helper()
+	if f.ageKey == "" {
+		t.Fatal("the released server needs the fixture's sealed secret store (newSvcPGSealed)")
 	}
+	ageKey := f.ageKey
 	port := func() string {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -138,12 +148,12 @@ func (f *svcPG) startReleasedServer(t *testing.T, bin string) (string, string) {
 		if resp, err := client.Get(base + "/healthz"); err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return base, token
+				return base, token, ""
 			}
 		}
 		select {
 		case <-exited:
-			t.Fatalf("the released wardynd exited before serving /healthz:\n%s", logs.String())
+			return "", "", "the process exited; its log:\n" + logs.String()
 		case <-deadline:
 			t.Fatalf("the released wardynd did not serve /healthz within 60s:\n%s", logs.String())
 		case <-tick.C:
@@ -159,7 +169,7 @@ func TestMixedVersion_OldServerSaveKeepsServiceGrant(t *testing.T) {
 	if bin == "" {
 		t.Skip("WARDYN_TEST_V0101_WARDYND (the released v0.10.1 wardynd binary) is set by the hosted mixed-version job")
 	}
-	f := newSvcPG(t, true)
+	f := newSvcPGSealed(t, true)
 	seeded, edited := "seed-"+uuid.NewString(), "edit-"+uuid.NewString()
 	row := svcPGRow("corp-a", true)
 	row.Name = seeded
@@ -208,6 +218,11 @@ func TestMixedVersion_OldServerSaveKeepsServiceGrant(t *testing.T) {
 		t.Fatalf("the old server's document has no corp-a row: %s", doc)
 	}
 	do(http.MethodPut, bytes.NewReader(mustJSON(m)))
+	// The released save purges provider credentials before it writes: the grant's record must survive it.
+	raw, err := f.sealed.Get(context.Background(), f.secretNameOf("corp-a"))
+	if rec, ok := parseServiceGrantRecord(raw); err != nil || !ok || rec.ClientSecret != svcClientSecret {
+		t.Fatalf("the grant's record after the old server's save = %v, %v; want it kept", ok, err)
+	}
 	if got := f.row("corp-a"); got.Name != edited || got.OIDC == nil || got.OIDC.ServiceGrant == nil {
 		t.Fatalf("this server reads corp-a as %q with grant %v, want the old server's edit %q and the grant kept", got.Name, got.OIDC, edited)
 	}

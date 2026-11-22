@@ -116,7 +116,7 @@ func (s *Server) keptMachine(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Op != runnerwire.KeptMachineOpDelete {
+	if a.Op != runnerwire.KeptMachineOpDelete && a.Op != runnerwire.KeptMachineOpDeleteExpired {
 		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
 	}
 	s.mu.Lock()

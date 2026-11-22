@@ -53,6 +53,34 @@ const driveHomeNamespaceClashPred = `EXISTS (
 // write (upsertUserDriveOn).
 var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$2", "$3")
 
+// driveMovesAnAllocationPred is true when an allocation of the drive has its storage object moved by a write of this
+// row: the arguments are the placeholders (or literals) of the drive id, the written backend, host root, home template
+// and name slug. It is the store's under-lock form of the re-home guard's rule (driveRehomedAllocations in the api): a
+// portal's folder is named by the portal and drive ids, so only the backend moves it; a group's on a team drive is the
+// team folder, named by the drive id, so the template never reaches it, the host root only on a host path and the name
+// only under the slug scheme and only where some place of the drive is an object Wardyn names (a host path is the root and
+// the home; the second place is a host path by schema, so only the first place and the written backend decide); any other allocation is named by all of them.
+const driveMovesAnAllocationPred = `EXISTS (
+			SELECT 1 FROM user_drive_grants g JOIN user_drives p ON p.id = g.drive_id
+			WHERE g.drive_id = %[1]s::uuid AND CASE
+				WHEN g.subject_type = '` + string(types.DriveSubjectPortal) + `' THEN p.backend IS DISTINCT FROM %[2]s::text
+				WHEN p.team THEN p.backend IS DISTINCT FROM %[2]s::text
+					OR (%[2]s::text = '` + shareBackend + `' AND p.host_root IS DISTINCT FROM %[3]s::text)
+					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text
+						AND (p.backend <> '` + shareBackend + `' OR %[2]s::text <> '` + shareBackend + `' OR COALESCE(p.alt_backend, '` + shareBackend + `') <> '` + shareBackend + `'))
+				ELSE p.backend IS DISTINCT FROM %[2]s::text OR p.host_root IS DISTINCT FROM %[3]s::text
+					OR p.home_template IS DISTINCT FROM %[4]s::text
+					OR (p.object_scheme = '` + string(types.DriveObjectSchemeSlug) + `' AND p.name_slug IS DISTINCT FROM %[5]s::text)
+			END)`
+
+// driveTeamFlipOfAllocatedPred is true when a write of this drive changes its team mode while any allocation holds it. It
+// is not an identity-field filter and not left to the caller's flag: a team drive is one shared folder and an ordinary
+// drive one folder per person, so a flip changes where every allocated run writes, whoever the allocation names and
+// whatever the re-home guard counted when it read. The arguments are the placeholders of the drive id and the written team.
+const driveTeamFlipOfAllocatedPred = `EXISTS (
+			SELECT 1 FROM user_drives p JOIN user_drive_grants g ON g.drive_id = p.id
+			WHERE p.id = %[1]s::uuid AND p.team IS DISTINCT FROM %[2]s::boolean)`
+
 // userDriveUpsertSQL: WHERE carries two guards — the re-home precondition
 // ($12, asserted under UpsertUserDrive's row lock) and the home-namespace rule
 // above. An empty result means a guard refused, not that the row is missing.
@@ -66,9 +94,8 @@ var userDriveUpsertSQL = `
 			alt_backend, alt_host_root, alt_runner_id)
 		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text,'id'::text,$13::boolean,
 			NULLIF($14::text, ''),NULLIF($15::text, ''),$16::uuid
-		WHERE (NOT $12::boolean OR NOT EXISTS (
-			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
-		))
+		WHERE (NOT $12::boolean OR NOT ` + fmt.Sprintf(driveMovesAnAllocationPred, "$1", "$3", "$4", "$6", "$11") + `)
+		  AND NOT ` + fmt.Sprintf(driveTeamFlipOfAllocatedPred, "$1", "$13") + `
 		  AND ($3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT ` +
 	fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$4", "$6") + `)
 		ON CONFLICT (id) DO UPDATE
@@ -151,9 +178,10 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 	if d.ID == uuid.Nil {
 		d.ID = uuid.New()
 	}
-	if !refuseIfAllocated {
-		return s.upsertUserDriveOn(ctx, s.Pool, d, false)
-	}
+	// Every write of a drive takes the drive's row lock, whatever the re-home guard answered: a grant's insert checks
+	// its foreign key with a lock that this one conflicts with, so a grant committed before this write is seen by its
+	// statement and one that has not yet is held behind it. A change of team mode (driveTeamFlipOfAllocatedPred) and an
+	// edit a portal's allocation cannot take (below) are refused under it.
 	// NOT EXISTS alone isn't the guard — the lock is. It sees only the
 	// statement's own snapshot; a concurrent grant INSERT that hasn't
 	// committed evades it (FOR KEY SHARE and FOR NO KEY UPDATE don't
@@ -166,12 +194,21 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 		return types.UserDrive{}, fmt.Errorf("store: begin user drive write: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	// No row yet means this PUT creates; nothing can reference a drive that
-	// doesn't exist yet, so an empty lock is fine.
+	// A PUT at an id that has no row yet has nothing to lock below, so two of them would both go on to the INSERT, and
+	// the one that lost the race to create would take the conflict-update path with its allocation predicate judged in
+	// the snapshot it started with, blind to an allocation committed since the winner created the drive. The drive's id
+	// is therefore a lock of its own, held to the commit: concurrent writes of one id run one after another whether or
+	// not the row exists, and each one's row lock and statement start after the one before it committed.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('user_drives:' || $1::text, 0))`, d.ID.String()); err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: lock user drive id: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
 		return types.UserDrive{}, fmt.Errorf("store: lock user drive: %w", err)
 	}
-	out, err := s.upsertUserDriveOn(ctx, tx, d, true)
+	if err := refuseEditOfPortalDrive(ctx, tx, d); err != nil {
+		return types.UserDrive{}, err
+	}
+	out, err := s.upsertUserDriveOn(ctx, tx, d, refuseIfAllocated)
 	if err != nil {
 		return types.UserDrive{}, err
 	}
@@ -209,12 +246,14 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 			if namespacePossible && s.driveHomeNamespaceClash(ctx, q, d) {
 				return types.UserDrive{}, ErrDriveHomeNamespaceConflict
 			}
-			if refuseIfAllocated && s.driveHasGrants(ctx, q, d.ID) {
+			if s.driveTeamFlipBlocked(ctx, q, d) || (refuseIfAllocated && s.driveHasGrants(ctx, q, d)) {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			// If only one guard applied, that's the answer regardless of the re-read (both fail
-			// closed to false on error — this only picks the message, never the write).
-			if refuseIfAllocated && !namespacePossible {
+			// closed to false on error — this only picks the message, never the write). Off a share the
+			// home-namespace guard is not in the statement, and the team-mode guard always is, so what
+			// refused it is an allocation whether or not the re-home flag was set.
+			if !namespacePossible {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			return types.UserDrive{}, ErrDriveHomeNamespaceConflict
@@ -224,13 +263,23 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 	return out, nil
 }
 
-// driveHasGrants reports whether any allocation points at this drive. A
-// failed read answers false so the caller falls back to the other 409's
-// message — never the write.
-func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, id uuid.UUID) bool {
+// driveTeamFlipBlocked reports whether the write changes the team mode of an allocated drive (the other refusal of the
+// upsert statement). A failed read answers false, as driveHasGrants does: it only picks the message, never the write.
+func (s PG) driveTeamFlipBlocked(ctx context.Context, q driveQuerier, d types.UserDrive) bool {
+	var blocked bool
+	if err := q.QueryRow(ctx, `SELECT `+fmt.Sprintf(driveTeamFlipOfAllocatedPred, "$1", "$2"), d.ID, d.Team).Scan(&blocked); err != nil {
+		return false
+	}
+	return blocked
+}
+
+// driveHasGrants reports whether the write moves an allocation of the drive (driveMovesAnAllocationPred), which is the
+// answer refuseIfAllocated refused on. A failed read answers false so the caller falls back to the other 409's message,
+// never the write.
+func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, d types.UserDrive) bool {
 	var exists bool
-	if err := q.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM user_drive_grants WHERE drive_id = $1)`, id).Scan(&exists); err != nil {
+	if err := q.QueryRow(ctx, `SELECT `+fmt.Sprintf(driveMovesAnAllocationPred, "$1", "$2", "$3", "$4", "$5"),
+		d.ID, string(d.Backend), d.HostRoot, string(d.HomeTemplate), types.DriveSlug(d.Name)).Scan(&exists); err != nil {
 		return false
 	}
 	return exists
@@ -282,15 +331,16 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 	const q = `SELECT d.id, d.name, d.backend, d.host_root, d.storage_class, d.home_template,
 			d.size_mib, d.writable, d.reclaim, d.created_at, d.updated_at, d.created_by, d.object_scheme, d.team,
 			COALESCE(d.alt_backend, ''), COALESCE(d.alt_host_root, ''), d.alt_runner_id,
-			d.owner_subject, d.delete_started_at, d.kept_from_run, d.home_runner_id, COALESCE(c.n, 0)
+			d.owner_subject, d.delete_started_at, d.kept_from_run, d.home_runner_id, COALESCE(c.n, 0), COALESCE(c.portals, 0)
 		FROM user_drives d
-		LEFT JOIN (SELECT drive_id, COUNT(*) AS n FROM user_drive_grants GROUP BY drive_id) c
+		LEFT JOIN (SELECT drive_id, COUNT(*) AS n, COUNT(*) FILTER (WHERE subject_type = 'portal') AS portals
+			FROM user_drive_grants GROUP BY drive_id) c
 			ON c.drive_id = d.id
 		ORDER BY d.name`
 	return collect(ctx, s.Pool, "list", "user drives", q, nil,
 		func(row pgx.Row) (types.UserDriveListItem, error) {
 			var item types.UserDriveListItem
-			dest := append(driveRowDest(&item.UserDrive), &item.GrantCount)
+			dest := append(driveRowDest(&item.UserDrive), &item.GrantCount, &item.PortalGrantCount)
 			if err := row.Scan(dest...); err != nil {
 				return types.UserDriveListItem{}, fmt.Errorf("store: scan user drive: %w", err)
 			}
@@ -332,6 +382,9 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 // ReplaceUserDriveGrant is UpsertUserDriveGrant that also returns the drives the subject lost:
 // the drive ids of the rows it removed and of the kept row's drive before the repoint.
 func (s PG) ReplaceUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	if g.SubjectType == types.DriveSubjectPortal {
+		return types.UserDriveGrant{}, nil, ErrDrivePortalAdditiveOnly
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin drive grant write: %w", err)
@@ -368,6 +421,9 @@ type grantJudge func(prev *types.UserDriveGrant) error
 // is removed. A write judged against the subject having no row is written only while it still has
 // none (ErrUserDriveGrantChanged).
 func replaceUserDriveGrantOn(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant, homeOverrideStated bool, judge grantJudge) (types.UserDriveGrant, []uuid.UUID, error) {
+	if err := lockDriveForGrant(ctx, tx, g); err != nil {
+		return types.UserDriveGrant{}, nil, err
+	}
 	if err := lockUserDriveGrants(ctx, tx, g); err != nil {
 		return types.UserDriveGrant{}, nil, err
 	}
@@ -425,6 +481,13 @@ func (s PG) AddUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeO
 		return types.UserDriveGrant{}, fmt.Errorf("store: begin user drive grant add: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	lock := lockDriveForGrant
+	if g.SubjectType == types.DriveSubjectPortal {
+		lock = lockPortalAllocation
+	}
+	if err := lock(ctx, tx, g); err != nil {
+		return types.UserDriveGrant{}, err
+	}
 	out, err := upsertUserDriveGrant(ctx, tx, g, homeOverrideStated, false)
 	if err != nil {
 		return types.UserDriveGrant{}, err
@@ -465,6 +528,9 @@ var _ UserDriveGrantTierWriter = PG{}
 // (ErrUserDriveGrantChanged otherwise). The removed drives are ReplaceUserDriveGrant's. READ
 // COMMITTED is pinned for UpsertUserDrive's reason. ErrNotFound for an unknown drive.
 func (s PG) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriveGrant, homeOverrideStated, additional bool) (types.UserDriveGrant, []uuid.UUID, error) {
+	if g.SubjectType == types.DriveSubjectPortal {
+		return types.UserDriveGrant{}, nil, ErrDrivePortalAdditiveOnly
+	}
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return types.UserDriveGrant{}, nil, fmt.Errorf("store: begin user drive grant write: %w", err)
@@ -500,6 +566,9 @@ func (s PG) UpsertUserDriveGrantWithinTier(ctx context.Context, g types.UserDriv
 // this subject and drive, the one row the write can change, under the subject's lock and that
 // row's lock.
 func addUserDriveGrantOn(ctx context.Context, tx pgx.Tx, g types.UserDriveGrant, homeOverrideStated bool, judge grantJudge) (types.UserDriveGrant, error) {
+	if err := lockDriveForGrant(ctx, tx, g); err != nil {
+		return types.UserDriveGrant{}, err
+	}
 	if err := lockUserDriveGrants(ctx, tx, g); err != nil {
 		return types.UserDriveGrant{}, err
 	}

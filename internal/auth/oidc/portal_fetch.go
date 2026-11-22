@@ -124,6 +124,7 @@ type portalNet struct {
 	roots            *x509.CertPool  // system roots; nil means the platform's
 	lookup           func(ctx context.Context, host string) ([]net.IP, error)
 	dial             func(ctx context.Context, network, addr string) (net.Conn, error)
+	proxy            *PortalProxy // the daemon proxy route for listed issuer hosts; nil means every fetch is direct
 }
 
 // timeout is the bound of one actual request.

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -67,6 +68,34 @@ type portalActivationMonitor struct {
 	last    time.Time
 	samples []portalSample
 	seen    map[portalAlarmKey]bool
+	unsent  bool      // the activation's audit rows were owed and not yet settled at the last attempt
+	retryAt time.Time // no new send of the owed rows before this
+}
+
+// mayRetry reports whether the owed rows may be sent at now.
+func (m *portalActivationMonitor) mayRetry(now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !now.Before(m.retryAt)
+}
+
+func (m *portalActivationMonitor) retryAfter(at time.Time) {
+	m.mu.Lock()
+	m.retryAt = at
+	m.mu.Unlock()
+}
+
+// owed reports whether the activation's audit rows are still unsettled, so the monitor retries soon.
+func (m *portalActivationMonitor) owed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unsent
+}
+
+func (m *portalActivationMonitor) setOwed(v bool) {
+	m.mu.Lock()
+	m.unsent = v
+	m.mu.Unlock()
 }
 
 // record adds a sample taken at now and drops what is older than the window.
@@ -141,7 +170,7 @@ func (s *Server) RunPortalActivationMonitor(ctx context.Context) {
 	for {
 		activated, _ := s.portalMonitorStep(ctx, s.cfg.Now().UTC())
 		wait := portalSampleEvery
-		if activated {
+		if activated && !s.portalMonitor().owed() {
 			wait = portalAlarmEvery
 		}
 		select {
@@ -163,6 +192,9 @@ func (s *Server) portalMonitorStep(ctx context.Context, now time.Time) (bool, er
 	if err != nil {
 		slog.WarnContext(ctx, "portal activation: read the switch", slog.Any("err", err))
 		return false, err
+	}
+	if activated {
+		s.deliverPortalActivation(ctx, ps)
 	}
 	sessions, err := ps.UntaggedClientSessions(ctx)
 	if err != nil {
@@ -246,7 +278,7 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	actorType, actor := actorFromRequest(r)
-	won, err := ps.ActivatePortalIssuers(r.Context(), actor, names)
+	won, err := ps.ActivatePortalIssuersAs(r.Context(), store.PortalActivation{ActorType: string(actorType), Actor: actor, Sessions: names})
 	if err != nil {
 		writeServerError(w, r, "switch issuer portals on", err)
 		return
@@ -256,11 +288,94 @@ func (s *Server) handleActivatePortalIssuers(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusOK, map[string]any{"activated": true, "already_activated": true})
 		return
 	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "portal_issuers.activate", "portal_issuers", "success",
-		mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(suspects)})))
-	if len(suspects) > 0 {
-		s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "portal_issuers.activate_override", "portal_issuers", "success",
-			mustJSON(map[string]any{"sessions": names})))
-	}
+	// The record is committed with the mark; a delivery that fails here is retried by every replica's monitor.
+	s.deliverPortalActivation(r.Context(), ps)
 	writeJSON(w, http.StatusOK, map[string]any{"activated": true, "overridden_sessions": len(suspects)})
+}
+
+// portalActivationRetryEvery is how long a replica leaves an activation whose rows it sent and could not see
+// in the shared audit table before it sends them again, so a replica whose rows wait in its local spool does
+// not append them again every tick.
+const portalActivationRetryEvery = time.Minute
+
+// deliverPortalActivation delivers the activation's audit rows while they are still owed, from the record the
+// winning write committed: the actor, the sessions the operator overrode and each event's fixed id and time.
+// Every delivery, by the activating request or any replica's monitor, is a replay of the same events
+// (store.WithAuditReplay), so the audit table keeps one row each however often it runs.
+//
+// Delivery is not settlement. A recorder that returns nil or audit.ErrSpooled may hold the row only in this
+// pod's local spool, which a replaced pod loses, so the record is settled only when the store reads both
+// events, with their fixed times, in the shared audit table (SettlePortalActivation). Until then every
+// replica sends what it does not see there.
+func (s *Server) deliverPortalActivation(ctx context.Context, ps store.PortalActivationStore) {
+	m := s.portalMonitor()
+	rec, owed, err := ps.PendingPortalActivation(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "portal activation: read the owed audit rows", slog.Any("err", err))
+		m.setOwed(true)
+		return
+	}
+	if !owed {
+		m.setOwed(false)
+		return
+	}
+	m.setOwed(true)
+	now := s.cfg.Now()
+	if !m.mayRetry(now) {
+		return
+	}
+	want := []store.AuditEventKey{{ID: rec.ActivateEventID, At: rec.EventAt}}
+	if len(rec.Sessions) > 0 {
+		want = append(want, store.AuditEventKey{ID: rec.OverrideEventID, At: rec.EventAt})
+	}
+	// An event counts as in the audit table only with the id and the event time the record fixed.
+	stored := func() (map[uuid.UUID]bool, bool) {
+		held, err := ps.AuditEventsStored(ctx, want)
+		if err != nil {
+			slog.WarnContext(ctx, "portal activation: read the audit table", slog.Any("err", err))
+			return nil, false
+		}
+		in := map[uuid.UUID]bool{}
+		for _, k := range want {
+			if held[store.AuditEventKey{ID: k.ID, At: k.At.UTC().Truncate(time.Microsecond)}] {
+				in[k.ID] = true
+			}
+		}
+		return in, true
+	}
+	in, ok := stored()
+	if !ok {
+		return
+	}
+	ctx = store.WithAuditReplay(ctx)
+	actorType := types.ActorType(rec.ActorType)
+	if !in[rec.ActivateEventID] {
+		activate := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate", "portal_issuers", "success",
+			mustJSON(map[string]any{"old_servers_stopped": true, "sessions_seen": len(rec.Sessions)}))
+		activate.ID, activate.Time = rec.ActivateEventID, rec.EventAt
+		s.recordAuditDurably(ctx, activate)
+	}
+	if len(rec.Sessions) > 0 && !in[rec.OverrideEventID] {
+		override := s.auditEvent(nil, actorType, rec.Actor, "portal_issuers.activate_override", "portal_issuers", "success",
+			mustJSON(map[string]any{"sessions": rec.Sessions}))
+		override.ID, override.Time = rec.OverrideEventID, rec.EventAt
+		s.recordAuditDurably(ctx, override)
+	}
+	if in, ok = stored(); !ok || len(in) != len(want) {
+		slog.WarnContext(ctx, "portal activation: the audit rows are not in the shared audit table yet, they stay owed")
+		m.retryAfter(now.Add(portalActivationRetryEvery))
+		return
+	}
+	settled, err := ps.SettlePortalActivation(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "portal activation: settle the audit rows", slog.Any("err", err))
+		m.retryAfter(now.Add(portalActivationRetryEvery))
+		return
+	}
+	if !settled {
+		slog.WarnContext(ctx, "portal activation: the record was not settled, it stays owed")
+		m.retryAfter(now.Add(portalActivationRetryEvery))
+		return
+	}
+	m.setOwed(false)
 }

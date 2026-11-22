@@ -291,6 +291,15 @@ func warnSmallPool(maxConns int32) {
 		slog.Int("pool_max_conns", int(maxConns)))
 }
 
+// seedBootState writes what a rebuilt or upgraded database starts with, before anything is served: the network
+// settings from WARDYN_SITE_CONFIG_SEED_FILE (nil seeds nothing), then the remote-provided runner pool.
+func seedBootState(ctx context.Context, srv *api.Server, seed *api.SiteConfigSeed) error {
+	if err := srv.SeedSiteConfig(ctx, seed); err != nil {
+		return err
+	}
+	return srv.BootstrapRunnerPools(ctx)
+}
+
 // bindSSHGatewayEarly is WARDYN_SSH_BIND_EARLY: with it on, the SSH gateway's address is bound before the
 // background workers start. A taken port does not stop boot: it is logged, /healthz stops advertising SSH
 // (MarkSSHGatewayUnbound), and nil comes back so no accept loop runs. With it off, or the gateway off, it binds
@@ -486,6 +495,10 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
 		}
 	}()
+
+	// Declared after the fanout drain, so it runs before it on every exit, the serve-error return included: the
+	// service grant queue dequeues no copy after it, and logs as unconfirmed the one its worker may still hold.
+	defer srv.StopServiceGrantSIEM()
 
 	// Declared after the fanout drain, so it runs BEFORE it: the open dry-run
 	// denial windows write their summaries while the sinks and the pool are

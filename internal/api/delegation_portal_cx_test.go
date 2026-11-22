@@ -90,6 +90,7 @@ type retiredBindingStore struct {
 }
 
 func (s *retiredBindingStore) UpsertCapabilityGrant(context.Context, types.CapabilityGrant) (types.CapabilityGrant, error) {
+	s.writes++
 	return types.CapabilityGrant{}, s.err
 }
 
@@ -113,6 +114,9 @@ func TestPortalRuling_StoreRefusalIs422WithItsRegisteredReason(t *testing.T) {
 		}
 		if len(h.ps.grants) != 0 || len(h.ps.idents) != 0 {
 			t.Errorf("%s: the refused write mutated state", c.name)
+		}
+		if rs.writes != 1 {
+			t.Errorf("%s: the store write was asked %d times, want once (the refusal is the store's)", c.name, rs.writes)
 		}
 	}
 }

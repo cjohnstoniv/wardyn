@@ -117,6 +117,10 @@ type portalStore struct {
 	stamped   int
 	swept     int
 	mintErr   error
+	// userTypeErr, groupsErr and issueErr fail the user type read, the sign-in record write and the identity write.
+	userTypeErr, groupsErr, issueErr error
+	// audit is the recorder whose rows stand for the shared audit table.
+	audit *recRecorder
 }
 
 var (
@@ -124,13 +128,54 @@ var (
 	_ store.PortalIdentityStore = (*portalStore)(nil)
 )
 
+// GetDelegateByID answers from the portals this store holds, as the Postgres read does for a portal of either kind,
+// and from the embedded store for any other id. Without it the embedded fake's console-only read would answer
+// not found for a live issuer portal.
+func (p *portalStore) GetDelegateByID(ctx context.Context, id uuid.UUID) (types.Delegate, error) {
+	p.pmu.Lock()
+	d, ok := p.portals[id]
+	p.pmu.Unlock()
+	if ok {
+		return d, nil
+	}
+	return p.authzStore.GetDelegateByID(ctx, id)
+}
+
 func (p *portalStore) GetUserType(_ context.Context, id string) (types.UserType, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.userTypeErr != nil {
+		return types.UserType{}, p.userTypeErr
+	}
 	if p.userTypes[id] {
 		return types.UserType{ID: id, Name: id}, nil
 	}
 	return types.UserType{}, store.ErrNotFound
+}
+
+// AuditEventsStored answers from the recorder's rows, as the shared audit table, by normalised (time, id).
+func (p *portalStore) AuditEventsStored(_ context.Context, want []store.AuditEventKey) (map[store.AuditEventKey]bool, error) {
+	norm := func(id uuid.UUID, at time.Time) store.AuditEventKey {
+		return store.AuditEventKey{ID: id, At: at.UTC().Truncate(time.Microsecond)}
+	}
+	asked := map[store.AuditEventKey]bool{}
+	for _, k := range want {
+		asked[norm(k.ID, k.At)] = true
+	}
+	out := map[store.AuditEventKey]bool{}
+	if p.audit == nil {
+		return out, nil
+	}
+	for _, ev := range p.audit.snapshot() {
+		if k := norm(ev.ID, ev.Time); asked[k] {
+			out[k] = true
+		}
+	}
+	return out, nil
+}
+
+func (p *portalStore) PutPrincipalGroups(context.Context, string, string, string, []string, bool, time.Time) error {
+	return p.groupsErr
 }
 
 func (p *portalStore) GetIssuerDelegateByRaw(_ context.Context, raw string) (types.Delegate, error) {
@@ -160,6 +205,9 @@ func (p *portalStore) lockPortal(id uuid.UUID, rev int64) (types.Delegate, error
 func (p *portalStore) IssuePortalIdentity(_ context.Context, principal, key, display, realIssuer string, portal uuid.UUID, rev int64) (uuid.UUID, bool, error) {
 	p.pmu.Lock()
 	defer p.pmu.Unlock()
+	if p.issueErr != nil {
+		return uuid.Nil, false, p.issueErr
+	}
 	if _, err := p.lockPortal(portal, rev); err != nil {
 		return uuid.Nil, false, err
 	}
@@ -304,15 +352,6 @@ func (p *portalStore) SweepExpiredPortalGrants(context.Context, time.Time) (int6
 	return 0, nil
 }
 
-func (p *portalStore) revoke(id uuid.UUID) {
-	p.pmu.Lock()
-	defer p.pmu.Unlock()
-	d := p.portals[id]
-	now := time.Now()
-	d.RevokedAt = &now
-	p.portals[id] = d
-}
-
 // seedGrant stores a live grant row exactly as given, for the reverse check's corrupt-store cases.
 func (p *portalStore) seedGrant(g types.PortalGrant) string {
 	raw := newBearer(delegatedTokenPrefix)
@@ -349,6 +388,7 @@ func newExchHarness(t *testing.T, shape ...func(*Config)) *exchHarness {
 	}
 	srv, _, _, _ := newAuthzMatrixServer(t, append([]func(*Config){wire}, shape...)...)
 	h := &exchHarness{srv: srv, ps: ps, ver: ver, rec: srv.cfg.Audit.(*recRecorder)}
+	ps.audit = h.rec
 	h.ver.subj = h.subject(portalTestUID)
 	return h
 }
@@ -596,7 +636,9 @@ func TestPortalExchange_AuditRows(t *testing.T) {
 		t.Fatalf("denial rows = %+v, want exactly %v", rows, want)
 	}
 	// The success: the grant, its end, the role, the freshness settings and the names of the admission rule.
+	// The token now carries the claim the portal requires.
 	h.ver.refusal = oidc.PortalRefusal{}
+	h.ver.claims = map[string]string{"tenant": "secret-environment-name"}
 	_, out := portalToken(t, h.exchange(t, d.ID, cred, "the-subject-token", nil))
 	rows := h.exchangeRows()
 	if len(rows) != 2 || rows[1].Outcome != "success" || rows[1].Target != h.ver.subj.Principal {
@@ -717,6 +759,56 @@ func TestPortalExchange_IssuerOutageColdAndWarm(t *testing.T) {
 	// Recovery needs nothing from the person: the next exchange is admitted.
 	h.ver.refusal = oidc.PortalRefusal{}
 	portalToken(t, h.exchange(t, d.ID, cred, "subject-token", nil))
+}
+
+func TestPortalExchange_ProxiedRefreshOutageStatusAndAudit(t *testing.T) {
+	h := newExchHarness(t)
+	d, cred := h.seedPortal(nil)
+	causes := []struct {
+		cause string
+		retry time.Duration
+		want  string
+	}{
+		{"unreachable", 30 * time.Second, "30"},
+		{"keys_unreachable", 0, ""},
+		{"issuer_unreachable", 20 * time.Second, "20"},
+	}
+	for _, c := range causes {
+		h.ver.refusal = oidc.PortalRefusal{Reason: oidc.PortalIssuerUnavailable, Cause: c.cause, Class: oidc.PortalRefusedUnavailable, RetryAfter: c.retry}
+		w := h.exchange(t, d.ID, cred, "subject-token", nil)
+		if w.Code != http.StatusServiceUnavailable || oauthCode(w) != "temporarily_unavailable" || w.Header().Get("Retry-After") != c.want {
+			t.Errorf("%s: %d %s Retry-After=%q, want 503 temporarily_unavailable with %q", c.cause, w.Code, w.Body.String(), w.Header().Get("Retry-After"), c.want)
+		}
+	}
+	// The audit rows are checked on their own: each denied exchange names the reason and its own cause.
+	rows := h.exchangeRows()
+	if len(rows) != len(causes) {
+		t.Fatalf("%d exchange rows, want %d", len(rows), len(causes))
+	}
+	for i, c := range causes {
+		data := portalRowData(t, rows[i])
+		if data["reason"] != oidc.PortalIssuerUnavailable || data["cause"] != c.cause {
+			t.Errorf("row %d = %v, want reason %s and cause %s", i, data, oidc.PortalIssuerUnavailable, c.cause)
+		}
+	}
+}
+
+func TestPortalRefreshFailures_VerifierSourceExposed(t *testing.T) {
+	counter := &PortalRefreshFailures{}
+	issuer := "https://login.corp.example/oauth2/a"
+	counter.Record(oidc.PortalRefreshFailure{Issuer: issuer, Cause: "address_refused", Source: "verifier"})
+	var b strings.Builder
+	counter.write(&b)
+	key := oidc.PortalIssuerKey(issuer)
+	if !strings.Contains(b.String(), `wardyn_portal_issuer_refresh_failures_total{issuer_key="`+key+`",portal="",source="verifier",cause="address_refused"} 1`) {
+		t.Fatalf("a verifier refusal is not exposed with source=\"verifier\":\n%s", b.String())
+	}
+	help, _, _ := strings.Cut(b.String(), "\n")
+	for _, source := range []string{"scheduled", "unknown_kid", "verifier"} {
+		if !strings.HasPrefix(help, "# HELP ") || !strings.Contains(help, source) {
+			t.Errorf("the HELP line %q does not name the source %s", help, source)
+		}
+	}
 }
 
 func TestPortalAdmission_RefusalStatusesDistinct(t *testing.T) {
