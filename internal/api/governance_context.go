@@ -366,7 +366,11 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 		if err != nil {
 			return contextPick{}, err
 		}
-		pick, _, err := s.pickContext(ctx, activeMemberships(ms), choice)
+		active, err := s.portalPinMemberships(ctx, activeMemberships(ms), choice)
+		if err != nil {
+			return contextPick{}, err
+		}
+		pick, _, err := s.pickContext(ctx, active, choice)
 		return pick, err
 	}
 	// A hidden group row only ever ADDS memberships. So a legacy=false row that matched is a sound
@@ -382,7 +386,11 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 			if err != nil {
 				return contextPick{}, "", err
 			}
-			pick, sound, err := s.pickContext(ctx, activeMemberships(ms), choice)
+			active, err := s.portalPinMemberships(ctx, activeMemberships(ms), choice)
+			if err != nil {
+				return contextPick{}, "", err
+			}
+			pick, sound, err := s.pickContext(ctx, active, choice)
 			if err != nil && contextRunRefusal(err) == nil {
 				return contextPick{}, "", err
 			}
@@ -672,7 +680,9 @@ func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request,
 // membership row on p's path could still match the owner: a user row naming their sub, a row for
 // their stamped type, an `all` row, or, unless the owner is an issuer-portal person, any group row (a
 // restart or revive of a group-keyed owner's run keeps today's reach). An email-keyed user row never counts here: the run does not record the
-// owner's email, so such a row could only admit a guess. The refusal names the arm
+// owner's email, so such a row could only admit a guess. A run an issuer portal started for its own
+// person also passes while that portal is registered and its pin covers the run's unit, unless the run
+// carries a strict workspace or a pinned organisation component (portalPinHoldsOwner). The refusal names the arm
 // taken (owner_session or row_can_match), which a revive audits.
 func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun, p *ResolvedUnit) (*ownerRefusal, error) {
 	if p == nil {
@@ -710,6 +720,13 @@ func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun,
 		for _, m := range rows {
 			found = found || (path[m.UnitID] && membershipCanMatchOwner(m, run))
 		}
+	}
+	if !found {
+		held, err := s.portalPinHoldsOwner(ctx, run, path)
+		if err != nil {
+			return nil, err
+		}
+		found = held
 	}
 	if found {
 		return nil, nil

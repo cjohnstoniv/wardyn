@@ -543,11 +543,11 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 | `max_subject_token_age_seconds` | 300 to 600, default 300. The oldest a token's `iat` may be. |
 | `grant_ttl_seconds` | 300 up to the maximum age, default the maximum age. The longest a grant lives from its mint. A grant also ends at the token's own signed end, so it can live much less: read `expires_in` in the answer, which can be as low as 5 seconds. |
 | `ui_session_renewal` | Optional, issuer portals only: a person's browser-app session renews on the portal's grants ([longer browser sessions](#longer-browser-sessions)). A console portal that sets it is refused 422 `delegate_renewal_needs_issuer`. |
-| `run_in_under` | Required: the unit its runs live in. The pin covers that unit and every unit under it, for launching runs and for managing the runs its people own, so pinning a parent lets the portal's people work in any child unit. |
+| `run_in_under` | Required: the unit its runs live in. The pin covers that unit and every unit under it, for launching runs and for managing the runs its people own, so pinning a parent lets the portal's people work in any child unit. Its people need no membership for an ordinary run there: see [where a portal's person runs](#where-a-portals-person-runs). |
 
 - A registration answers its refusals with 422 or 409 and a reason in [the SDK reference](../sdk.md). `GET /admin/delegates` shows `admission_rev` only for an issuer portal. A console portal's answer keeps its 0.10.0 shape.
 - When changes are held for a second person, a registration by a signed-in person is a held change: the answer is 202, and the credential is in that answer only. The break-glass admin token is not held: its write applies at once, and each one writes a `governance.change.bypass` row.
-- A portal that sets no group and no required claim carries a note in the review diff and the audit row: the portal chooses who can use it, and anyone it selects who meets the token requirements can act as a user in the pinned unit.
+- A portal that sets no group and no required claim carries a note in the review diff and the audit row: the portal chooses who can use it, and anyone it selects who meets the token requirements can act as a user in the pinned unit and every unit under it.
 - The group claim of a token is read tolerantly: a value that is not a list of strings counts as no groups.
 - An issuer portal keeps no groups for a person: their sign-in record is empty, so no group of theirs reaches any grant or restriction. The portal's own registered `group` still gates its exchange, from the token's claim.
 - The People list keeps one display value per person and nothing authorises by it: the token's `email` claim for an ID token (empty if absent), the token's `sub` (the login name) for an access token.
@@ -562,6 +562,17 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 - Changing the issuer string means new people. The internal address and the pin are not part of who a person is.
 - `GET /api/v1/people` returns `issuer` for each portal person, and `internal_address` when the registration has an `internal_issuer` (it is left out when empty, so treat it as optional). The console's People screen does not show them yet.
 - A person's first exchange through any portal writes one `person.create` row, which carries no email.
+
+<a id="where-a-portals-person-runs"></a>**Where a portal's person runs.**
+
+- The pin is the person's place to run. Through that portal, the pin unit and every unit under it are their contexts, at the `user` role, with no membership needed.
+- With no `run_in`, a run lands in the pin unit, unless the person holds a home membership in the pin unit or a unit under it, which wins. A membership outside the pin is never picked by default. A workspace the run attaches can move it to the workspace's unit, as for a member.
+- A strict workspace, or an organisation component with a unit pin, still needs a membership of the person's own in that unit or a unit under it. The portal's pin does not satisfy it: without one, the launch answers 403 `workspace_unit_not_yours` or `component_unit_pinned`. A run launched with one keeps needing it: without it, an extension, resume or revive is refused `unit_membership_gone`.
+- `run_in` may name the pin unit or any unit under it. A unit outside the pin answers 403 `unit_not_a_context`, or 403 `portal_unit_scope` when the person holds a membership there.
+- The unit's walls and the restrictions that cover the person apply as they do for a member.
+- While the portal stays registered, its grant can extend, end, kill and attach to such a run, which resumes a paused one. A revoked portal's grant reaches nothing.
+- A revive or an admin restart is not a portal action. When an operator revives or restarts a run outside the Default unit, Wardyn checks that its owner still holds the unit: through the pin of the live portal that started it, or else through a membership. A run in the Default unit needs neither.
+- This holds for an issuer portal's own people only. A console portal and a console sign-in take their contexts from memberships alone.
 
 **Exchange.** `POST /api/v1/token`, with the portal's id and `wdi_` credential as HTTP Basic, as above.
 
