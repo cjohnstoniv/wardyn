@@ -26,6 +26,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
+	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -244,9 +246,10 @@ func TestPG_UnstartedEnd_SecondCleanupMakesNoCall(t *testing.T) {
 type t2Dispatch struct {
 	name    string
 	claims  bool
-	grant   bool   // the run carries a runner_resident value, handed to the runner before the create
-	policy  string // the credential delivery policy; residentAllClassesPolicy when empty
-	hint    string // part of the failure hint of the return that fails the run
+	grant   bool                           // the run carries a runner_resident value, handed to the runner before the create
+	policy  string                         // the credential delivery policy; residentAllClassesPolicy when empty
+	hint    string                         // part of the failure hint of the return that fails the run
+	hintFor func(types.MachineKind) string // the same, when it depends on the machine kind
 	arrange func(t *testing.T, f *residentFix, run types.AgentRun, p *dispatchParams)
 }
 
@@ -263,7 +266,7 @@ func t2Exec(t *testing.T, f *residentFix, stmts ...string) {
 }
 
 // t2Returns are the ways a dispatch ends before or at its create, by the return that ends it. Each of the first
-// eight fails the run before the Mac was asked to create a sandbox, so a macOS VM run's end claims the drive it
+// eleven fails the run before the Mac was asked to create a sandbox, so a macOS VM run's end claims the drive it
 // kept; the last two keep it (a failed create that was asked for, and a failure before the marker is installed).
 var t2Returns = []t2Dispatch{
 	{name: "keptMachineAtDispatch refuses the run's machine", claims: true, hint: keptMachineNotFoundMsg("gone"),
@@ -304,11 +307,44 @@ var t2Returns = []t2Dispatch{
 			f.side.deliver = func(runnerwire.DeliverResidentArgs) error { return errors.New("the runner refused") }
 			f.side.mu.Unlock()
 		}},
-	{name: "the lease is refused before the create is asked for", claims: true,
+	{name: "the lease is refused before the create is asked for", claims: true, hint: errRunnerContained.Error(),
 		arrange: func(t *testing.T, f *residentFix, run types.AgentRun, _ *dispatchParams) {
 			t2Exec(t, f, `INSERT INTO run_containment_pending (run_id, runner_id, kind, since) VALUES ('`+run.ID.String()+`', '`+f.rn.ID.String()+`', 'agent_only', now())`)
 		}},
-	{name: "the create was asked for and failed", claims: false, grant: true},
+	{name: "the start-after-readback hold refuses the boot seed before the create", claims: true, hint: startAfterReadbackSeedHint,
+		arrange: func(_ *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {
+			f.srv.cfg.StartAfterReadback = true
+		}},
+	{name: "recording is required and the recording store is off", claims: true, hint: runnerpool.RecordingStoreOffMsg(),
+		arrange: func(t *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {
+			if _, _, err := f.st.PutRunnerPoolOrgDefaults(t.Context(), types.RunnerPoolDefaults{Recording: types.RecordingRequired}, "t2"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	{name: "the fresh start of the kept machine cannot be marked", claims: true,
+		hint: "its kept machine's fresh start could not be recorded",
+		arrange: func(t *testing.T, f *residentFix, run types.AgentRun, p *dispatchParams) {
+			owner, prepared := types.CanonicalUserSubject(run.CreatedBy), time.Now().Add(-time.Hour).UTC()
+			m, err := f.st.CreateKeptMachine(t.Context(), types.KeptMachine{Name: "dev", OwnerSubject: owner, RunnerID: f.rn.ID, Base: "base-1",
+				BasePreparedAt: prepared, RunID: &run.ID, ExpiresAt: time.Now().Add(30 * 24 * time.Hour).UTC()}, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Machine = &keptMachinePlan{mode: keptModeFresh, id: m.ID, name: "dev", owner: owner, runner: f.rn.ID, base: "base-1", prepared: prepared, limit: 4, idleDays: 30}
+			t2Exec(t, f,
+				`CREATE FUNCTION t2_mark_reset() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 't2: mark reset'; END $$`,
+				`CREATE TRIGGER t2_mark_reset BEFORE UPDATE ON kept_machines FOR EACH ROW
+					WHEN (NEW.reset_run_id IS NOT NULL AND OLD.reset_run_id IS DISTINCT FROM NEW.reset_run_id) EXECUTE FUNCTION t2_mark_reset()`)
+		}},
+	// The create was asked for, so the runner's or the substrate's own refusal of it is the failure: a macOS VM
+	// run is refused by the substrate's VM caps check before the wire (remote.CreateSandbox, checkVMCaps), a
+	// container run reaches the runner side, whose handler answers "unexpected create_sandbox".
+	{name: "the create was asked for and failed", claims: false, grant: true, hintFor: func(k types.MachineKind) string {
+		if k.IsMacOSVM() {
+			return remote.MacOSVMNotOffered("This runner")
+		}
+		return "unexpected " + runnerwire.MethodCreateSandbox
+	}},
 	{name: "the masking manifest cannot be started (before the marker)", claims: false, hint: "the run's masking manifest could not be committed",
 		arrange: func(t *testing.T, f *residentFix, _ types.AgentRun, _ *dispatchParams) {
 			dead, err := pgxpool.New(t.Context(), "postgres://wardyn@127.0.0.1:1/wardyn?connect_timeout=1&sslmode=disable")
@@ -337,6 +373,7 @@ func (t2Reclaimer) CanManageDrives(context.Context) error { return nil }
 // the substrate reclaims asked for. The drive is a Docker volume whatever the kind, so the cleanup's reclaim
 // reaches the fixture's runner and is counted; the kind alone decides whether the dispatch installs the marker.
 type t2Dispatched struct {
+	kind     types.MachineKind
 	f        *residentFix
 	run      types.AgentRun
 	reclaims *atomic.Int32
@@ -372,7 +409,7 @@ func t2Dispatch1(t *testing.T, kind types.MachineKind, c t2Dispatch) t2Dispatche
 	}
 	f.srv.dispatchRun(ctx, run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), p)
 	f.srv.WaitBackground()
-	return t2Dispatched{f, run, reclaims}
+	return t2Dispatched{kind, f, run, reclaims}
 }
 
 // requireFailed checks that the dispatch failed the run for the reason its case names, and returns the run.
@@ -385,8 +422,13 @@ func (d t2Dispatched) requireFailed(t *testing.T, c t2Dispatch) types.AgentRun {
 	if got.State != types.RunFailed {
 		t.Fatalf("run is %s, want FAILED", got.State)
 	}
-	if c.hint != "" && !strings.Contains(got.FailureHint, c.hint) {
-		t.Fatalf("failure hint %q, want it to contain %q: the run failed at some other return", got.FailureHint, c.hint)
+	if want := cmp.Or(c.hint, func() string {
+		if c.hintFor != nil {
+			return c.hintFor(d.kind)
+		}
+		return ""
+	}()); want != "" && !strings.Contains(got.FailureHint, want) {
+		t.Fatalf("failure hint %q, want it to contain %q: the run failed at some other return", got.FailureHint, want)
 	}
 	if c.policy == t2PostureRefusedPolicy {
 		if refusal := d.f.dispatchRefusal(t, d.run.ID); refusal["reason"] != string(placement.ReasonRunnerPostureUnmet) {
@@ -411,8 +453,20 @@ func (d t2Dispatched) wantKept(t *testing.T) {
 	if !row.exists || row.started != nil || row.issues != 0 || d.reclaims.Load() != 0 {
 		t.Errorf("after the dispatch: drive %+v with %d reclaims, want it kept, unmarked, count 0 and never reclaimed", row, d.reclaims.Load())
 	}
-	if m, err := d.f.st.GetMemberDriveOf(t.Context(), types.CanonicalUserSubject(d.run.CreatedBy), keptWorkFolderDriveID(d.run.ID)); err != nil || m.Deleting() {
-		t.Errorf("the owner's read of the kept drive = %v, deleting %v; want it visible", err, m.Deleting())
+	// A later run of the owner asking for the drive through the real admission path (authorizeRequestDrives:
+	// reachable, not held by its ended run, not held for the upgrade) is offered it, on a mountable target.
+	owner, id := types.CanonicalUserSubject(d.run.CreatedBy), keptWorkFolderDriveID(d.run.ID)
+	sc, err := d.f.st.GetSiteConfig(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.WorkspaceProviders = keepSite(true, true, 3, 0).WorkspaceProviders
+	if _, err := d.f.st.PutSiteConfig(t.Context(), sc); err != nil {
+		t.Fatal(err)
+	}
+	drives, refusal := authorizeDrives(d.f.srv, personCtx(owner), drivesRequest(id.String()))
+	if refusal != nil || len(drives) != 1 || drives[0].resolved.Drive.ID != id || drives[0].id != id.String() || drives[0].target == "" {
+		t.Errorf("a later run asking for the kept drive = %+v, refusal %+v; want it selected: drive %s on a target", drives, refusal, id)
 	}
 }
 
