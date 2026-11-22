@@ -183,9 +183,16 @@ func TestPG_DriveRegistration_AbsentIDWaitsForTheRegistrationInFlight(t *testing
 		t.Fatalf("registrations of an absent id did not wait for the one in flight (personal blocked %v, shared blocked %v)", blockedP, blockedS)
 	}
 	waitForPortalLock(t, "both registrations waiting on the id's lock", func() bool { return backendsWaiting(t, pool, true, "user_drives:") == 2 })
-	if n := rowCount(t, pool, `SELECT count(*) FROM user_drives WHERE id = $1`, id); n != 0 {
+	// Read on another goroutine: this one holds the lock's connection, and the pool guard fails a nested acquire.
+	var waiting int
+	onAnotherGoroutine(t, func() {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_drives WHERE id = $1`, id).Scan(&waiting); err != nil {
+			t.Errorf("count the id's rows: %v", err)
+		}
+	})
+	if waiting != 0 {
 		release()
-		t.Fatalf("%d row(s) for the id while its registrations wait, want none", n)
+		t.Fatalf("%d row(s) for the id while its registrations wait, want none", waiting)
 	}
 	release()
 	if err := resultP(); err != nil {
