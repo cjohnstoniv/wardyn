@@ -26,6 +26,7 @@ import (
 func TestPortalSuspend_AdminSuspendCutsExchangeAndGrants_PG(t *testing.T) {
 	l := newPortalLife(t)
 	principal, bearer := l.signIn(t, "u1")
+	before := l.ver.subj // the subject signIn exchanged, issued before the suspension
 	if got := l.meCode(t, bearer); got != http.StatusOK {
 		t.Fatalf("control: GET /me before the suspension = %d", got)
 	}
@@ -45,7 +46,7 @@ func TestPortalSuspend_AdminSuspendCutsExchangeAndGrants_PG(t *testing.T) {
 		t.Errorf("GET /me with the old grant = %d, want 401", got)
 	}
 	// A subject token issued before the suspension is refused as session_revoked, before the identity is read.
-	l.ver.subj = l.person("u1", "")
+	l.ver.subj = before
 	if got := l.exchange(t, l.d.ID, l.cred, "subject-token").Code; got != http.StatusBadRequest {
 		t.Errorf("exchange with a token issued before the suspension = %d, want 400", got)
 	}
