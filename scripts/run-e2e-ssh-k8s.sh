@@ -32,10 +32,9 @@
 #     session.promote audit row AND a keystroke from that ssh session
 #     actually reaching the shell are both asserted
 #
-# NOT RUN BY CI: no workflow invokes `make test-e2e-ssh-k8s` — it needs a kind
-# cluster this script deliberately does not create. It is a MANUAL proof, run
-# by hand against `make kind-quickstart`; treat a green result as evidence
-# only for the tip someone actually ran it on.
+# CI: nightly.yml's kind-survival-walk job runs it on the quickstart cluster that job brings up, before its
+# survival walk, and a release waits for that job. By hand, run it against `make kind-quickstart`; a green result
+# is evidence for the tip it ran on.
 #
 # DELIBERATELY NOT PROVEN HERE — sftp and `-L`. Both are an IMAGE contract,
 # not a substrate one (docs/SSH.md "Image contract (BYOI)": the gateway execs
@@ -79,7 +78,8 @@ command -v curl >/dev/null 2>&1 || die "curl not found"
 CONTEXT="kind-wardyn-quickstart"
 NAMESPACE="wardyn"
 RUNS_NAMESPACE="wardyn-runs"   # run pods live here (deploy/kind/quickstart.sh: a separate namespace)
-BASE="http://127.0.0.1:8080"
+# quickstart.sh's own port knob (default 8080): nightly.yml's kind-survival-walk brings its cluster up on 8280.
+BASE="http://127.0.0.1:${WARDYN_QUICKSTART_HTTP_PORT:-8080}"
 
 # WARDYN_TEST_K8S=1 says "run the cluster-dependent lane"; it does not say a
 # cluster is actually up. A cluster that was asked for but is not there is
