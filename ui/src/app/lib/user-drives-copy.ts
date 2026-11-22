@@ -225,15 +225,15 @@ export const DRIVES = {
     "Off by default: members' runs can read the drive and never change it. On, any member's run can change what the others' runs read and run.",
   TEAM_WRITE_UNKNOWN:
     "This drive has more allocations than this page lists, so its write setting cannot be changed here. Saving leaves every allocation's write setting as it is. A group you add here can't write.",
-  BACKEND_K8S_PVC_STATIC_TEAM: "Share provisioned by your platform (one pre-created volume claim for the team)",
+  BACKEND_K8S_PVC_STATIC_TEAM: "Share provisioned by your platform (a pre-created volume claim for the groups, and one for each issuer portal)",
   TEAM_EMPTY_READ_ONLY:
     "Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write.",
   TEAM_ONE_HOST: "Works on one host only. A Docker volume lives on the host that made it, so runs on another host get a different, empty folder.",
   TEAM_CLAIM_NOTE:
-    "Every member mounts the same claim, so it must allow many writers at once (ReadWriteMany). Ask your platform team if you're not sure.",
-  TEAM_NO_HOME: "Everyone gets the same folder, so a team drive has no directory per person.",
-  TEAM_SIZE_HINT: "One size for the whole team: members share it.",
-  TEAM_RECLAIM_KEPT: "Kept. A team drive belongs to its groups, so a leaver's cleanup skips it.",
+    "Everyone who mounts a claim shares it, so it must allow many writers at once (ReadWriteMany). Each issuer portal has its own claim. Ask your platform team if you're not sure.",
+  TEAM_NO_HOME: "Members of the allocated groups share one folder. Each allocated issuer portal has its own folder. A team drive has no directory per person.",
+  TEAM_SIZE_HINT: "One size for each shared folder: the people who mount it share it.",
+  TEAM_RECLAIM_KEPT: "Kept. A person's cleanup leaves shared folders in place.",
   TEAM_ALLOC_HINT: "A team drive is allocated to groups or issuer portals, never to one person or to everyone. Every mount is audited with who mounted it.",
   TEAM_GROUP_PLACEHOLDER: "Choose a group",
   TEAM_CHIP: "Team drive",

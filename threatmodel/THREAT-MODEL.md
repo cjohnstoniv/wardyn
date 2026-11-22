@@ -1538,22 +1538,22 @@ ADMIN pre-authorized** —
 
 #### Team drives (0.10) — one folder a group shares
 
-- **With team drives on, members of the allocated groups share one folder.**
+- **With team drives on, members of the allocated groups share one folder, and each allocated issuer portal has a separate folder of its own.**
   - If the allocation is writable, what one person's agent writes there, another person's agent can read and run. That is cross-person injection, by design.
-  - Any secret an agent writes there is visible to the whole group.
+  - Any secret an agent writes there is visible to the whole group, or to everyone who mounts the drive through that portal.
   - Nothing inspects or scans the folder's contents.
 - **What bounds it.**
   - It is off by default. The switch is `storage.user_drive.team_drives` (`UserDriveProvider.TeamDrives`, carried to resolution as `driveSizeCeiling.TeamDrives` by `driveSizeCeilingFor`).
     - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise it resolves per person, as before ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
     - With the switch off, a `team: true` drive write is a `422` (`driveTeamWriteRefusal`, [`internal/api/user_drives_team.go`](../internal/api/user_drives_team.go)).
-  - It is admin-made and allocated to groups only.
+  - It is admin-made and allocated to groups or eligible issuer portals only.
     - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0205_user_drives_team.sql`).
-    - `types.ValidateTeamDriveGrant` refuses any subject type but `group`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
+    - `types.ValidateTeamDriveGrant` refuses any subject type but `group` or `portal`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
   - It is read-only unless a super admin sets `members_can_write`, and the drive itself must be writable.
     - `newResolvedDrive` folds a team allocation to `writable && members_can_write && drive.writable`, so an allocation's `writable_override` cannot open a read-only team drive.
     - `types.ValidateTeamDriveGrant` refuses `members_can_write` on a read-only drive, and `types.DriveGrantWidens` names a newly set `members_can_write` a widening, so the security-admin tier allocates read-only only (`upsertUserDriveGrantAs`).
     - A run asking to write a read-only one is refused (`driveReadOnlyRefusal`).
-  - People outside the allocated groups resolve no grant on the drive, so they get no mount.
+  - People outside the allocated groups resolve no group grant on the drive, so they get no mount of the group's folder. A portal allocation needs a super admin, a live portal with its own identity issuer, and a `docker_volume` or `k8s_pvc_static` drive with no second place ([Operations](../docs/OPERATIONS.md#team-drives)). Anyone who mounts the drive through an allocated portal reaches that portal's own folder (`types.DrivePortalHome`), never the group's.
   - The one-person guard is lifted for team rows only.
     - A team folder's home is `t-` plus a hash of the drive id (`types.DriveTeamHome`), mounted under `/home/agent/shared/<slug>` (`runner.DriveTargetFor`, `runner.ValidateDriveTarget`), and carries no subject fingerprint.
     - A per-person drive still stamps its `SubjectHash`, and the docker driver still refuses a volume labelled for another person (`driveVolumeAdoptable`).
@@ -1561,7 +1561,7 @@ ADMIN pre-authorized** —
   - `GET /me/drives` lists in `shared_with` only the caller's own groups that carry the allocation (`teamSharedWith`).
 - **WHAT THIS DOES NOT CLOSE.**
   - A leaver's writes stay. A person's reclaim refuses a team drive (`driveTeamReclaimRefusal`), and the erasure's `member_drives` scope reaches only rows the person owns, which a team row never is. The files belong to the drive's groups.
-  - Group membership is the boundary: whoever the identity provider adds to a group reads everything already in the folder.
+  - Group membership is the boundary of the group's folder: whoever the identity provider adds to a group reads everything already in it. A portal's folder is bounded by the portal instead: everyone who mounts through it reads what others left there, and a writable run can change it, whether or not they are in any group.
   - A `docker_volume` team drive lives on one Docker host; runs elsewhere see a different, empty folder.
 
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
