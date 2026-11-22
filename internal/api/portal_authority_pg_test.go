@@ -327,11 +327,30 @@ func auditRowText(ev types.AuditEvent, roles map[string]string) string {
 	return fmt.Sprintf("%s|%s|%s|%s|target=%s|run=%s|%s", ev.Action, ev.ActorType, ev.Actor, ev.Outcome, role(ev.Target), run, raw)
 }
 
+// unmatchedLines is the lines of a that no line of b matches, each line of b matching one line of a at most, so a
+// line a has twice and b once is listed once.
+func unmatchedLines(a, b []string) []string {
+	rest := slices.Clone(b)
+	var out []string
+	for _, l := range a {
+		if i := slices.Index(rest, l); i >= 0 {
+			rest = slices.Delete(rest, i, i+1)
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
 // The origin argument on the shared helpers changes nothing for SCIM: one SCIM suspension and one purge of a known
 // person write exactly these audit events and no others. Every event of the request is compared whole, with its
 // target and data; the ids are the fixture's own (named by role), the counts are bound to what the fixture holds
 // (one run, one workspace, no credentials, tokens or keys) and to the session cuts the database holds, and only
-// times are normalised. The fixture is the pre-origin behaviour written out; a run that disagrees prints both lists.
+// times are normalised. The fixture is the pre-origin behaviour written out; a run that disagrees prints both lists,
+// then the lines only one of them has. The kill's identity revocation is one of the events: the identity provider
+// writes it to the same recorder. The run output finish's row is not: it is written on its own goroutine, which reads
+// the run while the kill clears its sandbox ref, so whether this run, with no output row, gets a capture gap row
+// depends on which lands first, and that row is the output contract's, not the shared helpers'.
 func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	e := newSCIMEnv(t)
 	const sub, email, oid = "sub-baseline", "baseline.me@corp.example", "aaaaaaaa-0000-4000-8000-0000000000c1"
@@ -366,13 +385,17 @@ func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	roles := map[string]string{userID: "person", run.String(): "run", ws.ID.String(): "workspace"}
 	var got []string
 	for _, ev := range e.b.h.audit.snapshot() {
-		got = append(got, auditRowText(ev, roles))
+		if ev.Action != "run.output.finalize" {
+			got = append(got, auditRowText(ev, roles))
+		}
 	}
 	slices.Sort(got)
 	zero := `"assignments_deleted":0,"components_erased":0,"credentials_erased":0,"drives":[],"email_rows_kept":0,"granted_drives":[],"grants_deleted":0,` +
 		`"invitations_cleared":0,"invitations_deleted":0,"kind":"purge","live_left":0,"masks_fenced":0,"pools_emptied":0,"pools_narrowed":0,` +
 		`"runner_pools_deleted":0,"service_identities_cleared":0,"templates_erased":0,"workspaces_reassigned":1`
 	want := []string{
+		// The identity provider's row names the run's SPIFFE ID as its actor and carries no target or data.
+		"identity.revoke|system|spiffe://wardyn.local/agent-run/" + run.String() + "|success|target=|run=<run>|{}",
 		"person.deprovision|system|wardyn/scim|success|target=<person>|run=-|{" + zero + "}",
 		fmt.Sprintf(`person.deprovision|system|wardyn/scim|success|target=<person>|run=-|{"keys_deleted":0,"kind":"suspend","runs_killed":1,"sessions_cut":%d,"tokens_revoked":0}`, cuts),
 		`run.kill|system|wardyn/scim|success|target=<run>|run=<run>|{"reason":"scim_suspend"}`,
@@ -381,7 +404,10 @@ func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("SCIM audit events of one suspension and purge:\n got:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+		// The differing lines print last, so a report that keeps only the tail of the output still shows them.
+		t.Errorf("SCIM audit events of one suspension and purge:\n got:\n  %s\nwant:\n  %s\nonly in got:\n  %s\nonly in want:\n  %s",
+			strings.Join(got, "\n  "), strings.Join(want, "\n  "),
+			strings.Join(unmatchedLines(got, want), "\n  "), strings.Join(unmatchedLines(want, got), "\n  "))
 	}
 	// The origin the SCIM paths use, field by field: the actor, the kill reason, the deactivation action, the
 	// purge reason, and no portal behaviour.
