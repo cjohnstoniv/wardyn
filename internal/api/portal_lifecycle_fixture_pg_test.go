@@ -226,18 +226,6 @@ func (l *portalLife) seedWorkforceLeaver(t *testing.T, name string, due bool) (s
 	return row, run
 }
 
-// lifeEventually polls cond until it holds, failing after ten seconds.
-func lifeEventually(t *testing.T, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // freshBearer is the bearer of an exchange whose subject token was issued after everything the test did so far
 // (after any cutoff it wrote), as a person who signs in at the provider again would hold. It fails the test unless
 // the exchange answers 200.
