@@ -6,7 +6,7 @@
 // The exact lookup of a portal person by issuer and person ID, beside the ordinary search. The strings are
 // written out so a drift in the copy module fails here.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { HttpError } from "../../../lib/api/core";
@@ -122,5 +122,86 @@ describe("finding a portal person by issuer and person ID", () => {
     setField(await screen.findByRole("textbox", { name: "Search people" }), "sam");
     await vi.waitFor(() => expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ q: "sam" })));
     expect(lookupMock).not.toHaveBeenCalled();
+  });
+});
+
+// A lookup that is still waiting when the operator opens another row, or dismisses that row's drawer, must not
+// open its person over that choice, nor show its failure.
+describe("a lookup that finishes after the operator chose something else", () => {
+  const KIM: PersonSummary = { ...SAM, principal: "delegate:person:k1:sub-kim", email: "kim@example.com" };
+
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  // Starts a lookup for Sam that stays pending, with Kim in the table.
+  async function lookupSamPending() {
+    const pending = deferred<{ principal: string; state: string; display_email: string; portals_used: never[] }>();
+    lookupMock.mockReturnValue(pending.promise);
+    listMock.mockResolvedValue({ people: [KIM] });
+    getMock.mockImplementation((principal: string) => Promise.resolve([SAM, KIM].find((p) => p.principal === principal)));
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator securityOperator operatorResolved principal="admin@corp.example">
+          <PeopleScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    setField(await screen.findByRole("textbox", { name: "Issuer" }), ISSUER);
+    setField(screen.getByRole("textbox", { name: "Person ID" }), "sub-sam");
+    await user.click(screen.getByRole("button", { name: "Find exact" }));
+    await waitFor(() => expect(lookupMock).toHaveBeenCalled());
+    return { user, pending };
+  }
+  const samAnswer = { principal: SAM.principal, state: "active", display_email: "sam@example.com", portals_used: [] as never[] };
+
+  it("leaves the row opened meanwhile open", async () => {
+    const { user, pending } = await lookupSamPending();
+    await user.click(await screen.findByRole("button", { name: "kim@example.com" }));
+    const drawer = within(await screen.findByRole("dialog"));
+    expect(drawer.getByText("kim@example.com", { exact: false })).toBeInTheDocument();
+    await act(async () => {
+      pending.resolve(samAnswer);
+    });
+    expect(within(screen.getByRole("dialog")).getByText("kim@example.com", { exact: false })).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).queryByText("sam@example.com", { exact: false })).toBeNull();
+  });
+
+  it("keeps the drawer closed when it was dismissed meanwhile", async () => {
+    const { user, pending } = await lookupSamPending();
+    await user.click(await screen.findByRole("button", { name: "kim@example.com" }));
+    await screen.findByRole("dialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => {
+      pending.resolve(samAnswer);
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows no error when it fails after another row was opened", async () => {
+    const { user, pending } = await lookupSamPending();
+    await user.click(await screen.findByRole("button", { name: "kim@example.com" }));
+    await screen.findByRole("dialog");
+    await act(async () => {
+      pending.reject(refused(404, "person_not_found", "no such person"));
+    });
+    expect(screen.queryByRole("alert", { hidden: true })).toBeNull();
+    expect(within(screen.getByRole("dialog")).getByText("kim@example.com", { exact: false })).toBeInTheDocument();
+  });
+
+  it("still opens the person when nothing else was chosen", async () => {
+    const { pending } = await lookupSamPending();
+    await act(async () => {
+      pending.resolve(samAnswer);
+    });
+    expect(within(await screen.findByRole("dialog")).getByText("sam@example.com", { exact: false })).toBeInTheDocument();
   });
 });

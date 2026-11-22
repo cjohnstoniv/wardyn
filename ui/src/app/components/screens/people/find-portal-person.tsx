@@ -21,7 +21,9 @@ function notFoundSentence(e: unknown): string {
   return answeredSentence(e, P.FIND_FAILED) ?? P.FIND_FAILED;
 }
 
-export function FindPortalPerson({ onFound }: { onFound: (p: PersonSummary) => void }) {
+// intent is the screen's counter of what the operator last chose: every row open, every drawer dismissal and
+// every lookup bumps it. A lookup that finishes after a later choice has been overtaken and changes nothing.
+export function FindPortalPerson({ onFound, intent }: { onFound: (p: PersonSummary) => void; intent: React.MutableRefObject<number> }) {
   const [issuer, setIssuer] = React.useState("");
   const [personId, setPersonId] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -29,15 +31,17 @@ export function FindPortalPerson({ onFound }: { onFound: (p: PersonSummary) => v
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const mine = ++intent.current;
     setBusy(true);
     setError("");
     try {
       const found = await peopleApi.portalPerson(issuer.trim(), personId.trim());
       const row = await peopleApi.get(found.principal);
+      if (intent.current !== mine) return;
       if (row) onFound(row);
       else setError(P.FIND_NOT_LISTED);
     } catch (err) {
-      setError(notFoundSentence(err));
+      if (intent.current === mine) setError(notFoundSentence(err));
     } finally {
       setBusy(false);
     }

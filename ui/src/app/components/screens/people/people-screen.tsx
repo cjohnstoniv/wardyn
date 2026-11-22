@@ -241,6 +241,13 @@ export function PeopleScreen() {
   const { access, state, reload } = useAccess(operator);
   const [reloadKey, setReloadKey] = React.useState(0);
   const [selected, setSelected] = React.useState<PersonSummary | null>(null);
+  // What the operator last chose to look at. A lookup still in flight when they open a row, dismiss the drawer
+  // or look up someone else is no longer wanted, and must not open its person over that choice.
+  const intent = React.useRef(0);
+  const choose = (p: PersonSummary | null) => {
+    intent.current++;
+    setSelected(p);
+  };
   const [adding, setAdding] = React.useState(false);
   // A drawer action or an add re-reads the first page, and the open person on their own: after Load more
   // they are not on that page, and the drawer's counts and disabled buttons follow what the action did.
@@ -283,8 +290,8 @@ export function PeopleScreen() {
           {P.TABLE_TITLE}
         </h2>
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <FindPortalPerson onFound={setSelected} />
-          <PeopleTable onOpen={setSelected} reloadKey={reloadKey} />
+          <FindPortalPerson intent={intent} onFound={setSelected} />
+          <PeopleTable onOpen={choose} reloadKey={reloadKey} />
         </div>
       </section>
 
@@ -294,7 +301,7 @@ export function PeopleScreen() {
 
       <PersonDrawer
         person={selected}
-        onClose={() => setSelected(null)}
+        onClose={() => choose(null)}
         onChanged={refresh}
       />
       <AddPersonDialog open={adding} onOpenChange={setAdding} onAdded={refresh} />
