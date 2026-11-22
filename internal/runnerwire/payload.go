@@ -332,6 +332,11 @@ type MacVMCaps struct {
 	// this Mac, attaches them to its macOS VM, and deletes them (reclaim_drive). A runner without it is
 	// never sent a macOS VM run with one.
 	DiskDrives bool `json:"disk_drives,omitempty"`
+	// PriorSessions is how many sessions this runner process had completed with an organisation (AUTH_OK received)
+	// before the one these caps are sent on, counted from the process's start. 0 on a fresh session says the process
+	// is new: no earlier process's delete can still be running on this Mac. Absent from a runner that does not
+	// count, and never taken as evidence.
+	PriorSessions *int `json:"prior_sessions,omitempty"`
 	// Window says the runner serves mac_window: it opens an attended window onto a macOS VM run it holds.
 	// A runner without it (older) is never sent the call.
 	Window bool `json:"window,omitempty"`
