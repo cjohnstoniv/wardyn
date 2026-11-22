@@ -452,7 +452,9 @@ func newPortalVerifier(issuer, internal string, clock func() time.Time, pn *port
 		cause := portalFetchCause(err)
 		if cause != portalCauseUnreachable {
 			// The key set has already dropped the keys and their address; the discovery record goes too, before the
-			// failure is reported. A document or address that breaks a rule is never kept as the last good one.
+			// failure is reported. A document or address that breaks a rule is never kept as the last good one. Until
+			// the drop, the door still answers this rule failure as an outage with the rest of the retry interval:
+			// fail-closed by design, for the few instructions between the key set's unlock and the drop.
 			if v.beforeDrop != nil {
 				v.beforeDrop()
 			}
