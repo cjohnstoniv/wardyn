@@ -136,6 +136,7 @@ type issuerAttachRig struct {
 	run        types.AgentRun
 	via        types.DelegationVia
 	person     string
+	member     types.GovernanceMembership // the membership naming the person on the run's unit
 	reads      *runReadHook
 	grantHang  *atomic.Bool
 	runnerHang *atomic.Bool
@@ -147,6 +148,7 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 	e := newAuthorityEnv(t)
 	d := e.portal(t, e.bind(t), &e.plat.ID)
 	principal, raw := e.person(t, d, "person-1")
+	member := personMember(t, e, principal)
 	g, err := e.st.GetPortalGrantByRaw(context.Background(), raw, time.Now())
 	if err != nil {
 		t.Fatalf("read the seeded grant: %v", err)
@@ -156,7 +158,7 @@ func newIssuerAttachRig(t *testing.T) *issuerAttachRig {
 	st := issuerAttachStore{authorityUnits: &authorityUnits{touchCountingStore: &touchCountingStore{authzStore: ast}}, PortalGrantStore: e.st, pg: e.st,
 		reads: reads, grantHang: grantHang, runnerHang: runnerHang}
 	cfg := baseTestConfig(newHarness(t), st)
-	rig := &issuerAttachRig{env: e, runner: &holderTestRunner{}, person: principal,
+	rig := &issuerAttachRig{env: e, runner: &holderTestRunner{}, person: principal, member: member,
 		audit: &issuerAttachAudit{held: make(chan time.Time, 1), detached: make(chan time.Time, 4)},
 		via:   types.DelegationVia{Delegate: d.ID, Grant: g.ID}, reads: reads, grantHang: grantHang, runnerHang: runnerHang, ast: ast}
 	cfg.Audit, cfg.Runner, cfg.SessionRevocations = rig.audit, rig.runner, newAttachRevocations()
@@ -505,5 +507,66 @@ func TestAttachIssuerPortal_LocalRunnerReadHeld_PG(t *testing.T) {
 	}
 	if took > bound+400*time.Millisecond {
 		t.Fatalf("the open waited %v on the runner read, want within %v", took, bound+400*time.Millisecond)
+	}
+}
+
+// TestAttachIssuerPortal_ThawNeedsPersonMembership_PG: a ticket's thaw of the person's paused run re-checks that
+// they still hold a membership on the run's unit. With the row naming them the run is thawed and the terminal
+// opens. With that row removed, the team's group row left in place counts for nothing, since an issuer-portal
+// person's groups are stored empty: the resume is refused as unit_membership_gone and the runtime never thaws.
+func TestAttachIssuerPortal_ThawNeedsPersonMembership_PG(t *testing.T) {
+	for name, keep := range map[string]bool{"a membership naming the person": true, "only an unrelated group's": false} {
+		t.Run(name, func(t *testing.T) {
+			rig, dr := newDispatchAttachRig(t)
+			if !keep {
+				if _, err := rig.env.st.DeleteGovernanceMembership(context.Background(), rig.member.ID); err != nil {
+					t.Fatalf("remove the person's membership: %v", err)
+				}
+			}
+			st := rig.srv.cfg.Store.(issuerAttachStore)
+			now := time.Now().UTC()
+			rig.ast.mu.Lock()
+			run := rig.ast.runs[rig.run.ID]
+			run.PausedAt, run.PausedReason = &now, types.PauseIdle
+			rig.ast.runs[rig.run.ID] = run
+			rig.ast.mu.Unlock()
+			rig.srv.cfg.Store = pausingAttachStore{st}
+			if keep {
+				_ = rig.dial(t).CloseNow()
+				dr.mu.Lock()
+				defer dr.mu.Unlock()
+				if len(dr.thaws) != 1 {
+					t.Fatalf("%d runtime thaws under a matching membership, want 1", len(dr.thaws))
+				}
+				return
+			}
+			tok, err := mintAttachTicket(audit.WithDelegation(context.Background(), rig.via), rig.srv.cfg.Store, rig.run.ID, types.ActorHuman,
+				rig.person, oidc.RoleUser, oidc.Issue{At: time.Now()})
+			if err != nil {
+				t.Fatalf("mint a ticket: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(rig.ts.URL, "http")+"/api/v1/runs/"+rig.run.ID.String()+"/attach?ticket="+tok, nil)
+			if err == nil {
+				_ = c.CloseNow()
+				t.Fatal("the terminal opened with only an unrelated group's membership on the run's unit")
+			}
+			if resp == nil || resp.StatusCode == http.StatusSwitchingProtocols {
+				t.Fatalf("an owner with no matching membership: %v %v, want an HTTP refusal", resp, err)
+			}
+			denied := false
+			for _, ev := range rig.audit.snapshot() {
+				denied = denied || (ev.Action == "run.resume" && ev.Outcome == "denied" && strings.Contains(string(ev.Data), `"refusal":"`+reasonUnitMembershipGone+`"`))
+			}
+			if !denied {
+				t.Fatalf("no run.resume denied row naming %s", reasonUnitMembershipGone)
+			}
+			dr.mu.Lock()
+			defer dr.mu.Unlock()
+			if len(dr.thaws) != 0 || len(dr.attaches) != 0 {
+				t.Fatalf("%d runtime thaws and %d attaches with no matching membership, want 0, 0", len(dr.thaws), len(dr.attaches))
+			}
+		})
 	}
 }

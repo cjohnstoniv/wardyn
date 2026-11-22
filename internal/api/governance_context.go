@@ -670,8 +670,8 @@ func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request,
 // unit above it. The owner's own session re-resolves their memberships in full. Anyone else knows
 // the owner only by the sub and the user type stamped on the run, so the check passes while a
 // membership row on p's path could still match the owner: a user row naming their sub, a row for
-// their stamped type, an `all` row, or any group row (a restart or revive of a group-keyed owner's
-// run keeps today's reach). An email-keyed user row never counts here: the run does not record the
+// their stamped type, an `all` row, or, unless the owner is an issuer-portal person, any group row (a
+// restart or revive of a group-keyed owner's run keeps today's reach). An email-keyed user row never counts here: the run does not record the
 // owner's email, so such a row could only admit a guess. The refusal names the arm
 // taken (owner_session or row_can_match), which a revive audits.
 func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun, p *ResolvedUnit) (*ownerRefusal, error) {
@@ -719,14 +719,17 @@ func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun,
 }
 
 // membershipCanMatchOwner is whether row could match the run's owner, known only by the run row. A
-// user row matches only the stamped sub: an email row never admits the owner here.
+// user row matches only the stamped sub: an email row never admits the owner here. A group row never
+// matches an issuer-portal person: their groups are stored empty, so no group row holds them.
 func membershipCanMatchOwner(m types.GovernanceMembership, run types.AgentRun) bool {
 	switch m.SubjectType {
 	case types.CapabilitySubjectUser:
 		return m.Subject == types.CanonicalUserSubject(run.CreatedBy)
 	case types.CapabilitySubjectUserType:
 		return run.UserType != "" && m.Subject == run.UserType
-	default: // all, and a group the run does not record
+	case types.CapabilitySubjectGroup: // a group the run does not record
+		return !types.IsPortalPersonPrincipal(run.CreatedBy)
+	default: // all
 		return true
 	}
 }
