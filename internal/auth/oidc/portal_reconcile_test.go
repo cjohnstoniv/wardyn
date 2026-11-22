@@ -697,7 +697,9 @@ func TestPortalRefresh_RuleRefusalStandsThroughFailedRetry(t *testing.T) {
 	h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer })
 	timedOut.Store(true)
 	h.clock.Advance(portalKeyCooldown + time.Second)
-	h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+	if retry := h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch); retry.RetryAfter != 0 {
+		t.Fatalf("the retry's caller: Retry-After = %v under a rule refusal, want 0", retry.RetryAfter)
+	}
 	if got := lastReport(); got != portalCauseUnreachable {
 		t.Fatalf("last reported cause %q, want the retry's %q", got, portalCauseUnreachable)
 	}
@@ -906,6 +908,28 @@ func TestPortalRetryAfter_OutageSameAtDoorAndSuccessPoint(t *testing.T) {
 			}
 		})
 	}
+	t.Run("unknown kid key outage", func(t *testing.T) {
+		// The last refresh is more than a retry interval old, so only the key attempt keeps the verifier closed:
+		// the exchange whose own key fetch failed, the door and the held exchange all answer the rest of that
+		// interval.
+		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+		warmPortal(h)
+		h.clock.Advance(portalKeyCooldown + time.Second)
+		x := pauseAfterPrepare(t, h, h.token(h.accessClaims()))
+		h.idp.set(func(f *fakeIdP) { f.keyStatus = http.StatusInternalServerError })
+		if r := h.wantUnavailable(h.kidToken("k2", 1), portalCauseKeysUnreachable); r.RetryAfter != portalKeyCooldown {
+			t.Fatalf("the key fetch's own caller: Retry-After = %v, want %v", r.RetryAfter, portalKeyCooldown)
+		}
+		h.clock.Advance(5 * time.Second)
+		door := h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerDown)
+		held := x.release()
+		if held.Cause != portalCauseIssuerDown {
+			t.Fatalf("the held exchange got %+v, want 503 %q", held, portalCauseIssuerDown)
+		}
+		if door.RetryAfter != 25*time.Second || held.RetryAfter != door.RetryAfter {
+			t.Fatalf("Retry-After at the door %v, at the success point %v; want 25s at both", door.RetryAfter, held.RetryAfter)
+		}
+	})
 	t.Run("never loaded", func(t *testing.T) {
 		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
 		h.idp.set(func(f *fakeIdP) { f.discStatus = http.StatusInternalServerError })
@@ -927,7 +951,9 @@ func TestPortalRecheck_HeldExchangeUnderRuleRefusal(t *testing.T) {
 	r := holdExchange(t, h, h.token(h.accessClaims()), func() {
 		h.clock.Advance(time.Hour)
 		h.idp.set(func(f *fakeIdP) { f.docIssuer = h.reg.Issuer + "/other" })
-		h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch)
+		if own := h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerMismatch); own.RetryAfter != 0 {
+			t.Fatalf("the refresh's own caller: Retry-After = %v under a rule refusal, want 0", own.RetryAfter)
+		}
 	})
 	if r.Reason != PortalIssuerUnavailable || r.Cause != portalCauseIssuerMismatch || r.RetryAfter != 0 {
 		t.Fatalf("the held exchange got %+v, want 503 %q with no Retry-After", r, portalCauseIssuerMismatch)
