@@ -161,8 +161,9 @@ grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check d
 # the image has been checked and signed, and each must resolve to the signed digest.
 runtags "$sha" ""
 grep -qx 'first_tag=ghcr.io/cjohnstoniv/wardynd:sha-1111111' "$out" || fail "the tags step did not output the per-commit tag as first_tag: $(cat "$out")"
-awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out" | grep -qx 'ghcr.io/cjohnstoniv/wardynd:latest' || fail "later_tags does not hold :latest for main's tip"
-! awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out" | grep -q 'sha-1111111' || fail "later_tags repeats the per-commit tag"
+later="$(awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out")"
+grep -qx 'ghcr.io/cjohnstoniv/wardynd:latest' <<<"$later" || fail "later_tags does not hold :latest for main's tip"
+! grep -q 'sha-1111111' <<<"$later" || fail "later_tags repeats the per-commit tag"
 step_line() { grep -n "^      - name: $1\$" "$PI" | head -1 | cut -d: -f1 || true; }
 b_line="$(grep -n '^        id: build$' "$PI" | head -1 | cut -d: -f1 || true)"
 c_line="$(step_line 'Check the image reports its revision')"
