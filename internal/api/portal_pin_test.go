@@ -30,16 +30,6 @@ func (s *pinPortalStore) ListGovernanceUnits(context.Context) ([]types.Governanc
 	return s.units, nil
 }
 
-func (s *pinPortalStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
-	s.pmu.Lock()
-	defer s.pmu.Unlock()
-	d, ok := s.portals[id]
-	if !ok {
-		return types.Delegate{}, store.ErrNotFound
-	}
-	return d, nil
-}
-
 // portalPinFixture is a server whose bearer is a portal_grants grant of a person of an issuer portal pinned to
 // unit pin, authenticated by the real middleware. The tree is the Default unit, the pin with a child, and an
 // unrelated unit.
@@ -197,6 +187,21 @@ type unreadablePortalFake struct{ *pinPortalStore }
 
 func (unreadablePortalFake) GetDelegateByID(context.Context, uuid.UUID) (types.Delegate, error) {
 	return types.Delegate{}, errors.New("portal row unreadable")
+}
+
+// noPortalReader is a store with no portal row read at all: it carries only store.Store's methods, and
+// GetDelegateByID is not one of them.
+type noPortalReader struct{ store.Store }
+
+// A store with no portal row read refuses the pin's read 503 portal_unit_unavailable, never as if the portal
+// were unpinned.
+func TestPortalPin_StoreWithoutPortalReadRefused503(t *testing.T) {
+	f := newPinFixture(t)
+	f.srv.cfg.Store = noPortalReader{}
+	pin, refusal := f.srv.portalPinOf(audit.WithDelegation(context.Background(), f.via))
+	if refusal == nil || refusal.status != http.StatusServiceUnavailable || refusal.body.Reason != "portal_unit_unavailable" || pin.applies {
+		t.Fatalf("a store with no portal read = %+v (%+v), want 503 portal_unit_unavailable and no pin", pin, refusal)
+	}
 }
 
 // A store that cannot read the portal's row refuses a delegated request 503 portal_unit_unavailable, never as if
