@@ -53,7 +53,7 @@ func TestPortalPurge_TombstoneRefusesExchangeAndBlanksEmail_PG(t *testing.T) {
 	l.token(t, idPortal, idCred)
 	displayEmail := func() string {
 		var e string
-		if err := l.pool.QueryRow(context.Background(), `SELECT email FROM principal_identities WHERE principal = $1`, principal).Scan(&e); err != nil {
+		if err := l.pool.QueryRow(context.Background(), `SELECT display_email FROM principal_identities WHERE principal = $1`, principal).Scan(&e); err != nil {
 			t.Fatal(err)
 		}
 		return e
