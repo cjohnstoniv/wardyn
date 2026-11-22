@@ -431,17 +431,17 @@ func TestChangelogTagGuardFollowsVersionLines(t *testing.T) {
 		sections   string
 		want       string
 	}{
-		{"A release/0.10 with an 0.11 candidate", "0.10.4", nil, "v0.10.3 v0.10.4 v0.11.0-rc.1", "v0.10.3 v0.10.4", "0.10.3 0.10.4", ""},
-		{"B main with an unported patch", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2", "0.10.2", ""},
-		{"C the patch merged, its section lost", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2 v0.10.3", "0.10.2", "v0.10.3"},
-		{"D a closed line's non-ancestor tag with its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.9.9 0.10.4 0.11.0-rc.1", ""},
-		{"D2 the same without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.9.9"},
-		{"E a maintained line's unported tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", ""},
-		{"E2 the same tag merged without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.10.5 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
-		{"F 0.10 left off the list is loud", "0.11.0-rc.1", nil, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
-		{"G an own-line candidate below the watermark, not an ancestor, without its section", "0.10.2", nil, "v0.10.0-rc.26 v0.10.2", "v0.10.2", "0.10.2", "v0.10.0-rc.26"},
-		{"H the release commit before its tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4", "v0.10.4", "0.10.4", ""},
-		{"I a final outranks its candidates", "0.10.2", nil, "v0.10.2-rc.1 v0.10.2", "v0.10.2-rc.1", "0.10.2-rc.1", ""},
+		{"release/0.10 with an 0.11 candidate", "0.10.4", nil, "v0.10.3 v0.10.4 v0.11.0-rc.1", "v0.10.3 v0.10.4", "0.10.3 0.10.4", ""},
+		{"main with an unported patch", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2", "0.10.2", ""},
+		{"the patch merged, its section lost", "0.10.2", nil, "v0.10.2 v0.10.3", "v0.10.2 v0.10.3", "0.10.2", "v0.10.3"},
+		{"a closed line's non-ancestor tag with its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.9.9 0.10.4 0.11.0-rc.1", ""},
+		{"the same without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.9.9 v0.10.4 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.9.9"},
+		{"a maintained line's unported tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", ""},
+		{"the same tag merged without its section", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.10.5 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
+		{"0.10 left off the list is loud", "0.11.0-rc.1", nil, "v0.10.4 v0.10.5 v0.11.0-rc.1", "v0.10.4 v0.11.0-rc.1", "0.10.4 0.11.0-rc.1", "v0.10.5"},
+		{"an own-line candidate below the watermark, not an ancestor, without its section", "0.10.2", nil, "v0.10.0-rc.26 v0.10.2", "v0.10.2", "0.10.2", "v0.10.0-rc.26"},
+		{"the release commit before its tag", "0.11.0-rc.1", []string{"0.10"}, "v0.10.4", "v0.10.4", "0.10.4", ""},
+		{"a final outranks its candidates", "0.10.2", nil, "v0.10.2-rc.1 v0.10.2", "v0.10.2-rc.1", "0.10.2-rc.1", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
