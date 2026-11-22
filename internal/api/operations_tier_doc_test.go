@@ -260,6 +260,7 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"DELETE /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
+	{"POST /api/v1/admin/drives/legacy-docker/release", "`POST /admin/drives/legacy-docker/release`"},
 	{"GET /api/v1/admin/runs/proxy-window", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/runs/restart", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},

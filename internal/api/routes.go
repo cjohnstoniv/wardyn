@@ -926,6 +926,9 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// case — see reconcile.go) and deliberately not a ticker; see
 	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
+	// Releases the person's Docker volumes that existed at the 0.10.2 upgrade (legacy_docker_release.go). SUPER: it
+	// answers for every person's drives, and an administrator states by calling it that every older server is stopped.
+	operatorOnly.Post("/admin/drives/legacy-docker/release", s.handleReleaseLegacyDockerDrives)
 	// Standing runs (run_revive.go). SUPER: a restart replaces the proxy of
 	// runs the caller does not own, under each owner's own ceiling, and the
 	// listing reads the whole fleet.

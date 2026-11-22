@@ -70,6 +70,9 @@ type portalActivationMonitor struct {
 	seen    map[portalAlarmKey]bool
 	unsent  bool      // the activation's audit rows were owed and not yet settled at the last attempt
 	retryAt time.Time // no new send of the owed rows before this
+	// The legacy Docker drives' release records (legacy_docker_release.go) are owed on their own stamp.
+	releaseUnsent  bool
+	releaseRetryAt time.Time
 }
 
 // mayRetry reports whether the owed rows may be sent at now.
@@ -90,6 +93,30 @@ func (m *portalActivationMonitor) owed() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.unsent
+}
+
+func (m *portalActivationMonitor) releaseOwed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.releaseUnsent
+}
+
+func (m *portalActivationMonitor) setReleaseOwed(v bool) {
+	m.mu.Lock()
+	m.releaseUnsent = v
+	m.mu.Unlock()
+}
+
+func (m *portalActivationMonitor) mayRetryRelease(now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !now.Before(m.releaseRetryAt)
+}
+
+func (m *portalActivationMonitor) retryReleaseAfter(at time.Time) {
+	m.mu.Lock()
+	m.releaseRetryAt = at
+	m.mu.Unlock()
 }
 
 func (m *portalActivationMonitor) setOwed(v bool) {
@@ -169,8 +196,12 @@ func (m *portalActivationMonitor) newSightings(now time.Time, sessions []types.C
 func (s *Server) RunPortalActivationMonitor(ctx context.Context) {
 	for {
 		activated, _ := s.portalMonitorStep(ctx, s.cfg.Now().UTC())
+		// Outside the activation: a release of the legacy Docker drives owes its audit row whether or not portals are on.
+		if ls, ok := s.cfg.Store.(store.LegacyDockerReleaseStore); ok {
+			s.deliverLegacyDockerReleases(ctx, ls, false)
+		}
 		wait := portalSampleEvery
-		if activated && !s.portalMonitor().owed() {
+		if activated && !s.portalMonitor().owed() && !s.portalMonitor().releaseOwed() {
 			wait = portalAlarmEvery
 		}
 		select {

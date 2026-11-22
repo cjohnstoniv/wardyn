@@ -456,9 +456,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
 	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
-	"POST /api/v1/admin/sandboxes/sweep":  {class: classAdmin},
-	"GET /api/v1/admin/runs/proxy-window": {class: classAdmin},
-	"POST /api/v1/admin/runs/restart":     {class: classAdmin},
+	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	// Releasing the person's Docker volumes held since the 0.10.2 upgrade: SUPER, it answers for every person's
+	// drives and states that every older server is stopped.
+	"POST /api/v1/admin/drives/legacy-docker/release": {class: classAdmin},
+	"GET /api/v1/admin/runs/proxy-window":             {class: classAdmin},
+	"POST /api/v1/admin/runs/restart":                 {class: classAdmin},
 	// Re-opening a person's identity row to another sign-in principal (the Entra
 	// app re-registration remedy): it decides who a sign-in becomes, the same
 	// reach the role mappings above are SUPER for.
