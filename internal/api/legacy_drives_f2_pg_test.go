@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -382,9 +384,10 @@ func (f *failingMacRelease) ReleaseLegacyMacDrives(ctx context.Context, runnerID
 // Test 15c. A failed marker write leaves the hold, and the write is tried again while the session lives; when the
 // session ends first (the link drops), the hold stays. And the old-writer case: a drive a 0.10.1 server was
 // deleting (S NULL, N even, the mark cleared on an ambiguous remove) is held when 0299 runs; the Mac's old process
-// is still the one connected (PriorSessions 1) and its reclaim completes after the link drops; the drive stays held
-// and every attach is refused throughout, until the new process connects (PriorSessions 0), and only then is the
-// hold lifted, with the delete columns exactly as they were.
+// is still the one connected (PriorSessions 1) and its reclaim is running. A deterministic fake Mac (oldWriterMac)
+// answers reclaim_drive: in use while the old delete runs (a concurrent delete is refused and the drive kept), no call
+// reaches it while the link is down and the old delete completes, and after the new process's evidence (PriorSessions
+// 0) the hold lifts with the delete columns unchanged and the image is found already absent, never reused.
 func TestLegacyMacDrives_FailedWriteAndOldWriterStayHeld_PG(t *testing.T) {
 	ctx := context.Background()
 	saved := readySweepRetries
@@ -438,27 +441,120 @@ func TestLegacyMacDrives_FailedWriteAndOldWriterStayHeld_PG(t *testing.T) {
 			}
 			return s
 		}
-		before := deleteColumns()
+		rows := func() int { return e.count(`SELECT count(*) FROM user_drives WHERE id = $1`, d.ID) }
+		owner := types.CanonicalUserSubject(e.personP)
+		ownerDelete := func() memberDriveDeletion {
+			tomb, started, err := e.pg.BeginMemberDriveDelete(ctx, owner, d.ID)
+			if err != nil {
+				t.Fatalf("begin the owner's delete: %v", err)
+			}
+			return e.srv.deleteMemberDrive(ctx, e.pg, tomb, started, memberDriveByOwner)
+		}
+		// The Mac still runs the 0.10.1 server's delete of this disk when the old process's link comes up.
+		fake := &oldWriterMac{capsTransport: capsTransport{online: true}, image: imageDeleting}
+		fake.link(t, e.srv, mac, true)
 
-		// The old process (it has served a session before) is the one connected: its READY is no evidence. Its
-		// link then drops and its 0.10.1 reclaim completes with no daemon watching; that changes nothing here.
+		// A concurrent use: the owner's delete reaches the Mac while its old delete is in flight, and is refused
+		// as in use; the drive is kept, still held, and the image is not touched.
 		wantHeldRefusal(t, "the old process connected", d, e.attach(e.srv, e.personP, d))
 		e.srv.releaseLegacyMacDrives(ctx, mac, freshMac(intp(1)), sameSessionAlways)
-		wantHeldRefusal(t, "after the old process's READY", d, e.attach(e.srv, e.personP, d))
+		if res := ownerDelete(); res.reason != reasonMemberDriveInUse {
+			t.Errorf("a delete while the old delete was in flight = %+v, want refused in use", res)
+		}
+		if got := fake.log; len(got) != 1 || got[0] != "reclaim: in use" || fake.image != imageDeleting {
+			t.Errorf("the Mac's log = %v image %s, want one refused reclaim and the image still deleting", got, fake.image)
+		}
+		if rows() != 1 || !e.held(d) {
+			t.Fatalf("after the refused delete: rows %d held %v, want the drive kept and held", rows(), e.held(d))
+		}
+
+		// The link drops. The old reclaim completes with no daemon watching, and the sweep has nothing to
+		// reach: no call arrives, and the drive stays held and refused while the Mac is away.
+		fake.link(t, e.srv, mac, false)
+		fake.finishOldDelete()
+		if err := e.srv.finishMacDiskDeletes(ctx); err != nil {
+			t.Fatal(err)
+		}
 		wantHeldRefusal(t, "after the old reclaim completed with the link down", d, e.attach(e.srv, e.personP, d))
-		if !e.held(d) {
-			t.Fatal("the drive was released before the new process connected")
+		if len(fake.log) != 1 || !e.held(d) {
+			t.Fatalf("with the link down: Mac log %v held %v, want no new call and the drive held", fake.log, e.held(d))
 		}
 
 		// The Mac's process is replaced: the new one has no earlier session, so no delete of an earlier daemon
-		// can still be running there.
+		// can still be running there. The hold lifts, and the old image is absent: a delete finds nothing to
+		// remove and the row goes. The Mac was never asked to use or recreate the disk.
+		fake.link(t, e.srv, mac, true)
+		beforeRelease := deleteColumns()
 		e.srv.releaseLegacyMacDrives(ctx, mac, freshMac(intp(0)), sameSessionAlways)
 		if e.held(d) {
 			t.Error("the new process's evidence did not release the drive")
 		}
 		wantNotHeld(t, "after the new process connected", d, e.attach(e.srv, e.personP, d))
-		if after := deleteColumns(); after != before {
-			t.Errorf("delete columns changed from %s to %s; the release must write the mark and nothing else", before, after)
+		if after := deleteColumns(); after != beforeRelease {
+			t.Errorf("delete columns changed from %s to %s; the release must write the mark and nothing else", beforeRelease, after)
+		}
+		res := ownerDelete()
+		if res.reason != "" || res.outcome != string(runner.DriveReclaimAlreadyAbsent) {
+			t.Errorf("a delete after the evidence = %+v, want the image already absent", res)
+		}
+		if want := []string{"reclaim: in use", "reclaim: already absent"}; len(fake.log) != 2 || fake.log[1] != want[1] || fake.image != imageGone {
+			t.Errorf("the Mac's log = %v image %s, want %v and the image gone", fake.log, fake.image, want)
+		}
+		if rows() != 0 {
+			t.Error("the drive row is still there after its image was found absent")
 		}
 	})
+}
+
+const (
+	imageDeleting = "deleting" // an older server's delete is still running on the Mac
+	imageGone     = "gone"
+)
+
+// oldWriterMac is a deterministic Mac that keeps one disk image: reclaim_drive answers in use while an older
+// server's delete of it is running and already_absent once it has finished. It records every call that reaches it.
+type oldWriterMac struct {
+	capsTransport
+	image string
+	log   []string
+}
+
+func (m *oldWriterMac) Call(ctx context.Context, method string, in, out any, opts ...runnerwire.CallOption) error {
+	if method != runnerwire.MethodReclaimDrive {
+		return m.capsTransport.Call(ctx, method, in, out, opts...)
+	}
+	res := out.(*runnerwire.ReclaimDriveResult)
+	switch m.image {
+	case imageDeleting:
+		m.log = append(m.log, "reclaim: in use")
+		res.InUse = true
+	default:
+		m.log = append(m.log, "reclaim: already absent")
+		res.Outcome = runner.DriveReclaimAlreadyAbsent
+	}
+	return nil
+}
+
+func (m *oldWriterMac) finishOldDelete() { m.image = imageGone }
+
+// link puts this Mac's session in the server's table (a new process connecting) or takes it out (the link dropped).
+func (m *oldWriterMac) link(t *testing.T, srv *Server, id uuid.UUID, up bool) {
+	t.Helper()
+	srv.cfg.RunnerOnline = func(r uuid.UUID) bool { return up && r == id }
+	srv.runnerStreams.subsMu.Lock()
+	defer srv.runnerStreams.subsMu.Unlock()
+	if !up {
+		delete(srv.runnerStreams.subs, id)
+		return
+	}
+	sub := remote.New(id.String(), m, remote.Options{})
+	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{DiskDrives: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+	if srv.runnerStreams.subs == nil {
+		srv.runnerStreams.subs = map[uuid.UUID]runnerEndpoint{}
+	}
+	srv.runnerStreams.subs[id] = runnerEndpoint{sub: sub, link: &remote.Link{}}
 }
