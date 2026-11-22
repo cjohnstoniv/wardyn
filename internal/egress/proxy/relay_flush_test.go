@@ -130,6 +130,7 @@ func TestLLMRoute_StreamedAnswerReachesTheAgentPerEvent(t *testing.T) {
 	p, _ := newLocalRouteProxy(t, "http://wardynd.test:8080", "RUNTOK", upstreamAddr(up), anthropicInjector(), testInsecureTLSConfig)
 	front := httptest.NewServer(p)
 	defer front.Close()
+	defer release() // runs before front.Close, which waits on the held request
 
 	start := time.Now()
 	resp := firstEvent(t, start, func() (*http.Response, error) {
@@ -149,6 +150,7 @@ func TestMITMLLM_StreamedAnswerReachesTheAgentPerEvent(t *testing.T) {
 	p, _, caPEM := mitmProxy(t, "alert", up)
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
+	defer release()
 
 	tlsConn := agentMITMConn(t, proxySrv.URL, caPEM)
 	defer func() { _ = tlsConn.Close() }()
