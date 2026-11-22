@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -278,5 +279,63 @@ func TestMemberDriveErasureKeepsDrivesWhileARunStarts(t *testing.T) {
 	}
 	if len(st.owned(aliceSub)) != 0 || len(rn.calls) != 1 {
 		t.Errorf("after the retry alice owns %d drives, substrate calls = %d; want none left after one reclaim", len(st.owned(aliceSub)), len(rn.calls))
+	}
+}
+
+// TestMemberDriveErasureOutcomeSentences: what the erasure's error says for each way a drive's delete can end
+// without finishing, and what each leaves behind. A delete that was issued and whose end the substrate did not
+// confirm (no outcome, an outcome this server does not know, a bare error, or a refusal that does not say nothing
+// changed) is held and says so, never that it was refused or failed; a refusal typed as untouched names the drive and
+// carries the substrate's own error; a refusal before any call (this server cannot delete) says the drive could not be
+// deleted and leaves it unclaimed.
+func TestMemberDriveErasureOutcomeSentences(t *testing.T) {
+	const notConfirmed = `member drive "Notes" is held: Wardyn could not confirm that deleting its storage finished`
+	for name, tc := range map[string]struct {
+		rn        runner.Runner
+		want      string // the exact sentence, which the erasure error must contain
+		notWanted string
+		held      bool // the drive stays, tombstoned at the issued count
+		calls     int  // substrate reclaim calls
+	}{
+		"an answer with no outcome": {
+			rn: &memberDriveRunner{}, want: notConfirmed, notWanted: "was kept", held: true, calls: 1},
+		"an outcome this server does not know": {
+			rn: &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: "partly"}}, want: notConfirmed, notWanted: "was kept", held: true, calls: 1},
+		"an error that says nothing about the storage": {
+			rn: &memberDriveRunner{reclaimRunner: reclaimRunner{err: errors.New("the substrate went away")}}, want: notConfirmed, notWanted: "was kept", held: true, calls: 1},
+		"a refusal that does not say nothing changed": {
+			rn: &memberDriveRunner{reclaimRunner: reclaimRunner{err: runner.ErrDriveNotReclaimable}}, want: notConfirmed, notWanted: "was kept", held: true, calls: 1},
+		"a refusal typed as untouched": {
+			rn:        &memberDriveRunner{reclaimRunner: reclaimRunner{err: runner.ErrDriveInUse}},
+			want:      `storage deletion was refused for drive "Notes": ` + runner.ErrDriveInUse.Error(),
+			notWanted: "could not confirm", calls: 1},
+		"a server that cannot delete": {
+			rn:        &memberDriveRunner{lifecycleErr: runner.ErrDriveLifecycleUnavailable},
+			want:      `member drive "Notes" could not be deleted: this server cannot delete its storage`,
+			notWanted: "could not confirm"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := newMemberDriveStore()
+			d := seedMemberDrive(st, aliceSub, "Notes")
+			srv, rec := erasureDriveServer(st, tc.rn)
+			if code, body := eraseMemberDrivesAs(srv, aliceSub); code != http.StatusInternalServerError {
+				t.Fatalf("erasure = %d %s, want the incomplete 500", code, body)
+			}
+			_, data := erasureRowOf(t, rec)
+			msg := fmt.Sprint(data["error"])
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("person.erasure error = %q, want it to contain %q", msg, tc.want)
+			}
+			if strings.Contains(msg, tc.notWanted) {
+				t.Errorf("person.erasure error = %q, must not contain %q", msg, tc.notWanted)
+			}
+			got, ok := st.drives[d.ID]
+			if !ok || got.Deleting() != tc.held {
+				t.Errorf("drive kept = %v, held (deleting) = %v, want kept and held = %v", ok, ok && got.Deleting(), tc.held)
+			}
+			if rn := tc.rn.(*memberDriveRunner); len(rn.calls) != tc.calls {
+				t.Errorf("substrate reclaim calls = %d, want %d", len(rn.calls), tc.calls)
+			}
+		})
 	}
 }
