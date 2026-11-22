@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -210,7 +211,7 @@ func TestServiceGrant_RotateWhileMintPending_PG(t *testing.T) {
 		t.Fatalf("row ids = %v, want one per request (2)", got)
 	}
 	oldRows, newRows := f.rowsByID(got[0]), f.rowsByID(got[1])
-	if len(oldRows) != 1 || !strings.Contains(string(oldRows[0].Data), `"superseded_by":"revision"`) ||
+	if len(oldRows) != 1 || svcRowFields(t, oldRows[0])["superseded_by"] != "revision" ||
 		len(newRows) != 1 || strings.Contains(string(newRows[0].Data), "superseded") {
 		t.Fatalf("mint rows = %v and %v; want one each, the first superseded by the revision", oldRows, newRows)
 	}
@@ -426,14 +427,12 @@ func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	if len(f.mintRows()) != 1 || first.Outcome != "success" || f.idp.count() != 1 {
 		t.Fatalf("after one success: %d rows, %d requests", len(f.mintRows()), f.idp.count())
 	}
-	data := string(first.Data)
-	for _, want := range []string{`"client_id":"svc-client"`, `"expires_at"`, `"trigger":"refresh"`} {
-		if !strings.Contains(data, want) {
-			t.Errorf("success row %s lacks %s", data, want)
-		}
+	data := svcRowFields(t, first)
+	if data["client_id"] != "svc-client" || data["trigger"] != "refresh" || data["expires_at"] == nil {
+		t.Errorf("success row %s lacks client_id svc-client, trigger refresh or expires_at", first.Data)
 	}
-	if strings.Contains(data, "previous_valid_until") {
-		t.Errorf("a success row carries previous_valid_until: %s", data)
+	if _, ok := data["previous_valid_until"]; ok {
+		t.Errorf("a success row carries previous_valid_until: %s", first.Data)
 	}
 	f.idp.mu.Lock()
 	f.idp.respond = func(int, svcReq) svcAnswer {
@@ -451,12 +450,12 @@ func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	if n := len(f.mintRows()); n != 3 || f.idp.count() != 3 {
 		t.Fatalf("rows = %d, requests = %d, want one row per request sent (3)", n, f.idp.count())
 	}
-	if d := string(second.Data); second.Outcome != "failure" || !strings.Contains(d, `"reason":"invalid_scope"`) || !strings.Contains(d, `"oauth_error":"invalid_scope"`) ||
-		!strings.Contains(d, `"http_status":400`) || !strings.Contains(d, `"client_id":"svc-client"`) || !strings.Contains(d, "previous_valid_until") {
-		t.Errorf("failure row with a live earlier token = %s", d)
+	if d := svcRowFields(t, second); second.Outcome != "failure" || d["reason"] != "invalid_scope" || d["oauth_error"] != "invalid_scope" ||
+		d["http_status"] != float64(400) || d["client_id"] != "svc-client" || d["previous_valid_until"] == nil {
+		t.Errorf("failure row with a live earlier token = %s", second.Data)
 	}
-	if d := string(third.Data); strings.Contains(d, "previous_valid_until") {
-		t.Errorf("a failure row after the token expired names previous_valid_until: %s", d)
+	if _, ok := svcRowFields(t, third)["previous_valid_until"]; ok {
+		t.Errorf("a failure row after the token expired names previous_valid_until: %s", third.Data)
 	}
 	f.idp.mu.Lock()
 	f.idp.respond = func(int, svcReq) svcAnswer { return svcAnswer{Status: 400, Body: `{"error":"made_up_code_xyz"}`} }
@@ -475,7 +474,18 @@ func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 			t.Errorf("an audit row carries %q", leak)
 		}
 	}
-	if last := string(fourth.Data); !strings.Contains(last, `"oauth_error":"other"`) {
-		t.Errorf("an unrecognised error code was not recorded as other: %s", last)
+	if last := svcRowFields(t, fourth); last["oauth_error"] != "other" || last["reason"] != svcReasonRefused {
+		t.Errorf("an unrecognised error code was not recorded as other, refused: %s", fourth.Data)
 	}
+}
+
+// svcRowFields parses an audit row's data: Postgres hands jsonb back in its own spacing, so a row is compared by
+// field, not by its text.
+func svcRowFields(t *testing.T, e types.AuditEvent) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(e.Data, &m); err != nil {
+		t.Fatalf("row data %s: %v", e.Data, err)
+	}
+	return m
 }

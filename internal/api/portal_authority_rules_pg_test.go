@@ -271,6 +271,7 @@ func TestPortalSubjectRuling_OldHeldUnitAdminRefusedAtApproval_PG(t *testing.T) 
 	payload, _ := json.Marshal(p)
 	ch, _, err := e.pg.ProposeGovernanceChange(ctx, types.GovernanceChange{
 		TargetKind: govKindUnitAdmin, Op: "create", TargetKey: membershipKey(p.UnitID, p.SubjectType, p.Subject), Payload: payload,
+		Diff:     renderGovernanceDiff(base, nil, nil, nil), // governance_changes.diff is NOT NULL (migration 0126)
 		BaseHash: computeETag(base), DeploymentHash: computeETag(e.cfg.DefaultPolicy), ProposedBy: "sub-legacy-proposer",
 	}, time.Hour)
 	if err != nil {

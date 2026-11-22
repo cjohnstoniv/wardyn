@@ -249,9 +249,6 @@ func (f *svcPG) queryRows(q string, arg any) []types.AuditEvent {
 	return out
 }
 
-// sinkRows are this server's sink copies of mint rows.
-func (f *svcPG) sinkRows() []types.AuditEvent { return f.sink.mintCopies() }
-
 // awaitRows waits until each id has exactly one row in audit_events.
 func (f *svcPG) awaitRows(t *testing.T, ids ...uuid.UUID) {
 	t.Helper()
@@ -282,9 +279,6 @@ func (f *svcPG) sinkSettled(t *testing.T) {
 	t.Helper()
 	svcSinkSettled(t, f.srv, f.sink)
 }
-
-// drainSink is svcFix.drainSink for this server.
-func (f *svcPG) drainSink(ctx context.Context) error { return svcDrainSink(ctx, f.srv, f.sink) }
 
 // holdAuditChain holds the audit chain lock on a pool of its own until release.
 func (f *svcPG) holdAuditChain() (release func()) {
