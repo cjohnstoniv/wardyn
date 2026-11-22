@@ -5,8 +5,9 @@
 
 // The portals a portal person used, in their drawer. The real people client runs; only the HTTP call is
 // answered by principal, so the request URL is part of what is checked.
+import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { PersonSummary } from "../../../lib/types";
@@ -32,6 +33,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PeopleScreen } from "./people-screen";
+import { PersonDrawer } from "./person-drawer";
 
 function person(over: Partial<PersonSummary>): PersonSummary {
   return {
@@ -116,6 +118,58 @@ describe("the portals a portal person used", () => {
     await drawer.findByText("Portal A");
     expect(portalRequests()).toEqual([`/people/${encodeURIComponent(SAM.principal)}/portals`]);
     expect(drawer.queryByText("Portal C")).toBeNull();
+  });
+
+  // Holds one person's portals read until released; every other request is answered as in beforeEach.
+  function holdPortals(principal: string) {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const answer = wfetchMock.getMockImplementation()!;
+    wfetchMock.mockImplementation((path: string) => (path === `/people/${encodeURIComponent(principal)}/portals` ? held.then(() => answer(path)) : answer(path)));
+    return release;
+  }
+
+  it("shows no 'no portal' line while the read is pending, then the answer", async () => {
+    const release = holdPortals(SAM.principal);
+    const drawer = await open("sam@example.com");
+    await waitFor(() => expect(portalRequests()).toHaveLength(1));
+    expect(drawer.queryByText("No portal used yet")).toBeNull();
+    expect(drawer.queryByText("Portal A")).toBeNull();
+    release();
+    expect(await drawer.findByText("Portal A")).toBeInTheDocument();
+  });
+
+  it("shows neither an empty line nor the last person's list, in any committed render, for the next person's pending read", async () => {
+    // What the page shows after every commit, read before the effects that start the next read have run.
+    const commits: string[] = [];
+    function Probe() {
+      React.useLayoutEffect(() => {
+        commits.push(document.body.textContent ?? "");
+      });
+      return null;
+    }
+    const tree = (person: PersonSummary) => (
+      <MemoryRouter>
+        <OperatorProvider operator securityOperator operatorResolved principal="admin@corp.example">
+          <PersonDrawer person={person} onClose={() => {}} onChanged={() => {}} />
+          <Probe />
+        </OperatorProvider>
+      </MemoryRouter>
+    );
+    const { rerender } = render(tree(SAM));
+    expect(await within(await screen.findByRole("dialog")).findByText("Portal A")).toBeInTheDocument();
+    const release = holdPortals(KIM.principal);
+    const before = commits.length;
+    rerender(tree(KIM));
+    const drawer = within(await screen.findByRole("dialog"));
+    await waitFor(() => expect(portalRequests()).toHaveLength(2));
+    expect(commits.length).toBeGreaterThan(before);
+    commits.slice(before).forEach((text) => {
+      expect(text).not.toContain("No portal used yet");
+      expect(text).not.toContain("Portal A");
+    });
+    release();
+    expect(await drawer.findByText("Portal C")).toBeInTheDocument();
   });
 
   it("makes no portals request and shows no portals section for a workforce person", async () => {

@@ -73,9 +73,15 @@ export function PersonDrawer({
   // Only a portal person has portals. The read is for this one person, so another person on the same issuer
   // never lists here.
   const portalPrincipal = person?.issuer ? principal : undefined;
-  const [portals, setPortals] = React.useState<PortalUsed[]>([]);
-  const [portalState, setPortalState] = React.useState<"loading" | "error" | "ready">("loading");
-  const [portalError, setPortalError] = React.useState<unknown>(null);
+  // The answer carries the person it is for: until this person's read answers, nothing of an earlier person's
+  // answer (or an empty list) is shown, not even for the render before the effect starts the read.
+  const [portalRead, setPortalRead] = React.useState<
+    { for: string; failed: false; portals: PortalUsed[] } | { for: string; failed: true; error: unknown } | null
+  >(null);
+  const thisPortalRead = portalRead?.for === portalPrincipal ? portalRead : null;
+  const portalState = !thisPortalRead ? "loading" : thisPortalRead.failed ? "error" : "ready";
+  const portals = thisPortalRead && !thisPortalRead.failed ? thisPortalRead.portals : [];
+  const portalError = thisPortalRead?.failed ? thisPortalRead.error : null;
   const [portalAttempt, setPortalAttempt] = React.useState(0);
   const { showSpinner } = useDeferredBusy(tokenState === "loading");
 
@@ -104,21 +110,18 @@ export function PersonDrawer({
   }, [principal, attempt]);
 
   React.useEffect(() => {
-    setPortals([]);
+    setPortalRead(null);
     if (!portalPrincipal) return;
     let live = true;
-    setPortalState("loading");
     peopleApi
       .portals(portalPrincipal)
       .then((v) => {
         if (!live) return;
-        setPortals(v.portals_used);
-        setPortalState("ready");
+        setPortalRead({ for: portalPrincipal, failed: false, portals: v.portals_used });
       })
       .catch((e: unknown) => {
         if (!live) return;
-        setPortalError(e);
-        setPortalState("error");
+        setPortalRead({ for: portalPrincipal, failed: true, error: e });
       });
     return () => {
       live = false;
