@@ -803,6 +803,31 @@ commands are the ones in "Back them up" and "Restore them", and in
   its action as `refused`; at most 32 such rows an hour are written per runner, whichever replicas take its events
   and across a restart, before one `suppressed` row stands for the rest.
 
+### A service grant's token request: timing, recording and limits
+
+A model provider's service grant asks its identity provider for a token. These are the bounds an operator can rely on, and what each one leaves out. The bounds come from the design and the code; they are not measured times.
+
+- **Timing.**
+  - Each attempt, its one retry included, is limited to 25 seconds, and runs apart from the caller, which leaves at its own deadline. One try's reads, the secret's lock and the token request are limited to 10 seconds; the publication, the re-reads after a failure and the status write get 5 seconds each.
+  - The background refresher passes once a minute, 8 attempts at a time. A rotation or a removal reaches a server within about 90 seconds: up to 60 seconds to the next pass, 5 seconds of reads and one 25-second attempt. Each further 8 due rows that are slow at the same time add 25 seconds, and so does a pass that runs past 60 seconds.
+  - A failed request shows when its attempt returns, at most 25 seconds after it began.
+- **Recording.**
+  - The `model_provider.service_grant.mint` success row commits with the publication of the token. It means the token was issued and released to that server's cache, never that anything received it.
+  - A publication that does not commit is settled afterwards, or written to the audit spool when the database is down. The database therefore holds every mint row except one whose publication and settle both failed.
+  - A row that failed both ways is logged under `AUDIT WRITE FAILED:` with its `event_id`, a `disposition`, `commit_unknown` and `spool_append_failed`. The disposition is `lost` only when no spool is set and both failures were definite. It is `unconfirmed` when a commit's answer was lost, or the spool's append failed, because that line may still be on disk. A failed append logs `AUDIT FALLBACK SPOOL FAILED (EVENT LOST)`, the line the spool alert matches, even when a commit's answer was lost too.
+- **Sink copies.**
+  - Each server sends a copy of a mint row to the audit sinks after the row is recorded, from a queue of 64, in queue order and not commit order. Delivery is best effort.
+  - A full queue or a stop drops copies. The server logs the ids of what it dropped and counts each once. The one copy being sent at a stop may still reach the sink, and the log says it is unconfirmed.
+  - A row whose commit outcome is unknown sends no copy: the database row is the record.
+- **Requests in flight.**
+  - A server has 16 permits, one for each token request in flight and each mint row not yet recorded. Several can be for one grant. An attempt that finds none sends nothing.
+  - One refused before its record read reads nothing, and answers from a token already published with more than a minute left, or `unavailable`. One refused at the final reservation may have read the record, and answers `unavailable`.
+- **Writers wait.** A write to the secret or to the site settings waits behind each publication that overlaps it. That is normally under 5 seconds, and longer when the publication's client has given up and the database has not yet ended its transaction.
+- **What none of this covers.**
+  - A write that changes the stored value without a new revision: a direct write to Vault or Key Vault, or an external write whose row update failed and whose route answered an error. A request that races it may send either value, each only to its own destination. Write the secret again; that write commits a new revision.
+  - A token issued before a removal or a rotation. It stays usable by a proxy lease or a consumer until the lease ends or it expires, and Wardyn does not recall it.
+  - A cached token published before a rotation can still be returned to a request whose read began before the rotation committed.
+
 ### The hash chain — what a rewritten row looks like
 
 - The triggers above stop `UPDATE`/`DELETE`/`TRUNCATE` *through Wardyn's schema*, and the role split hardens that
@@ -1180,6 +1205,7 @@ lever today**. Concretely:
   - `curl --fail` exits `18` (partial file) or `56` (receive error); a Go client's body read returns
     `unexpected EOF`.
   - A complete export ends cleanly and its format is unchanged.
+  - A retention drop that commits while an export runs ends it the same way: wardynd reads the retention mark before the first page and again after every page, so a page read after a drop is never passed off as the whole trail.
   - Treat any non-clean end as an incomplete export and re-run it.
   - A reverse proxy that buffers whole responses can hide the abort from its own client, so export directly or
     through a proxy that streams.
@@ -1538,6 +1564,8 @@ erases one person's retained records by explicit scope, in one audited act
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
 - A SCIM request naming a user by id answers not found for a user of another issuer or tenant; group requests ignore such a user named as a member.
+- `GET /scim/status` lists only the people of its own SCIM issuer and tenant, and never a person an issuer portal introduced: that person's stuck steps are on [the portal's own status view](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
+- A group lookup by `displayName` that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
 - A group `PATCH` whose earlier member operation failed answers that failure first, as a 5xx the identity provider retries. A member add that reaches a group being deleted answers 404 only when nothing earlier failed.
 
 | Provisioning event | What Wardyn does |
@@ -3904,7 +3932,7 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
 
 - There is no rolling upgrade across 0.10.2: stop every older replica before the first 0.10.2 one starts. The chart's `Recreate` strategy does this; on Compose, `docker compose up -d` replaces the single `wardynd` container.
 - Upgrade the organisation first, then upgrade and restart each Mac runner. Until a Mac runner is upgraded and restarted, the disk drives created before the upgrade on that Mac are held: listed, but a run cannot attach them. If a Mac's drives stay held after its runner restarted, restart the runner again.
-- Docker volume drives created before the upgrade are held until an administrator releases them. After the old `wardynd` has stopped, restart dockerd (or confirm no drive removal was in flight), then call `POST /api/v1/admin/drives/legacy-docker/release`. The release is audited with your name as `drive.legacy_docker.release`; it answers `{released, event_id}`, and after an interrupted call it answers `{released: 0, replayed: [...]}` once it has delivered that call's record.
+- Docker volume drives created before the upgrade are held until an administrator releases them. After the old `wardynd` has stopped, restart dockerd (or confirm no drive removal was in flight), then call `POST /api/v1/admin/drives/legacy-docker/release`. The release is audited with your name as `drive.legacy_docker.release`; it answers `{released, event_id}`, and after an interrupted call it answers `{released: 0, replayed: [...]}` once it has delivered that call's record. Every server also retries an interrupted call's audit row once a minute, so the row is written even if nobody calls again, and a repeated call does the same on any runner target.
 - A run created before the upgrade that attaches a held drive fails at dispatch ("Drive NAME is waiting for an administrator to finish the upgrade and cannot be used yet." for Docker, "Drive NAME is waiting for its Mac to be upgraded and restarted." for a Mac). Start it again after the release. A held drive still counts toward the per-person drive limit; a person at the limit can delete a held drive to make room.
 - Migration `0299_drive_delete_fence` adds `user_drives.delete_issues`, `user_drives.legacy_unsettled` and the `drive_legacy_releases` table. If the app role is not one of the roles it grants to and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, grant it `SELECT, INSERT, UPDATE` on `drive_legacy_releases` as soon as the migration has run, or the release route fails.
 - The migration marks every delete the older daemon left marked, including claims that never reached a runner, but not a delete it had already cleared after an error, which is why the holds exist. A 0.10.1 binary refuses to start over it (`db: this database records <N> migration(s) this wardynd does not ship`); to go back, restore the pre-upgrade dump.

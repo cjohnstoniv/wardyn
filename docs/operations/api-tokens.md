@@ -542,6 +542,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 | `user_type` | The user type every one of its people gets. It is never read from a claim, and their role is always `user`. |
 | `max_subject_token_age_seconds` | 300 to 600, default 300. The oldest a token's `iat` may be. |
 | `grant_ttl_seconds` | 300 up to the maximum age, default the maximum age. The longest a grant lives from its mint. A grant also ends at the token's own signed end, so it can live much less: read `expires_in` in the answer, which can be as low as 5 seconds. |
+| `ui_session_renewal` | Optional, issuer portals only: a person's browser-app session renews on the portal's grants ([longer browser sessions](#longer-browser-sessions)). A console portal that sets it is refused 422 `delegate_renewal_needs_issuer`. |
 | `run_in_under` | Required: the unit its runs live in. The pin covers that unit and every unit under it, for launching runs and for managing the runs its people own, so pinning a parent lets the portal's people work in any child unit. |
 
 - A registration answers its refusals with 422 or 409 and a reason in [the SDK reference](../sdk.md). `GET /admin/delegates` shows `admission_rev` only for an issuer portal. A console portal's answer keeps its 0.10.0 shape.
@@ -605,6 +606,7 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 - It resolves the host and dials the address it checked. Loopback, link-local, metadata and other reserved addresses are refused for every host.
 - Any host may resolve to a public address. The extra private ranges (RFC 1918, unique-local and CGNAT, no other private space) and the extra CA from `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` apply only to the host and port a registration selects with `internal_issuer` that is also listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS`. Listing a public issuer's host alone grants neither. An `internal_issuer` that is not listed is refused with `address_refused`, and nothing is resolved. Nothing skips verification.
 - Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable`; the audit reason is `portal_issuer_unavailable` and its `cause` is `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
+- A failed fetch is enforced before it is logged or reported, so an exchange already under way is refused while the report runs. While a refusal of a discovery document or key address is in force, every unavailable answer carries that refusal's cause, through later failed retries and outages, until a refresh passes. Then `keys_cooldown` means a verified new key address is waiting for its keys.
 - A token whose key is not known triggers at most one key fetch per 30 seconds. Inside that interval the answer is 503 `temporarily_unavailable`, cause `keys_cooldown`.
 - An outage answer carries `Retry-After`, the rest of the 30-second interval. When a key fetch broke a rule, such as `address_refused`, the wait is zero and the header is left out.
 - Wardyn learns of an outage only at its own fetches.
@@ -618,8 +620,50 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
 
 - For a registration without an internal issuer address, Wardyn uses the daemon proxy when the issuer host is on `WARDYN_DAEMON_PROXY_ALWAYS`. Registrations with an internal issuer address use the direct internal route. Wardyn still resolves the host and checks every address under the rules above, and asks the proxy to connect to an address it checked, never to the name.
 - On the proxy route the issuer is trusted only under `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. With it unset, a registration without an internal issuer address whose issuer host is listed is refused at its exchanges. The proxy must pass the issuer's TLS through uninspected.
-- The warning `portal issuer: refresh failed` names the `route` (`proxy` or `direct`) and a `detail`. A proxied fetch adds `proxy connect failed` (the proxy was not reached), `proxy target failed` (it was, and the issuer was not), `proxy status` and its family, such as `4xx` or `5xx` (the proxy answered the connect with anything but 200; a 302 logs `proxy status 3xx`), `proxy tls failed` (an https proxy's own handshake), `not the proxy` (cause `address_refused`) and `tls handshake failed`.
+- The warning `portal issuer: refresh failed` names the `route` (`proxy` or `direct`) and a `detail`. A proxied fetch adds `proxy connect failed` (the proxy was not reached), `proxy target failed` (it was, and the issuer was not), `proxy status` and its family, such as `4xx` or `5xx` (the proxy answered the connect with anything but 200; a 302 logs `proxy status 3xx`), `proxy tls failed` (an https proxy's own handshake), `not the proxy` (cause `address_refused`) and `tls handshake failed`. Before any connect, `name not resolved` is an outage, `address refused` is a checked address Wardyn will not use, and `host not comparable` is an issuer host Wardyn cannot compare with the list (cause `address_refused`); `request failed` stands for any other transport error.
 - After a proxy connect, target or status failure, Wardyn tries the next address it checked while addresses and time remain. On the proxy route with no CA file set, the detail is `no proxied issuer roots`.
+
+#### Longer browser sessions
+
+- Without `ui_session_renewal`, a person's browser-app session ends with the grant it was opened under, at the latest `WARDYN_UI_SANDBOX_SESSION_TTL` (default 8 hours) after the ticket was redeemed.
+- With it, the session follows a chain: the grants this portal minted for that person while one of them was live. It ends at the redemption plus `WARDYN_UI_SANDBOX_SESSION_TTL` at the latest, and sooner when no grant of the chain is live.
+- Every new request asks the chain again. It is refused once no grant of the chain is live, the portal is revoked, or the person or the portal's unit refuses. A stream that is already open never follows the chain: it ends at the end it was admitted with.
+- Desktops (the sign-in desktop included), terminals and a helper's support sessions never renew, whatever the portal sets.
+- Only an issuer portal can set it. A registration that sets it on a console portal answers 422 `delegate_renewal_needs_issuer`. This release has longer browser sessions switched on, so a registration is not refused `delegate_renewal_withheld`.
+
+#### What a revoke or a suspension reaches
+
+- A new request, and a new connection, is checked at its own opening with no cached answer: after a revoke of the portal, a suspension or purge of the person, or a change of the portal's unit, it is refused at once.
+- An open connection is re-checked on a beat, and ends at the first check that fails, or at the end it was admitted with. The design limits, counted from the event, are:
+
+| Connection | Re-checked | Each check limited to | Ends within |
+|---|---|---|---|
+| Browser app, including a stream or upgrade | every 30 seconds | 5 seconds | about 35 seconds |
+| Event stream | every 15 seconds | 5 seconds | about 20 seconds |
+| Terminal | every 30 seconds | 5 seconds | about 35 seconds |
+| Desktop | every 30 seconds | 10 seconds | about 40 seconds |
+
+- These are limits the design sets, read from the code. They are not measured times.
+- The person sees the connection drop with no clean close, and is refused when they reconnect.
+- An event stream whose opening check fails answers 403 `revoked`; one that cannot be checked answers 503 `revocation_unavailable`. A ticket for a run that no longer exists is refused 403 `ui_gateway_ticket_invalid`.
+- Every read that decides whether to open a session (the ticket, the run, the desktop's closed set, a terminal's opening) is limited to 5 seconds and answers a retryable 503 when it gets no answer.
+- Starting the sandbox's side of a connection is limited too. A request, a terminal opening or a desktop dial starts nothing in the sandbox at or after 25 seconds from the check that admitted it, and the first write of a refused request passes no bytes. An app that needs longer than 25 seconds to start from cold is refused with a retryable 503 even when nothing was revoked, and a retry finds it started. A session that opened in time is not cut by this.
+- A request goes out on a connection of its own, never one shared with another request. A runner reached over a network link refuses a start whose time has passed at the link, and the runner needs no change for it.
+- A terminal opened with a portal ticket attaches through the organisation. On the local route it answers 409 `attach_local_unavailable` with `detail` `issuer_portal`.
+- Every connection the dispatch bound gates writes one `ui.dispatch` row when it closes ([the audit reference](../AUDIT-ACTIONS.md)).
+
+#### Suspend, reactivate and purge a portal's person
+
+A person is one per issuer and provider id, so one suspension reaches them through every portal on that issuer. These routes are API only, and work only on a `delegate:person:` principal; any other principal is refused 422 `portal_person_only`.
+
+1. Find them. `GET /people/portal-person?issuer=<exact issuer>&person_id=<their id at the provider>` answers `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals. `GET /people/{principal}/portals` answers the same shape. Neither carries `purge_after`. An issuer with no binding answers 404 `portal_issuer_not_bound` (check its spelling); a bound issuer with no such person answers 404 `person_not_found`, and asking creates nobody.
+2. Suspend. `POST /people/{principal}/suspend` (admin or security admin) deactivates the person and deletes their grants in one step, so a grant stops at its next request, then sweeps their API tokens and SSH keys and kills every run of theirs. The body is optional: `purge_after_seconds` (0 to ten years, 0 or absent for none) schedules the permanent purge, and a positive value needs a super admin (403 `portal_purge_deadline_operator_only`).
+3. If it answers 503 `portal_lifecycle_incomplete`, a step is still pending. Send the same request again. A sweep also finishes pending suspensions and purges every 15 minutes, with or without SCIM set up.
+4. Look at what is stuck. `GET /admin/portal-lifecycle/status` (admin or security admin) answers `deactivated` (`person`, `deactivated_at`, `purge_after`), `pending` (`person`, `step`, `last_error`), `pending_suspensions` and `pending_purges`, naming each person by principal. It answers whether or not SCIM is configured. `GET /scim/status` stays the workforce's view: it lists only the people of its own SCIM issuer and tenant, and no portal person.
+5. Undo it. `POST /people/{principal}/reactivate` (super admin) clears the deactivation and any purge date. Grants, tokens, keys and runs the suspension removed do not come back; the person's next exchange through a portal admits them again.
+6. Or make it permanent. `POST /people/{principal}/purge` (super admin) needs a suspended person (409 `person_not_suspended`, which is also the answer when a reactivation commits first) and cannot be undone: every portal refuses that person for good, and the same issuer and person id can never sign in again. A purge of a person already purged retries its pending steps. A purge at its scheduled date, by the sweep, writes no `person.purge` row.
+
+Each answer reports `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. A purged person answers 409 `person_purged` to a suspend or reactivate. The routes and their reasons are in [the SDK reference](../sdk.md); their audit rows are `person.suspend`, `person.reactivate`, `person.purge` and `identity.deactivate`.
 
 #### Switch issuer portals on
 
