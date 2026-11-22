@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ScrollText,
@@ -31,6 +32,7 @@ import { runs as runsApi } from "../../lib/api/runs";
 import { Note } from "./governance/display";
 import { absoluteTime, clockTime, mediumDate } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
+import { queryClient } from "../../lib/query-client";
 import { Input } from "../ui/input";
 import { Button } from "../ui/button";
 import {
@@ -66,6 +68,7 @@ import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-vie
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
 const AUDIT_POLL_MS = 5000;
+const NO_EVENTS: AuditEvent[] = [];
 
 // The four /healthz ebpf_groundtruth states. "unavailable" is the DEFAULT for
 // nearly every install (the ground-truth tier is an opt-in compose profile), so
@@ -208,8 +211,6 @@ export function AuditScreen() {
   const unitsKnown = securityOperator || unitsAdmin !== null;
   const unitAdmin = !securityOperator && (unitsAdmin?.length ?? 0) > 0;
   const view = useConsoleMode();
-  const [events, setEvents] = React.useState<AuditEvent[]>([]);
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   // W25-W25.2-3: the run filter lives in the URL (?run_id=), not component
   // state. A member's ONLY reachable trail is a run they own (the server 200s
   // an empty list for any unfiltered /audit query), so the filter has to be
@@ -240,7 +241,6 @@ export function AuditScreen() {
   const actorParam = searchParams.get("actor") ?? "";
   const actorFilter: ActorType | "all" = ACTOR_TYPES.includes(actorParam as ActorType) ? (actorParam as ActorType) : "all";
   const setActorFilter = (a: ActorType | "all") => setFilters({ actor: a === "all" ? "" : a });
-  const [groundTruth, setGroundTruth] = React.useState<{ state?: string; reason?: string }>();
 
   // #3036: run titles for the rows' run references, read once from the runs list. A failed or partial read only
   // leaves the id alone after "Run"; the rows never wait on it.
@@ -261,13 +261,22 @@ export function AuditScreen() {
   // Drill-in run context (id + agent + task + repo + barrier), fetched via the
   // real GET /runs/{id} — never invented from the audit event fields, which
   // don't carry them.
-  const [drillRun, setDrillRun] = React.useState<AgentRun | undefined>(undefined);
-  const [drillLoading, setDrillLoading] = React.useState(false);
   // ui-auditRec-3: a true 404 (getRun resolves undefined) is a PERMANENT
   // "archived or deleted" — a REJECTED fetch (500/network/403) is a transient
   // failure the operator can retry. Collapsing both into one message told an
   // operator their run was gone when the control plane had just hiccuped.
-  const [drillError, setDrillError] = React.useState<"not-found" | "failed" | null>(null);
+  // getRun answers undefined for a 404; a query may not resolve undefined, so "not found" is null here.
+  const drillQuery = useQuery(
+    {
+      queryKey: ["audit", runFilter, "run"],
+      queryFn: async () => (await runsApi.getRun(runFilter)) ?? null,
+      enabled: runFilter !== "",
+    },
+    queryClient,
+  );
+  const drillRun = drillQuery.isError ? undefined : (drillQuery.data ?? undefined);
+  const drillLoading = drillQuery.isFetching;
+  const drillError: "not-found" | "failed" | null = drillQuery.isError ? "failed" : drillQuery.data === null ? "not-found" : null;
 
   // When a run_id filter is set, query the SERVER with run_id so we get that
   // run's authoritative, complete per-run trail (not a client filter over a
@@ -275,133 +284,75 @@ export function AuditScreen() {
   // Must NOT client re-sort by wall-clock time — the server returns events in
   // authoritative append (seq) order; re-sorting by `time` can reorder events
   // that share a timestamp and misrepresent causality. Preserve as-is.
-  // Only the LATEST events read may write anything: a poll tick or load still in flight for the previous run
-  // filter would otherwise land after the new filter's read and show the wrong run's trail, status, error,
-  // liveness or sensor state under it. A superseded read resolves null, success or failure alike.
-  const eventsRequestId = React.useRef(0);
-  const fetchEvents = React.useCallback(() => {
-    const requestId = ++eventsRequestId.current;
-    // The kernel sensor's health rides along with every audit refresh (initial
-    // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
-    // events, so an event list structurally cannot show them — a dead sensor
-    // reads exactly like a quiet one. health() never rejects.
-    void healthApi.health().then((h) => {
-      if (eventsRequestId.current === requestId) setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined);
-    });
-    // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
-    // investigating: ask for its newest page.
-    // Resolves with the list it set, or null when a newer read superseded it.
-    return (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)).then(
-      (list) => {
-        if (eventsRequestId.current !== requestId) return null;
-        setEvents(list);
-        return list;
-      },
-      (e: unknown) => {
-        if (eventsRequestId.current !== requestId) return null;
-        throw e;
-      },
-    );
-  }, [runFilter]);
-  // A read that answers after the screen is gone is superseded: it must not write the URL from a screen that has left.
-  React.useEffect(
-    () => () => {
-      eventsRequestId.current++;
+  // The read is keyed by the run filter, so an answer for an earlier filter lands under that filter's key and is never shown under this one.
+  // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
+  // investigating: ask for its newest page.
+  const eventsQuery = useQuery(
+    {
+      queryKey: ["audit", runFilter, "events"],
+      queryFn: () => (runFilter ? api.listAudit(runFilter, { newest: true }) : api.listAudit(undefined)),
     },
-    [],
+    queryClient,
   );
-  // The kind in the URL, dropped when the list a read just answered with lacks it. Called from a load and from a
-  // poll tick, on the list that read set (null: superseded or unmounted, so nothing is judged). A kind that
+  const events = eventsQuery.data ?? NO_EVENTS;
+  const status: "loading" | "error" | "ready" = eventsQuery.data ? "ready" : eventsQuery.isError ? "error" : "loading";
+  // The kernel sensor's health rides along with every audit refresh (initial
+  // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
+  // events, so an event list structurally cannot show them — a dead sensor
+  // reads exactly like a quiet one. health() never rejects.
+  // keepPreviousData keeps the chip on screen across a filter change until the new answer lands.
+  const sensorQuery = useQuery(
+    { queryKey: ["audit", runFilter, "sensor"], queryFn: () => healthApi.health(), placeholderData: keepPreviousData },
+    queryClient,
+  );
+  const groundTruth = sensorQuery.data?.ebpf_groundtruth?.state ? sensorQuery.data.ebpf_groundtruth : undefined;
+  // The kind in the URL, dropped when the list a read just answered with lacks it. Called after every read of this
+  // filter that answered, on the list that read set. A kind that
   // leaves the window must not stay in the URL to narrow the list again when a later tick brings it back.
-  const dropAbsentKind = (list: AuditEvent[] | null) => {
+  const dropAbsentKind = React.useCallback((list: AuditEvent[] | null) => {
     const { urlKind: kind, setFilters: drop } = dropKindRef.current;
     if (list && kind !== "all" && !list.some((e) => eventKind(e) === kind)) drop({ kind: "" });
-  };
+  }, []);
+  const { data: eventsData, dataUpdatedAt } = eventsQuery;
+  React.useEffect(() => {
+    if (eventsData) dropAbsentKind(eventsData);
+  }, [eventsData, dataUpdatedAt, dropAbsentKind]);
 
   // Whether the LAST read actually answered. `status` cannot carry this: the
   // live tail deliberately keeps the last good view on a failed tick and so
   // stays "ready" forever, which is what let the green chip below keep
   // claiming the trail was appending over a feed that had stopped answering
   // (CONSOLE-RULES §10 — a result verb needs a real result behind it).
-  const [pollStale, setPollStale] = React.useState(false);
+  const pollStale = eventsQuery.isRefetchError;
 
-  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
-  const load = React.useCallback(() => {
-    setStatus("loading");
-    fetchEvents()
-      .then((list) => {
-        if (!list) return;
-        setPollStale(false);
-        setStatus("ready");
-        dropAbsentKind(list);
-      })
-      .catch((e) => {
-        setLoadMessage(failureSentence(e));
-        setStatus("error");
-      });
-  }, [fetchEvents]);
-  React.useEffect(load, [load]);
+  const loadMessage = eventsQuery.isError ? failureSentence(eventsQuery.error) : undefined;
 
   // Live-tail: audit is append-only, so a background poll is meaningful (new
   // events only ever get added). Refresh quietly — never flip back to the
   // loading skeleton, that would flicker the whole list every tick.
   // Returned, so usePoll's in-flight guard holds the next tick until this read answers: a read slower than the
   // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
+  // With a list on screen a tick joins a read still in flight. With none yet it replaces that read, so a first read
+  // that hangs is not waited on for good (TanStack joins a read with no data instead of cancelling it).
+  const { refetch: refetchEvents } = eventsQuery;
+  const { refetch: refetchSensor } = sensorQuery;
   const tick = React.useCallback(() => {
-    return fetchEvents()
-      .then((list) => {
-        if (!list) return;
-        setPollStale(false);
-        setStatus("ready");
-        dropAbsentKind(list);
-      })
-      .catch((e) => {
-        /* transient poll failure — keep the last good view and retry next
-           tick, but stop asserting the trail is live while it is not. */
-        setPollStale(true);
-        // A tick that overtook the filter's first read is that first read: nothing else will end the loading state.
-        setLoadMessage(failureSentence(e));
-        setStatus((s) => (s === "loading" ? "error" : s));
-      });
-  }, [fetchEvents]);
-  usePoll(tick, AUDIT_POLL_MS, status !== "ready" || showRetention);
+    void refetchSensor({ cancelRefetch: false });
+    const key = ["audit", runFilter, "events"];
+    return queryClient.getQueryData(key) === undefined
+      ? queryClient.cancelQueries({ queryKey: key, exact: true }).then(() => refetchEvents())
+      : refetchEvents({ cancelRefetch: false });
+  }, [refetchEvents, refetchSensor, runFilter]);
+  // The poll's hold follows the screen one render late, as the status state did: a refocus that lands in the commit
+  // of a filter change still reads, and replaces the new filter's first read.
+  const [pollHeld, setPollHeld] = React.useState(true);
+  React.useEffect(() => setPollHeld(status !== "ready" || showRetention), [status, showRetention]);
+  usePoll(tick, AUDIT_POLL_MS, pollHeld);
 
-  // Monotonic guard: the runFilter effect below and a manual Retry can each
-  // start a fetch, and either can still be in flight when the other starts
-  // (or when runFilter changes/clears again) — only the LATEST request's
-  // resolution is allowed to write state, so a stale response can never
-  // clobber a newer one.
-  const drillRequestId = React.useRef(0);
-
-  const fetchDrillRun = React.useCallback((id: string) => {
-    const requestId = ++drillRequestId.current;
-    setDrillLoading(true);
-    runsApi
-      .getRun(id)
-      .then((r) => {
-        if (drillRequestId.current !== requestId) return;
-        setDrillLoading(false);
-        setDrillRun(r);
-        setDrillError(r ? null : "not-found");
-      })
-      .catch(() => {
-        if (drillRequestId.current !== requestId) return;
-        setDrillLoading(false);
-        setDrillRun(undefined);
-        setDrillError("failed");
-      });
-  }, []);
-
-  React.useEffect(() => {
-    if (!runFilter) {
-      drillRequestId.current++; // invalidate any request still in flight
-      setDrillRun(undefined);
-      setDrillError(null);
-      setDrillLoading(false);
-      return;
-    }
-    fetchDrillRun(runFilter);
-  }, [runFilter, fetchDrillRun]);
+  const retry = () => {
+    void queryClient.resetQueries({ queryKey: ["audit", runFilter, "events"], exact: true });
+    void sensorQuery.refetch();
+  };
 
   // Which event-kind facets actually have data in the loaded window — an "only
   // include facets that exist" rule so an operator never sees a dead filter for
@@ -536,7 +487,7 @@ export function AuditScreen() {
           loading={drillLoading || !unitsKnown || (unitAdmin && drillError === "not-found" && status !== "ready")}
           error={drillError}
           view={view}
-          onRetry={() => fetchDrillRun(runFilter)}
+          onRetry={() => void drillQuery.refetch()}
           onClear={() => setRunFilter("")}
           unitRun={unitRun}
         />
@@ -574,7 +525,7 @@ export function AuditScreen() {
         </div>
       ) : status === "error" ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <ErrorState message={loadMessage} onRetry={load} />
+          <ErrorState message={loadMessage} onRetry={retry} />
         </div>
       ) : filtered.length === 0 ? (
         <div className="overflow-hidden rounded-xl border border-border bg-card">
