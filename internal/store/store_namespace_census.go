@@ -164,6 +164,7 @@ var namespaceCensusExempt = map[string]string{
 	"credential_grants.spec":                    "a run's own settings and recorded state, not a list that names people",
 	"delegated_tokens.groups":                   "group names or claim values, never a person principal",
 	"delegates.required_claim":                  "group names or claim values, never a person principal",
+	"deprovision_jobs.audit_event_payload":      "one audit event's data pinned for a retried step, sealed for a human actor; audit rows confer no authority",
 	"deprovision_jobs.detail":                   "runner, run-containment and sweep telemetry; not an authority source",
 	"desktop_signins.pause_record":              "runner, run-containment and sweep telemetry; not an authority source",
 	"governance_boundary.contact":               "limits, contact details and boundary settings; no person list (a boundary spec has no ui_apps field)",
