@@ -30,6 +30,7 @@ import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus,
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
 import { AddPersonDialog } from "./add-person-dialog";
+import { FindPortalPerson } from "./find-portal-person";
 import { PersonDrawer } from "./person-drawer";
 import { personState, roleLabel, STATE_LABEL, STATE_TONE } from "./people-format";
 
@@ -282,6 +283,7 @@ export function PeopleScreen() {
           {P.TABLE_TITLE}
         </h2>
         <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <FindPortalPerson onFound={setSelected} />
           <PeopleTable onOpen={setSelected} reloadKey={reloadKey} />
         </div>
       </section>

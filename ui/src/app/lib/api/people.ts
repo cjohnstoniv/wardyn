@@ -5,7 +5,7 @@
 
 // The admin People page's reads and writes (internal/api/people.go, sessions.go, sshkeys_admin.go).
 // All securityOps: admin or security admin. Stored-credential erase is credentials.erase.
-import type { PersonList, PersonSummary, PersonToken } from "../types";
+import type { PersonList, PersonSummary, PersonToken, PortalPersonView } from "../types";
 import { asJson, asNoContent, LIST_LIMIT, unwrapList, wfetch } from "./core";
 
 const seg = (principal: string) => encodeURIComponent(principal);
@@ -47,6 +47,14 @@ export const people = {
       cursor = page.next_cursor;
     } while (cursor);
     return undefined;
+  },
+
+  // GET /api/v1/people/portal-person?issuer&person_id -> the portal person with that exact issuer and provider ID.
+  // 404 portal_issuer_not_bound: no portal is registered for that issuer string. 404 person_not_found: the issuer
+  // is registered and no portal has introduced that person.
+  async portalPerson(issuer: string, personId: string): Promise<PortalPersonView> {
+    const p = new URLSearchParams({ issuer, person_id: personId });
+    return asJson<PortalPersonView>(await ok(await wfetch(`/people/portal-person?${p.toString()}`, { method: "GET" })));
   },
 
   // GET /api/v1/people/{principal}/tokens -> all their tokens, revoked and expired ones included. The
