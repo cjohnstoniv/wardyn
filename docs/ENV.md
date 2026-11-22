@@ -2257,9 +2257,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_DAEMON_PROXY_ALWAYS`
 
 - Host names whose **service grant token request** and **issuer portal discovery and key fetches** always go to the daemon proxy, past `WARDYN_DAEMON_NO_PROXY` and `NO_PROXY` (flag `-daemon-proxy-always`; `serviceGrantTransport`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go); `newPortalProxyClient`, [`internal/auth/oidc/portal_fetch_proxy.go`](../internal/auth/oidc/portal_fetch_proxy.go)). List the token URL's host as well when it differs from the issuer's.
-- Only those calls, each on its own transport. Every other call routes as it did without the list, and a portal fetch for a host not on the list stays direct.
-- For a portal fetch, wardynd resolves the issuer host itself, refuses a private, loopback, link-local or metadata answer, and asks the proxy to connect to the address it checked, never to the name.
-- The issuer's certificate is checked through the tunnel against `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` only, so the proxy must pass that host's TLS through uninspected and allow a CONNECT to an address. A name wardynd cannot resolve is an outage.
+- Only those calls, each on its own transport. A portal fetch counts only for a registration with no internal issuer address; one with an internal issuer address stays direct. Every other call routes as it did without the list, and a portal fetch for a host not on the list stays direct.
+- For a proxied portal fetch, wardynd resolves the issuer host itself, refuses a private, loopback, link-local or metadata answer, and asks the proxy to connect to the address it checked, never to the name.
+- A proxied portal fetch checks the issuer's certificate through the tunnel against `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` only, so the proxy must pass that host's TLS through uninspected and allow a CONNECT to an address. A name wardynd cannot resolve is an outage.
 - The proxy is `WARDYN_DAEMON_PROXY_URL` or `_SECRET`, else `HTTPS_PROXY`.
 - Match: the exact host, case-insensitive; a trailing dot and a port are ignored.
 - A non-ASCII token address matches in its IDNA-ASCII form, so list `xn--` names.
