@@ -310,6 +310,11 @@
     "sentence": "(audit only)"
   },
   {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
+  },
+  {
     "reason": "drive_not_in_pool",
     "target": "\"runs.drive\"",
     "sentence": "msg"

@@ -158,6 +158,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"template_list.go:templateCallerOf":                        {1, "authz-only: template reach"},
 	"user_drives.go:handleGetUserDrives":                       {1, "authz-only: drive storage layout; a security admin reads the allow-listed projection"},
 	"user_drives_me.go:userDriveDeniedByUnit":                  {1, "authz-only: a display flag"},
+	"user_drives_portal.go:upsertPortalDriveGrant":             {1, "authz-only: a portal allocation is a super admin's write; a run reaches the drive only through that portal's own launch (portalDriveDenied refuses every other drive) and meets the boundary at resolve"},
 	"user_drives_preview.go:handlePreviewUserDrive":            {1, "authz-only: drive storage layout"},
 	"user_drives_run.go:driveDoorProfile":                      {1, "R: a drive door the boundary holds no knob for; the run it admits meets the boundary at resolve"},
 	"user_drives_second_place.go:boundRunnerName":              {1, "authz-only: a display (the bound runner's name)"},

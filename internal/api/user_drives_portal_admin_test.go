@@ -126,13 +126,14 @@ func TestPortalDriveAllocation_CommittedGrantNeedsNoSecondRead(t *testing.T) {
 		t.Errorf("object_name = %q, want %q", out.ObjectName, want)
 	}
 	var writes int
-	for _, ev := range audit.events {
+	rows := audit.snapshot()
+	for _, ev := range rows {
 		if ev.Action == "drive.grant.write" {
 			writes++
 		}
 	}
 	if writes != 1 {
-		t.Errorf("drive.grant.write rows = %d, want 1 (events %+v)", writes, audit.events)
+		t.Errorf("drive.grant.write rows = %d, want 1 (events %+v)", writes, rows)
 	}
 }
 
