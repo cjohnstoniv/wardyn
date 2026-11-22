@@ -4979,6 +4979,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Allocated to an issuer portal** (super admin).
 
 - Send `POST /api/v1/drives/grants` with `subject_type: portal`, the portal's id as `subject` and `additional: true`. The portal must be registered with its own identity issuer and not revoked. The drive must be `docker_volume` or `k8s_pvc_static` with no second place. A security admin is refused.
+- On `k8s_pvc_static`, create the claim named by the allocation response's `object_name` before the first run: a missing static claim is a refusal, not a create. A `docker_volume` folder is made on first use.
 - The allocation does not mount the drive by itself. To mount it, include its id in the run's drives list. Once mounted, other issuer portals cannot reach that run (`portal_run_scope`), even if the allocation is removed or the creating portal is revoked.
 - A queued run starts with no wider mode than it was admitted with, and read-only when none was recorded.
 - While a portal holds the drive, an edit that would stop it being a team drive answers 409, and one that adds a second place or moves it off those two backends answers 422. Nothing is written; remove the portal's allocation first.

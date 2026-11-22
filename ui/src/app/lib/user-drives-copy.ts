@@ -234,7 +234,7 @@ export const DRIVES = {
   TEAM_NO_HOME: "Everyone gets the same folder, so a team drive has no directory per person.",
   TEAM_SIZE_HINT: "One size for the whole team: members share it.",
   TEAM_RECLAIM_KEPT: "Kept. A team drive belongs to its groups, so a leaver's cleanup skips it.",
-  TEAM_ALLOC_HINT: "A team drive is allocated to groups, never to one person or to everyone. Every mount is audited with who mounted it.",
+  TEAM_ALLOC_HINT: "A team drive is allocated to groups or issuer portals, never to one person or to everyone. Every mount is audited with who mounted it.",
   TEAM_GROUP_PLACEHOLDER: "Choose a group",
   TEAM_CHIP: "Team drive",
   TEAM_ONE_HOST_CHIP: "One host only",

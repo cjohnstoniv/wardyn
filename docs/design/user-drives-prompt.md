@@ -655,7 +655,7 @@ confirming happens through the API.
 | `BACKEND_K8S_PVC_STATIC_TEAM` | Share provisioned by your platform (one pre-created volume claim for the team) |
 | `FIELD_TEAM` | Team drive |
 | `FIELD_TEAM_WRITE` | Members can write |
-| `TEAM_ALLOC_HINT` | A team drive is allocated to groups, never to one person or to everyone. Every mount is audited with who mounted it. |
+| `TEAM_ALLOC_HINT` | A team drive is allocated to groups or issuer portals, never to one person or to everyone. Every mount is audited with who mounted it. |
 | `TEAM_CHIP` | Team drive |
 | `TEAM_CLAIM_NOTE` | Every member mounts the same claim, so it must allow many writers at once (ReadWriteMany). Ask your platform team if you're not sure. |
 | `TEAM_EMPTY_READ_ONLY` | Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write. |
