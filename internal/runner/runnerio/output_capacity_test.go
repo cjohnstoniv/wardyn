@@ -117,7 +117,13 @@ func TestRunnerioOutput_LocalCapacityRetries(t *testing.T) {
 				t.Fatal("the local refusal sent an OPEN")
 			}
 			if full == "peer" {
-				<-h.refused                   // the probe's
+				// The peer's handler signals before it returns the refusal, so the probe's signal is already
+				// buffered; a refusal from anywhere else fails here rather than waiting forever.
+				select {
+				case <-h.refused:
+				default:
+					t.Fatal("the probe's refusal did not come from the peer's handler")
+				}
 				h.refuse.Store(math.MaxInt32) // the peer stays full until the test frees it
 			}
 
