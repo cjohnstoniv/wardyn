@@ -212,13 +212,16 @@ func TestWriteGated_PortalPromotionDeliversOnlyThroughItsCheckedWriter(t *testin
 				principal: person, checkStart: time.Now()})
 			pending := make(chan struct{})
 			entered := make(chan struct{})
+			var enterOnce, releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(pending) }) }
 			h := &attachHolder{recheck: func(context.Context) (time.Time, bool) {
-				close(entered)
+				enterOnce.Do(func() { close(entered) })
 				<-pending
 				return time.Now(), tc.check
 			}}
 			h.writable.Store(tc.writer)
 			t.Cleanup(func() { _ = h.mux.Close() })
+			t.Cleanup(release) // on every exit, a failed assertion included, so the check never stays blocked
 			if err := srv.establishExec(ctx, run, h); err != nil || !h.ready.isReady() {
 				t.Fatalf("the first opening = %v, ready %v; want it open", err, h.ready.isReady())
 			}
@@ -244,7 +247,13 @@ func TestWriteGated_PortalPromotionDeliversOnlyThroughItsCheckedWriter(t *testin
 			fr.mu.Unlock()
 			opened := make(chan error, 1)
 			go func() { opened <- srv.establishExec(ctx, run, h) }()
-			<-entered // the promotion's check is running, blocked on pending
+			select {
+			case <-entered: // the promotion's check is running, blocked on pending
+			case err := <-opened:
+				t.Fatalf("the promotion's opening returned %v without running its own check", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the promotion's own check did not start within 5s")
+			}
 			// A drain past its ready wait, or mid-frame, while the promotion's check is running: every chunk
 			// is asked again, and none is delivered, nor any resize.
 			if err := h.writeGated(&h.mux, []byte("k")); err != nil {
@@ -253,7 +262,7 @@ func TestWriteGated_PortalPromotionDeliversOnlyThroughItsCheckedWriter(t *testin
 			if h.canDeliver() {
 				t.Fatal("canDeliver while the promotion's check is running: resizes would reach the old exec")
 			}
-			close(pending)
+			release()
 			if err := <-opened; (err == nil) != tc.check {
 				t.Fatalf("the promotion's opening = %v with its check %v", err, tc.check)
 			}
