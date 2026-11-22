@@ -58,7 +58,7 @@ const ProvidersScreen = React.lazy(() =>
     default: m.ProvidersScreen,
   })),
 );
-// A security admin's Images page (design final §3): pre-wrapped images only. A super admin reaches the
+// A security admin's Images page (design final section 3): pre-wrapped images only. A super admin reaches the
 // same tab under Providers, so it has no nav item in that tier.
 const ImagesScreen = React.lazy(() =>
   import("./components/screens/providers/images-tab").then((m) => ({
@@ -131,7 +131,7 @@ const SecretsScreen = React.lazy(() =>
     default: m.SecretsScreen,
   })),
 );
-// M-5 (#636): the settings split — one screen per view (§4.3), replacing the
+// M-5 (#636): the settings split — one screen per view (section 4.3), replacing the
 // single SettingsScreen that used to mount unchanged at both routes.
 const AdminSettingsScreen = React.lazy(() =>
   import("./components/screens/settings/admin-settings-screen").then((m) => ({
