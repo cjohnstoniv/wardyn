@@ -11,6 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- An issuer portal's person can read their own non-interactive run's command output on a runner that does not capture it, such as Kubernetes: `GET /runs/{id}/output` recovers it from the run's recording, masked, with no input and no attach session. An interactive run's output and its pane snapshot stay closed to every portal.
+- Audit action `run.output.refuse`: a portal's read of `GET /runs/{id}/output` that ends with 409 `run_output_not_captured`, `run_output_not_kept` or `run_output_interactive`, or 410 `run_output_expired`, records the same reason and status the answer carried.
+
+### Changed
+
+- An issuer portal's person runs in the portal's pinned unit without holding a membership there. A strict workspace, or an organisation component pinned to a unit, still needs an actual membership, at launch and at every extension, resume and revive.
+- `GET /runs/{id}/output` no longer writes an `authz.denied` row when it withholds the pane snapshot or recording-derived output from a portal. A console security admin reading another person's pane snapshot or recording output is still audited `not_owner`.
+
+### Fixed
+
+- The API tokens page now says that a provider token issued before a suspension stays refused after the person is reactivated: its exchange answers 400 `invalid_grant`, audited `session_revoked`.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
