@@ -3166,7 +3166,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
+        # staticcheck's three tag sets run as three cells: in one job the passes swapped past the time limit.
+        # The tagless cell keeps the name `gates (staticcheck)`, a required context.
+        gate: [govulncheck, staticcheck, staticcheck-docker, staticcheck-k8s, licenses, license-headers, gitleaks]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -3201,15 +3203,16 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+            go-gates-${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
       # The gate's own `go run tool@version` dependencies, fetched here so a network
       # stall fails fast under this name instead of eating the job timeout. The
       # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
       - name: Fetch gate tools
         timeout-minutes: 4
-        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+        run: scripts/fetch-gate-tools.sh ${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}
       # See go-lint: staticcheck's whole-tree pass.
       - name: Add swap for the memory peak
-        if: matrix.gate == 'staticcheck'
+        if: startsWith(matrix.gate, 'staticcheck')
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -3223,7 +3226,7 @@ jobs:
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
-          make ${{ matrix.gate }}
+          make ${{ matrix.gate == 'staticcheck' && 'staticcheck-tagless' || matrix.gate }}
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

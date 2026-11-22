@@ -1,4 +1,4 @@
-.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-editors test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc agent-image-novnc-signin test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: doc-links test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build runnerd-image compose-up compose-down demo clean test-conformance-docker test-conformance-k8s test-kek-conformance test-kek-conformance-kind test-daemon-proxy-secret-kind build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck staticcheck-tagless staticcheck-docker staticcheck-k8s agent-images test-drive help test-report test-report-pg test-report-pg-api test-report-pg-store test-report-docker test-report-k8s cover-check cover-union release-check release-patch candidate-preflight ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-byoi test-e2e-ssh test-e2e-ssh-editors test-e2e-ssh-k8s test-e2e-ui-sandbox test-provider-seed test-e2e-ui screenshots record-demo setup stop-host reset reset-all doctor dev-pg agent-images-core test-race test-race-pg tidy-check agent-image-base agent-image-full agent-image-harnesses agent-image-claude-code-multiarch agent-image-vscode agent-image-novnc agent-image-novnc-signin test-image-novnc-signin gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -635,10 +635,20 @@ govulncheck: ## Scan for known vulnerabilities (tagless + -tags docker + -tags d
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker ./...
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -tags docker,k8s ./...
 
-staticcheck: ## Static analysis (tagless + -tags docker + -tags docker,k8s)
-	@echo "Running staticcheck (tagless + -tags docker + -tags docker,k8s)..."
+staticcheck: staticcheck-tagless staticcheck-docker staticcheck-k8s ## Static analysis (tagless + -tags docker + -tags docker,k8s)
+
+# One target per tag set, so CI can give each whole-tree pass a runner of its own: the three in one job
+# outgrew a hosted runner's memory and swapped past the job's time limit.
+staticcheck-tagless:
+	@echo "Running staticcheck (tagless)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
+
+staticcheck-docker:
+	@echo "Running staticcheck (-tags docker)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker ./...
+
+staticcheck-k8s:
+	@echo "Running staticcheck (-tags docker,k8s)..."
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -tags docker,k8s ./...
 
 # go.mod/go.sum must stay tidy: `go mod tidy` produces no diff. A stray require,
