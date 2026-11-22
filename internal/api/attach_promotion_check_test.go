@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -210,7 +211,9 @@ func TestWriteGated_PortalPromotionDeliversOnlyThroughItsCheckedWriter(t *testin
 			ctx := withTicketActor(t.Context(), ticketActor{via: &types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()},
 				principal: person, checkStart: time.Now()})
 			pending := make(chan struct{})
+			entered := make(chan struct{})
 			h := &attachHolder{recheck: func(context.Context) (time.Time, bool) {
+				close(entered)
 				<-pending
 				return time.Now(), tc.check
 			}}
@@ -226,19 +229,42 @@ func TestWriteGated_PortalPromotionDeliversOnlyThroughItsCheckedWriter(t *testin
 				h.writable.Store(false) // the lease's demotion (demoteWriter)
 			}
 			h.promote()
-			// A drain past its ready wait, or mid-frame, while the promotion's check is pending: every chunk
+			// Between its check and its install, the promotion's Attach asks again: a drain past its ready wait
+			// delivers nothing and no resize reaches the old exec, whatever the check returned.
+			var hookRan, hookDeliverable atomic.Bool
+			var hookErr atomic.Value
+			fr.mu.Lock()
+			fr.hook = func(bool) {
+				hookRan.Store(true)
+				hookDeliverable.Store(h.canDeliver())
+				if err := h.writeGated(&h.mux, []byte("h")); err != nil {
+					hookErr.Store(err)
+				}
+			}
+			fr.mu.Unlock()
+			opened := make(chan error, 1)
+			go func() { opened <- srv.establishExec(ctx, run, h) }()
+			<-entered // the promotion's check is running, blocked on pending
+			// A drain past its ready wait, or mid-frame, while the promotion's check is running: every chunk
 			// is asked again, and none is delivered, nor any resize.
 			if err := h.writeGated(&h.mux, []byte("k")); err != nil {
 				t.Fatal(err)
 			}
 			if h.canDeliver() {
-				t.Fatal("canDeliver while the promotion's check is pending: resizes would reach the old exec")
+				t.Fatal("canDeliver while the promotion's check is running: resizes would reach the old exec")
 			}
-			opened := make(chan error, 1)
-			go func() { opened <- srv.establishExec(ctx, run, h) }()
 			close(pending)
 			if err := <-opened; (err == nil) != tc.check {
 				t.Fatalf("the promotion's opening = %v with its check %v", err, tc.check)
+			}
+			if hookRan.Load() != tc.check {
+				t.Fatalf("the promotion's Attach ran = %v with its check %v", hookRan.Load(), tc.check)
+			}
+			if err, _ := hookErr.Load().(error); err != nil {
+				t.Fatal(err)
+			}
+			if hookDeliverable.Load() {
+				t.Fatal("canDeliver inside the promotion's Attach, after its check and before its install: input would reach the old exec")
 			}
 			if err := h.writeGated(&h.mux, []byte("k")); err != nil && tc.check {
 				t.Fatal(err)
