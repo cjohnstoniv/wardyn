@@ -812,13 +812,13 @@ A model provider's service grant asks its identity provider for a token. These a
   - The background refresher passes once a minute, 8 attempts at a time. A rotation or a removal reaches a server within about 90 seconds: up to 60 seconds to the next pass, 5 seconds of reads and one 25-second attempt. Each further 8 due rows that are slow at the same time add 25 seconds, and so does a pass that runs past 60 seconds.
   - A failed request shows when its attempt returns, at most 25 seconds after it began.
 - **Recording.**
-  - The `model_provider.service_grant.mint` success row commits with the publication of the token. It means the token was issued and released to that server's cache, never that anything received it.
-  - A publication that does not commit is settled afterwards, or written to the audit spool when the database is down. The database therefore holds every mint row except one whose publication and settle both failed.
+  - The `model_provider.service_grant.mint` success row commits with the publication of the token. Success means the provider issued a token. A success without `superseded` means Wardyn committed its publication; a newer cached entry can still win the cache, and nothing says anything received the token.
+  - A publication that does not commit is settled afterwards, or written to the audit spool when the database is down. The database therefore holds every mint row except one whose publication and settle both failed, or one that could not be prepared, in which case the token is not published.
   - A row that failed both ways is logged under `AUDIT WRITE FAILED:` with its `event_id`, a `disposition`, `commit_unknown` and `spool_append_failed`. The disposition is `lost` only when no spool is set and both failures were definite. It is `unconfirmed` when a commit's answer was lost, or the spool's append failed, because that line may still be on disk. A failed append logs `AUDIT FALLBACK SPOOL FAILED (EVENT LOST)`, the line the spool alert matches, even when a commit's answer was lost too.
 - **Sink copies.**
   - Each server sends a copy of a mint row to the audit sinks after the row is recorded, from a queue of 64, in queue order and not commit order. Delivery is best effort.
   - A full queue or a stop drops copies. The server logs the ids of what it dropped and counts each once. The one copy being sent at a stop may still reach the sink, and the log says it is unconfirmed.
-  - A row whose commit outcome is unknown sends no copy: the database row is the record.
+  - When a commit's answer was lost and the database then settles the row, the copy is of the canonical row. Only the spool fallback after an unknown commit sends no copy: the database row is the record.
 - **Requests in flight.**
   - A server has 16 permits, one for each token request in flight and each mint row not yet recorded. Several can be for one grant. An attempt that finds none sends nothing.
   - One refused before its record read reads nothing, and answers from a token already published with more than a minute left, or `unavailable`. One refused at the final reservation may have read the record, and answers `unavailable`.

@@ -203,7 +203,7 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
 ## The continuous lane
 
 - Everything above is about **release** images — the ten `vX.Y.Z`-tagged images `release.yml` publishes.
-- A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:sha-<short-sha>`. It checks that the image's CLIs and daemon report the commit and signs that digest. Only then does `ghcr.io/cjohnstoniv/wardynd:latest` move to it.
+- A second lane publishes each push to `main` once CI passes on it: [`.github/workflows/publish-image.yml`](../.github/workflows/publish-image.yml) builds `wardynd` alone and pushes `ghcr.io/cjohnstoniv/wardynd:sha-<short-sha>`. It runs the version command for the two amd64 CLIs in the image, checks that every regular file copied out of each architecture's image contains the revision text, and signs that digest. Only then does `ghcr.io/cjohnstoniv/wardynd:latest` move to it.
 
 Those tags are **signed but not attested**, and their signature is under a different identity:
 
