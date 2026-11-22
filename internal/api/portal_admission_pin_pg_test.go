@@ -16,7 +16,7 @@ import (
 
 // A portal with no group and no claim match admits on the token checks alone, and nothing else about the
 // person's authority moves with it: the user type comes from the portal row (the exchange copies it into the
-// grant, delegation_portal.go:247, and the helper's grant models that copy), the person enters a unit through a
+// grant in portalExchange, and the helper's grant models that copy), the person enters a unit through a
 // membership naming that user type, and the pin bounds the pick. The type's top-priority membership is a unit
 // outside the pin, so the default pick leaves the pin and is refused; only the named unit under the pin
 // launches. A portal pinned to that other unit, on the same type, lands there by default: the control that the
@@ -81,11 +81,12 @@ func TestPortalAdmission_PinUserTypeAndMembershipHoldWithoutGroup_PG(t *testing.
 	}
 
 	// Control: a portal whose row carries the standard type, on the same pin, gives its person none of the
-	// type's membership or grant, so the person launches nothing. The type applied is the portal row's.
+	// contractor type's grant, so the restricted agent is refused (the agent check runs before any unit check).
+	// The type applied is the portal row's.
 	plain := e.portal(t, e.bind(t), &e.plat.ID)
 	_, plainTok := e.person(t, plain, "carol")
-	if w := e.post(t, "/api/v1/runs", plainTok, pinRun(e.team.Name)); w.Code == http.StatusCreated {
-		t.Errorf("a standard-type portal launched in the team = %d %s, want a refusal", w.Code, w.Body.String())
+	if w := e.post(t, "/api/v1/runs", plainTok, pinRun("")); w.Code != http.StatusForbidden || errorReason(w) != "capability_agent" {
+		t.Errorf("a standard-type portal's launch = %d %s, want 403 capability_agent", w.Code, w.Body.String())
 	}
 	if rows := e.rows("run.create"); len(rows) != 2 {
 		t.Errorf("run.create rows = %d, want 2 (the pinned portal's team run and the control's other-unit run)", len(rows))
