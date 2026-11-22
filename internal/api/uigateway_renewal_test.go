@@ -835,6 +835,9 @@ func TestUIIssuerPortal_BackgroundDoorReadsAnswer503(t *testing.T) {
 				if issuer {
 					ta.admitBy = time.Now().Add(200 * time.Millisecond)
 				}
+				if !issuer && tc.audit != nil {
+					ta.caller = "caller" // not the watch door's ticket: a policy that reads as no inbound app answers the background-only refusal
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond) // the opening's, or the request's end
 				defer cancel()
 				req := httptest.NewRequestWithContext(ctx, http.MethodGet, uiEnterPath, nil)
@@ -848,17 +851,9 @@ func TestUIIssuerPortal_BackgroundDoorReadsAnswer503(t *testing.T) {
 					t.Fatalf("another ticket's answer changed to the issuer's 503: %s", rec.Body.String())
 				case !issuer && tc.site != nil && (!answered || rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), reasonDesktopSignInsOff)):
 					t.Fatalf("another ticket's unreadable roster: %v %d %s, want 403 %s", answered, rec.Code, rec.Body.String(), reasonDesktopSignInsOff)
-				case !issuer && tc.audit != nil:
-					// An unreadable policy is no inbound app: the answer is the one a readable policy gives the same ticket.
-					h2, st2 := bgWatchHarness(t)
-					h2.srv.cfg.Store = &issuerDoorStore{desktopSiteStore: st2}
-					want := httptest.NewRecorder()
-					wantAnswered := h2.srv.uiBackgroundDoorRefused(want, httptest.NewRequest(http.MethodGet, uiEnterPath, nil),
-						backgroundOnlyRefusal(h2.run, "web application gateway"), h2.run, uiDesktopAppName, ta)
-					if answered != wantAnswered || rec.Code != want.Code || rec.Body.String() != want.Body.String() {
-						t.Fatalf("another ticket's unreadable policy: %v %d %q, want the readable policy's %v %d %q",
-							answered, rec.Code, rec.Body.String(), wantAnswered, want.Code, want.Body.String())
-					}
+				case !issuer && tc.audit != nil && (!answered || rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), reasonRunBackgroundOnly)):
+					// An unreadable policy is no inbound app: the ticket takes the refusal, and is not let through as inbound.
+					t.Fatalf("another ticket's unreadable policy: %v %d %s, want 409 %s", answered, rec.Code, rec.Body.String(), reasonRunBackgroundOnly)
 				}
 			})
 		}
