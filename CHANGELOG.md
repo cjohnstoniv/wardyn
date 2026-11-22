@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-11-23
+
 ### Added
 
 - An issuer portal's person can read their own non-interactive run's command output on a runner that does not capture it, such as Kubernetes: `GET /runs/{id}/output` recovers it from the run's recording, masked, with no input and no attach session. An interactive run's output and its pane snapshot stay closed to every portal.
