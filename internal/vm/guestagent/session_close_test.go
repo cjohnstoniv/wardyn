@@ -102,8 +102,18 @@ func TestSessionClose_WakesBlockedStdinWrite(t *testing.T) {
 		t.Fatalf("Stdin.Write returned %v before Close with nothing read", w.err)
 	case <-time.After(300 * time.Millisecond):
 	}
-	during := echoStart("during")
-	duringErr := wait(during, time.Second) // a timeout (the window stall) is recorded; any other error fails below
+	// The write has stalled once the other session's input cannot pass either: the stuck exec's unread input
+	// then holds the shared connection's window, so the write is parked inside a frame, holding the frame
+	// lock. Until then it may still be moving (a slow runner), and a graceful Stdin.Close can pass between
+	// its frames. A timeout (the stall) is recorded; any other error fails below.
+	var during chan error
+	var duringErr error
+	for until := time.Now().Add(10 * time.Second); ; {
+		during = echoStart("during")
+		if duringErr = wait(during, time.Second); duringErr != nil || time.Now().After(until) {
+			break
+		}
+	}
 	graceful := make(chan error, 1)
 	go func() { graceful <- s.Stdin.Close() }()
 	select {
