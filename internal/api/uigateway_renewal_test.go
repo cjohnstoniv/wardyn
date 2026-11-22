@@ -371,19 +371,30 @@ func renewingRig(t *testing.T) (*issuerUIRig, types.PortalGrant, *http.Cookie) {
 }
 
 // TestUIRenewal_ContinuingGrantsKeepServing: while the portal keeps minting the person grants of the same
-// chain, each before the last one ends, the session keeps serving past every single grant's end, and its
-// cookie expires at redemption plus the session TTL, not with the entry grant.
+// chain, each before the last one ends, the session keeps serving past every single grant's end, through
+// 24 minutes after redemption, and its cookie expires at redemption plus the session TTL, not with the entry
+// grant. A portal revoke then refuses that same cookie's next request.
 func TestUIRenewal_ContinuingGrantsKeepServing(t *testing.T) {
 	rig, a, c := renewingRig(t)
-	if want := rig.clock.now().Add(rig.srv.uiSessionTTL() - time.Minute); c.Expires.Before(want) {
+	redeemed := rig.clock.now()
+	if want := redeemed.Add(rig.srv.uiSessionTTL() - time.Minute); c.Expires.Before(want) {
 		t.Fatalf("a renewable cookie expires %v, capped by its entry grant (%v)", c.Expires, a.ExpiresAt)
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 6; i++ {
 		rig.is.grant(rig.principal, a.ChainID, rig.clock.now().Add(5*time.Minute))
 		rig.clock.advance(4 * time.Minute)
 		if r := rig.relay(c); r.Code != http.StatusOK {
 			t.Fatalf("renewal %d, %v past the entry grant's end: %d %s", i, rig.clock.now().Sub(a.ExpiresAt), r.Code, r.Body.String())
 		}
+	}
+	if d := rig.clock.now().Sub(redeemed); d < 24*time.Minute {
+		t.Fatalf("the session was last served %v after redemption, want 24m", d)
+	}
+	rig.is.mu.Lock()
+	rig.is.revoked = true
+	rig.is.mu.Unlock()
+	if r := rig.relay(c); r.Code != http.StatusForbidden {
+		t.Fatalf("the same cookie after a portal revoke, 24m in: %d, want 403", r.Code)
 	}
 }
 
