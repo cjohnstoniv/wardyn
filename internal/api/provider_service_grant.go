@@ -272,17 +272,18 @@ type serviceGrantFlight struct {
 }
 
 // serviceGrantJoin returns key's running flight, or starts fn as a new one on a goBackground goroutine. The flight
-// leaves the map before done is closed, so a caller arriving after it ends starts a new one.
-func (s *Server) serviceGrantJoin(key string, fn func() (serviceGrantMinted, error)) *serviceGrantFlight {
+// leaves the map before done is closed, so a caller arriving after it ends starts a new one. joined reports a
+// running flight.
+func (s *Server) serviceGrantJoin(key string, fn func() (serviceGrantMinted, error)) (f *serviceGrantFlight, joined bool) {
 	s.svcGrant.mu.Lock()
 	defer s.svcGrant.mu.Unlock()
-	if f, ok := s.svcGrant.flights[key]; ok {
-		return f
+	if running, ok := s.svcGrant.flights[key]; ok {
+		return running, true
 	}
 	if s.svcGrant.flights == nil {
 		s.svcGrant.flights = map[string]*serviceGrantFlight{}
 	}
-	f := &serviceGrantFlight{done: make(chan struct{})}
+	f = &serviceGrantFlight{done: make(chan struct{})}
 	s.svcGrant.flights[key] = f
 	s.goBackground(func() {
 		defer func() {
@@ -300,7 +301,7 @@ func (s *Server) serviceGrantJoin(key string, fn func() (serviceGrantMinted, err
 		}()
 		f.tok, f.err = fn()
 	})
-	return f
+	return f, false
 }
 
 // serviceGrantTransport is the round tripper of the token request: the configured one, else the daemon's.
@@ -440,7 +441,7 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 	// The elected flight publishes the one result, a failure included, so a waiter never records the same
 	// failed request again after a newer attempt has succeeded. It runs under the elected attempt's context; a
 	// caller waits for it only until its own deadline.
-	f := s.serviceGrantJoin(key, func() (serviceGrantMinted, error) {
+	f, joined := s.serviceGrantJoin(key, func() (serviceGrantMinted, error) {
 		tok, merr := s.serviceGrantMint(ctx, tctx, p, digest, rev, revOK, trigger, attempt, gen)
 		var se *serviceGrantError
 		if errors.As(merr, &se) && se.refused {
@@ -460,6 +461,9 @@ func (s *Server) serviceGrantTokenOnce(ctx context.Context, p types.ModelProvide
 		}
 		return tok, merr
 	})
+	if joined {
+		s.svcGrant.stop("flight.joined")
+	}
 	select {
 	case <-f.done:
 		return f.tok, f.err

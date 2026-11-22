@@ -333,12 +333,16 @@ func (s *pubPGStale) onlyT1(t *testing.T) {
 	}
 }
 
-// pair starts a refresh attempt for T2 and, once its row id is fixed, a concurrent resolve that joins its flight.
+// pair starts a refresh attempt for T2 and, once its row id is fixed, a concurrent resolve, and returns once that
+// resolve has joined the refresh's flight: one that arrives after the flight ends would mint on its own.
 func (s *pubPGStale) pair(t *testing.T) (refresh, resolve <-chan pubPGMint, t2 uuid.UUID) {
 	t.Helper()
 	refresh = pubPGAsync(s.f, s.row, serviceGrantTriggerRefresh)
 	pubPGPoll(t, "the attempt's row id", 5*time.Second, func() bool { return len(s.ids()) >= 2 })
+	joined := s.gates.hold("flight.joined")
 	resolve = pubPGAsync(s.f, s.row, serviceGrantTriggerResolve)
+	joined.await(t)
+	joined.release()
 	return refresh, resolve, s.ids()[1]
 }
 
