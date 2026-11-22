@@ -126,6 +126,8 @@ export interface MacVMCaps {
   base: MacVMBase;
   /** The runner keeps a person's disk drives and kept work folders as disk images on this Mac, and deletes them. */
   disk_drives?: boolean;
+  /** How many sessions this runner process completed with the organisation before this one; 0 says the process is new. Absent from a runner that does not count. */
+  prior_sessions?: number;
   /** The runner opens an attended window (keyboard and pointer) onto a macOS VM run it holds. */
   window?: boolean;
   /** The runner keeps a person's kept machines and deletes them. */
