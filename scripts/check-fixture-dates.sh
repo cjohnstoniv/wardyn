@@ -181,6 +181,12 @@ declare -A ALLOWLIST=(
   # Invitations and service identities: a fixed instant that is wire passthrough (CLI table rows, the account
   # lists) or the frozen clock the token dialog and the copy formatters are tested against; nothing reads the real clock.
   ["cmd/wardyn/service_identity_test.go"]=1
+  # The pinned kill receipt: a fixed id and time carried into the event unchanged and compared for equality only;
+  # nothing reads the real clock.
+  ["internal/api/portal_kill_guard_test.go"]=2
+  # The drive delete fence backfill: a created_at in the year 2100 stands for a database clock set back, so the
+  # backfill must mark the row whatever its stored time says; the migration reads no clock against it.
+  ["internal/db/drive_delete_fence_migration_pg_test.go"]=2
   ["ui/src/app/components/screens/settings/token-dialog.test.tsx"]=1
   ["ui/src/app/components/screens/settings/your-account-screen.test.tsx"]=2
   ["ui/src/app/components/wardyn/copy/service-tokens.test.ts"]=4
