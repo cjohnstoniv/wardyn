@@ -50,9 +50,11 @@ type uiDispatch struct {
 	now func() time.Time
 }
 
-// withUIDispatchBy sets a relayed request's dispatch time (relayUISession).
-func (s *Server) withUIDispatchBy(ctx context.Context, by time.Time) context.Context {
-	return context.WithValue(ctx, uiDispatchCtxKey{}, uiDispatch{by: by, now: s.cfg.Now})
+// withUIDispatchBy sets a relayed request's dispatch time (relayUISession). by is on the wall clock (the check's
+// start, read with time.Now), and so is the clock it is read against: the gate's timers are wall-clock timers,
+// and Config.Now, which a test may move, is not the clock by was read on.
+func withUIDispatchBy(ctx context.Context, by time.Time) context.Context {
+	return context.WithValue(ctx, uiDispatchCtxKey{}, uiDispatch{by: by, now: time.Now})
 }
 
 // uiDispatchFrom is ctx's dispatch time; false for a request not on an issuer portal.

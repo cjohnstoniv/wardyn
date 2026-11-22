@@ -99,6 +99,11 @@ func dispatchStalls() []dispatchStall {
 				rig.relayAsync(ctx, "/hold", c)
 			}
 			waitWithin(t, 5*time.Second, "the port's connections held", func() bool { return slots(rig.srv, rig.run.ID) == maxUIConnsPerRun })
+			waitWithin(t, 5*time.Second, "the held requests written", func() bool { // one driver write each, before this request
+				rig.dr.mu.Lock()
+				defer rig.dr.mu.Unlock()
+				return len(rig.dr.hs) >= maxUIConnsPerRun
+			})
 			close(entered)
 		}},
 		{name: "c a stalled thaw", typed: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
@@ -146,6 +151,7 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 				c := rig.session(rig.grant)
 				entered, release := make(chan struct{}), make(chan struct{})
 				st.arm(t, rig, c, entered, release)
+				_, held := rig.dr.bytesAtOrAfter(time.Now()) // the stall's own requests' bytes (b's held connections), not this request's
 				t0 := time.Now()
 				by := t0.Add(rig.fresh) // at or before the request's dispatch time
 				ans := rig.relayAsync(context.Background(), "/", c)
@@ -166,8 +172,8 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 				if !after {
 					return
 				}
-				if all != 0 || r.Code != http.StatusServiceUnavailable {
-					t.Fatalf("released after: %d bytes, answer %d %s; want 0 and the 503", all, r.Code, r.Body.String())
+				if all-held != 0 || r.Code != http.StatusServiceUnavailable {
+					t.Fatalf("released after: %d bytes, answer %d %s; want 0 and the 503", all-held, r.Code, r.Body.String())
 				}
 				if st.typed && dispatchReason(r) != uiDeniedReasonDelegationUnavailable {
 					t.Fatalf("released after: reason %q, want the dispatch 503's %q", dispatchReason(r), uiDeniedReasonDelegationUnavailable)

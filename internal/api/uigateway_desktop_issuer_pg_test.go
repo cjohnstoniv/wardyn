@@ -173,8 +173,10 @@ func TestUIDesktopIssuerPortal_AdmissionClosedReadHeldPastBound_PG(t *testing.T)
 }
 
 // heldDesktopReadStore holds the desktop's opening reads until ctx ends: the rules read (the run's policy
-// rows) once policy is set, and once signIn is set the run read after the rules read, which is the sign-in
-// watch's (watchVMSignIn reads on, for a store that keeps take overs).
+// rows) once policy is set, and once signIn is set the one run read after the rules read, which is the sign-in
+// watch's (watchVMSignIn reads on, for a store that keeps take overs). Only that one: the stream's own watch
+// reads the run from checkStart plus its interval, and the handler's end joins a read already running, so
+// holding that read too would hold the refusal's end for the watch's bound, not the opening's.
 type heldDesktopReadStore struct {
 	issuerPGStore
 	policy, signIn, armed *atomic.Bool
@@ -186,14 +188,14 @@ func (s heldDesktopReadStore) QueryAuditEvents(ctx context.Context, runID uuid.U
 		return nil, ctx.Err()
 	}
 	events, err := s.issuerPGStore.QueryAuditEvents(ctx, runID, limit)
-	if s.signIn.Load() {
+	if s.signIn.CompareAndSwap(true, false) {
 		s.armed.Store(true)
 	}
 	return events, err
 }
 
 func (s heldDesktopReadStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
-	if s.armed.Load() {
+	if s.armed.CompareAndSwap(true, false) {
 		<-ctx.Done()
 		return types.AgentRun{}, ctx.Err()
 	}

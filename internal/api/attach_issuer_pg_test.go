@@ -91,6 +91,12 @@ func (s issuerAttachStore) GetGovernanceUnitChain(ctx context.Context, id uuid.U
 	return s.pg.GetGovernanceUnitChain(ctx, id)
 }
 
+// ListGovernanceMemberships is the units' memberships on Postgres, beside the units above: a thaw re-checks
+// that a membership on the run's unit could still match its owner (ownerMembershipRefusal).
+func (s issuerAttachStore) ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMembership, error) {
+	return s.pg.ListGovernanceMemberships(ctx)
+}
+
 // issuerAttachAudit records the rig's audit rows; while hold is set, the first session.attach row waits for
 // it to close, and each session.detach row's time is sent on detached.
 type issuerAttachAudit struct {
@@ -464,8 +470,8 @@ func TestAttachIssuerPortal_GrantEndCarriedPastSlowSetup_PG(t *testing.T) {
 }
 
 // TestAttachIssuerPortal_LocalRunnerReadHeld_PG: a portal person's own local-placement run asks for transport=local
-// and its runner read hangs. The terminal answers the retryable 503 within the opening bound, not the 409 a
-// runner that is not theirs gets, and not when the store answers.
+// and its runner read hangs. An issuer portal's ticket never attaches locally, so the terminal answers the 409
+// with detail issuer_portal before any runner read, never waiting on the store that holds it.
 func TestAttachIssuerPortal_LocalRunnerReadHeld_PG(t *testing.T) {
 	const bound = time.Second
 	setSupportWatch(t, time.Hour, bound)
@@ -491,11 +497,11 @@ func TestAttachIssuerPortal_LocalRunnerReadHeld_PG(t *testing.T) {
 		_ = c.CloseNow()
 		t.Fatal("the terminal opened while its runner could not be read")
 	}
-	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("a held runner read: %v %v, want the retryable 503", resp, err)
+	if resp == nil || resp.StatusCode != http.StatusConflict {
+		t.Fatalf("a held runner read: %v %v, want the 409 an issuer portal's local attach gets", resp, err)
 	}
-	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), attachUnverifiableMsg) {
-		t.Fatalf("a held runner read answered %s, want %s", body, attachUnverifiableMsg)
+	if body, _ := io.ReadAll(resp.Body); !strings.Contains(string(body), `"detail":"`+localAttachIssuerPortal+`"`) {
+		t.Fatalf("a held runner read answered %s, want detail %s", body, localAttachIssuerPortal)
 	}
 	if took > bound+400*time.Millisecond {
 		t.Fatalf("the open waited %v on the runner read, want within %v", took, bound+400*time.Millisecond)

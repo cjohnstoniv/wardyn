@@ -42,7 +42,6 @@ type dispatchRunner struct {
 	mu     sync.Mutex
 	starts []dispatchStart
 	hs     []dispatchH
-	reads  []time.Time // the app's receipt, as the backend read it
 	// hook, when set for a kind, runs before that start with its context; an error refuses the start.
 	hook   map[string]func(ctx context.Context) error
 	closes int

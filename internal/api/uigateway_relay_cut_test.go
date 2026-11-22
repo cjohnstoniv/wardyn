@@ -500,8 +500,12 @@ func TestUIIssuerPortal_NonRenewableStreamEndsAtGrantExpiry(t *testing.T) {
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(2*time.Second))
 	c := rig.session(a)
 	rig.is.grant(rig.principal, a.ChainID, rig.clock.now().Add(time.Hour))
-	endsAt(t, rig, c, rig.wall(a.ExpiresAt), "a non-renewable stream")
+	endsAt(t, rig, c, rig.wall(cookieEnd(a.ExpiresAt)), "a non-renewable stream")
 }
+
+// cookieEnd is the expiry a non-renewable cookie of a grant ending at end is signed with: end in whole seconds
+// (uiSession.Expires), which the stream's end (uiStreamEnd) takes when it is the earliest, as it is here.
+func cookieEnd(end time.Time) time.Time { return time.Unix(end.Unix(), 0) }
 
 // TestPortalDisable_OpenStreamsEndAtGrantExpiry: a person the identity provider disabled gets no further
 // grant, so a renewable session's open stream ends at the end its chain had when it was admitted.
@@ -691,7 +695,7 @@ func TestUIRelayIssuerPortal_InterimResponseBoundedByEnd(t *testing.T) {
 	rig := newIssuerUIRig(t, streamBackend(&inputLog{}))
 	a := rig.is.grant(rig.principal, uuid.Nil, rig.clock.now().Add(3*time.Second))
 	c := rig.session(a)
-	end := rig.wall(a.ExpiresAt)
+	end := rig.wall(cookieEnd(a.ExpiresAt)) // renewal off: the cookie's signed expiry, the grant's end in whole seconds
 	conns := make(chan *stallConn, 4)
 	srv, ended := serveGateway(t, rig, gwHTTP1, conns)
 	rawRequest(t, srv, gwHTTP1, rig.path("/early?at="+strconv.FormatInt(end.Add(-time.Second).UnixNano(), 10)), c, "")

@@ -289,6 +289,9 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 	}
 	runID := run.ID
 	ticketBy, gated := h.openingGate(ctx)
+	if gated {
+		h.gated.Store(true) // before any opening: canDeliver then asks for this promotion's own writer
+	}
 	h.openMu.Lock()
 	defer h.openMu.Unlock()
 	for {

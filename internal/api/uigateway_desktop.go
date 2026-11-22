@@ -133,14 +133,8 @@ func (s *Server) uiDesktopClosedHere(sess uiSession, now time.Time) bool {
 	return ok
 }
 
-// uiDesktopClosed reports whether sess was closed on any replica. Only a closed answer is cached: an
-// open one is read from the store every time, and a store that cannot answer counts as closed.
-func (s *Server) uiDesktopClosed(ctx context.Context, sess uiSession, now time.Time) bool {
-	closed, unread := s.uiDesktopClosedRead(ctx, sess, now)
-	return closed || unread
-}
-
-// uiDesktopClosedRead is uiDesktopClosed with its two answers apart: sess was closed, or the store couldn't say.
+// uiDesktopClosedRead reports whether sess was closed on any replica, and whether the store could not say. Only a
+// closed answer is cached: an open one is read from the store every time.
 func (s *Server) uiDesktopClosedRead(ctx context.Context, sess uiSession, now time.Time) (closed, unread bool) {
 	if s.uiDesktopClosedHere(sess, now) {
 		return true, false
