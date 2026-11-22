@@ -238,7 +238,7 @@ func TestLegacyDockerReleaseRetry_SendsAgainUntilTheTableHoldsTheRow(t *testing.
 // A call of the route delivers and settles the earlier owed record on either runner target, and its zero-release
 // answer keeps the replayed id: on the Docker target (nothing marked) and on every other target (nothing to
 // release) the answer is {released: 0, replayed: [id]}; the next call answers {released: 0}.
-// Values: target "docker" and "k8s" (a non-Docker target) and "" (none); marked drives 0 and 2; the Docker target
+// Values: target "docker", "k8s" and "local" (non-Docker targets; New turns an empty target into "docker"); marked drives 0 and 2; the Docker target
 // with 2 marked releases them and answers its own event_id with the earlier id replayed.
 func TestReleaseLegacyDockerDrives_AnswersTheReplayedIdsOnEveryTarget(t *testing.T) {
 	type answer struct {
@@ -254,7 +254,7 @@ func TestReleaseLegacyDockerDrives_AnswersTheReplayedIdsOnEveryTarget(t *testing
 	}{
 		{"docker", 0, 0, 1},
 		{"k8s", 2, 0, 0},
-		{"", 2, 0, 0},
+		{"local", 2, 0, 0},
 		{"docker", 2, 2, 1},
 	} {
 		d := newReleaseDouble()

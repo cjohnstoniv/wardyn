@@ -128,8 +128,10 @@ func TestLegacyDockerRelease_HoldsReleasesAndTouchesNothingElse_PG(t *testing.T)
 
 	// Not an operator: a member and a security administrator are refused, and nothing is released or recorded.
 	for name, c := range map[string]*http.Cookie{"member": e.person, "security administrator": e.alice} {
-		if code, _ := callRelease(t, e, e.srv, c); code != http.StatusForbidden {
-			t.Errorf("%s calling the release = %d, want 403", name, code)
+		// requireOperator (http.go:505-516) refuses with ReasonAdminSurface, which the registry (authz/registry.go:166) makes a
+		// 403 deny and refuse (refusal.go:56-59) writes as the wire reason.
+		if w := doSSO(t, e.srv, http.MethodPost, legacyReleasePath, c, ""); w.Code != http.StatusForbidden || errorReason(w) != string(authz.ReasonAdminSurface) {
+			t.Errorf("%s calling the release = %d reason %q, want 403 %s", name, w.Code, errorReason(w), authz.ReasonAdminSurface)
 		}
 	}
 	for _, d := range []types.UserDrive{mine, theirs, disk} {

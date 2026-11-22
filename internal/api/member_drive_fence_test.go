@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -23,7 +24,8 @@ func TestLegacyHeldDriveIsListedButNotAttachable(t *testing.T) {
 	d := seedMemberDrive(st, aliceSub, "Notes")
 	d.LegacyUnsettled = true
 	st.drives[d.ID] = d
-	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	// The delete at the end needs a substrate that confirms it (a reply with no outcome keeps the row held).
+	srv, _ := memberDriveServer(st, &memberDriveRunner{reclaimRunner: reclaimRunner{Runner: &fakeRunner{}, outcome: runner.DriveReclaimDeleted}}, "docker")
 	alice := personCtx(aliceSub)
 
 	got := meDrivesOf(t, srv, alice)
