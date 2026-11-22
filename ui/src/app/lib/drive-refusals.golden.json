@@ -23,7 +23,7 @@
   { "key": "MEMBER_NAME_TAKEN", "args": ["Team data"], "text": "\"Team data\" is already the name of a drive you can use. Pick another name." },
   { "key": "MEMBER_IN_USE", "args": [], "text": "A run is still using this drive. End that run, or delete a run kept after its end, then try again." },
   { "key": "MEMBER_BUSY", "args": [], "text": "This drive is already being deleted." },
-  { "key": "MEMBER_DELETE_FAILED", "args": [], "text": "The drive's files couldn't be deleted. Nothing was removed; try again." },
+  { "key": "MEMBER_DELETE_FAILED", "args": [], "text": "Wardyn could not confirm that deletion finished. The drive is held while deletion is pending." },
   { "key": "MEMBER_RATE_LIMITED", "args": [], "text": "Too many drive changes; wait a minute and try again." },
   { "key": "MEMBER_MAC_UNAVAILABLE", "args": [], "text": "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date." },
   { "key": "MEMBER_DELETE_DEFERRED", "args": ["Studio Mac"], "text": "Deleting. Studio Mac is offline, so the disk is removed when it reconnects." },

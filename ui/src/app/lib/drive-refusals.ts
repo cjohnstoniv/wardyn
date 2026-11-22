@@ -44,7 +44,7 @@ export const DRIVE_REFUSAL = {
   MEMBER_IN_USE: () =>
     "A run is still using this drive. End that run, or delete a run kept after its end, then try again.",
   MEMBER_BUSY: () => "This drive is already being deleted.",
-  MEMBER_DELETE_FAILED: () => "The drive's files couldn't be deleted. Nothing was removed; try again.",
+  MEMBER_DELETE_FAILED: () => "Wardyn could not confirm that deletion finished. The drive is held while deletion is pending.",
   MEMBER_RATE_LIMITED: () => "Too many drive changes; wait a minute and try again.",
   // A disk drive kept on a Mac: made on one of the person's own Macs, and deleted there.
   MEMBER_MAC_UNAVAILABLE: () => "runner_id: choose one of your own Macs. It must be online, with a runner that is up to date.",

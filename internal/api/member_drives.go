@@ -89,7 +89,7 @@ func memberDriveReleasingOnMacMsg(name string) string {
 func memberDriveBusyMsg() string { return "This drive is already being deleted." }
 
 func memberDriveDeleteFailedMsg() string {
-	return "The drive's files couldn't be deleted. Nothing was removed; try again."
+	return "Wardyn could not confirm that deletion finished. The drive is held while deletion is pending."
 }
 
 // memberDriveMacUnavailableMsg refuses a disk drive on a runner that is not one of the caller's own
@@ -544,9 +544,10 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 		switch {
 		case rerr == nil:
 			res.outcome = string(outcome)
-		case errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveNotReclaimable) || errors.Is(rerr, runner.ErrDriveUntouched):
-			res.outcome, res.reason, res.driverErr = driveReclaimOutcomeRefused, reasonMemberDriveInUse, rerr
-			res.untouched = errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveUntouched)
+		case errors.Is(rerr, runner.ErrDriveInUse) || errors.Is(rerr, runner.ErrDriveUntouched):
+			// Only the typed refusals are definitive. A bare ErrDriveNotReclaimable (a k8s claim already
+			// Terminating) does not say nothing was touched, so it is the ambiguous failure below.
+			res.outcome, res.reason, res.driverErr, res.untouched = driveReclaimOutcomeRefused, reasonMemberDriveInUse, rerr, true
 		default:
 			slog.WarnContext(ctx, "api: member drive delete failed on the substrate",
 				slog.String("drive_id", d.ID.String()), slog.String("error", rerr.Error()))
@@ -563,6 +564,15 @@ func (s *Server) settleMemberDriveDelete(ctx context.Context, ms store.MemberDri
 	claimN := d.DeleteIssues
 	sweep := by == memberDriveByMacReconnect
 	var err error
+	if res.reason == "" && res.outcome != string(runner.DriveReclaimDeleted) && res.outcome != string(runner.DriveReclaimAlreadyAbsent) {
+		// Both reclaim paths end here. A reply with no outcome, or one this server does not know (a Mac's
+		// successful reply that omits it), is not affirmative evidence that the storage is gone: the call
+		// was issued, so the row stays held at the issued count and the answer is the ambiguous failure.
+		slog.WarnContext(ctx, "api: a member drive's delete came back with an outcome that is not deleted or already_absent",
+			slog.String("drive_id", d.ID.String()), slog.String("outcome", res.outcome))
+		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteFailed
+		return
+	}
 	switch {
 	case res.reason == "" || res.reason == reasonMemberDriveRecordOnly:
 		n := claimN // a record-only delete issued nothing
