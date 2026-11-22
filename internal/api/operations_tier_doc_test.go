@@ -303,6 +303,12 @@ var docTierRows = []struct{ route, token string }{
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/scim/status", "`GET /scim/status`"},
+	{"GET /api/v1/people/portal-person", "`GET /people/portal-person`"},
+	{"GET /api/v1/people/{principal}/portals", "`GET /people/{principal}/portals`"},
+	{"POST /api/v1/people/{principal}/suspend", "`POST /people/{principal}/suspend`"},
+	{"GET /api/v1/admin/portal-lifecycle/status", "`GET /admin/portal-lifecycle/status`"},
+	{"POST /api/v1/people/{principal}/reactivate", "`POST /people/{principal}/reactivate`"},
+	{"POST /api/v1/people/{principal}/purge", "`POST /people/{principal}/purge`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 	// 0.9 #1508: the invitation, service-identity and token-move routes, one row each.
 	{"POST /api/v1/people/{principal}/invitations", "`POST /people/{principal}/invitations`"},

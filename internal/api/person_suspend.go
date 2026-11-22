@@ -44,21 +44,29 @@ type portalPersonStateView struct {
 
 // denyPortalPerson records a refused lifecycle request, naming why. No identity, job or other row is written.
 func (s *Server) denyPortalPerson(r *http.Request, action, target, reason string) {
-	if action == "" {
-		return
-	}
 	actorType, actor := actorFromRequest(r)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, action, target, "denied", mustJSON(map[string]any{"reason": reason})))
+}
+
+// portalRefusal is the refusal resolvePortalPerson leaves for a lifecycle request: a denied row of action.
+func (s *Server) portalRefusal(r *http.Request, action string) func(principal, reason string) {
+	return func(principal, reason string) { s.denyPortalPerson(r, action, principal, reason) }
 }
 
 // resolvePortalPerson finds the portal person the {principal} path names, or answers and reports false: 422
 // portal_person_only for any other principal, 404 person_not_found for a portal principal no portal has ever
 // introduced (nothing is created by asking), and 404 portal_issuer_not_bound for a row whose issuer lost its
-// binding. action, when set, is the request row a refusal leaves.
-func (s *Server) resolvePortalPerson(w http.ResponseWriter, r *http.Request, action string) (portalLifecycleStore, store.PrincipalIdentity, bool) {
+// binding. onRefused, when set, leaves the request row of a refused lifecycle request (portalRefusal); a read
+// passes nil and leaves none.
+func (s *Server) resolvePortalPerson(w http.ResponseWriter, r *http.Request, onRefused func(principal, reason string)) (portalLifecycleStore, store.PrincipalIdentity, bool) {
 	principal := strings.TrimSpace(principalParam(r))
+	deny := func(reason string) {
+		if onRefused != nil {
+			onRefused(principal, reason)
+		}
+	}
 	if !types.IsPortalPersonPrincipal(principal) {
-		s.denyPortalPerson(r, action, principal, reasonPortalPersonOnly)
+		deny(reasonPortalPersonOnly)
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonPortalPersonOnly, "principal: this names a person who is not a portal person; only people an issuer portal introduced (delegate:person:...) can be acted on here")
 		return nil, store.PrincipalIdentity{}, false
 	}
@@ -81,13 +89,13 @@ func (s *Server) resolvePortalPerson(w http.ResponseWriter, r *http.Request, act
 				writeServerError(w, r, "check a portal person's issuer", err)
 				return nil, store.PrincipalIdentity{}, false
 			}
-			s.denyPortalPerson(r, action, principal, reasonPortalIssuerNotBound)
+			deny(reasonPortalIssuerNotBound)
 			writeErrorReason(w, http.StatusNotFound, reasonPortalIssuerNotBound, "this person's issuer has no binding")
 			return nil, store.PrincipalIdentity{}, false
 		}
 		return st, ident, true
 	}
-	s.denyPortalPerson(r, action, principal, reasonPersonNotFound)
+	deny(reasonPersonNotFound)
 	writeErrorReason(w, http.StatusNotFound, reasonPersonNotFound, "no portal has introduced this person, so there is nothing of theirs to act on")
 	return nil, store.PrincipalIdentity{}, false
 }
@@ -111,7 +119,7 @@ func (s *Server) writePortalPersonState(w http.ResponseWriter, r *http.Request, 
 // transaction as the deactivation, so a grant stops at its next request, and every run of theirs is killed.
 // The request answers 503 until every step is done, so a retry finishes it.
 func (s *Server) handleSuspendPortalPerson(w http.ResponseWriter, r *http.Request) {
-	st, ident, ok := s.resolvePortalPerson(w, r, "person.suspend")
+	st, ident, ok := s.resolvePortalPerson(w, r, s.portalRefusal(r, "person.suspend"))
 	if !ok {
 		return
 	}
@@ -160,7 +168,7 @@ func (s *Server) handleSuspendPortalPerson(w http.ResponseWriter, r *http.Reques
 // and any purge deadline, then writes a person.reactivate row. A purged person answers 409: the tombstone is
 // permanent.
 func (s *Server) handleReactivatePortalPerson(w http.ResponseWriter, r *http.Request) {
-	st, ident, ok := s.resolvePortalPerson(w, r, "person.reactivate")
+	st, ident, ok := s.resolvePortalPerson(w, r, s.portalRefusal(r, "person.reactivate"))
 	if !ok {
 		return
 	}
