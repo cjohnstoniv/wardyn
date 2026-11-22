@@ -31,7 +31,7 @@ func TestDriveTeamHome(t *testing.T) {
 	}
 }
 
-// TestValidateTeamDriveGrant: a team drive is allocated to groups only, pins no
+// TestValidateTeamDriveGrant: a team drive is allocated to groups or eligible issuer portals, pins no
 // directory, and is read-only unless members_can_write is set on a writable
 // drive; members_can_write means nothing on any other drive.
 func TestValidateTeamDriveGrant(t *testing.T) {
