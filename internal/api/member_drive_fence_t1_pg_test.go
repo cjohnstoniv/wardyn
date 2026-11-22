@@ -108,6 +108,16 @@ func (s *fencePausedWorker) awaitPaused(t *testing.T, done <-chan struct{}) {
 	}
 }
 
+// awaitDone waits, for a bounded time, for a worker to end.
+func awaitDone(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the worker did not finish within 30 s")
+	}
+}
+
 func newFencePausedWorker(pg store.PG) *fencePausedWorker {
 	return &fencePausedWorker{PG: pg, paused: make(chan struct{}), resume: make(chan struct{})}
 }
@@ -170,7 +180,7 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 			t.Fatalf("a later run asking for the cleared drive = %d %s, want 201", got.Code, got.Body)
 		}
 		w.release()
-		<-done
+		awaitDone(t, done)
 		afterwards(t, e, drive, calls)
 	})
 
@@ -200,7 +210,7 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 			t.Fatalf("a later run asking for the cleared drive = %d %s, want 201", got.Code, got.Body)
 		}
 		w.release()
-		<-done
+		awaitDone(t, done)
 		afterwards(t, e, drive, calls)
 	})
 }
@@ -237,7 +247,7 @@ func TestPG_DriveFence_CrashOnEitherSideOfTheIssue(t *testing.T) {
 		e.srv.cfg.Store = fenceCrashAtIssue{PG: e.pg, afterCommit: afterCommit}
 		done := make(chan struct{})
 		go func() { defer close(done); e.srv.finishQueuedKeptDrive(ctx, run.ID) }()
-		<-done
+		awaitDone(t, done)
 		e.srv.cfg.Store = e.pg
 		if calls.Load() != 0 {
 			t.Fatalf("substrate calls before the process stopped = %d, want 0", calls.Load())
