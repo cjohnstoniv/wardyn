@@ -53,7 +53,7 @@ const (
 	keepValues  = "posture values (modes, ids, counts, booleans), never a path or a spec"
 	keepRule    = "an approval rule as its security-tier author wrote it: kinds, repo and preset predicates, and the egress hosts and tools it approves; it holds no policy's workspace_mounts"
 	keepSigning = keepEgress + "; no_aws_host and unsigned_host are aws_signing_reason values about such a host"
-	keepGrant   = "the configured gateway's host name, never its URL: an egress destination its runs are allowed (run.subscription.inject's host), " +
+	keepGrant   = "the configured gateway's host name, never its URL: an egress destination its runs are allowed (the host resolveProviderLane derives from the provider's base URL), " +
 		"and the host the member-safe provider view names (providerHost); the token and refused-form hosts are withheld"
 )
 
