@@ -507,12 +507,12 @@ describe("support strip: the consent answer shows even when the next read fails"
     fireEvent.click(screen.getByRole("button", { name: "read again", hidden: true }));
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2));
     await act(async () => {
-      resolvePoll({ doors_offered: OFFERED, open: grant() });
+      resolvePoll({ doors_offered: OFFERED as SupportDoor[], open: grant() });
       resolveAccept(active());
     });
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
     await act(async () => {
-      resolveAfter({ doors_offered: OFFERED, ...after });
+      resolveAfter({ doors_offered: OFFERED as SupportDoor[], ...after });
     });
   }
 
