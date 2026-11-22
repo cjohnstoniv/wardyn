@@ -21,6 +21,9 @@ import (
 type issuerPGStore struct {
 	*uiMemStore
 	pg store.PG
+	// The console portals' legacy table on Postgres, which delegationLive reads for a grant portal_grants no
+	// longer answers (ended, or its portal revoked).
+	store.DelegateStore
 }
 
 var (
@@ -61,6 +64,12 @@ func (s issuerPGStore) ListGovernanceUnits(ctx context.Context) ([]types.Governa
 func (s issuerPGStore) GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
 	return s.pg.GetGovernanceUnitChain(ctx, id)
 }
+
+// ListGovernanceMemberships is the units' memberships on Postgres, beside the units above: a thaw re-checks
+// that a membership on the run's unit could still match its owner (ownerMembershipRefusal).
+func (s issuerPGStore) ListGovernanceMemberships(ctx context.Context) ([]types.GovernanceMembership, error) {
+	return s.pg.ListGovernanceMemberships(ctx)
+}
 func (s issuerPGStore) CloseUIDesktop(ctx context.Context, key string, at time.Time) error {
 	return s.pg.CloseUIDesktop(ctx, key, at)
 }
@@ -90,7 +99,7 @@ func newIssuerPGRig(t *testing.T, backend http.Handler, shape ...func(*types.Del
 		t.Fatalf("read the seeded grant: %v", err)
 	}
 	h := newUIHarness(t, backend)
-	h.srv.cfg.Store = issuerPGStore{uiMemStore: h.store, pg: e.st}
+	h.srv.cfg.Store = issuerPGStore{uiMemStore: h.store, pg: e.st, DelegateStore: e.st}
 	h.srv.cfg.SessionRevocations = &memRevocations{cut: map[string]time.Time{}}
 	h.srv.cfg.Now = time.Now // the grants' ends are on the database clock: these tests run on the real one
 	h.owner, h.run.CreatedBy, h.run.UnitID = principal, principal, &e.team.ID

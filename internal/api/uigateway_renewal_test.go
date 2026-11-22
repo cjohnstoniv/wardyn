@@ -50,6 +50,7 @@ type issuerUIStore struct {
 var (
 	_ store.PortalGrantStore = (*issuerUIStore)(nil)
 	_ store.DelegateReader   = (*issuerUIStore)(nil)
+	_ store.DelegateStore    = (*issuerUIStore)(nil)
 	_ identityBlocker        = (*issuerUIStore)(nil)
 )
 
@@ -119,6 +120,28 @@ func (s *issuerUIStore) StampPortalUsed(context.Context, uuid.UUID, time.Time) e
 
 func (s *issuerUIStore) SweepExpiredPortalGrants(context.Context, time.Time) (int64, error) {
 	return 0, nil
+}
+
+// The console portals' legacy table, empty, as Postgres has it beside portal_grants: a portal grant that has
+// ended or whose portal is revoked is read there next (delegationLive) and is not found, so it has ended.
+func (s *issuerUIStore) CreateDelegate(context.Context, types.Delegate, string) (types.Delegate, error) {
+	return types.Delegate{}, store.ErrNotFound
+}
+func (s *issuerUIStore) GetDelegateByRaw(context.Context, string) (types.Delegate, error) {
+	return types.Delegate{}, store.ErrNotFound
+}
+func (s *issuerUIStore) ListDelegates(context.Context) ([]types.Delegate, error) { return nil, nil }
+func (s *issuerUIStore) RevokeDelegate(context.Context, uuid.UUID, time.Time, bool) (types.Delegate, int, error) {
+	return types.Delegate{}, 0, store.ErrNotFound
+}
+func (s *issuerUIStore) MintDelegatedToken(context.Context, types.DelegatedToken, string, time.Time) (types.DelegatedToken, error) {
+	return types.DelegatedToken{}, store.ErrNotFound
+}
+func (s *issuerUIStore) GetDelegatedTokenByRaw(context.Context, string, time.Time) (types.DelegatedToken, error) {
+	return types.DelegatedToken{}, store.ErrNotFound
+}
+func (s *issuerUIStore) GetDelegatedTokenByID(context.Context, uuid.UUID, time.Time) (types.DelegatedToken, error) {
+	return types.DelegatedToken{}, store.ErrNotFound
 }
 
 func (s *issuerUIStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {

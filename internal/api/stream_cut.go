@@ -173,6 +173,9 @@ func (c *streamCut) Cut() {
 	interrupt := !streamCutNoInterrupt.Load()
 	if interrupt && !c.switched {
 		_ = c.rc.SetWriteDeadline(streamPast)
+		// The read side too: a request body still streaming in (an upload) is read no further, so draining it on
+		// the handler's way out (net/http reads up to 256 KiB of it) never holds the request open past the cut.
+		_ = c.rc.SetReadDeadline(streamPast)
 	}
 	conn, closers := c.conn, c.closers
 	c.closers = nil

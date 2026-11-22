@@ -186,6 +186,13 @@ func TestAttachIssuerPortal_OpenedSessionOutlivesDeadline_PG(t *testing.T) {
 	rig, _ := newDispatchAttachRig(t)
 	by := time.Now().Add(dispatchFresh)
 	writer := rig.dial(t)
+	// The writer's client reads all along, as a browser does: a client that never reads answers no ping, and the
+	// same person's second socket, admitted read-only, would evict it as stale (probeStaleWriter) within ~4 s.
+	closed := make(chan time.Time, 1)
+	go func() {
+		drainClient(writer)
+		closed <- time.Now()
+	}()
 	observer := rig.dial(t)
 	waitWithin(t, 5*time.Second, "both openings", func() bool {
 		rig.runner.mu.Lock()
@@ -225,15 +232,6 @@ func TestAttachIssuerPortal_OpenedSessionOutlivesDeadline_PG(t *testing.T) {
 	})
 	// A revoke after a timely opening is torn down by the watch, as before.
 	at := rig.suspend(t)
-	closed := make(chan time.Time, 1)
-	go func() {
-		for {
-			if _, _, err := writer.Read(context.Background()); err != nil {
-				closed <- time.Now()
-				return
-			}
-		}
-	}()
 	select {
 	case got := <-closed:
 		cutBy(t, "terminal opened in time, suspend after its dispatch time", at, got, relayEvery+relayBound+relaySlack)

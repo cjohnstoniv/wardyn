@@ -464,6 +464,12 @@ func (agreeStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, t
 	return false, nil
 }
 
+// GetDelegateByID answers the delegated caller's portal as a console portal (no issuer): an attach reads the
+// portal first (issuerPortalOf), and a console portal's caller keeps the person's own catalogue.
+func (agreeStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
+	return types.Delegate{ID: id, Name: "console portal"}, nil
+}
+
 // TestMemberDriveAttachAndDispatchAgree: for every caller kind, a member drive
 // attach and the dispatch re-read agree. A person's session, their own API
 // token and a delegated caller attach it and dispatch keeps it; a device or a

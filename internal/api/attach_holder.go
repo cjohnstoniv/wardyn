@@ -91,6 +91,10 @@ type attachHolder struct {
 	// holder: establishExec asks it before any opening the ticket's check does not cover. It returns when the
 	// check started and whether it passed.
 	recheck func(context.Context) (time.Time, bool)
+	// gated is set by establishExec when this holder's openings are gated (openingGate): an issuer portal's
+	// ticket or a check of its own. canDeliver reads it beside recheck, so a gated holder with no check of its
+	// own, whose every later opening establishExec refuses, delivers through no exec either.
+	gated atomic.Bool
 	// support is the support grant this holder's ticket was minted under (uuid.Nil for everyone else). A
 	// support holder never keeps the writer seat against the run's owner (evictSupportWriter), and waits
 	// behind every non-support observer (nextObserver).
@@ -220,11 +224,12 @@ func (h *attachHolder) canWrite() bool {
 }
 
 // canDeliver reports whether input and resizes may reach the sandbox through this holder now: canWrite, and for
-// a holder with its own check (an issuer portal's) a writer exec installed for its current promotion (writerGen).
-// canWrite alone admits input to the queue, so keystrokes typed during a promotion wait for that writer; they
-// never reach the observer's exec, nor an exec whose check a newer promotion has not repeated.
+// a holder with its own check (an issuer portal's), or whose openings are gated (gated), a writer exec installed
+// for its current promotion (writerGen). canWrite alone admits input to the queue, so keystrokes typed during a
+// promotion wait for that writer; they never reach the observer's exec, nor an exec whose check a newer
+// promotion has not repeated.
 func (h *attachHolder) canDeliver() bool {
-	return h.canWrite() && (h.recheck == nil || h.writerGen.Load() == h.promotions.Load()+1)
+	return h.canWrite() && ((h.recheck == nil && !h.gated.Load()) || h.writerGen.Load() == h.promotions.Load()+1)
 }
 
 // attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
