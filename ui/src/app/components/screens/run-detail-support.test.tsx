@@ -6,7 +6,7 @@
 // The run page's support strip: hidden until the setup answer carries support_sessions, the helper's Request help
 // dialog, the one banner each party reads, and the line for every way help ends.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { ModelAccessProvider } from "../wardyn/model-access-context";
@@ -235,7 +235,7 @@ describe("support strip: the banner", () => {
     const user = userEvent.setup();
     mount({ principal: "maya" });
     await screen.findByRole("button", { name: "End now" });
-    await user.click(screen.getByRole("button", { name: "read again" })); // started before the end
+    await user.click(screen.getByRole("button", { name: "read again", hidden: true })); // started before the end
     await user.click(screen.getByRole("button", { name: "End now" }));
     expect(await screen.findByTestId("support-ended")).toBeTruthy();
     await act(async () => release({ doors_offered: OFFERED as SupportDoor[], open: active() })); // the old answer lands late
@@ -259,7 +259,7 @@ describe("support strip: the banner", () => {
     const user = userEvent.setup();
     mount({ principal: "maya" });
     await user.click(await screen.findByRole("button", { name: "End now" })); // ends g-1, response held
-    await user.click(screen.getByRole("button", { name: "read again" })); // g-2 is now open
+    await user.click(screen.getByRole("button", { name: "read again", hidden: true })); // g-2 is now open
     await waitFor(() => expect(screen.getByTestId("support-active").textContent).toContain("pat"));
     await act(async () => release(endedA));
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
@@ -284,7 +284,7 @@ describe("support strip: the banner", () => {
     const user = userEvent.setup();
     mount({ principal: "maya" });
     await user.click(await screen.findByRole("button", { name: "End now" })); // ends g-1, response held
-    await user.click(screen.getByRole("button", { name: "read again" })); // g-2 came and went
+    await user.click(screen.getByRole("button", { name: "read again", hidden: true })); // g-2 came and went
     expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
     await act(async () => release(endedA));
     await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
@@ -316,7 +316,7 @@ describe("support strip: the banner", () => {
       const user = userEvent.setup();
       mount({ principal: "maya" });
       await user.click(await screen.findByRole("button", { name: "End now" }));
-      await user.click(screen.getByRole("button", { name: "read again" }));
+      await user.click(screen.getByRole("button", { name: "read again", hidden: true }));
       expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
       await act(async () => release(endedA));
       await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
@@ -350,7 +350,7 @@ describe("support strip: the banner", () => {
       const user = userEvent.setup();
       mount({ principal: "maya" });
       await user.click(await screen.findByRole("button", { name: "End now" }));
-      await user.click(screen.getByRole("button", { name: "read again" }));
+      await user.click(screen.getByRole("button", { name: "read again", hidden: true }));
       expect((await screen.findByTestId("support-ended")).textContent).toContain("Nobody answered");
       await act(async () => release(endedA));
       await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
@@ -410,6 +410,44 @@ describe("support strip: the consent answer shows even when the next read fails"
     await afterRead(2);
     expect(await screen.findByTestId("support-active")).toBeTruthy();
     expect(screen.queryByTestId("support-requested")).toBeNull();
+  });
+
+  // Accept A and hold its answer; the second read is the one a poll made while the answer was in flight.
+  async function holdAccept(second: SupportStatus) {
+    let resolve!: (g: SupportGrantView) => void;
+    api.accept.mockReturnValue(new Promise<SupportGrantView>((r) => (resolve = r)));
+    api.status
+      .mockResolvedValueOnce({ doors_offered: OFFERED, open: grant() })
+      .mockResolvedValueOnce({ doors_offered: OFFERED, ...second })
+      .mockRejectedValue(new Error("network down"));
+    const user = await review();
+    await user.click(screen.getByRole("checkbox", { name: /Terminal/ }));
+    await user.click(screen.getByRole("radio", { name: "30 minutes" }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(api.accept).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "read again", hidden: true }));
+    await afterRead(2);
+    await act(async () => {
+      resolve(active());
+    });
+    await afterRead(3);
+  }
+
+  it("a late accept does not bring back a grant a poll already showed ended", async () => {
+    await holdAccept({ open: null, ended: active({ state: "ended", end_reason: "revoked" }) });
+    expect(await screen.findByTestId("support-ended")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
+  it("a late accept leaves a replacement grant a poll showed open", async () => {
+    await holdAccept({ open: grant({ grant: "g-2", helper: "pat" }) });
+    expect(await screen.findByText("pat asked to help in this run")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
+  it("control: an accept with nothing in between shows the grant open", async () => {
+    await holdAccept({ open: grant() });
+    expect(await screen.findByTestId("support-active")).toBeTruthy();
   });
 
   it("control: a decline whose re-read succeeds also drops the requested banner", async () => {
@@ -520,7 +558,7 @@ describe("support strip: a failed read keeps what was shown", () => {
     mount({ principal: "sam", operator: true });
     await waitFor(() => expect(screen.getByTestId("helper-terminal").textContent).toBe("true"));
     api.status.mockRejectedValueOnce(new HttpError(500, "internal error"));
-    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    await act(async () => screen.getByRole("button", { name: "read again", hidden: true }).click());
     expect(api.status).toHaveBeenCalledTimes(2);
     expect(screen.getByTestId("helper-terminal").textContent).toBe("true");
     expect(screen.getByText("You are helping in this run")).toBeTruthy();
@@ -530,12 +568,12 @@ describe("support strip: a failed read keeps what was shown", () => {
     mount({ principal: "maya" });
     expect(await screen.findByText("sam is helping in this run")).toBeTruthy();
     api.status.mockRejectedValueOnce(new HttpError(500, "internal error"));
-    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    await act(async () => screen.getByRole("button", { name: "read again", hidden: true }).click());
     expect(screen.getByText("sam is helping in this run")).toBeTruthy();
     expect(screen.getByRole("button", { name: "End now" })).toBeTruthy();
 
     api.status.mockRejectedValueOnce(new HttpError(404, "run not found", "run_not_found"));
-    await act(async () => screen.getByRole("button", { name: "read again" }).click());
+    await act(async () => screen.getByRole("button", { name: "read again", hidden: true }).click());
     await waitFor(() => expect(screen.queryByText("sam is helping in this run")).toBeNull());
   });
 });

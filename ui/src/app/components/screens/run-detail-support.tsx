@@ -82,7 +82,7 @@ export interface RunSupport {
   refresh: () => Promise<void>;
   /** Show a grant the server just confirmed as ended, and drop any status read that started before it. */
   applyEnded: (ended: SupportGrantView) => void;
-  /** Show the grant an accept or a decline returned, so the banner follows the answer even if the next read fails. */
+  /** Show the grant an accept or a decline returned, so the banner follows the answer even if the next read fails; a late accept for a grant no longer shown open changes nothing. */
   applyAnswered: (answered: SupportGrantView) => void;
 }
 
@@ -136,8 +136,13 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   const applyAnswered = React.useCallback(
     (answered: SupportGrantView) => {
       if (answered.state !== "active") return applyEnded(answered);
-      appliedSeq.current = ++readSeq.current;
-      setStatus((prev) => ({ ...prev, open: answered }));
+      // An accept's answer can arrive late: it applies only while this same grant is still the one shown open.
+      // A read that already showed it ended, or a different grant open, is newer than the answer and stays.
+      setStatus((prev) => {
+        if (prev?.open?.grant !== answered.grant) return prev;
+        appliedSeq.current = ++readSeq.current;
+        return { ...prev, open: answered };
+      });
     },
     [applyEnded],
   );
