@@ -22,8 +22,8 @@ import (
 // until an administrator who has stopped every older server releases them. There is no command-line or console
 // form: the route is the whole interface.
 const (
-	// legacyDockerReleaseRetryEvery is how long a replica leaves a release whose row it sent and could not see in
-	// the shared audit table before it sends it again.
+	// legacyDockerReleaseRetryEvery is how often every replica reads the owed release records and sends the audit
+	// row of each it cannot see in the shared audit table (RunLegacyDockerReleaseRetry).
 	legacyDockerReleaseRetryEvery = time.Minute
 	// pgDeadlockDetected is PostgreSQL's SQLSTATE for the transaction a deadlock chose to end; the statement has
 	// not taken effect and is run again as it was.
@@ -41,29 +41,29 @@ func (s *Server) handleReleaseLegacyDockerDrives(w http.ResponseWriter, r *http.
 		writeErrorReason(w, http.StatusNotImplemented, reasonDelegationStoreUnavailable, "drive release requires the Postgres store backend")
 		return
 	}
-	replayed := s.deliverLegacyDockerReleases(r.Context(), ls, true)
-	if s.cfg.RunnerTarget != types.DriveBackendDockerVolume.RunnerTarget() {
-		// Only the Docker deployment's drives are held for this release; any other target releases nothing.
-		writeJSON(w, http.StatusOK, map[string]any{"released": 0})
-		return
-	}
-	actorType, actor := actorFromRequest(r)
-	rec, err := ls.ReleaseLegacyDockerDrives(r.Context(), string(actorType), actor)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgDeadlockDetected {
-		rec, err = ls.ReleaseLegacyDockerDrives(r.Context(), string(actorType), actor) // nothing committed: the same call again
-	}
-	if err != nil {
-		writeServerError(w, r, "release the legacy Docker drives", err)
-		return
-	}
-	out := map[string]any{"released": rec.Released}
-	if rec.Released > 0 {
-		out["event_id"] = rec.ID
-		// This release's own event is delivered now; only the earlier ones are replays.
-		for _, id := range s.deliverLegacyDockerReleases(r.Context(), ls, true) {
-			if id != rec.ID {
-				replayed = append(replayed, id)
+	replayed := s.deliverLegacyDockerReleases(r.Context(), ls)
+	out := map[string]any{"released": 0}
+	// Only the Docker deployment's drives are held for this release; any other target releases nothing, but still
+	// answers the earlier events it delivered, as the Docker target's zero release does.
+	if s.cfg.RunnerTarget == types.DriveBackendDockerVolume.RunnerTarget() {
+		actorType, actor := actorFromRequest(r)
+		rec, err := ls.ReleaseLegacyDockerDrives(r.Context(), string(actorType), actor)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgDeadlockDetected {
+			rec, err = ls.ReleaseLegacyDockerDrives(r.Context(), string(actorType), actor) // nothing committed: the same call again
+		}
+		if err != nil {
+			writeServerError(w, r, "release the legacy Docker drives", err)
+			return
+		}
+		out["released"] = rec.Released
+		if rec.Released > 0 {
+			out["event_id"] = rec.ID
+			// This release's own event is delivered now; only the earlier ones are replays.
+			for _, id := range s.deliverLegacyDockerReleases(r.Context(), ls) {
+				if id != rec.ID {
+					replayed = append(replayed, id)
+				}
 			}
 		}
 	}
@@ -73,31 +73,42 @@ func (s *Server) handleReleaseLegacyDockerDrives(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, out)
 }
 
+// RunLegacyDockerReleaseRetry delivers the owed release records until ctx ends: at once, then every
+// legacyDockerReleaseRetryEvery. It is its own loop, so it neither waits for the portal monitor's timer (an hour
+// once portals are on) nor runs behind its sampling, and each pass reads the owed rows from the database, so a
+// record committed by a replica that then stopped is found by every other. Boot starts it on every replica.
+func (s *Server) RunLegacyDockerReleaseRetry(ctx context.Context) {
+	s.runLegacyDockerReleaseRetry(ctx, legacyDockerReleaseRetryEvery)
+}
+
+func (s *Server) runLegacyDockerReleaseRetry(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		if ls, ok := s.cfg.Store.(store.LegacyDockerReleaseStore); ok {
+			s.deliverLegacyDockerReleases(ctx, ls)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // deliverLegacyDockerReleases sends the audit event of every committed release not yet settled and settles each
 // the audit table then holds, and returns the ids it settled. Every delivery is a replay of the same event
 // (store.WithAuditReplay) with the id and time the record fixed, so the audit table keeps one row each however
 // often, and from whichever replica, it runs. Delivery is not settlement: a recorder that says it accepted the row
 // may hold it only in a pod's local spool, so a record is settled only when the store reads the row, with its
-// fixed time, in the shared audit table. force skips the replica's retry stamp (a call that asked for it).
-func (s *Server) deliverLegacyDockerReleases(ctx context.Context, ls store.LegacyDockerReleaseStore, force bool) []uuid.UUID {
-	m := s.portalMonitor()
+// fixed time, in the shared audit table. A record that stays owed is sent again by the next call or tick.
+func (s *Server) deliverLegacyDockerReleases(ctx context.Context, ls store.LegacyDockerReleaseStore) []uuid.UUID {
 	recs, err := ls.PendingLegacyDockerReleases(ctx)
 	if err != nil {
 		slog.WarnContext(ctx, "drive release: read the owed audit rows", slog.Any("err", err))
-		m.setReleaseOwed(true)
-		return nil
-	}
-	if len(recs) == 0 {
-		m.setReleaseOwed(false)
-		return nil
-	}
-	m.setReleaseOwed(true)
-	now := s.cfg.Now()
-	if !force && !m.mayRetryRelease(now) {
 		return nil
 	}
 	var settled []uuid.UUID
-	owed := false
 	for _, rec := range recs {
 		key := store.AuditEventKey{ID: rec.ID, At: rec.EventAt}
 		stored := func() bool {
@@ -116,25 +127,17 @@ func (s *Server) deliverLegacyDockerReleases(ctx context.Context, ls store.Legac
 		}
 		if !stored() {
 			slog.WarnContext(ctx, "drive release: the audit row is not in the shared audit table yet, it stays owed")
-			owed = true
 			continue
 		}
 		ok, err := ls.SettleLegacyDockerRelease(ctx, rec.ID)
 		switch {
 		case err != nil:
 			slog.WarnContext(ctx, "drive release: settle the audit row", slog.Any("err", err))
-			owed = true
 		case !ok:
 			slog.WarnContext(ctx, "drive release: the record was not settled, it stays owed")
-			owed = true
 		default:
 			settled = append(settled, rec.ID)
 		}
-	}
-	if owed {
-		m.retryReleaseAfter(now.Add(legacyDockerReleaseRetryEvery))
-	} else {
-		m.setReleaseOwed(false)
 	}
 	return settled
 }
