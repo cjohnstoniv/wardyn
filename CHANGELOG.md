@@ -30,6 +30,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   grant's token request outcome is recorded.
 - `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) lists exact host names whose service grant token request always goes through the daemon proxy, even when `WARDYN_DAEMON_NO_PROXY` covers them. For now it changes only that token request; every other call wardynd makes is routed as before. WORDING PENDING
 - A super admin can allocate a team drive to an issuer portal, and a run started through that portal can mount it. Migration `0297_portal_team_drives` adds the `portal` subject type to drive allocations and `agent_runs.portal_drives`; it creates no table, so the split-role grants above are unchanged.
+- `POST /api/v1/admin/drives/legacy-docker/release` (administrators) releases Docker drives created before the upgrade, which 0.10.2 holds until released; the call is audited as `drive.legacy_docker.release`.
+
+### Changed
+
+- A macOS VM run whose create fails after the Mac was asked now keeps its kept work folder (unmarked and attachable) instead of dropping it; delete it from the drive list if it is not wanted.
 
 ### Fixed
 

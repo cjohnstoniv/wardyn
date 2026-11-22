@@ -3897,6 +3897,16 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   plan the window.
 - `--wait` (below) is what keeps it short.
 
+### Upgrading to 0.10.2: drives from before the upgrade
+
+- There is no rolling upgrade across 0.10.2: stop every older replica before the first 0.10.2 one starts. The chart's `Recreate` strategy does this; on Compose, `docker compose up -d` replaces the single `wardynd` container.
+- Upgrade the organisation first, then upgrade and restart each Mac runner. Until a Mac runner is upgraded and restarted, the disk drives created before the upgrade on that Mac are held: listed, but a run cannot attach them. If a Mac's drives stay held after its runner restarted, restart the runner again.
+- Docker volume drives created before the upgrade are held until an administrator releases them. After the old `wardynd` has stopped, restart dockerd (or confirm no drive removal was in flight), then call `POST /api/v1/admin/drives/legacy-docker/release`. The release is audited with your name as `drive.legacy_docker.release`; it answers `{released, event_id}`, and after an interrupted call it answers `{released: 0, replayed: [...]}` once it has delivered that call's record.
+- A run created before the upgrade that attaches a held drive fails at dispatch ("Drive NAME is waiting for an administrator to finish the upgrade and cannot be used yet." for Docker, "Drive NAME is waiting for its Mac to be upgraded and restarted." for a Mac). Start it again after the release. A held drive still counts toward the per-person drive limit; a person at the limit can delete a held drive to make room.
+- Migration `0299_drive_delete_fence` adds `user_drives.delete_issues`, `user_drives.legacy_unsettled` and the `drive_legacy_releases` table. If the app role is not one of the roles it grants to and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, grant it `SELECT, INSERT, UPDATE` on `drive_legacy_releases` as soon as the migration has run, or the release route fails.
+- The migration marks every delete the older daemon left marked, including claims that never reached a runner, but not a delete it had already cleared after an error, which is why the holds exist. A 0.10.1 binary refuses to start over it (`db: this database records <N> migration(s) this wardynd does not ship`); to go back, restore the pre-upgrade dump.
+- A kept work folder whose delete was claimed but never ran (a crash) stays marked deleting and hidden, still counting against its owner's drive limit, until an administrator deletes it.
+
 ### Before you upgrade: a large recording store
 
 - Migration `0216` reads every stored recording once, so a large recording store in Postgres can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes.

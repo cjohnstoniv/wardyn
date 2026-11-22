@@ -42,6 +42,11 @@ func (s *Server) handleReleaseLegacyDockerDrives(w http.ResponseWriter, r *http.
 		return
 	}
 	replayed := s.deliverLegacyDockerReleases(r.Context(), ls, true)
+	if s.cfg.RunnerTarget != types.DriveBackendDockerVolume.RunnerTarget() {
+		// Only the Docker deployment's drives are held for this release; any other target releases nothing.
+		writeJSON(w, http.StatusOK, map[string]any{"released": 0})
+		return
+	}
 	actorType, actor := actorFromRequest(r)
 	rec, err := ls.ReleaseLegacyDockerDrives(r.Context(), string(actorType), actor)
 	var pgErr *pgconn.PgError
