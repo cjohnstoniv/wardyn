@@ -280,7 +280,7 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   `pane_snapshot` and `recording` keep the recording's owner-or-operator privacy gate,
   even after recording is disabled. A portal never reads `pane_snapshot`. An issuer
   portal's grant reads `stdout` and a successful `recording` recovery of its person's
-  own runs; a recording that is missing, failed or erased answers it as a run with no
+  own non-interactive runs; a recording that is missing, failed or erased answers it as a run with no
   recording. A console portal's delegated token reads `stdout` only. A withheld source
   falls through to the run's stdout tail or shared chunks when there are any (200,
   `source: stdout`), and otherwise to the answer a run with no such row gives (409).

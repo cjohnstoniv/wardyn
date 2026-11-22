@@ -20,7 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- An issuer portal's person runs in the portal's pinned unit without holding a membership there. A strict workspace, or an organisation component pinned to a unit, still needs an actual membership, at launch and at every extension, resume and revive.
+- An issuer portal's person runs in the portal's pinned unit, and any unit under it, without holding a membership there. With no `run_in`, a run now lands in the pin unit unless the person holds a home membership in the pin unit or a unit under it. So after upgrading, a person who joined a unit as a workaround may see runs land in the pin unit instead, and a membership outside the pin no longer refuses a run with no `run_in`. A `run_in` outside the pin is still refused. A strict workspace, or an organisation component pinned to a unit, still needs an actual membership, at launch and at every extension, resume and revive. Console portals and console sign-ins are unchanged. See [where a portal's person runs](docs/operations/api-tokens.md#where-a-portals-person-runs).
 - `GET /runs/{id}/output` no longer writes an `authz.denied` row when it withholds the pane snapshot or recording-derived output from a portal. A console security admin reading another person's pane snapshot or recording output is still audited `not_owner`.
 
 ### Fixed
