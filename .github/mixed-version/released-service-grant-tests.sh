@@ -39,7 +39,8 @@ cleanup() {
 trap cleanup EXIT
 fail() { echo "::error::$*"; exit 1; }
 # phase prints when each part starts, so a run that stalls shows where.
-phase() { echo "== $(date -u +%H:%M:%SZ) $*"; }
+# Each phase is also a notice annotation, so a runner that is lost mid-step still shows the last one reached.
+phase() { echo "== $(date -u +%H:%M:%SZ) $*"; echo "::notice::mixed-version phase: $*"; }
 
 phase pull the released image
 docker pull --platform linux/amd64 "$IMAGE"
@@ -91,7 +92,8 @@ wait "$probe" 2>/dev/null || [ $? -gt 128 ] || fail "the probe wardynd did not s
 
 names=$(IFS='|'; echo "${TESTS[*]}")
 phase build the api test binary
-go test -race -c -o "$BIN/api.test" ./internal/api/
+# Two workers, as ci.yml prebuilds it: the compile is the job's memory peak.
+go test -race -c -p 2 -o "$BIN/api.test" ./internal/api/
 phase run ${TESTS[*]}
 test_dir=$(mktemp -d "$RUNNER_TEMP/v0101-tests.XXXXXX")
 (cd "$test_dir" && WARDYN_TEST_PG="$PG/wardyn?sslmode=disable" WARDYN_TEST_V0101_WARDYND="$BIN/wardynd" WARDYN_TEST_V0101_CLI="$BIN/wardyn" \

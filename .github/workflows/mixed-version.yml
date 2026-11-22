@@ -238,6 +238,17 @@ jobs:
       # Last of the cluster checks: it upgrades the old replica in place with a sign-in issuer.
       - name: The old server's sign-in callback refuses an issuer-portal person, and signs in an ordinary one
         run: bash .github/mixed-version/portal-artifacts.sh old-callback
+      # The step below compiles internal/api's tests with -race beside the kind node, Postgres and two
+      # replicas: that compile is near all of a hosted runner's memory (ci.yml's go job), and with no swap the
+      # runner was shut down mid-step twice, its log never uploaded.
+      - name: Add swap for the internal/api test compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
