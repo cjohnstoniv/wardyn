@@ -243,6 +243,8 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: The service-grant tests against the released v0.10.1 wardynd and CLI
+        # Its own bound inside the job's, so a stall fails here and the logs step still runs.
+        timeout-minutes: 30
         run: bash .github/mixed-version/released-service-grant-tests.sh
       - name: Logs on failure
         if: failure()

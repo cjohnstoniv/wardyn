@@ -38,7 +38,10 @@ cleanup() {
 }
 trap cleanup EXIT
 fail() { echo "::error::$*"; exit 1; }
+# phase prints when each part starts, so a run that stalls shows where.
+phase() { echo "== $(date -u +%H:%M:%SZ) $*"; }
 
+phase pull the released image
 docker pull --platform linux/amd64 "$IMAGE"
 cid=$(docker create --platform linux/amd64 "$IMAGE")
 docker cp "$cid:/wardynd" "$BIN/wardynd"
@@ -62,7 +65,10 @@ done
 [ "$up" = 1 ] || fail "the port-forward to svc/postgres never accepted a connection"
 
 # wardynd has no version flag; it reports its build on /healthz. Boot it once on a database of its own.
-kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -qc 'CREATE DATABASE mv_v0101_probe'
+phase create the probe database
+timeout 120 kubectl -n "$NS" exec deployment/postgres -- psql -U wardyn -d wardyn -v ON_ERROR_STOP=1 -qc 'CREATE DATABASE mv_v0101_probe' ||
+	fail "creating the probe database failed or took over 120 s"
+phase boot the released wardynd
 age=$("$BIN/wardynd" -gen-age-key | grep '^AGE-SECRET-KEY-')
 probe_dir=$(mktemp -d "$RUNNER_TEMP/v0101-probe.XXXXXX")
 (cd "$probe_dir" && WARDYN_PG_DSN="$PG/mv_v0101_probe?sslmode=disable" WARDYN_LISTEN=127.0.0.1:18090 \
@@ -79,10 +85,14 @@ done
 [ "$v" = 0.10.1 ] || fail "the extracted wardynd reports '$v' on /healthz, want 0.10.1"
 echo "ok: wardynd /healthz version -> $v"
 kill "$probe"
+for _ in $(seq 1 30); do kill -0 "$probe" 2>/dev/null || break; sleep 1; done
+kill -0 "$probe" 2>/dev/null && { kill -9 "$probe"; fail "the probe wardynd did not stop within 30 s of SIGTERM"; }
 wait "$probe" 2>/dev/null || [ $? -gt 128 ] || fail "the probe wardynd did not stop on SIGTERM"
 
 names=$(IFS='|'; echo "${TESTS[*]}")
+phase build the api test binary
 go test -race -c -o "$BIN/api.test" ./internal/api/
+phase run ${TESTS[*]}
 test_dir=$(mktemp -d "$RUNNER_TEMP/v0101-tests.XXXXXX")
 (cd "$test_dir" && WARDYN_TEST_PG="$PG/wardyn?sslmode=disable" WARDYN_TEST_V0101_WARDYND="$BIN/wardynd" WARDYN_TEST_V0101_CLI="$BIN/wardyn" \
 	exec "$BIN/api.test" -test.count=1 -test.v -test.timeout=15m -test.run "^(${names})\$") 2>&1 | tee "$LOG"
