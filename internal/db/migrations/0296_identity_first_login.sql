@@ -20,7 +20,7 @@ ALTER TABLE principal_identities ADD COLUMN IF NOT EXISTS first_login_at TIMESTA
 -- a SCIM write made, without it; the sign-in path of this release reads such a row's last_login_at as proof the
 -- first sign-in is past and leaves first_login_at NULL for good. The trigger gives those writes the value, from
 -- the same fact the release's own statements use. A SCIM write that sets no last_login_at leaves it NULL, so
--- provisioning is still no sign-in, and a statement that names first_login_at is not changed. A column DEFAULT
+-- provisioning is still no sign-in, and a first sign-in a statement supplies (not NULL) is kept. A column DEFAULT
 -- could not tell a sign-in's row from a SCIM write's, and a read rule could not once a SCIM write has touched the
 -- row. The function is new in this release, so nothing an earlier release made is replaced.
 CREATE FUNCTION principal_identities_first_login() RETURNS trigger LANGUAGE plpgsql AS $$
