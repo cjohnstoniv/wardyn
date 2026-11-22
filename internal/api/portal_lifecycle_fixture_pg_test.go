@@ -92,10 +92,14 @@ func (l *portalLife) meCode(t *testing.T, bearer string) int {
 	return do(t, l.h.srv, http.MethodGet, "/api/v1/me", bearer, "").Code
 }
 
-// exchangeFor runs an exchange for uid and returns the HTTP status.
+// exchangeFor runs an exchange for uid and returns the HTTP status. Its subject token is issued after any cutoff
+// the test wrote, as a person who signs in at the provider again would hold: an older token is refused as
+// session_revoked before the identity is read, and these callers ask about the identity.
 func (l *portalLife) exchangeFor(t *testing.T, uid string) int {
 	t.Helper()
+	time.Sleep(50 * time.Millisecond)
 	l.ver.subj = l.person(uid, "")
+	l.ver.subj.IssuedAt = time.Now()
 	return l.exchange(t, l.d.ID, l.cred, "subject-token").Code
 }
 
