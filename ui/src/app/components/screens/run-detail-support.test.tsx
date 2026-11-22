@@ -5,6 +5,7 @@
 
 // The run page's support strip: hidden until the setup answer carries support_sessions, the helper's Request help
 // dialog, the one banner each party reads, and the line for every way help ends.
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -65,15 +66,17 @@ function Page({ r }: { r: RunDetail }) {
   );
 }
 
-function mount(who: { principal: string; operator?: boolean; security?: boolean }, on = true, r: RunDetail = run) {
+function mount(who: { principal: string; operator?: boolean; security?: boolean }, on = true, r: RunDetail = run, strict = false) {
   const status = baseStatus({ features: { scheduled_runs: false, ...(on ? { support_sessions: true } : {}) } } as Partial<SetupStatus>);
-  return render(
+  const page = (
     <ModelAccessProvider status={status} onRefresh={() => {}}>
       <OperatorProvider operator={who.operator ?? false} securityOperator={who.security ?? who.operator ?? false} principal={who.principal}>
         <Page r={r} />
       </OperatorProvider>
-    </ModelAccessProvider>,
+    </ModelAccessProvider>
   );
+  // StrictMode replays state updaters, as the console's own root does (main.tsx).
+  return render(strict ? <StrictMode>{page}</StrictMode> : page);
 }
 
 const answer = (s: SupportStatus) => api.status.mockResolvedValue({ doors_offered: OFFERED, recorded_doors: ["terminal"], ...s });
@@ -447,6 +450,44 @@ describe("support strip: the consent answer shows even when the next read fails"
 
   it("control: an accept with nothing in between shows the grant open", async () => {
     await holdAccept({ open: grant() });
+    expect(await screen.findByTestId("support-active")).toBeTruthy();
+  });
+
+  // The read the accept starts is later than the answer: when it succeeds, what it shows wins, also under StrictMode.
+  async function acceptThenRead(after: SupportStatus) {
+    api.accept.mockResolvedValue(active());
+    // StrictMode runs the first read twice: every read before the accept shows the request.
+    // Only the first read after the accept answers: later polls fail and keep what is shown, so a dropped answer shows.
+    let afterAccept = 0;
+    api.status.mockImplementation(async () => {
+      if (!api.accept.mock.calls.length) return { doors_offered: OFFERED, open: grant() };
+      if (afterAccept++ === 0) return { doors_offered: OFFERED, ...after };
+      throw new Error("network down");
+    });
+    const user = userEvent.setup();
+    mount({ principal: "maya" }, true, run, true);
+    await user.click(await screen.findByRole("button", { name: "Review request" }));
+    await user.click(screen.getByRole("checkbox", { name: /Terminal/ }));
+    await user.click(screen.getByRole("radio", { name: "30 minutes" }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(api.accept).toHaveBeenCalled());
+    await waitFor(() => expect(api.status.mock.calls.length).toBeGreaterThanOrEqual(2));
+  }
+
+  it("under StrictMode, a successful read after the accept that shows it ended wins", async () => {
+    await acceptThenRead({ open: null, ended: active({ state: "ended", end_reason: "revoked" }) });
+    expect(await screen.findByTestId("support-ended")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
+  it("under StrictMode, a successful read after the accept that shows a replacement wins", async () => {
+    await acceptThenRead({ open: grant({ grant: "g-2", helper: "pat" }) });
+    expect(await screen.findByText("pat asked to help in this run")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
+  it("control: under StrictMode, an accept whose read agrees shows the grant open", async () => {
+    await acceptThenRead({ open: active() });
     expect(await screen.findByTestId("support-active")).toBeTruthy();
   });
 
