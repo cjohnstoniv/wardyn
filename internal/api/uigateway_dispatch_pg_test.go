@@ -412,10 +412,12 @@ func dispatchPct(ds []time.Duration, p float64) time.Duration {
 	return s[int(float64(len(s)-1)*p)]
 }
 
-// TestUIRelayIssuerPortal_SingleUseCostMeasured_PG measures the single-use proxy against the shared one; its one
-// gate is zero slot refusals for a page with more than maxUIConnsPerRun requests in flight.
+// TestUIRelayIssuerPortal_SingleUseCostMeasured_PG measures the single-use proxy against the shared one, on the
+// recording fake runner (no Docker, remote runner or VM driver). Its gate: a cold or warm page with more than
+// maxUIConnsPerRun requests in flight gets every asset (200 and the app's body), with no slot refusal; the case
+// held at the slot cap records its outcome only.
 func TestUIRelayIssuerPortal_SingleUseCostMeasured_PG(t *testing.T) {
-	load := func(rig *dispatchRig, c *http.Cookie, n int) (lat []time.Duration, refused int) {
+	load := func(rig *dispatchRig, c *http.Cookie, n int) (lat []time.Duration, served, refused int, other []int) {
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for i := 0; i < n; i++ {
@@ -427,13 +429,18 @@ func TestUIRelayIssuerPortal_SingleUseCostMeasured_PG(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				lat = append(lat, time.Since(start))
-				if r.Code == http.StatusServiceUnavailable {
+				switch {
+				case r.Code == http.StatusOK && r.Body.String() == "sandbox app":
+					served++
+				case r.Code == http.StatusServiceUnavailable:
 					refused++
+				default:
+					other = append(other, r.Code)
 				}
 			}()
 		}
 		wg.Wait()
-		return lat, refused
+		return lat, served, refused, other
 	}
 	for _, kase := range []string{"cold", "warm", "at the slot cap"} {
 		for _, portal := range []bool{true, false} {
@@ -452,11 +459,12 @@ func TestUIRelayIssuerPortal_SingleUseCostMeasured_PG(t *testing.T) {
 					t.Cleanup(release)
 				}
 			}
-			lat, refused := load(rig, c, 20)
-			t.Logf("20-asset page, %s, portal=%v: p50 %s p95 %s, %d slot refusals, %d relay execs, %d probes",
-				kase, portal, dispatchPct(lat, 0.5), dispatchPct(lat, 0.95), refused, rig.dr.count("socat"), rig.dr.count("sh"))
-			if kase != "at the slot cap" && refused != 0 {
-				t.Errorf("%s portal=%v: %d slot refusals for a page with more than %d requests in flight, want 0", kase, portal, refused, maxUIConnsPerRun)
+			lat, served, refused, other := load(rig, c, 20)
+			t.Logf("20-asset page, %s, portal=%v: p50 %s p95 %s, %d served, %d slot refusals, other answers %v, %d relay execs, %d probes",
+				kase, portal, dispatchPct(lat, 0.5), dispatchPct(lat, 0.95), served, refused, other, rig.dr.count("socat"), rig.dr.count("sh"))
+			if kase != "at the slot cap" && (served != 20 || refused != 0 || len(other) != 0) {
+				t.Errorf("%s portal=%v: %d of 20 assets served, %d slot refusals, other answers %v, for a page with more than %d requests in flight; want all 20 served",
+					kase, portal, served, refused, other, maxUIConnsPerRun)
 			}
 		}
 	}
