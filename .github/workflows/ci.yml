@@ -76,8 +76,8 @@ jobs:
   # branch protection accepts, and it never waits for a runner just to do
   # nothing.
   #
-  # Start order. The account runs 20 jobs at once and a change to Go asks for
-  # about 35, so some wait, and GitHub picks which among the jobs that became
+  # Start order. The account runs 40 jobs at once across all of its runs, and a change to Go asks for
+  # about 35, so when runs overlap some wait, and GitHub picks which among the jobs that became
   # ready together. The long jobs (go, go-lint, ui, ui-e2e, helm-install-test, both
   # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
   # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
@@ -347,6 +347,8 @@ jobs:
           # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
           # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # Kept for the next step, which runs internal/api's tests as three slices of it (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
         run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
@@ -355,6 +357,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
           # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # internal/api runs as three slices of the prebuilt binary beside the other packages (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+          WARDYN_TEST_REPORT_SPLIT_PKG: github.com/cjohnstoniv/wardyn/internal/api
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest

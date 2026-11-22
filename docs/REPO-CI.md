@@ -18,6 +18,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 | `api` and `store` shards run only DSN-gated tests | `make test-report-pg-api`, `make test-report-pg-store`, [`scripts/pg-test-select.sh`](../scripts/pg-test-select.sh) | The unit run fails if a DSN-skipped test is outside the pick; every `pg` probe is picked |
 | Postgres shards write no coverage | `WARDYN_TEST_REPORT_COVER=0` | `build` unions `unit`, `docker`, `k8s` only |
 | internal/api's tests build without DWARF | `GOFLAGS` on each step that builds them, [`scripts/ci-api-prebuild.sh`](../scripts/ci-api-prebuild.sh) | A step that reuses a prebuild sets the same `GOFLAGS`, since with any other value it compiles the package again; each prebuild's notice records the compile's largest single process |
+| internal/api runs as three slices | WARDYN_TEST_REPORT_SPLIT_BIN on the go job's prebuild and test steps and _PKG on the test step, [scripts/test-report.sh](../scripts/test-report.sh), [scripts/lib/test_slices.py](../scripts/lib/test_slices.py) | The slices run the prebuilt binary; every test it lists is picked by exactly one slice and must report a result there, or the leg fails |
 | Flaky Go test quarantine | [`test/go-quarantine.txt`](../test/go-quarantine.txt), `go test -skip` | Issue, owner, expiry within 14 days; expired or malformed fails the suite |
 
 Image-script tests set `WARDYN_MITM_CA_DIR` to a private temporary directory to isolate generated CA files, and `WARDYN_TRUSTED_CA_PATH` to a stand-in for the mounted `/etc/wardyn-trusted-ca.pem`.
@@ -260,9 +261,9 @@ So:
 - The `agent-run --selftest` step stays in the `agent-aws-sso` and `agent-codex-cli` scans, so it runs whenever their Dockerfile or `agent-run` scripts change.
 - [`image_scope_guard_test.go`](../cmd/wardynd/image_scope_guard_test.go) plants every input it derives from the Dockerfiles and `go list`, and fails when the script says "skip".
 
-**Start order under the 20-job cap.**
+**Start order under the 40-job cap.**
 
-- The account runs 20 jobs at once and a change to Go asks for about 35, so some wait, and GitHub picks which among the jobs that became ready together.
+- The account runs 40 jobs at once across all of its runs, and a change to Go asks for about 35, so when runs overlap some wait, and GitHub picks which among the jobs that became ready together.
 - The long jobs (`go`, `ui`, `ui-e2e`, `helm-install-test`, both conformance jobs, `envbuild-integration`, `test-pg-shard`) need only `changes`.
 - The short ones (`gates`, `notices`, the `trivy` scans) also need `diagrams`, a 45-second job that starts with the run (the scans also need `image-scope`, which has no `needs` and so starts with it),
   - so they become ready about half a minute after the long jobs, which by then hold their runners, and share what is left.

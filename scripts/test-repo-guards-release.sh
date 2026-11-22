@@ -6,6 +6,7 @@
 # Go module seeding, watched kind walks, write steps tied to a release tag ref, the guest agent's stamp). They sit in their own
 # file to keep test-repo-guards.sh under the file-size limit. Not run on its own: test-repo-guards.sh
 # sources it after guard 25, so these guards share its fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
+#  36. ci.yml's go legs build with the Makefile recipes' flags; one split binary.
 
 # ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
 # The binaries job builds every TARGETS entry in one step, but each target has its
@@ -240,4 +241,41 @@ elif ! bash "$ROOT/scripts/test-check-release-stamp.sh" >/dev/null 2>&1; then
     bad "scripts/test-check-release-stamp.sh failed — check-release-stamp.sh no longer tells a stamped binary from an unstamped one (#3636)"
 else
     ok "release.yml checks the packaged guest agent's release stamp, and the check refuses an unstamped binary"
+fi
+
+# ── 36. ci.yml's go job: matrix.build equals the Makefile recipe's flags, and both split steps name one binary ──
+# CI-1 (r2, M1): with internal/api's tests split into slices of the prebuilt binary, the make step runs that file as
+# given, so the go job's `matrix.build` decides which tags and flags internal/api's tests are built with, and nothing
+# else ties it to the test-report* recipes. A recipe changed without its leg (or the reverse) would run internal/api
+# under the old tag set, green, while every other package uses the new one. This guard compares each leg's `build:`
+# with the recipe's words between the suite name and `./...` plus ` -covermode=atomic -coverpkg=./...`, and needs the
+# two steps that set WARDYN_TEST_REPORT_SPLIT_BIN to give it the same value.
+ci_split_problems() {
+    local ci="$1" mk="$2" rows suite tgt build want bins
+    rows="$(yq -r '.jobs.go.strategy.matrix.include[] | .suite + " " + .target + " " + .build' "$ci" 2>/dev/null)" || rows=""
+    [ -n "$rows" ] || { echo "the go job has no readable matrix legs"; return 0; }
+    while read -r suite tgt build; do
+        want="$(sed -nE "s#^[[:space:]]+WARDYN_TEST_PG= \./scripts/test-report\.sh ${suite} (.*) \./\.\.\.\$#\1#p" "$mk" | head -1)"
+        if [ -z "$want" ]; then
+            echo "leg $suite: no 'WARDYN_TEST_PG= ./scripts/test-report.sh $suite … ./...' recipe line in the Makefile"
+        elif [ "$build" != "$want -covermode=atomic -coverpkg=./..." ]; then
+            echo "leg $suite: build is '$build' but the Makefile recipe says '$want -covermode=atomic -coverpkg=./...'"
+        fi
+    done <<< "$rows"
+    bins="$(yq -r '.jobs.go.steps[] | .env.WARDYN_TEST_REPORT_SPLIT_BIN // ""' "$ci" 2>/dev/null)"
+    [ "$(printf '%s\n' "$bins" | sed '/^$/d' | wc -l)" = 2 ] || echo "exactly two go-job steps (the prebuild and the make step) must set WARDYN_TEST_REPORT_SPLIT_BIN"
+    [ "$(printf '%s\n' "$bins" | sed '/^$/d' | sort -u | wc -l)" = 1 ] || echo "the go job's two WARDYN_TEST_REPORT_SPLIT_BIN values differ"
+}
+split_ci="$(mktemp -d)"
+split_real="$(ci_split_problems .github/workflows/ci.yml Makefile)"
+cp .github/workflows/ci.yml "$split_ci/ci.yml"
+sed -i 's#build: -race -tags docker -covermode#build: -race -covermode#' "$split_ci/ci.yml"
+split_plant="$(ci_split_problems "$split_ci/ci.yml" Makefile)"
+rm -rf "$split_ci"
+if [ -n "$split_real" ]; then
+    bad "ci.yml's go job and the Makefile disagree about how internal/api's tests are built (CI-1): $split_real"
+elif [ -z "$split_plant" ]; then
+    bad "guard 36's plant (a leg without its -tags) was not caught, so the guard checks nothing"
+else
+    ok "ci.yml's go legs build with the Makefile recipes' flags, and the two split steps name one binary"
 fi
