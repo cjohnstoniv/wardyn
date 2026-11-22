@@ -58,7 +58,7 @@ describe("ScimCard", () => {
     expect(within(card).getByRole("link", { name: "Leaver runbook" })).toHaveAttribute("href", expect.stringContaining("OPERATIONS.md#leavers-and-scim"));
     expect(within(card).getByText("Endpoint")).toBeInTheDocument();
     expect(within(card).getByText(/\/scim\/v2$/)).toBeInTheDocument();
-    expect(within(card).queryByText("Token last matched")).toBeNull();
+    expect(within(card).queryByText("Token on the latest update")).toBeNull();
     expect(within(card).queryByText("No one is deactivated.")).toBeNull();
   });
 
@@ -66,9 +66,10 @@ describe("ScimCard", () => {
     const card = await open(status());
     expect(screen.getByRole("button", { name: /^SCIM provisioning\s*0 deactivated · 0 unfinished/ })).toBeInTheDocument();
     expect(within(card).getByText("Endpoint")).toBeInTheDocument();
-    expect(within(card).getByText("Token last matched")).toBeInTheDocument();
+    expect(within(card).getByText("Token on the latest update")).toBeInTheDocument();
     expect(within(card).getByText("Primary token")).toBeInTheDocument();
-    expect(within(card).queryByText(/Your identity provider is using the next token/)).toBeNull();
+    expect(within(card).queryByText(/The latest update used the next token/)).toBeNull();
+    expect(within(card).getByText(/This is the token of the latest update only.*confirm that each configured provisioning job has switched before you retire one/)).toBeInTheDocument();
     expect(within(card).getByText("Purge delay")).toBeInTheDocument();
     expect(within(card).getByText("30 days")).toBeInTheDocument();
     expect(within(card).getByText("Workspaces on purge")).toBeInTheDocument();
@@ -115,11 +116,8 @@ describe("ScimCard", () => {
     // Two people are unfinished, not three rows.
     expect(screen.getByRole("button", { name: /^SCIM provisioning\s*2 deactivated · 2 unfinished/ })).toBeInTheDocument();
     expect(within(card).getByText("Next token")).toBeInTheDocument();
-    expect(
-      within(card).getByText(
-        "Your identity provider is using the next token. Move it to WARDYN_SCIM_TOKEN and unset WARDYN_SCIM_TOKEN_NEXT to finish the rotation.",
-      ),
-    ).toBeInTheDocument();
+    expect(within(card).getByText(/The latest update used the next token.*Confirm that each configured job has switched before you retire a token\..*WARDYN_SCIM_TOKEN_NEXT/)).toBeInTheDocument();
+    expect(within(card).queryByText(/This is the token of the latest update only/)).toBeNull();
     expect(within(card).getByText("Left as they are")).toBeInTheDocument();
 
     const tables = within(card).getAllByRole("table");
@@ -196,6 +194,6 @@ describe("ScimCard", () => {
     expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^SCIM provisioning$/ })).toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Token last matched")).toBeInTheDocument();
+    expect(await screen.findByText("Token on the latest update")).toBeInTheDocument();
   });
 });

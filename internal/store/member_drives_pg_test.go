@@ -150,20 +150,21 @@ func TestMemberDriveDeleteConcurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("take over a 61-second-old tombstone: %v", err)
 	}
-	if err := st.FinishMemberDriveDelete(ctx, d.ID, stale); !errors.Is(err, store.ErrNotFound) {
+	if err := st.FinishMemberDriveDelete(ctx, d.ID, stale, 0); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("finish with the taken-over tombstone = %v, want ErrNotFound", err)
 	}
-	if err := st.AbortMemberDriveDelete(ctx, d.ID, stale); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("abort with the taken-over tombstone = %v, want ErrNotFound", err)
+	if err := st.ClearMemberDriveClaim(ctx, d.ID, stale, 0); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("clear with the taken-over tombstone = %v, want ErrNotFound", err)
 	}
-	if err := st.AbortMemberDriveDelete(ctx, d.ID, second); err != nil {
+	if err := st.ClearMemberDriveClaim(ctx, d.ID, second, 0); err != nil {
 		t.Errorf("abort our own tombstone: %v", err)
 	}
+	// The clear moved the count by two: the next claim is over 2, and finishes under that pair.
 	_, third, err := st.BeginMemberDriveDelete(ctx, "alice", d.ID)
 	if err != nil {
-		t.Fatalf("begin after an abort: %v", err)
+		t.Fatalf("begin after a clear: %v", err)
 	}
-	if err := st.FinishMemberDriveDelete(ctx, d.ID, third); err != nil {
+	if err := st.FinishMemberDriveDelete(ctx, d.ID, third, 2); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	if _, err := st.GetMemberDriveOf(ctx, "alice", d.ID); !errors.Is(err, store.ErrNotFound) {

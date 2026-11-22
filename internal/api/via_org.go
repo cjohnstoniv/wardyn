@@ -325,9 +325,9 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 // the run was dispatched with. The engine is kept while the run's policy generation slot stays the one it was
 // built at: every revive, on any replica, moves the slot in the write that stores its config, so a newer slot
 // retires the engine (viaOrgRun.retireStale) and the next one is built from the config as it stands now. A
-// build refused for the site's upstream proxy host is remembered for the setting it read, so the run's later
-// requests neither build it again nor audit its resolve again; a rewrite of the setting is read on the next
-// request. Any other build failure is tried again each time.
+// build refused for the site's upstream proxy host is remembered for the setting that build used, when that
+// setting can be proved, so the run's later requests at that setting neither build it again nor audit its resolve
+// again; a request at any other setting builds. Any other build failure is tried again each time.
 func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
 	// Read outside run.mu, so the run's requests do not queue on it, and before the config: an advance stores its
 	// config in the same write as its slot, so a config read after this slot is at least as new as it.
@@ -347,7 +347,7 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	if refused, ok := run.upstreamRefused[setting]; named && ok {
 		return nil, nil, viaOrgRefusalRemembered{refused}
 	}
-	cfg, err := s.viaOrgEngineConfig(ctx, runID)
+	cfg, used, usedNamed, err := s.viaOrgEngineConfigUsing(ctx, runID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,15 +355,13 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	cfg.ViaOrgRoutes = nil
 	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, s.viaOrgEngineOptions(run))
 	if err != nil {
-		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
-			// The build read the setting itself, after this one: a refusal is remembered only when both
-			// reads agree, so none is held for a setting that was rewritten while it was built.
-			if after, ok := s.viaOrgUpstreamSetting(ctx); ok && after == setting {
-				if run.upstreamRefused == nil {
-					run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
-				}
-				run.upstreamRefused[setting] = err
+		if usedNamed && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+			// Kept under the setting the build used, not the one read before it: the setting may have been
+			// rewritten, even back, between the two reads.
+			if run.upstreamRefused == nil {
+				run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
 			}
+			run.upstreamRefused[used] = err
 		}
 		return nil, nil, err
 	}
@@ -432,6 +430,12 @@ func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstr
 	if err != nil {
 		return setting, false
 	}
+	return s.viaOrgUpstreamSettingOf(ctx, sc)
+}
+
+// viaOrgUpstreamSettingOf names the upstream proxy setting of a site config already read, reading only the
+// secret's revision.
+func (s *Server) viaOrgUpstreamSettingOf(ctx context.Context, sc types.SiteConfig) (setting viaOrgUpstreamSetting, named bool) {
 	setting.url, setting.secretRef = sc.UpstreamProxyURL, sc.UpstreamProxySecretRef
 	if setting.secretRef != "" && s.cfg.Secrets != nil {
 		rev, ok, err := secretstore.RevisionOf(ctx, s.cfg.Secrets.For(""), setting.secretRef)
@@ -448,17 +452,24 @@ func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstr
 // broker keeps only via_org grants' repositories. Nothing else that holds a credential is kept. The
 // org network applies, but its internal hosts lift only for a via_org destination.
 func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*proxy.Config, error) {
+	cfg, _, _, err := s.viaOrgEngineConfigUsing(ctx, runID)
+	return cfg, err
+}
+
+// viaOrgEngineConfigUsing is viaOrgEngineConfig and the upstream proxy setting its build used (named as
+// viaOrgUpstreamSettingOf does). named is false when that setting cannot be proved.
+func (s *Server) viaOrgEngineConfigUsing(ctx context.Context, runID uuid.UUID) (*proxy.Config, viaOrgUpstreamSetting, bool, error) {
 	raw, err := s.loadRunProxyConfig(ctx, runID)
 	if err != nil {
-		return nil, fmt.Errorf("read the run's stored proxy config: %w", err)
+		return nil, viaOrgUpstreamSetting{}, false, fmt.Errorf("read the run's stored proxy config: %w", err)
 	}
 	cfg, err := proxy.LoadConfigBytes(raw)
 	if err != nil {
-		return nil, err
+		return nil, viaOrgUpstreamSetting{}, false, err
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return nil, err
+		return nil, viaOrgUpstreamSetting{}, false, err
 	}
 	viaOrg := map[uuid.UUID]types.CredentialGrant{}
 	for _, g := range grants {
@@ -504,7 +515,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	}
 	sc, scErr := s.siteConfigForDispatch(ctx)
 	if scErr != nil {
-		return nil, scErr
+		return nil, viaOrgUpstreamSetting{}, false, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
 	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM, cfg.AWSSigV4 = nil, nil, nil, nil, nil, nil
@@ -525,9 +536,16 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	if cfg.NoNetwork {
 		noHop = upstreamNoHopNoNetwork
 	}
+	// The setting this build used is the site config read just above (sc), never a read of its own: a refusal is
+	// remembered for the setting that was refused. A secret's revision stands for the value the resolve read only
+	// when it is the same before and after it; otherwise the build's setting cannot be named.
+	setting, named := s.viaOrgUpstreamSettingOf(ctx, sc)
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil, noHop)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
-	return cfg, nil
+	if after, ok := s.viaOrgUpstreamSettingOf(ctx, sc); !ok || after != setting {
+		named = false
+	}
+	return cfg, setting, named, nil
 }
 
 // viaOrgADOGateCovers reports whether the sealed row's Azure DevOps gate names host.

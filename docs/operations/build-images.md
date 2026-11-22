@@ -173,6 +173,7 @@ Wardyn's published images are `linux/amd64` + `linux/arm64` indexes. A fleet wit
 - The target runs `docker buildx build --platform linux/amd64,linux/arm64 -f deploy/images/claude-code/Dockerfile --push`.
 - The Go helper binaries cross-compile and the vendor CLI is fetched per target architecture, so only the `apt`/`npm` steps need emulation (QEMU: `docker run --privileged --rm tonistiigi/binfmt --install all`).
 - A host-staged `claude-bin` is one architecture's binary, so the target refuses to run while one is staged.
+- A staged AWS CLI zip (`AWS_CLI_INSTALL=staged`) is one architecture's too, so the target refuses it: leave it unset, or build each architecture separately with `make agent-images-core`.
 - The corporate-build variables (`NPM_REGISTRY`, `HTTPS_PROXY`, `CLAUDE_INSTALL`, ...) pass through as for `agent-images-core`.
 - Name the result in `WARDYN_AGENT_IMAGES='{"claude-code":"<your-registry>/agent-claude-code:<tag>"}'` and restart wardynd.
 

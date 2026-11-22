@@ -170,21 +170,11 @@ func (s *Server) treeDryRun(w http.ResponseWriter, r *http.Request, target strin
 			fmt.Sprintf("target: %q is not a dry-run target — use boundary, unit or membership_move", target))
 		return
 	}
-	var before, after treeSnapshot
-	err := s.cfg.Store.DryRunGovernance(r.Context(), func(q store.Querier) (err error) {
-		if before, err = readTreeSnapshot(r.Context(), q); err != nil {
-			return err
-		}
-		if err = apply(q); err != nil {
-			return err
-		}
-		after, err = readTreeSnapshot(r.Context(), q)
-		return err
-	})
+	before, after, in, err := s.treeReplay(r.Context(), apply)
 	if s.answerOutsideScope(w, r, "governance.dry_run", err) || writeMembershipTreeError(w, r, "governance dry run", err) {
 		return
 	}
-	report, err := s.treeEffect(r.Context(), before, after)
+	report, err := s.treeEffect(r.Context(), before, after, in)
 	if err != nil {
 		writeServerError(w, r, "governance dry run", err)
 		return
@@ -260,6 +250,54 @@ type treeSnapshot struct {
 	memberships []types.GovernanceMembership
 }
 
+// wallInputs is what snapshotWalls resolves a tree against besides the tree: the configured depth
+// limit and the boundary. Both sides of one comparison resolve against a single read of them, so a
+// depth or boundary write landing between the two sides never reads as the compared write's effect.
+type wallInputs struct {
+	limit    int
+	boundary types.Boundary
+}
+
+// wallInputsQ reads the depth limit and the boundary on q.
+func (s *Server) wallInputsQ(ctx context.Context, q store.Querier) (wallInputs, error) {
+	limit, err := unitDepthLimitQ(ctx, q)
+	if err != nil {
+		return wallInputs{}, err
+	}
+	b, err := s.boundaryQ(ctx, q)
+	return wallInputs{limit: limit, boundary: b}, err
+}
+
+// treeDryRunPause is a test seam: it runs with "replay" between the first tree read and the replayed
+// write, and with "walls" between resolving the two sides of a comparison.
+var treeDryRunPause = func(string) {}
+
+// treeReplay reads the tree, runs apply on the same transaction, reads the tree again, and rolls it
+// all back. The governance graph lock is taken before the first read and held to the rollback (graph
+// lock first, then whatever apply takes, the order every graph writer takes them in), so no other
+// write to the tree lands between the two reads and shows as apply's effect. in is read under the
+// lock too, once, for treeEffect to resolve both sides with.
+func (s *Server) treeReplay(ctx context.Context, apply func(q store.Querier) error) (before, after treeSnapshot, in wallInputs, err error) {
+	err = s.cfg.Store.DryRunGovernance(ctx, func(q store.Querier) (err error) {
+		if err = store.LockGovernanceGraph(ctx, q); err != nil {
+			return err
+		}
+		if in, err = s.wallInputsQ(ctx, q); err != nil {
+			return err
+		}
+		if before, err = readTreeSnapshot(ctx, q); err != nil {
+			return err
+		}
+		treeDryRunPause("replay")
+		if err = apply(q); err != nil {
+			return err
+		}
+		after, err = readTreeSnapshot(ctx, q)
+		return err
+	})
+	return before, after, in, err
+}
+
 func readTreeSnapshot(ctx context.Context, q store.Querier) (treeSnapshot, error) {
 	units, err := store.ListGovernanceUnitsQ(ctx, q)
 	if err != nil {
@@ -278,23 +316,20 @@ type unitWalls struct {
 
 // snapshotWalls resolves every unit of snap as the context resolve does once it has picked the unit:
 // the Default unit is the deployment ceiling, any other unit its path composed from the top
-// (composeAll, the composition GET /governance shows), then ceilingFromUnit and the boundary.
-func (s *Server) snapshotWalls(ctx context.Context, snap treeSnapshot) (map[uuid.UUID]unitWalls, error) {
-	limit, err := s.unitDepthLimit(ctx)
-	if err != nil {
-		return nil, err
-	}
+// (composeAll, the composition GET /governance shows), then ceilingFromUnit and the boundary. The
+// depth limit and the boundary are in's, never read here.
+func (s *Server) snapshotWalls(ctx context.Context, snap treeSnapshot, in wallInputs) map[uuid.UUID]unitWalls {
 	ctx = withDisplayRead(ctx)
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone(), MemberDefault: s.memberDefaultFor(s.cfg.DefaultPolicy.Resources)}
 	out := map[uuid.UUID]unitWalls{}
-	for _, res := range s.composeAll(snap.units, limit) {
+	for _, res := range s.composeAll(snap.units, in.limit) {
 		c := deployment
 		var err error
 		if res.Row.ID != store.DefaultUnitID {
 			c, err = s.ceilingFromUnit(ctx, res.Resolved, res.Err, deployment)
 		}
 		if err == nil {
-			c, err = s.boundaryCeiling(ctx, c)
+			c, err = boundCeiling(in.boundary, c)
 		}
 		if err != nil {
 			out[res.Row.ID] = unitWalls{err: adminResolveError(err)}
@@ -302,7 +337,7 @@ func (s *Server) snapshotWalls(ctx context.Context, snap treeSnapshot) (map[uuid
 		}
 		out[res.Row.ID] = unitWalls{spec: redactSpecForRead(c.Spec, s.specReadTierFor(ctx)), limits: c.Limits}
 	}
-	return out, nil
+	return out
 }
 
 // wallChanges is the knobs that differ between two contexts' walls: the policy's, then every limit.
@@ -334,16 +369,11 @@ func jsonAt(v any, path string) any {
 
 // treeEffect is what a write that turned before into after changes: the per-membership report and the
 // live runs it touches. The dry run computes it over the rolled-back write; it is the same function
-// over the states either side of an applied write.
-func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot) (treeDryRunReport, error) {
-	bw, err := s.snapshotWalls(ctx, before)
-	if err != nil {
-		return treeDryRunReport{}, err
-	}
-	aw, err := s.snapshotWalls(ctx, after)
-	if err != nil {
-		return treeDryRunReport{}, err
-	}
+// over the states either side of an applied write. Both sides resolve against in (treeReplay's).
+func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot, in wallInputs) (treeDryRunReport, error) {
+	bw := s.snapshotWalls(ctx, before, in)
+	treeDryRunPause("walls")
+	aw := s.snapshotWalls(ctx, after, in)
 	names := map[uuid.UUID]string{}
 	for _, u := range append(slices.Clone(before.units), after.units...) {
 		names[u.ID] = u.Name

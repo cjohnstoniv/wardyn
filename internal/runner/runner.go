@@ -400,6 +400,10 @@ type ExecSession struct {
 	Resize func(cols, rows uint16) error // no-op returning nil with no TTY
 	Wait   func() (int, error)
 	Close  func() error // tears down ONLY this exec stream — never the sandbox, agent, or any sidecar
+	// Abort stops this exec's input at once, with no I/O on any shared link: no byte written to Stdin
+	// passes to the substrate after Abort returns, and it never waits on a blocked Stdin.Write or on
+	// another stream. Nil: Close already does this.
+	Abort func()
 }
 
 // Sandbox is a handle to a created sandbox.
@@ -855,6 +859,21 @@ var ErrDriveInUse = errors.New("runner: the drive's storage is still held by a r
 // object answering to the drive's name is NOT the storage it allocated — a
 // reclaim that gets this wrong deletes another member's files.
 var ErrDriveNotReclaimable = errors.New("runner: the object under this drive's name is not the storage it allocated")
+
+// ErrDriveUntouched marks a refusal a DriveReclaimer made before it changed anything: nothing was deleted, and the
+// object is as it was. A caller that issued a delete under a claim may then give the claim up. It rides beside the
+// refusal's own sentinel (see Untouched) and is never answered for a refusal that may have changed something, nor
+// by a Mac, whose answer crosses the wire without it.
+var ErrDriveUntouched = errors.New("runner: the drive's storage was not touched")
+
+// untouched is err that also answers errors.Is(ErrDriveUntouched); its text is err's.
+type untouched struct{ err error }
+
+func (u untouched) Error() string   { return u.err.Error() }
+func (u untouched) Unwrap() []error { return []error{u.err, ErrDriveUntouched} }
+
+// Untouched marks err, a refusal made before anything changed, as ErrDriveUntouched too.
+func Untouched(err error) error { return untouched{err} }
 
 // DriveReclaimer is an OPTIONAL Runner capability, modelled on ImageRemover: a
 // substrate that can DESTROY the per-person storage object a user drive

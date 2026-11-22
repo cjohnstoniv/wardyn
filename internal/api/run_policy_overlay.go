@@ -141,6 +141,9 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 	if err := validatePolicySpec(spec); err != nil {
 		return base, nil, invalid(err)
 	}
+	if err := s.ruleUIAppCallers(ctx, spec); err != nil {
+		return base, nil, uiAppCallerRefusal(err)
+	}
 	overlaid := redactSpecForUser(auditablePolicy(merged))
 	src.Overlay, src.overlaid = keys, &overlaid
 	return spec, warns, nil

@@ -23,7 +23,7 @@
 | No shell: model and tool or MCP calls only; nothing the model writes is executed in the sandbox | No | `CC1` | No code to escape with. Egress, the MCP broker and tool rules matter, and they are the same at every barrier |
 | Tool-calling with fixed local tools you vetted: no package installs, no arbitrary scripts | Only your tools | `CC1`; `CC2` if a tool parses untrusted files (documents, archives, images) | A parser bug is the realistic way in, and gVisor shrinks the kernel surface a bug reaches |
 | Code and shell: installs packages, builds and runs tests | Yes, anything | `CC2` where the host offers it; `CC1` only for code you trust on your own machine | Arbitrary code is the kernel-exploit case Fence leaves open |
-| Any shape holding a write-capable credential, or working on untrusted code on a shared host | Either | `CC3` | Wardyn already requires it for write-capable grants and non-baseline API keys; set it yourself for untrusted code |
+| Any shape holding a write-capable credential, or working on untrusted code on a shared host | Either | `CC3` | Wardyn raises it only for a write or admin GitHub token, `cloud_sts` and a non-baseline `api_key`. For `git_pat`, `ssh_key` and untrusted code, set a floor in a profile or policy |
 
 The shipped example policies use `CC1` because it needs nothing beyond Docker, not because it fits every agent ([examples/policies/README.md](../examples/policies/README.md)).
 
@@ -31,9 +31,10 @@ The shipped example policies use `CC1` because it needs nothing beyond Docker, n
 
 | Case | What happens | Where |
 |---|---|---|
-| A grant with write permissions (a GitHub token with a write scope, or `cloud_sts`) | The run is raised to `CC3` | [`RequiredConfinementFloor`](../internal/composer/risk.go) |
+| A `github_token` grant with a `write` or `admin` permission | The run is raised to `CC3` | [`RequiredConfinementFloor`](../internal/composer/risk.go) |
+| A `cloud_sts` grant | It counts for the floor, but the embedded identity provider refuses it at run creation (`422` `run_grants_require_spire`), so no run launches with it at any barrier | [Credentials](CREDENTIALS.md#every-kind-side-by-side) |
 | An `api_key` grant to a host outside the coding-agent baseline | The run is raised to `CC3` | Same function |
-| `git_pat` and `ssh_key` grants | No floor of their own, so clones still work on a host without KVM | Same file |
+| `git_pat` and `ssh_key` grants | No floor of their own, so clones still work on a host without KVM; set one in a profile or policy if you want it | Same file |
 | A component's header credential | Raises the run to `CC3` only when `require_vault_for_credentials` is on; it is `false` by default | [Custom components](operations/custom-components.md) |
 | A governance profile's `min_confinement_class` | A run under the profile below it is raised to it | [`clamp.go`](../internal/composer/clamp.go) |
 | A governance profile's `confinement_floors` | A run with a named trait (`own_image`, `self_defined_component`, `data_out_open`) is raised to that trait's class | [`TraitFloor`](../internal/composer/confinement_floors.go) |

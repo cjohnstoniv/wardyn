@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.0). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.2). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -220,7 +220,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 |---|---|---|
 | **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata), the VM boundary of B14 and B15, and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
 | **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (no route off the host, so nothing to bypass to), not by omitting the var. |
-| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The per-tool-call decision plane ships and is in-sandbox and cooperative; tool-call egress interception is planned: [detail](#b3--sandbox-vs-mcptool-gateway). |
+| **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The in-sandbox per-tool-call decision plane is cooperative; the proxy enforces `deny` and `approve_each` on remote MCP servers attached through it, and does not mediate other tools: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | Authenticated by a per-run JWT from wardynd's embedded issuer (SPIFFE-shaped; the runner asserts the attestation; SPIRE is planned). The broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
 | **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
@@ -266,8 +266,18 @@ A run gets what every layer allows. The run's policy record names the layer that
   - A decision plane, not a containment one.
   - Note also that `ToolAllow` is WIDENING authority evaluated outside the sandbox: an operator
     writing `tool_rules` is pre-approving calls no human will see.
-- **Planned half:** interception of MCP tool-call EGRESS, which is what would make this a boundary
-  rather than a protocol both sides have to honour.
+- **Shipped half, for attached remote MCP servers:** the proxy's MCP broker enforces outside the sandbox.
+  - A server is attached through the proxy only. Its host is refused on the ordinary route above every
+    allow, so a direct request to it is denied.
+  - Before forwarding, the broker refuses a `tools/call` the run's rules `deny` and holds an
+    `approve_each` call for a person's yes on that call's exact arguments. A caller that skips the
+    harness and the in-sandbox relay is still bound by both.
+  - A `hold` is not asked there: it passes, because the harness or the relay asked before the call, so a
+    direct call that skips both is not held.
+- **What the proxy does not mediate:** a tool that is not a remote MCP server attached through the
+  proxy (an MCP server running in the sandbox, a local tool, or any other egress to an allowed host) has
+  only the cooperative gate above and the egress policy of B2. This is not a claim that every tool call
+  is mediated.
 - **Above this plane (0.8):** a governance profile's autonomy rubric decides, control-plane side and
   before dispatch, whether a run may operate at `L2`/`L3` (auto-approval, seeded auto tools,
   `task_mode=exec`) at all, graded on the run's posture.
@@ -520,13 +530,13 @@ A run gets what every layer allows. The run's policy record names the layer that
 | L0 structural 🟢 **[shipped]** | Per-run Docker network with no route off the host and no address on it: internal, gateway mode `isolated`, IPv6 off, Docker Engine 28.0.0 or later. The only off-host path is the wardyn-proxy sidecar | `HTTP_PROXY` env-var bypass class (no route exists to bypass to); direct IP egress |
 | L1 default-deny 🟢 **[shipped on Kubernetes]** / 🟡 **[Docker planned]** | Kubernetes NetworkPolicy default-deny proven by a boot canary; the Docker form is planned: [detail](#l1-default-deny). | Non-HTTP raw-socket tunnels that never reach the proxy process; extends "no route but the proxy" to Kubernetes. Depth ATOP the metadata/link-local guard L2 already enforces — the metadata block does not wait on L1 |
 | L2 wardyn-proxy 🟢 **[shipped]** | Allowlist, approval, injection and the unconditional loopback/multicast/metadata guard: [detail](#l2-wardyn-proxy). | L7 exfil to unlisted domains; token leakage into sandbox; metadata-server theft and DNS-rebinding, including under `allow_all_egress` |
-| L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. A remote MCP tool set to `approve_each` is held at the MCP broker for a person's yes on each call **[shipped]**. Interception of tool-call EGRESS **[planned]** | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. An `approve_each` tool is gated at the broker whatever process calls it. It does NOT stop tool-call egress: the relay is in-sandbox and cooperative (B3), so an agent that never calls it is not gated |
+| L3 MCP gateway 🟡 **[partial]** | Per-tool-call approval and logging **[shipped]**: `tool_rules` resolved proxy-side (`decideByToolRules`) plus the in-sandbox `cmd/wardyn-toolgate` relay, every outcome on the decision log. A remote MCP tool set to `approve_each` is held at the MCP broker for a person's yes on each call **[shipped]**. Other tools' call egress is not mediated (B3) | The shipped half stops a gated tool call the operator's rules refuse, and records the rest. An `approve_each` tool is gated at the broker whatever process calls it. Tools outside the attached remote servers rely on the cooperative relay; skipping that relay avoids its gate (B3) |
 
 - L0 residual (Docker): a run started before the Docker Engine 28.0.0 change, or under `WARDYN_ALLOW_HOST_REACHABLE_RUN_NETWORK=1`, can reach services on the Docker host ([run networks](../docs/OPERATIONS.md#docker-host-run-networks)).
 - Four egress layers stack outward: L0 structural confinement (Docker) and the L2 proxy carry
   enforcement on every path, L1 is shipped on Kubernetes (canary-proven NetworkPolicy; the Docker
   nftables form remains planned).
-- And L3 is partial — its decision half ships, its interception half does not.
+- And L3 is partial — it enforces `deny` and `approve_each` for remote MCP servers attached through the proxy, and the rest of its decision half is cooperative.
 
 **Substrate delta: Docker (L0) vs Kubernetes (L1).**
 
@@ -567,8 +577,8 @@ is not the deployment described above.**
 | Env-var proxy bypass (documented industry bypass class) | Designed out at L0: the run's network has no route off the host, so ignoring the compatibility-only `HTTP_PROXY`/`HTTPS_PROXY` reaches no route. **[shipped]** | L0, B2 |
 | Direct-IP / non-HTTP / metadata-server (169.254.169.254) egress | Closed twice over, independently: **L0 [shipped]** (no off-host route at all) and **L2 [shipped]**'s unconditional IP guard, which runs AFTER the policy verdict so `allow_all_egress` cannot pass it — [§4.2](#42-the-unconditional-ip-guard-and-its-two-admin-authored-exceptions). | L0, L2 (L1 adds depth) |
 | | L1 🟢 **[shipped on Kubernetes]**, 🟡 **[Docker planned]**, adds depth; the metadata block does not wait on it | |
-| MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[partial]**: the DECISION half ships — operator-authored `tool_rules` resolved proxy-side by `decideByToolRules`, the in-sandbox `cmd/wardyn-toolgate` relay, and a `tool_call` approval for anything on `hold`. | L3, B3 |
-| | But the relay is cooperative, so the EGRESS-interception half that would close this class is still planned and the class stays open below L2. | |
+| MCP/tool-call egress that bypasses the network proxy | Caught at L3, a separate tool-call gateway plane (the documented MCP-blind-firewall class designed out). 🟡 **[partial]**: operator-authored `tool_rules` resolved proxy-side by `decideByToolRules`, the in-sandbox `cmd/wardyn-toolgate` relay, and a `tool_call` approval for anything on `hold`; for a remote MCP server attached through the proxy, the broker also refuses a `deny` call and holds an `approve_each` call. | L3, B3 |
+| | But the relay is cooperative, so for a tool that is not an attached remote MCP server the class stays open below L2. | |
 | Sandbox writing into the control plane through the brokered approvals route | An inbound write surface from inside B1, bounded in shape but not in volume: [detail](#sandbox-writing-into-the-control-plane-through-the-brokered-approvals-route). | B1, B5, AU |
 | Container-runtime escape via known runc/containerd CVE classes | Hardened-runc floor on Docker (cap-drop ALL, no-new-privileges, tmpfs, RuntimeDefault seccomp — never `unconfined` — host-gated AppArmor) and container-level PSS hardening on every Kubernetes pod (`baseSecurityContext`, [`internal/runner/k8s/naming.go`](../internal/runner/k8s/naming.go)) **[shipped]**. | CC2, L0 |
 | | No hostPath is shipped by construction; userns (`hostUsers:false`) is **[planned]** — [§7](#7-confinement-class-claims) CC1 states the full posture. | |
@@ -915,6 +925,9 @@ By default an agent starts before its proxy confirms the policy it loaded. With 
   - Every replica masks with that corpus, whichever replica served the request and across restarts.
   - The five doors that relay or persist sandbox output (the recording upload, live attach, exec relay, SSH shell and live output read) answer `503` `mask_state_unavailable` (the SSH shell refuses with a channel error and the same `authz.denied` row) for a run whose manifest they cannot prove complete.
     - And a consumer that cannot prove its copy current replaces a live chunk with the placeholder, answers an upload `503` and refuses an attach.
+    - A recording upload proves its copy current again after each batch of its body arrives, up to 1 MiB with a shared corpus, and masks the batch with the corpus it then holds.
+    - So a value handed to the run while the upload waited or was being read is masked, in the bytes the upload still held back as well.
+    - A batch it cannot vouch for, or a corpus whose run is not covered when it is adopted (an erasure mid-upload), ends the upload `503`, and the store keeps none of it.
   - A `mask_copies` erase also records a durable owner fence, including when no values exist.
   - Global registration compares that fence with a cursor snapshot taken before credential reads or network exchange: a delayed AWS or Entra response cannot register behind the erase.
   - A new sign-in can use a later snapshot.
@@ -1523,32 +1536,32 @@ ADMIN pre-authorized** —
 - (c) Turning on k8s member drives needs `drives.reclaim.enabled`, i.e. `delete` on claims for wardynd.
   - A compromised wardynd can then delete any claim in the runs namespace, which is already true whenever reclaim is on.
 
-#### Team drives (0.10) — one folder a group shares
+#### Team drives (0.10) — a folder a group or an issuer portal shares
 
-- **With team drives on, members of the allocated groups share one folder.**
+- **With team drives on, members of the allocated groups share one folder, and each allocated issuer portal has a separate folder of its own.**
   - If the allocation is writable, what one person's agent writes there, another person's agent can read and run. That is cross-person injection, by design.
-  - Any secret an agent writes there is visible to the whole group.
+  - Any secret an agent writes there is visible to the whole group, or to everyone who mounts the drive through that portal.
   - Nothing inspects or scans the folder's contents.
 - **What bounds it.**
   - It is off by default. The switch is `storage.user_drive.team_drives` (`UserDriveProvider.TeamDrives`, carried to resolution as `driveSizeCeiling.TeamDrives` by `driveSizeCeilingFor`).
-    - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise it resolves per person, as before ([`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
+    - `newResolvedDrive` treats a row as team only when the row says `team` AND the switch is on; otherwise a group allocation resolves per person, as before, and a portal allocation is refused and mounts nothing (`errDriveUnmountable`, [`internal/api/user_drives_resolve.go`](../internal/api/user_drives_resolve.go)).
     - With the switch off, a `team: true` drive write is a `422` (`driveTeamWriteRefusal`, [`internal/api/user_drives_team.go`](../internal/api/user_drives_team.go)).
-  - It is admin-made and allocated to groups only.
+  - It is admin-made and allocated to groups or eligible issuer portals only.
     - Drive writes are super-admin routes. Postgres keeps a team row an admin share with no owner (`user_drives_team_shape`, migration `0205_user_drives_team.sql`).
-    - `types.ValidateTeamDriveGrant` refuses any subject type but `group`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` runs it again at resolution, so a row written around the boundary mounts nothing.
+    - `types.ValidateTeamDriveGrant` refuses any subject type but `group` or `portal`, and any `home_override`, at the grant write (`teamDriveGrantAllowed`), and `teamResolvedDrive` (a group) or `portalResolvedDrive` (a portal) checks it again at resolution, so a row written around the boundary mounts nothing.
   - It is read-only unless a super admin sets `members_can_write`, and the drive itself must be writable.
     - `newResolvedDrive` folds a team allocation to `writable && members_can_write && drive.writable`, so an allocation's `writable_override` cannot open a read-only team drive.
-    - `types.ValidateTeamDriveGrant` refuses `members_can_write` on a read-only drive, and `types.DriveGrantWidens` names a newly set `members_can_write` a widening, so the security-admin tier allocates read-only only (`upsertUserDriveGrantAs`).
+    - `types.ValidateTeamDriveGrant` refuses `members_can_write` on a read-only drive, and `types.DriveGrantWidens` names a newly set `members_can_write` a widening, so the security-admin tier allocates read-only only to groups (`upsertUserDriveGrantAs`). A portal allocation needs a super admin even when read-only (`upsertPortalDriveGrant`).
     - A run asking to write a read-only one is refused (`driveReadOnlyRefusal`).
-  - People outside the allocated groups resolve no grant on the drive, so they get no mount.
+  - People outside the allocated groups resolve no group grant on the drive, so they get no mount of the group's folder. A portal allocation needs a super admin, a live portal with its own identity issuer, and a `docker_volume` or `k8s_pvc_static` drive with no second place ([Operations](../docs/OPERATIONS.md#team-drives)). Anyone who mounts the drive through an allocated portal reaches that portal's own folder (`types.DrivePortalHome`), never the group's.
   - The one-person guard is lifted for team rows only.
-    - A team folder's home is `t-` plus a hash of the drive id (`types.DriveTeamHome`), mounted under `/home/agent/shared/<slug>` (`runner.DriveTargetFor`, `runner.ValidateDriveTarget`), and carries no subject fingerprint.
+    - A group's team folder has the home `t-` plus a hash of the drive id (`types.DriveTeamHome`); a portal's has `p-` plus a hash of the portal and drive ids (`types.DrivePortalHome`). A group's folder is mounted under `/home/agent/shared/<slug>` (`runner.DriveTargetFor`, `runner.ValidateDriveTarget`), and carries no subject fingerprint.
     - A per-person drive still stamps its `SubjectHash`, and the docker driver still refuses a volume labelled for another person (`driveVolumeAdoptable`).
   - The mount audit names the person who mounted: `auditDriveMount` adds `team: true` and `mounted_by` (the run's creator) to every team `run.drive.mount` row ([`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)).
   - `GET /me/drives` lists in `shared_with` only the caller's own groups that carry the allocation (`teamSharedWith`).
 - **WHAT THIS DOES NOT CLOSE.**
-  - A leaver's writes stay. A person's reclaim refuses a team drive (`driveTeamReclaimRefusal`), and the erasure's `member_drives` scope reaches only rows the person owns, which a team row never is. The files belong to the drive's groups.
-  - Group membership is the boundary: whoever the identity provider adds to a group reads everything already in the folder.
+  - A leaver's writes stay. A person's reclaim refuses a team drive (`driveTeamReclaimRefusal`), and the erasure's `member_drives` scope reaches only rows the person owns, which a team row never is. A group folder's files belong to the drive's groups, and a portal folder's to the portal.
+  - Group membership is the boundary of the group's folder: whoever the identity provider adds to a group reads everything already in it. A portal's folder is bounded by the portal instead: everyone who mounts through it reads what others left there, and a writable run can change it, whether or not they are in any group.
   - A `docker_volume` team drive lives on one Docker host; runs elsewhere see a different, empty folder.
 
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
@@ -1609,7 +1622,9 @@ These risks are **not closed by v1 Wardyn**.
 ### Numbered residuals
 
 1. **The model-API channel is an unavoidable data-exit path.**
-   - The LLM gateway logs every prompt/token/tool call but cannot stop an agent encoding data into a prompt to a model it may call.
+   - The proxy records connection and request decisions (host, port, method and path), token counts on the model routes it can meter, and, where `llm_inspection` is on, a content-free inspection summary.
+   - That is not a transcript: no prompt or response body is kept, and a model call in an opaque tunnel yields only the connection row, marked as a model tunnel, with no per-call counts.
+   - It cannot stop an agent encoding data into a prompt to a model it may call.
    - Wardyn does not prevent exfiltration over the model channel.
    - The optional, off-by-default guardrail (`internal/contentscan`, policy `llm_inspection`) narrows this for the HONEST agent — it scans outbound prompts on the inspectable API-key route for operator-declared known secret values, and the `env_secret` and `file_secret` values placed in the run, and can alert/block.
    - But a prompt-injected agent can base64/hex/split-across-turns/encrypt around any scanner, and subscription-OAuth/Bedrock CONNECT modes stay opaque until the Phase-2 TLS-MITM tier (flagged `llm.scan.bypass`).
@@ -1690,8 +1705,13 @@ These risks are **not closed by v1 Wardyn**.
         - A base ref may be a mutable tag or a digest-pinned ref (`repo@sha256:…`).
         - A pinned, pre-pulled base is matched without a registry round-trip (works air-gapped) and pinning is the recommended operator practice — but Wardyn **does not require it**.
         - A mutable tag is resolved at wrap time — a registry re-pointing a tag changes what gets wrapped, and the run's recorded image tag is not by itself proof of content.
-      - **Base CONTENT is not scanned or attested** — no malware/CVE scan, no signature or provenance verification (no cosign/notation/SLSA).
-        - A backdoored base is wrapped and launched.
+      - **Base CONTENT is not scanned**, and base signatures are checked only when an admin turns image admission on.
+        - There is no malware or CVE scan, and no SLSA provenance check of the build.
+        - Image admission (site setting `images.admission`, and a governance profile's required signers) is OFF by default. In audit mode it reports what enforce would have refused and neither refuses nor pins.
+        - Where it enforces (the site's enforce mode, or a profile naming required signers, which applies whatever the site mode), it reads the digest's Sigstore signatures and attestations and holds them to the signers that cover the image. It refuses an image no signer covers, or one whose signature or required attestation is missing or does not verify. It then pins the admitted digest, and the base wrap uses that pin rather than the tag.
+        - It checks the member's image, an attached workspace's base image or a policy-carried one. It does not check the convention image, a macOS VM run (which runs no member image), an operator or the break-glass admin.
+        - It proves who signed that digest, not that the content is benign: a malicious-but-signed base is admitted.
+        - A backdoored base is wrapped and launched when admission is off or in audit mode, or when a trusted signer vouches for it.
         - What bounds it is structural.
         - A BYOI base's code executes only *later*, inside the run's confinement tier under the same egress policy, credential-brokering and audit — contained exactly as well as a hostile agent, no better.
         - (Devcontainer build-TIME content is NOT covered by that argument.)
@@ -1989,19 +2009,19 @@ These risks are **not closed by v1 Wardyn**.
     - The fix is the multi-user central-control-plane topology ([`docs/OPERATIONS.md`](../docs/OPERATIONS.md#multi-user-who-can-change-what)'s "Multi-user: who can change what"); nothing in the product enforces that separation exists.
 
 24. **`TestAuthzMatrix`'s "cannot go stale" invariant does not cover the UI-sandbox gateway.**
-    - The matrix's own coverage-boundary comment ([`internal/api/authz_test.go`](../internal/api/authz_test.go)) names exactly one excluded surface — the SSH gateway's separate listener — because `chi.Walk` only discovers routes on `srv.router`.
-    - So a route living on a different `http.Handler` is invisible to it.
-    - `UIGatewayHandler` is wired as its own listener/handler, never registered on `srv.router`, so it is exactly as invisible as SSH is.
-    - But the comment does not say so, which reads as a stronger guarantee ("every route") than the test provides.
-    - A credibility gap in what a green matrix run means, not a live authorization hole: `uigateway_test.go` exercises that surface's authorization today, the same relationship `sshgateway_test.go` has to the SSH exclusion.
-    - A future route on the UI gateway's own router would escape both the guarantee and this document's notice of the exclusion — the failure mode `TestAuthzMatrix` exists to prevent everywhere else.
+    - `chi.Walk` only discovers routes on `srv.router`, so a route living on a different `http.Handler` is invisible to the matrix.
+    - The matrix's own coverage-boundary comment ([`internal/api/authz_test.go`](../internal/api/authz_test.go)) names both separate listeners, the SSH gateway and `UIGatewayHandler`, and says a green matrix says nothing about their authorization.
+    - `UIGatewayHandler` is wired as its own listener/handler, never registered on `srv.router`, so the matrix does not discover it.
+    - What remains is that limit, not a live authorization hole: the matrix cannot discover a route on the UI gateway's own router, and that surface's authorization is pinned only by its own tests in `uigateway_test.go`, the same relationship `sshgateway_test.go` has to the SSH exclusion.
+    - A future route on the UI gateway's own router would escape the matrix — the failure mode `TestAuthzMatrix` exists to prevent everywhere else — and only those separate tests would catch it.
 
 25. **A member-authored mount's bind is still not atomic with its check (TOCTOU), and the residual is accepted, not closed.**
     - The gate re-resolves the source with `EvalSymlinks` in the docker driver immediately before `ContainerCreate` — as late as this process can look.
     - But validate and create remain two operations, exactly the window `ValidateMountSource`'s own residual note publishes for OPERATOR mounts.
     - A member with local root can swap the source for a symlink inside that window; we do not claim to defeat it.
-    - Two things bound the blast radius: the roots are **operator/MDM-set**, so the widest a member can aim the race is *within the declared roots* — the target set cannot be enlarged, only raced within.
-    - And the credential-dotfile deny-list matches the **post-`EvalSymlinks` real path**, so a won race landing on `~/.ssh` inside a too-wide root is still refused unless the attacker also defeats that list.
+    - The roots (**operator/MDM-set**) and the credential-dotfile deny-list (matched on the **post-`EvalSymlinks` real path**) protect the mount target at **CHECK TIME only**.
+    - The container runtime is handed the original source path and resolves it again itself, and no open directory handle ties that later lookup to the target the checks resolved.
+    - So a source swapped after the checks is held to neither the roots nor the deny-list: a won race can bind a path outside the roots or a credential directory. That is the accepted, host-side race, and the host is the trust boundary.
     - The tests pin the ORDERING this depends on; the race itself is not deterministically testable and no test claims to cover it.
     - The env-as-code write (`POST /workspaces/{id}/env-as-code/write`) re-checks the directory it opened through `/proc/self/fd` on Linux; on a daemon host without it (macOS, Windows) a source swapped between that write's path check and its open is not re-checked.
 
@@ -2019,9 +2039,9 @@ These risks are **not closed by v1 Wardyn**.
     - The workspace-noun instance of residual #14's one-operator-tier, bounded the same way.
 
 28. **A configured `WARDYN_TRUSTED_CA_FILE` makes the corporate middlebox a trusted issuer for `wardynd`, every proxy sidecar, and every sandbox — not merely tolerated on one hop.**
-    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything the three processes send over TLS.
+    - The bundle is additive to the system roots, so while the knob is set the middlebox can read and rewrite anything those paths send over TLS.
     - `wardynd`'s own OIDC discovery, GitHub App transport and audit-webhook calls (all on the one mutated `http.DefaultTransport`).
-    - The proxy sidecar's forward and control-plane transports.
+    - The proxy sidecar's egress (forward) transport. Its control-plane connection to `wardynd` is excluded: it trusts only `wardynd`'s own internal CA, never the system roots or this bundle (B6).
     - And — because `runner.InstallSandboxTrustedCA` appends the same PEM into the sandbox's CA trust — the agent's TLS clients on a passthrough (non-MITM'd) CONNECT tunnel.
     - Wardyn's own inspection/masking (the `llm_inspection` guardrail, the per-run MITM CA) sits INSIDE that envelope, not above it.
     - There is no certificate pinning anywhere this trust applies — the bound is scope, not depth.
@@ -2121,11 +2141,11 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-34. **A drive created before migration `0067` names its objects by slug, so two such drives can collide, and a collision or a replaced object is a REFUSED RUN, not a cross-mount.**
+34. **Older drive names can collide. Identity checks refuse mismatched storage, with the startup and removed-hold exceptions below.**
     - An old-scheme name is `wardyn-drive-<drive-slug>-<home>`. Both fields admit `-`, so drive `eng` + home `us-bob` and drive `eng-us` + home `bob` name one object.
     - Since `0067` every new drive names its objects by its fixed-width id (`DriveObjectSchemeID`), so `<home>` starts at a fixed offset. A row keeps the scheme it was created under, because neither substrate can rename storage.
     - A fail-closed identity check bounds the old scheme: `driveClaimIdentity` refuses a claim whose `wardyn.drive` / `wardyn.home` labels are not this run's, and `driveVolumeAdoptable` refuses another drive's volume.
-    - A collision costs one of the two people a refused run; the remedy is distinct home names.
+    - A collision the identity check catches costs one of the two people a refused run; the remedy is distinct home names.
     - A run checks a drive's object before its proxy starts and mounts it by name later. In between, a reclaim can remove it and another person's first run make one under that name (an old-scheme collision, or a reused `home_override`).
     - On Kubernetes the run reads the claim again before the agent pod is made and once its main container runs, and refuses one that is gone, deleting or another UID (`recheckDriveClaims`).
     - On Docker a never-started container with no network mounts each checked volume, read-only and `NoCopy`, until teardown (`pinDriveVolumes`), so a reclaim answers "in use"; a volume whose labels changed before that is refused. A drive's seed, which writes into an empty volume, is made only after it.
@@ -2143,8 +2163,8 @@ These risks are **not closed by v1 Wardyn**.
     - So a share whose mount point is or traverses a credential directory — or a symlink that lands in one — is refused at authoring and again at bind time.
     - And the claim residual #25 makes about member mounts is now true of drives.
     - It closes nothing beyond that: a drive inherits residual #25's TOCTOU **identically**.
-    - The blast radius is bounded two ways.
-    - The roots are operator/MDM-set, so the race can only be aimed WITHIN the declared roots.
+    - Both the roots and the deny-list are checks made at CHECK TIME only: they say nothing about what the runtime resolves after them.
+    - The roots are operator/MDM-set.
     - And containment is **PER DRIVE**, evaluated at CHECK TIME.
     - `runner.UserDriveHomeWithinItsRoot` asserts the symlink-resolved source is a strict subdirectory of THIS drive's own `host_root` — carried onto the mount from the resolved row, and an absent one is a refusal rather than a skip.
     - That is on top of `UserDriveMountSourceCheck`'s ceiling over the whole root LIST and the base-name rule.
@@ -2153,7 +2173,7 @@ These risks are **not closed by v1 Wardyn**.
     - **What is left is the window, not the rule.**
       - Every one of those checks runs on the `EvalSymlinks`-resolved path, and what is handed to `ContainerCreate` is still the LEXICAL `<host_root>/<home>` source, which the daemon resolves again for itself.
       - Validate and create remain two operations, so a host-root attacker who re-points the home in between binds whatever that second resolve finds.
-      - The check is placed as late as this process can look, immediately before the create, and the deny-list matches the post-`EvalSymlinks` real path, so a won race landing on a credential directory is still refused.
+      - The check is placed as late as this process can look, immediately before the create, and the deny-list matches the post-`EvalSymlinks` real path at that moment. Neither holds the target the runtime resolves afterwards, so a won race can land outside the roots or on a credential directory.
       - The race is not deterministically testable and no test claims to cover it.
 
     </details>
@@ -2574,8 +2594,10 @@ These risks are **not closed by v1 Wardyn**.
     - A frozen agent sits exactly where a running one would, reachable to anyone who already had host or daemon access.
     - The proxy sidecar is deliberately never frozen (so it keeps renewing its token and answering egress decisions), so a frozen run is not "off the network" either.
     - Verified only on runc/cgroup v2 today (`runsc`/Kata report unsupported rather than assume an unproven control).
-    - Nothing yet calls Freeze from a real pause-and-resume feature (residual #55 covers reach once something does).
-    - This residual is about the primitive itself, which any future caller inherits unchanged.
+    - The shipped caller is the control plane's pause sweep (`pauseRun` in [`internal/api/run_pause.go`](../internal/api/run_pause.go)): it freezes a run that has had an approval waiting for a quarter of an hour, or that is idle past its `pause_idle_after_sec` limit, on a confinement class whose freeze the runner reports as supported.
+    - It records its intent, freezes the agent, then marks the run paused. A decided approval, or a person thawing it to open a shell, resumes it.
+    - The freeze changes nothing listed above: the agent's files, network namespace and any host or daemon access to it stay as they were, and the proxy keeps running.
+    - Residual #55 covers reach over a run once it is paused or revived.
 
 54. **A control-plane outage leaves a window of egress with no durable audit.**
     - The proxy's token renewer gives up asking for a fresh token after an hour of failures and keeps running "on a dead identity, visibly" (`runTokenRenewerTuned` in [`internal/egress/proxy/renew.go`](../internal/egress/proxy/renew.go)) rather than stopping, deliberately.
@@ -2611,13 +2633,15 @@ These risks are **not closed by v1 Wardyn**.
     - An operator sizing host disk for "however many runs are live" can be surprised by however many are merely kept.
     - A fleet of long-running, frequently-ended runs under a generous grace is the case this compounds; surfacing disk used on the run page is a tracked follow-up, not yet shipped.
 
-58. **Kubernetes cannot keep, revive, restart, or (once it ships) pause a run — each is an optional `Runner` capability the k8s substrate does not implement.**
-    - So a k8s run's end and limits still fire on schedule but every other long-holds behavior degrades to an immediate, non-resumable teardown.
+58. **On the ordinary Kubernetes substrate a run cannot be kept, revived, restarted or paused — each is an optional `Runner` capability that substrate does not implement.**
+    - So an ordinary k8s run's end and limits still fire on schedule but every other long-holds behavior degrades to an immediate, non-resumable teardown.
     - `SandboxEnder`, `ProxyReviver`, `SandboxStarter` and `Freezer` (all in [`internal/runner/runner.go`](../internal/runner/runner.go)) each document the same shape — a router in front of a substrate without the interface returns that interface's own `Err*Unsupported` sentinel.
     - And the control plane's fallback for an end is to stop the run outright rather than keep it.
-    - This is a substrate gap, not a policy choice: a k8s deployment gets none of "kept for a grace window," "revived after an outage," "resumed after a reboot," or (when it ships) "paused when idle."
+    - This is a substrate gap, not a policy choice: an ordinary k8s deployment gets none of "kept for a grace window," "revived after an outage," "resumed after a reboot," or "paused when idle."
+    - The optional, experimental agent-sandbox mode with `k8s.agentSandbox.keep.enabled` ([B13a](#b13a--agent-sandbox-controller-vs-run)) adds keep and revive, and restart with current limits, for a run that can be kept: an interactive run with a kept work folder and a `claude-code` or `codex-cli` agent. Any other run on it ends as it does without keep.
+    - It keeps the work folder and the run's Secret, and it loses running programs and memory. It trusts the controller and the runs namespace's `sandboxes` and `endpointslices` writers, and it is not a Kubernetes freeze: no Kubernetes substrate pauses a run in place.
     - Every one of those needs a durable, re-attachable unit of storage and identity that a stopped or evicted pod does not provide, which is also why user-drive persistence is the prerequisite direction for closing this rather than a k8s-specific reimplementation of each behavior individually.
-    - See [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md).
+    - See [Kubernetes: known gaps](../docs/operations/kubernetes-known-gaps.md) and [keep and revive](../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
 
 59. **A run's rendered proxy config — its run token, per-run MITM CA private key and (when configured) the operator's upstream-proxy credential — is held in two places: the running proxy's memory, and one sealed database row.**
     <details><summary>Details</summary>
@@ -2633,7 +2657,7 @@ These risks are **not closed by v1 Wardyn**.
     - The kept run's token is also refused at every `/internal` door (`authz.denied`, `run_kept`), so a copy of it mints, injects and decides nothing.
     - What remains: an actor with the database AND the secret store's key can open any live or kept run's config, the same actor who can already open every stored credential.
     - An actor with Docker-daemon or host access can still read a RUNNING proxy's memory, the pre-existing process-memory residual.
-    - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and a kept run is not kept at all (residual 58), so the Secret's life is the run's.
+    - On Kubernetes the config reaches the sidecar through a per-run Secret and an in-memory volume (#688) and on the ordinary substrate a run is not kept at all (residual 58), so the Secret's life is the run's. With the optional keep mode a kept run's Secret stays until the run is revived or torn down.
     - It is not re-created from the row.
     - On a Mac with `macos_vm_inspection_ca` on, the runner re-issues this CA under the Mac's own, limited to the hosts the run's proxy terminates; see the macOS VM inspection CA residual (#99).
 
@@ -2664,7 +2688,8 @@ These risks are **not closed by v1 Wardyn**.
     - A UI-app session a portal opens through an attach ticket is a credential derived from the grant and is bounded by it (0.8.5, #1475).
     - Redemption and every 30-second re-check resolve the grant by id, so revoking the portal or the grant expiring ends it.
     - And the session cookie is capped at the grant's expiry (about ten minutes).
-    - The exception is a stream already open — a terminal WebSocket or a relayed socket — which keeps working until it closes or the run ends.
+    - A terminal WebSocket opened through a portal ticket is checked again every 30 seconds, each check bounded to five seconds: it closes on the grant's expiry or revocation, the portal's revocation, the person's revocation, or any check that fails or cannot be made (`attachAuthority` in [`internal/api/attach_authority.go`](../internal/api/attach_authority.go)).
+    - The exception left is an upgraded relayed socket of a UI-app browser session, which carries no re-check and keeps working until it closes (`TestUIGateway_EstablishedConnectionOutlivesTheRevoke` pins this).
     - A portal registered under the wrong identity-provider client id acts for whoever that client's tokens name, which is why only a super admin registers one and why it may never be Wardyn's own client id.
 
     </details>
@@ -2910,7 +2935,10 @@ These risks are **not closed by v1 Wardyn**.
     - The gateway relays bytes it cannot parse, so those rules hold only through the CLI, and `WARDYN_SYNC_DIR` is a start point, not a boundary.
     - **Ordinary files remain.** A pulled `Makefile`, package script, test or source file runs when the developer builds, with their credentials and none of Wardyn's controls.
     - Transfers are recorded as byte counts (`ssh.sync.transfer`), never content, and SFTP is unmasked (§4.1).
-    - **Bind write-back does not exist yet.** Through 0.9.3 a run on a runner takes no laptop folder: a `local_dir` source or a `host_path` drive is refused `placement_local_path` (`ReasonPlacementLocalPath`, [`internal/placement/reasons.go`](../internal/placement/reasons.go)), because nothing binds a path to a runner yet.
+    - **A folder bind is not sync.** A member's `local_dir` mount or a `host_path` drive on a run placed on a runner is bound to that runner and its allowed roots (`--drive-root`): the run is refused `placement_local_path` unless the stored path names the runner it is sent to and lies inside one of that runner's roots, and a run with a folder bound to a runner is failed rather than started on any other (`boundFolderOffItsRunner`, [`internal/api/run_placement_dispatch.go`](../internal/api/run_placement_dispatch.go)).
+    - A path that is not bound that way is still refused `placement_local_path` (`ReasonPlacementLocalPath`, [`internal/placement/reasons.go`](../internal/placement/reasons.go)).
+    - A bind opted in as writable (read-only is the other mode) changes the selected host folder directly. None of the sync client's protections apply to it: no conflict rule, no deletion rule and no file exclusion, so the agent can delete, overwrite or add any file in that folder, including `.git/`, `.envrc` and editor launch files.
+    - The root checks and the credential deny-list protect the bind target at check time only (residuals #25 and #35).
 
 69. **On a runner host the developer is root: every control binds the agent, not the developer, and everything a local run uses is developer-readable [0.9, client mode].**
     <details><summary>Details</summary>
@@ -3056,7 +3084,8 @@ These risks are **not closed by v1 Wardyn**.
     - A sponsor may see and stop the service's runs. Entering one needs an explicit `service_attach` grant, is recorded as the sponsor, and is never available over SSH or to a portal's delegated token.
     - Entry is off for everyone until an administrator names the grant, and it never takes the super-admin exemption. An allow written for everyone admits every sponsor.
     - A withdrawn grant refuses only the next ticket. An issued UI session keeps working until its TTL (`WARDYN_UI_SANDBOX_SESSION_TTL`), a session revoke, or its next re-check after the sponsorship ends.
-    - A terminal stream already open runs until it closes, and an open `/events` stream keeps flowing until the run ends.
+    - A withdrawn `service_attach` grant is checked at ticket mint only, so it ends no terminal already open. What the terminal's 30-second authority check does ask again is the sponsor's entry rule: the sponsor must still be the service identity's sponsor since the ticket's authority time, and a sponsorship that has ended, or that cannot be read, closes the socket (`sponsorStillEntitled` in [`internal/api/run_entry.go`](../internal/api/run_entry.go)).
+    - An open `/events` stream ends at the run's end, at its five-minute hold timer, on cancellation, or when a keepalive check (every 15 seconds) finds the session or portal delegation ended; a stream authenticated as the service identity ends when the identity is suspended or retired, its sponsor changed after the stream opened, or its sponsor's session is no longer live (`serviceEndedSince`, [`internal/api/run_events.go`](../internal/api/run_events.go)).
 
 79. **A run's launch intent is kept as long as the run row, and an erase races only launches that begin after it [0.9].**
     - The intent holds the run's task text, inline component definitions, and the names (never values) of the secrets, hosts and workspaces it asked for.
@@ -4131,6 +4160,14 @@ What it does not stop:
   redirect. Its code works once and lasts 5 minutes, the request 10, and the approve page shows the computer name, the
   code and whether the request came from the approver's own address; that address check is advisory.
 
+### Endpoint sign-in with no identity token (opt-in, per provider row)
+
+`oidc.require_id_token: false` on a `custom_endpoint` row signs people in against an authority that never grants `openid`.
+
+- It is allowed only with `identity_binding: none`, which already ties nothing about the authority's identity to the console person. The `console` binding is refused with `false` and keeps requiring a verified identity token.
+- No identity token is requested. One sent anyway is ignored: not verified, stored or logged. No issuer or subject is recorded, so a review shows no platform account for that sign-in; the capture audit row says `id_token: not_required`.
+- State, PKCE, the session's person, the one-use callback and the authority and TLS checks are unchanged. The mode is part of the row's sign-in address, so changing it deletes the row's stored sign-ins and refuses a callback or redemption made under the other setting.
+
 ### The unauthenticated metrics listener (opt-in)
 
 - `WARDYN_METRICS_LISTEN` (Helm `metrics.listener.enabled`, off by default) opens a second, plain-HTTP listener that answers `GET /metrics` with **no credential** and `404` to everything else (`api.Server.MetricsListenerHandler`, [`internal/api/metrics_listener.go`](../internal/api/metrics_listener.go)).
@@ -4695,7 +4732,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | No resident secrets | Late-bound, proxy-injected credentials with output masking 🟢 **[shipped]**: [gaps and exceptions](#no-resident-secrets). | AT-1.1: agent reading secrets from sandbox env/disk |
 | Env-var proxy bypass defended | L0 🟢 **[shipped]** (no route off the host; proxy env is compat-only, no route to bypass to) | Env-var proxy-bypass class |
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
-| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3's decision half ships (`tool_rules`, `wardyn-toolgate`) and is cooperative; its interception half is planned, so this row is NOT "always active" for tool-call egress until that ships |
+| Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3 enforces `deny` and `approve_each` at the proxy for remote MCP servers attached through it, and its `tool_rules` and `wardyn-toolgate` relay are cooperative for the rest, so this row is NOT "always active" for a tool that is not an attached remote MCP server |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
 | Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |

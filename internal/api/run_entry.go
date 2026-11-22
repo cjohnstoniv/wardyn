@@ -151,11 +151,15 @@ const (
 	verdictRevocationUnavailable entryVerdict = uiDeniedReasonRevocationUnavailable
 	verdictDelegationEnded       entryVerdict = uiDeniedReasonDelegationEnded
 	verdictDelegationUnavailable entryVerdict = uiDeniedReasonDelegationUnavailable
+	// verdictPortalUnitScope and verdictPortalUnitUnavailable: an issuer portal's ticket on a run outside its
+	// pin, and a pin that could not be read (issuerPortalTicketHolds).
+	verdictPortalUnitScope       entryVerdict = reasonPortalUnitScope
+	verdictPortalUnitUnavailable entryVerdict = reasonPortalUnitUnavailable
 )
 
 // unavailable reports a verdict that is a failed lookup rather than a refusal.
 func (v entryVerdict) unavailable() bool {
-	return v == verdictRevocationUnavailable || v == verdictDelegationUnavailable
+	return v == verdictRevocationUnavailable || v == verdictDelegationUnavailable || v == verdictPortalUnitUnavailable
 }
 
 // redeemAttachTicket is the one redemption of an attach ticket, for the terminal
@@ -169,6 +173,7 @@ func (v entryVerdict) unavailable() bool {
 // The returned actor is empty for verdictInvalid and names the ticket's
 // principal for every other verdict, so the caller audits who was refused.
 func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.UUID) (ticketActor, entryVerdict, error) {
+	start := time.Now()
 	ta, ok, err := consumeAttachTicket(ctx, s.cfg.Store, tok, runID, s.cfg.Now())
 	if err != nil {
 		return ticketActor{}, verdictOK, err
@@ -176,17 +181,41 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 	if !ok || ta.authorizedAt.IsZero() {
 		return ticketActor{}, verdictInvalid, nil
 	}
+	ta.checkStart = start
+	// An issuer portal's opening reads, the chain's here and the entry's after redemption, share one deadline.
+	if issuerPortalPerson(ta.via, ta.principal) {
+		ta.admitBy = time.Now().Add(issuerAdmitBound())
+		var cancel context.CancelFunc
+		ctx, cancel = ta.admitCtx(ctx)
+		defer cancel()
+	}
 	expires, v := s.ticketAuthority(ctx, ta, runID)
 	ta.grantExpires = expires
+	if v == verdictOK {
+		ta.renewChain = s.uiRenewalChain(ctx, ta)
+		// A chain read the opening deadline ran out on is an outage, never a session that quietly stops renewing.
+		if ta.renewChain == uuid.Nil && !ta.admitBy.IsZero() && ctx.Err() != nil {
+			slog.WarnContext(ctx, "wardynd: an issuer portal ticket's renewal chain could not be read in its bound", "run_id", runID, "err", ctx.Err())
+			v = verdictRevocationUnavailable
+		}
+	}
 	return ta, v, nil
 }
 
 // ticketAuthority asks whether the authority a redeemed ticket carries still holds: the revocation cuts
 // (session-only ones included) against the ticket's own issue time and sequence, never the redemption's,
-// and the portal grant it was minted through. Redemption asks it once; an open terminal socket asks it
-// again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
+// and the portal grant it was minted through, never a later one; for an issuer portal's ticket also the
+// person's identity and the pin (issuerPortalTicketHolds). Redemption asks it once; an open terminal socket
+// asks it again on every authority check (attach_authority.go). It returns the grant's expiry for a ticket
 // minted through a portal.
 func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid.UUID) (time.Time, entryVerdict) {
+	// An issuer portal's ticket is answered within the watch bound, at redemption as on every re-check: a store
+	// that hangs is a 503, never a held request.
+	if issuerPortalPerson(ta.via, ta.principal) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, issuerAdmitBound())
+		defer cancel()
+	}
 	// The credential the ticket was minted under (a personal token, or a CLI sign-in's session) is asked after
 	// by id, as a Mac window's is: its revoke, expiry or sign-out ends the terminal though no person-level cut
 	// was written. A store that cannot say refuses.
@@ -211,7 +240,11 @@ func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid
 		}
 	}
 	if ta.via != nil {
-		return s.delegationLive(ctx, *ta.via)
+		expires, v := s.delegationLive(ctx, *ta.via)
+		if v == verdictOK && issuerPortalPerson(ta.via, ta.principal) {
+			v = s.issuerPortalTicketHolds(ctx, ta, runID)
+		}
+		return expires, v
 	}
 	return time.Time{}, verdictOK
 }
@@ -224,6 +257,9 @@ func (s *Server) ticketAuthority(ctx context.Context, ta ticketActor, runID uuid
 // never was one, and wrong for a session that provably was. An absent grant, or
 // one under another portal, has ended.
 func (s *Server) delegationLive(ctx context.Context, via types.DelegationVia) (time.Time, entryVerdict) {
+	if expires, v, found := s.portalGrantLive(ctx, via); found {
+		return expires, v
+	}
 	ds, ok := s.cfg.Store.(store.DelegateStore)
 	if !ok {
 		slog.ErrorContext(ctx, "wardynd: a portal-derived session cannot be checked: the store has no portal capability")
@@ -244,7 +280,8 @@ func (s *Server) delegationLive(ctx context.Context, via types.DelegationVia) (t
 }
 
 // sessionExpiry is when a UI session opened from this ticket ends: the
-// configured lifetime, or the portal grant's expiry if that comes first.
+// configured lifetime, or the portal grant's expiry if that comes first, unless
+// the session renews (renewChain), when its chain bounds every request instead.
 func (a ticketActor) sessionExpiry(now time.Time, ttl time.Duration) time.Time {
 	exp := now.Add(ttl)
 	if a.support != uuid.Nil {
@@ -255,7 +292,7 @@ func (a ticketActor) sessionExpiry(now time.Time, ttl time.Duration) time.Time {
 			exp = a.supportExpires // a helper's session ends with its grant
 		}
 	}
-	if a.via != nil && a.grantExpires.Before(exp) {
+	if a.via != nil && a.grantExpires.Before(exp) && a.renewChain == uuid.Nil {
 		return a.grantExpires
 	}
 	return exp

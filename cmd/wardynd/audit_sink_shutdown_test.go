@@ -277,3 +277,35 @@ func TestServeAndShutdownDrainsSinksOnAServeError(t *testing.T) {
 	t.Fatalf("the collector never saw the event: the serve-error return skipped the audit-sink drain "+
 		"(received %d batch(es))", len(seen))
 }
+
+// The serve-error exit stops the service grant sink queue before the fanout closes: the deferred stop has already
+// run when serveAndShutdown returns, so a second stop finds the queue stopped.
+// Plant: drop the deferred StopServiceGrantSIEM in serveAndShutdown; the queue is then still running and the test's
+// own stop returns true.
+func TestServeAndShutdownStopsTheServiceGrantSinkQueueOnAServeError(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	defer busy.Close()
+	addr := busy.Addr().String()
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fan, err := buildAuditFanout(rootCtx, "")
+	if err != nil {
+		t.Fatalf("buildAuditFanout: %v", err)
+	}
+	empty, no := "", false
+	trust := "wardyn.local"
+	f := &bootFlags{
+		listen: &addr, tlsCert: &empty, tlsKey: &empty,
+		tlsTerminated: &no, trustDomain: &trust,
+	}
+	srv := api.New(api.Config{})
+	if _, serr := serveAndShutdown(rootCtx, f, tlsPosture{}, srv, "none", fan, &audit.DenialCoalescer{}, nil, nil); serr == nil {
+		t.Fatal("serveAndShutdown returned nil against an address already in use")
+	}
+	if srv.StopServiceGrantSIEM() {
+		t.Fatal("the service grant sink queue was still running after the serve-error exit: its stop was not deferred")
+	}
+}

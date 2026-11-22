@@ -221,6 +221,10 @@ export function useAttachSession(args: UseAttachSessionArgs) {
   // be the helper's. Never reset, so a person who was a helper here never reads "sign in again".
   const helperRef = React.useRef(false);
   if (supportHelper) helperRef.current = true;
+  // The page's current answer: false after the latch is the poll's result that the grant is no longer open. While
+  // it still says open, a 4401 is only a close: the server sends it for a failed grant read as well as an ended one.
+  const helperOpenRef = React.useRef(false);
+  helperOpenRef.current = !!supportHelper;
   operatorResolvedRef.current = operatorResolved;
   // Signing out mid-page closes the socket and stops retries and input, but
   // keeps the terminal and what it shows: the same person signing back in
@@ -625,7 +629,12 @@ export function useAttachSession(args: UseAttachSessionArgs) {
           }
           setMode(null);
           setConnState("closed");
-          term.writeln(`\r\n\x1b[2m${helperRef.current ? SUPPORT_HELPER.terminalEnded : "[session ended: sign in again to reconnect]"}\x1b[0m`);
+          const line = !helperRef.current
+            ? "[session ended: sign in again to reconnect]"
+            : helperOpenRef.current
+              ? SUPPORT_HELPER.terminalDropped
+              : SUPPORT_HELPER.terminalEnded;
+          term.writeln(`\r\n\x1b[2m${line}\x1b[0m`);
           return;
         }
         // Clean, intentional close (1000) => the run finished / we unmounted.

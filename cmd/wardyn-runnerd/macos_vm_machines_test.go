@@ -322,7 +322,7 @@ func TestMachinesDeleteRemovesFolderAndLock(t *testing.T) {
 	if _, err := os.Lstat(other); err != nil {
 		t.Errorf("another machine went with it: %v", err)
 	}
-	if want := "deleted kept machine dev (" + macvm.RunKey(id.String()) + "); the organisation's record goes on the next report\n"; out.String() != want {
+	if want := "deleted kept machine dev (" + macvm.RunKey(id.String()) + ") from this Mac. Its organisation record still counts towards your kept-machine limit. Find it with 'wardyn machines' and request removal with 'wardyn machines delete <name or id>'.\n"; out.String() != want {
 		t.Errorf("printed %q, want %q", out.String(), want)
 	}
 }
@@ -543,6 +543,13 @@ type fakeKept struct {
 	eraseErr error
 }
 
+// fakeKeptExpiring is fakeKept with the conditional delete the organisation's expiry-driven delete needs.
+type fakeKeptExpiring struct{ fakeKept }
+
+func (f *fakeKeptExpiring) DeleteExpiredKeptMachine(context.Context, uuid.UUID, string) (string, error) {
+	return runnerwire.KeptMachineDeleted, nil
+}
+
 func (f *fakeKept) KeptMachines() (*runnerwire.MacVMKept, error) { return f.kept, f.keptErr }
 func (f *fakeKept) SweepKeptMachines() error                     { f.sweeps++; return nil }
 func (f *fakeKept) EraseKeptMachines(context.Context) error      { f.erases++; return f.eraseErr }
@@ -581,6 +588,24 @@ func TestCapsCarryKeptMachines(t *testing.T) {
 	}
 	if c := m.build(nil); !c.KeptMachines || c.Kept != nil {
 		t.Fatalf("a failed count with no last caps reports %+v", c.Kept)
+	}
+}
+
+// The caps say the runner runs the conditional expiry delete only when its driver does; one that keeps machines
+// but cannot says nothing, which the organisation reads as an older runner and sends no expiry delete.
+func TestCapsSayWhetherTheConditionalDeleteRuns(t *testing.T) {
+	m := keptRig(t)
+	m.useDriver(&fakeKept{kept: &runnerwire.MacVMKept{LimitBytes: 110 << 30}})
+	if c := m.build(nil); !c.KeptMachines || c.KeptConditionalDelete {
+		t.Fatalf("a driver with no conditional delete: kept %v, conditional %v", c.KeptMachines, c.KeptConditionalDelete)
+	}
+	m.useDriver(&fakeKeptExpiring{fakeKept{kept: &runnerwire.MacVMKept{LimitBytes: 110 << 30}}})
+	if c := m.build(nil); !c.KeptMachines || !c.KeptConditionalDelete {
+		t.Fatalf("a driver with the conditional delete: kept %v, conditional %v", c.KeptMachines, c.KeptConditionalDelete)
+	}
+	m.useDriver(noDriver{})
+	if c := m.build(nil); c.KeptConditionalDelete {
+		t.Fatal("a driver that keeps nothing reports the conditional delete")
 	}
 }
 
@@ -949,5 +974,21 @@ func TestKeptFromFolderHoldsAnUnrecoveredSession(t *testing.T) {
 	}
 	if k := got[idle.String()]; k.InUse || k.RunID != "" {
 		t.Fatalf("a machine no session holds: %+v", k)
+	}
+}
+
+// The caps list each machine with the run whose stop wrote its record, so the organisation can tell an idle
+// report of the latest use from a cached one of an earlier use.
+func TestKeptCapsNameTheRunThatStoppedEachMachine(t *testing.T) {
+	m := keptRig(t)
+	id, plain := uuid.New(), uuid.New()
+	keptMachine(t, m, id, "dev", func(r *macvm.KeptRecord) { r.LastStopRun = "run-2" })
+	keptMachine(t, m, plain, "old", nil)
+	got := map[string]string{}
+	for _, k := range m.keptFromFolder().Machines {
+		got[k.ID] = k.StopRunID
+	}
+	if got[id.String()] != "run-2" || got[plain.String()] != "" {
+		t.Fatalf("stop runs in the caps = %v, want run-2 for the recorded stop and none for a machine with no recorded stop", got)
 	}
 }

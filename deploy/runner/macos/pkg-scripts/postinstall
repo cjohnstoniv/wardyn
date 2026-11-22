@@ -73,7 +73,10 @@ make_ledger() {
 mkdir -p "$R/usr/local/bin"
 ln -sf /usr/local/wardyn/bin/wardyn-runnerd "$R/usr/local/bin/wardyn-runnerd"
 ln -sf /usr/local/wardyn/bin/wardyn "$R/usr/local/bin/wardyn"
-if [ -e "$R/usr/local/wardyn/bin/wardyn-macvm" ]; then
+# The package is universal but the VM helper is arm64 only, so an Intel host cannot run it: it makes no
+# ledger there (macOS VMs are unavailable on Intel anyway). hw.optional.arm64 is 1 on Apple silicon even
+# when this script runs translated, which `uname -m` would not show. On Apple silicon the setup stays a hard failure.
+if [ -e "$R/usr/local/wardyn/bin/wardyn-macvm" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
   make_ledger || { echo "postinstall: the macOS VM admission ledger was not made, so macOS VMs stay off; reinstall to retry" >&2; exit 1; }
 fi
 uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)

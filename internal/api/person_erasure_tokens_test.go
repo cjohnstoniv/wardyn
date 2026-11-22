@@ -16,7 +16,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/maskmanifest"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -96,6 +99,9 @@ func TestPersonErasure_SaysWhenATokenWasNotRevoked(t *testing.T) {
 			if got["tokens_revocation_failed"] != true || got["detail"] != erasureTokensNotRevoked {
 				t.Errorf("%s = %v, want tokens_revocation_failed and the remedy", what, got)
 			}
+			if d, _ := got["detail"].(string); strings.Contains(d, "erased") {
+				t.Errorf("%s detail %q claims an erasure it does not know happened", what, d)
+			}
 		}
 	}
 	for route, erase := range routes {
@@ -129,6 +135,33 @@ func TestPersonErasure_SaysWhenATokenWasNotRevoked(t *testing.T) {
 			mayWork(t, erase(t, fx))
 			if open := fx.st.unrevoked(t); len(open) != 0 {
 				t.Errorf("open tokens after the retry = %+v, want none", open)
+			}
+		})
+		// A revoke Azure DevOps refused for good, then a mask fence that fails before the credentials are
+		// erased: the stored sign-in remains, and the failure's row says a token may work without saying the
+		// credentials are erased. The fence fails on a pool that reaches no database.
+		t.Run(route+", refused, then a failing mask fence", func(t *testing.T) {
+			fx := newADOConsoleLane(t, true)
+			pool, err := pgxpool.New(context.Background(), "postgres://wardyn@127.0.0.1:1/none?connect_timeout=1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			fx.srv.cfg.MaskManifests = maskmanifest.New(pool, nil, secretmask.NewRegistry())
+			fx.pats.revokeErr = &adoPATError{Status: http.StatusBadRequest}
+			e := erase(t, fx)
+			if e.code == http.StatusOK || e.outcome != "failure" {
+				t.Fatalf("erase = %d, row %s; want a failure, the fence could not run", e.code, e.outcome)
+			}
+			if _, kept := fx.stored(t, fx.subject); !kept {
+				t.Fatal("the stored sign-in was erased although the fence failed first")
+			}
+			got := e.audited
+			if got["tokens_revocation_failed"] != true || got["detail"] != erasureTokensNotRevoked {
+				t.Errorf("failure row = %v, want tokens_revocation_failed and the remedy", got)
+			}
+			if d, _ := got["detail"].(string); strings.Contains(d, "erased") {
+				t.Errorf("failure row detail %q says the credentials are erased; they remain", d)
 			}
 		})
 		for name, revokeErr := range map[string]error{

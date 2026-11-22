@@ -78,6 +78,10 @@ type KeptRecord struct {
 	// ActiveRun is the run id that booted the machine and has not yet stopped it (KeptStopUpdate clears it);
 	// a stop that is not that run's changes nothing. LastUsed is the latest boot or stop.
 	ActiveRun string `json:"active_run,omitempty"`
+	// LastStopRun is the run whose stop wrote the record's current LastStop and ExpiresAt (KeptStopUpdate
+	// sets it); empty for a machine that has not stopped since a runner that records it. The organisation
+	// settles an idle machine only from a record whose LastStopRun is the run it is waiting on.
+	LastStopRun string `json:"last_stop_run,omitempty"`
 	// IdleDays is the allowance the latest boot or stop gave ExpiresAt (KeptRecordIdleDays reads it).
 	IdleDays int       `json:"idle_days,omitempty"`
 	LastUsed time.Time `json:"last_used,omitzero"`
@@ -418,8 +422,14 @@ func KeptStopUpdate(rec *KeptRecord, runID string, now time.Time, idleDays int) 
 	if runID == "" || rec.ActiveRun != runID {
 		return false
 	}
-	rec.ActiveRun, rec.LastUsed, rec.ExpiresAt, rec.IdleDays = "", now, keptExpiry(now, idleDays), keptIdleDays(idleDays)
+	rec.ActiveRun, rec.LastStopRun, rec.LastUsed, rec.ExpiresAt, rec.IdleDays = "", runID, now, keptExpiry(now, idleDays), keptIdleDays(idleDays)
 	return true
+}
+
+// KeptExpired reports whether rec is past its expiry with no session holding it: a machine a run holds
+// never expires under it, and a record with no expiry has none to pass.
+func KeptExpired(rec KeptRecord, now time.Time) bool {
+	return rec.ActiveRun == "" && !rec.ExpiresAt.IsZero() && now.After(rec.ExpiresAt)
 }
 
 // checkKept reads dir's record and refuses a boot by anyone but the machine's owner on its runner, and one

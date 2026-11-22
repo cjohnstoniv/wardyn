@@ -188,13 +188,25 @@ func (s *Server) lockStart(ctx context.Context, id uuid.UUID) (startHold, error)
 		return startHold{}, startUnfenced{err}
 	}
 	until := time.Now().Add(runStartFenceWait)
+	by, cutoff := runner.StartCutoff(ctx) // a start with a cutoff waits for its turn and its lock until then
+	if cutoff && by.Before(until) {
+		until = by
+	}
 	gctx, stop := context.WithDeadline(ctx, until)
 	leave, err := s.locks.starts.enter(gctx, id)
 	stop()
 	if err != nil {
 		return refuse(fmt.Errorf("%w: waiting for the run's earlier command starts: %w", db.ErrLockBusy, err))
 	}
-	hctx, release, err := s.locker().Lock(ctx, runStartKey(id), max(time.Until(until), time.Second))
+	wait := max(time.Until(until), time.Second)
+	if cutoff {
+		wait = time.Until(until)
+	}
+	if wait <= 0 {
+		leave()
+		return refuse(fmt.Errorf("%w: the start's cutoff passed", db.ErrLockBusy))
+	}
+	hctx, release, err := s.locker().Lock(ctx, runStartKey(id), wait)
 	if err != nil {
 		leave()
 		return refuse(err)
@@ -212,6 +224,9 @@ func startRead[T, U any](s *Server, h startHold, read func(context.Context) (T, 
 	return read(ctx)
 }
 
+// startAfterFunc arms a start's budget timer (startAdmitted): time.AfterFunc, which a test replaces to hold it.
+var startAfterFunc = time.AfterFunc
+
 // startAdmitted runs start, one command start under h, and lets the fence go beside the started command, never
 // while it runs. start runs on a context of ctx's that is cut at budget, which also lets the fence go, or when h's
 // lock is lost. A value start returns after either, or once a check on the lock's own connection
@@ -225,7 +240,7 @@ func startAdmitted[T any](s *Server, ctx context.Context, h startHold, budget ti
 		return zero, errStartLockLost
 	}
 	sctx, cut := context.WithCancelCause(ctx)
-	slow := time.AfterFunc(budget, func() { cut(errStartTooSlow); h.release() })
+	slow := startAfterFunc(budget, func() { cut(errStartTooSlow); h.release() })
 	unwatch := context.AfterFunc(h.ctx, func() {
 		if errors.Is(context.Cause(h.ctx), db.ErrLockLost) {
 			cut(errStartLockLost)
@@ -259,6 +274,11 @@ func (s *Server) execAdmitted(ctx context.Context, h startHold, ref string, spec
 
 // startFresh runs start on run id as it stands under its start lock: the last read (liveRunForExec, in words)
 // refuses a run that cannot take a command now (startRefused), and the start is startAdmitted's.
+//
+// A start cutoff on ctx (runner.WithStartCutoff), zero for most callers, bounds the lock's wait and the start by
+// a time: after the last read the budget is the smaller of its own and the time left, and with none left the
+// start is refused (errStartTooSlow) without calling start, since a budget timer that already fired runs on
+// another goroutine. ctx itself gets no deadline: the started command lives on it.
 func startFresh[T any](s *Server, ctx context.Context, id uuid.UUID, words liveRunWords, budget time.Duration, start func(context.Context, types.AgentRun) (T, error), end func(T)) (T, error) {
 	var zero T
 	h, err := s.lockStart(ctx, id)
@@ -269,6 +289,14 @@ func startFresh[T any](s *Server, ctx context.Context, id uuid.UUID, words liveR
 	if msg != "" {
 		h.release()
 		return zero, startRefused(msg)
+	}
+	if by, ok := runner.StartCutoff(ctx); ok {
+		left := time.Until(by)
+		if left <= 0 {
+			h.release()
+			return zero, errStartTooSlow
+		}
+		budget = min(budget, left)
 	}
 	return startAdmitted(s, ctx, h, budget, func(ctx context.Context) (T, error) { return start(ctx, run) }, end)
 }

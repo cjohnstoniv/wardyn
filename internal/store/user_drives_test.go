@@ -166,9 +166,12 @@ func TestPG_UserDrive_DuplicateNameConflicts(t *testing.T) {
 // created in between would be re-homed silently by an unconditional write. The
 // precondition rides the writing statement, so the window is gone whatever happens
 // between the read and the write — which is what this
-// asserts: with a grant present, a write carrying refuseIfAllocated changes
-// nothing and answers ErrDriveAllocated; the same write without it still applies,
-// because the rule is the API boundary's and only the precondition lives here.
+// asserts: with a person's grant present, a write carrying refuseIfAllocated that
+// moves that grant's storage object (here a home template change) changes nothing
+// and answers ErrDriveAllocated; the same write without it still applies, because
+// the rule is the API boundary's and only the precondition lives here. The
+// precondition refuses only what driveMovesAnAllocationPred says moves: the seeded
+// drive's objects are named by its id, so a rename moves none and applies under it.
 func TestPG_UserDrive_RefuseIfAllocatedIsAssertedInTheStatement(t *testing.T) {
 	pool := runsPGPool(t)
 	ctx := context.Background()
@@ -187,19 +190,27 @@ func TestPG_UserDrive_RefuseIfAllocatedIsAssertedInTheStatement(t *testing.T) {
 		Subject: "test-race-" + uuid.NewString(), DriveID: d.ID, CreatedBy: "admin@example.com",
 	})
 
+	// A rename moves no object of an ID-named drive, so the grant is not re-homed and the write applies.
+	renamed.Name = "test-race-renamed-again-" + uuid.NewString()
+	if _, err := st.UpsertUserDrive(ctx, renamed, true); err != nil {
+		t.Fatalf("guarded rename of an allocated ID-named drive: %v, want it to apply — the person's object is "+
+			"named by the drive's id, not its name", err)
+	}
+
 	rehomed := renamed
-	rehomed.Name = "test-race-rehomed-" + uuid.NewString()
+	rehomed.HomeTemplate = types.HomeTemplateSub
 	if _, err := st.UpsertUserDrive(ctx, rehomed, true); !errors.Is(err, store.ErrDriveAllocated) {
-		t.Fatalf("guarded write on an ALLOCATED drive: err = %v, want ErrDriveAllocated — this is the grant that "+
+		t.Fatalf("guarded re-home on an ALLOCATED drive: err = %v, want ErrDriveAllocated — this is the grant that "+
 			"appeared after the gate read", err)
 	}
-	if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Name != renamed.Name {
-		t.Errorf("stored name = %q (%v), want the refused write to have applied NOTHING", got.Name, err)
+	if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.HomeTemplate != renamed.HomeTemplate || got.Name != renamed.Name {
+		t.Errorf("stored drive = %q, %q (%v), want the refused write to have applied NOTHING (%q, %q)",
+			got.Name, got.HomeTemplate, err, renamed.Name, renamed.HomeTemplate)
 	}
 	// …and the SAME write, unguarded, still applies: the confirmed re-home.
-	if _, err := st.UpsertUserDrive(ctx, rehomed, false); err != nil {
-		t.Errorf("unguarded write on an allocated drive: %v, want it to apply — a confirmed re-home is an "+
-			"admin's to make", err)
+	if got, err := st.UpsertUserDrive(ctx, rehomed, false); err != nil || got.HomeTemplate != rehomed.HomeTemplate {
+		t.Errorf("unguarded write on an allocated drive = %q (%v), want it to apply — a confirmed re-home is an "+
+			"admin's to make", got.HomeTemplate, err)
 	}
 }
 

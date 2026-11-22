@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -61,7 +62,7 @@ func TestPG_ChangeImpact_ProfileUpdate(t *testing.T) {
 	ctx := context.Background()
 	person := treeMember(t, e.govEnv, e.a1, types.CapabilitySubjectUser, "sub-imp-person", 1, false)
 	runID := uuid.New()
-	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: runID, CreatedBy: "sub-imp-runner", Agent: "claude-code", ConfinementClass: types.CC2,
+	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: runID, CreatedAt: time.Now(), CreatedBy: "sub-imp-runner", Agent: "claude-code", ConfinementClass: types.CC2,
 		State: types.RunRunning, RunnerTarget: "docker", Task: "t", Title: "quarterly close", SPIFFEID: "spiffe://wardyn.local/agent-run/" + runID.String(),
 		SandboxRef: "wardyn-agent-" + runID.String(), UnitID: &e.a1.ID}); err != nil {
 		t.Fatal(err)
@@ -141,6 +142,25 @@ func TestPG_ChangeImpact_KindWithNoDryRun(t *testing.T) {
 	}
 	if w := e.call(e.sec, http.MethodGet, impactPath(ch.ID), ""); w.Code != http.StatusNotFound {
 		t.Errorf("a security admin reading a role mapping impact = %d, want 404", w.Code)
+	}
+}
+
+// TestPG_ChangeImpact_MembershipAddAndDelete: a held membership add and a held membership delete,
+// which the tree dry run does not model, answer none/kind, never a tree with no people.
+func TestPG_ChangeImpact_MembershipAddAndDelete(t *testing.T) {
+	e := newUnitAdminEnv(t, true)
+	for name, ch := range map[string]types.GovernanceChange{"add": e.heldOn(e.a2), "delete": e.legacyDelete("sub-imp-legacy", e.a2)} {
+		if want := map[string]string{"add": "upsert", "delete": "delete"}[name]; ch.TargetKind != govKindMembership || ch.Op != want {
+			t.Fatalf("the held %s = %s/%s, want %s/%s", name, ch.TargetKind, ch.Op, govKindMembership, want)
+		}
+		w := e.call(e.bob, http.MethodGet, impactPath(ch.ID), "")
+		got := readImpact(t, w)
+		if got.Computed == impactTree || got.Computed != impactNone || got.NotComputed != impactKindNotComputed {
+			t.Errorf("a held membership %s's impact = %s, want none/kind", name, w.Body)
+		}
+		if got.People != nil || got.LiveRuns != nil || got.LiveRunsTotal != nil || strings.Contains(w.Body.String(), `"people"`) {
+			t.Errorf("a held membership %s's impact claims people or live runs: %s", name, w.Body)
+		}
 	}
 }
 

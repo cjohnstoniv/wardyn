@@ -38,7 +38,15 @@ func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, seen time.Time, name
 		SET name=$1, spec=$2, updated_at=GREATEST(now(), updated_at + interval '1 microsecond')
 		WHERE id=$3 AND updated_at=$4
 		RETURNING id, name, created_at, updated_at, spec`
-	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id, seen))
+	var out types.RunPolicy
+	err = s.inTx(ctx, func(tx Querier) error {
+		if err := ruleUIAppCallersQ(ctx, tx, specJSON); err != nil {
+			return err
+		}
+		var serr error
+		out, serr = scanPolicy(tx.QueryRow(ctx, q, name, specJSON, id, seen))
+		return serr
+	})
 	switch {
 	case errors.Is(err, ErrNotFound):
 		// A guard miss and a missing row look the same to the UPDATE.

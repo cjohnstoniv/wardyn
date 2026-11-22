@@ -26,8 +26,19 @@ var sponsorReachRoutes = map[string]string{
 	"handleGetRunContainment": `r.Get("/runs/{id}/containment", s.handleGetRunContainment)`,
 }
 
+// sponsorReachHelpers are the helpers a handler above asks ownsRunOrSponsorOrAdmin through: the handler, its one
+// caller, and how many times the helper asks it. runEventsOpeningRun is handleRunEvents' read gate, split out so an
+// issuer portal's stream reads its run under its opening's bound; it asks once on each of its two paths, that
+// stream's and every other's (getRunAuthorizedBy).
+var sponsorReachHelpers = map[string]struct {
+	handler string
+	asks    int
+}{
+	"runEventsOpeningRun": {"handleRunEvents", 2},
+}
+
 // TestSponsorReach_RouteCensus: ownsRunOrSponsorOrAdmin is asked by exactly the five per-run handlers above, once
-// each, and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
+// each (directly or through their helper in sponsorReachHelpers), and by nothing else; those handlers are mounted where the design says. A new caller is a new route a sponsor
 // reaches, and has to be classified here before it merges.
 func TestSponsorReach_RouteCensus(t *testing.T) {
 	entries, err := os.ReadDir(".")
@@ -35,6 +46,7 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 		t.Fatal(err)
 	}
 	found, direct, redeem := map[string]int{}, map[string]int{}, map[string]int{}
+	callers := map[string]map[string]int{}
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -58,11 +70,28 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 						direct[fn.Name.Name]++
 					case "mayEnterRunOrSponsor":
 						redeem[fn.Name.Name]++
+					default:
+						if _, ok := sponsorReachHelpers[sel.Sel.Name]; ok {
+							if callers[sel.Sel.Name] == nil {
+								callers[sel.Sel.Name] = map[string]int{}
+							}
+							callers[sel.Sel.Name][fn.Name.Name]++
+						}
 					}
 				}
 				return true
 			})
 		}
+	}
+	for helper, h := range sponsorReachHelpers {
+		if found[helper] != h.asks {
+			t.Errorf("%s asks ownsRunOrSponsorOrAdmin %d times, want %d", helper, found[helper], h.asks)
+		}
+		if want := map[string]int{h.handler: 1}; !maps.Equal(callers[helper], want) {
+			t.Errorf("%s is called by %v, want %v: a helper is one handler's read gate, not a route of its own", helper, callers[helper], want)
+		}
+		found[h.handler]++ // the handler asks it through the helper
+		delete(found, helper)
 	}
 	for fn, route := range sponsorReachRoutes {
 		if found[fn] != 1 {
@@ -86,7 +115,8 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
 	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
 	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionStillAuthorized": 1, "inboundCaller": 1, "attachAuthority": 1}
+	// uiSessionArms is the open session's re-check, after its portal's arm (uiSessionAuthority, its one caller).
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionArms": 1, "inboundCaller": 1, "attachAuthority": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
 	}

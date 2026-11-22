@@ -256,6 +256,12 @@ func restrictionReview(old types.Restriction, next types.RestrictionWrite) *chan
 	}
 	var widens []composer.Widening
 	var held []string
+	if old.Spec.AllowedDomains == nil && next.Spec.AllowedDomains != nil && b.Ceiling.AllowAllEgress {
+		// A first allowlist is seeded into the open reading only where open egress reaches it, so
+		// against an old that allows all egress it widens nothing; Leq, comparing the lists as
+		// written, would name every entry. It is held as first_allowlist below.
+		a.Ceiling.AllowedDomains = b.Ceiling.AllowedDomains
+	}
 	if !composer.Leq(a.Ceiling, b.Ceiling, a.Limits, b.Limits) {
 		widens = composer.LeqWidenings(a.Ceiling, b.Ceiling)
 		if len(widens) == 0 {

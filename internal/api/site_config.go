@@ -721,6 +721,12 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		narrowed = &n
 	}
+	// Service grants (provider_service_grant_door.go): a body that names no grant keeps the stored one, and
+	// a grant leaves only by an explicit removal; the removal's secret claims are written with the save.
+	plan, ok := s.planServiceGrantDoor(w, r, existing.ModelProviders, cfg.ModelProviders, present["model_providers"])
+	if !ok {
+		return
+	}
 	// Rule 8 on this door too: it mints UIDs and accepts address changes the
 	// same as PUT /model-providers, so it purges the same way, before the save.
 	invalidated, err := s.purgeProviderCredentials(r.Context(), existing.ModelProviders, cfg.ModelProviders)
@@ -728,11 +734,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
-	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
-	if err != nil {
-		writeServerError(w, r, "put site config", err)
+	saved, err := s.putSiteConfigGrants(r.Context(), cfg, plan.change)
+	if writeSiteConfigSaveError(w, r, err) {
 		return
 	}
+	providerWarnings, cleanup := s.finishServiceGrantWrite(r.Context(), plan, providerWarnings)
 	s.endUnanswerableSignIns(r.Context(), existing.ModelProviders, saved.ModelProviders)
 	// The logo follows the document just saved (siteBrandingLogo's doc). The
 	// document is already stored; a failure here is a 500, and the same apply
@@ -785,6 +791,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	auditProviderBlocks(datum, saved, invalidated)
+	auditServiceGrantCleanup(datum, cleanup)
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {
 		datum["sources_no_longer_admitted"] = *narrowed

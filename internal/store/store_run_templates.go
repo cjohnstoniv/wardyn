@@ -238,6 +238,9 @@ func checkTemplateGrant(ctx context.Context, q Querier, grant *TemplateGrantChec
 }
 
 func insertTemplateRevision(ctx context.Context, q Querier, t types.RunTemplate) error {
+	if err := ruleUIAppCallersQ(ctx, q, []byte(t.Document)); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `INSERT INTO run_template_revisions (template_id, revision, name, description, document, created_at, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`, t.ID, t.Revision, t.Name, t.Description, []byte(t.Document), t.UpdatedAt, t.UpdatedBy)
 	return err
@@ -304,6 +307,9 @@ func (s PG) ListTemplateGroupAdmins(ctx context.Context) ([]types.TemplateGroupA
 // PutTemplateGroupAdmin — see TemplateStore.
 func (s PG) PutTemplateGroupAdmin(ctx context.Context, g types.TemplateGroupAdmin) (types.TemplateGroupAdmin, error) {
 	err := s.inTx(ctx, func(q Querier) error {
+		if err := ruleDelegatePersonSubject(ctx, q, "template_group_admins.person", g.Person); err != nil {
+			return err
+		}
 		if _, err := q.Exec(ctx, `INSERT INTO template_group_admins (group_id, person, granted_by, granted_at)
 			VALUES ($1, $2, $3, now())
 			ON CONFLICT (group_id, person) DO UPDATE SET granted_by = EXCLUDED.granted_by, granted_at = EXCLUDED.granted_at`,

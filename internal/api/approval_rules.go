@@ -333,7 +333,7 @@ type approvalRuleReport struct {
 }
 
 // handleApprovalRuleDryRun reports what a drafted rule (the body), or a stored one (a body naming only a rule),
-// would do: every PENDING row through the same dry-run decide() the live switch runs, and the rows requested in the
+// would do (a stored one only when the body holds `name` and no other key): every PENDING row through the same dry-run decide() the live switch runs, and the rows requested in the
 // last seven days by predicate alone. It writes nothing: the report decider makes recordAudit drop every row.
 func (s *Server) handleApprovalRuleDryRun(w http.ResponseWriter, r *http.Request) {
 	rs, ok := s.approvalRuleStore(w)
@@ -341,11 +341,17 @@ func (s *Server) handleApprovalRuleDryRun(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var body types.ApprovalRuleWrite
-	if !decodeStrict(w, r, &body) {
+	present, msg := decodeStrictKeys(w, r, &body)
+	if present == nil {
+		if msg != "" {
+			writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
+		}
 		return
 	}
 	rule := types.ApprovalRule{ID: uuid.New(), Name: cmp.Or(body.Name, "draft"), Version: 1}
-	if len(body.Kinds) == 0 && body.Name != "" {
+	// Only a body holding the name key and nothing else selects the stored rule. Any other body is a draft and is
+	// validated as one, so an edited draft that omits or empties kinds is refused, never answered with the saved rule.
+	if len(present) == 1 && present["name"] && body.Name != "" {
 		stored, err := rs.GetApprovalRule(r.Context(), body.Name)
 		if err != nil {
 			if notFoundIf(w, err, "approval rule", reasonApprovalRuleNotFound) {

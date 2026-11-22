@@ -371,7 +371,7 @@ export function SummaryHeader({
           </Chip>
         )}
         <span className="text-muted-foreground" aria-label={`${terminal ? "Total run time" : "Running for"} ${elapsed}`}>
-          {terminal ? RUN_HEADER.RAN(elapsed, shortTime(run.updated_at)) : elapsed}
+          {terminal ? RUN_HEADER.RAN(elapsed, shortTime(run.ended_at ?? run.updated_at)) : elapsed}
         </span>
         {/* #3034: the run's lifetime is two pill menus on the facts row, not a band under the header. */}
         {onLifetimeChanged && <RunEndsControls run={run} onChanged={onLifetimeChanged} />}

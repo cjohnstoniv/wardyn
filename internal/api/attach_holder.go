@@ -87,6 +87,14 @@ type attachHolder struct {
 	// nil otherwise: a promotion is written long after the attach, on the
 	// daemon's context, so the holder carries it to session.promote (#1234).
 	via *types.DelegationVia
+	// recheck is an issuer portal's socket's own authority check (attachPromotionCheck), nil for every other
+	// holder: establishExec asks it before any opening the ticket's check does not cover. It returns when the
+	// check started and whether it passed.
+	recheck func(context.Context) (time.Time, bool)
+	// gated is set by establishExec when this holder's openings are gated (openingGate): an issuer portal's
+	// ticket or a check of its own. canDeliver reads it beside recheck, so a gated holder with no check of its
+	// own, whose every later opening establishExec refuses, delivers through no exec either.
+	gated atomic.Bool
 	// support is the support grant this holder's ticket was minted under (uuid.Nil for everyone else). A
 	// support holder never keeps the writer seat against the run's owner (evictSupportWriter), and waits
 	// behind every non-support observer (nextObserver).
@@ -124,6 +132,13 @@ type attachHolder struct {
 	// atomic, not mu: the pumps read it per chunk and must never contend with a
 	// resize write.
 	writable atomic.Bool
+	// promotions counts this holder's promotions (promote). Read with writable, it names the promotion an
+	// issuer portal's check covers (establishExec).
+	promotions atomic.Uint64
+	// writerGen is promotions+1 as it stood when establishExec installed a writer exec under it, 0 before any:
+	// a holder with its own check (an issuer portal's) delivers input and resizes only while it matches
+	// (canDeliver). A promotion counts first, so it is stale before the slot is handed over.
+	writerGen atomic.Uint64
 
 	// notify tells THIS client something about its mode, in two cases.
 	// readOnly=false: it was promoted (read-only -> writable). The transport
@@ -156,10 +171,11 @@ type attachHolder struct {
 	ready attachReady
 	// mux is the session the pumps read and write: the holder's current exec.
 	mux muxSession
-	// openMu serialises establishExec; the three fields below are its state.
+	// openMu serialises establishExec; the four fields below are its state.
 	openMu     sync.Mutex
 	execOpened bool
-	execWriter bool // the current exec was opened without ignore-size
+	execWriter bool   // the current exec was opened without ignore-size
+	execGen    uint64 // the promotions the current exec's authority covers
 	execCancel context.CancelFunc
 
 	// evicted flips the instant a take-over removes this holder from the
@@ -207,6 +223,15 @@ func (h *attachHolder) canWrite() bool {
 	return h != nil && h.writable.Load() && !h.evicted.Load() && h.lease.live()
 }
 
+// canDeliver reports whether input and resizes may reach the sandbox through this holder now: canWrite, and for
+// a holder with its own check (an issuer portal's), or whose openings are gated (gated), a writer exec installed
+// for its current promotion (writerGen). canWrite alone admits input to the queue, so keystrokes typed during a
+// promotion wait for that writer; they never reach the observer's exec, nor an exec whose check a newer
+// promotion has not repeated.
+func (h *attachHolder) canDeliver() bool {
+	return h.canWrite() && ((h.recheck == nil && !h.gated.Load()) || h.writerGen.Load() == h.promotions.Load()+1)
+}
+
 // attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
 // is the granularity at which write authority is re-tested.
 //
@@ -240,13 +265,13 @@ func (h *attachHolder) writeGated(sess runner.Session, p []byte) error {
 	if h == nil {
 		return nil
 	}
-	if h.onInput != nil && len(p) > 0 && h.canWrite() {
+	if h.onInput != nil && len(p) > 0 && h.canDeliver() {
 		h.onInput()
 	}
 	for len(p) > 0 {
-		if !h.canWrite() {
+		if !h.canDeliver() {
 			h.dropInput(len(p))
-			return nil // evicted, an observer or fenced: drop the rest, server-side
+			return nil // evicted, an observer, fenced or mid-promotion: drop the rest, server-side
 		}
 		n := min(len(p), attachWriteChunk)
 		if _, err := sess.Write(p[:n]); err != nil {
@@ -269,8 +294,10 @@ func (h *attachHolder) dropInput(n int) {
 
 // promote hands this observer the write slot. The caller holds the registry
 // lock. The holder goes back to attaching, because its exec is still the
-// observer's: input stays held until the transport has replaced it.
+// observer's: input stays held until the transport has replaced it. The count
+// goes first, so whoever reads the slot as this promotion's reads its count too.
 func (h *attachHolder) promote() {
+	h.promotions.Add(1)
 	h.writable.Store(true)
 	h.ready.setAttaching()
 }

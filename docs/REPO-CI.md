@@ -54,7 +54,8 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
-| `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
+| `staticcheck` (tagless, docker, docker,k8s matrix; checks `staticcheck (staticcheck-…)`) | – | pending | pending | 40 |
+| `gates-staticcheck` (aggregator, check `gates (staticcheck)`) | – | pending | pending | 10 |
 | `helm-install-test` | – | pending | pending | 20 |
 | `vm` | – | pending | pending | 30 |
 | `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |
@@ -82,6 +83,7 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `runner-units` | – | pending | pending | 15 |
 | `ci-ran` | – | pending | pending | 10 |
 | `train-suites` | – | pending | pending | 180 |
+| `mixed-version` | – | pending | pending | 50 |
 | `train-gate` | – | pending | pending | 10 |
 | `go-modules` | – | pending | pending | 15 |
 | `go-gate-tools` | – | pending | pending | 15 |
@@ -114,7 +116,8 @@ gh run list -R cjohnstoniv/wardyn --workflow ci.yml --status completed --limit 6
 - `kind-survival-walk`, `k6-kind-conformance`, `k6-workload-e2e`, `kind-acceptance-walks`, `hybrid-walk`, `kind-upgrade-walk` and `ssh-editors-live` run under `scope=candidate`, are in `release.yml`'s `watched=`, and gate a release. [`scripts/green-by-tree.sh`](../scripts/green-by-tree.sh) requires every leg of a matrix job to be green.
 - [`scripts/test-repo-guards.sh`](../scripts/test-repo-guards.sh) guard 18 keeps the skip set in step with `notify-new-lanes`. A skipped job reports `skipped`, so that job stays quiet.
 - A dispatched nightly has one concurrency group per ref and scope, so a second dispatch cancels the first. A scheduled run has its own group and is never cancelled.
-- On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call would fail on a fork's read-only token, so nothing uses `workflow_call`.
+- On a same-repo `train/*` or `prep/*` pull request, `train-suites` dispatches the nightly (`scope=candidate`, `publish=false`) on the head and waits; `train-gate` needs that run green. A call of the nightly would fail on a fork's read-only token, so `train-suites` dispatches it; the one job that does call a workflow is `mixed-version`, below.
+- On the same heads, `mixed-version` calls [`mixed-version.yml`](../.github/workflows/mixed-version.yml): the published 0.10.1 wardynd runs as an old replica beside this tree's in one kind cluster, and the issuer-portal activation barrier is checked. `train-gate` needs it. A call runs from the head, before its file is on `main`.
 - The nightly restores the `go-<suite>-` caches `ci.yml` saves and saves none. Only `publish` on (the default) stages and attests images.
 - [`overlay-proofs.yml`](../.github/workflows/overlay-proofs.yml) runs [`scripts/overlay-proof.sh`](../scripts/overlay-proof.sh) revert proofs; each must exit 1 with its named FAIL. Never dispatch it while a train attempt 1 is queued.
   - Dispatch it on the bundle branch `proofs/<branch>-<sha12>`, one commit on `origin/main` adding `.proofs/`; on `main` every job skips.

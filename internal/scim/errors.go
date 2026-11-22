@@ -18,6 +18,7 @@ const (
 	TypeInvalidPath   = "invalidPath"
 	TypeInvalidValue  = "invalidValue"
 	TypeNoTarget      = "noTarget"
+	TypeTooMany       = "tooMany"
 )
 
 // Error is the RFC 7644 error envelope. Status is the HTTP status the handler answers with; the wire form

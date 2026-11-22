@@ -528,8 +528,15 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		resolved.Paused = true
 		return resolved, nil
 	}
+	if team && tier == types.DriveSubjectPortal {
+		return portalResolvedDrive(resolved)
+	}
 	if team {
 		return teamResolvedDrive(resolved, tier)
+	}
+	if tier == types.DriveSubjectPortal {
+		// With team drives off a portal's drive is never a per-person folder: it mounts nothing.
+		return nil, fmt.Errorf("%w: %s", errDriveUnmountable, driveTeamOffMsg)
 	}
 	// The managed non-hash refusal, repeated — and repeated for the same reason
 	// the home-override tier gate below is, on a row written by an older binary
@@ -688,7 +695,7 @@ func teamResolvedDrive(resolved *types.ResolvedDrive, tier types.CapabilitySubje
 	if err := types.ValidateTeamDriveGrant(resolved.Drive, types.UserDriveGrant{SubjectType: tier, HomeOverride: resolved.Grant.HomeOverride}); err != nil {
 		slog.Warn("wardynd: user drive: a team drive's allocation breaks the team rule and mounts nothing",
 			slog.String("drive", resolved.Drive.Name), slog.String("tier", string(tier)))
-		return nil, fmt.Errorf("%w: drive: this deployment cannot mount drive %s (a team drive is allocated to groups only; ask an admin)",
+		return nil, fmt.Errorf("%w: drive: this deployment cannot mount drive %s (a team drive is allocated to groups or eligible issuer portals; ask an admin)",
 			errDriveUnmountable, resolved.Drive.Name)
 	}
 	resolved.HomeName = types.DriveTeamHome(resolved.Drive)

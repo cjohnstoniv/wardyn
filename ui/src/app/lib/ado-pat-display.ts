@@ -127,8 +127,8 @@ function expiryClock(iso: string, now: number): string {
 }
 
 // The card's last-token line: how the newest token ended, or nothing while it
-// is a run's live token. A closed record is not proof of a revoke: a refused
-// one leaves the token working to valid_to, and an expired one was never revoked.
+// is a run's live token. A closed record is not proof of a revoke: a failed
+// one may leave the token working to valid_to, and an expired one was never revoked.
 function lastTokenLine(last: NonNullable<SCMAccessPAT["last_token"]>, now: number): string | null {
   const created = formatClock(last.created_at);
   // Past valid_to the token is dead whatever its revoke came to: it is not said to work, or to need a revoke.

@@ -131,19 +131,57 @@ func (s *memberDriveStore) BeginMemberDriveDeleteAdmin(ctx context.Context, id u
 	return s.BeginMemberDriveDelete(ctx, "", id)
 }
 
-func (s *memberDriveStore) AbortMemberDriveDelete(_ context.Context, id uuid.UUID, started time.Time) error {
+// claimed is the row while it carries the claim (started, n), as the store's statements match it.
+func (s *memberDriveStore) claimed(id uuid.UUID, started time.Time, n int) (types.UserDrive, bool) {
 	d, ok := s.drives[id]
-	if !ok || d.DeleteStartedAt == nil || !d.DeleteStartedAt.Equal(started) {
+	return d, ok && d.DeleteStartedAt != nil && d.DeleteStartedAt.Equal(started) && d.DeleteIssues == n
+}
+
+func (s *memberDriveStore) BeginMemberDriveTakeover(_ context.Context, id uuid.UUID) (types.UserDrive, time.Time, error) {
+	d, ok := s.drives[id]
+	if !ok || d.OwnerSubject == "" || d.DeleteStartedAt == nil || s.now.Sub(*d.DeleteStartedAt) < time.Minute {
+		return types.UserDrive{}, time.Time{}, store.ErrNotFound
+	}
+	at := s.now
+	d.DeleteStartedAt = &at
+	s.drives[id] = d
+	return d, at, nil
+}
+
+func (s *memberDriveStore) IssueMemberDriveDelete(_ context.Context, id uuid.UUID, started time.Time, n int) (int, error) {
+	d, ok := s.claimed(id, started, n)
+	if !ok {
+		return 0, store.ErrNotFound
+	}
+	d.DeleteIssues += 1 + d.DeleteIssues%2
+	s.drives[id] = d
+	return d.DeleteIssues, nil
+}
+
+func (s *memberDriveStore) ClearMemberDriveClaim(_ context.Context, id uuid.UUID, started time.Time, n int) error {
+	d, ok := s.claimed(id, started, n)
+	if !ok || n%2 != 0 {
 		return store.ErrNotFound
 	}
 	d.DeleteStartedAt = nil
+	d.DeleteIssues += 2
 	s.drives[id] = d
 	return nil
 }
 
-func (s *memberDriveStore) FinishMemberDriveDelete(_ context.Context, id uuid.UUID, started time.Time) error {
-	d, ok := s.drives[id]
-	if !ok || d.DeleteStartedAt == nil || !d.DeleteStartedAt.Equal(started) {
+func (s *memberDriveStore) ClearMemberDriveIssued(_ context.Context, id uuid.UUID, started time.Time, claimN, issued int) error {
+	d, ok := s.claimed(id, started, issued)
+	if !ok || claimN%2 != 0 || issued != claimN+1 {
+		return store.ErrNotFound
+	}
+	d.DeleteStartedAt = nil
+	d.DeleteIssues++
+	s.drives[id] = d
+	return nil
+}
+
+func (s *memberDriveStore) FinishMemberDriveDelete(_ context.Context, id uuid.UUID, started time.Time, n int) error {
+	if _, ok := s.claimed(id, started, n); !ok {
 		return store.ErrNotFound
 	}
 	delete(s.drives, id)

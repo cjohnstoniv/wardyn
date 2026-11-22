@@ -125,6 +125,11 @@ export const BOUNDARY_DRY_RUN = {
   DEFAULT_TEAM: "Default",
   NARROWED: "Narrowed",
   NO_CHANGE: "No change",
+  /** the report's empty label: it measures stored policies and assignments, not the boundary's own settings. */
+  NO_POLICY_CHANGE: "No existing policies would change",
+  DATA_OUT_LOCK: "Data out lock",
+  DATA_OUT_LOCKED: "Locked for profiles below",
+  DATA_OUT_UNLOCKED: "Not locked",
   COMPARED: "Compared with Wardyn's walls only. Your organisation's boundary isn't included.",
   BACK: "Back to editing",
   SUBMIT: "Submit for approval",

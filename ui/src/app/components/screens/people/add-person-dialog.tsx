@@ -7,7 +7,7 @@
 // sign-in. The server's 422/409 sentences are shown as sent.
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { accountToast, signInGeneration } from "../../../lib/account-toasts";
 import { people as peopleApi } from "../../../lib/api/people";
 import { getErrorMessage } from "../../../lib/format";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
@@ -34,10 +34,11 @@ export function AddPersonDialog({ open, onOpenChange, onAdded }: { open: boolean
     e.preventDefault();
     setBusy(true);
     setError("");
+    const startedUnder = signInGeneration();
     try {
       const created = await peopleApi.create(principal.trim(), email.trim());
       const who = email.trim() || principal.trim();
-      toast.success(created ? P.ADDED(who) : P.ALREADY_LISTED(who));
+      accountToast("success", created ? P.ADDED(who) : P.ALREADY_LISTED(who), startedUnder);
       onOpenChange(false);
       onAdded();
     } catch (err) {

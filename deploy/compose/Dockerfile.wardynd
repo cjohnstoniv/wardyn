@@ -161,6 +161,11 @@ ARG TARGETARCH
 # default, so `make ci`/`docker compose build`/publish-image.yml's per-commit
 # build all get the commit-suffixed string.
 ARG RELEASE_BUILD=false
+# REVISION is the commit the image is built from (publish-image.yml's per-commit build passes it). The
+# build context has no .git, so the toolchain stamps no vcs.revision; this stamps internal/version's
+# unexported buildRevision instead, so wardynd's /healthz and `wardyn --version` report <version>+<commit>.
+# Empty by default, and ignored when RELEASE_BUILD=true, so a release image reports the bare version.
+ARG REVISION=
 # GOFIPS140 pins the Go Cryptographic Module snapshot wardynd is compiled
 # against. Empty (the default) is Go's ordinary build. The published
 # `wardynd-fips` image sets it in release.yml's and nightly.yml's matrix rows,
@@ -169,9 +174,9 @@ ARG RELEASE_BUILD=false
 # an image built from this recipe cannot be a mislabelled ordinary binary.
 # docs/operations/secrets-and-keys.md names the certificate the snapshot is.
 ARG GOFIPS140=
-RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardynd ./cmd/wardynd \
+RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -tags "${GO_BUILD_TAGS}" -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD} -X github.com/cjohnstoniv/wardyn/internal/version.buildRevision=${REVISION}" -o /out/wardynd ./cmd/wardynd \
  && { [ -z "${GOFIPS140}" ] || go version -m /out/wardynd | awk -v want="GOFIPS140=${GOFIPS140}" '$1 == "build" && $2 == want { found = 1 } END { exit !found }'; } \
- && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD}" -o /out/wardyn ./cmd/wardyn \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD} -X github.com/cjohnstoniv/wardyn/internal/version.buildRevision=${REVISION}" -o /out/wardyn ./cmd/wardyn \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/tools/wardyn-git-helper ./cmd/wardyn-git-helper \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-tetragon-ingest ./cmd/wardyn-tetragon-ingest
@@ -184,13 +189,13 @@ RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go buil
 # linux/amd64 default keeps a build without these args working unchanged.
 ARG HOST_GOOS=linux
 ARG HOST_GOARCH=amd64
-RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -o /out/wardyn-host ./cmd/wardyn
+RUN CGO_ENABLED=0 GOOS=${HOST_GOOS} GOARCH=${HOST_GOARCH} go build -ldflags "-X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD} -X github.com/cjohnstoniv/wardyn/internal/version.buildRevision=${REVISION}" -o /out/wardyn-host ./cmd/wardyn
 # One CLI per host platform, always. A published image is built once (linux/amd64
 # above), yet `make setup` pulls it on macOS and arm64 hosts too, where up.sh must
 # extract a binary that runs there rather than overwrite bin/wardyn with a foreign
 # one (scripts/up.sh seed_host_proxy picks /host/wardyn-<os>-<arch>).
 RUN for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do \
-      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -ldflags "-s -w" -o /out/host/wardyn-${t%/*}-${t#*/} ./cmd/wardyn || exit 1; \
+      CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -trimpath -ldflags "-s -w -X github.com/cjohnstoniv/wardyn/internal/version.releaseBuild=${RELEASE_BUILD} -X github.com/cjohnstoniv/wardyn/internal/version.buildRevision=${REVISION}" -o /out/host/wardyn-${t%/*}-${t#*/} ./cmd/wardyn || exit 1; \
     done
 
 # Runtime stage: resolves to $TARGETPLATFORM (no --platform pin) and runs NO
