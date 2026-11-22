@@ -146,8 +146,6 @@ function storedBody(b: Branding): BrandingSave {
   };
 }
 
-const DANGER_CONFIRM = "bg-danger text-danger-foreground hover:bg-danger/90";
-
 function readBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -414,7 +412,7 @@ export function BrandingCard() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className={DANGER_CONFIRM}
+              variant="destructive"
               disabled={removing}
               onClick={(e) => {
                 e.preventDefault();

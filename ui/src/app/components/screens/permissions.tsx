@@ -519,7 +519,7 @@ export function PermissionsScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               onClick={(e) => {
                 e.preventDefault();
                 if (toRemove) void removeGrant(toRemove);
@@ -650,13 +650,8 @@ function ConfirmEnforcement({
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            className={cn(
-              lockout
-                ? "bg-danger text-danger-foreground hover:bg-danger/90"
-                : turningOn
-                  ? "bg-warning text-background hover:bg-warning/90"
-                  : undefined,
-            )}
+            variant={lockout ? "destructive" : undefined}
+            className={turningOn && !lockout ? "bg-warning text-background hover:bg-warning/90" : undefined}
             onClick={(e) => {
               e.preventDefault();
               onConfirm();
@@ -924,7 +919,7 @@ export function AddGrantForm({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               onClick={() => {
                 setConfirmWall(false);
                 void submit();

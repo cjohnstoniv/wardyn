@@ -42,7 +42,7 @@ export function KeptOutput({ out, onGoOutput }: { out: RunOutput; onGoOutput: ()
           const el = e.currentTarget;
           atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < AT_END_PX;
         }}
-        className="scroll-thin min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-xs text-[#e6edf3]"
+        className="scroll-thin min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-all p-3 font-mono text-xs text-terminal-foreground"
       >
         {empty ? (
           <span className="text-muted-foreground">{out.complete ? RUN_OUTPUT.emptyFinal : RUN_OUTPUT.emptyLive}</span>

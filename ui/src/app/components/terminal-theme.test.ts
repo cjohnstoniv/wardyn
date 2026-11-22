@@ -22,9 +22,6 @@ function token(block: string, name: string): string | undefined {
   return block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})\\s*;`))?.[1];
 }
 
-// Follow-up: these three run-detail sites still type the terminal colours; the next commit moves them to the tokens.
-const FOLLOW_UP = ["run-detail/output-tab.tsx", "run-detail/output-pane.tsx", "run-detail/terminal-notice.tsx"];
-
 describe("terminal palette", () => {
   it("keeps theme.css's --terminal and --terminal-foreground equal to the xterm palette", () => {
     expect(token(root, "terminal")).toBe(TERMINAL_THEME.background);
@@ -43,7 +40,7 @@ describe("terminal palette", () => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) && !p.endsWith("components/terminal-theme.ts") && !FOLLOW_UP.some((f) => p.endsWith(f))) {
+        else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) && !p.endsWith("components/terminal-theme.ts")) {
           const text = readFileSync(p, "utf8").toLowerCase();
           for (const b of banned) if (text.includes(b)) found.push(`${p} ${b}`);
         }
