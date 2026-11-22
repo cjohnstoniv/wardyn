@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds, is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+
+### Changed
+
+- With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

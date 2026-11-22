@@ -266,6 +266,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
+	{"GET /api/v1/runs/{id}/attach/forward", "`GET /runs/{id}/attach/forward`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
 	// the security tier's inventory-then-revoke pair.
 	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},

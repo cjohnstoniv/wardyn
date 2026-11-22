@@ -178,6 +178,9 @@ var gatewayCommands = []struct {
 
 func TestGatewayCommands_GatewayOffIsOneLineAndTouchesNothing(t *testing.T) {
 	for _, tc := range gatewayCommands {
+		if tc.name == "forward" {
+			continue // with the gateway off, forward asks the organisation first: run_forward_attach_test.go
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			home := homeWithKey(t, false)
 			log := fakeSSH(t, "0")

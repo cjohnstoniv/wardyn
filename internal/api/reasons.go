@@ -945,3 +945,14 @@ const (
 	reasonSupportRequestBad    = "support_request_invalid" // 400: the doors, reason or minutes are not what the route reads
 	reasonSupportUnavailable   = "support_unavailable"     // 503: the support grant store is not available here, or could not be read
 )
+
+// Port forwarding over the organisation (attach_forward.go): GET /runs/{id}/attach/forward.
+const (
+	reasonRunForwardOff            = "run_forward_off"             // 409: the switch is off, or the operator left forward out of WARDYN_SSH_CHANNELS
+	reasonRunForwardTicketRequired = "run_forward_ticket_required" // 400: the request carries no attach ticket; every forward needs one
+	reasonRunForwardInvalid        = "run_forward_invalid"         // 400: port is not a whole number from 1 to 65535
+	reasonRunForwardPortRefused    = "run_forward_port_refused"    // 403: a macOS VM's Screen Sharing ports (5900-5909)
+	reasonRunForwardUnavailable    = "run_forward_unavailable"     // 409: the run cannot take a forward now: no runner, not running, ended, or paused and not resumed
+	reasonRunForwardBusy           = "run_forward_busy"            // 429: the run already holds its most SSH channels, commands and forwards
+	reasonRunForwardFailed         = "run_forward_failed"          // 502: the runner could not start the relay
+)

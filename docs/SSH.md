@@ -204,12 +204,12 @@ Host wardyn-<run-id>
     - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset. Leaving `exec` out of `WARDYN_SSH_CHANNELS` turns it off.
     - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
-- `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
+- `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here. With the gateway off it goes through the organisation when the operator has turned on `WARDYN_ATTACH_FORWARD` ([sdk.md](sdk.md#forwarding-a-port-through-the-organisation)), and stops with one line otherwise.
 - `wardyn run editor <run-id>` writes the run's `Host` block to `~/.wardyn/ssh_config`, asks before adding `Include ~/.wardyn/ssh_config` at the top of `~/.ssh/config`, then opens VS Code Remote-SSH. Keep that `Include` outside any `Host` or `Match` block, or ssh will not find the run's host.
   - `--dir` picks the sandbox folder (default `/home/agent/work`).
   - The setting in [VS Code Remote-SSH](#5-vs-code-remote-ssh) is required.
-- All three need the gateway on and a key on your account.
-  - With the gateway off they stop with one line saying the operator has not turned SSH on.
+- `exec` and `editor` need the gateway on; `forward` needs it or `WARDYN_ATTACH_FORWARD`. All three need a key on your account when they use the gateway.
+  - With the gateway off `exec` and `editor` stop with one line saying the operator has not turned SSH on, and `forward` does the same unless `WARDYN_ATTACH_FORWARD` is on.
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
@@ -318,6 +318,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
   not reached this way.
 - Bind `127.0.0.1` (or `0.0.0.0`) for anything you want
   to reach over `-L`.
+- With the gateway off and `WARDYN_ATTACH_FORWARD` on, `wardyn run forward` reaches the same relay with the same bounds through the organisation, one attach ticket per connection.
 
 ## 5. VS Code Remote-SSH
 

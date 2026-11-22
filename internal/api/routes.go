@@ -665,6 +665,7 @@ func (s *Server) routes() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(s.ticketOrHumanAuth)
 			r.Get("/runs/{id}/attach", s.handleAttachWS)
+			r.Get("/runs/{id}/attach/forward", s.handleAttachForward) // one TCP connection to the sandbox's loopback, by ticket only; off unless the operator turns it on (attach_forward.go)
 		})
 
 		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
