@@ -82,6 +82,13 @@ type diskMacTransport struct {
 	capsTransport
 	inUse bool
 	asked int
+	// replies, when set, answers the nth reclaim_drive (the last one repeats); an err is the call's transport error.
+	replies []macReclaimReply
+}
+
+type macReclaimReply struct {
+	res runnerwire.ReclaimDriveResult
+	err error
 }
 
 func (t *diskMacTransport) Call(_ context.Context, method string, _, out any, _ ...runnerwire.CallOption) error {
@@ -89,6 +96,11 @@ func (t *diskMacTransport) Call(_ context.Context, method string, _, out any, _ 
 		return t.capsTransport.Call(context.Background(), method, nil, nil)
 	}
 	t.asked++
+	if len(t.replies) > 0 {
+		rep := t.replies[min(t.asked, len(t.replies))-1]
+		*out.(*runnerwire.ReclaimDriveResult) = rep.res
+		return rep.err
+	}
 	*out.(*runnerwire.ReclaimDriveResult) = runnerwire.ReclaimDriveResult{InUse: t.inUse, Outcome: runner.DriveReclaimDeleted}
 	if t.inUse {
 		out.(*runnerwire.ReclaimDriveResult).Outcome = ""
