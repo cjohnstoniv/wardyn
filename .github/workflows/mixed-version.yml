@@ -247,7 +247,8 @@ jobs:
         timeout-minutes: 30
         run: bash .github/mixed-version/released-service-grant-tests.sh
       - name: Logs on failure
-        if: failure()
+        # cancelled() too: the job's own time limit cancels the job rather than failing it.
+        if: failure() || cancelled()
         run: |
           kubectl -n "$NS" get pods -o wide || true
           kubectl -n "$NS" logs deployment/new-wardyn --tail=200 || true

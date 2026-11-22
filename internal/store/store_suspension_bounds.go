@@ -329,6 +329,9 @@ type PortalEventPinner interface {
 
 // PinPortalEvent — see PortalEventPinner. Only a pending row is written: a step another worker finished meanwhile
 // answers what it holds with Done set, so a late retry neither pins again nor restores a payload the finish cleared.
+// The payload is written only beside the id this call pins: a row an older writer left holding an id and no payload
+// keeps none, and its step replays as the system actor, since a payload sealed under this call's id would never open
+// beside that one.
 func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string, k JobKey, id uuid.UUID, at time.Time, payload []byte, bound *time.Time) (PinnedEvent, error) {
 	if k.ID == uuid.Nil {
 		return PinnedEvent{}, ErrSuperseded
@@ -341,7 +344,8 @@ func (s PG) PinPortalEvent(ctx context.Context, identity uuid.UUID, kind string,
 		              WHERE identity_id = $1 AND kind = $2 AND step = $3 AND target = $4 AND id = $8
 		                AND ($9::timestamptz IS NULL OR `+suspensionCurrentSQL("$9")+`) FOR UPDATE),
 		     upd AS (UPDATE deprovision_jobs d SET audit_event_id = COALESCE(d.audit_event_id, $5), audit_event_at = COALESCE(d.audit_event_at, $6),
-		                    audit_event_payload = COALESCE(d.audit_event_payload, $7::jsonb)
+		                    audit_event_payload = CASE WHEN d.audit_event_id IS NULL THEN COALESCE(d.audit_event_payload, $7::jsonb)
+		                                               ELSE d.audit_event_payload END
 		              FROM cur WHERE d.id = cur.id AND cur.state = 'pending'
 		          RETURNING d.audit_event_id, d.audit_event_at, d.audit_event_payload)
 		SELECT COALESCE(upd.audit_event_id, cur.audit_event_id), COALESCE(upd.audit_event_at, cur.audit_event_at), COALESCE(upd.audit_event_payload, cur.audit_event_payload), cur.state = 'done'
