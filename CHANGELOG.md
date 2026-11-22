@@ -11,7 +11,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
-## [0.10.2] — 2026-11-21
+## [0.10.2] — 2026-11-22
 
 ### Added
 
