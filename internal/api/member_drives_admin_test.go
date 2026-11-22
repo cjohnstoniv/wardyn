@@ -104,8 +104,8 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
 			} else if tc.reason != "" {
 				body := wantReason(t, w, tc.status, tc.reason)
-				if tc.reason == reasonMemberDriveDeleteFailed && body.Error != memberDriveDeleteFailedMsg() {
-					t.Errorf("message = %q, want %q", body.Error, memberDriveDeleteFailedMsg())
+				if tc.reason == reasonMemberDriveDeleteFailed && body.Error != "Wardyn could not confirm that deletion finished." {
+					t.Errorf("message = %q, want the could-not-confirm sentence", body.Error)
 				}
 			}
 			home, _ := types.DriveHomeName(d, aliceSub, "")
@@ -369,8 +369,8 @@ func TestMemberDriveDeleteHoldsWhatItCannotConfirm(t *testing.T) {
 				id := d.ID.String()
 
 				body := wantReason(t, rt.call(srv, id), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed)
-				if body.Error != memberDriveDeleteFailedMsg() || strings.Contains(body.Error, "Nothing was removed") {
-					t.Errorf("message = %q, want the held-while-pending sentence and no promise the files survived", body.Error)
+				if body.Error != "Wardyn could not confirm that deletion finished." || strings.Contains(body.Error, "Nothing was removed") {
+					t.Errorf("message = %q, want the could-not-confirm sentence and no promise the files survived", body.Error)
 				}
 				got, kept := st.drives[d.ID]
 				if !kept || !got.Deleting() || got.DeleteIssues != 1 {
@@ -480,6 +480,53 @@ func TestMacDiskDeleteHoldsWhatItCannotConfirm(t *testing.T) {
 			}
 			if _, kept := st.drives[d.ID]; kept || tr.asked != 2 {
 				t.Errorf("after the retry kept = %v, Mac asked %d; want the row gone after two asks", kept, tr.asked)
+			}
+		})
+	}
+}
+
+// failSecondStartingRead answers the first read of the owner's starting runs and fails every later one, so the
+// delete's read past the claim fails before any call is made.
+type failSecondStartingRead struct {
+	*memberDriveStore
+	reads int
+}
+
+func (s *failSecondStartingRead) MemberDriveOwnerStarting(ctx context.Context, owner string, d time.Duration) (bool, error) {
+	s.reads++
+	if s.reads > 1 {
+		return false, errors.New("starting runs unreadable")
+	}
+	return s.memberDriveStore.MemberDriveOwnerStarting(ctx, owner, d)
+}
+
+// A failure before the call (the starting-run read past the claim) answers 503 with the same sentence as an
+// ambiguous failure after it, but nothing was issued: the claim is given up (tombstone cleared, count moved on by
+// two) and the drive is not held. The message must not claim it is.
+func TestMemberDriveDeleteFailedBeforeTheCallIsNotHeld(t *testing.T) {
+	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
+	for by, call := range map[string]func(srv *Server, id string) *httptest.ResponseRecorder{
+		memberDriveByOwner: func(srv *Server, id string) *httptest.ResponseRecorder { return deleteMyDrive(srv, aliceSub, id) },
+		memberDriveByAdmin: func(srv *Server, id string) *httptest.ResponseRecorder {
+			return memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": id})
+		},
+	} {
+		t.Run(by, func(t *testing.T) {
+			st := newMemberDriveStore()
+			d := seedMemberDrive(st, aliceSub, "Notes")
+			rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+			srv, rec := memberDriveServer(st, rn, "docker")
+			srv.cfg.Store = &failSecondStartingRead{memberDriveStore: st}
+			body := wantReason(t, call(srv, d.ID.String()), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed)
+			if body.Error != "Wardyn could not confirm that deletion finished." {
+				t.Errorf("message = %q", body.Error)
+			}
+			got, kept := st.drives[d.ID]
+			if !kept || got.Deleting() || got.DeleteIssues != 2 || len(rn.calls) != 0 {
+				t.Errorf("kept = %v, deleting = %v, issues = %d, calls = %d; want kept, claim given up (issues 2), no call", kept, got.Deleting(), got.DeleteIssues, len(rn.calls))
+			}
+			if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "failed" || data["by"] != by {
+				t.Errorf("audit = %v, want outcome failed by %s", data, by)
 			}
 		})
 	}

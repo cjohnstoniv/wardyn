@@ -663,7 +663,7 @@ const (
 	reasonMemberDriveNameTaken         = "member_drive_name_taken"         // a drive the caller can use already has the name
 	reasonMemberDriveInUse             = "member_drive_in_use"             // a live or kept run still holds the drive
 	reasonMemberDriveBusy              = "member_drive_busy"               // another delete of the drive is in flight
-	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the delete could not be confirmed; the drive is held while it is pending
+	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the delete could not be confirmed (the drive may be held, or the claim given up before any call)
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
 	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off

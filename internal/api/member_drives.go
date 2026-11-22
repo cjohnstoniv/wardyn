@@ -89,7 +89,7 @@ func memberDriveReleasingOnMacMsg(name string) string {
 func memberDriveBusyMsg() string { return "This drive is already being deleted." }
 
 func memberDriveDeleteFailedMsg() string {
-	return "Wardyn could not confirm that deletion finished. The drive is held while deletion is pending."
+	return "Wardyn could not confirm that deletion finished."
 }
 
 // memberDriveMacUnavailableMsg refuses a disk drive on a runner that is not one of the caller's own
