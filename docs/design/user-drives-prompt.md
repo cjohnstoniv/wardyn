@@ -660,7 +660,7 @@ confirming happens through the API.
 | `TEAM_CLAIM_NOTE` | Everyone who mounts a claim shares it, so it must allow many writers at once (ReadWriteMany). Each issuer portal has its own claim. Ask your platform team if you're not sure. |
 | `TEAM_EMPTY_READ_ONLY` | Nobody can write to a read-only team drive on a Wardyn-managed volume, so it stays empty. Use a share your platform fills, or turn on Members can write. |
 | `TEAM_GROUP_PLACEHOLDER` | Choose a group |
-| `TEAM_HINT` | One folder shared by everyone it is allocated to. Each person's runs see, and can run, what the others' runs wrote there. |
+| `TEAM_HINT` | People who share a folder can read what others leave there. Each allocated issuer portal has its own folder. |
 | `TEAM_NO_HOME` | Members of the allocated groups share one folder. Each allocated issuer portal has its own folder. A team drive has no directory per person. |
 | `TEAM_ONE_HOST` | Works on one host only. A Docker volume lives on the host that made it, so runs on another host get a different, empty folder. |
 | `TEAM_ONE_HOST_CHIP` | One host only |

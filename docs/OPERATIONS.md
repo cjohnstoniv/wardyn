@@ -1388,7 +1388,7 @@ erases one person's retained records by explicit scope, in one audited act
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 - These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
@@ -4942,7 +4942,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
 - Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
 - The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 
 **Orphans.**
 
@@ -4957,15 +4957,15 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 ### Team drives
 
-- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, instead of one folder per person.
+- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, and each allocated issuer portal a folder of its own, instead of one folder per person.
 - It is off by default. Turn it on with `storage.user_drive.team_drives: true` in the workspace providers (`PUT /api/v1/workspace-providers`).
-- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person, as every drive did before.
+- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person for a group allocation, as every drive did before. A portal allocation is refused instead and mounts nothing.
 
 **Make one** (super admin).
 
 1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
 2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`, or to an issuer portal (below). The allowed recipients are groups and eligible issuer portals. Any other subject type, and `home_override`, are refused.
-3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only to groups. A portal allocation needs a super admin even when read-only.
 
 **What a member's run sees** (a group allocation).
 
@@ -4984,9 +4984,9 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A queued run starts with no wider mode than it was admitted with, and read-only when none was recorded.
 - While a portal holds the drive, an edit that would stop it being a team drive answers 409, and one that adds a second place or moves it off those two backends answers 422. Nothing is written; remove the portal's allocation first.
 
-**Before you upgrade.** Turning on `storage.user_drive.team_drives` shares folders between people. Members of the allocated groups share the team folder. Each allocated issuer portal has a separate folder for the people who mount the drive through that portal. Anyone with access to a folder can read files another person left there. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups or eligible issuer portals, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` shares folders between people. Members of the allocated groups share the team folder. Each allocated issuer portal has a separate folder for the people who mount the drive through that portal. Anyone with access to a folder can read files another person left there. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to everyone who shares that folder. The switch is off by default; a team drive is admin-made and allocated to groups or eligible issuer portals, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
 
-**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
+**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to everyone who shares that folder. Keep allocations read-only unless they need a shared working area.
 
 **What differs by backend.**
 
@@ -4997,8 +4997,8 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Changing and removing.**
 
 - `team` cannot change while the drive is allocated (409). Remove the allocations first.
-- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and portals and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once nobody needs it.
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
 
 ### User drives on Kubernetes
 

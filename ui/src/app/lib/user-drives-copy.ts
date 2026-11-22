@@ -218,7 +218,7 @@ export const DRIVES = {
   RECLAIM_HINT: "Recorded here, carried out by you: removing an allocation below never deletes data. Preview prints the exact object to remove.",
   // ---- team drives (#1988), behind storage.user_drive.team_drives ----
   FIELD_TEAM: "Team drive",
-  TEAM_HINT: "One folder shared by everyone it is allocated to. Each person's runs see, and can run, what the others' runs wrote there.",
+  TEAM_HINT: "People who share a folder can read what others leave there. Each allocated issuer portal has its own folder.",
   // Replaces FIELD_WRITABLE on a team drive: the editor shows one write toggle.
   FIELD_TEAM_WRITE: "Members can write",
   TEAM_WRITE_HINT:
