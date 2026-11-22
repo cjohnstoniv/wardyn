@@ -544,7 +544,11 @@ func TestPG_AuditRetentionMarkMovesOnlyOnADrop(t *testing.T) {
 	if before != 0 {
 		t.Fatalf("mark before any drop = %d, want 0", before)
 	}
-	appendAuditRow(t, c.pool, "test.mark.append")
+	ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: "ret-probe",
+		Action: "test.mark.append", Outcome: "success"}
+	if err := store.InsertAuditEvent(ctx, c.pool, &ev); err != nil {
+		t.Fatalf("InsertAuditEvent test.mark.append: %v", err)
+	}
 	if got, err := pg.AuditRetentionMark(ctx); err != nil || got != before {
 		t.Fatalf("mark after an append = %d, %v; want it unchanged at %d", got, err, before)
 	}
