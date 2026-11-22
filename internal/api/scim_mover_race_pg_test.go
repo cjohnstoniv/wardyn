@@ -188,13 +188,21 @@ func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
 			t.Fatalf("remove = %d %s", r.Code, r.Body.String())
 		}
 		_, tid, raw := e.mintTokenAs(e.a, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{groupClaim}})
+		// A person of another issuer joins in the same add: the delete owes this endpoint no removal of them.
+		var foreign uuid.UUID
+		if err := e.pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower)
+			VALUES ('sub-foreign', 'https://idp.other.example', 'foreign@other.example') RETURNING id`).Scan(&foreign); err != nil {
+			t.Fatal(err)
+		}
 		add, err := testutil.PGConn(t, e.pool).Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = add.Rollback(ctx) }()
-		if _, err := add.Exec(ctx, `INSERT INTO scim_group_members (group_id, identity_id, added_at) VALUES ($1, $2, now())`, w.group.ID, w.moverID); err != nil {
-			t.Fatal(err)
+		for _, id := range []any{w.moverID, foreign} {
+			if _, err := add.Exec(ctx, `INSERT INTO scim_group_members (group_id, identity_id, added_at) VALUES ($1, $2, now())`, w.group.ID, id); err != nil {
+				t.Fatal(err)
+			}
 		}
 		done := make(chan *httptest.ResponseRecorder, 1)
 		go func() {
@@ -216,7 +224,15 @@ func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
 		}
 
 		if !e.groupJobsDone(w.moverID, w.group.ID) {
-			t.Error("the member added while the delete ran has no finished removal")
+			t.Error("the member added while the delete ran does not have its 3 removal steps done")
+		}
+		var foreignRows int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2`,
+			foreign, store.JobKindGroupRemove).Scan(&foreignRows); err != nil {
+			t.Fatal(err)
+		}
+		if foreignRows != 0 {
+			t.Errorf("the other issuer's member has %d group_remove rows, want 0", foreignRows)
 		}
 		if !e.tokenRevoked(tid) {
 			t.Error("the token of the member added while the delete ran is not revoked")

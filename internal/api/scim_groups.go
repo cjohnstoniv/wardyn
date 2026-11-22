@@ -183,16 +183,18 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	now := s.cfg.Now().UTC()
-	g, err := st.CreateScimGroup(ctx, in.ExternalID, in.DisplayName, now)
+	// The members are read before anything is written, and the group and its members commit together: a
+	// failure at either step leaves no group, so the identity provider's retry with the same externalId is
+	// not a conflict. A 409 is only a group that really exists.
+	own, err := s.ownMembers(ctx, st, memberIdentities(in.Members))
+	if err != nil {
+		s.scimServerError(w, r, "create the group", err)
+		return
+	}
+	g, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
 	if errors.Is(err, store.ErrScimGroupExists) {
 		writeSCIMError(w, scim.NewError(http.StatusConflict, "uniqueness", "a group with this externalId already exists"))
 		return
-	}
-	if err == nil {
-		var own []uuid.UUID
-		if own, err = s.ownMembers(ctx, st, memberIdentities(in.Members)); err == nil {
-			err = st.AddScimGroupMembers(ctx, g.ID, own, now)
-		}
 	}
 	if err != nil {
 		s.scimServerError(w, r, "create the group", err)
@@ -233,6 +235,8 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var errs []error
+	gone := false
+memberOps:
 	for _, op := range ops {
 		if op.Attr != scim.AttrMembers {
 			continue
@@ -248,9 +252,10 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 				err = st.AddScimGroupMembers(ctx, g.ID, own, s.cfg.Now().UTC())
 			}
 			if errors.Is(err, store.ErrNotFound) {
-				// A deletion committed after the group was read: nobody is added, and the request is refused.
-				writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
-				return
+				// A deletion committed after the group was read: nobody is added, the rest is the deletion's,
+				// and the request is refused below, after any earlier failure.
+				gone = true
+				break memberOps
 			}
 			if err != nil {
 				errs = append(errs, err)
@@ -268,6 +273,12 @@ func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := errors.Join(errs...); err != nil {
 		s.scimServerError(w, r, "update the group", err)
+		return
+	}
+	// An earlier removal that failed answers 5xx first: its ledger stays pending, and the 404 would tell the
+	// identity provider the request was settled.
+	if gone {
+		writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))
 		return
 	}
 	if externalIDRefused {

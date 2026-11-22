@@ -247,6 +247,59 @@ func TestPG_DriveRegistration_AllocationUnderTheFirstModeBlocksALaterFlip(t *tes
 	}
 }
 
+// The outcome the id lock above exists for, staged by the interleaving itself: a registration of a new id is in
+// flight, with the drive inserted personal and a group allocated under that mode, uncommitted. A PUT of the same id
+// that flips it to shared waits on the id's lock, and when the registration commits it locks the row, sees the
+// allocation and is refused with ErrDriveAllocated. Without the lock it never waits on the advisory lock (its row
+// lock finds nothing), judges its guards with neither the drive nor the allocation visible, and writes the flip over a
+// live allocation after the commit.
+func TestPG_DriveRegistration_AllocationInFlightBlocksAFlipOfTheNewID(t *testing.T) {
+	st, pool := isolatedStore(t)
+	ctx := context.Background()
+	d := newUserDrive("reg-" + uuid.NewString()[:8])
+	d.ID = uuid.New()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM user_drive_grants WHERE drive_id = $1`, d.ID)
+		_ = st.DeleteUserDrive(ctx, d.ID)
+	})
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // already committed on the happy path
+	if _, err := tx.Exec(ctx, driveIDLockSQL, d.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO user_drives (id, name, name_slug, backend, home_template, size_mib, writable)
+		VALUES ($1, $2, $2, 'docker_volume', 'hash', 1024, false)`, d.ID, d.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, enabled, created_by)
+		VALUES ($1, 'group', 'platform', $2, true, 'x')`, uuid.New(), d.ID); err != nil {
+		t.Fatal(err)
+	}
+	flip := d
+	flip.Team, flip.Writable = true, true
+	blocked, result := parked(func() error { _, err := st.UpsertUserDrive(ctx, flip, true); return err })
+	if !blocked {
+		_ = tx.Commit(ctx)
+		t.Fatal("the flip did not wait for the registration in flight")
+	}
+	waitForPortalLock(t, "the flip waiting on the id's lock", func() bool { return backendsWaiting(t, pool, true, "user_drives:") == 1 })
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := result(); !errors.Is(err, store.ErrDriveAllocated) {
+		t.Errorf("the flip behind a committed registration and allocation: err = %v, want ErrDriveAllocated", err)
+	}
+	if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Team {
+		t.Errorf("drive = %+v, %v; want it still personal", got, err)
+	}
+	if n := rowCount(t, pool, `SELECT count(*) FROM user_drive_grants WHERE drive_id = $1`, d.ID); n != 1 {
+		t.Errorf("%d allocation row(s), want the one", n)
+	}
+}
+
 // A portal's allocation asking for write access, behind a drive edit that made the drive read-only, is refused under the
 // drive's lock and stores nothing, so a later change to writable cannot activate it; against a writable drive the same
 // allocation is stored.

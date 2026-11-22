@@ -496,6 +496,10 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		}
 	}()
 
+	// Declared after the fanout drain, so it runs before it on every exit, the serve-error return included: the
+	// service grant queue dequeues no copy after it, and logs as unconfirmed the one its worker may still hold.
+	defer srv.StopServiceGrantSIEM()
+
 	// Declared after the fanout drain, so it runs BEFORE it: the open dry-run
 	// denial windows write their summaries while the sinks and the pool are
 	// still open.

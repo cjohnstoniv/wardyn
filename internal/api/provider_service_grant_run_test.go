@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -146,7 +149,11 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 			events = append(events, event{at, false})
 		}
 	}
-	sort.SliceStable(events, func(i, j int) bool { return events[i].at < events[j].at })
+	// The stuck pass starts just before the resolve of the same moment, so the workers are held when it asks.
+	sort.SliceStable(events, func(i, j int) bool {
+		a, b := events[i], events[j]
+		return a.at < b.at || (slow && a.at == b.at && !a.resolve && b.resolve)
+	})
 	var installed string // the header the proxy holds
 	var lease time.Time
 	resolves, handed := 0, map[string]bool{}
@@ -212,6 +219,18 @@ func svcSpanExpiry(t *testing.T, first, passAt time.Duration, slow bool) {
 	}
 	if len(handed) != 2 {
 		t.Fatalf("tokens handed to the proxy = %d, want the first and its replacement", len(handed))
+	}
+	if slow {
+		// Dispatch's request, the eight held workers' slow rows, then the 50-minute resolve's renewal; the
+		// other eight slow rows wait for the release at clean-up.
+		var order []string
+		for _, r := range f.idp.requests() {
+			order = append(order, map[bool]string{true: "slow", false: "healthy"}[strings.Contains(r.URL, "hang-")])
+		}
+		want := append(append([]string{"healthy"}, slices.Repeat([]string{"slow"}, serviceGrantPassWorkers)...), "healthy")
+		if !slices.Equal(order, want) {
+			t.Fatalf("token request order = %v, want %v", order, want)
+		}
 	}
 	healthy := f.svcHealthyRequests()
 	var rows int
@@ -394,8 +413,11 @@ func TestServiceGrant_UnmaskableTokenNotHandedOut(t *testing.T) {
 	}
 }
 
+// Plant: put the token into the success row's data; the audit sweep runs after the row's sink copy arrives, so it
+// finds it.
 func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	f := newSvcFixWithSecret(t)
+	ids := f.captureRowIDs()
 	plan, env, policy, ok := f.dispatch(t)
 	if !ok {
 		t.Fatal("dispatch refused")
@@ -405,6 +427,7 @@ func TestServiceGrant_SandboxHoldsPlaceholderOnly(t *testing.T) {
 	if code != http.StatusOK {
 		t.Fatalf("resolve: %d", code)
 	}
+	f.awaitSink(t, ids()...) // the sweep covers each success's sink copy
 	sandbox, _ := json.Marshal(env)
 	planned, _ := json.Marshal(policy)
 	grants, _ := json.Marshal(f.st.grants)
@@ -592,8 +615,15 @@ func TestPutProviderCredential_ServiceOnServiceGrantRow409(t *testing.T) {
 		ClientID: svcClientID, ServiceIdentities: []string{svcOwner}}
 	site := credentialSite(row)
 	srv := modelProvidersStatusSrv(t, site, &capStore{})
-	svc := ssoSession(t, svcOwner, "svc@corp.example", oidc.RoleUser)
-	w := doSSO(t, srv, http.MethodPut, "/api/v1/model-providers/"+row.ID+"/credential", svc, `{"value":"a-pasted-token-0123456789"}`)
+	// A service identity reaches the door by its own token, never a session cookie (the cookie lane refuses a
+	// service principal), so the request carries the context the token lane builds.
+	router := chi.NewRouter()
+	srv.mountModelProviderCredentialRoutes(router)
+	ctx := withServiceIdentity(withHumanIdentity(context.Background(), svcOwner, "", oidc.RoleUser, types.UserTypeStandard, []string{}, false), "ci-bot", "sponsor@corp.example")
+	r := httptest.NewRequest(http.MethodPut, "/model-providers/"+row.ID+"/credential", strings.NewReader(`{"value":"a-pasted-token-0123456789"}`)).WithContext(ctx)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, r)
 	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), reasonModelProviderCredentialSignsIn) || !strings.Contains(w.Body.String(), mpcServiceGrant) {
 		t.Fatalf("PUT = %d %s, want 409 with the service grant sentence", w.Code, w.Body.String())
 	}
@@ -613,6 +643,8 @@ func TestSetupStatus_ServiceIdentityServiceGrantState(t *testing.T) {
 	}
 	f.idp.respond = func(int, svcReq) svcAnswer { return svcOAuthError(401, "invalid_client") }
 	f.token(serviceGrantTriggerRefresh) //nolint:errcheck // the failure is the point
+	// The heartbeat is its own loop: only a live replica's failure grades the row.
+	f.srv.serviceGrantHeartbeat(ctx)
 	if got := grade(); got.State != modelAccessNotConfigured || got.Cause != reasonServiceGrantFailing {
 		t.Fatalf("after a definitive failure: %+v, want not_configured %s", got, reasonServiceGrantFailing)
 	}

@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -30,7 +31,7 @@ var uiSpecSites = map[string]uiSpecSite{
 	"checkOverlay":                {ruledBy: []string{"writeGovernanceUnit"}},
 	"finishGovernanceUnitRequest": {ruledBy: []string{"writeGovernanceUnit"}},
 	"handlePutPreset":             {ruledBy: []string{"validatePresetRequest"}},
-	"resolveRunPolicyFacts":       {ruledBy: []string{"resolveRunPolicyFacts"}},
+	"inlinePolicyRefusal":         {ruledBy: []string{"inlinePolicyRefusal"}},
 	"applyPolicyOverlay":          {ruledBy: []string{"applyPolicyOverlay"}},
 	"LoadPolicySpec":              {exempt: "the policy file is a configured source, read by the census, not a stored spec"},
 	"applyRestrictionChange":      {exempt: "a RestrictionSpec has no ui_apps field"},
@@ -47,35 +48,45 @@ var uiSpecSites = map[string]uiSpecSite{
 // name share a node, which only widens what a guard flags).
 func uiSpecCallGraph(t *testing.T, dir string) map[string]map[string]bool {
 	t.Helper()
-	pkgs, err := parser.ParseDir(token.NewFileSet(), dir, func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
 	calls := map[string]map[string]bool{}
-	for _, p := range pkgs {
-		for _, f := range p.Files {
-			for _, d := range f.Decls {
-				fd, ok := d.(*ast.FuncDecl)
-				if !ok || fd.Body == nil {
-					continue
-				}
-				c := calls[fd.Name.Name]
-				if c == nil {
-					c = map[string]bool{}
-					calls[fd.Name.Name] = c
-				}
-				ast.Inspect(fd.Body, func(n ast.Node) bool {
-					if ce, ok := n.(*ast.CallExpr); ok {
-						switch fn := ce.Fun.(type) {
-						case *ast.Ident:
-							c[fn.Name] = true
-						case *ast.SelectorExpr:
-							c[fn.Sel.Name] = true
-						}
-					}
-					return true
-				})
+	for _, f := range files {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok || fd.Body == nil {
+				continue
 			}
+			c := calls[fd.Name.Name]
+			if c == nil {
+				c = map[string]bool{}
+				calls[fd.Name.Name] = c
+			}
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if ce, ok := n.(*ast.CallExpr); ok {
+					switch fn := ce.Fun.(type) {
+					case *ast.Ident:
+						c[fn.Name] = true
+					case *ast.SelectorExpr:
+						c[fn.Sel.Name] = true
+					}
+				}
+				return true
+			})
 		}
 	}
 	return calls

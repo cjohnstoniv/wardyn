@@ -7,14 +7,19 @@ package api
 // the secret route allows and to whom, and the switch-on's refusal. Skipped without WARDYN_TEST_PG.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -285,10 +290,16 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	svc := ssoSession(t, svcOwner, "svc@corp.example", oidc.RoleUser)
 	p := f.row("corp-a")
 	body := putServiceGrantSecretRequest{Value: svcClientSecret, TokenURL: p.OIDC.ServiceGrant.TokenURL, ClientID: p.OIDC.ServiceGrant.ClientID, BaseURL: p.BaseURL}
-	for name, c := range map[string]*http.Cookie{"security admin": secAdmin, "service": svc, "person": f.person} {
+	// The cookie lane refuses a service principal before any route runs (401 reserved_principal); the others reach
+	// the route and are refused there.
+	callers := map[string]struct {
+		c    *http.Cookie
+		want int
+	}{"security admin": {secAdmin, http.StatusForbidden}, "service": {svc, http.StatusUnauthorized}, "person": {f.person, http.StatusForbidden}}
+	for name, k := range callers {
 		for _, m := range []string{http.MethodPut, http.MethodDelete} {
-			if w := f.do(m, f.secretPath("corp-a"), c, body); w.Code != http.StatusForbidden {
-				t.Errorf("%s %s the secret route = %d, want 403", name, m, w.Code)
+			if w := f.do(m, f.secretPath("corp-a"), k.c, body); w.Code != k.want {
+				t.Errorf("%s %s the secret route = %d, want %d", name, m, w.Code, k.want)
 			}
 		}
 	}
@@ -320,6 +331,55 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	if w := f.do(http.MethodPut, f.secretPath("no-such"), f.admin, nb); w.Code != http.StatusNotFound {
 		t.Errorf("an unknown provider = %d, want 404", w.Code)
 	}
+	// An authenticated service caller, by the service token it is issued, through the normal router: the identity
+	// the grant serves is refused PUT and DELETE, and the stored record is unchanged after both. The token lane
+	// checks the sponsor's session on every request, so the server gets the revocation store now, after the cookie
+	// cases above.
+	f.srv.cfg.SessionRevocations = &pgTestRevocations{pool: f.pool, st: f.pg}
+	tok := svcPGServiceToken(t, f, "ci-bot", "sub-sponsor")
+	raw, _ := json.Marshal(body)
+	name := serviceGrantSecretName(p.UID)
+	stored := func() []byte {
+		t.Helper()
+		v, err := f.secrets().Get(secretstore.WithPurpose(context.Background(), secretstore.PurposeServiceGrant), name)
+		if err != nil {
+			t.Fatalf("read the stored record: %v", err)
+		}
+		return v
+	}
+	before := stored()
+	for _, m := range []string{http.MethodPut, http.MethodDelete} {
+		if w := do(t, f.srv, m, "/api/v1"+f.secretPath("corp-a"), tok, string(raw)); w.Code != http.StatusForbidden {
+			t.Errorf("a service token's %s on the secret route = %d %s, want 403", m, w.Code, w.Body.String())
+		}
+	}
+	if after := stored(); !bytes.Equal(after, before) {
+		t.Error("a service token's refused write or delete changed the stored record")
+	}
+}
+
+// svcPGServiceToken is a live service token for service identity name, sponsored by sponsor, created the way the
+// token route stores one (store.CreateServiceToken after the identity's row), and returned as its plaintext.
+func svcPGServiceToken(t *testing.T, f *svcPG, name, sponsor string) string {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := f.pg.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: sponsor, Issuer: "https://idp.example",
+		Email: sponsor + "@corp.example"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	si, err := f.pg.CreateServiceIdentity(ctx, types.ServiceIdentity{Name: name, Sponsor: sponsor, UserType: types.UserTypeStandard, CreatedBy: "seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageFreshSponsorships(t, f.pool) // a token is a credential only when created after sponsor_since
+	plaintext, truncated := newBearer(apiTokenPrefix), false
+	if _, err := f.pg.CreateServiceToken(ctx, si.Name, sponsor, apiTokenMaxPerPrincipal, types.APIToken{
+		ID: uuid.New(), Principal: si.Principal(), Role: oidc.RoleUser, UserType: si.UserType, Groups: []string{},
+		GroupsTruncated: &truncated, Name: "ci", CreatedAt: time.Now().UTC(), ExpiresAt: ptrTime(time.Now().UTC().Add(time.Hour)),
+	}, plaintext); err != nil {
+		t.Fatal(err)
+	}
+	return plaintext
 }
 
 func TestServiceGrant_BindingRefusesNewDestination_PG(t *testing.T) {

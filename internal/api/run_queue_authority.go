@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -280,7 +281,7 @@ func narrowRole(launched, derived string) string {
 
 // The ends a portal launch's start gives that no console launch has.
 const (
-	queueEndUserTypeUnknown   = "user_type_unknown"
+	queueEndUserTypeUnknown   = string(authz.ReasonUserTypeUnknown)
 	queueEndPortalUnitScope   = "portal_unit_scope"
 	queueEndPortalRunScope    = "portal_run_scope"
 	queueUserTypeUnknownHint  = "The user type this portal gives its people no longer exists, so this run was not started."

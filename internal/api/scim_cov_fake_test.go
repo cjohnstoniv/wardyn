@@ -784,6 +784,33 @@ func (s *scimCovStore) CreateScimGroup(_ context.Context, externalID, displayNam
 	return *g, nil
 }
 
+// CreateScimGroupWithMembers is all or nothing, as the store's transaction is: a failure of the member write
+// leaves no group.
+func (s *scimCovStore) CreateScimGroupWithMembers(_ context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (store.ScimGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.enter("CreateScimGroup"); err != nil {
+		return store.ScimGroup{}, err
+	}
+	externalID = strings.TrimSpace(externalID)
+	for _, g := range s.groups {
+		if strings.EqualFold(g.ExternalID, externalID) {
+			return store.ScimGroup{}, store.ErrScimGroupExists
+		}
+	}
+	if err := s.enter("AddScimGroupMembers"); err != nil {
+		return store.ScimGroup{}, err
+	}
+	g := &store.ScimGroup{ID: s.newID(), ExternalID: externalID, DisplayName: displayName, CreatedAt: now}
+	s.groups[g.ID] = g
+	for _, m := range identities {
+		if _, known := s.idents[m]; known && !slices.Contains(s.members[g.ID], m) {
+			s.members[g.ID] = append(s.members[g.ID], m)
+		}
+	}
+	return *g, nil
+}
+
 func (s *scimCovStore) addGroup(externalID, name string, members ...uuid.UUID) store.ScimGroup {
 	s.mu.Lock()
 	defer s.mu.Unlock()

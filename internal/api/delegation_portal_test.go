@@ -339,15 +339,6 @@ func (p *portalStore) SweepExpiredPortalGrants(context.Context, time.Time) (int6
 	return 0, nil
 }
 
-func (p *portalStore) revoke(id uuid.UUID) {
-	p.pmu.Lock()
-	defer p.pmu.Unlock()
-	d := p.portals[id]
-	now := time.Now()
-	d.RevokedAt = &now
-	p.portals[id] = d
-}
-
 // seedGrant stores a live grant row exactly as given, for the reverse check's corrupt-store cases.
 func (p *portalStore) seedGrant(g types.PortalGrant) string {
 	raw := newBearer(delegatedTokenPrefix)
@@ -632,7 +623,9 @@ func TestPortalExchange_AuditRows(t *testing.T) {
 		t.Fatalf("denial rows = %+v, want exactly %v", rows, want)
 	}
 	// The success: the grant, its end, the role, the freshness settings and the names of the admission rule.
+	// The token now carries the claim the portal requires.
 	h.ver.refusal = oidc.PortalRefusal{}
+	h.ver.claims = map[string]string{"tenant": "secret-environment-name"}
 	_, out := portalToken(t, h.exchange(t, d.ID, cred, "the-subject-token", nil))
 	rows := h.exchangeRows()
 	if len(rows) != 2 || rows[1].Outcome != "success" || rows[1].Target != h.ver.subj.Principal {
@@ -753,6 +746,56 @@ func TestPortalExchange_IssuerOutageColdAndWarm(t *testing.T) {
 	// Recovery needs nothing from the person: the next exchange is admitted.
 	h.ver.refusal = oidc.PortalRefusal{}
 	portalToken(t, h.exchange(t, d.ID, cred, "subject-token", nil))
+}
+
+func TestPortalExchange_ProxiedRefreshOutageStatusAndAudit(t *testing.T) {
+	h := newExchHarness(t)
+	d, cred := h.seedPortal(nil)
+	causes := []struct {
+		cause string
+		retry time.Duration
+		want  string
+	}{
+		{"unreachable", 30 * time.Second, "30"},
+		{"keys_unreachable", 0, ""},
+		{"issuer_unreachable", 20 * time.Second, "20"},
+	}
+	for _, c := range causes {
+		h.ver.refusal = oidc.PortalRefusal{Reason: oidc.PortalIssuerUnavailable, Cause: c.cause, Class: oidc.PortalRefusedUnavailable, RetryAfter: c.retry}
+		w := h.exchange(t, d.ID, cred, "subject-token", nil)
+		if w.Code != http.StatusServiceUnavailable || oauthCode(w) != "temporarily_unavailable" || w.Header().Get("Retry-After") != c.want {
+			t.Errorf("%s: %d %s Retry-After=%q, want 503 temporarily_unavailable with %q", c.cause, w.Code, w.Body.String(), w.Header().Get("Retry-After"), c.want)
+		}
+	}
+	// The audit rows are checked on their own: each denied exchange names the reason and its own cause.
+	rows := h.exchangeRows()
+	if len(rows) != len(causes) {
+		t.Fatalf("%d exchange rows, want %d", len(rows), len(causes))
+	}
+	for i, c := range causes {
+		data := portalRowData(t, rows[i])
+		if data["reason"] != oidc.PortalIssuerUnavailable || data["cause"] != c.cause {
+			t.Errorf("row %d = %v, want reason %s and cause %s", i, data, oidc.PortalIssuerUnavailable, c.cause)
+		}
+	}
+}
+
+func TestPortalRefreshFailures_VerifierSourceExposed(t *testing.T) {
+	counter := &PortalRefreshFailures{}
+	issuer := "https://login.corp.example/oauth2/a"
+	counter.Record(oidc.PortalRefreshFailure{Issuer: issuer, Cause: "address_refused", Source: "verifier"})
+	var b strings.Builder
+	counter.write(&b)
+	key := oidc.PortalIssuerKey(issuer)
+	if !strings.Contains(b.String(), `wardyn_portal_issuer_refresh_failures_total{issuer_key="`+key+`",portal="",source="verifier",cause="address_refused"} 1`) {
+		t.Fatalf("a verifier refusal is not exposed with source=\"verifier\":\n%s", b.String())
+	}
+	help, _, _ := strings.Cut(b.String(), "\n")
+	for _, source := range []string{"scheduled", "unknown_kid", "verifier"} {
+		if !strings.HasPrefix(help, "# HELP ") || !strings.Contains(help, source) {
+			t.Errorf("the HELP line %q does not name the source %s", help, source)
+		}
+	}
 }
 
 func TestPortalAdmission_RefusalStatusesDistinct(t *testing.T) {

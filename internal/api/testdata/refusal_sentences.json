@@ -290,6 +290,11 @@
     "sentence": "delegationRefusal"
   },
   {
+    "reason": "delegation_scope",
+    "target": "r.URL.Path",
+    "sentence": "delegationRefusal"
+  },
+  {
     "reason": "drive_not_allocated_to_portal",
     "target": "\"runs.drive\"",
     "sentence": "portalDriveNotAllocatedMsg"

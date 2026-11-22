@@ -31,7 +31,7 @@ func seedIssuerPortal(t *testing.T, st store.PG, pin *uuid.UUID, shape ...func(*
 	d := types.Delegate{ID: uuid.New(), Name: "portal-" + uuid.NewString(), IdPClientID: uuid.NewString(), RegisteredBy: "test",
 		Issuer: b.Issuer, InternalIssuer: b.InternalIssuerNorm, IssuerKey: b.IssuerKey, RunInUnder: pin,
 		TokenProfile: "okta_access_token", UserType: types.UserTypeStandard, MaxSubjectTokenAgeSeconds: 600, GrantTTLSeconds: 600,
-		AdmissionRev: 1}
+		AdmissionRev: 1, PortalManagedAdmission: true}
 	for _, f := range shape {
 		f(&d)
 	}
@@ -201,15 +201,23 @@ func TestPortalSubjectRuling_UICallerUnboundRefusedAtCreateAndQueuedStart_PG(t *
 			t.Errorf("%s naming an unbound portal person = %d %s, want %d %s", what, w.Code, w.Body, code, reason)
 		}
 	}
+	// The inbound feature is restricted until an allow names it (migration 0239), and a launch asks it before
+	// the policy: the person holds it, so each launch below meets the caller ruling.
+	if w := e.admin(http.MethodPost, "/api/v1/permissions/grants", `{"subject_type":"user","subject":"`+e.personP+
+		`","capability":"feature","value":"`+featureInbound+`","effect":"allow"}`); w.Code/100 != 2 {
+		t.Fatalf("grant the inbound feature = %d %s", w.Code, w.Body)
+	}
 	for _, field := range []string{"inline_policy", "policy_overlay"} {
 		_, w := e.launch(e.person, pool, uiCallerBody(field, unboundPerson))
 		refused("a launch's "+field, http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal, w)
 	}
-	apps := `{"ui_apps":[{"name":"web","port":3000,"inbound":true,"callers":["user:` + unboundPerson + `"]}]}`
+	uiApps := `"ui_apps":[{"name":"web","port":3000,"inbound":true,"callers":["user:` + unboundPerson + `"]}]`
+	// A preset stores a whole inline policy, so it names its confinement class.
 	refused("a launch preset", http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal,
-		e.admin(http.MethodPut, "/api/v1/presets/unbound-callers", `{"request":{"agent":"claude-code","inline_policy":`+apps+`}}`))
+		e.admin(http.MethodPut, "/api/v1/presets/unbound-callers", `{"request":{"agent":"claude-code","inline_policy":{"min_confinement_class":"CC2",`+uiApps+`}}}`))
+	// A template's ui_apps needs the interactive (or experience) field beside it.
 	tmpl, _ := json.Marshal(map[string]any{"scope": "person", "name": "unbound-callers",
-		"document": json.RawMessage(templateDocBody(`{"inline_policy":` + apps + `}`))})
+		"document": json.RawMessage(templateDocBody(`{"interactive":true,"inline_policy":{` + uiApps + `}}`))})
 	refused("a run template", http.StatusUnprocessableEntity, reasonDelegatePersonUnknownPortal,
 		e.call(e.person, http.MethodPost, "/api/v1/templates", string(tmpl)))
 
@@ -319,6 +327,12 @@ func TestPortalIssuerBinding_DefaultPolicyReferenceRefused_PG(t *testing.T) {
 	g.srv.cfg.DefaultPolicy.UIApps = nil
 	ch := g.pending(g.call(g.super, http.MethodDelete, path, ""))
 	g.srv.cfg.DefaultPolicy.UIApps = named(held.IssuerKey)
+	// A change proposed under another deployment default is stale before anything else is read
+	// (decideInTx), so the held row is moved onto the current default for the decision to reach the census.
+	if _, err := g.pool.Exec(context.Background(), `UPDATE governance_changes SET deployment_hash = $1 WHERE id = $2`,
+		computeETag(g.srv.cfg.DefaultPolicy), ch.ID); err != nil {
+		t.Fatal(err)
+	}
 	if w := g.call(second, http.MethodPost, approvePath(ch.ID), `{}`); w.Code != http.StatusConflict || wireReason(t, w) != reasonPortalIssuerInUse {
 		t.Fatalf("approve beside a default policy reference = %d %s, want 409 %s", w.Code, w.Body, reasonPortalIssuerInUse)
 	}

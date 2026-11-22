@@ -14,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -36,6 +38,21 @@ const (
 // ErrServiceGrantsNotActivated is PutSiteConfigGrantsQ's answer when the document would carry a grant and
 // the stored document does not yet hold the activation mark: nothing was written.
 var ErrServiceGrantsNotActivated = errors.New("store: service grants are not activated")
+
+// ErrServiceGrantCommitUnknown: COMMIT was sent and its answer was an error, so whether the row landed is unknown.
+var ErrServiceGrantCommitUnknown = errors.New("store: the commit's outcome is unknown")
+
+// ServiceGrantSecretRow names the secrets row whose value_rev is a service grant secret's revision.
+type ServiceGrantSecretRow struct{ Owner, Name string }
+
+// ServiceGrantPublish is one minted token's publication: the rows it share-locks and the decision made under them.
+type ServiceGrantPublish struct {
+	Secret *ServiceGrantSecretRow // nil: the store keeps no revision row; Decide gets secretRev nil
+	// Decide runs inside the transaction once both rows are share-locked and read. It must do no I/O. It returns the
+	// one row to write (already prepared) and whether that row publishes the token.
+	Decide       func(sc types.SiteConfig, doc ServiceGrantDoc, secretRev *string) (ev types.AuditEvent, published bool)
+	BeforeCommit func() // test seam: runs after the row is written and before COMMIT; nil in production
+}
 
 // ServiceGrantCleanup is a claim on one retired provider uid: its secret record is to be deleted. Revision is
 // the record's revision when the claim was written, "" when the secret store keeps none. ID names this claim
@@ -91,6 +108,12 @@ type ServiceGrantStore interface {
 	TouchServiceGrantReplica(ctx context.Context, replicaID string) error
 	ServiceGrantStatuses(ctx context.Context, uids []string) ([]ServiceGrantStatusRow, error)
 	SweepServiceGrantStatuses(ctx context.Context) (int64, error)
+	// PublishServiceGrantMint commits one minted token's mint row with the decision that the token is current. See PG's.
+	PublishServiceGrantMint(ctx context.Context, p ServiceGrantPublish) (ev types.AuditEvent, published bool, seq int64, err error)
+	// SettleServiceGrantMint records ev unless a row with its id and time exists, and returns the row the database holds.
+	SettleServiceGrantMint(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error)
+	// ServiceGrantSIEM is the sink that rows written past the recorder chain go to after their commit; nil for none.
+	ServiceGrantSIEM() audit.Sink
 }
 
 var _ ServiceGrantStore = PG{}
@@ -357,3 +380,104 @@ func (s PG) SweepServiceGrantStatuses(ctx context.Context) (int64, error) {
 	}
 	return tag.RowsAffected(), nil
 }
+
+// PublishServiceGrantMint writes one mint row and the decision it carries in one read-committed transaction:
+// the secret's row (when p.Secret is set) and the site-config row are share-locked and read, p.Decide picks the
+// row, and the row is appended to the audit chain before COMMIT. Lock order: the rows first, the chain lock last
+// (inside InsertAuditEventTx). A write to either row therefore commits either before the share locks are granted,
+// and Decide sees it, or after this transaction ends, and the decision stands for it. seq is the audit
+// high-water mark this transaction left, so it orders publications in commit order. A Commit error is
+// ErrServiceGrantCommitUnknown: the row may or may not have landed. No sink copy is sent here.
+func (s PG) PublishServiceGrantMint(ctx context.Context, p ServiceGrantPublish) (types.AuditEvent, bool, int64, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.AuditEvent{}, false, 0, fmt.Errorf("store: begin service grant publication: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return types.AuditEvent{}, false, 0, fmt.Errorf("store: bound the publication's lock waits: %w", err)
+	}
+	var secretRev *string
+	if p.Secret != nil {
+		var rev string
+		err := tx.QueryRow(ctx, `SELECT value_rev::text FROM secrets WHERE owned_by=$1 AND name=$2 FOR SHARE`,
+			p.Secret.Owner, p.Secret.Name).Scan(&rev)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return types.AuditEvent{}, false, 0, fmt.Errorf("store: lock the service grant secret's row: %w", err)
+		}
+		secretRev = &rev
+	}
+	var one int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM site_config WHERE singleton FOR SHARE`).Scan(&one); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return types.AuditEvent{}, false, 0, fmt.Errorf("store: lock the site config row: %w", err)
+	}
+	sc, err := GetSiteConfigQ(ctx, tx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	doc, err := ServiceGrantDocQ(ctx, tx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	ev, published := p.Decide(sc, doc, secretRev)
+	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	seq, err := highWaterSeq(ctx, tx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	if p.BeforeCommit != nil {
+		p.BeforeCommit()
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.AuditEvent{}, false, 0, fmt.Errorf("%w: %w", ErrServiceGrantCommitUnknown, err)
+	}
+	return ev, published, seq, nil
+}
+
+// SettleServiceGrantMint records a mint row that its publication did not commit, or whose COMMIT answer was lost.
+// Under the chain lock every earlier writer has ended, so a row with ev's id and time is the canonical one and is
+// returned as the database holds it, hashes included; otherwise ev is appended and returned with its hashes.
+// Every return ends the transaction, so the chain lock is never left held.
+func (s PG) SettleServiceGrantMint(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.AuditEvent{}, fmt.Errorf("store: begin service grant settle: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+		return types.AuditEvent{}, fmt.Errorf("store: bound audit chain lock wait: %w", err)
+	}
+	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+		return types.AuditEvent{}, fmt.Errorf("store: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
+	}
+	var held types.AuditEvent
+	var actorType string
+	var data []byte
+	err = tx.QueryRow(ctx, `SELECT `+auditCols+`, COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_events WHERE time = $1 AND id = $2`, ev.Time, ev.ID).
+		Scan(&held.ID, &held.Time, &held.RunID, &actorType, &held.Actor, &held.Action, &held.Target, &held.Outcome,
+			&held.SourceIP, &data, &held.PrevHash, &held.RowHash)
+	switch {
+	case err == nil:
+		held.ActorType = types.ActorType(actorType)
+		if len(data) > 0 {
+			held.Data = data
+		}
+		held.DeviceID = FederatedDeviceID(held)
+		return held, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return types.AuditEvent{}, fmt.Errorf("store: look up a settled mint row: %w", err)
+	}
+	if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
+		return types.AuditEvent{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.AuditEvent{}, fmt.Errorf("%w: %w", ErrServiceGrantCommitUnknown, err)
+	}
+	return ev, nil
+}
+
+// ServiceGrantSIEM is the sink mint rows go to after their commit (ServiceGrantStore).
+func (s PG) ServiceGrantSIEM() audit.Sink { return s.SIEM }
