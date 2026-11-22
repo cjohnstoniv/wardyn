@@ -3166,10 +3166,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # staticcheck's three tag sets run as three cells: in one job the passes swapped past the time limit.
-        # The tagless cell keeps the name `gates (staticcheck)`, a required context.
-        gate: [govulncheck, staticcheck, staticcheck-docker, staticcheck-k8s, licenses, license-headers, gitleaks]
-    steps:
+        # staticcheck runs in the staticcheck job below, one cell per tag set; `gates (staticcheck)` aggregates it.
+        gate: [govulncheck, licenses, license-headers, gitleaks]
+    steps: &gate_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -3226,7 +3225,7 @@ jobs:
           vmstat -t 15 &
           vm=$!
           trap 'kill "$vm" 2>/dev/null || true' EXIT
-          make ${{ matrix.gate == 'staticcheck' && 'staticcheck-tagless' || matrix.gate }}
+          make ${{ matrix.gate }}
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -3237,6 +3236,33 @@ jobs:
             ~/.cache/staticcheck
           key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # staticcheck's three whole-tree passes (tagless, -tags docker, -tags docker,k8s), one runner each: in one job they
+  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's.
+  staticcheck:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [staticcheck-tagless, staticcheck-docker, staticcheck-k8s]
+    steps: *gate_steps
+
+  # The required context `gates (staticcheck)`: it passes only when every staticcheck pass did. A failed, cancelled or
+  # skipped pass fails it.
+  gates-staticcheck:
+    name: gates (staticcheck)
+    needs: staticcheck
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every staticcheck pass passed
+        env:
+          PASSES: ${{ needs.staticcheck.result }}
+        run: |
+          [ "$PASSES" = success ] || { echo "::error::a staticcheck pass did not pass (result: $PASSES); see the staticcheck (…) checks"; exit 1; }
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-26.04
@@ -3751,7 +3777,7 @@ jobs:
   # created before this run's. A family this run did not save, because its job
   # failed or its entry already existed, keeps its older entry.
   go-cache-prune:
-    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates, staticcheck]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
