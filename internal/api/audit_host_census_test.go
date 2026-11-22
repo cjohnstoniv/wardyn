@@ -53,8 +53,8 @@ const (
 	keepValues  = "posture values (modes, ids, counts, booleans), never a path or a spec"
 	keepRule    = "an approval rule as its security-tier author wrote it: kinds, repo and preset predicates, and the egress hosts and tools it approves; it holds no policy's workspace_mounts"
 	keepSigning = keepEgress + "; no_aws_host and unsigned_host are aws_signing_reason values about such a host"
-	keepGrant   = "host names only, never a URL: the provider's gateway, an egress destination its runs are allowed (run.subscription.inject's host), " +
-		"and the identity provider's token URL host this server sends the grant's token request to"
+	keepGrant   = "the configured gateway's host name, never its URL: an egress destination its runs are allowed (run.subscription.inject's host), " +
+		"and the host the member-safe provider view names (providerHost); the token and refused-form hosts are withheld"
 )
 
 // auditHostReviewed are the host-shaped fields served as recorded, per action. A host-shaped field on a
@@ -83,19 +83,17 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"governance.unit.write":                      {[]string{"contact_request_url"}, "the contact link a profile shows its members"},
 	"harness.login.start":                        {[]string{"sso_start_url"}, "the identity provider's sign-in start URL, an egress destination"},
 	"llm.scan.*":                                 {[]string{"host"}, keepEgress},
-	"model_provider.service_grant.mint":          {[]string{"token_host"}, keepGrant},
-	"model_provider.service_grant.secret_delete": {[]string{"base_host", "token_host"}, keepGrant},
-	"model_provider.service_grant.secret_write": {[]string{"base_host", "body_base_host", "body_token_host", "token_host"},
-		keepGrant + "; on a refused write, the hosts the admin's body named in their place"},
-	"model_provider.write":               {[]string{"base_url_changed"}, "a boolean"},
-	"policy.inline.apply":                {[]string{"workspace_mounts"}, "a count of mounts, never a path"},
-	"remote_runner.people_policy.delete": {[]string{"after", "before"}, keepValues},
-	"remote_runner.people_policy.set":    {[]string{"after", "before"}, keepValues},
-	"run.artifact.redirect":              {[]string{"host"}, keepEgress},
-	"run.aws_cli.configure":              {[]string{"aws_signing_host"}, keepEgress},
-	"run.bedrock.configure":              {[]string{"hosts", "aws_signing_host", "no_aws_host", "unsigned_host"}, keepSigning},
-	"run.ceiling.reassert":               {[]string{"dropped_injection_hosts"}, keepEgress},
-	"run.component.attach":               {[]string{"hosts"}, keepEgress},
+	"model_provider.service_grant.secret_delete": {[]string{"base_host"}, keepGrant},
+	"model_provider.service_grant.secret_write":  {[]string{"base_host"}, keepGrant},
+	"model_provider.write":                       {[]string{"base_url_changed"}, "a boolean"},
+	"policy.inline.apply":                        {[]string{"workspace_mounts"}, "a count of mounts, never a path"},
+	"remote_runner.people_policy.delete":         {[]string{"after", "before"}, keepValues},
+	"remote_runner.people_policy.set":            {[]string{"after", "before"}, keepValues},
+	"run.artifact.redirect":                      {[]string{"host"}, keepEgress},
+	"run.aws_cli.configure":                      {[]string{"aws_signing_host"}, keepEgress},
+	"run.bedrock.configure":                      {[]string{"hosts", "aws_signing_host", "no_aws_host", "unsigned_host"}, keepSigning},
+	"run.ceiling.reassert":                       {[]string{"dropped_injection_hosts"}, keepEgress},
+	"run.component.attach":                       {[]string{"hosts"}, keepEgress},
 	"run.create": {[]string{"inline_policy", "policy_overlay", "spec"},
 		"a boolean, the overlay's key names, and the starting spec recorded with each mount source already <redacted>"},
 	"run.drive.mount":                {[]string{"object"}, keepObject},

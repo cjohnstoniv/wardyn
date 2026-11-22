@@ -319,31 +319,130 @@ func auditEmittedKeys(t *testing.T) map[string][]string {
 		}
 	}
 	out := map[string][]string{}
+	record := func(a string, keys []string) {
+		for _, k := range keys {
+			if !slices.Contains(out[a], k) {
+				out[a] = append(out[a], k)
+			}
+		}
+	}
 	for _, fn := range src.decls {
 		if fn.Body == nil {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			args, data, ok := auditEmitParts(n)
+			if !ok {
+				return true
+			}
+			keys := src.keysOf(fn, data, 0)
+			for _, a := range src.actionsOf(fn, args) {
+				record(a, keys)
+			}
+			for a, extra := range src.passedActions(fn, args) {
+				record(a, append(slices.Clone(keys), extra...))
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// auditEmitParts is an emit's action arguments and its data: an auditEvent or recordMaintenanceAudit call's
+// arguments and last one, or a types.AuditEvent literal's Action and Data (a row with a fixed id and time).
+func auditEmitParts(n ast.Node) ([]ast.Expr, ast.Expr, bool) {
+	switch n := n.(type) {
+	case *ast.CallExpr:
+		if len(n.Args) > 0 && isAuditEmit(n) {
+			return n.Args, n.Args[len(n.Args)-1], true
+		}
+	case *ast.CompositeLit:
+		if sel, ok := n.Type.(*ast.SelectorExpr); !ok || sel.Sel.Name != "AuditEvent" || !isIdent(sel.X, "types") {
+			return nil, nil, false
+		}
+		var action, data ast.Expr
+		for _, el := range n.Elts {
+			kv, ok := el.(*ast.KeyValueExpr)
+			switch {
+			case ok && isIdent(kv.Key, "Action"):
+				action = kv.Value
+			case ok && isIdent(kv.Key, "Data"):
+				data = kv.Value
+			}
+		}
+		if action != nil && data != nil {
+			return []ast.Expr{action}, data, true
+		}
+	}
+	return nil, nil, false
+}
+
+// passedActions is, for an emit whose action is a parameter of fn, each auditHostViews action a call of fn
+// passes in it, with the keys of every argument fn ranges over into its data (a helper's caller-supplied fields).
+func (src auditEmitSource) passedActions(fn *ast.FuncDecl, args []ast.Expr) map[string][]string {
+	var params []string
+	for _, f := range fn.Type.Params.List {
+		for _, pn := range f.Names {
+			params = append(params, pn.Name)
+		}
+	}
+	paramAt := func(e ast.Expr) int {
+		if id, ok := e.(*ast.Ident); ok {
+			return slices.Index(params, id.Name)
+		}
+		return -1
+	}
+	var at, ranged []int
+	for _, a := range args {
+		if i := paramAt(a); i >= 0 {
+			at = append(at, i)
+		}
+	}
+	if len(at) == 0 {
+		return nil
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if r, ok := n.(*ast.RangeStmt); ok {
+			if i := paramAt(r.X); i >= 0 {
+				ranged = append(ranged, i)
+			}
+		}
+		return true
+	})
+	out := map[string][]string{}
+	for _, caller := range src.decls {
+		if caller.Body == nil {
+			continue
+		}
+		ast.Inspect(caller.Body, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) == 0 || !isAuditEmit(call) {
+			if !ok || len(call.Args) != len(params) || auditCalleeName(call) != fn.Name.Name {
 				return true
 			}
-			actions := src.actionsOf(fn, call.Args)
-			if len(actions) == 0 {
-				return true
-			}
-			keys := src.keysOf(fn, call.Args[len(call.Args)-1], 0)
-			for _, a := range actions {
-				for _, k := range keys {
-					if !slices.Contains(out[a], k) {
-						out[a] = append(out[a], k)
+			for _, i := range at {
+				for _, a := range src.actionsOf(caller, call.Args[i:i+1]) {
+					keys := out[a]
+					for _, r := range ranged {
+						keys = append(keys, src.keysOf(caller, call.Args[r], 1)...)
 					}
+					out[a] = keys
 				}
 			}
 			return true
 		})
 	}
 	return out
+}
+
+// auditCalleeName is the name a call calls: a method's or a plain function's.
+func auditCalleeName(call *ast.CallExpr) string {
+	switch f := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	case *ast.Ident:
+		return f.Name
+	}
+	return ""
 }
 
 func isAuditEmit(call *ast.CallExpr) bool {
