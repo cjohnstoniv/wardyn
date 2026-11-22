@@ -412,8 +412,8 @@ func TestPortalReactivate_PG(t *testing.T) {
 func TestPortalReactivate_PreSuspensionTokenStaysRefused_PG(t *testing.T) {
 	l := newPortalLife(t)
 	principal, _ := l.signIn(t, "u1")
-	old := l.person("u1", "")
-	old.IssuedAt = time.Now()
+	// The exact claims the sign-in exchange accepted, issued before the suspension below.
+	old := l.ver.subj
 	time.Sleep(50 * time.Millisecond)
 	if w := l.post(t, l.admin, principal, "suspend", ""); w.Code != http.StatusOK {
 		t.Fatalf("suspend = %d %s", w.Code, w.Body.String())
