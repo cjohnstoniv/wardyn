@@ -56,6 +56,9 @@ var (
 	errAttachBackgroundOnly = errors.New(runBackgroundOnlyMsg("interactive exec"))
 	// errAttachTimedOut: Runner.Attach did not return within attachPrepareTimeout.
 	errAttachTimedOut = errors.New("attach timed out")
+	// errAttachReopen: the holder's role or promotions changed while its exec was opening (settleOpened);
+	// establishExec opens again and never returns it.
+	errAttachReopen = errors.New("attach role changed while opening")
 	// errAttachUncovered: a promotion's new exec was refused because the run's
 	// masking corpus can no longer be proven whole (mask_manifest.go).
 	errAttachUncovered = errors.New("run masking state unavailable")
@@ -273,11 +276,19 @@ func (s *Server) attachOptionsFor(runID uuid.UUID, h *attachHolder, writer bool)
 // returned), and the loop opens again only if the role changed. A replacement
 // exec also re-proves the run's masking corpus whole. Each Attach is a start under
 // the run's start lock (startFresh), on the run as it stands there.
+//
+// An issuer portal's ticket check covers the socket's first opening in the role
+// it was registered in, and nothing else. Every other opening, and a writer's
+// readiness after any promotion, waits on the socket's own check (h.recheck), run
+// here after the role and its promotion count were read; a check that does not
+// pass cuts the socket and opens nothing. Each Attach starts before its check's
+// start plus uiDispatchFresh (attachDispatchBy for the ticket's).
 func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attachHolder) error {
 	if backgroundOnlyRefusal(run, "interactive exec") != nil {
 		return errAttachBackgroundOnly
 	}
 	runID := run.ID
+	ticketBy, gated := h.openingGate(ctx)
 	h.openMu.Lock()
 	defer h.openMu.Unlock()
 	for {
@@ -285,17 +296,32 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 			return errAttachCancelled
 		}
 		writer := h.writable.Load()
-		if h.execOpened && h.execWriter == writer {
-			h.ready.setReadyIf(func() bool { return h.writable.Load() == writer })
+		gen := h.promotions.Load() // after the role: a promotion counts before it hands over the slot
+		current := func() bool { return h.holds(writer, gated, gen) }
+		if h.execFits(writer, gated, gen) {
+			h.ready.setReadyIf(current)
 			return nil
 		}
 		if h.execOpened && !s.maskCovered(ctx, runID) {
 			return errAttachUncovered
 		}
+		by, err := h.openingBy(ctx, ticketBy, gated, gen)
+		if err != nil {
+			return err
+		}
 		opts := s.attachOptionsFor(runID, h, writer)
 
+		// No Runner.Attach is started at or after the dispatch time, and its timer fires at the earlier of the
+		// two bounds.
+		if gated && !time.Now().Before(by) {
+			return errAttachTimedOut
+		}
 		actx, acancel := context.WithCancel(ctx)
-		timer := time.AfterFunc(s.attachPrepareEvery(), acancel)
+		every := s.attachPrepareEvery()
+		if gated {
+			actx, every = runner.WithStartCutoff(actx, by), min(every, time.Until(by))
+		}
+		timer := time.AfterFunc(every, acancel)
 		sess, err := startFresh(s, actx, runID, attachLiveRunWords, s.attachPrepareEvery(),
 			func(ctx context.Context, run types.AgentRun) (runner.Session, error) {
 				return s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
@@ -309,19 +335,13 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 			}
 			return err
 		}
-		switch {
-		case !inTime:
+		if err := settleOpened(ctx, h, inTime, gated, by, current); err != nil {
 			_ = sess.Close()
 			acancel()
-			return errAttachTimedOut
-		case ctx.Err() != nil || h.evicted.Load():
-			_ = sess.Close()
-			acancel()
-			return errAttachCancelled
-		case h.writable.Load() != writer:
-			_ = sess.Close() // promoted while attaching: open again in the new role
-			acancel()
-			continue
+			if errors.Is(err, errAttachReopen) {
+				continue // promoted while attaching: open again in the new role, under its own check
+			}
+			return err
 		}
 		old, ok := h.mux.install(sess, opts.Cols, opts.Rows)
 		if !ok {
@@ -335,8 +355,10 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 		if h.execCancel != nil {
 			h.execCancel()
 		}
-		h.execCancel, h.execOpened, h.execWriter = acancel, true, writer
-		if !writer {
+		h.execCancel, h.execOpened, h.execWriter, h.execGen = acancel, true, writer, gen
+		if writer {
+			h.writerGen.Store(gen + 1) // before ready: the drain delivers as soon as it is
+		} else {
 			// An observer opened at the writer's size of a moment ago; re-apply the
 			// live one so a resize that landed meanwhile is not missed.
 			if w := s.attachHolderFor(runID); w != nil && w != h {
@@ -347,7 +369,7 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 				}
 			}
 		}
-		h.ready.setReadyIf(func() bool { return h.writable.Load() == writer })
+		h.ready.setReadyIf(current)
 		if writer {
 			// A newly installed writer sets the window: carry its size to the
 			// observers still queued, as a window-change would. A promoted SSH
@@ -356,6 +378,35 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 		}
 		return nil
 	}
+}
+
+// settleOpened is whether a session Attach returned may be installed: errAttachTimedOut when Attach outlived its
+// timer or (gated) the dispatch time, errAttachCancelled when ctx ended or h was evicted, errAttachReopen when h's
+// role or promotions changed while it attached (current), else nil.
+func settleOpened(ctx context.Context, h *attachHolder, inTime, gated bool, by time.Time, current func() bool) error {
+	switch {
+	case !inTime:
+		return errAttachTimedOut
+	case ctx.Err() != nil || h.evicted.Load():
+		return errAttachCancelled
+	case !current():
+		return errAttachReopen
+	case gated && !time.Now().Before(by): // installed only before the dispatch time, before any frame
+		return errAttachTimedOut
+	}
+	return nil
+}
+
+// holds reports whether h still has the role (writer) an opening was made for and, on an issuer portal's socket
+// (gated), the promotions count (gen) it was checked under.
+func (h *attachHolder) holds(writer, gated bool, gen uint64) bool {
+	return h.writable.Load() == writer && (!gated || h.promotions.Load() == gen)
+}
+
+// execFits reports whether h's exec is already the one its role (writer) and, on an issuer portal's socket
+// (gated), its promotions count (gen) call for. The caller holds openMu.
+func (h *attachHolder) execFits(writer, gated bool, gen uint64) bool {
+	return h.execOpened && h.execWriter == writer && (!gated || h.execGen == gen)
 }
 
 // attachObservers is a snapshot of runID's queued observers, oldest first.
@@ -376,7 +427,7 @@ func (s *Server) attachObservers(runID uuid.UUID) []*attachHolder {
 // its browser grid follows too. A client that was displaced in the meantime
 // fans nothing out.
 func (s *Server) fanoutWriterResize(ctx context.Context, runID uuid.UUID, writer *attachHolder, cols, rows uint16) {
-	if !writer.canWrite() {
+	if !writer.canDeliver() {
 		return
 	}
 	for _, o := range s.attachObservers(runID) {

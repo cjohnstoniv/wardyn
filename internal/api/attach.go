@@ -294,7 +294,13 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// thaw included, runs under what is left of the opening deadline, by design: one that fails or runs out is
 	// the retryable 503, and a thaw the deadline ends leaves the run paused with a settle record for the
 	// pause sweep (resumeRun), so the next try starts from a paused run.
-	if err := s.thawForExec(actx, run, principalType, principal, "presence"); err != nil {
+	tctx, tcancel := attachThawCtx(ctx, actx)
+	defer tcancel()
+	if err := s.thawForExec(tctx, run, principalType, principal, "presence"); err != nil {
+		if attachDispatchPast(ctx) { // a thaw cut at an issuer portal's dispatch time
+			writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
+			return
+		}
 		if !admit.admitBy.IsZero() {
 			refuseIssuerOpeningUnread(actx, w, "thaw", attachUnverifiableMsg, err)
 			return
@@ -373,6 +379,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,
+		recheck:    s.attachPromotionCheck(r, id, cut),
 		notify:     wa.notify,
 		displace:   wa.displace,
 		ping:       c.Ping,

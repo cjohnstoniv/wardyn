@@ -37,6 +37,9 @@ type uiGatewayState struct {
 	uiReassert   map[string]time.Time
 	uiProxyOnce  sync.Once
 	uiProxy      *httputil.ReverseProxy
+	// uiDispatch is the dispatch gate's state: issuer portals' single-use proxy and the slot wait
+	// (uigateway_dispatch.go).
+	uiDispatch uiDispatchState
 	// uiInbound is the inbound arm's token sessions and per-run request buckets (uigateway_inbound.go).
 	uiInbound uiInboundState
 	// uiDesktop caches the desktop sessions their person closed and holds this process's live desktop

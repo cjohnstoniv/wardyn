@@ -169,6 +169,18 @@ func (sess uiSession) backgroundWatch() bool {
 	return sess.Desktop && sess.ViewOnly && sess.App == uiDesktopAppName && sess.Caller == "" && !sess.Inbound
 }
 
+// auditUI writes one ui.* event on the DAEMON-lifetime context, never the
+// request's: ui.close in particular reports the end of the very connection
+// whose context is already cancelled by the time it runs, which is the same
+// trailing-write race the SSH bridges' audits hit (sshgateway_channels.go).
+//
+// These actions are deliberately NOT session.attach: there is no PTY, no
+// holder, and no content capture on this path, and a relay session must never
+// appear in the recording picker as though a recording of it existed.
+func (s *Server) auditUI(runID *uuid.UUID, actorType types.ActorType, principal, action, target, outcome string, data map[string]any) {
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(runID, actorType, principal, action, target, outcome, mustJSON(data)))
+}
+
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
 // portal it was entered through, if any.
 func (s *Server) auditUISession(sess uiSession, action, target, outcome string, data map[string]any) {

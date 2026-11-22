@@ -741,13 +741,18 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now(), gen)
+	// An issuer portal's request starts nothing in the sandbox at or after its dispatch time
+	// (uigateway_dispatch.go): each start below is checked first, and bounded by it.
+	if uiDispatchPast(ctx) {
+		return nil, uiDispatchRefusal(ctx)
+	}
 	// A paused run is thawed before the execs below (run_pause.go).
-	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
-		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")
+	if err := s.uiThaw(ctx, run, sess); err != nil {
+		return nil, err
 	}
 
-	release, ok := s.acquireUIConn(sess.Run)
-	if !ok {
+	release, ok := s.uiDialSlot(ctx, sess.Run)
+	if _, gated := uiDispatchFrom(ctx); !ok && !gated { // a portal dial waited for its slot (uiDialSlot)
 		// An idle pooled connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle
 		// pool could refuse another app of the same run. Close the idle pool once and retry. The trade-off:
 		// it drops every run's idle connections, but only when a run hits its cap, and an idle connection
@@ -768,13 +773,18 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		release()
 		return nil, err
 	}
-	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
+	if err := s.uiEnsureAppBy(ctx, run, sess); err != nil {
 		stopSignIn()
 		release()
 		return nil, err
 	}
+	if uiDispatchPast(ctx) {
+		stopSignIn()
+		release()
+		return nil, uiDispatchRefusal(ctx)
+	}
 
-	execSess, err := s.execFresh(ctx, run.ID, uiLiveRunWords, runner.ExecSpec{
+	execSess, err := s.execFresh(uiStartCtx(ctx), run.ID, uiLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, sess.Port),
 	})
 	if err != nil {
@@ -802,7 +812,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	s.auditUISession(sess, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 		map[string]any{"app": sess.App, "port": sess.Port})
 	conn := newExecConn(execSess, run.SandboxRef+":"+strconv.Itoa(sess.Port))
-	return s.recordDesktopConn(run, sess, &uiConn{execConn: conn, closeFn: func() {
+	return s.recordDesktopConn(run, sess, s.uiGate(ctx, &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
 		// Off the closing path, best-effort: a hung audit sink holds this goroutine, never the relay.
@@ -811,7 +821,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 			s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 				map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(closed.Sub(opened).Seconds())})
 		})
-	}}, stopSignIn), nil
+	}}, execSess, sess, fmt.Sprintf("127.0.0.1:%d", sess.Port)), stopSignIn), nil
 }
 
 // on-demand launcher
@@ -978,18 +988,4 @@ func (s *Server) markUIAppReady(key string) {
 		clear(s.uiReady)
 	}
 	s.uiReady[key] = s.cfg.Now()
-}
-
-// audit
-
-// auditUI writes one ui.* event on the DAEMON-lifetime context, never the
-// request's: ui.close in particular reports the end of the very connection
-// whose context is already cancelled by the time it runs, which is the same
-// trailing-write race the SSH bridges' audits hit (sshgateway_channels.go).
-//
-// These actions are deliberately NOT session.attach: there is no PTY, no
-// holder, and no content capture on this path, and a relay session must never
-// appear in the recording picker as though a recording of it existed.
-func (s *Server) auditUI(runID *uuid.UUID, actorType types.ActorType, principal, action, target, outcome string, data map[string]any) {
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(runID, actorType, principal, action, target, outcome, mustJSON(data)))
 }

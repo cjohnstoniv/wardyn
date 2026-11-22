@@ -400,6 +400,10 @@ type ExecSession struct {
 	Resize func(cols, rows uint16) error // no-op returning nil with no TTY
 	Wait   func() (int, error)
 	Close  func() error // tears down ONLY this exec stream — never the sandbox, agent, or any sidecar
+	// Abort stops this exec's input at once, with no I/O on any shared link: no byte written to Stdin
+	// passes to the substrate after Abort returns, and it never waits on a blocked Stdin.Write or on
+	// another stream. Nil: Close already does this.
+	Abort func()
 }
 
 // Sandbox is a handle to a created sandbox.
@@ -440,6 +444,24 @@ type Sandbox struct {
 // is down. It is transient: the caller retries or refuses, and never falls back
 // to another substrate.
 var ErrRunnerOffline = errors.New("runner: the runner is offline")
+
+// ErrStartCutoff is the answer for a start that reached the runner link's writer at or after its
+// start cutoff (WithStartCutoff): nothing was sent, so the runner never saw the start.
+var ErrStartCutoff = errors.New("runner: the start's cutoff passed before it was sent")
+
+type startCutoffKey struct{}
+
+// WithStartCutoff sets the time at or after which a start made under ctx must not leave this process. A
+// substrate whose starts cross a link (a registered runner) checks it at the link's writer.
+func WithStartCutoff(ctx context.Context, by time.Time) context.Context {
+	return context.WithValue(ctx, startCutoffKey{}, by)
+}
+
+// StartCutoff returns the cutoff WithStartCutoff set.
+func StartCutoff(ctx context.Context) (time.Time, bool) {
+	by, ok := ctx.Value(startCutoffKey{}).(time.Time)
+	return by, ok && !by.IsZero()
+}
 
 // ErrPendingOnRunner is the answer for a teardown that was queued as a pending
 // action because the runner's link is down. It is not a failure: the action

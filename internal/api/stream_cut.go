@@ -161,7 +161,8 @@ func (c *streamCut) isEnding() bool {
 	return c.ending
 }
 
-// Cut ends the stream: once, and only while its handler runs. Only the watch calls it.
+// Cut ends the stream: once, and only while its handler runs. The watch calls it, and so does an issuer
+// portal terminal's own check before an opening its ticket's check does not cover (attachPromotionCheck).
 func (c *streamCut) Cut() {
 	c.mu.Lock()
 	if c.cut || !c.live {
