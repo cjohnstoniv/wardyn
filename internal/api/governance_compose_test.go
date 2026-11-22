@@ -377,7 +377,7 @@ func TestCheckOverlayUnitClosesAnOpenBase(t *testing.T) {
 	} {
 		leaf := types.GovernanceUnit{ID: uuid.New(), Name: "locked", ParentID: &base.ID, Overlay: &types.CeilingOverlay{
 			AllowAllEgress: new(false), AllowedDomains: &[]string{tc.entry}}}
-		werr := srv.checkOverlay(leaf, []types.GovernanceUnit{leaf, base})
+		werr := srv.checkOverlay(leaf, []types.GovernanceUnit{leaf, base}, nil)
 		if !tc.refused && werr != nil {
 			t.Errorf("%s: refused %v, want accepted", tc.entry, werr)
 		}

@@ -26,7 +26,7 @@ permissions:
 
 # A new push to a pull request cancels that PR's older run: its result gates
 # nothing once the head moves, but it holds runner slots, which are what this
-# repository's CI queues on (docs/CI.md, "This repository's own CI"). A push
+# repository's CI queues on (docs/REPO-CI.md, "This repository's own CI"). A push
 # keys on its run_id and so shares a group with nothing: a run on main is never
 # cancelled, never queued behind another, and never replaced while pending. A
 # per-branch key would do all three, because GitHub keeps one running and one
@@ -43,7 +43,7 @@ env:
 
 # Every job sets timeout-minutes. Unset, GitHub allows 360, so one hung job holds
 # a runner for six hours. Each value is at least twice the job's measured
-# maximum, with a ten-minute floor (docs/CI.md); raise it with the measurement.
+# maximum, with a ten-minute floor (docs/REPO-CI.md); raise it with the measurement.
 jobs:
   # ── which jobs a change can affect (#932) ─────────────────────────────────
   # Classifies the changed paths once. Six outputs, each 'true' or 'false':
@@ -63,7 +63,7 @@ jobs:
   # a new directory runs every job until someone decides otherwise. The Go
   # suites never skip: dozens of guard tests read the docs, the CHANGELOG,
   # ui/src and the workflows. A docs- or console-only change narrows them to
-  # those guard packages instead (see the go job; docs/CI.md, "Incremental CI").
+  # those guard packages instead (see the go job; docs/REPO-CI.md, "Incremental CI").
   #
   # A job that consumes these outputs must also run when this job FAILED
   # (`!cancelled()`) and compare with != 'false', so a missing output runs the
@@ -144,7 +144,7 @@ jobs:
               Makefile|.github/workflows/ci.yml) ui=true ;;
             esac
             case "$f" in
-              internal/macvm/*|internal/foldersync/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
+              internal/macvm/*|internal/pathutil/*|internal/foldersync/*|internal/runner/member_mount*|internal/runner/member_scan_holders_test.go|internal/vmnet/*|internal/rfbauth/*|cmd/wardyn-macvm/*|internal/vm/guestagent/*|cmd/wardyn-guest-agent/*|cmd/wardyn-runnerd/*|test/conformance/macvm/*|deploy/runner/macos/*|deploy/macos-guest/*|scripts/build-runner-pkg.sh|scripts/check-macvm-selectors.sh|go.mod|go.sum|.github/workflows/ci.yml) macos=true ;;
             esac
             if [ "$class" = backend ]; then
               case "$f" in *_test.go) ;; *) images=true ;; esac
@@ -858,7 +858,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: ''
@@ -1081,7 +1081,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24)@'
@@ -1344,7 +1344,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
@@ -1508,7 +1508,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|busybox:1\.38)@'
@@ -1925,7 +1925,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|golang:[0-9.]+|node:[0-9]+-trixie-slim|busybox:1\.38|hello-world:latest)@'
@@ -2065,7 +2065,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+(-alpine)?|debian:trixie-slim|busybox:latest)@'
@@ -2122,7 +2122,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(hello-world:latest)@'
@@ -2190,7 +2190,7 @@ jobs:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: '/library/(golang:[0-9.]+-alpine|alpine:3\.24|debian:trixie-slim)@'
@@ -2446,7 +2446,7 @@ jobs:
         if: ${{ !cancelled() && steps.sign.outcome == 'success' && steps.agent.outcome == 'success' }}
         run: |
           set -euo pipefail
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for f in "$RUNNER_TEMP/wardyn-macvm" "$RUNNER_TEMP/wardyn-guest-agent" "$RUNNER_TEMP/wardyn-runnerd"; do
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"
             echo "$f: minos $mins"
@@ -2833,7 +2833,7 @@ jobs:
       TRIVY_BUILD_ARGS: ''
     steps: &trivy_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/CI.md)
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
         uses: ./.github/actions/base-image-mirror
         with:
           prime: ${{ env.TRIVY_PRIME }}
@@ -3160,14 +3160,15 @@ jobs:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    # A cold staticcheck ran past 15 min on main (no cache entry), and only a success saves one. 40, was 25: a
-    # train's cold staticcheck was killed at 25 inside `make staticcheck`.
+    # 40 dates from when staticcheck ran here: a cold pass was killed at 25. It now has its own job (below); this
+    # limit was left as it was.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        gate: [govulncheck, staticcheck, licenses, license-headers, gitleaks]
-    steps:
+        # staticcheck runs in the staticcheck job below, one cell per tag set; `gates (staticcheck)` aggregates it.
+        gate: [govulncheck, licenses, license-headers, gitleaks]
+    steps: &gate_steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -3201,15 +3202,16 @@ jobs:
           restore-keys: |
             go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-gates-${{ matrix.gate }}-${{ runner.os }}-
+            go-gates-${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
       # The gate's own `go run tool@version` dependencies, fetched here so a network
       # stall fails fast under this name instead of eating the job timeout. The
       # measured cold fetch of one tool is at most 67 s (licenses); 4 min is 3x, rounded up.
       - name: Fetch gate tools
         timeout-minutes: 4
-        run: scripts/fetch-gate-tools.sh ${{ matrix.gate }}
+        run: scripts/fetch-gate-tools.sh ${{ startsWith(matrix.gate, 'staticcheck') && 'staticcheck' || matrix.gate }}
       # See go-lint: staticcheck's whole-tree pass.
       - name: Add swap for the memory peak
-        if: matrix.gate == 'staticcheck'
+        if: startsWith(matrix.gate, 'staticcheck')
         run: |
           swapon --show
           sudo fallocate -l 8G /swapfile-wardyn
@@ -3234,6 +3236,33 @@ jobs:
             ~/.cache/staticcheck
           key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
+  # staticcheck's three whole-tree passes (tagless, -tags docker, -tags docker,k8s), one runner each: in one job they
+  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's.
+  staticcheck:
+    needs: [changes, diagrams] # diagrams only for the start order: see `changes`
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [staticcheck-tagless, staticcheck-docker, staticcheck-k8s]
+    steps: *gate_steps
+
+  # The required context `gates (staticcheck)`: it passes only when every staticcheck pass did. A failed, cancelled or
+  # skipped pass fails it.
+  gates-staticcheck:
+    name: gates (staticcheck)
+    needs: staticcheck
+    if: ${{ always() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Every staticcheck pass passed
+        env:
+          PASSES: ${{ needs.staticcheck.result }}
+        run: |
+          [ "$PASSES" = success ] || { echo "::error::a staticcheck pass did not pass (result: $PASSES); see the staticcheck (…) checks"; exit 1; }
   # ── supply-chain: DCO sign-off ─────────────────────────────────────────────
   dco:
     runs-on: ubuntu-26.04
@@ -3320,7 +3349,7 @@ jobs:
   #   change; every job not yet finished ends `cancelled`, which branch
   #   protection does not accept, and `build` and `test-pg` (`always()`) still
   #   run after the cancel and fail on the legs' or shards' result, so neither
-  #   reads as passing. docs/CI.md ("Stop a red run early") has
+  #   reads as passing. docs/REPO-CI.md ("Stop a red run early") has
   #   the reasoning and the runs it was read from.
   # - It holds no stored credential. The only token is this workflow's own
   #   GITHUB_TOKEN with `actions: write`, scoped to these jobs, which check out
@@ -3439,8 +3468,8 @@ jobs:
   # A train/* or prep/* pull request merges a whole wave, and a nightly suite has
   # gone red on a train whose pull request CI was green. On those heads
   # train-gate passes only when train-suites (the nightly's candidate scope)
-  # passed. On any other head, and on push, train-suites skips and train-gate
-  # passes at once, so the one name can be required everywhere. A fork's
+  # and mixed-version passed. On any other head, and on push, both skip and
+  # train-gate passes at once, so the one name can be required everywhere. A fork's
   # train/* branch never runs train-suites, so train-gate stays red there.
   #
   # train-suites dispatches the nightly rather than calling it: GitHub checks a
@@ -3488,8 +3517,21 @@ jobs:
           # failed reads in a row (see ci-wait-run.sh).
           ./scripts/ci-wait-run.sh "$id"
 
+  # mixed-version calls the workflow rather than dispatching it: a called
+  # workflow runs from the pull request head, so it works before its file is on
+  # main, which a dispatch does not. It needs only contents: read, so the
+  # caller's token covers it. Same train-head condition as train-suites.
+  mixed-version:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'train/') || startsWith(github.head_ref, 'prep/'))
+    uses: ./.github/workflows/mixed-version.yml
+    permissions:
+      contents: read
+
   train-gate:
-    needs: train-suites
+    needs: [train-suites, mixed-version]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10
@@ -3499,14 +3541,16 @@ jobs:
           EVENT: ${{ github.event_name }}
           HEAD_REF: ${{ github.head_ref }}
           SUITES: ${{ needs.train-suites.result }}
+          MIXED: ${{ needs.mixed-version.result }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             case "$HEAD_REF" in
               train/*|prep/*)
-                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; } ;;
+                [ "$SUITES" = success ] || { echo "::error::train-suites did not pass (result: $SUITES)"; exit 1; }
+                [ "$MIXED" = success ] || { echo "::error::mixed-version did not pass (result: $MIXED)"; exit 1; } ;;
             esac
           fi
-          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES"
+          echo "train-gate: $EVENT ${HEAD_REF:-(no head ref)}, train-suites $SUITES, mixed-version $MIXED"
 
   # ── every flaky e2e test gets an issue ─────────────────────────────────────
   # scripts/run-ui-e2e.sh lists each test that passed only on a retry in
@@ -3609,6 +3653,7 @@ jobs:
       - trivy-agent-novnc-signin
       - notices
       - gates
+      - staticcheck
       - dco
     if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
@@ -3733,7 +3778,7 @@ jobs:
   # created before this run's. A family this run did not save, because its job
   # failed or its entry already existed, keeps its older entry.
   go-cache-prune:
-    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates]
+    needs: [go-modules, go, go-lint, ui-e2e, conformance-k8s, conformance, envbuild-integration, test-pg-shard, notices, gates, staticcheck]
     if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 10

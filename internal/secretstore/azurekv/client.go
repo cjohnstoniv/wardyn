@@ -21,6 +21,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
 	"github.com/cjohnstoniv/wardyn/internal/hoptls"
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/httpkv"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/kek"
@@ -155,7 +156,7 @@ func httpsURL(setting, raw string) (*url.URL, error) {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("%s %q is not an http(s) URL", setting, raw)
 	}
-	if u.Scheme == "http" && !httpkv.Loopback(u.Hostname()) {
+	if u.Scheme == "http" && !loopback.Host(u.Hostname()) {
 		return nil, fmt.Errorf("%s %q is plain http:// to a non-loopback host; use https://", setting, raw)
 	}
 	return u, nil

@@ -201,8 +201,15 @@ type KeptMachineDeleter interface {
 	DeleteKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
 }
 
-// keptMachine acts on one kept machine's folder on this Mac. Its one op is delete, of a machine named
-// by its full id.
+// KeptMachineExpiredDeleter is a KeptMachineDeleter that also runs the expiry-driven delete: it removes the
+// machine only if the Mac's own record, read under the machine's lock, says it has expired. It refuses (a
+// refused reply, nothing removed) when the record's deadline is later or a session holds the machine.
+type KeptMachineExpiredDeleter interface {
+	DeleteExpiredKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
+// keptMachine acts on one kept machine's folder on this Mac. Its ops are delete and delete_expired, of a
+// machine named by its full id.
 func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any, error) {
 	var a runnerwire.KeptMachineArgs
 	if err := runnerwire.Unmarshal(args, &a); err != nil {
@@ -210,7 +217,7 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	}
 	id, err := uuid.Parse(a.ID)
 	switch {
-	case a.Op != runnerwire.KeptMachineOpDelete:
+	case a.Op != runnerwire.KeptMachineOpDelete && a.Op != runnerwire.KeptMachineOpDeleteExpired:
 		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
 	case err != nil || id == uuid.Nil || id.String() != a.ID:
 		return nil, runnerwire.Refuse("kept_machine needs a machine's full id")
@@ -219,7 +226,17 @@ func (d *Dispatcher) keptMachine(ctx context.Context, args json.RawMessage) (any
 	if !ok {
 		return nil, runnerwire.Refuse("this runner keeps no machines")
 	}
-	outcome, err := km.DeleteKeptMachine(ctx, id, a.By)
+	del := km.DeleteKeptMachine
+	// An expiry delete from a control plane of the earlier release is op delete with by expiry: it is the same
+	// request as delete_expired, and runs only the conditional delete.
+	if a.Op == runnerwire.KeptMachineOpDeleteExpired || a.By == runnerwire.KeptMachineByExpiry {
+		ex, ok := d.cfg.Substrate.(KeptMachineExpiredDeleter)
+		if !ok {
+			return nil, runnerwire.Refuse("this runner cannot delete only an expired machine")
+		}
+		del = ex.DeleteExpiredKeptMachine
+	}
+	outcome, err := del(ctx, id, a.By)
 	switch {
 	case err != nil:
 		return nil, err
@@ -346,6 +363,7 @@ type refArgs struct {
 	Ref         string   `json:"ref"`
 	Argv        []string `json:"argv"`
 	AgentExecID string   `json:"agent_exec_id"`
+	Deny        []string `json:"deny"`
 	CfgJSON     []byte   `json:"cfg_json"`
 	Generation  int64    `json:"generation"` // runnerwire.AgentPauseArgs
 	// PolicyGeneration is runnerwire.RefArgs' and ReplaceProxyArgs': the policy generation the call acts for.
@@ -482,6 +500,23 @@ func (d *Dispatcher) dispatchRef(ctx context.Context, method, ref string, a refA
 		return nil, endRef(ctx, sub, ref, a.PolicyGeneration)
 	case runnerwire.MethodFenceProxy:
 		return nil, fenceRef(ctx, sub, ref)
+	case runnerwire.MethodNarrowProxy:
+		n, ok := sub.(runner.ProxyNarrower)
+		if !ok {
+			return nil, runner.ErrNarrowUnsupported
+		}
+		var st runner.ProxyNarrowState
+		var err error
+		if len(a.Deny) == 0 {
+			st, err = n.ProxyNarrowState(ctx, ref)
+		} else {
+			st, err = n.NarrowProxy(ctx, ref, a.Deny)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return runnerwire.NarrowProxyResult{ConfigSHA256: st.ConfigSHA256, BaseSHA256: st.BaseSHA256,
+			LiveDenies: st.LiveDenies, Changed: st.Changed, BaseChecked: st.BaseChecked}, nil
 	case runnerwire.MethodStopProxy:
 		return nil, stopProxyRef(ctx, sub, ref, a.PolicyGeneration)
 	case runnerwire.MethodStart:

@@ -72,10 +72,25 @@ func TestLocalPlacement_GatewayMCPServerRefusedAtEveryDoor(t *testing.T) {
 	}
 }
 
+// localPersonRunnerStore binds a local dispatch fixture's run to a person's runner, the one runner whose
+// refusal says "your own runner" (localRefusalPrefix).
+type localPersonRunnerStore struct {
+	localDispatchStore
+	row types.Runner
+}
+
+func (s localPersonRunnerStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
+	return s.row, nil
+}
+
 // Dispatch stays the backstop: a local spec carrying a run identity route is refused there, and the
 // run's failure hint names the server, not the spec field the audit row keeps.
 func TestLocalDispatchRefusesAGatewayRouteNamingTheServer(t *testing.T) {
 	srv, st, audit, run := localDispatchFixture(t, types.PlacementLocal)
+	id := uuid.New()
+	run.RunnerID = &id
+	st.run = run
+	srv.cfg.Store = localPersonRunnerStore{localDispatchStore: st, row: types.Runner{ID: id, OwnerKind: types.RunnerOwnerPerson, TrustClass: types.RunnerTrustPersonal}}
 	spec := localOrgNetworkSpec(run.ID)
 	spec.ProxyConfig.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "mcp.corp.example", Port: 443, MCPKey: "tools", Audience: "mcp-aud"}}
 	if srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), types.SiteConfig{}, &spec, nil, llmTransport{}, false) {
@@ -108,6 +123,37 @@ func TestLocalPlacement_GatewayBedrockProviderRefusedAtCreate(t *testing.T) {
 		"Remove it from this run, or run this on a remote-hosted runner."
 	if ref == nil || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != want {
 		t.Fatalf("a Bedrock identity provider on a local run = %+v, want %s %q", ref, placement.ReasonPlacementCredential, want)
+	}
+}
+
+// A key or custom_endpoint provider that sends run identity and has a base URL sets both an LLMUpstreams entry and a
+// run identity route. Create refuses the local run on the identity gate, which names the provider, not on the
+// LLMUpstreams gate, whose sentence names nothing (placement/gateway_identity_named_test.go is the unit twin).
+func TestLocalPlacement_GatewayKeyProviderRefusedAtCreate(t *testing.T) {
+	endpoint := testGatewayProvider()
+	key := endpoint
+	key.Kind = types.ModelProviderAnthropicAPIKey
+	for _, p := range []types.ModelProvider{endpoint, key} {
+		t.Run(string(p.Kind), func(t *testing.T) {
+			f := newComponentFixture(t)
+			f.srv.cfg.Store = localPlanTestStore{f.st}
+			f.st.siteConfig = types.SiteConfig{ModelProviders: providerBlock(p)}
+			ctx := utCtx("user", "", nil)
+			if err := f.srv.cfg.Secrets.For(runIdentitySubject(ctx, capSub)).Put(ctx, providerSecretName(p.UID, providerKeyPart), []byte("own-key")); err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(ctx)
+			req := createRunRequest{Placement: placement.Local, Agent: "claude-code", ModelProvider: p.ID}
+			_, ref := f.srv.localPlacementRefusal(r, req, true, nil, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+			want := `The model provider "corp-gw" sends your organisation's run identity, so it runs only on your organisation's remote-hosted runners. ` +
+				"Remove it from this run, or run this on a remote-hosted runner."
+			if ref == nil || ref.status != placement.ReasonPlacementCredential.Status() || ref.body.Reason != string(placement.ReasonPlacementCredential) || ref.body.Error != want {
+				t.Fatalf("a %s identity provider with a base URL on a local run = %+v, want %s %q", p.Kind, ref, placement.ReasonPlacementCredential, want)
+			}
+			if strings.Contains(ref.body.Error, "ProxyConfig.LLMUpstreams") {
+				t.Errorf("the refusal %q is the unnamed LLMUpstreams one", ref.body.Error)
+			}
+		})
 	}
 }
 

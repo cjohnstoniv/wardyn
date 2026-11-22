@@ -13,12 +13,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // data_out is one rule over every path a run's content leaves by (docs/POLICIES.md#data_out). The rule is
-// frozen into the run's policy envelope at create and re-met at the seal; the doors below read it from the
-// envelope, as the desktop rules are read.
+// frozen into the run's policy envelope at create and re-met at the seal. Dispatch keeps it on the run's row
+// too, where audit retention cannot prune it, and the doors below read it from there (runDataOutRule).
 
 const (
 	dataOutKeepsOutputMsg = "This run's data_out rule keeps its content in: only a security admin can read its output."
@@ -45,10 +46,27 @@ func validateDataOut(r types.TransferRule) error {
 // thing. Answering blocked instead would stop an ended run's sandbox and lose its computer folder's changes.
 var errDataOutGenerationUnread = errors.New("the run's current policy generation could not be read")
 
-// runDataOutRule is the run's data_out rule from its policy envelope, "" read as allowed. found is false for a
-// run that recorded no envelope, which carries no rule. A run whose current policy generation's row cannot be
-// read has no rule to give, and is an error wrapping errDataOutGenerationUnread with the generation.
+// runDataOutRule is the run's data_out rule. Its row's rule comes first (agent_runs.data_out, written at
+// dispatch before the run.policy.resolve row and raised by a revive), which audit retention cannot prune. A
+// row with none reads its policy envelope, "" read as allowed: a run from before the column that a previous
+// release dispatched after the upgrade's migration. Such a run whose current policy generation's row cannot be
+// read has no rule to give, and is an error wrapping errDataOutGenerationUnread with the generation; a run
+// with a rule on its row never reads the generation, since a revive raises the row before its generation is
+// current, and the migration (0292) leaves a run whose current generation's row is missing NULL so that it
+// reaches the read below. found is false when neither holds a rule. The rule is then allowed, as for a run
+// never dispatched, only at generation 1: dispatch writes the row before any sandbox exists, so no content was
+// kept in. On a store that keeps the column, a run past generation 1 with no envelope and no rule on its row
+// has lost the rows that said what its revive enforced, and is the same error. A run from before the column
+// that was dispatched but whose policy rows retention had pruned gets its row set to blocked by the migration
+// (0292), so it never reaches this answer.
 func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule types.TransferRule, found bool, err error) {
+	stored, keeps, err := s.storedRunDataOut(ctx, runID)
+	if err != nil {
+		return types.TransferAllowed, false, err
+	}
+	if stored != nil {
+		return *stored, true, nil
+	}
 	envelope, _, found, unread, err := s.runEffectivePolicyGen(ctx, runID)
 	if err != nil {
 		return types.TransferAllowed, false, err
@@ -57,10 +75,49 @@ func (s *Server) runDataOutRule(ctx context.Context, runID uuid.UUID) (rule type
 		return types.TransferAllowed, false, fmt.Errorf("%w (generation %d)", errDataOutGenerationUnread, unread)
 	}
 	if !found {
-		// A run with no recorded policy (its audit rows were pruned) carries no rule; refusing it would close output and replay on every pruned run.
+		if keeps {
+			if gs, ok := s.cfg.Store.(store.RunPolicyGenerations); ok {
+				st, _, err := gs.RunPolicyState(ctx, runID)
+				if err != nil {
+					return types.TransferAllowed, false, err
+				}
+				if gen := st.CurrentGeneration(); gen >= 2 {
+					return types.TransferAllowed, false, fmt.Errorf("%w (generation %d)", errDataOutGenerationUnread, gen)
+				}
+			}
+		}
 		return types.TransferAllowed, false, nil
 	}
 	return envelope.DataOut.DataOut(), true, nil
+}
+
+// dataOutUnrecorded is the rule a revive or an in-place edit carries for a run whose row and audit log both
+// hold none on a store that keeps the column (reviveCarryRecordedRules). Such a run has a sandbox, so it was
+// dispatched, but by a previous release that kept no row, and retention has since pruned its policy rows: its
+// rule is unknown, so the new generation keeps its content in rather than open what the run may have kept.
+const dataOutUnrecorded = types.TransferBlocked
+
+// storedRunDataOut is the rule the run's row keeps, nil when it keeps none, and whether the store keeps the
+// column at all (store.RunDataOuts).
+func (s *Server) storedRunDataOut(ctx context.Context, runID uuid.UUID) (rule *types.TransferRule, keeps bool, err error) {
+	if _, ok := s.cfg.Store.(store.RunDataOuts); !ok {
+		return nil, false, nil
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return nil, true, err
+	}
+	return run.DataOut, true, nil
+}
+
+// raiseRunDataOut stores rule on the run's row, or keeps the stricter rule it holds (store.RunDataOuts). A
+// store without the column has nothing to write.
+func (s *Server) raiseRunDataOut(ctx context.Context, runID uuid.UUID, rule types.TransferRule) error {
+	st, ok := s.cfg.Store.(store.RunDataOuts)
+	if !ok {
+		return nil
+	}
+	return st.RaiseRunDataOut(ctx, runID, rule)
 }
 
 // auditDataOutDenied records one path a run's data_out rule kept content in on.

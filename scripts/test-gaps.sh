@@ -48,13 +48,13 @@
 #   pg:    test/reports/go/pg/coverage-func.txt       (written by `make test-report-pg`), or, when only
 #          the shards ran, the per-function best of every test/reports/go/pg*/coverage-func.txt (`make
 #          test-report-pg-api` / `-store`, local only: ci.yml's shards run with coverage off)
-#   out:   docs/TEST-GAPS.md
+#   out:   test/reports/go/TEST-GAPS.md   (gitignored)
 #
 # Refresh:
 #   make cover-check        # regenerate the union profile (both shipped builds)
 #   make test-report-pg     # optional (needs WARDYN_TEST_PG): refresh the PG cross-check
 #                           # (or the shard targets test-report-pg-api / test-report-pg-store)
-#   ./scripts/test-gaps.sh  # regenerate docs/TEST-GAPS.md
+#   ./scripts/test-gaps.sh  # regenerate test/reports/go/TEST-GAPS.md
 set -euo pipefail
 
 MODULE="github.com/cjohnstoniv/wardyn/"
@@ -313,7 +313,7 @@ if [ "${1:-}" = "--self-test" ]; then self_test; exit 0; fi
 UNION="${1:-test/reports/go/union/coverage-func.txt}"
 PG="${2:-test/reports/go/pg/coverage-func.txt}"
 PG_LABEL="$PG"
-OUT="${3:-docs/TEST-GAPS.md}"
+OUT="${3:-test/reports/go/TEST-GAPS.md}"
 
 if [ ! -f "$UNION" ]; then
   echo "test-gaps: union coverage profile not found: $UNION" >&2

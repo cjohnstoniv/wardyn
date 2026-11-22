@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/spf13/cobra"
 )
 
@@ -127,8 +128,8 @@ func setupProxyRelayCmd() *cobra.Command {
 // address warns: the default ("0.0.0.0") and a bare hostname both land here,
 // and the fail-safe direction for an exposure warning is to print it.
 func relayExposureWarning(listenAddr string) string {
-	host := strings.TrimSpace(listenAddr)
-	if strings.EqualFold(host, "localhost") || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()) {
+	host := strings.ToLower(strings.TrimSpace(listenAddr))
+	if loopback.Host(host) {
 		return ""
 	}
 	return "WARNING: this relay is unauthenticated and is bound to " + listenAddr +

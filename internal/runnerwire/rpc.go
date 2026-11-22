@@ -92,10 +92,25 @@ const (
 	// MethodFenceProxy cuts a contained run's agent off every network it is attached to (RefArgs, an empty
 	// reply). Sent only to a runner whose caps carry ProxyFence.
 	MethodFenceProxy = "fence_proxy"
+	// MethodNarrowProxy adds hosts to a Kubernetes sandbox's proxy deny list in place (NarrowProxyArgs, answered with
+	// NarrowProxyResult); an empty Deny reads the list. Sent only to a runner whose caps carry ProxyNarrow.
+	MethodNarrowProxy = "narrow_proxy"
 )
 
-// KeptMachineOpDelete is kept_machine's one op.
-const KeptMachineOpDelete = "delete"
+// kept_machine's ops. KeptMachineOpDelete removes a machine whatever its deadline says: a person's or an
+// operator's decision. KeptMachineOpDeleteExpired is the organisation's expiry-driven delete: under the machine's
+// lock the Mac reads its own record and removes the folder only if the deadline there has passed with no
+// session holding the machine, else it refuses and removes nothing. A runner that predates it refuses the
+// op as unknown, which is why the organisation sends it only to a runner whose caps carry
+// MacVMCaps.KeptConditionalDelete.
+const (
+	KeptMachineOpDelete        = "delete"
+	KeptMachineOpDeleteExpired = "delete_expired"
+)
+
+// KeptMachineByExpiry is the By of a delete the organisation starts because the machine's deadline has
+// passed; it is sent with KeptMachineOpDeleteExpired. Every other By is a person's or an operator's decision.
+const KeptMachineByExpiry = "expiry"
 
 // KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
 // erasure, expiry or a revoked runner.
@@ -355,6 +370,22 @@ type ReplaceProxyArgs struct {
 // new proxy was handed. A runner that predates it answers nothing, which decodes as an empty hash.
 type ReplaceProxyResult struct {
 	ConfigSHA256 string `json:"config_sha256,omitempty"`
+}
+
+// NarrowProxyArgs is narrow_proxy's input. PolicyGeneration is for the runner's log only: the list only grows.
+type NarrowProxyArgs struct {
+	Ref              string   `json:"ref"`
+	Deny             []string `json:"deny,omitempty"`
+	PolicyGeneration int      `json:"policy_generation,omitempty"`
+}
+
+// NarrowProxyResult is narrow_proxy's answer: runner.ProxyNarrowState on the wire.
+type NarrowProxyResult struct {
+	ConfigSHA256 string   `json:"config_sha256"`
+	BaseSHA256   string   `json:"base_sha256"`
+	LiveDenies   []string `json:"live_denies"`
+	Changed      bool     `json:"changed,omitempty"`
+	BaseChecked  bool     `json:"base_checked,omitempty"`
 }
 
 // SweepArgs is the crash-orphan sweep. A func cannot cross the wire, so it runs

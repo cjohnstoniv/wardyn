@@ -131,6 +131,20 @@ func (s *Server) runnerEndpoint(id uuid.UUID) runnerEndpoint {
 	return ep
 }
 
+// heldRunnerSessions is the runners whose session this replica holds, by the link a
+// probe of their sandboxes goes over (remote.Link.Call answers offline otherwise).
+func (s *Server) heldRunnerSessions() []uuid.UUID {
+	s.runnerStreams.subsMu.Lock()
+	defer s.runnerStreams.subsMu.Unlock()
+	var held []uuid.UUID
+	for id, ep := range s.runnerStreams.subs {
+		if ep.link.Online() {
+			held = append(held, id)
+		}
+	}
+	return held
+}
+
 // runnerOutputAccepted commits a runner run's accepted output end before the
 // runner is told (remote.Options.OutputAccepted).
 func (s *Server) runnerOutputAccepted(ctx context.Context, runID uuid.UUID, accepted int64) error {
@@ -212,6 +226,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			peer := ep.link.ReadyPeer()
 			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
+			go s.releaseLegacyMacDrives(s.cfg.BaseCtx, id, ep.sub, sameSession)
 			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
 		},
 	}, nil

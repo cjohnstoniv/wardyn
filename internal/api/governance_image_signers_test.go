@@ -60,10 +60,11 @@ func TestRequiredImageSignersNoSiteBlockAndUnreadable(t *testing.T) {
 }
 
 // The three doors that write the field call the check: the profile's limits and overlay_limits, and the
-// restriction's limits.
+// restriction's limits. The profile write checks both through unitRequiredSignersRefusal.
 func TestRequiredImageSignersDoorsCallTheCheck(t *testing.T) {
 	for file, want := range map[string][]string{
-		"governance_unit_write.go":         {`requiredImageSignersRefusal(r.Context(), "limits.required_image_signers"`, `requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers"`},
+		"governance_unit_write.go":         {`s.unitRequiredSignersRefusal(r.Context(), req)`},
+		"governance_image_signers.go":      {`requiredImageSignersRefusal(ctx, "limits.required_image_signers", req.Limits.RequiredImageSigners)`, `requiredImageSignersRefusal(ctx, "overlay_limits.required_image_signers", *ol.RequiredImageSigners)`},
 		"governance_restriction_routes.go": {`requiredImageSignersRefusal(r.Context(), "limits.required_image_signers"`},
 	} {
 		src, err := os.ReadFile(file)

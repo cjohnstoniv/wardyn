@@ -620,6 +620,11 @@ func TestRecordWorkspace_Guards(t *testing.T) {
 	if w := do(t, srv, http.MethodPost, url, adminToken, `{"name":"build & test"}`); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("no-runner: code = %d, want 503; body=%s", w.Code, w.Body.String())
 	}
+	// The old task_key alias is gone: decodeStrict refuses it as an unknown key.
+	if w := do(t, srv, http.MethodPost, url, adminToken, `{"task_key":"build & test"}`); w.Code != http.StatusBadRequest ||
+		errorReason(w) != reasonInvalidRequestBody || !strings.Contains(w.Body.String(), "task_key") {
+		t.Errorf("task_key alias: code = %d reason = %q, want 400 %s naming task_key; body=%s", w.Code, errorReason(w), reasonInvalidRequestBody, w.Body.String())
+	}
 	// A confined VERIFY session request parses (503 no-runner, NOT 400) — the
 	// request struct must carry `confined` or DisallowUnknownFields would reject it,
 	// silently breaking the confined-verify path.

@@ -100,7 +100,9 @@ var backgroundDoors = []backgroundDoor{
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
 	// one exception, so the predicate is asked where its ticket is spent: uiEnterCommon.
-	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionStillAuthorized"},
+	// The open session's re-check is uiSessionArms, not uiSessionStillAuthorized: the re-check asks the
+	// portal's arm first (uiSessionAuthority), then every other arm, this predicate among them, in uiSessionArms.
+	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionArms"},
 		Routes: []string{"POST /runs/{id}/apps/{app}/ticket"}, Enforced: true},
 	// The desktop's own display is the novnc app, behind the web application
 	// gateway above. Its routes here are the Files panel, which moves files in and
@@ -115,8 +117,9 @@ var backgroundDoors = []backgroundDoor{
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }
 
-// passiveRunRoutes are the /runs/{id} routes that are not interactive doors: they
-// read, or change the run's lifecycle, and stay available to a background run.
+// passiveRunRoutes are the /runs/{id} routes that are not interactive doors: reads (including recording
+// replay), lifecycle changes (end, title, kill, resume, revive, bring-back), and three writes that open
+// nothing: profile synthesis, the live egress narrowing and a security operator's node record. All stay available to a background run.
 var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}":                     "read the run",
 	"GET /runs/{id}/ado-tokens":          "read",
@@ -146,6 +149,13 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
+
+	// A support helper's doors are the entry points supportMayEnter names (support_entry.go); these five open none.
+	"POST /runs/{id}/support":                 "a super admin asks to help; opens nothing until the owner accepts",
+	"GET /runs/{id}/support":                  "read the run's help request or session; opens nothing",
+	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
+	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
+	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

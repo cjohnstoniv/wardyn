@@ -170,6 +170,9 @@ type SetupFeatures struct {
 	// MacWindow is the site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window
 	// on their Mac. Absent when off or when the site config could not be read, which the console reads as off.
 	MacWindow bool `json:"mac_window,omitempty"`
+	// SupportSessions is WARDYN_SUPPORT_SESSIONS: an admin may ask to help inside someone's run. Absent when off,
+	// so the console shows no Request help button.
+	SupportSessions bool `json:"support_sessions,omitempty"`
 }
 
 func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
@@ -180,6 +183,7 @@ func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
 		MCPLocalServers: envEnabled(envMCPLocalServers),
 		MacOSVMs:        envEnabled(envMacOSVMs),
 		MacWindow:       macWindow,
+		SupportSessions: envEnabled(envSupportSessions),
 	}
 }
 

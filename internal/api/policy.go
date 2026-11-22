@@ -57,8 +57,17 @@ func LoadPolicySpec(path string) (types.RunPolicySpec, error) {
 		return types.RunPolicySpec{}, fmt.Errorf("api: parse policy %s: %w", path, err)
 	}
 	clampStoredFileSize(&spec, "the policy file "+path)
-	if err := validateAuthoredPolicySpec(spec); err != nil {
+	// The file is the default policy, read at boot, and Wardyn never saves it: an
+	// api_key grant it marks requires_approval loads, with a warning, so an
+	// upgrade never stops the daemon.
+	if err := validateAuthoredPolicySpecHolding(spec, spec.EligibleGrants); err != nil {
 		return types.RunPolicySpec{}, fmt.Errorf("api: invalid policy %s: %w", path, err)
+	}
+	for i, g := range spec.EligibleGrants {
+		if g.Kind == types.GrantAPIKey && g.RequiresApproval {
+			slog.Warn("wardynd: an api_key grant in the policy file requires approval; its key is never injected: remove requires_approval from the file, or the grant",
+				"file", path, "grant", fmt.Sprintf("eligible_grants[%d]", i))
+		}
 	}
 	return spec, nil
 }
@@ -90,15 +99,17 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 // file). owner_only_refs is refused there: Wardyn sets it at launch, on a
 // spec the run path then validates with validatePolicySpec.
 func validateAuthoredPolicySpec(spec types.RunPolicySpec) error {
-	if err := validatePolicySpec(spec); err != nil {
+	return validateAuthoredPolicySpecHolding(spec, nil)
+}
+
+// validateAuthoredPolicySpecHolding is validateAuthoredPolicySpec for a spec
+// that may carry grants an earlier write already held, which a write that does
+// not change them leaves alone (see authoredAPIKeyApprovalRefusal).
+func validateAuthoredPolicySpecHolding(spec types.RunPolicySpec, held []types.GrantSpec) error {
+	if err := validateAuthoredSpecBase(spec); err != nil {
 		return err
 	}
-	for i, g := range spec.EligibleGrants {
-		if err := authoredGrantRefusal(fmt.Sprintf("eligible_grants[%d]", i), g); err != nil {
-			return err
-		}
-	}
-	return nil
+	return authoredAPIKeyApprovalRefusal(spec.EligibleGrants, held)
 }
 
 // authoredGrantRefusal refuses what a person never authors on a grant (see validateAuthoredPolicySpec).

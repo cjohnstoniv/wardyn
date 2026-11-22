@@ -39,13 +39,14 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the five /governance/changes routes on the unit-admin tier
+// mountGovernanceChangeRoutes registers the six /governance/changes routes on the unit-admin tier
 // (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
 // per-change approver below decides which those are. The group a mount function receives is decided
 // at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
 func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 	unit.Get("/governance/changes", s.handleListGovernanceChanges)
 	unit.Get("/governance/changes/{id}", s.handleGetGovernanceChange)
+	unit.Get("/governance/changes/{id}/impact", s.handleGetGovernanceChangeImpact)
 	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
 	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
 	unit.Put("/governance/changes/{id}/note", s.handlePutGovernanceChangeNote)
@@ -136,6 +137,9 @@ type govRefusal struct {
 	write func(w http.ResponseWriter, r *http.Request)
 	// why is a short label for the error text.
 	why string
+	// failure, when set, is the class an approval refused this way records on its failure row; an empty
+	// failure records none.
+	failure string
 }
 
 func (e *govRefusal) Error() string { return "governance change refused: " + e.why }
@@ -490,9 +494,9 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit
 // rows that record it: a lapsed change is moved to expired (governance.change.expire), and an approval
-// that failed for a stale target, a change no longer pending or an error is recorded as
-// governance.change.approve with outcome failure and that class, beside a failed bypass row when the
-// admin token spent one.
+// that failed for a stale target, a change no longer pending, an error or a refusal that names a failure
+// class is recorded as governance.change.approve with outcome failure and that class, beside a failed
+// bypass row when the admin token spent one.
 func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, head types.GovernanceChange, approve, bypass bool,
 	actorType types.ActorType, principal string, err error) {
 	ctx := r.Context()
@@ -511,6 +515,9 @@ func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, he
 	var write *unitWriteError
 	switch {
 	case errors.As(err, &refusal):
+		if refusal.failure != "" {
+			failed(refusal.failure)
+		}
 		refusal.write(w, r)
 	case errors.As(err, &notPending):
 		if notPending.Lapsed {

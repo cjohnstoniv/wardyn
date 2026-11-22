@@ -33,7 +33,7 @@ export const DESKTOP_SIGNIN_REASON_LINE: Readonly<Record<string, string>> = {
   desktop_signin_start_failed:
     "The sign-in desktop didn't start. Wardyn resumes the agent, or ends the run if it can't.",
   desktop_signin_end_failed:
-    "Wardyn couldn't finish ending the sign-in: the desktop couldn't be confirmed closed, or the agent couldn't be resumed. The agent stays stopped, and Wardyn retries 3 times, then ends the run.",
+    "Wardyn couldn't finish ending the sign-in. The display or agent's state may be unconfirmed, or the end may not have been recorded. Wardyn retries a failed stop or resume, then tries to end the run after three failed retries. Try ending the sign-in again.",
   desktop_signin_site_invalid: "Enter the site's domain, such as example.com.",
   desktop_signin_share_failed: "That site's login couldn't be shared with the agent. Nothing was shared.",
   desktop_signin_unavailable: "Wardyn couldn't read or save this run's sign-in just now. Try again.",

@@ -95,6 +95,12 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An issuer portal verifies the person's token against its own identity provider and never reaches the
+	// console's sign-in code below (delegation_portal.go).
+	if d.Issuer != "" {
+		s.portalExchange(w, r, d, subjectToken, actorToken, authorizedAt)
+		return
+	}
 	deny := func(status int, code, target, reason string) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, delegateActor(d.ID), "delegation.exchange",
 			target, "denied", mustJSON(map[string]any{"reason": reason})))
@@ -239,11 +245,24 @@ func (s *Server) authenticateDelegate(w http.ResponseWriter, r *http.Request) (t
 		return types.Delegate{}, nil, false
 	}
 	id, secret, ok := r.BasicAuth()
-	if !ok || !strings.HasPrefix(secret, delegateCredentialPrefix) {
+	issuerPortal := strings.HasPrefix(secret, store.PortalCredentialPrefix)
+	if !ok || !(strings.HasPrefix(secret, delegateCredentialPrefix) || issuerPortal) {
 		s.auditAuthFailedAs(r, delegationAuthActor, "missing_client_credential")
 		return refuse()
 	}
-	d, err := ds.GetDelegateByRaw(r.Context(), secret)
+	// Each prefix resolves only its own kind of portal: wdp_ a row with no issuer, wdi_ a row with one.
+	var d types.Delegate
+	var err error
+	if issuerPortal {
+		ps, okPS := s.cfg.Store.(store.PortalGrantStore)
+		if !okPS {
+			writeOAuthError(w, http.StatusNotImplemented, "server_error", "issuer portals require the Postgres store backend")
+			return types.Delegate{}, nil, false
+		}
+		d, err = ps.GetIssuerDelegateByRaw(r.Context(), secret)
+	} else {
+		d, err = ds.GetDelegateByRaw(r.Context(), secret)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		s.auditAuthFailedAs(r, delegationAuthActor, "invalid_client_credential")
 		return refuse()

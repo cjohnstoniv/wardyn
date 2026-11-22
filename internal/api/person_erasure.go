@@ -132,11 +132,12 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 	return &erasure.Orchestrator{Steps: steps}
 }
 
-// erasureTokensNotRevoked is the credentials scope's statement, beside tokens_revocation_failed, that an Azure
-// DevOps token it tried to revoke may still work: Azure DevOps refused the revoke for good, and the sign-in a
-// later revoke would need is erased with the rest. A revoke that did not finish erases nothing instead
+// erasureTokensNotRevoked is the statement, beside tokens_revocation_failed, that an Azure DevOps token Wardyn
+// tried to revoke may still work: Azure DevOps refused the revoke for good, and the sign-in a later revoke would
+// need is erased with the rest. It says nothing of whether the credentials are erased, since the same text is on
+// a failure that stopped before they were (the mask fence). A revoke that did not finish erases nothing instead
 // (errADORevokeUnfinished).
-const erasureTokensNotRevoked = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked. A token that was not revoked works until it expires; to end it sooner, revoke it in Azure DevOps."
+const erasureTokensNotRevoked = "Wardyn could not confirm that every token it created for this person's runs was revoked. A token whose revoke failed may still work until it expires; to end it sooner, revoke it in Azure DevOps."
 
 // tokensNotRevokedOf is the two keys a credentials step set before it failed (err is the orchestrator's),
 // so the failure's audit row still says a token may work; nil when the step did not say so.
@@ -769,10 +770,12 @@ func (s *Server) handleErasePerson(w http.ResponseWriter, r *http.Request) {
 // under action, when name is a reserved identity (isReservedPrincipal): the
 // admin token, the local operator, a device or a portal is no person, and the
 // runs, outputs and recordings stamped with it belong to the deployment's
-// automation, not to someone who can ask to be forgotten. It reports whether it
-// answered.
+// automation, not to someone who can ask to be forgotten. A portal person
+// (delegate:person:<k>:<e>) is a person, and the one reserved name erasure
+// accepts, unless the name is the configured local operator's: that seat is
+// protected first, whatever shape it was given. It reports whether it answered.
 func (s *Server) refuseReservedErasure(w http.ResponseWriter, r *http.Request, action, name string) bool {
-	if !s.isReservedPrincipal(name) {
+	if !s.isReservedPrincipal(name) || (isPortalPersonName(name) && !s.isLocalOperatorName(name)) {
 		return false
 	}
 	s.auditOwnerRefusal(r, action, name, reasonReservedPrincipal)

@@ -19,9 +19,10 @@ import { EFFECT_PAST, splitToolRules } from "../policy-tool-rules";
 import { Chip } from "../primitives";
 import { readPATScope } from "../../../lib/git-pat-scope";
 import { asFirstUseMode } from "../../../lib/types";
-import type { ConfinementClass, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
+import type { ConfinementClass, HostRuleSet, RunPolicyHostMarks, RunPolicySpec, ToolRule } from "../../../lib/types";
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
-import { IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { hostRuleLines } from "../../screens/new-run-flow/review/host-rules-lines";
+import { HOST_RULES, IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { pushesLines, toolRulesTail } from "./policy-facts";
 import { WALL_PRESETS } from "../copy/wall-presets";
 
@@ -47,6 +48,8 @@ export interface PolicyFacts {
 type ChipSpec = { label: string; tone: "neutral" | "warning" | "info"; title?: string };
 type Value = {
   text?: string;
+  /** Set in monospace before the text: a host rule line starts with its host. */
+  head?: string;
   mono?: boolean;
   /** A second, quieter line under the value before it. */
   note?: boolean;
@@ -78,6 +81,27 @@ const asBool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
 const asStrings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
 const asBags = (v: unknown) => (Array.isArray(v) && v.every(isBag) ? (v as Bag[]) : undefined);
 const asBag = (v: unknown) => (isBag(v) ? v : undefined);
+const isEffect = (v: unknown) => v === "allow" || v === "deny" || v === "hold";
+const asHostRuleSets = (v: unknown): HostRuleSet[] | undefined =>
+  Array.isArray(v) &&
+  v.every(
+    (s) =>
+      isBag(s) &&
+      Array.isArray(s.rules) &&
+      s.rules.every(
+        (r) =>
+          isBag(r) && !!asString(r.host) && isEffect(r.effect) && (r.methods === undefined || !!asStrings(r.methods)) && (r.paths === undefined || !!asStrings(r.paths)),
+      ),
+  )
+    ? (v as HostRuleSet[])
+    : undefined;
+
+/** The server's key for one rule set (types.HostRuleSetKey): methods and paths sorted and de-duplicated, then Go's JSON, which escapes < > &. */
+export function hostRuleSetKey(set: HostRuleSet): string {
+  const sorted = (a?: string[]) => (a?.length ? [...new Set(a)].sort() : undefined);
+  const rules = set.rules.map((r) => ({ host: r.host, methods: sorted(r.methods), paths: sorted(r.paths), effect: r.effect }));
+  return JSON.stringify({ rules }).replace(/[<>&\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
 
 const ccLabel = (cc: string) => CC_META[cc as ConfinementClass]?.label ?? cc;
 const text = (t: string, extra?: Partial<Value>): Value => ({ text: t, ...extra });
@@ -85,6 +109,7 @@ const mono = (t: string, extra?: Partial<Value>): Value => ({ text: t, mono: tru
 
 const hostChip = (inspected: boolean): ChipSpec =>
   inspected ? { label: SUMMARY.inspected, tone: "info" } : { label: SUMMARY.tunnelOnly, tone: "neutral" };
+const partlyChip: ChipSpec = { label: SUMMARY.partlyInspected, tone: "info" };
 
 export function cpuText(millis?: number): string {
   return millis ? SUMMARY.cpuValue(String(Number((millis / 1000).toFixed(2)))) : SUMMARY.standardLimit;
@@ -189,12 +214,26 @@ function summarize(
     if (hostMarks) meanings.push({ text: SUMMARY.tunnelOnlyAllowAll });
   } else if (allowed || outside.length > 0) {
     const inspected = new Set(hostMarks?.inspected);
-    const hosts = entries(allowed ?? [], "allowed_domains").map((v) =>
-      hostMarks && v.text && v.mark !== "removed" ? { ...v, end: hostChip(inspected.has(v.text)) } : v,
-    );
+    const partial = hostMarks?.partial ?? {};
+    // An entry opened only in part is followed by a quieter line naming the destinations that are opened.
+    const hosts = entries(allowed ?? [], "allowed_domains").flatMap((v): Value[] => {
+      if (!hostMarks || !v.text || v.mark === "removed") return [v];
+      const subset = Object.prototype.hasOwnProperty.call(partial, v.text) ? partial[v.text] : undefined;
+      // A wildcard in an older server's inspected list (it recorded no partial) names hosts the proxy may not
+      // open, so it reads as opened in part, which destinations unknown.
+      const legacyWildcard = hostMarks.partial === undefined && inspected.has(v.text) && v.text.startsWith("*");
+      if (subset || legacyWildcard) {
+        const opened = subset?.length ? [text(SUMMARY.opens(subset.join(", ")), { note: true })] : [];
+        return [{ ...v, end: partlyChip }, ...opened];
+      }
+      return [{ ...v, end: hostChip(inspected.has(v.text)) }];
+    });
     network.push(row(SUMMARY.allowedHosts, hosts.length + outside.length > 0 ? [...hosts, ...outside] : [text(SUMMARY.none)], "allow_all_egress", "allowed_domains"));
     if (hosts.concat(outside).some((v) => v.end?.label === SUMMARY.inspected)) {
       meanings.push({ chip: hostChip(true), text: SUMMARY.inspectedMeaning });
+    }
+    if (hosts.some((v) => v.end?.label === SUMMARY.partlyInspected)) {
+      meanings.push({ chip: partlyChip, text: SUMMARY.partlyInspectedMeaning });
     }
     if (hosts.some((v) => v.end?.label === SUMMARY.tunnelOnly)) {
       meanings.push({ chip: hostChip(false), text: SUMMARY.tunnelOnlyMeaning });
@@ -215,6 +254,31 @@ function summarize(
         ...ipRemoved.map((v) => text(line(v), { mark: "removed" as const })),
       ], "refuse_ip_literals"),
     );
+  }
+  // One line per host the rules name, the same words Review uses. Marks are per rule set on the wire, so the lines before launch
+  // are read from the sets before launch (the current sets less the added ones, plus the removed ones): a line is added when
+  // no line before said the same, and removed when no line now says the same.
+  const hostRules = take("host_rules", asHostRuleSets);
+  const removedSets = (marks?.removed("host_rules") ?? []).flatMap((e) => {
+    try {
+      return asHostRuleSets([JSON.parse(e)]) ?? [];
+    } catch {
+      return [];
+    }
+  });
+  const nowLines = hostRuleLines(hostRules).lines;
+  const wasSets = [...(hostRules ?? []).filter((set) => marks?.of("host_rules", hostRuleSetKey(set)) !== "added"), ...removedSets];
+  const wasLines = hostRuleLines(wasSets).lines;
+  const wasText = new Set(wasLines.map((l) => l.text));
+  const nowText = new Set(nowLines.map((l) => l.text));
+  const ruleValue = (l: { host: string; text: string }, mark?: PolicyMark): Value => ({ head: l.host, text: l.text.slice(l.host.length), mark });
+  const hostRuleValues = [
+    ...nowLines.map((l) => ruleValue(l, wasText.has(l.text) ? undefined : "added")),
+    ...wasLines.filter((l) => !nowText.has(l.text)).map((l) => ruleValue(l, "removed")),
+  ];
+  if (hostRuleValues.length > 0) {
+    network.push(row(HOST_RULES.label, hostRuleValues, "host_rules"));
+    meanings.push({ text: HOST_RULES.meaning }, { text: HOST_RULES.narrows });
   }
   // The wire still accepts the legacy boolean here.
   const firstUse = take("first_use_approval", (v) => (typeof v === "string" || typeof v === "boolean" ? v : undefined));
@@ -445,8 +509,13 @@ export function PolicySummary({
                     <ul className="flex flex-col gap-0.5">
                       {r.values.map((v, i) => (
                         <li key={i} className="flex flex-wrap items-baseline gap-2 text-sm text-foreground [overflow-wrap:anywhere]">
-                          {v.text && (
-                            <span className={v.mono ? "font-mono" : v.note ? "text-xs text-muted-foreground" : undefined}>{v.text}</span>
+                          {v.text && v.head ? (
+                            <span>
+                              <span className="font-mono">{v.head}</span>
+                              {v.text}
+                            </span>
+                          ) : (
+                            v.text && <span className={v.mono ? "font-mono" : v.note ? "text-xs text-muted-foreground" : undefined}>{v.text}</span>
                           )}
                           {v.hidden && <HiddenChip tip={v.hiddenTip} />}
                           {v.chips?.map((c) => (

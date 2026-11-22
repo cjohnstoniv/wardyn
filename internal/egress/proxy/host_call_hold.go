@@ -54,7 +54,7 @@ const (
 
 	hostCallHeldPrefix   = "Wardyn did not send this request: "
 	hostCallWaitingText  = hostCallHeldPrefix + "a host rule holds %s %s on %s until a person decides (approval %s). Send it again once it is approved."
-	hostCallDeclinedText = hostCallHeldPrefix + "a person declined %s %s on %s, so it is refused for the rest of the run."
+	hostCallDeclinedText = hostCallHeldPrefix + "a person declined %s %s on %s, so this proxy refuses it for the rest of the run."
 	hostCallDeclinedOnce = hostCallHeldPrefix + "a person declined %s %s on %s for this request only. Send it again to ask again."
 	hostCallClosedText   = hostCallHeldPrefix + "its approval closed without a decision. Send it again to ask again."
 	hostCallNoAskText    = hostCallHeldPrefix + "Wardyn could not ask a person about it. Send it again to ask again."
@@ -188,7 +188,7 @@ func (p *Proxy) awaitHostCall(r *http.Request, host string, port int, scope type
 	if p.approval == nil {
 		return false, hostCallRefused("this proxy has no way to ask", hostCallNoAskText)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), hostCallWindow*hostCallSecond)
+	ctx, cancel := context.WithTimeout(r.Context(), holdFor(r.Context(), hostCallWindow*hostCallSecond)) // under a via_org engine, what is left of this request's hold time
 	defer cancel()
 	if id != uuid.Nil {
 		// A retry rejoining the pending request: the console reads it as held for this window too.
@@ -217,11 +217,13 @@ func (p *Proxy) askHostCall(ctx context.Context, scope types.HostCallScope) (uui
 	case err != nil:
 		return uuid.Nil, hostCallRefused("the request for an approval could not be raised", hostCallNoAskText)
 	}
-	id := p.hostCalls.install(scope.CallSHA256, got)
-	if id == uuid.Nil {
-		return uuid.Nil, hostCallRefused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
+	if id := p.hostCalls.install(scope.CallSHA256, got); id != uuid.Nil {
+		return id, nil
 	}
-	return id, nil
+	// The raise joined an approval a person decided once before it was filed, and another waiting request
+	// spent it: that answer is this request's too (pollHostCall), so a once no refuses it and a once yes
+	// already taken asks again.
+	return got, nil
 }
 
 // pollHostCall waits on approval id for the scope's key: true once a person approved it for this request.
@@ -248,9 +250,13 @@ func (p *Proxy) pollHostCall(ctx context.Context, r *http.Request, host string, 
 				if p.hostCalls.claim(key, id) {
 					return p.releaseHostCall(r, host, port, id), nil
 				}
-				var refusal *hostHoldAnswer // another waiting request took it: this one asks again
+				lost := id // another waiting request took it: this one asks again
+				var refusal *hostHoldAnswer
 				if id, refusal = p.askHostCall(ctx, scope); refusal != nil {
 					return false, refusal
+				}
+				if id == lost { // the ask named the yes it just lost: asking again would only loop
+					return false, hostCallRefused("the request for an approval named one this proxy cannot wait on", hostCallNoAskText)
 				}
 				continue
 			case ar.State == types.ApprovalDenied && ar.DecisionScope == types.ScopeOnce:

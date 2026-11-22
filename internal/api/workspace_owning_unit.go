@@ -196,7 +196,7 @@ func (s *Server) holdOwningUnit(w http.ResponseWriter, r *http.Request, id uuid.
 		payload: owningUnitChange{WorkspaceID: id, UnitID: unit, Strict: strict},
 		before:  owningUnitState(from, fromStrict), after: owningUnitState(unit, strict),
 		changed:   changed,
-		baseState: owningUnitState(from, fromStrict)})
+		baseState: owningUnitState(from, fromStrict), review: pinReview()})
 }
 
 // samePinUnit reports whether two pins name the same unit (nil: unpinned).

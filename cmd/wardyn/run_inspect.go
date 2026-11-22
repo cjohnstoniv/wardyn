@@ -232,10 +232,14 @@ func runKillCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := client().KillRun(cmd.Context(), id); err != nil {
+			resp, err := client().KillRun(cmd.Context(), id)
+			if err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "kill requested for run %s\n", args[0])
+			if resp.Teardown == "confirming" {
+				fmt.Fprintf(cmd.OutOrStdout(), "Run %s is KILLED; its sandbox is still stopping. Wardyn confirms the stop in the background and records the result in the audit log (run.kill.confirm).\n", args[0])
+			}
 			return nil
 		},
 	}

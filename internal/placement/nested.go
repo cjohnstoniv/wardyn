@@ -37,7 +37,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[proxy.MCPBinding]():           strings.Fields("Harness SHA256 Servers"),
 	reflect.TypeFor[types.LocalModelSettings]():   strings.Fields("Models MaxContext MaxOutput KeepAliveSeconds AllowOnLaptopRunners"),
 	reflect.TypeFor[LocalPlan]():                  strings.Fields("Spec Origins CredentialIntents OrgConfigKeys VerifiedLocalPaths UpstreamProxySecretRef TrustedOutput SelfDefinedComponents LocalSelfDefinedComponents Delivery Posture ConfinementFloor Trust OwnerKind RequireManagedDevice"),
-	reflect.TypeFor[CredentialOrigin]():           strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn"),
+	reflect.TypeFor[CredentialOrigin]():           strings.Fields("Class Delivery GrantKind Stored OwnNamespace OwnerOnly ResidentOptIn ViaOrgOptIn"),
 	reflect.TypeFor[CredentialIntent]():           strings.Fields("Field Origin"),
 	reflect.TypeFor[DeliveryPolicy]():             strings.Fields("Classes ByTrust"),
 	reflect.TypeFor[TrustPolicy]():                strings.Fields("Classes"),

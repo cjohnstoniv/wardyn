@@ -70,6 +70,9 @@ type evictionApprovalStore struct {
 func (s *evictionApprovalStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if a.RequestedAt.IsZero() {
+		a.RequestedAt = time.Now().UTC()
+	}
 	s.rows[a.ID] = a
 	return a, nil
 }

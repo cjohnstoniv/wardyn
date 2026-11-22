@@ -28,6 +28,12 @@ const (
 	CodeFolderPassBusy       Code = "folder_pass_busy"
 	CodeProxyFenced          Code = "proxy_fenced"
 	CodeProxyGenerationNewer Code = "proxy_generation_newer"
+	CodeNarrowUnsupported    Code = "narrow_unsupported"
+	CodeNarrowRefused        Code = "narrow_refused"
+	CodeNarrowNotListening   Code = "narrow_not_listening"
+	CodeNarrowNotSent        Code = "narrow_not_sent"
+	CodeNarrowUncertain      Code = "narrow_uncertain"
+	CodeTeardownConfirming   Code = "teardown_confirming"
 	CodeRefused              Code = "refused"
 	CodeInternal             Code = "internal"
 )
@@ -49,6 +55,14 @@ var codeSentinels = []struct {
 	{CodeFolderPassBusy, runner.ErrFolderPassBusy},
 	{CodeProxyFenced, runner.ErrProxyFenced},
 	{CodeProxyGenerationNewer, runner.ErrProxyGenerationNewer},
+	{CodeNarrowUnsupported, runner.ErrNarrowUnsupported},
+	{CodeNarrowRefused, runner.ErrNarrowRefused},
+	{CodeNarrowNotListening, runner.ErrNarrowNotListening},
+	{CodeNarrowNotSent, runner.ErrNarrowNotSent},
+	{CodeNarrowUncertain, runner.ErrNarrowUncertain},
+	// Last, so a chain that also holds an earlier sentinel keeps that code. An organisation older than this
+	// code reads it as internal (Err), the answer it had before.
+	{CodeTeardownConfirming, runner.ErrTeardownConfirming},
 }
 
 // Valid reports whether c is in the closed list.
@@ -127,6 +141,8 @@ func (e *Error) Err() error {
 // EventRefusal is the organisation's verdict that an EVENT can never be accepted: the same bytes would get the same
 // answer, and the refusal is already recorded durably. The org peer acknowledges the frame and keeps the session;
 // any other error from a checked handler still ends the link, so a transient failure is replayed (DR-0436, #3648).
+// A rate refusal (RefusalRateLimited) is the exception: the frame is dropped, not wrong, and the sender's next full
+// report carries what it held.
 type EventRefusal struct {
 	Code string // one of the Refusal* codes
 	Err  error  // the ingest's own sentinel, for logs
@@ -143,4 +159,5 @@ const (
 	RefusalUnsupportedKind = "unsupported_kind" // a kind this organisation has no ingestion for
 	RefusalStoreRefused    = "store_refused"    // ownership, generation, hash, run state, grant, or a changed repeat
 	RefusalUnknownRun      = "unknown_run"      // the run (or its execution) no longer exists
+	RefusalRateLimited     = "rate_limited"     // past the organisation's rate for this runner; the runner's next full report carries it again
 )

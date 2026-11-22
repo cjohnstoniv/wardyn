@@ -16,6 +16,10 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// approval.Rejoin finds the stamp by a type assertion, so a signature that drifts from the interface would turn
+// every rejoin into a silent no-op instead of a compile error.
+var _ approval.RejoinStamper = store.PG{}
+
 // TestPG_ApprovalRejoinStampsOnlyTheRunsPendingRow: a raise that deduplicates
 // onto a PENDING row stamps last_rejoined_at (0193), which every approvals read
 // carries, so approval.Hold measures the re-entered hold from it. Another run,
@@ -51,14 +55,83 @@ func TestPG_ApprovalRejoinStampsOnlyTheRunsPendingRow(t *testing.T) {
 		run  uuid.UUID
 		kind types.ApprovalKind
 	}{"another run": {uuid.New(), types.ApprovalEgressDomain}, "another kind": {runID, types.ApprovalToolCall}} {
-		if _, ok, err := pg.StampApprovalRejoin(ctx, first.ID, c.run, c.kind, time.Now().UTC()); err != nil || ok {
+		if _, ok, err := pg.StampApprovalRejoin(ctx, first.ID, c.run, c.kind); err != nil || ok {
 			t.Errorf("%s: stamped = %v, %v; want not stamped", name, ok, err)
 		}
 	}
 	if _, err := pg.DecideApproval(ctx, first.ID, types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "u"}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
-	if _, ok, err := pg.StampApprovalRejoin(ctx, first.ID, runID, types.ApprovalEgressDomain, time.Now().UTC()); err != nil || ok {
+	if _, ok, err := pg.StampApprovalRejoin(ctx, first.ID, runID, types.ApprovalEgressDomain); err != nil || ok {
 		t.Errorf("decided row: stamped = %v, %v; want not stamped", ok, err)
+	}
+}
+
+// TestPG_ApprovalRejoinNeverPrecedesRequestedAt: requested_at is the database's clock unless a caller
+// stores an explicit time, and this one stores a time an hour ahead of now(). The rejoin stamp is the
+// database's clock, floored at requested_at, so it never orders before the row it rejoins.
+func TestPG_ApprovalRejoinNeverPrecedesRequestedAt(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runID := uuid.New()
+	if _, err := pg.CreateRun(ctx, types.AgentRun{
+		ID: runID, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CreatedBy: "test-user",
+		Agent: "claude-code", Repo: "test/repo", Task: "t", ConfinementClass: types.CC2, State: types.RunPending,
+		SPIFFEID: "spiffe://test/agent-run/" + runID.String(), RunnerTarget: "docker",
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	ahead := time.Now().UTC().Add(time.Hour)
+	row, err := pg.CreateApproval(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedAt: ahead,
+		RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`)})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	got, ok, err := pg.StampApprovalRejoin(ctx, row.ID, runID, types.ApprovalEgressDomain)
+	if err != nil || !ok || got.LastRejoinedAt == nil {
+		t.Fatalf("stamp: %+v, %v, %v; want the row stamped", got, ok, err)
+	}
+	if got.LastRejoinedAt.Before(row.RequestedAt) {
+		t.Fatalf("last_rejoined_at %v is before requested_at %v", got.LastRejoinedAt, row.RequestedAt)
+	}
+}
+
+// TestPG_ApprovalRaiseAndRejoinShareTheDatabaseClock: a raise with a zero RequestedAt is stamped by the
+// database, as the rejoin is, so the rejoin is strictly after the raise whatever the replicas' clocks say.
+func TestPG_ApprovalRaiseAndRejoinShareTheDatabaseClock(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	runID := uuid.New()
+	if _, err := pg.CreateRun(ctx, types.AgentRun{
+		ID: runID, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), CreatedBy: "test-user",
+		Agent: "claude-code", Repo: "test/repo", Task: "t", ConfinementClass: types.CC2, State: types.RunPending,
+		SPIFFEID: "spiffe://test/agent-run/" + runID.String(), RunnerTarget: "docker",
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	row, err := pg.CreateApproval(ctx, types.ApprovalRequest{ID: uuid.New(), RunID: runID, Kind: types.ApprovalEgressDomain,
+		State: types.ApprovalPending, RequestedScope: json.RawMessage(`{"host":"pkg.example.com","mode":"wait_for_review"}`)})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	if _, ok, err := pg.StampApprovalRejoin(ctx, row.ID, runID, types.ApprovalEgressDomain); err != nil || !ok {
+		t.Fatalf("stamp: %v, %v; want the row stamped", ok, err)
+	}
+	got, err := pg.GetApproval(ctx, row.ID)
+	if err != nil || got.LastRejoinedAt == nil {
+		t.Fatalf("read back: %+v, %v; want last_rejoined_at set", got, err)
+	}
+	if !got.LastRejoinedAt.After(got.RequestedAt) {
+		t.Errorf("last_rejoined_at %v is not after requested_at %v", got.LastRejoinedAt, got.RequestedAt)
+	}
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatalf("db now: %v", err)
+	}
+	if d := dbNow.Sub(got.RequestedAt); d < 0 || d > 5*time.Second {
+		t.Errorf("requested_at %v is %v before the database's now() %v; want it stamped by the database just now", got.RequestedAt, d, dbNow)
 	}
 }

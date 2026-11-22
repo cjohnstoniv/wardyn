@@ -1,7 +1,7 @@
 # Docker Hub images CI pulls by digest, copied byte-for-byte to
 # ghcr.io/cjohnstoniv/base-images by .github/workflows/mirror-base-images.yml and
 # served back to CI under their docker.io names by
-# .github/actions/base-image-mirror (docs/CI.md, "Docker Hub base-image mirror").
+# .github/actions/base-image-mirror (docs/REPO-CI.md, "Docker Hub base-image mirror").
 #
 # scripts/test-repo-guards.sh (guard 17) fails when a Dockerfile FROM pin on
 # docker.io is missing here, so a Dependabot base-image bump goes red until this
@@ -42,7 +42,7 @@ docker.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3
 #                      which still asks a registry: drop it once primed)
 #   registry:2         scripts/kind-sso-walk.sh (docker run)
 #   postgres:16        Makefile helm-install-test, pulled INSIDE kind: copied,
-#                      but only useful once a step `kind load`s it (docs/CI.md)
+#                      but only useful once a step `kind load`s it (docs/REPO-CI.md)
 tag docker.io/library/busybox:latest@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
 tag docker.io/library/hello-world:latest@sha256:11a3eb1597e864c51b3f56733cb2e8a90bf0c284bfc05f9444d81c558bc848aa
 tag docker.io/library/postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d

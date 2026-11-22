@@ -56,7 +56,7 @@ func newPendingReasonApproval(t *testing.T, host string, poll types.ApprovalStat
 	ap.mu.Lock()
 	defer ap.mu.Unlock()
 	if poll != "" {
-		ap.hosts[approvalHostKey(host)] = &hostApproval{state: apPending, approvalID: uuid.New(), lastPoll: time.Now().Add(-2 * pollInterval)}
+		ap.hosts[approvalHostKey(host)] = &hostApproval{state: apPending, approvalID: uuid.New(), lastPoll: time.Now().Add(-2 * pendingPollFloor)}
 	}
 	for i := 0; capped && len(ap.hosts) < maxApprovalHosts; i++ {
 		ap.hosts[fmt.Sprintf("h%d.test", i)] = &hostApproval{state: apApproved}

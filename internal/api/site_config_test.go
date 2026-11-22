@@ -1,13 +1,6 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//lint:file-ignore SA1019 TestHandlePutSiteConfig_LegacyArtifactOverridesFold and
-// TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects read
-// the deprecated SiteConfig.ArtifactOverrides to prove the request-decode fold
-// (foldLegacyArtifactOverrides) round-trips it correctly — see
-// internal/api/site_config.go's own file-scope ignore for why the field still
-// exists.
-
 package api
 
 import (
@@ -500,94 +493,22 @@ func TestHandlePutSiteConfig_ReportsDanglingSecretRefs(t *testing.T) {
 	}
 }
 
-// TestHandlePutSiteConfig_LegacyArtifactOverridesFold is the fold-compat proof
-// for Task 3: a body saved before EgressRedirects existed (still keyed by the
-// deprecated artifact_overrides) must keep applying — folded into
-// EgressRedirects with the correct per-ecosystem From URL, never persisted back
-// in the old shape.
-func TestHandlePutSiteConfig_LegacyArtifactOverridesFold(t *testing.T) {
-	fake := &fakeSiteConfigStore{}
-	srv, _ := newSiteConfigHarness(t, fake)
-
-	body := `{"artifact_overrides": {
-		"npm": {"base_url": "https://artifactory.corp/api/npm/npm-remote/", "token_secret_ref": "npm-token"},
-		"go":  {"base_url": "https://artifactory.corp/api/go/go-remote"}
-	}}`
-	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
-	if w.Code != http.StatusOK {
-		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	var got types.SiteConfig
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got.ArtifactOverrides) != 0 {
-		t.Errorf("ArtifactOverrides = %+v, want empty (folded, never persisted in the old shape)", got.ArtifactOverrides)
-	}
-	if len(got.EgressRedirects) != 2 {
-		t.Fatalf("EgressRedirects = %+v, want 2 folded entries", got.EgressRedirects)
-	}
-	// Sorted by ecosystem key (go < npm) -- see foldLegacyArtifactOverrides.
-	if got.EgressRedirects[0].Ecosystem != "go" || got.EgressRedirects[0].From != "https://proxy.golang.org" ||
-		got.EgressRedirects[0].To != "https://artifactory.corp/api/go/go-remote" || got.EgressRedirects[0].TokenSecretRef != "" {
-		t.Errorf("EgressRedirects[0] = %+v, want the folded go entry", got.EgressRedirects[0])
-	}
-	if got.EgressRedirects[1].Ecosystem != "npm" || got.EgressRedirects[1].From != "https://registry.npmjs.org/" ||
-		got.EgressRedirects[1].To != "https://artifactory.corp/api/npm/npm-remote/" || got.EgressRedirects[1].TokenSecretRef != "npm-token" {
-		t.Errorf("EgressRedirects[1] = %+v, want the folded npm entry", got.EgressRedirects[1])
-	}
-	// The STORE must never see the legacy field either — only the fold's output.
-	if fake.putSeen == nil || len(fake.putSeen.ArtifactOverrides) != 0 {
-		t.Errorf("store received ArtifactOverrides = %+v, want empty (fold must clear it before persisting)", fake.putSeen)
-	}
-}
-
-// TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects: a
-// body that sets BOTH the deprecated and the current field is ambiguous (which
-// one is authoritative?) and must 400 rather than silently pick one.
-func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *testing.T) {
+// TestHandlePutSiteConfig_RefusesArtifactOverrides: artifact_overrides is no
+// longer a SiteConfig field, so decodeStrictKeys refuses it as an unknown field
+// before anything is validated, stored or audited.
+func TestHandlePutSiteConfig_RefusesArtifactOverrides(t *testing.T) {
 	fake := &fakeSiteConfigStore{}
 	srv, audit := newSiteConfigHarness(t, fake)
-	body := `{
-		"artifact_overrides": {"npm": {"base_url": "https://artifactory.corp/npm/"}},
-		"egress_redirects": [{"from": "https://registry.npmjs.org/", "to": "https://artifactory.corp/npm/", "ecosystem": "npm"}]
-	}`
+	body := `{"artifact_overrides": {"npm": {"base_url": "https://artifactory.corp/npm/"}}}`
 	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	if fake.putSeen != nil {
-		t.Errorf("a rejected write must never reach the store, got %+v", fake.putSeen)
+	if !strings.Contains(w.Body.String(), "artifact_overrides") {
+		t.Errorf("body = %s, want it to name artifact_overrides", w.Body.String())
 	}
-	if len(audit.events) != 0 {
-		t.Errorf("a rejected write must not audit, got %d events", len(audit.events))
-	}
-}
-
-// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem: an unknown
-// ecosystem key resolves to ecosystemPublicURL[eco] == "", which the fold
-// must not emit as an EgressRedirect with From="" — validateSiteConfig's next
-// pass would then 400 it as `egress_redirects[0]: invalid from ""`, never
-// naming the actual offending artifact_overrides key, and never reaching the
-// "unknown ecosystem" message that exists for exactly this case two guards
-// further down (it validates EgressRedirects, which by then never carries the
-// raw legacy key). The fold itself must refuse it, naming
-// `artifact_overrides.<key>`.
-func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.T) {
-	fake := &fakeSiteConfigStore{}
-	srv, audit := newSiteConfigHarness(t, fake)
-
-	body := `{"artifact_overrides": {"rubygems": {"base_url": "https://artifactory.corp/api/gems/gems-remote/"}}}`
-	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
-	}
-	if want := fmt.Sprintf(legacyArtifactOverridesUnknownEcosystemRefusal, "rubygems"); !strings.Contains(w.Body.String(), want) {
-		t.Errorf("body = %s, want it to contain the constant %q", w.Body.String(), want)
-	}
-	// Not the empty-From message a fold that emitted the key would 400 with.
-	if strings.Contains(w.Body.String(), `invalid from ""`) {
-		t.Errorf("body = %s, still surfaces the useless empty-From message instead of naming the key", w.Body.String())
+	if got := errorReason(w); got != reasonSiteConfigRequestInvalid {
+		t.Errorf("reason = %q, want %q", got, reasonSiteConfigRequestInvalid)
 	}
 	if fake.putSeen != nil {
 		t.Errorf("a rejected write must never reach the store, got %+v", fake.putSeen)

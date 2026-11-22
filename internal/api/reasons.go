@@ -302,6 +302,7 @@ const (
 	reasonInvalidIncludeKilledParam = "invalid_include_killed_param" // ?include_killed= is not "", "0", or "1"
 	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
+	reasonInvalidServiceParam       = "invalid_service_param"        // ?service= is present and not "0" or "1"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -337,7 +338,6 @@ const (
 
 	// GET/PUT /site-config.
 	reasonSiteConfigRequestInvalid          = "site_config_request_invalid"            // the PUT body did not decode
-	reasonSiteConfigArtifactOverrideInvalid = "site_config_artifact_override_invalid"  // a legacy artifact-override field fails validation
 	reasonSiteConfigIntegrationsViaOwnRoute = "site_config_integrations_via_own_route" // integrations were named inline instead of through their own endpoints
 	reasonSiteConfigInvalid                 = "site_config_invalid"                    // the submitted config fails one of validateAgentProviders/validateSiteConfig/validateModelProviders/validateDefaultProviders/validateModelProviderImagePrereqs
 	reasonSiteConfigStale                   = "site_config_stale"                      // If-Match does not match the current site-config ETag
@@ -478,8 +478,9 @@ const (
 	reasonAPITokenNameInvalid        = "api_token_name_invalid"         // name exceeds the length cap or has a control character
 	reasonAPITokenTTLInvalid         = "api_token_ttl_invalid"          // ttl_seconds is negative or implausibly large
 
-	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid and cli_session_invalid are one
-	// answer each for every refusal of the token call and of a refresh, so neither is an oracle.
+	// CLI sign-in (cli_sign_in.go, cli_sessions.go). cli_sign_in_invalid is one answer for every refusal of the token
+	// call, and cli_session_invalid one reason and sentence for every refusal of a refresh, so neither is an oracle.
+	// Past a valid device proof a refresh's detail may name a sign-out, a lifetime or an idle end (cliSessionEndDetail).
 	reasonCLISignInRateLimited       = "cli_sign_in_rate_limited"      // too many sign-in attempts or refreshes from this address or for this session
 	reasonCLISignInInvalidRequest    = "cli_sign_in_invalid_request"   // the sign-in request body is malformed
 	reasonCLIPasteSignInOff          = "cli_paste_sign_in_off"         // paste-back sign-in while WARDYN_CLI_PASTE_SIGN_IN is off
@@ -546,6 +547,13 @@ const (
 	reasonDelegateRunInUnderInvalid  = "delegate_run_in_under_invalid" // run_in_under names no existing governance unit
 	reasonPortalUnitScope            = "portal_unit_scope"             // a pinned portal's launch resolved outside its unit
 	reasonPortalUnitUnavailable      = "portal_unit_unavailable"       // the portal's row or the units could not be read (503)
+
+	// Team drives for an issuer portal (user_drives_portal.go, run_drives_portal.go, portal_pin.go).
+	reasonPortalRunScope             = "portal_run_scope"               // the run mounted another portal's drive, so this portal cannot reach it (403)
+	reasonDrivePortalBackend         = "drive_portal_backend"           // a portal's folder needs a drive on docker_volume or k8s_pvc_static (422)
+	reasonDrivePortalSecondPlace     = "drive_portal_second_place"      // a drive with a second place cannot be a portal's folder (422)
+	reasonDrivePortalNotIssuerPortal = "drive_portal_not_issuer_portal" // the portal has no issuer of its own, so it takes no team drive (422)
+	reasonDrivePortalNotLive         = "drive_portal_not_live"          // the portal is unknown or revoked (422)
 
 	// /api/v1/setup/integrations and /api/v1/setup/onboarding.
 	reasonIntegrationInvalid              = "integration_invalid"                // the integration write fails validation
@@ -655,7 +663,7 @@ const (
 	reasonMemberDriveNameTaken         = "member_drive_name_taken"         // a drive the caller can use already has the name
 	reasonMemberDriveInUse             = "member_drive_in_use"             // a live or kept run still holds the drive
 	reasonMemberDriveBusy              = "member_drive_busy"               // another delete of the drive is in flight
-	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the substrate failed; nothing was removed
+	reasonMemberDriveDeleteFailed      = "member_drive_delete_failed"      // the delete could not be confirmed (the drive may be held, or the claim given up before any call)
 	reasonMemberDriveRateLimited       = "member_drive_rate_limited"       // too many creates and deletes in a minute
 	reasonUserDriveMemberOwned         = "user_drive_member_owned"         // an admin drive route named a person's drive
 	reasonKeepWorkFolderDisabled       = "keep_work_folder_disabled"       // member drives or the keep_main_drive switch is off
@@ -806,6 +814,7 @@ const (
 	reasonRunExecInvalid     = "run_exec_invalid"     // command is empty or over 128 KiB, or timeout_sec is outside 1 to 300
 	reasonRunExecUnavailable = "run_exec_unavailable" // the run cannot take a command now: no runner, not running, ended, or paused and not resumed
 	reasonRunExecFailed      = "run_exec_failed"      // the runner could not start the command, or lost it before it ended
+	reasonRunExecOff         = "run_exec_off"         // 409: the operator left exec out of WARDYN_SSH_CHANNELS, so commands are off for the deployment
 	reasonRunExecBusy        = "run_exec_busy"        // 429: the run already holds its most SSH channels and commands at once (WARDYN_SSH_MAX_SESSIONS_PER_RUN)
 	reasonAuditUnavailable   = "audit_unavailable"    // strict audit is on and the change's intent row could not be written first; nothing was changed
 )
@@ -924,4 +933,15 @@ const (
 	reasonModelUsageUnsupported = "model_usage_unsupported"  // 501: this store keeps no model usage
 	reasonModelUsageReadFailed  = "model_usage_read_failed"  // 500: the run's usage rows could not be read
 	reasonModelUsageWriteFailed = "model_usage_write_failed" // 500: a usage record could not be stored; the proxy retries
+)
+
+// Support sessions (support_grant.go, support_entry.go): an admin's request to help inside someone's run.
+const (
+	reasonSupportDisabled      = "support_disabled"        // 409: WARDYN_SUPPORT_SESSIONS is off, so a request or an accept is refused
+	reasonSupportNotAllowed    = "support_not_allowed"     // 403: the caller may not ask for help in a run: not a super admin signed in as a person, or the run's own owner
+	reasonSupportRunIneligible = "support_run_ineligible"  // 409: the run cannot take a helper (not running, lost, operator-owned, a service's, a background task, or local mode)
+	reasonSupportGrantOpen     = "support_grant_open"      // 409: the run already has a request or help session open
+	reasonSupportGrantNotFound = "support_grant_not_found" // 404: no such open help request on this run, or it was already answered, ended or lapsed
+	reasonSupportRequestBad    = "support_request_invalid" // 400: the doors, reason or minutes are not what the route reads
+	reasonSupportUnavailable   = "support_unavailable"     // 503: the support grant store is not available here, or could not be read
 )

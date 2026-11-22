@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ModelProviders is the org's model-provider CONFIGURATION: which credential kinds this deployment
@@ -41,6 +42,10 @@ type ModelProvidersRead struct {
 	// GatewayIdentityBedrockSSO says whether a bedrock_sso provider can send run identity on this install:
 	// true only while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY), which that needs.
 	GatewayIdentityBedrockSSO bool `json:"gateway_identity_bedrock_sso"`
+	// ServiceGrants is each provider's service grant state, by provider id; ServiceGrantCleanups the removed
+	// grants whose secret is still to be deleted. Server facts, not stored and not in the ETag.
+	ServiceGrants        map[string]ServiceGrantStatus `json:"service_grants,omitempty"`
+	ServiceGrantCleanups []ServiceGrantCleanup         `json:"service_grant_cleanups,omitempty"`
 }
 
 // Empty reports whether p carries no provider — the shape a PUT uses to CLEAR the block, normalized back
@@ -178,15 +183,16 @@ const (
 	// OIDCBindingConsole requires the identity token's issuer to be the one the console signs people in
 	// with, and the person it names to be the signed-in one. The default.
 	OIDCBindingConsole = "console"
-	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject and
-	// stores the sign-in under whoever made it. An admin's choice, audited when set.
+	// OIDCBindingNone compares nothing: the capture records the authority's issuer and subject (none with
+	// RequireIDToken false) and stores the sign-in under whoever made it. An admin's choice, audited when set.
 	OIDCBindingNone = "none"
 )
 
 // ProviderOIDC is a custom_endpoint's sign-in: where each person signs in and as which client. PKCE
-// (S256), openid and offline_access are always on and are not settings.
+// (S256) and offline_access are always on and are not settings; openid is on unless RequireIDToken is false.
 type ProviderOIDC struct {
-	// Issuer is required: discovery and the identity token's verification both come from it.
+	// Issuer is required: discovery and, unless RequireIDToken is false, the identity token's verification
+	// both come from it.
 	Issuer string `json:"issuer"`
 	// AuthorizeURL and TokenURL override what discovery names.
 	AuthorizeURL string `json:"authorize_url,omitempty"`
@@ -194,10 +200,81 @@ type ProviderOIDC struct {
 	ClientID     string `json:"client_id"`
 	// ClientSecretRef names an operator secret holding the client's secret; empty is a public client.
 	ClientSecretRef string `json:"client_secret_ref,omitempty"`
-	// Scopes are asked for beside openid and offline_access.
+	// Scopes are asked for beside offline_access and, unless RequireIDToken is false, openid.
 	Scopes []string `json:"scopes"`
 	// IdentityBinding is OIDCBindingConsole (also "") or OIDCBindingNone.
 	IdentityBinding string `json:"identity_binding,omitempty"`
+	// RequireIDToken is whether the sign-in asks for openid and needs a verified identity token. Omitted is
+	// true. False is for an authority that never grants openid, is valid only with OIDCBindingNone, and
+	// stores the sign-in under the signed-in console person with no issuer or subject recorded.
+	RequireIDToken *bool `json:"require_id_token,omitempty"`
+	// ServiceGrant lets the service identities it lists use this row with a token Wardyn gets for the
+	// client itself, while people on the row keep signing in. The store keeps it apart from the provider
+	// rows (store.ServiceGrantDoc); it is attached here on a read and lifted out on a write.
+	ServiceGrant *ProviderServiceGrant `json:"service_grant,omitempty"`
+}
+
+// ProviderServiceGrant is a custom_endpoint row's client-credentials grant for service identities.
+// The client secret is never part of it: it is written through its own route and kept under a name
+// Wardyn derives from the row.
+type ProviderServiceGrant struct {
+	// GrantType is exactly client_credentials.
+	GrantType string `json:"grant_type"`
+	TokenURL  string `json:"token_url"`
+	ClientID  string `json:"client_id"`
+	// Scope is the space-separated scope list sent as one form value; Audience is sent only when set.
+	Scope    string `json:"scope,omitempty"`
+	Audience string `json:"audience,omitempty"`
+	// ClientAuth is client_secret_basic (also "") or client_secret_post.
+	ClientAuth string `json:"client_auth,omitempty"`
+	// ServiceIdentities are the service principals (service:<name>) that may use the grant.
+	ServiceIdentities []string `json:"service_identities"`
+}
+
+// The two client authentication methods of a ProviderServiceGrant.
+const (
+	ServiceGrantClientAuthBasic = "client_secret_basic"
+	ServiceGrantClientAuthPost  = "client_secret_post"
+	ServiceGrantTypeClientCreds = "client_credentials"
+)
+
+// ServiceGrantStatus is one provider's service grant as GET /model-providers shows it: the client, the
+// derived name its secret is kept under, and what each server replica last saw. Never a value.
+type ServiceGrantStatus struct {
+	ClientID        string `json:"client_id"`
+	ClientSecretRef string `json:"client_secret_ref"`
+	// State is ok, failing or not_yet, read from the live replicas' rows with the live digest only.
+	State    string                      `json:"state"`
+	Replicas []ServiceGrantReplicaStatus `json:"replicas"`
+}
+
+// ServiceGrantReplicaStatus is one replica's last outcome for a service grant.
+type ServiceGrantReplicaStatus struct {
+	Host        string     `json:"host"`
+	Live        bool       `json:"live"`
+	State       string     `json:"state"`
+	AttemptedAt time.Time  `json:"attempted_at"`
+	LastOKAt    *time.Time `json:"last_ok_at,omitempty"`
+	ValidUntil  *time.Time `json:"valid_until,omitempty"`
+	Reason      string     `json:"reason,omitempty"`
+	OAuthError  string     `json:"oauth_error,omitempty"`
+	HTTPStatus  int        `json:"http_status,omitempty"`
+	Egress      string     `json:"egress,omitempty"`
+}
+
+// ServiceGrantCleanup is a pending clean-up of a removed grant's secret, listed on GET /model-providers
+// until the record is gone: the retired uid, the provider id it had, why, since when, and the name.
+type ServiceGrantCleanup struct {
+	UID             string    `json:"uid"`
+	ProviderID      string    `json:"provider_id"`
+	Reason          string    `json:"reason"`
+	Since           time.Time `json:"since"`
+	ClientSecretRef string    `json:"client_secret_ref"`
+}
+
+// IDTokenRequired is RequireIDToken with the default filled in: a missing value is true.
+func (o *ProviderOIDC) IDTokenRequired() bool {
+	return o == nil || o.RequireIDToken == nil || *o.RequireIDToken
 }
 
 // Binding is IdentityBinding with the default filled in.

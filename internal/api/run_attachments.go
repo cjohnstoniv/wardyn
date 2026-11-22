@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
@@ -290,7 +291,7 @@ func overlapRefusal(t, self, other, otherPath string) *runRefusal {
 	msg := workspaceOverlapEqualMsg(t, other)
 	switch {
 	case t == otherPath:
-	case pathWithin(t, otherPath):
+	case pathutil.Within(otherPath, t):
 		msg = workspaceOverlapNestedMsg(t, other, otherPath)
 	default:
 		msg = workspaceOverlapNestedMsg(otherPath, self, t)

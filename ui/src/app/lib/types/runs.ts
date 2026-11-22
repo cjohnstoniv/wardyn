@@ -712,7 +712,11 @@ export interface RunPolicyView {
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
 export interface RunPolicyHostMarks {
+  // Entries whose every destination the proxy opens.
   inspected: string[];
+  // An entry the proxy opens only some destinations of (a wildcard, or a host with no port opened on one
+  // port), with those destinations as terminated lists them. The rest it allows passes through unread.
+  partial?: Record<string, string[]>;
   // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
   terminated: string[];
   // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,

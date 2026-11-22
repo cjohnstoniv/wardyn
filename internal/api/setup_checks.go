@@ -518,12 +518,6 @@ func credentialStorageMode(external, keyService string) string {
 // never restored: the document round-trips fine and reads as fully configured,
 // but every credentialed path through it (the upstream proxy, a redirect's
 // token) is dead until the named secret is set.
-//
-// Deliberately does not check the deprecated ArtifactOverrides: sc always
-// comes from Store.GetSiteConfig, and every persisted document has already
-// gone through either the PUT-time fold (foldLegacyArtifactOverrides,
-// site_config.go) or the one-time 0030 migration, so that field is provably
-// always empty by the time it is read back here.
 func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 	// effectiveScmHosts, not ScmHosts: "is anything configured at all" has to
 	// answer yes for an install whose git hosts come from provider rows, and no

@@ -280,7 +280,7 @@ func TestReassignWorkspace_KeepsBinding_RunRefusedNamed(t *testing.T) {
 	if w := do(t, f.srv, http.MethodPost, "/api/v1/workspaces/"+viaDoor.ID.String()+"/reassign", adminToken, ""); w.Code >= http.StatusBadRequest {
 		t.Fatalf("reassign = %d %s", w.Code, w.Body.String())
 	}
-	if _, err := f.srv.reassignWorkspaces(f.ctx, []string{f.rn.Owner}); err != nil {
+	if _, err := f.srv.reassignWorkspaces(f.ctx, f.srv.scimOrigin(), []string{f.rn.Owner}); err != nil {
 		t.Fatalf("scim reassign: %v", err)
 	}
 	for path, id := range map[string]uuid.UUID{viaDoorPath: doorSrc, viaSCIMPath: scimSrc} {
@@ -301,11 +301,11 @@ func TestLeaverPurge_RevokesRunnerKeepsBinding(t *testing.T) {
 	f.srv.cfg.UserMounts = runner.UserMountPolicy{Roots: []string{boundLaptopRoot}}
 	_, srcID := f.seedBoundFolder(t, boundFolder)
 
-	revoked, err := f.srv.revokeLeaverRunners(f.ctx, []string{f.rn.Owner})
+	revoked, err := f.srv.revokeLeaverRunners(f.ctx, f.srv.scimOrigin(), []string{f.rn.Owner})
 	if err != nil || revoked["runners_revoked"] != 1 {
 		t.Fatalf("leaver runners = %v, %v; want the bound runner revoked", revoked, err)
 	}
-	reassigned, err := f.srv.reassignWorkspaces(f.ctx, []string{f.rn.Owner})
+	reassigned, err := f.srv.reassignWorkspaces(f.ctx, f.srv.scimOrigin(), []string{f.rn.Owner})
 	if err != nil || reassigned["workspaces_reassigned"] != 1 {
 		t.Fatalf("leaver workspaces = %v, %v; want the bound workspace handed over", reassigned, err)
 	}

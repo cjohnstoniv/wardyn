@@ -86,7 +86,7 @@ export const ADO_PAT = {
   MEMBER_LAST_TOKEN: (created: string, revoked: string) => `Last token: created ${created}, revoked ${revoked}.`,
   MEMBER_LAST_TOKEN_EXPIRED: (created: string, expired: string) => `Last token: created ${created}, expired ${expired}.`,
   MEMBER_LAST_TOKEN_NOT_REVOKED: (created: string, expires: string) =>
-    `Last token: created ${created}. Wardyn couldn't revoke it, so it works until ${expires}; revoke it in Azure DevOps under Personal access tokens.`,
+    `Last token: created ${created}. Wardyn could not confirm the revoke. The token may still work until ${expires}; revoke it in Azure DevOps under Personal access tokens.`,
   MEMBER_LAST_TOKEN_UNCONFIRMED: (created: string, expires: string) =>
     `Last token: created ${created}. Its revoke isn't confirmed; it stops working by ${expires} at the latest.`,
   MEMBER_DISCONNECT: "Disconnect",
@@ -144,7 +144,7 @@ export const ADO_PAT = {
     renewed: "renewed",
     access_added: "access added",
     expired: "expired",
-    not_revoked: "not revoked",
+    not_revoked: "revoke failed",
     revoke_pending: "revoke not confirmed",
   },
   // The reasons the server writes (ado_run_pats.revoke_reason). "expired" is not
@@ -166,7 +166,7 @@ export const ADO_PAT = {
   RUN_RENEWAL_FAILED: (expires: string) =>
     `Wardyn couldn't renew this run's token, so it stops working at ${expires}. Sign in to Azure DevOps again to keep this run going.`,
   RUN_REVOKE_FAILED: (expires: string) =>
-    `Wardyn couldn't revoke this run's token. It expires at ${expires}; revoke it in Azure DevOps under Personal access tokens.`,
+    `Wardyn could not confirm the revoke of this run's token. It may still work until ${expires}; revoke it in Azure DevOps under Personal access tokens.`,
   RUN_ACCESS_ADDED: (time: string, capability: string) => `Access added ${time}: ${capability} (new token)`,
   APPROVAL_WIDENS: "Approving adds this access to the run's token for the rest of this run, even for a one-time approval.",
 

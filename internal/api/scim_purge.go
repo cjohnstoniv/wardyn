@@ -85,8 +85,11 @@ func (s *Server) handleSCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 // touching anything when it is not. Without it (DELETE) the purge is unconditional and repeatable: a
 // retry finishes the steps that are still pending and writes nothing new once they are all done.
 func (s *Server) purgeIdentity(ctx context.Context, st scimStore, id uuid.UUID, slot string, requireDue bool) (bool, error) {
+	if s.cfg.SCIM == nil {
+		return false, errNoSCIMConfig
+	}
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
-	marked, err := st.MarkIdentityPurged(ctx, id, requireDue)
+	marked, err := st.MarkIdentityPurged(ctx, id, requireDue, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant)
 	if err != nil {
 		return false, err
 	}
@@ -97,6 +100,7 @@ func (s *Server) purgeIdentity(ctx context.Context, st scimStore, id uuid.UUID, 
 }
 
 func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, slot string) error {
+	o := s.scimOrigin()
 	if err := s.suspendIdentity(ctx, st, id, slot); err != nil {
 		return err
 	}
@@ -104,12 +108,21 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 	if err != nil {
 		return err
 	}
-	forms, err := s.deprovisionForms(ctx, st, ident, store.JobKindPurge)
+	// Nothing of a foreign identity is purged: the suspension above already left it alone (suspendStepOne),
+	// and no step below runs for it.
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, id)
+			return nil
+		}
+		return err
+	}
+	forms, err := s.deprovisionForms(ctx, o, st, ident, store.JobKindPurge)
 	if err != nil {
 		return err
 	}
 	if forms.unproved != "" {
-		return s.refuseUnproved(ctx, st, ident, forms.unproved)
+		return s.refuseUnproved(ctx, o, st, ident, forms.unproved)
 	}
 	forms = forms.destructive()
 	isEmail := func(t string) bool {
@@ -129,24 +142,24 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		return err
 	}
 	// The owed rows are durable on the ledger, so a drain that cannot finish never holds the purge's steps.
-	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+	if err := s.drainRefusalAudits(ctx, o, st, ident, store.JobKindPurge, jobs); err != nil {
 		slog.WarnContext(ctx, "api: an owed refusal row was not written and stays owed", slog.String("identity", id.String()), slog.Any("err", err))
 	}
 	steps := []error{
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepWorkspaces}, func() (map[string]int, error) {
-			return s.reassignWorkspaces(ctx, forms.targets)
+			return s.reassignWorkspaces(ctx, o, forms.targets)
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepGrants}, func() (map[string]int, error) {
 			// An address another principal holds keeps its rows: it can be a recycled one, and those are the new holder's.
 			n, err := st.DeleteUserSubjectRows(ctx, id, principals, emails)
 			if err == nil {
-				s.auditLeaverPoolPolicies(ctx, n.Pools)
+				s.auditLeaverPoolPolicies(ctx, o, n.Pools)
 			}
 			return map[string]int{"grants_deleted": int(n.Grants), "assignments_deleted": int(n.Assignments), "email_rows_kept": int(n.Kept),
 				"pools_narrowed": int(n.PoolsNarrowed), "pools_emptied": int(n.PoolsEmptied)}, err
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepRunners}, func() (map[string]int, error) {
-			return s.revokeLeaverRunners(ctx, principals)
+			return s.revokeLeaverRunners(ctx, o, principals)
 		}),
 		s.purgeStep(ctx, st, id, jobs, store.JobKey{Step: jobStepInvites}, func() (map[string]int, error) {
 			return eraseLeaverInvitations(ctx, s.cfg.Store, principals)
@@ -164,7 +177,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 		slog.WarnContext(ctx, "api: a purge step failed and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
-	if err := s.auditPurge(ctx, st, id, forms); err != nil {
+	if err := s.auditPurge(ctx, o, st, id, forms); err != nil {
 		slog.WarnContext(ctx, "api: a purge's audit row was not written and stays pending", slog.String("identity", id.String()), slog.Any("err", err))
 		return fmt.Errorf("%w: %w", errDeprovisionIncomplete, err)
 	}
@@ -175,7 +188,7 @@ func (s *Server) finishPurge(ctx context.Context, st scimStore, id uuid.UUID, sl
 // ledger's audit step, where /scim/status lists it; a retry that finds it there writes no second denied row.
 // A row neither the store nor the audit spool accepted is owed (oweRefusalAudit) until a drain writes it.
 // No retry finishes it, so the refusal says what an admin does instead.
-func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.PrincipalIdentity, c string) error {
+func (s *Server) refuseUnproved(ctx context.Context, o leaverOrigin, st scimStore, ident store.PrincipalIdentity, c string) error {
 	id := ident.ID
 	remedy := "an admin erases what is under that form by subject"
 	if ident.Principal == "" {
@@ -187,12 +200,12 @@ func (s *Server) refuseUnproved(ctx context.Context, st scimStore, ident store.P
 	if err != nil {
 		return err
 	}
-	if err := s.drainRefusalAudits(ctx, st, ident, store.JobKindPurge, jobs); err != nil {
+	if err := s.drainRefusalAudits(ctx, o, st, ident, store.JobKindPurge, jobs); err != nil {
 		return err
 	}
 	var owed error
 	if j, ok := jobByKey(jobs, key.Step, key.Target); (!ok || j.LastError != refused.Error()) &&
-		!s.recordDeprovisionRefusal(ctx, ident, store.JobKindPurge, "denied", reasonOwnerAmbiguous, c) {
+		!s.recordDeprovisionRefusal(ctx, o, ident, store.JobKindPurge, "denied", reasonOwnerAmbiguous, c) {
 		owed = oweRefusalAudit(ctx, st, id, store.JobKindPurge, store.JobKey{Step: store.JobStepRefusalAudit + "denied/" + reasonOwnerAmbiguous, Target: c})
 	}
 	return errors.Join(refused, owed, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, refused))
@@ -253,7 +266,7 @@ func (s *Server) eraseForPurge(ctx context.Context, principal string) (map[strin
 // /runners/{id} does, and every registration token still redeemable for them, as DELETE
 // /runners/tokens/{id} does, then clears the owners as the revoker of any runner and the minter of any
 // token for someone else. A store without runners holds none.
-func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[string]int, error) {
+func (s *Server) revokeLeaverRunners(ctx context.Context, o leaverOrigin, owners []string) (map[string]int, error) {
 	detail := map[string]int{"runners_revoked": 0, "runner_tokens_revoked": 0, "runner_attribution_cleared": 0}
 	st, ok := s.cfg.Store.(store.PG)
 	if !ok {
@@ -269,7 +282,7 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 			if rn.State == types.RunnerRevoked {
 				continue
 			}
-			rev, _, err := s.revokeRunner(ctx, rn.ID, types.ActorSystem, scimActor, "")
+			rev, _, err := s.revokeRunner(ctx, rn.ID, o.actorType, o.actor, "")
 			if rev.Runner.ID != uuid.Nil {
 				detail["runners_revoked"]++
 			}
@@ -289,7 +302,7 @@ func (s *Server) revokeLeaverRunners(ctx context.Context, owners []string) (map[
 			if err != nil {
 				return nil, err
 			}
-			s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, placement.ActionRunnerTokenRevoke, t.ID.String(), "success",
+			s.recordAudit(ctx, s.auditEvent(nil, o.actorType, o.actor, placement.ActionRunnerTokenRevoke, t.ID.String(), "success",
 				mustJSON(map[string]any{"owner": t.Owner, "minted_by": t.MintedBy, "expires_at": t.ExpiresAt})))
 			detail["runner_tokens_revoked"]++
 		}
@@ -350,10 +363,10 @@ func eraseLeaverSponsorships(ctx context.Context, st store.Store, principals []s
 }
 
 // reassignWorkspaces hands every workspace a target owns to the operator, as POST
-// /workspaces/{id}/reassign does, unless WARDYN_SCIM_LEAVER_WORKSPACES is keep.
-func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[string]int, error) {
+// /workspaces/{id}/reassign does, unless the origin keeps them (WARDYN_SCIM_LEAVER_WORKSPACES is keep, for SCIM).
+func (s *Server) reassignWorkspaces(ctx context.Context, o leaverOrigin, targets []string) (map[string]int, error) {
 	n := 0
-	if s.cfg.SCIM != nil && s.cfg.SCIM.KeepWorkspaces {
+	if o.keepWorkspaces {
 		return map[string]int{"workspaces_reassigned": n}, nil
 	}
 	all, err := s.cfg.Store.ListWorkspaces(ctx)
@@ -366,7 +379,7 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 		if ws.OwnedBy == "" || !slices.ContainsFunc(targets, func(t string) bool { return strings.EqualFold(t, ws.OwnedBy) }) {
 			continue
 		}
-		data := map[string]any{"from_owner": ws.OwnedBy, "reason": "scim_purge"}
+		data := map[string]any{"from_owner": ws.OwnedBy, "reason": o.purgeReason}
 		_, err := s.cfg.Store.SetWorkspaceOwner(ctx, ws.ID, "")
 		if errors.Is(err, store.ErrConflict) {
 			// An operator-owned workspace already has this name (names are per owner): an offboarding
@@ -384,7 +397,7 @@ func (s *Server) reassignWorkspaces(ctx context.Context, targets []string) (map[
 			continue
 		}
 		all[i].OwnedBy = ""
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, "workspace.reassign", ws.ID.String(), "success",
+		s.recordAudit(ctx, s.auditEvent(nil, o.actorType, o.actor, "workspace.reassign", ws.ID.String(), "success",
 			mustJSON(data)))
 		n++
 	}
@@ -506,12 +519,13 @@ func memberDrivesOf(drives []types.UserDriveListItem, subjects []string) []types
 
 // auditPurge writes the person.deprovision row of a purge, once, after every other step is done. A
 // failed write leaves the step pending, so the retry writes it.
-func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, forms leaverForms) error {
+func (s *Server) auditPurge(ctx context.Context, o leaverOrigin, st scimStore, id uuid.UUID, forms leaverForms) error {
 	jobs, err := st.ListDeprovisionJobs(ctx, id, store.JobKindPurge)
 	if err != nil {
 		return err
 	}
-	if j, ok := jobByKey(jobs, store.JobStepAuditDeprovision, ""); ok && j.Done {
+	j, found := jobByKey(jobs, store.JobStepAuditDeprovision, "")
+	if found && j.Done {
 		return nil
 	}
 	counts := map[string]int{}
@@ -543,6 +557,12 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 		return err
 	}
 	key := store.JobKey{Step: store.JobStepAuditDeprovision}
+	if o.portal {
+		if !found {
+			return store.ErrSuperseded
+		}
+		key.ID = j.ID
+	}
 	data := map[string]any{
 		"kind": store.JobKindPurge, "credentials_erased": counts["credentials_erased"], "masks_fenced": counts["masks_fenced"], "components_erased": counts["components_erased"],
 		"invitations_deleted": counts["invitations_deleted"], "invitations_cleared": counts["invitations_cleared"], "service_identities_cleared": counts["service_identities_cleared"],
@@ -563,8 +583,15 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 	if counts["tokens_revocation_failed"] > 0 {
 		data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 	}
-	ev := s.auditEvent(nil, types.ActorSystem, scimActor, "person.deprovision", id.String(), "success", mustJSON(data))
-	if err := s.recordAuditStrict(ctx, ev); err != nil {
+	ev := s.auditEvent(nil, o.actorType, o.actor, "person.deprovision", id.String(), "success", mustJSON(data))
+	rctx, err := s.pinStepEvent(ctx, o, st, s.cfg.Now().UTC(), id, store.JobKindPurge, key, &ev)
+	if errors.Is(err, errStepSettled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.recordAuditStepEvent(rctx, o, ev); err != nil {
 		return errors.Join(err, st.FailDeprovisionJob(ctx, id, store.JobKindPurge, key, err))
 	}
 	return st.FinishDeprovisionJob(ctx, id, store.JobKindPurge, key, nil)
@@ -575,13 +602,13 @@ func (s *Server) auditPurge(ctx context.Context, st scimStore, id uuid.UUID, for
 // policy as it now stands and never the subjects taken out: they are the purged person's own names.
 // It is written once the strip has committed, so a crash before it loses the row and the retry,
 // with nothing left to strip, writes none.
-func (s *Server) auditLeaverPoolPolicies(ctx context.Context, pools []types.RunnerPoolUsePolicy) {
+func (s *Server) auditLeaverPoolPolicies(ctx context.Context, o leaverOrigin, pools []types.RunnerPoolUsePolicy) {
 	for _, p := range pools {
 		after := p.Subjects
 		if after == nil {
 			after = []types.RunnerPoolSubject{}
 		}
-		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, scimActor, auditPoolUsePolicySet, p.PoolID.String(), "success",
+		s.recordAudit(ctx, s.auditEvent(nil, o.actorType, o.actor, auditPoolUsePolicySet, p.PoolID.String(), "success",
 			mustJSON(map[string]any{"after": after, "revision": p.Revision, "emptied": len(after) == 0, "cause": "leaver_purge"})))
 	}
 }
@@ -592,11 +619,18 @@ func (s *Server) drainOwedRefusals(ctx context.Context, st scimStore, o store.Pe
 	if err != nil {
 		return err
 	}
+	if err := s.scimAuthority(ident); err != nil {
+		if errors.Is(err, errNotSCIMOwned) {
+			s.warnNotSCIMOwned(ctx, o.IdentityID)
+			return nil
+		}
+		return err
+	}
 	jobs, err := st.ListDeprovisionJobs(ctx, o.IdentityID, o.Kind)
 	if err != nil {
 		return err
 	}
-	return s.drainRefusalAudits(ctx, st, ident, o.Kind, jobs)
+	return s.drainRefusalAudits(ctx, s.scimOrigin(), st, ident, o.Kind, jobs)
 }
 
 // SweepSCIMPurge is one tick of the purge sweeper, run on the elected sweeper leader: it purges every
@@ -611,7 +645,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	ctx = withActor(ctx, types.ActorSystem, scimActor)
 	var errs []error
 	if s.cfg.SCIM.PurgeAfter > 0 {
-		due, err := st.PurgeDueIdentities(ctx, scimSweepBatch)
+		due, err := st.PurgeDueIdentities(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimSweepBatch)
 		errs = append(errs, err)
 		for _, d := range due {
 			// A schedule with no proof that the identity's current deactivation is its own suspension's came
@@ -629,7 +663,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			}
 		}
 	}
-	pending, err := st.PendingLeavers(ctx, scimResumeIdle, scimSweepBatch)
+	pending, err := st.PendingLeavers(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range pending {
 		if p.Purged {
@@ -640,7 +674,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	}
 	// A mover stays active, so their group removals are not leaver work and are resumed on their own. A
 	// group deleted since still has its member's steps finished, with its external id unknown.
-	removals, err := st.PendingGroupRemovals(ctx, scimResumeIdle, scimSweepBatch)
+	removals, err := st.PendingGroupRemovals(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, p := range removals {
 		g, err := st.GetScimGroup(ctx, p.GroupID)
@@ -657,7 +691,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 	// touched is not idle here and their resume is not held by this touch), but the row is owed all the same.
 	// TestSCIMSuspensionWritesAnOwedRefusalRowAfterTheReasonChanges and
 	// TestSCIMGroupRemovalWritesAnOwedRefusalRowAfterTheReasonChanges pin this loop-last order.
-	owed, err := st.PendingRefusalAudits(ctx, scimResumeIdle, scimSweepBatch)
+	owed, err := st.PendingRefusalAudits(ctx, s.cfg.SCIM.Issuer, s.cfg.SCIM.Tenant, scimResumeIdle, scimSweepBatch)
 	errs = append(errs, err)
 	for _, o := range owed {
 		errs = append(errs, s.drainOwedRefusals(ctx, st, o))

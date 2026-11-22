@@ -40,11 +40,15 @@ import { entryErrorMessage, isBackgroundRun, mayEnterRunOrUnknown, sponsorOnlyEn
 import { CodeBlock, Mono } from "../wardyn/code-block";
 import { RUN_CLI, RUN_SSH, UI_APPS_LANE, UI_APPS_LAUNCHER_MISSING_PREFIX } from "../wardyn/copy";
 import { RUN_SYNC } from "../wardyn/copy/runners";
+import { DESKTOP_FILES } from "../wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "../wardyn/operator-context";
+import { useSupportHelperDoors } from "../wardyn/support-helper-context";
+import { ATTACH_TILE_DOORS, SSH_LANE_DOORS, hasAnyDoor, missingDoors } from "../wardyn/support-helper-lanes";
 import { isVMKind } from "../../lib/types/machine-kind";
 import { WidgetCard } from "../wardyn/primitives";
 import { DesktopFilesPanel } from "./run-detail/desktop-files-panel";
 import { UIAppRow } from "./run-detail/ui-app-row";
+import { ClosedDoorsLine, ClosedLane } from "./run-detail/helper-closed-lane";
 import { useRunDataOut } from "./run-detail/use-run-data-out";
 import { cn } from "../ui/utils";
 import { CliLane, GetTheCli } from "./run-detail/get-the-cli";
@@ -60,10 +64,23 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // a run no person owns. Both hooks run unconditionally — `||` on a hook CALL
   // would reorder them. False hides the card (Q1): it has no control that could
   // work, and the pane already says why.
-  const mayAttach = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  const mayEnter = mayEnterRunOrUnknown(run, principal, operator, resolved);
+  // A helper of an open support grant (null for anyone else): they enter through the doors the owner ticked, so the
+  // card draws for them in place of the owner rule, a lane per open door and one sentence for each closed one. The
+  // CLI lane, Manage SSH keys and the owner's controls on a web app are not theirs.
+  const helperDoors = useSupportHelperDoors();
+  const asHelper = !mayEnter && !!helperDoors;
+  const mayAttach = mayEnter || (asHelper && hasAnyDoor(helperDoors, ATTACH_TILE_DOORS));
+  const sshDoorsOpen = !asHelper || hasAnyDoor(helperDoors, SSH_LANE_DOORS);
+  const sshDoorsMissing = asHelper ? missingDoors(helperDoors, SSH_LANE_DOORS) : [];
+  const filesDoor = !asHelper || helperDoors.includes("files");
+  const webAppsDoor = !asHelper || helperDoors.includes("web_apps");
+  // The server puts a declared novnc app behind the desktop door, not web_apps (uiSupportDoor).
+  const desktopDoor = !asHelper || helperDoors.includes("desktop");
+  const appBehindClosedDoor = (a: UIApp) => !desktopDoor && a.name === "novnc";
   const running = run.state === "RUNNING";
   // A service identity's sponsor opens the terminal and apps, never SSH (the server answers it run_owner_only).
-  const sponsorOnly = resolved && sponsorOnlyEntry(run, principal, operator);
+  const sponsorOnly = resolved && !asHelper && sponsorOnlyEntry(run, principal, operator);
 
   const [ssh, setSSH] = React.useState<{
     enabled?: boolean;
@@ -179,11 +196,16 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
     ...(proxy ? [`  ProxyCommand ${proxy}`] : []),
   ].join("\n");
   const hasKeys = keys === null || keys.length > 0;
-  const sshOn = !!ssh?.enabled && !sponsorOnly;
+  // A helper enters another person's run on the gateway's admin override, which refuses a capped key and any key not
+  // stamped admin (sshOverrideRefusal). How old the stamp may be is the server's WARDYN_SSH_ROLE_TTL, which the page
+  // does not have, so a stale stamp is not told apart here.
+  const helperKeysRefused = asHelper && keys !== null && keys.length > 0 && !keys.some((k) => !k.capped && k.role === "admin");
+  const sshBase = !!ssh?.enabled && !sponsorOnly;
+  const sshOn = sshBase && sshDoorsOpen;
   const uiApps: UIApp[] = run.ui_apps ?? [];
   const uiSandboxOn = !!uiSandbox?.enabled;
   // The card's one teal Open button: the first inbound app, else the first.
-  const primaryApp = Math.max(0, uiApps.findIndex((a) => a.inbound));
+  const primaryApp = Math.max(0, uiApps.findIndex((a) => a.inbound && !appBehindClosedDoor(a)));
   // ponytail: "external:" is a bare description-string prefix, not a typed
   // field on AgentRun — cheaper than a labels map for the one consumer this
   // card is. Upgrade to a labels map (or a real field) once a second
@@ -225,7 +247,13 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   // token at whatever else owns the host root). It rides `wardyn login <url>`;
   // the attach command itself carries no prefix.
   const consoleURL = typeof window !== "undefined" ? window.location.origin + basePath() : "";
-  const syncLane = sshOn && run.placement !== "local" && !!run.agent_exec_id;
+  // The non-VM run's Files panel: with a declared UI app once the gateway is on, or, for a run with none, when the run's
+  // rule is review. The two cases were separate renders in the same place and never both true.
+  const filesPanelHere =
+    mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) &&
+    ((uiSandboxOn && uiApps.length > 0) || (dataOut === "review" && uiApps.length === 0));
+  const syncBase = sshBase && run.placement !== "local" && !!run.agent_exec_id;
+  const syncLane = syncBase && filesDoor;
 
   return (
     // The body scrolls, not the tile: the canvas tile clips (overflow-hidden), so
@@ -247,27 +275,32 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         detaching never ends the run.
       </p>
 
-      <CliLane runId={run.id} consoleURL={consoleURL} />
-      <GetTheCli
-        version={cliFacts.version}
-        artifactBase={cliFacts.artifactBase}
-        fingerprints={cliFacts.fingerprints}
-        healthAnswered={healthAnswered}
-        loaded={cliLoaded}
-        onRetry={() => setAttempt((n) => n + 1)}
-      />
+      {!asHelper && (
+        <>
+          <CliLane runId={run.id} consoleURL={consoleURL} />
+          <GetTheCli
+            version={cliFacts.version}
+            artifactBase={cliFacts.artifactBase}
+            fingerprints={cliFacts.fingerprints}
+            healthAnswered={healthAnswered}
+            loaded={cliLoaded}
+            onRetry={() => setAttempt((n) => n + 1)}
+          />
+        </>
+      )}
 
       {!sponsorOnly && (
       <details
         className="group mt-4 border-t border-border pt-3"
-        open={sshOpen ?? (sshOn && keys !== null && keys.length > 0)}
+        open={sshOpen ?? (!sshDoorsOpen || (sshOn && keys !== null && keys.length > 0))}
         onToggle={(e) => setSSHOpen(e.currentTarget.open)}
       >
         <summary className="flex cursor-pointer items-center gap-2">
           <span className="flex-1 text-xs font-medium text-foreground">{RUN_CLI.SSH_TITLE}</span>
           <ChevronDown aria-hidden className="size-3.5 text-muted-foreground transition-transform group-open:rotate-180" />
         </summary>
-        {healthAnswered && !sshOn && (
+        {!sshDoorsOpen && <ClosedDoorsLine doors={sshDoorsMissing} />}
+        {healthAnswered && !sshOn && sshDoorsOpen && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             Off on this deployment. It gives you <Mono className="text-foreground">ssh</Mono>, scp and VS Code
             Remote-SSH straight into the sandbox, keyed to the SSH keys in Settings. An operator turns it on by
@@ -282,11 +315,22 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             The command below is real, but no key is registered to connect with yet.
           </p>
-          <Button asChild size="sm" className="mt-2">
-            <Link to="/account">
-              <KeyRound className="size-3.5" /> Manage SSH keys
-            </Link>
-          </Button>
+          {/* Manage SSH keys leads to the member-mode account page and would end a helper's access: plain words for them. */}
+          {!asHelper && (
+            <Button asChild size="sm" className="mt-2">
+              <Link to="/account">
+                <KeyRound className="size-3.5" /> Manage SSH keys
+              </Link>
+            </Button>
+          )}
+        </div>
+      )}
+
+      {sshOn && helperKeysRefused && (
+        <div className="mb-3 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
+          <p className="text-meta leading-relaxed text-muted-foreground">
+            Your registered SSH keys cannot open this run: the gateway takes only a fresh, uncapped admin key for someone else&apos;s run.
+          </p>
         </div>
       )}
 
@@ -358,11 +402,13 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
       </div>
       )}
 
-      {sshOn && (
+      {sshOn && !asHelper && (
         <Link to="/account" className="mt-3 inline-block text-xs font-medium text-primary hover:underline">
           Manage SSH keys
         </Link>
       )}
+      {/* An open SSH lane that cannot carry every channel keeps its command and names the doors it will refuse. */}
+      {sshOn && sshDoorsMissing.length > 0 && <ClosedDoorsLine doors={sshDoorsMissing} className="mt-3" />}
       </details>
       )}
 
@@ -378,11 +424,14 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
         </div>
       )}
 
+      {syncBase && !filesDoor && <ClosedLane title={RUN_SYNC.LANE_TITLE} doors={["files"]} />}
+
       {/* UI apps lane LAST: the mock's S3 (docs/design/ui-sandboxes-mock/index.html)
           orders the card CLI -> SSH (heading + command) -> UI apps. */}
       <div className="mt-4 border-t border-border pt-3">
         <p className="text-xs font-medium text-foreground">{UI_APPS_LANE.title}</p>
-        {healthAnswered && !uiSandboxOn && (
+        {!webAppsDoor && <ClosedDoorsLine doors={["web_apps"]} />}
+        {webAppsDoor && healthAnswered && !uiSandboxOn && (
           <>
             <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
               {monoTokens(UI_APPS_LANE.off, "WARDYN_UI_SANDBOX_LISTEN")}
@@ -398,17 +447,20 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
             </p>
           </>
         )}
-        {uiSandboxOn && uiApps.length === 0 && (
+        {webAppsDoor && uiSandboxOn && uiApps.length === 0 && (
           <p className="mt-0.5 text-meta leading-relaxed text-muted-foreground">
             {monoTokens(UI_APPS_LANE.noApps, "ui_apps")}
           </p>
         )}
-        {uiSandboxOn && uiApps.length > 0 && (
+        {webAppsDoor && uiSandboxOn && uiApps.length > 0 && (
           <>
             <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
               {UI_APPS_LANE.intro}
             </p>
-            {uiApps.map((app, i) => (
+            {uiApps.map((app, i) =>
+              appBehindClosedDoor(app) ? (
+                <ClosedLane key={app.name} title={app.name} doors={["desktop"]} className="mt-3 border-t border-border pt-3 first-of-type:border-t-0 first-of-type:pt-0" />
+              ) : (
               <UIAppRow
                 key={app.name}
                 runId={run.id}
@@ -417,6 +469,7 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
                 busy={openingApp === app.name}
                 onOpen={() => openApp(app)}
                 facts={uiSandbox}
+                helper={asHelper}
               >
                 {appError?.app === app.name && (
                   <div className="mt-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5">
@@ -438,16 +491,16 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
                   </div>
                 )}
               </UIAppRow>
-            ))}
+              ),
+            )}
             <p className="mt-3 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.newTab}</p>
             <p className="mt-2 text-meta leading-relaxed text-muted-foreground">{UI_APPS_LANE.noRecording}</p>
-            {/* A VM run's Files panel is in its Desktop tile; any other run with a declared UI app keeps it here. */}
-            {mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && <DesktopFilesPanel runId={run.id} />}
           </>
         )}
-        {dataOut === "review" && uiApps.length === 0 && mayAttach && !sponsorOnly && running && !isVMKind(run.machine_kind) && (
-          <DesktopFilesPanel runId={run.id} noDesktop />
-        )}
+        {/* A VM run's Files panel is in its Desktop tile; any other run keeps it here: with a declared UI app, or, under
+            review, as the reviewed way out of a run with none. It rides the files door alone, never web_apps. */}
+        {filesPanelHere && filesDoor && <DesktopFilesPanel runId={run.id} noDesktop={uiApps.length === 0} />}
+        {filesPanelHere && !filesDoor && <ClosedLane title={DESKTOP_FILES.title} doors={["files"]} className="mt-4" />}
       </div>
     </WidgetCard>
   );

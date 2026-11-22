@@ -10,7 +10,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import type { RunPolicySpec } from "../../../lib/types";
 import { SUMMARY } from "../../screens/run-detail/policy-tab-copy";
 import { WALL_PRESETS } from "../copy/wall-presets";
-import { PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
+import { hostRuleSetKey, PolicySummary, specIsRedacted, type PolicyChangeMarks } from "./policy-summary";
 
 // Every key a RunPolicySpec has, each carrying something the Summary shows.
 const FULL = {
@@ -341,7 +341,10 @@ describe("PolicySummary host marks", () => {
   const INSPECTED_MEANING =
     "Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate.";
   const TUNNEL_MEANING =
-    "Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here.";
+    "Wardyn passes this traffic through without reading it. It sees only the host name. Wardyn leaves the TLS connection intact, but a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.";
+  const PARTLY = "Partly inspected";
+  const PARTLY_MEANING =
+    "Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread.";
   const ALLOW_ALL_LINE = "Hosts not listed as Inspected pass through unread.";
   const ALLOW_ALL_TEXT = "Allow-all egress (block-list only)";
   const spec = { allowed_domains: ["artifacts.corp.example", "pypi.org"] } as RunPolicySpec;
@@ -353,8 +356,10 @@ describe("PolicySummary host marks", () => {
     expect(SUMMARY.inspectedMeaning).toBe(INSPECTED_MEANING);
     expect(SUMMARY.tunnelOnlyMeaning).toBe(TUNNEL_MEANING);
     expect(SUMMARY.tunnelOnlyAllowAll).toBe(ALLOW_ALL_LINE);
+    expect(SUMMARY.partlyInspected).toBe(PARTLY);
+    expect(SUMMARY.partlyInspectedMeaning).toBe(PARTLY_MEANING);
     const cli = readFileSync(join(__dirname, "../../../../../../cmd/wardyn/run_policy.go"), "utf8");
-    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE]) expect(cli).toContain(`"${s}"`);
+    for (const s of [INSPECTED, TUNNEL, INSPECTED_MEANING, TUNNEL_MEANING, ALLOW_ALL_LINE, PARTLY, PARTLY_MEANING]) expect(cli).toContain(`"${s}"`);
   });
 
   it("puts each chip on its own host, and one meaning line per mark present", () => {
@@ -365,6 +370,49 @@ describe("PolicySummary host marks", () => {
     expect(within(row("pypi.org")).queryByText(INSPECTED)).toBeNull();
     expect(screen.getByText(INSPECTED_MEANING)).toBeInTheDocument();
     expect(screen.getByText(TUNNEL_MEANING)).toBeInTheDocument();
+  });
+
+  it("marks a wildcard Partly inspected beside a tunneled sibling, and names what is opened", () => {
+    const wild = { allowed_domains: ["*.corp.example", "build.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    render(
+      <PolicySummary
+        spec={wild}
+        hostMarks={{
+          inspected: ["artifacts.corp.example"],
+          partial: { "*.corp.example": ["artifacts.corp.example", "git.corp.example:8443"] },
+          terminated: ["artifacts.corp.example", "git.corp.example:8443"],
+          outside: [],
+        }}
+      />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(screen.getByText("Opens artifacts.corp.example, git.corp.example:8443")).toBeInTheDocument();
+    expect(within(row("build.corp.example")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    for (const s of [PARTLY_MEANING, INSPECTED_MEANING, TUNNEL_MEANING]) expect(screen.getByText(s)).toBeInTheDocument();
+  });
+
+  it("a wildcard in an older server's inspected list is not claimed whole, and a host with a list of none is partial", () => {
+    const old = { allowed_domains: ["*.corp.example", "artifacts.corp.example"] } as RunPolicySpec;
+    const { unmount } = render(
+      <PolicySummary spec={old} hostMarks={{ inspected: ["*.corp.example", "artifacts.corp.example"], terminated: ["artifacts.corp.example"], outside: [] }} />,
+    );
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+    expect(within(row("*.corp.example")).queryByText(INSPECTED)).toBeNull();
+    expect(within(row("artifacts.corp.example")).getByText(INSPECTED)).toBeInTheDocument();
+    expect(screen.queryByText(/^Opens /)).toBeNull(); // which destinations is not known
+    unmount();
+    render(<PolicySummary spec={old} hostMarks={{ inspected: [], partial: { "*.corp.example": [] }, terminated: [], outside: [] }} />);
+    expect(within(row("*.corp.example")).getByText(PARTLY)).toBeInTheDocument();
+  });
+
+  it("a host named like an inherited object key is not read as partial", () => {
+    const keys = { allowed_domains: ["constructor", "toString", "pypi.org"] } as RunPolicySpec;
+    render(<PolicySummary spec={keys} hostMarks={{ inspected: [], partial: { "pypi.org": ["pypi.org:8443"] }, terminated: [], outside: [] }} />);
+    expect(within(row("constructor")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("toString")).getByText(TUNNEL)).toBeInTheDocument();
+    expect(within(row("pypi.org")).getByText(PARTLY)).toBeInTheDocument();
   });
 
   it("explains only the marks present", () => {
@@ -541,5 +589,118 @@ describe("PolicySummary: the wall preset's notes (P-63, P-62b)", () => {
     const pushes = row("Tools and pushes", "Pushes");
     expect(pushes).toHaveTextContent(WALL_PRESETS.PUSH_EVERY_REFUSED);
     expect(pushes).not.toHaveTextContent(WALL_PRESETS.PUSHES_UNSTOPPABLE);
+  });
+});
+
+describe("PolicySummary: the Host rules row", () => {
+  // The board's text (RN-3), written out in full.
+  const MEANING = "A path covers itself and every path under it. A person's answer to a held request stands for that host, method and path for this proxy; a new proxy asks again.";
+  const NARROWS = "Host rules only narrow a host: a request must also pass the rest of the network settings.";
+  const API = { rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/public"] }] };
+  const API_LINE = "api.example.com: allows GET within /public. Any other request is refused.";
+  const withRules = (v: unknown) => ({ ...FULL, host_rules: v }) as unknown as RunPolicySpec;
+
+  it("reads host_rules as a Network row with the host in monospace, never as an Other setting", () => {
+    render(<PolicySummary spec={withRules([API])} />);
+    const r = row("Network", "Host rules");
+    expect(r).toHaveTextContent(API_LINE);
+    expect(within(r).getByText("api.example.com")).toHaveClass("font-mono");
+    expect(screen.queryByText("host_rules")).toBeNull();
+    expect(section("Network")).toHaveTextContent(MEANING);
+    expect(section("Network")).toHaveTextContent(NARROWS);
+  });
+
+  it("lists every host with no cap, in order, and says how two sets naming one host combine", () => {
+    const sets = [
+      { rules: Array.from({ length: 10 }, (_, i) => ({ host: `h${i}.example.com`, effect: "hold", methods: ["POST"] })) },
+      { rules: [{ host: "h0.example.com", effect: "deny", paths: ["/x"] }] },
+    ];
+    render(<PolicySummary spec={withRules(sets)} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items).toHaveLength(10);
+    expect(items[0]).toHaveTextContent("h0.example.com: 2 rule sets name this host. Set 1: holds POST anywhere for a person to decide. Set 2: refuses any method within /x.");
+    expect(items[9]).toHaveTextContent("h9.example.com: holds POST anywhere for a person to decide. Any other request is refused.");
+  });
+
+  it.each([["absent", undefined], ["empty", []]])("shows no row and no meaning lines when host_rules is %s", (_n, v) => {
+    render(<PolicySummary spec={withRules(v)} />);
+    expect(screen.queryByText("Host rules")).toBeNull();
+    expect(screen.queryByText("host_rules")).toBeNull();
+    expect(screen.queryByText(MEANING)).toBeNull();
+    expect(screen.queryByText(NARROWS)).toBeNull();
+  });
+
+  it("a host_rules value of the wrong shape stays raw under Other settings", () => {
+    render(<PolicySummary spec={withRules([{ rules: [{ host: "api.example.com", effect: "permit" }] }])} />);
+    expect(screen.queryByText("Host rules")).toBeNull();
+    expect(screen.getByText("host_rules")).toBeInTheDocument();
+  });
+
+  it("flags a rule set launch added and lists a removed set as a struck line; an unchanged line carries no mark", () => {
+    const REG = { rules: [{ host: "registry.example.com", effect: "allow", methods: ["GET", "HEAD"] }] };
+    const OLD = { rules: [{ host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/downloads"] }] };
+    const now = [API, REG] as never as import("../../../lib/types").HostRuleSet[];
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "host_rules" && entry === hostRuleSetKey(now[1]) ? "added" : undefined),
+      removed: (field) => (field === "host_rules" ? [JSON.stringify(OLD)] : []),
+    };
+    render(<PolicySummary spec={withRules(now)} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent(API_LINE);
+    expect(items[0]).not.toHaveTextContent("at start");
+    expect(items[1]).toHaveTextContent("registry.example.com: allows GET, HEAD anywhere. Any other request is refused.Added at start");
+    expect(items[2]).toHaveTextContent("files.example.com: allows GET within /downloads. Any other request is refused.Removed at start");
+  });
+
+  it("a host whose words did not change in an edited set carries no mark and is not listed again as removed", () => {
+    const FILES = { host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/downloads"] };
+    const REG = { host: "registry.example.com", effect: "allow", methods: ["GET", "HEAD"] };
+    const now = [{ rules: [API.rules[0], REG] }] as never as import("../../../lib/types").HostRuleSet[];
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "host_rules" && entry === hostRuleSetKey(now[0]) ? "added" : undefined),
+      removed: (field) => (field === "host_rules" ? [JSON.stringify({ rules: [API.rules[0], FILES] })] : []),
+    };
+    render(<PolicySummary spec={withRules(now)} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual([
+      API_LINE,
+      "registry.example.com: allows GET, HEAD anywhere. Any other request is refused.Added at start",
+      "files.example.com: allows GET within /downloads. Any other request is refused.Removed at start",
+    ]);
+  });
+
+  it("a host two sets name keeps its line unmarked when only another host changes in one of them", () => {
+    const A = { rules: [{ host: "api.example.com", effect: "allow", methods: ["GET"], paths: ["/v1"] }] };
+    const B = { rules: [{ host: "api.example.com", effect: "allow", methods: ["POST"], paths: ["/v1"] }, { host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/a"] }] };
+    const B2 = { rules: [{ host: "api.example.com", effect: "allow", methods: ["POST"], paths: ["/v1"] }, { host: "files.example.com", effect: "allow", methods: ["GET"], paths: ["/b"] }] };
+    const now = [A, B2] as never as import("../../../lib/types").HostRuleSet[];
+    const marks: PolicyChangeMarks = {
+      of: (field, entry) => (field === "host_rules" && entry === hostRuleSetKey(now[1]) ? "added" : undefined),
+      removed: (field) => (field === "host_rules" ? [JSON.stringify(B)] : []),
+    };
+    render(<PolicySummary spec={withRules(now)} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent("api.example.com: 2 rule sets name this host. Set 1: allows GET within /v1. Set 2: allows POST within /v1.");
+    expect(items[0]).not.toHaveTextContent("at start");
+    expect(items[1]).toHaveTextContent("files.example.com: allows GET within /b. Any other request is refused.Added at start");
+    expect(items[2]).toHaveTextContent("files.example.com: allows GET within /a. Any other request is refused.Removed at start");
+  });
+
+  it("matches the server's set keys written out by hand, not ones this file builds", () => {
+    const REG = { rules: [{ host: "registry.example.com", effect: "allow", methods: ["HEAD", "GET"], paths: ["/z", "/a"] }] };
+    const keys = ['{"rules":[{"host":"api.example.com","methods":["GET"],"paths":["/public"],"effect":"allow"}]}', '{"rules":[{"host":"registry.example.com","methods":["GET","HEAD"],"paths":["/a","/z"],"effect":"allow"}]}'];
+    const marks: PolicyChangeMarks = { of: (field, entry) => (field === "host_rules" && keys.includes(entry) ? "added" : undefined), removed: () => [] };
+    render(<PolicySummary spec={withRules([API, REG])} marks={marks} />);
+    const items = within(row("Network", "Host rules")).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Added at start");
+    expect(items[1]).toHaveTextContent("registry.example.com: allows HEAD, GET within /z, /a. Any other request is refused.Added at start");
+  });
+
+  it("builds the server's set key: methods and paths sorted, empty ones left out, < > & escaped as Go does", () => {
+    expect(hostRuleSetKey({ rules: [{ host: "a.example.com", effect: "allow", methods: ["POST", "GET", "GET"], paths: ["/b&c", "/a"] }, { host: "b.example.com", effect: "deny", methods: [], paths: [] }] })).toBe(
+      '{"rules":[{"host":"a.example.com","methods":["GET","POST"],"paths":["/a","/b\\u0026c"],"effect":"allow"},{"host":"b.example.com","effect":"deny"}]}',
+    );
   });
 });

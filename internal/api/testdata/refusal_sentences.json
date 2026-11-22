@@ -6,6 +6,11 @@
   },
   {
     "reason": "admin_surface",
+    "target": "\"drive.grant.portal\"",
+    "sentence": "portalDriveAllocationAdminMsg"
+  },
+  {
+    "reason": "admin_surface",
     "target": "\"governance.unit.\" + e.field",
     "sentence": "e.sentence"
   },
@@ -285,9 +290,24 @@
     "sentence": "delegationRefusal"
   },
   {
+    "reason": "delegation_scope",
+    "target": "r.URL.Path",
+    "sentence": "delegationRefusal"
+  },
+  {
+    "reason": "drive_not_allocated_to_portal",
+    "target": "\"runs.drive\"",
+    "sentence": "portalDriveNotAllocatedMsg"
+  },
+  {
     "reason": "drive_not_found",
     "target": "\"drives.member.delete\"",
     "sentence": "msg"
+  },
+  {
+    "reason": "drive_not_found",
+    "target": "\"runs.drive\"",
+    "sentence": "(audit only)"
   },
   {
     "reason": "drive_not_found",
@@ -556,6 +576,16 @@
   },
   {
     "reason": "not_owner",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "not_owner",
+    "target": "run.ID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
+    "reason": "not_owner",
     "target": "ws.ID.String()",
     "sentence": "\"workspace not found\""
   },
@@ -608,6 +638,11 @@
     "reason": "second_human_required",
     "target": "id.String()",
     "sentence": "sw + \" is set: a second human must decide this — it is your run's request, so someone else approves or denies it\""
+  },
+  {
+    "reason": "second_human_required",
+    "target": "id.String()",
+    "sentence": "sw + \" is set: a second human must decide this — you are helping in this run, so someone else approves or denies it\""
   },
   {
     "reason": "second_human_required",
@@ -688,6 +723,21 @@
     "reason": "src.reason",
     "target": "\"runs.task_mode\"",
     "sentence": "fmt.Sprintf(\"`task_mode=exec` is not allowed by %s at this run's posture: it permits autonomy level %s (bound by %s), \" + \"and an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.\", src.phrase, level, bound)"
+  },
+  {
+    "reason": "support_door_not_granted",
+    "target": "run.ID.String()",
+    "sentence": "\"the run's owner did not allow this kind of help\" (registry)"
+  },
+  {
+    "reason": "support_grant_ended",
+    "target": "run.ID.String()",
+    "sentence": "\"this help session has ended\" (registry)"
+  },
+  {
+    "reason": "support_helper_decision",
+    "target": "ap.ID.String()",
+    "sentence": "SupportHelperDecisionBody"
   },
   {
     "reason": "unit_scope_denied",

@@ -43,6 +43,13 @@ type Server struct {
 	// Legacy makes the server a runner from before proxy fencing and the folder pass limit: PublishCaps sends
 	// neither flag, fence_proxy is an unknown method, and a policy generation is not read.
 	Legacy bool
+	// Narrow, when set, answers narrow_proxy; unset, the substrate is one that cannot narrow, and the verb
+	// answers narrow_unsupported. PublishCaps carries ProxyNarrow only while it is set, as a runner whose
+	// substrate narrows does (a Legacy server carries none and does not know the verb); Rig.Narrows sets it
+	// and publishes again.
+	Narrow func(runnerwire.NarrowProxyArgs) (runnerwire.NarrowProxyResult, error)
+	// NarrowCalls is every narrow_proxy frame received, in order.
+	NarrowCalls []runnerwire.NarrowProxyArgs
 }
 
 // Serve runs the runner side of a session over conn, backed by sub, until the
@@ -63,7 +70,7 @@ func (s *Server) PublishCaps(ctx context.Context, capacity placement.Capacity, r
 		return err
 	}
 	data, err := json.Marshal(runnerwire.Caps{Support: cs, Capacity: capacity, AllowedRoots: roots, Version: version, ProxySettings: runnerwire.ProxySettings,
-		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy})
+		ProxyFence: !s.Legacy, FolderPassOnce: !s.Legacy, ProxyNarrow: !s.Legacy && s.Narrow != nil})
 	if err != nil {
 		return err
 	}
@@ -109,7 +116,7 @@ func (s *Server) keptMachine(args json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a.Op != runnerwire.KeptMachineOpDelete {
+	if a.Op != runnerwire.KeptMachineOpDelete && a.Op != runnerwire.KeptMachineOpDeleteExpired {
 		return nil, runnerwire.Refuse("kept_machine op %q is unknown", a.Op)
 	}
 	s.mu.Lock()
@@ -281,6 +288,8 @@ func (s *Server) refMethod(ctx context.Context, method string, args json.RawMess
 		return s.teardown(ref, s.sub.KillSandbox(ctx, ref))
 	case runnerwire.MethodFenceProxy:
 		return nil, s.fence(ctx, method, ref)
+	case runnerwire.MethodNarrowProxy:
+		return s.narrow(args)
 	case runnerwire.MethodEnd:
 		return s.end(ctx, ref, a.PolicyGeneration)
 	case runnerwire.MethodPauseAgent, runnerwire.MethodResumeAgent:
@@ -357,6 +366,25 @@ func (s *Server) fence(ctx context.Context, method, ref string) error {
 		return fmt.Errorf("unknown method %q", method)
 	}
 	return f.FenceProxy(ctx, ref)
+}
+
+// narrow serves narrow_proxy with the scripted answer; a server playing an older runner does not know it.
+func (s *Server) narrow(args json.RawMessage) (any, error) {
+	if s.Legacy {
+		return nil, fmt.Errorf("unknown method %q", runnerwire.MethodNarrowProxy)
+	}
+	a, err := decode[runnerwire.NarrowProxyArgs](args)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.NarrowCalls = append(s.NarrowCalls, a)
+	narrow := s.Narrow
+	s.mu.Unlock()
+	if narrow == nil {
+		return nil, runner.ErrNarrowUnsupported
+	}
+	return narrow(a)
 }
 
 // replaceProxyAt serves replace_proxy, acting for the generation it names when the substrate reads it.

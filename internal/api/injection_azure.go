@@ -303,9 +303,10 @@ func (s *Server) reconcileAzureReauth(ctx context.Context, ap types.ApprovalRequ
 	if !ok {
 		return ap, false
 	}
-	// Generation: only a sign-in captured AFTER the raise answers it, and only one no renewal has since found ended.
+	// Generation: only a sign-in captured AFTER the raise, both read on the database's clock (signedInAfter), answers it,
+	// and only one no renewal has since found ended.
 	blob, found, err := s.readEntraBlob(secretstore.WithPurpose(ctx, secretstore.PurposeStatus), sc.Owner, ec)
-	if err != nil || !found || !blob.CapturedAt.After(ap.RequestedAt) || blob.signInEnded() {
+	if err != nil || !found || blob.signInEnded() || !blob.signedInAfter(ap.RequestedAt) {
 		return ap, false
 	}
 	ev := s.auditEvent(&ap.RunID, types.ActorHuman, sc.Owner, "credential.reauth.resolve", ap.ID.String(), "success",

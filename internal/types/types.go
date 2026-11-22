@@ -236,6 +236,12 @@ type AgentRun struct {
 	// records. The run's later audit rows carry their own policy's digest as data.policy_digest. Empty for a run not yet
 	// dispatched, one dispatched before the field, or one whose write failed.
 	PolicyDigest string `json:"policy_digest,omitempty"`
+	// DataOut is the run's data_out rule as its row keeps it (agent_runs.data_out): written at dispatch just
+	// before the run.policy.resolve row, raised by a revive whose seal makes it stricter, never lowered, and
+	// kept when audit retention prunes the policy rows. nil for a run not yet dispatched, or one from before the
+	// column that the upgrade (migration 0292) found no rule for and did not set to blocked: it then reads its
+	// policy envelope, or allowed with none. Never on the wire: the run's policy view shows the rule.
+	DataOut *TransferRule `json:"-"`
 	// PolicyReadback is the run's current proxy start, as its policy readback stands (RunPolicyReadback);
 	// filled on the single-run read only, nil elsewhere and for a run with no recorded start.
 	PolicyReadback *RunPolicyReadback `json:"policy_readback,omitempty"`
@@ -303,6 +309,9 @@ type AgentRun struct {
 	// CreatedViaActor is the agent that portal named when it launched the run (the subject and issuer of the
 	// identity provider token the portal held for it); nil when it named none. It is recorded, never authorised.
 	CreatedViaActor *DelegationActor `json:"created_via_actor,omitempty"`
+	// PortalDrives marks a run that mounted a drive allocated to the portal in CreatedVia. Set at create, never
+	// changed, and not part of the wire: a run that carries it is reachable only through that portal.
+	PortalDrives bool `json:"-"`
 	// HasRecording/RecordingBytes/RecordingDurationSec are derived, never stored: projected on every single-run read,
 	// and on a list only with ?include=recording_meta. HasRecording is the only "no recording" signal. It is a pointer
 	// so a list that did not ask is silent (nil, key omitted) rather than saying false for a stored recording; a
@@ -758,6 +767,11 @@ type PersonSummary struct {
 	SSHKeys         int        `json:"ssh_keys"`
 	Credentials     int        `json:"credentials"`
 	ActiveRuns      int        `json:"active_runs"`
+	// Issuer and InternalAddress are set for a portal person only: the issuer the person's portal
+	// registered, and the internal address its binding fetches keys from ("" when the issuer's own
+	// address is used).
+	Issuer          string `json:"issuer,omitempty"`
+	InternalAddress string `json:"internal_address,omitempty"`
 }
 
 // PersonList is one page of GET /people. NextCursor is empty on the last page.

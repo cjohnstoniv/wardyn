@@ -357,6 +357,8 @@ export interface SetupStatus {
     macos_vms?: boolean;
     /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */
     mac_window?: boolean;
+    /** WARDYN_SUPPORT_SESSIONS: a super admin may ask to help inside someone's running run. Absent when off. */
+    support_sessions?: boolean;
   };
   checks: SetupCheck[];
   auth: {
@@ -422,8 +424,7 @@ export interface SetupStatus {
   // Optional for the same fixture-compat reason as `llm_ready`.
   scm?: SCMPosture;
   // The EFFECTIVE integration set (stored ∪ legacy-derived) with each row's live
-  // capabilities — the server's own answer, as opposed to the rows
-  // lib/api/integrations.ts derives client-side for the two legacy categories.
+  // capabilities — the server's own answer.
   // Optional for the same fixture-compat reason as `llm_ready`.
   integrations?: WireIntegration[];
   // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —

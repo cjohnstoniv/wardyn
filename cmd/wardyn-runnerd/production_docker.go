@@ -470,6 +470,7 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
 	_, keeps := sub.(runner.SandboxEnder)
 	_, fences := sub.(runner.ProxyFencer)
+	_, narrows := sub.(runner.ProxyNarrower)
 	support, err := sub.Classes(ctx)
 	if err != nil {
 		return runnerwire.Caps{}, err
@@ -479,7 +480,7 @@ func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runner
 	if arch == "" {
 		arch = engineArch(ctx)
 	}
-	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences}, nil
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows}, nil
 }
 
 // checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and

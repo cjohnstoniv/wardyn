@@ -143,7 +143,7 @@ func (s *Server) pendingApprovalsForRuns(r *http.Request, runIDs []uuid.UUID) (m
 	if err != nil {
 		return nil, err
 	}
-	s.projectHolds(rows)
+	s.projectHolds(r.Context(), rows)
 	out := map[uuid.UUID][]types.ApprovalRequest{}
 	for _, ap := range rows {
 		out[ap.RunID] = append(out[ap.RunID], ap)

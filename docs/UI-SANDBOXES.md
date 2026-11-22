@@ -478,7 +478,7 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 |---|---|
 | `401` `inbound_credential_invalid`, with `WWW-Authenticate: Bearer` | The bearer is not a live inbound token. An API, CLI, admin or portal token is refused the same way |
 | `404` `inbound_not_found` | No such run, no such app, an app that is not inbound, or a holder who is neither the owner nor a caller |
-| `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100: the run's inbound apps together, or one caller over all runs. The owner's browser spends only the run's |
+| `429` `inbound_rate_limited`, `Retry-After: 1` | Past 50 requests a second, burst 100, either to the run's inbound apps together or from one caller over all runs; the `inbound.deny` row's `limit` says which. The owner's browser spends only the run's |
 | `409` `ui_gateway_not_running` | The run is not running, is kept or has no sandbox |
 | `503` `run_unreadable` | The run or its policy is unreadable |
 | `403` `data_out_blocked` | The run's `data_out` is `review` or `blocked` and the app is not the desktop. Audited as `inbound.deny` `data_out` and `run.data_out.deny`, each under `auth.fail`'s bound |
@@ -675,6 +675,13 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
   it closes, including after a portal revoke: killing the run is what ends an
   in-flight session, the same bound attach and [SSH](SSH.md#bounds) publish.
   - A WebSocket or other upgraded connection an inbound token opened is the exception (rc.8); see [its re-check](#what-wardyn-checks-on-every-call).
+  - So is a support helper's: each new request is re-checked before it is relayed, and one already open, a WebSocket or a long response, is re-checked every 30 seconds and closed once the grant stops.
+- **A support helper.** A super admin whose [support request](ENV.md#wardyn_support_sessions) the run's owner accepted with the web apps or desktop door ticked opens the run's apps, governed.
+  - Web apps opens a declared app that is not a desktop. Desktop opens the `novnc` app and a Linux VM's desktop. A door the owner left unticked is `403` `support_door_not_granted` when the ticket is asked for. A ticket used after its grant ended, ran out or lost that door is `403` `ui_gateway_ticket_run_mismatch` at the enter.
+  - It needs per-run hosts. On one shared host the ticket mint answers `403` `inbound_needs_host_mode`.
+  - The profile's `deny_ui_apps` and `deny_interactive` and the run's `data_out` apply. The helper never has a super admin's exemption.
+  - The cookie ends with the grant, and each re-check asks the grant again: a revoke or an expiry ends the session, and a grant that cannot be read fails closed (`503`).
+  - The session's rows carry `support_grant` and `entry` `support`.
 - Every refusal writes a
   `ui.authorize` / `denied` row naming the reason.
 - **Header hygiene, both directions.** Cookies are not port-scoped, so a shared

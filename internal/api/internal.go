@@ -144,6 +144,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.GatewayCallID != "" {
 		fields["gateway_call_id"] = dl.GatewayCallID
 	}
+	// The id the gateway or its provider assigned to the attempt; absent where none was read.
+	if dl.GatewayRequestID != "" {
+		fields["gateway_request_id"] = dl.GatewayRequestID
+	}
 	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
 	dl.Refusal.AuditFields(fields)
 	if dl.MatchedRule != "" {

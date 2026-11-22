@@ -624,10 +624,10 @@ func dominatedBy(path []ast.Node, guards []string) bool {
 	return false
 }
 
-// A ref means "a sandbox may exist". It is cleared in four places, each after a confirmed teardown; a fifth,
+// A ref means "a sandbox may exist". It is cleared in five places, each after a confirmed teardown; a sixth,
 // or one that lost its condition, would drop the only record of a sandbox still running. Three go through
-// clearSandboxRef; killTeardownTail calls ClearSandboxRefRetaining on the store it asserted to
-// sandboxRefRetainingClearer.
+// clearSandboxRef; killTeardownTail and the kill's background confirm (tryKillConfirm) call
+// ClearSandboxRefRetaining on the store they asserted to sandboxRefRetainingClearer.
 func TestSandboxRefClearCensus(t *testing.T) {
 	type site struct {
 		call   string
@@ -638,6 +638,7 @@ func TestSandboxRefClearCensus(t *testing.T) {
 		"reconcile.go:reconcileOrphanedRun":          {"clearSandboxRef", []string{"torn"}},
 		"run_terminal_effects.go:finalizeRunEffects": {"clearSandboxRef", []string{"teardownOK"}},
 		"runs_lifecycle.go:killTeardownTail":         {"ClearSandboxRefRetaining", []string{"kerr", "queued"}},
+		"run_kill_confirm.go:tryKillConfirm":         {"ClearSandboxRefRetaining", []string{"kerr"}},
 	}
 	files := goFilesOfAPI(t)
 	found := map[string]bool{}
@@ -661,8 +662,8 @@ func TestSandboxRefClearCensus(t *testing.T) {
 			}
 		})
 	}
-	if len(frozen) != 4 {
-		t.Errorf("the frozen list has %d clears, want four", len(frozen))
+	if len(frozen) != 5 {
+		t.Errorf("the frozen list has %d clears, want five", len(frozen))
 	}
 	for key := range frozen {
 		if !found[key] {

@@ -40,7 +40,7 @@ import (
 // teardown on the same failing daemon would lose the files and contain nothing.
 
 // runTokenLapseAfter is how long a RUNNING run may go without a renew before
-// its identity is dead. The proxy renews at least every 30 minutes and gives
+// its identity is dead. The proxy renews at least every 15 minutes (10 on a Kubernetes runner) and gives
 // up an hour after its last good renew (egress/proxy/renew.go
 // renewGiveUpAfter, which mirrors the embedded provider's 1 h tokenTTL); the
 // five minutes cover the stamp landing a moment after the mint and a small

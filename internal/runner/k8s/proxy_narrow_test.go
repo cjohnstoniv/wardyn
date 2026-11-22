@@ -11,9 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -101,7 +98,7 @@ func narrowJSON(t *testing.T, a proxy.NarrowAnswer) string {
 }
 
 // A server-mode proxy pod gets the env, a read-write mount and a default-medium emptyDir with a 1Mi
-// size limit, and its staged config mount stays read-only. A runner's proxy pod gets none of them.
+// size limit, and its staged config mount stays read-only. A runner's pod is in proxy_narrow_runner_test.go.
 func TestProxyPod_LiveDenyVolumeAndEnv(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	installProxyIPReactor(t, cs, "10.244.0.9")
@@ -156,59 +153,6 @@ func TestProxyPod_LiveDenyVolumeAndEnv(t *testing.T) {
 	}
 	if vol.EmptyDir.SizeLimit == nil || vol.EmptyDir.SizeLimit.String() != "1Mi" {
 		t.Errorf("size limit = %v, want 1Mi", vol.EmptyDir.SizeLimit)
-	}
-
-	// A runner's proxy pod never takes a narrowing, so it gets no socket whose failure could stop it.
-	px := httptest.NewServer(http.NotFoundHandler())
-	defer px.Close()
-	h := newRunnerHarness(t)
-	h.d.cfg.ProxyImage = "registry.example/wardyn-proxy:pinned"
-	h.d.cfg.Sink = &fakeSink{h: h}
-	h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
-	installProbedProxyReactor(h, px.Listener.Addr().String(), nil)
-	installAgentRunningReactor(t, h.cs)
-	rspec := testSandboxSpec()
-	rspec.RunID = h.runID
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, err := h.d.CreateSandbox(ctx, rspec); err != nil {
-		t.Fatalf("runner CreateSandbox: %v", err)
-	}
-	rpod, err := h.cs.CoreV1().Pods(testNamespace).Get(ctx, proxyPodName(rspec.RunID), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get runner proxy pod: %v", err)
-	}
-	if _, has := findVolume(rpod.Spec.Volumes, proxyLiveDenyVolumeName); has {
-		t.Errorf("a runner's proxy pod has the live deny volume")
-	}
-	for _, rc := range rpod.Spec.Containers {
-		for _, e := range rc.Env {
-			if e.Name == proxy.LiveDenyDirEnv {
-				t.Errorf("a runner's proxy container has %s", proxy.LiveDenyDirEnv)
-			}
-		}
-		for _, m := range rc.VolumeMounts {
-			if m.Name == proxyLiveDenyVolumeName {
-				t.Errorf("a runner's proxy container mounts the live deny volume")
-			}
-		}
-	}
-}
-
-func TestProxyNarrowState_RunnerModeUnsupported(t *testing.T) {
-	h := newRunnerHarness(t)
-	narrowProxyPod(t, h.cs, h.runID, true, true)
-	ex := &narrowExecutor{}
-	h.d.execFactory = ex.execFactory
-	ref := agentPodName(h.runID)
-	if _, err := h.d.ProxyNarrowState(context.Background(), ref); !errors.Is(err, runner.ErrNarrowUnsupported) {
-		t.Errorf("ProxyNarrowState in runner mode = %v, want ErrNarrowUnsupported", err)
-	}
-	if _, err := h.d.NarrowProxy(context.Background(), ref, []string{"a.example"}); !errors.Is(err, runner.ErrNarrowUnsupported) {
-		t.Errorf("NarrowProxy in runner mode = %v, want ErrNarrowUnsupported", err)
-	}
-	if ex.calls != 0 {
-		t.Errorf("runner mode ran %d execs, want none", ex.calls)
 	}
 }
 
@@ -452,4 +396,15 @@ func TestNarrowProxy_ClosesStdinAfterTheRequest(t *testing.T) {
 			t.Errorf("an exec whose stdin never ends: err %v, sawEOF %v, answer %q; want the deadline, no EOF and no answer", err, ex.sawEOF, out.String())
 		}
 	})
+}
+
+// seqExecutor is a Driver.execFactory double that answers each exec with the next of outs.
+type seqExecutor struct {
+	outs  []string
+	calls int
+}
+
+func (s *seqExecutor) execFactory(string, string, []string, bool, bool) (remotecommand.Executor, error) {
+	s.calls++
+	return &narrowExecutor{stdout: s.outs[s.calls-1]}, nil
 }

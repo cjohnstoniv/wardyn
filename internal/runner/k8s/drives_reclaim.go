@@ -69,7 +69,7 @@ func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runn
 	if idErr := driveClaimIdentity(claim, &drive); idErr != nil {
 		// driveClaimIdentity already logged the operator's half; the sentinel
 		// error never carries the comparison itself (errDriveClaimForeign).
-		return "", fmt.Errorf("k8s: drive: refusing to reclaim claim %q: %w", drive.ObjectName, runner.ErrDriveNotReclaimable)
+		return "", runner.Untouched(fmt.Errorf("k8s: drive: refusing to reclaim claim %q: %w", drive.ObjectName, runner.ErrDriveNotReclaimable))
 	}
 	if claim.DeletionTimestamp != nil {
 		return "", fmt.Errorf("k8s: drive: claim %q is already Terminating (deleted at %s): %w",
@@ -88,8 +88,8 @@ func (d *Driver) ReclaimDrive(ctx context.Context, drive types.DriveMount) (runn
 			slog.Warn("wardynd: k8s substrate: a drive's volume claim changed between its inspection and its reclaim; nothing was deleted",
 				slog.String("claim", drive.ObjectName), slog.String("namespace", ns),
 				slog.String("inspected_uid", string(claim.UID)), slog.String("error", err.Error()))
-			return "", fmt.Errorf("k8s: drive: claim %q changed after it was inspected, nothing was deleted: %w",
-				drive.ObjectName, runner.ErrDriveNotReclaimable)
+			return "", runner.Untouched(fmt.Errorf("k8s: drive: claim %q changed after it was inspected, nothing was deleted: %w",
+				drive.ObjectName, runner.ErrDriveNotReclaimable))
 		}
 		if apierrors.IsNotFound(err) {
 			// Raced by another reclaim between Get and Delete, with nothing

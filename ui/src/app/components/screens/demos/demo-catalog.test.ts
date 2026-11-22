@@ -108,7 +108,6 @@ describe("demo catalog", () => {
     );
     expect(injecting.map((d) => d.id)).toEqual([
       "key-never-in-the-box",
-      "authorized-not-issued",
       "rest-api-token",
     ]);
     for (const d of injecting) {
@@ -193,6 +192,20 @@ describe("demo catalog", () => {
     expect(sts.needsGitHubApp).toBeUndefined();
   });
 
+  it("authorized-not-issued is one approval-gated git_pat on example.com, with no allowed domain", () => {
+    const d = DEMOS.find((x) => x.id === "authorized-not-issued")!;
+    expect(d.policy.eligible_grants).toHaveLength(1);
+    const grant = d.policy.eligible_grants![0];
+    expect(grant.kind).toBe("git_pat");
+    expect(grant.requires_approval).toBe(true);
+    // At 30 s or less the proxy re-mints on every sub-request (git_broker.go:84).
+    expect(grant.ttl_seconds).toBeGreaterThan(30);
+    const scope = grant.scope as { host?: string; secret_name?: string };
+    expect(scope.host).toBe("example.com");
+    expect(scope.secret_name).toBe(d.needsSecret);
+    expect(d.policy.allowed_domains).toEqual([]);
+  });
+
   // Exactly one TEACH+GATE card today. The gate does NOT drop the step
   // (setup/steps.ts's stepOrder reads needsModel/needsSecret only), so a new
   // needsGitHubApp demo has to be a deliberate decision, not a copy-paste.
@@ -203,11 +216,12 @@ describe("demo catalog", () => {
     expect(gated[0].needsModel).toBeFalsy();
   });
 
-  it("authorized-not-issued's steps pin the real mint 409 body codes", () => {
+  it("authorized-not-issued's steps pin the git ladder", () => {
     const d = DEMOS.find((x) => x.id === "authorized-not-issued")!;
     const allText = d.steps.map((s) => `${s.text} ${s.cmd ?? ""}`).join(" ");
-    expect(allText).toContain('"code":"pending"');
-    expect(allText).toContain('"code":"already_minted"');
+    for (const want of ["git ls-remote https://example.com/", "{grant_id}", "already_minted", "403", "502"]) {
+      expect(allText).toContain(want);
+    }
   });
 
   it("the original showcase quartet covers distinct first_use_approval / allow-all combos", () => {

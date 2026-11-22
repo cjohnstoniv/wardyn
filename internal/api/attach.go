@@ -114,6 +114,27 @@ type resizeMsg struct {
 	Rows uint16 `json:"rows"`
 }
 
+// refuseLocalModeAttach writes the local-mode loopback refusal and returns true
+// when it refused; handleAttachWS runs it first, before any upgrade.
+func (s *Server) refuseLocalModeAttach(w http.ResponseWriter, r *http.Request) bool {
+	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
+	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
+	// so the socket is never opened. Two gates, same as the REST surface in
+	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
+	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
+	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
+	// require a credential, so this is local-mode-only.
+	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
+		return true
+	}
+	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
+		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+		return true
+	}
+	return false
+}
+
 // handleAttachWS is the interactive-attach WebSocket endpoint:
 //
 //	GET /api/v1/runs/{id}/attach
@@ -153,19 +174,8 @@ type resizeMsg struct {
 func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	// Defense-in-depth: in LOCAL no-auth mode the attach WS is
-	// protected only by same-origin at websocket.Accept. Reject BEFORE the upgrade
-	// so the socket is never opened. Two gates, same as the REST surface in
-	// humanOrAdminAuth: (1) a non-loopback TCP peer (a direct LAN client forging
-	// "Host: 127.0.0.1" against a 0.0.0.0 bind) and (2) a non-loopback Host (browser
-	// DNS-rebinding, which arrives from a loopback peer). SSO/token modes already
-	// require a credential, so this is local-mode-only.
-	if s.cfg.LocalMode && !s.localPeerTrusted(r.RemoteAddr) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModePeerNotLoopback, localPeerRefusal)
-		return
-	}
-	if s.cfg.LocalMode && !isLoopbackHost(r.Host) {
-		writeErrorReason(w, http.StatusForbidden, reasonLocalModeHostNotLoopback, "Local mode: request Host is not loopback (DNS-rebinding guard)")
+	// Local-mode loopback refusals: before the origin check and the upgrade.
+	if s.refuseLocalModeAttach(w, r) {
 		return
 	}
 
@@ -212,13 +222,28 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, ok := s.getRunOr404(w, r, id)
-	if !ok {
+	// An issuer portal's ticket is admitted under its opening deadline (ticketActor.admitCtx), the run read and
+	// the entry checks included; the socket then lives on the request.
+	admit, _ := ticketActorFromContext(ctx)
+	actx, acancel := admit.admitCtx(ctx)
+	defer acancel()
+	ar := r.WithContext(actx)
+	var run types.AgentRun
+	if !admit.admitBy.IsZero() {
+		got, gone, ok := s.issuerOpeningRun(actx, w, id, attachUnverifiableMsg)
+		if gone {
+			writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found") // as getRunOr404 answers
+		}
+		if !ok {
+			return
+		}
+		run = got
+	} else if run, ok = s.getRunOr404(w, r, id); !ok {
 		return
 	}
 
 	// Entry authorization (#1476): the owner rule, on both lanes.
-	if s.refuseAttachEntry(w, r, run) || s.refuseBackgroundOnly(w, r, run, "terminal") {
+	if s.refuseAttachEntry(w, ar, run) || s.refuseBackgroundOnly(w, ar, run, "terminal") {
 		return
 	}
 
@@ -240,7 +265,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Door 2 of five (mask_manifest.go): the terminal's recorded tail is masked
 	// against the run's corpus, which this server must be able to prove whole.
-	if s.refuseUncovered(w, r, run.ID, "runs.attach") {
+	if s.refuseUncovered(w, ar, run.ID, "runs.attach") {
 		return
 	}
 
@@ -254,26 +279,49 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
-	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal) // the per-run session cap
+	var support uuid.UUID
+	if ta, ok := ticketActorFromContext(ctx); ok {
+		support = ta.support
+	}
+	releaseSlot := s.webAttachSlot(ctx, w, run, principalType, principal, support) // the per-run session cap
 	if releaseSlot == nil {
 		return
 	}
 	defer releaseSlot()
 
 	// A paused run is thawed before the exec: the daemon refuses one into a
-	// paused container (run_pause.go).
-	if err := s.thawForExec(ctx, run, principalType, principal, "presence"); err != nil {
+	// paused container (run_pause.go). An issuer portal's thaw, its wait for the run's lock and the runtime's
+	// thaw included, runs under what is left of the opening deadline, by design: one that fails or runs out is
+	// the retryable 503, and a thaw the deadline ends leaves the run paused with a settle record for the
+	// pause sweep (resumeRun), so the next try starts from a paused run.
+	tctx, tcancel := attachThawCtx(ctx, actx)
+	defer tcancel()
+	if err := s.thawForExec(tctx, run, principalType, principal, "presence"); err != nil {
+		if attachDispatchPast(ctx) { // a thaw cut at an issuer portal's dispatch time
+			writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
+			return
+		}
+		if !admit.admitBy.IsZero() {
+			refuseIssuerOpeningUnread(actx, w, "thaw", attachUnverifiableMsg, err)
+			return
+		}
 		writeErrorReason(w, http.StatusBadGateway, reasonAttachResumeFailed, "run is paused and could not be resumed; try again")
 		return
 	}
 	// transport=local (attach_local.go) is checked only here, after every check above, thaw
-	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder.
-	local, ok := s.localAttachRequested(w, r, run)
+	// included, so a local attach is refused exactly where a relay one is (C1). Do not reorder. It reads under
+	// the opening deadline (ar); the socket below lives on the request.
+	local, ok := s.localAttachRequested(w, ar, run)
 	if !ok {
 		return
 	}
 
-	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	// An issuer portal's socket is cut from beside it (attachIssuerCut): the upgrade goes through the cut's
+	// writer, so the switched connection registers with it, and its watch runs from here, before the audit
+	// write below.
+	ctx, aw, cut, stopCut := s.attachIssuerCut(r, w, id)
+	defer stopCut()
+	c, err := websocket.Accept(aw, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -331,11 +379,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,
+		recheck:    s.attachPromotionCheck(r, id, cut),
 		notify:     wa.notify,
 		displace:   wa.displace,
 		ping:       c.Ping,
 	}
 	holder.lastOutput.Store(time.Now().UnixNano())
+	if ta, ok := ticketActorFromContext(ctx); ok && ta.support != uuid.Nil {
+		holder.support, wa.fields = ta.support, supportEntryFields(ta.support)
+	}
 	wa.holder = holder
 	la := newLocalAttach(wa, local, r.URL.Query().Get("local_nonce"))
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
@@ -353,6 +405,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// release above, so a holder never outlives its exec.
 	defer func() { _ = holder.mux.Close() }()
 
+	s.finishAttachSession(ctx, finishCtx, pumpCtx, cancel, r, c, run, id, principalType, principal, opts, wa, holder, la, readOnly, releaseHolder, cut)
+}
+
+// finishAttachSession is handleAttachWS's tail: the opening session.attach row,
+// the pump, and the recording, session.detach audit and socket close after it.
+func (s *Server) finishAttachSession(ctx, finishCtx, pumpCtx context.Context, cancel context.CancelFunc, r *http.Request,
+	c *websocket.Conn, run types.AgentRun, id uuid.UUID, principalType types.ActorType, principal string,
+	opts runner.AttachOptions, wa *webAttach, holder *attachHolder, la *localAttach, readOnly bool,
+	releaseHolder func() (announce func()), cut *streamCut) {
 	// The first of two session.attach rows: the holder is registered and its exec
 	// is being opened. The audit log is append-only and hash-chained, so the
 	// outcome is a second row, never an update; this one exists before any
@@ -407,7 +468,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	go s.attachKeepalive(pumpCtx, id)
 	// Started before the exec is opened, so a fence ends an attach in flight too. The credential that
 	// opened this socket is checked again while it is open (attachEnders, attach_authority.go).
-	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel)
+	endedFromOutside := s.attachEnders(pumpCtx, r, id, c, holder, cancel, cut)
 
 	// Bidirectional pump. closeReason is filled by whichever side ends first.
 	// castTee (may be nil when no RecordingStore is wired) receives a copy of the
@@ -524,10 +585,29 @@ func parseUint16(s string) uint16 {
 // that fails the rule gets the 403 naming why; a member stamp keeps its own.
 // superAdmin is true past this block only on the admin's own run or an
 // operator-owned one, so the deny_interactive exemption cannot reach a
-// person's run.
+// person's run. A helper's ticket (one that carries a support grant) is asked of the support arm instead, and
+// never takes the exemption.
 func (s *Server) refuseAttachEntry(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	id := run.ID
 	if ta, tok := ticketActorFromContext(r.Context()); tok {
+		if ta.support != uuid.Nil {
+			// A helper's ticket (supportMayEnter, support_terminal.go): a grant that is live and ticks the terminal
+			// door, then the run's deny_interactive door with no exemption: a helper is never a super admin here.
+			// A ticket minted for one app never opens a terminal.
+			if ta.caller != "" || ta.app != "" {
+				s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+				writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				return true
+			}
+			if _, v := s.supportMayEnter(r.Context(), run, ta.principal, ta.support, supportDoorTerminal); v != supportOK {
+				if !s.refuseSupport(w, r, run, v) {
+					s.auditAttachDenied(r, id, ta.principal, "attach ticket does not authorize this run")
+					writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, "attach ticket does not authorize this run")
+				}
+				return true
+			}
+			return s.refuseInteractiveAttach(w, r, run)
+		}
 		superAdmin := ta.role == oidc.RoleAdmin
 		// The sponsor arm: still the sponsor of the active identity since the ticket's authority time. A
 		// sponsor's ticket is member-stamped, so the door below always runs, a super admin sponsor included.

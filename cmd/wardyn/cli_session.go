@@ -420,7 +420,7 @@ func (s *storedSession) refresh(ctx context.Context, st sessionStore) error {
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized && ae.Reason == "cli_session_invalid" {
 		// The secret, the key and the tokens are of no further use: only the session id and why stay.
-		s.item.Ended = fmt.Sprintf(endReasonServer, ae.Reason)
+		s.item.Ended = serverEndWhy(ae)
 		s.item.Secret, s.item.KeySeed, s.item.AccessToken, s.item.AdminToken = "", "", "", ""
 		if perr := st.put(s.origin, s.item); perr != nil {
 			return perr
@@ -436,6 +436,24 @@ func (s *storedSession) refresh(ctx context.Context, st sessionStore) error {
 	}
 	s.token, s.tokenKind = g.AccessToken, types.APITokenKindCLIAccess
 	return nil
+}
+
+// serverEndWhy is the sentence a refused renewal is stored with: the end the server names in the refusal's
+// detail (signed out, its lifetime, idle), else its reason code, for an end the server does not name.
+func serverEndWhy(ae *sdk.APIError) string {
+	var body struct {
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal([]byte(ae.Body), &body)
+	switch body.Detail {
+	case types.CLISessionEndSignedOut:
+		return endReasonSignedOut
+	case types.CLISessionEndExpired:
+		return endReasonExpired
+	case types.CLISessionEndIdle:
+		return endReasonIdle
+	}
+	return fmt.Sprintf(endReasonServer, ae.Reason)
 }
 
 // sessionTransport puts the stored sign-in's current bearer on each request to its own organisation, so a

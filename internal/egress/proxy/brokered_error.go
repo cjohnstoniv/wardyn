@@ -6,7 +6,6 @@ package proxy
 import (
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -362,10 +361,7 @@ func writeProviderError(w http.ResponseWriter, shape errShape, status int, reaso
 	for k, v := range extra {
 		body[k] = v
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	out, _ := json.Marshal(body)
-	_, _ = w.Write(out)
+	writeJSONStatus(w, status, "application/json", body)
 }
 
 // writeBrokeredFault answers a failed leg on an LLM or AWS lane in the shape's

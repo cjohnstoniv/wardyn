@@ -46,6 +46,8 @@ type Fake struct {
 	FencedPause bool
 	// EndErr, when set, is what EndSandbox answers, as an end that failed on the runner.
 	EndErr error
+	// KillErr, when set, is what KillSandbox answers, and the sandbox stays.
+	KillErr error
 	// PolicyGens is the policy generation of each fence-aware stop_proxy, end and replace_proxy the fake was
 	// sent (StopProxyAt, EndSandboxAt, ReplaceProxyHashedAt), in order.
 	PolicyGens []PolicyGenCall
@@ -259,6 +261,12 @@ func (f *Fake) StopSandbox(_ context.Context, ref string) error {
 }
 func (f *Fake) KillSandbox(_ context.Context, ref string) error {
 	f.note("kill", ref)
+	f.mu.Lock()
+	err := f.KillErr
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	f.drop(ref)
 	return nil
 }

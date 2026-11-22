@@ -380,6 +380,49 @@ func TestRunLease_AServiceWithoutALiveIdentityIsNotRenewed(t *testing.T) {
 	}
 }
 
+// sponsorLeaseStore is a service identity store whose sponsorship, as ServiceStillSponsored judges it for the
+// run, is held or lost.
+type sponsorLeaseStore struct {
+	*serviceIdentityLeaseStore
+	sponsored bool
+}
+
+func (s *sponsorLeaseStore) ServiceStillSponsored(context.Context, string, string, time.Time) (bool, error) {
+	return s.sponsored, nil
+}
+
+// A healthy service with a 60-minute unit and 45 minutes left is inside the warning window before its
+// half-life. The warning is held back only while the renewal at the half-life will be allowed, and that renewal
+// also needs the sponsor (serviceRunLive): a changed sponsor is warned now, an unchanged one is not.
+func TestRunLease_AChangedSponsorIsWarnedBeforeTheHalfLife(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sponsored bool
+		warned    bool
+	}{
+		{name: "the sponsor changed", warned: true},
+		{name: "the sponsor is unchanged", sponsored: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newServiceLeaseFixture(t, 45*time.Minute)
+			f.st.run.RunLimits = types.RunLimits{MaxEndAheadSec: 3600}
+			f.st.run.ServiceStatus = &types.RunServiceStatus{Health: types.ServiceHealthHealthy, ObservedAt: f.now}
+			f.st.run.CreatedBy = types.ServicePrincipalPrefix + "ops-bot"
+			svc := &serviceIdentityLeaseStore{leaseStore: f.st, svc: types.ServiceIdentity{Name: "ops-bot", Sponsor: "t@example.com"}}
+			f.srv.cfg.Store = &sponsorLeaseStore{serviceIdentityLeaseStore: svc, sponsored: tc.sponsored}
+			f.srv.cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+			end := f.endsAt()
+			f.sweep(t)
+			if got := f.endsAt(); !got.Equal(end) {
+				t.Errorf("ends_at = %v, want it unchanged before the half-life", got)
+			}
+			if n := len(f.audit.eventsFor(f.run.ID, "run.ending_soon")); (n == 1) != tc.warned || n > 1 {
+				t.Errorf("%d run.ending_soon rows, want warned=%v", n, tc.warned)
+			}
+		})
+	}
+}
+
 // A renewal refused the same way is audited once an hour, a new reason at once, and a renewal that
 // lands clears the memory so a later refusal is audited again.
 func TestAuditRenewalRefused_IsRateLimitedPerReason(t *testing.T) {

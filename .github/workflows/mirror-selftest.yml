@@ -5,7 +5,7 @@ name: Mirror self-test
 # 28, classic image store) and ubuntu-26.04 (Docker 29, containerd image store
 # by default). Dispatch it after mirror-base-images.yml has copied the list,
 # and again whenever the runner image or the action changes. It publishes
-# nothing. See docs/CI.md, "Docker Hub base-image mirror".
+# nothing. See docs/REPO-CI.md, "Docker Hub base-image mirror".
 #
 # What it shows, in order:
 #   1. after the action, dockerd lists the mirror, the mirror process outlives

@@ -84,6 +84,10 @@ func newAdmissionFixtureOf(t *testing.T, kind types.RunnerOwnerKind) *admissionF
 	if run, err = st.CreateRun(ctx, run); err != nil {
 		t.Fatal(err)
 	}
+	// It stands for a dispatched run, which keeps a data_out rule on its row (keepRunDataOut).
+	if err := st.RaiseRunDataOut(ctx, run.ID, types.TransferAllowed); err != nil {
+		t.Fatal(err)
+	}
 	run.SandboxRef = "runner:" + rn.ID.String() + "/sandbox"
 	if err := st.SetSandboxRef(ctx, run.ID, run.SandboxRef); err != nil {
 		t.Fatal(err)

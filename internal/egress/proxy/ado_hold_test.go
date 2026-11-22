@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -254,7 +255,7 @@ func TestADOHold_BudgetIsItsOwn(t *testing.T) {
 	h := newADOHoldHarness(t, cp, &fakeApprovalReader{steps: steps(types.ApprovalApproved)})
 	coord := h.p.inject.reauth
 	coord.counted = maxReauthHolds // the sign-in budget spent does not block an escalation
-	if _, _, ok := coord.admitCapability(uuid.New(), url.Values{}); !ok {
+	if _, _, ok := coord.admitCapability(context.Background(), uuid.New(), url.Values{}); !ok {
 		t.Fatal("a spent sign-in budget refused a capability hold")
 	}
 	coord.capCounted = maxCapabilityHolds
@@ -371,12 +372,12 @@ func TestADOHold_ATimedOutHoldIsNotStickyForTheRetry(t *testing.T) {
 		wf.err = errReauthTimedOut
 		close(wf.done)
 	}
-	wf, fresh, ok := coord.admitCapability(id, url.Values{})
+	wf, fresh, ok := coord.admitCapability(context.Background(), id, url.Values{})
 	if !fresh || !ok {
 		t.Fatal("first admit")
 	}
 	expire(wf)
-	again, fresh, ok := coord.admitCapability(id, url.Values{})
+	again, fresh, ok := coord.admitCapability(context.Background(), id, url.Values{})
 	if !ok || !fresh || again == wf || coord.capCounted != 2 {
 		t.Fatalf("retry after a timeout joined the dead hold (fresh=%v counted=%d)", fresh, coord.capCounted)
 	}

@@ -9,6 +9,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
 )
@@ -33,4 +34,35 @@ func TestHostCaps_ProxyFenceFollowsTheSubstrate(t *testing.T) {
 	if caps.ProxyFence {
 		t.Error("a substrate without FenceProxy advertised ProxyFence; want it off")
 	}
+}
+
+// ProxyNarrow is advertised for a substrate that narrows a proxy in place, and not for one that does not.
+func TestHostCaps_ProxyNarrowFollowsTheSubstrate(t *testing.T) {
+	ctx := context.Background()
+	plain := runnertest.NewFake()
+	caps, err := hostCaps(ctx, plain, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caps.ProxyNarrow {
+		t.Error("a substrate that is not a runner.ProxyNarrower advertised ProxyNarrow; want it off")
+	}
+	caps, err = hostCaps(ctx, narrowingHost{plain}, "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caps.ProxyNarrow {
+		t.Error("a substrate that implements runner.ProxyNarrower: ProxyNarrow = false; want true")
+	}
+}
+
+// narrowingHost is a substrate with the Kubernetes driver's narrowing methods.
+type narrowingHost struct{ substrate.Substrate }
+
+func (narrowingHost) ProxyNarrowState(context.Context, string) (runner.ProxyNarrowState, error) {
+	return runner.ProxyNarrowState{}, nil
+}
+
+func (narrowingHost) NarrowProxy(context.Context, string, []string) (runner.ProxyNarrowState, error) {
+	return runner.ProxyNarrowState{}, nil
 }

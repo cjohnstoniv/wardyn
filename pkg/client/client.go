@@ -17,7 +17,8 @@
 //   - runs (/api/v1/runs):               CreateRun, CreateRunWith, Preflight, GetRun, ListRuns, ListRunsPage,
 //     ListGrants, ListGrantsPage, KillRun, EditRunEgress, ExecRun, SynthesizeProfile, GetRecording, RunFiles, RunEvents, RunOutput,
 //     RunSignIn, GetRunPolicy, GetRunSyncRules, GetRunAllowedModels, GetRunWallPreset, RunContainment, RecordRunNode,
-//     OpenMacWindow, GetMacWindow, GetRunMachine
+//     OpenMacWindow, GetMacWindow, GetRunMachine, and a help session on a run (/api/v1/runs/{id}/support): RequestSupport,
+//     SupportStatus, AcceptSupport, DeclineSupport, EndSupport
 //   - approvals (/api/v1/approvals):     ListApprovals, ListApprovalsPage, ListApprovalsDecidable, Approve, Deny
 //   - policies (/api/v1/policies):       CreatePolicy, GetPolicy, GetPolicyDocument, GetDefaultPolicy, ListPolicies,
 //     ListPoliciesPage, UpdatePolicy, DeletePolicy
@@ -34,7 +35,7 @@
 //     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult, PutSiteConfigClearing
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
-//     sign-in and credential doors are NOT wrapped
+//     sign-in, credential and service-grant doors are NOT wrapped
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive, DeleteMyDriveResult (/api/v1/me/drives)
@@ -105,6 +106,8 @@
 //     self-service half, wrapped only for CreateAPIToken and RevokeAPIToken (listing stays unwrapped)
 //   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
 //     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
+//   - /api/v1/service-grant-cleanups — POST /{uid}/retry (admin): one more try at deleting the secret of a service
+//     grant removed from a model provider. Admin maintenance, like the service-grant routes under /api/v1/model-providers
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
@@ -379,6 +382,9 @@ type AuditFilter struct {
 	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
+	// Order "desc" reads a run's trail newest window first, newest event first, as ?order=desc does; empty keeps
+	// the default, oldest first. It narrows nothing.
+	Order string
 }
 
 // queryValues renders f as the query params the server's parseAuditFilter
@@ -402,6 +408,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.Outcome != "" {
 		q.Set("outcome", f.Outcome)
+	}
+	if f.Order != "" {
+		q.Set("order", f.Order)
 	}
 	return q
 }

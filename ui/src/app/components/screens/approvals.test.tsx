@@ -33,6 +33,8 @@ vi.mock("sonner", () => ({
 let mockPendingKind: ApprovalRequest["kind"] = "credential";
 let mockPendingEmpty = false;
 let mockCancelledRow = false;
+// The reason the cancelled archive row recorded (internal/api terminalCancelReason); absent reads as unknown.
+let mockCancelReason: string | undefined;
 let mockExpiredPushRow = false;
 // F5-F4: every listApprovals call rejects while true — simulates a transient
 // fetchAll() failure (Promise.all over the 5 states) without having to race
@@ -99,6 +101,7 @@ vi.mock("../../lib/api/approvals", () => {
               requested_at: new Date().toISOString(),
               decided_at: new Date().toISOString(),
               decided_by: "system",
+              reason: mockCancelReason,
             } satisfies ApprovalRequest,
           ]);
         }
@@ -178,6 +181,7 @@ import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/
 beforeEach(() => {
   mockRunState = "RUNNING";
   mockCancelledRow = false;
+  mockCancelReason = undefined;
   mockExpiredPushRow = false;
   mockFailAllLists = false;
   mockListError = null;
@@ -754,16 +758,26 @@ describe("ApprovalsScreen — the run has ended", () => {
     expect(screen.queryByText(STATES.ERROR_DEFAULT)).toBeNull();
   });
 
-  it("a CANCELLED row in the Decided tab says nothing was approved and nothing denied", async () => {
+  it.each([
+    ["run_lost", APPROVAL.CANCELLED_LOST, "ended"],
+    ["run_ended", APPROVAL.CANCELLED_BODY, "lost contact"],
+    ["run_killed", APPROVAL.CANCELLED_BODY, "lost contact"],
+    [undefined, APPROVAL.CANCELLED_UNKNOWN, "ended"],
+    ["something_new", APPROVAL.CANCELLED_UNKNOWN, "ended"],
+  ])("a CANCELLED row recorded as %s says nothing was approved or denied, in its own words", async (reason, sentence, notSaid) => {
     mockCancelledRow = true;
+    mockCancelReason = reason;
     render(
       <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
         <ApprovalsScreen />
       </MemoryRouter>,
     );
-    expect(await screen.findByText(APPROVAL.CANCELLED_BODY)).toBeInTheDocument();
+    const line = await screen.findByText(sentence);
+    expect(line).toHaveTextContent("Nothing was approved and nothing was denied.");
+    expect(line.textContent).not.toContain(notSaid === "ended" ? "run ended" : notSaid);
     expect(screen.getByText("by system", { exact: false })).toBeInTheDocument();
   });
+
 });
 
 // P0.3 (R3-F001/F108/F145).

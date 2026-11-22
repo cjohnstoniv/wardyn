@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -146,16 +147,38 @@ type uiSession struct {
 	// revoked, expired or signed out, which no person-level cut records (uiSessionStillAuthorized).
 	CredToken   uuid.UUID `json:"ct,omitzero"`
 	CredSession uuid.UUID `json:"cs,omitzero"`
+	// SupportGrant is the support grant a helper's ticket carried, uuid.Nil for everyone else. A session with one
+	// is re-checked against that grant, not the owner rule, and its rows name the grant (uigateway_support.go).
+	SupportGrant uuid.UUID `json:"g,omitzero"`
+	// Chain is the issuer-portal grant chain a renewable session lives on (uigateway_renewal.go), uuid.Nil for
+	// every other session. An older server ignores it and asks after the entry grant, which it cannot find.
+	Chain uuid.UUID `json:"rc,omitzero"`
 	// tokenID and sponsor ride an inbound token's session only, never a cookie: the token its rows name,
 	// and the sponsor of the service identity that holds it.
 	tokenID uuid.UUID
 	sponsor string
+	// admitBy and closedUnread ride one request, never a cookie: an issuer portal's shared deadline for its
+	// opening reads (issuerAdmitCtx), and a desktop's Closed set that could not be read within it.
+	admitBy      time.Time
+	closedUnread bool
 }
 
 // backgroundWatch says sess is a view-only watch of a background run's built-in desktop, the one way a person
 // reaches that desktop. Only the watch door's ticket makes one (ticketOpensBackgroundWatch).
 func (sess uiSession) backgroundWatch() bool {
 	return sess.Desktop && sess.ViewOnly && sess.App == uiDesktopAppName && sess.Caller == "" && !sess.Inbound
+}
+
+// auditUI writes one ui.* event on the DAEMON-lifetime context, never the
+// request's: ui.close in particular reports the end of the very connection
+// whose context is already cancelled by the time it runs, which is the same
+// trailing-write race the SSH bridges' audits hit (sshgateway_channels.go).
+//
+// These actions are deliberately NOT session.attach: there is no PTY, no
+// holder, and no content capture on this path, and a relay session must never
+// appear in the recording picker as though a recording of it existed.
+func (s *Server) auditUI(runID *uuid.UUID, actorType types.ActorType, principal, action, target, outcome string, data map[string]any) {
+	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(runID, actorType, principal, action, target, outcome, mustJSON(data)))
 }
 
 // auditUISession writes one ui.* row for sess: its run, its principal, and the
@@ -166,6 +189,9 @@ func (s *Server) auditUISession(sess uiSession, action, target, outcome string, 
 	}
 	if sess.Service != "" {
 		data["service_identity"], data["entry"] = sess.Service, sponsorEntry
+	}
+	if sess.SupportGrant != uuid.Nil {
+		maps.Copy(data, supportEntryFields(sess.SupportGrant))
 	}
 	s.recordStreamAudit(s.uiAuditCtx(s.cfg.BaseCtx, sess), sess.SandboxRef, s.auditEvent(&sess.Run, uiActorType(sess), sess.Principal, action, target, outcome, mustJSON(data)))
 }
@@ -189,13 +215,17 @@ func (s *Server) uiSessionTTL() time.Duration {
 }
 
 // newUISession is the session a redeemed ticket opens on one app of run, for at most ttl.
+// A desktop of any kind and a helper's session never renew, whatever the portal says.
 func (s *Server) newUISession(run types.AgentRun, ta ticketActor, app string, port int, ttl time.Duration) uiSession {
 	now := s.cfg.Now()
+	if uiAppIsDesktopSession(app) || ta.support != uuid.Nil {
+		ta.renewChain = uuid.Nil
+	}
 	return uiSession{
 		Run: run.ID, App: app, Port: port,
 		Principal: ta.principal, Role: ta.role, Email: ta.email,
 		Expires: ta.sessionExpiry(now, ttl).Unix(), IssuedAt: now.Unix(), AuthorizedAt: ta.authorizedAt.Unix(), AuthorizedNs: int64(ta.authorizedAt.Nanosecond()), RevSeq: ta.revSeq, Via: ta.via, Service: sponsoredService(run),
-		CredToken: ta.tokenID, CredSession: ta.cliSessionID,
+		CredToken: ta.tokenID, CredSession: ta.cliSessionID, SupportGrant: ta.support, Chain: ta.renewChain,
 	}
 }
 
@@ -214,6 +244,9 @@ func (s *Server) startUISession(w http.ResponseWriter, r *http.Request, run type
 	})
 	if sess.Service != "" {
 		data = withSponsorEntry(run, data)
+	}
+	if sess.SupportGrant != uuid.Nil {
+		maps.Copy(data, supportEntryFields(sess.SupportGrant))
 	}
 	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", sess.App, "success", ta.withVia(data))
 	http.Redirect(w, r, s.uiBasePath()+uiRelayPrefix(run.ID, sess.App)+landing, redirectStatus)
@@ -311,9 +344,21 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	if sess.IssuedAt <= 0 || sess.AuthorizedAt <= 0 || now.Sub(time.Unix(sess.IssuedAt, 0)) >= s.uiSessionTTLFor(sess) {
 		return uiSession{}, false
 	}
-	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosed reads the shared set.
-	if sess.Desktop && s.uiDesktopClosed(r.Context(), sess, now) {
-		return uiSession{}, false
+	// An issuer portal's opening reads share one deadline from here (issuerAdmitCtx).
+	if issuerPortalPerson(sess.Via, sess.Principal) {
+		sess.admitBy = time.Now().Add(issuerAdmitBound())
+	}
+	// A Closed desktop is refused on every replica and after a restart: uiDesktopClosedRead reads the shared set.
+	// For an issuer portal's session a set that could not be read is the caller's 503 (closedUnread), not a
+	// cookie refused as invalid.
+	if sess.Desktop {
+		ctx, cancel := issuerAdmitCtx(r.Context(), sess)
+		closed, unread := s.uiDesktopClosedRead(ctx, sess, now)
+		cancel()
+		if closed || (unread && sess.admitBy.IsZero()) {
+			return uiSession{}, false
+		}
+		sess.closedUnread = unread
 	}
 	return sess, true
 }
@@ -335,7 +380,8 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // An inbound session (uigateway_inbound.go) skips the background-only arm, a named caller's skips the
 // ownership one (sess.Caller), and both answer to the run's profile's deny_ui_apps and deny_interactive.
 // Any other session answers to the profile as its door did (uiSessionUnitDenies), so a profile edit ends it
-// at its next re-check.
+// at its next re-check. A support helper's session answers to its grant in place of the ownership rule, and
+// never has the exemption: its role is member.
 //
 // Three arms are needed: the ownership re-assert catches a handed-over run but
 // NOT an off-boarded owner (they still equal run.CreatedBy), the revoke cutoff
@@ -355,18 +401,46 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // able to see in the trail, and it is otherwise invisible between that
 // session's last ui.open and its ui.close.
 func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
+	_, de := s.uiSessionAuthority(ctx, sess, run)
+	return de
+}
+
+// uiSessionAuthority is uiSessionStillAuthorized with the end the session's portal grant gives it: for an
+// issuer portal's session the chain's effective end when it renews, else the entry grant's end; zero for a
+// session that did not come through an issuer portal.
+func (s *Server) uiSessionAuthority(ctx context.Context, sess uiSession, run types.AgentRun) (time.Time, *uiDialError) {
+	var end time.Time
 	// First, ahead of the revocation store being configured at all: a session
 	// opened through a portal ends with that portal's grant (#1475).
 	if sess.Via != nil {
-		switch _, v := s.delegationLive(ctx, *sess.Via); v {
+		issuer := issuerPortalPerson(sess.Via, sess.Principal)
+		var v entryVerdict
+		if issuer {
+			end, v = s.uiPortalGrantEnd(ctx, sess)
+		} else {
+			_, v = s.delegationLive(ctx, *sess.Via)
+		}
+		switch v {
 		case verdictDelegationEnded:
-			return s.uiDenyReassert(sess, uiDeniedReasonDelegationEnded,
+			return time.Time{}, s.uiDenyReassert(sess, uiDeniedReasonDelegationEnded,
 				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		case verdictDelegationUnavailable:
-			return s.uiDenyReassert(sess, uiDeniedReasonDelegationUnavailable,
+			return time.Time{}, s.uiDenyReassert(sess, uiDeniedReasonDelegationUnavailable,
 				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 		}
+		// An issuer portal's person also answers to their identity and the portal's pin (uigateway_renewal.go).
+		if issuer {
+			if de := s.issuerPortalPersonHolds(ctx, sess.Principal, *sess.Via, run); de != nil {
+				return time.Time{}, s.uiDenyReassert(sess, de.reason, de.status, de.msg)
+			}
+		}
 	}
+	return end, s.uiSessionArms(ctx, sess, run)
+}
+
+// uiSessionArms is every arm of the re-check after the portal's: the credential, the entry rule or the
+// support grant, the background rule, the profile and the revocation cutoff.
+func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	if sess.CredToken != uuid.Nil || sess.CredSession != uuid.Nil {
 		gone, err := s.macWindowCredentialGone(ctx, macWindowAuthority{TokenID: sess.CredToken, CLISessionID: sess.CredSession})
 		if err != nil {
@@ -379,7 +453,18 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		}
 	}
-	if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
+	if sess.SupportGrant != uuid.Nil {
+		// A helper's session answers to its grant: live, ticking this app's door, the owner and helper still signed in.
+		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, uiSupportDoor(sess.App)); v {
+		case supportOK:
+		case supportUnavailable: // fail closed: a grant that cannot be read is not a grant
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
+				http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		default:
+			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
+				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		}
+	} else if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
@@ -488,14 +573,21 @@ func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg s
 // Debounced per session to uiReassertInterval so this stays a couple of store
 // reads per session rather than a pair per relayed request — and so it never
 // turns a pooled request into a dial, which would undo the per-run connection
-// bound the pool exists to hold.
+// bound the pool exists to hold. A helper's session is not debounced (uiReassertDue).
 //
 // ponytail: the debounce map is pruned wholesale past a bound, like
 // shouldTouch's. Worst case is one extra re-check per live session.
 func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialError {
+	_, de := s.uiReassertRelayEnd(ctx, sess)
+	return de
+}
+
+// uiReassertRelayEnd is uiReassertRelay with the end uiSessionAuthority read (zero when the pass was cached
+// or the session did not come through an issuer portal, which is never cached).
+func (s *Server) uiReassertRelayEnd(ctx context.Context, sess uiSession) (time.Time, *uiDialError) {
 	now := s.cfg.Now()
 	if !s.uiReassertDue(sess, now) {
-		return nil
+		return time.Time{}, nil
 	}
 	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
@@ -503,7 +595,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 		// Fail CLOSED, for the same reason the revocation arm does: "the check
 		// could not run" must never resolve to "carry on". Retryable, so 503.
 		slog.ErrorContext(ctx, "wardynd: ui gateway re-assert could not load the run", "run_id", sess.Run, "err", err)
-		return s.uiDenyReassert(sess, reasonRunUnreadable,
+		return time.Time{}, s.uiDenyReassert(sess, reasonRunUnreadable,
 			http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
 	// The run's own state too, which uiDial reads on every new connection: a pooled connection never reaches
@@ -514,14 +606,15 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 	// ended; refused here, before the upgrade, the viewer would retry instead.
 	if !sess.Inbound && !sess.Desktop {
 		if de := uiRunGone(run); de != nil {
-			return de
+			return time.Time{}, de
 		}
 	}
-	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
-		return de
+	end, de := s.uiSessionAuthority(ctx, sess, run)
+	if de != nil {
+		return time.Time{}, de
 	}
 	s.markUIReasserted(sess, now, gen)
-	return nil
+	return end, nil
 }
 
 // uiRunGone refuses a UI request to a run whose UI apps are gone: one not RUNNING or with no sandbox, or a
@@ -538,15 +631,36 @@ func uiRunGone(run types.AgentRun) *uiDialError {
 
 // uiReassertKey identifies ONE minted session: the same human, the same run and
 // the same enter. A re-enter mints a new issued-at, so it re-checks at once
-// instead of inheriting the old session's window.
+// instead of inheriting the old session's window. A Closed desktop is keyed on it
+// across replicas (uiDesktopClosedKey), so its form never changes.
 func uiReassertKey(sess uiSession) string {
 	return sess.Principal + "\x00" + sess.Run.String() + "\x00" + sess.App + "\x00" + strconv.FormatInt(sess.IssuedAt, 10)
 }
 
+// uiPassKey keys the relay's pass cache: uiReassertKey and the signed authority the session derives from (the
+// portal and grant it came through, its authority time and revocation sequence), so two same-second cookies
+// of one person that differ in any of those never share a pass.
+func uiPassKey(sess uiSession) string {
+	var via string
+	if sess.Via != nil {
+		via = sess.Via.Delegate.String() + "\x00" + sess.Via.Grant.String()
+	}
+	return uiReassertKey(sess) + "\x00" + via + "\x00" + strconv.FormatInt(sess.AuthorizedAt, 10) + "\x00" +
+		strconv.FormatInt(sess.AuthorizedNs, 10) + "\x00" + strconv.FormatInt(sess.RevSeq, 10)
+}
+
+// uiReassertDue answers whether sess's request re-checks now. A helper's session (one carrying a support grant)
+// and an issuer portal's always do, with no debounce: the check then refuses a revoked grant, a suspended or
+// purged person, a revoked portal or a run moved out of the pin with a clean refusal before the request is
+// relayed, where a debounced pass would relay it and leave a stream to the watch (relayWatchCtx) to cut later.
+// The cost is the full check on every request of those sessions, and of no other.
 func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
+	if sess.SupportGrant != uuid.Nil || issuerPortalPerson(sess.Via, sess.Principal) {
+		return true
+	}
 	s.uiReassertMu.Lock()
 	defer s.uiReassertMu.Unlock()
-	at, ok := s.uiReassert[uiReassertKey(sess)]
+	at, ok := s.uiReassert[uiPassKey(sess)]
 	return !ok || now.Sub(at) >= uiReassertInterval
 }
 
@@ -566,5 +680,5 @@ func (s *Server) markUIReasserted(sess uiSession, now time.Time, gen uint64) {
 	} else if len(s.uiReassert) > 1024 {
 		clear(s.uiReassert)
 	}
-	s.uiReassert[uiReassertKey(sess)] = now
+	s.uiReassert[uiPassKey(sess)] = now
 }

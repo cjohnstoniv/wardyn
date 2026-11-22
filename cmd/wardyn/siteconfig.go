@@ -81,8 +81,7 @@ func siteConfigCmd(client clientFn) *cobra.Command {
 			"    wardyn site-config get > corp-baseline.json      # before a reset\n" +
 			"    wardyn site-config set corp-baseline.json        # after `make setup`\n\n" +
 			"`set` REPLACES the whole document (the server contract), so edit what `get`\n" +
-			"produced rather than sending a fragment. A document saved before egress_redirects\n" +
-			"existed (still keyed by artifact_overrides) is folded automatically on set.",
+			"produced rather than sending a fragment.",
 	}
 	cmd.AddCommand(siteConfigGetCmd(client), siteConfigSetCmd(client))
 	return subcommandGroup(cmd)

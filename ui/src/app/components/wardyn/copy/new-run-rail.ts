@@ -21,13 +21,10 @@ export const RAIL_CHECK = {
 export const RAIL_PROVIDER = {
   LABEL: "Model provider",
   STATIC: (name: string) => `Model provider · ${name}`,
-  OPTION: (name: string, what: string, state: string) => `${name} — your ${what} · ${state}`,
   PLACEHOLDER: "Choose a model provider",
   NOT_SIGNED_IN: (name: string) => `You're not signed in to AWS for ${name}.`,
   NO_TOKEN: (name: string) => `No token is available for ${name}.`,
   LAUNCH_HINT: "Choose a model provider to launch.",
-  CHANGED: (next: string, prev: string, harness: string) =>
-    `Model provider changed to ${next} — ${prev} isn't available to ${harness}.`,
   // #542 rail-gap packet (canon.md's "R3 — selected, not connected (the three
   // missing kinds)") — the other two credential kinds ProviderNotConnectedLine
   // had no branch for: a stored key (anthropic_api_key/openai_api_key) and the

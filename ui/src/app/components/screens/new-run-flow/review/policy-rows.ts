@@ -17,7 +17,9 @@ import type { PolicyPreviewResult } from "../../../../lib/types/policy-preview";
 import { isVMKind } from "../../../../lib/types/machine-kind";
 import type { ConfinementClass } from "../../../../lib/types/runs";
 import { sameValue } from "../draft/draft-reducer";
+import { HOST_RULES, IP_LITERALS } from "../../run-detail/policy-tab-copy";
 import { innerWallsText } from "./format";
+import { hostRuleLines } from "./host-rules-lines";
 import type { NewRunDraft, RunIntent } from "../draft/run-intent";
 import { changedFromOrigin, draftSource, intentAt, originSource, serverSource } from "./provenance";
 import type { ReviewPreflight } from "./review-seams";
@@ -69,6 +71,18 @@ export function changedRows(intent: RunIntent, base: RunIntent): Set<PolicyRowId
 
 const FILE_KEYS = ROW_KEYS.files;
 
+/** Host lines the Network row shows before it counts the rest (board RN). */
+const HOST_LINE_CAP = 8;
+
+/** The Network row's notes from the previewed policy: the IP-address rule under allow-all egress, then what the host rules say. */
+function networkNotes(spec: PolicyPreviewResult["spec"] | undefined, open: boolean): { text: string }[] {
+  const ip = open && spec?.refuse_ip_literals === true ? [IP_LITERALS.on] : [];
+  const { lines, more } = hostRuleLines(spec?.host_rules, HOST_LINE_CAP);
+  // The note that rules only narrow comes last, after the cap line, whenever any host line shows.
+  const rules = lines.length > 0 ? [...lines.map((l) => l.text), ...(more ? [more] : []), HOST_RULES.narrows] : [];
+  return [...ip, ...rules].map((text) => ({ text }));
+}
+
 /** The Network value: the plain count, or under open egress the count of the listed hosts with the rest said (A3.1). */
 export function networkValue(hosts: number, open: boolean): string {
   if (open) return hosts === 1 ? NR_REVIEW.POLICY_HOST_OPEN_ONE : NR_REVIEW.POLICY_HOSTS_OPEN(hosts);
@@ -106,7 +120,9 @@ export function policyRows(
 
   const hosts = access ? reachedHosts(access, wallsLeftOut) : preview?.spec.allowed_domains?.length;
   if (hosts !== undefined) {
-    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: networkValue(hosts, (access ? access.unlisted.allow_all : preview?.spec.allow_all_egress) === true), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name) });
+    const open = (access ? access.unlisted.allow_all : preview?.spec.allow_all_egress) === true;
+    const notes = networkNotes(preview?.spec, open);
+    rows.push({ id: "network", label: NR_REVIEW.POLICY_NETWORK, value: networkValue(hosts, open), detail: joined(NR_REVIEW.PROV_SOURCE_POLICY, preview?.source.name), ...(notes.length > 0 && { notes }) });
   }
 
   const kinds = (access?.credentials ?? []).map((c) => access?.rows.find((r) => r.id === c.row)?.name).filter((n): n is string => !!n);

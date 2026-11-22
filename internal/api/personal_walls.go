@@ -851,8 +851,7 @@ func (s *Server) wallsAdmitApproval(w http.ResponseWriter, r *http.Request, ap t
 			run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID)
 		}
 		if err != nil {
-			writeErrorReason(w, http.StatusServiceUnavailable, reasonRunUnreadable,
-				"This approval's run could not be read to check its network preset, so nothing was decided. Try again.")
+			approvalRunUnreadable(w, r, err)
 			return run, false, false
 		}
 		haveRun = true

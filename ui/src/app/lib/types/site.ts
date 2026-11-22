@@ -11,13 +11,6 @@
 
 import type { RecordingLevel } from "./policy";
 
-/** @deprecated superseded by EgressRedirect — kept only so a PUT body saved
- *  before EgressRedirects existed keeps decoding (see SiteConfig.artifact_overrides). */
-export interface ArtifactOverride {
-  base_url: string;
-  token_secret_ref?: string;
-}
-
 // One outbound redirect: requests to `from` are substituted to `to` (from's
 // host dropped from egress, to's host allowed), with an optional token
 // injected proxy-side. `ecosystem` set (one of the six package-manager keys)
@@ -65,9 +58,6 @@ export interface SiteConfig {
   // NOT lift the SSRF guard or grant policy allow on its own — see
   // internal/types/site_config.go's SiteConfig.UpstreamProxyNoProxy.
   upstream_proxy_no_proxy?: string[];
-  /** @deprecated superseded by egress_redirects, which generalizes this from
-   *  package registries to any outbound URL/host. */
-  artifact_overrides?: Record<string, ArtifactOverride>;
   // The operator's outbound redirect list — see EgressRedirect.
   egress_redirects?: EgressRedirect[];
   scm_hosts?: string[];
@@ -280,6 +270,42 @@ export interface ModelProvidersRead extends ModelProviders {
   // Whether a bedrock_sso provider can send run identity on this install: only
   // while it signs AWS requests at its proxy (WARDYN_AWS_SIGV4_AT_PROXY).
   gateway_identity_bedrock_sso: boolean;
+  // Server facts, not stored and not in the ETag. Each provider's service grant
+  // state by provider id, and the removed grants whose secret is still to be
+  // deleted (Go's types.ServiceGrantStatus and types.ServiceGrantCleanup).
+  service_grants?: Record<string, ServiceGrantStatus>;
+  service_grant_cleanups?: ServiceGrantCleanup[];
+}
+
+export interface ServiceGrantStatus {
+  client_id: string;
+  client_secret_ref: string;
+  // ok, failing or not_yet, read from the live replicas' rows with the live digest only.
+  state: string;
+  replicas: ServiceGrantReplicaStatus[];
+}
+
+// One replica's last outcome for a service grant (Go's types.ServiceGrantReplicaStatus).
+export interface ServiceGrantReplicaStatus {
+  host: string;
+  live: boolean;
+  state: string;
+  attempted_at: string;
+  last_ok_at?: string;
+  valid_until?: string;
+  reason?: string;
+  oauth_error?: string;
+  http_status?: number;
+  egress?: string;
+}
+
+// A pending clean-up of a removed grant's secret (Go's types.ServiceGrantCleanup).
+export interface ServiceGrantCleanup {
+  uid: string;
+  provider_id: string;
+  reason: string;
+  since: string;
+  client_secret_ref: string;
 }
 
 // Closed set, server-validated.
@@ -304,9 +330,9 @@ export interface ModelProviderGatewayIdentity {
 }
 
 // A custom_endpoint's sign-in (Go's types.ProviderOIDC): where each person signs in and as which
-// client. PKCE, openid and offline_access are always on and are not settings.
+// client. PKCE and offline_access are always on and are not settings; openid is on unless require_id_token is false.
 export interface ProviderOIDC {
-  // Required: discovery and the identity token's verification both come from it.
+  // Required: discovery and, unless require_id_token is false, the identity token's verification both come from it.
   issuer: string;
   // Overrides of what discovery names. The editor does not show them; a save carries them through.
   authorize_url?: string;
@@ -314,10 +340,29 @@ export interface ProviderOIDC {
   client_id: string;
   // The name of an operator secret holding the client's secret; absent is a public client.
   client_secret_ref?: string;
-  // Asked for beside openid and offline_access. The server keeps the list as sent, duplicates included.
+  // Asked for beside offline_access and, unless require_id_token is false, openid. The server keeps the list as sent, duplicates included.
   scopes: string[];
   // "console" (also absent) or "none".
   identity_binding?: "console" | "none" | (string & {});
+  // Set through the API or the policy file only: false signs in against an authority that grants no openid
+  // (identity_binding "none" only). Absent is true. The editor shows no control for it and keeps what is stored.
+  require_id_token?: boolean;
+  // Set through the API or the policy file only (Go's types.ProviderServiceGrant): the client credentials a
+  // listed service identity's runs get a token with. The editor shows no control for it and keeps what is stored.
+  service_grant?: ProviderServiceGrant;
+}
+
+// A provider's service grant. The client's secret is never part of it: it is written through its own route.
+export interface ProviderServiceGrant {
+  grant_type: "client_credentials";
+  token_url: string;
+  client_id: string;
+  scope?: string;
+  audience?: string;
+  // client_secret_basic (also absent) or client_secret_post.
+  client_auth?: "client_secret_basic" | "client_secret_post" | (string & {});
+  // The service principals (service:<name>) that may use the grant.
+  service_identities: string[];
 }
 
 // One provider. No credential lives here — each person supplies their own.
@@ -487,6 +532,9 @@ export interface ADOEntraConfig {
   runner_resident?: boolean;
   // Also put that token into the sandbox. Requires runner_resident.
   runner_resident_sandbox?: boolean;
+  // Let a runner reach this connection's minted tokens through the server, which adds the token (via_org).
+  // Absent reads as off; it applies only with token_mode minted_pat.
+  runner_via_org?: boolean;
 }
 
 // The closed git-provider kinds. A self-hosted forge is not a third kind: it is

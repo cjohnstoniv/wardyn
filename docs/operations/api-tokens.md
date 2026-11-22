@@ -195,6 +195,8 @@ a new login ends the last.
 - **Ending it.** `POST /sessions/revoke` (every scope, including `sessions_only`), a console sign-out, Signed-in CLIs
   (`DELETE /me/cli-sessions/{id}`) and SCIM deactivation end the session and its tokens at once. A sessions-only cut
   leaves the person's own API tokens working, as before; `session.revoke` counts `cli_sessions_ended`.
+  The CLI then says why only when the sign-in was signed out, reached its lifetime or went unused past its idle
+  lifetime; every other end reads the same.
 - **Admins.** An admin's CLI acts as role `user`. `wardyn login --admin` asks for a fresh approval and gives a 1-hour
   `cli_admin` token with the real role, never renewed, which ends with the session.
 - **No browser.** `WARDYN_CLI_PASTE_SIGN_IN=true` lets the person paste a code back instead; the code lasts 5
@@ -518,3 +520,175 @@ actor_token_type=urn:ietf:params:oauth:token-type:access_token     (required wit
   - Open WebSocket streams are the exception: a terminal or relayed socket already established keeps working until it closes or the run ends.
   - Runs a portal launched keep running after it is revoked: they are the person's runs.
   - With `?cut_in_flight=true` those runs also get no more gateway tokens ([When a run's gateway access ends](ai-gateway.md#when-a-runs-gateway-access-ends)). It is off by default, so a revoke changes nothing else for the person's work.
+
+### Portals with their own identity issuer
+
+- A portal can sign its people in against its own identity provider, not Wardyn's. Register it with an `issuer`.
+- Its people are the portal's own. They are never console sign-ins: their principal starts `delegate:person:`, which every human sign-in door refuses.
+- The credential has the prefix `wdi_` followed by 64 lowercase hex characters. It is shown once and stored only as a hash.
+- A portal without `issuer` is a console portal, and everything above this section stays as it was.
+- A registration answers 409 `portal_issuers_not_activated` until an admin has [switched issuer portals on](#switch-issuer-portals-on), and 409 `portal_issuers_need_sso` while console sign-in is not configured.
+
+| Field | Meaning |
+|---|---|
+| `issuer` | The exact issuer string in the tokens' `iss`, compared byte for byte. Another spelling of a bound issuer, even by a final `/`, is refused 409 `delegate_issuer_spelling_conflict`. |
+| `internal_issuer` | Where Wardyn fetches discovery and keys, when that differs. Its host must be listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS`. A portal on an issuer already bound must use the binding's address, or 409 `delegate_issuer_address_conflict`. |
+| `token_profile` | `okta_id_token` or `okta_access_token`. A portal on a bound issuer must name a person by the same claim (`sub` or `uid`), or 409 `delegate_issuer_profile_conflict`. |
+| `audience`, `required_scopes` | Access-token profile only: the one `aud` and the scopes the token must carry. |
+| `email_domains` | ID-token profile only: the token's `email_verified` must be true and its domain listed. |
+| `groups_claim`, `group` | The claim that lists groups (default `groups`) and the one group a person must be in. |
+| `portal_managed_admission` | Set when the portal alone chooses its people: no group, and then no signal of Wardyn's own says the portal chose wrongly. A registration sets a group, or this flag, never both. |
+| `required_claim` | One optional `{claim, value}` match, checked in addition to the group (or the flag), never instead of it: the token's top-level claim must be that string. The claim should be one the person cannot edit at the provider. |
+| `user_type` | The user type every one of its people gets. It is never read from a claim, and their role is always `user`. |
+| `max_subject_token_age_seconds` | 300 to 600, default 300. The oldest a token's `iat` may be. |
+| `grant_ttl_seconds` | 300 up to the maximum age, default the maximum age. The longest a grant lives from its mint. A grant also ends at the token's own signed end, so it can live much less: read `expires_in` in the answer, which can be as low as 5 seconds. |
+| `ui_session_renewal` | Optional, issuer portals only: a person's browser-app session renews on the portal's grants ([longer browser sessions](#longer-browser-sessions)). A console portal that sets it is refused 422 `delegate_renewal_needs_issuer`. |
+| `run_in_under` | Required: the unit its runs live in. The pin covers that unit and every unit under it, for launching runs and for managing the runs its people own, so pinning a parent lets the portal's people work in any child unit. |
+
+- A registration answers its refusals with 422 or 409 and a reason in [the SDK reference](../sdk.md). `GET /admin/delegates` shows `admission_rev` only for an issuer portal. A console portal's answer keeps its 0.10.0 shape.
+- When changes are held for a second person, a registration by a signed-in person is a held change: the answer is 202, and the credential is in that answer only. The break-glass admin token is not held: its write applies at once, and each one writes a `governance.change.bypass` row.
+- A portal that sets no group and no required claim carries a note in the review diff and the audit row: the portal chooses who can use it, and anyone it selects who meets the token requirements can act as a user in the pinned unit.
+- The group claim of a token is read tolerantly: a value that is not a list of strings counts as no groups.
+- An issuer portal keeps no groups for a person: their sign-in record is empty, so no group of theirs reaches any grant or restriction. The portal's own registered `group` still gates its exchange, from the token's claim.
+- The People list keeps one display value per person and nothing authorises by it: the token's `email` claim for an ID token (empty if absent), the token's `sub` (the login name) for an access token.
+
+**Who a person is.**
+
+- A person's principal is `delegate:person:<k>:<e>`.
+  - `k` is the first 26 characters of the lowercase, unpadded base32 of SHA-256 over a fixed prefix and the exact issuer string.
+  - `e` is the lowercase, unpadded base32 of the person id's bytes.
+- The person id is the token's `uid` for an access token and its `sub` for an ID token. It is 1 to 128 printable ASCII characters with no space.
+- Two portals on one issuer share its people. What separates them is the unit each is pinned to: every request is checked against the portal's pin, and a person's own run outside it answers 403 `portal_unit_scope`.
+- Changing the issuer string means new people. The internal address and the pin are not part of who a person is.
+- `GET /api/v1/people` returns `issuer` for each portal person, and `internal_address` when the registration has an `internal_issuer` (it is left out when empty, so treat it as optional). The console's People screen does not show them yet.
+- A person's first exchange through any portal writes one `person.create` row, which carries no email.
+
+**Exchange.** `POST /api/v1/token`, with the portal's id and `wdi_` credential as HTTP Basic, as above.
+
+- `subject_token_type` must be the profile's: `urn:ietf:params:oauth:token-type:access_token` for `okta_access_token`, `…:id_token` for `okta_id_token`. Another type is 400 `invalid_request`.
+- The client sees an OAuth code. The audit row's `reason` is finer, so read the two apart:
+
+| Case | Client gets | `delegation.exchange` `reason` |
+|---|---|---|
+| `actor_token` sent | 400 `invalid_request` | `actor_token_unsupported` |
+| A `wdg_` token as the subject | 400 `invalid_grant` | `subject_token_delegated` |
+| The verifier refuses the token | 400 `invalid_grant`, or 400 `invalid_request` for a wrong type, or 403 `access_denied` when the portal may not act for them | the verifier's reason; `cause` or the claim's name beside it |
+| Issuer or keys cannot be reached | 503 `temporarily_unavailable`, with `Retry-After` when the wait is above zero | `portal_issuer_unavailable`, with `cause` |
+| The admission rule changed mid-exchange | 503 `temporarily_unavailable` | `portal_admission_changed` |
+| Identity deactivated or purged, or the session revoked | 400 `invalid_grant`, nothing minted | `identity_deactivated`, `session_revoked` |
+| A read failed | 503 `temporarily_unavailable` | `failure` row: the reply's code, `cause` names the step |
+| The sign-in record write failed | 503 `temporarily_unavailable` | `failure` row: `cause` is `sign_in_record_write` |
+| The identity or grant write failed unexpectedly | 500 `server_error` | `failure` row: `cause` is `issue_portal_identity` or `mint_portal_grant` |
+
+- A wrong, revoked or missing portal credential, or a binding retired mid-exchange, is 401 `invalid_client` and writes `auth.fail`, not a `delegation.exchange` row. A malformed form (`grant_type`, `subject_token`, a type or the actor fields) is refused 400 before the exchange and writes no row.
+- The answer is `{"access_token":"wdg_…","token_type":"Bearer","expires_in":N,…}`. The token has no refresh, and `expires_in` is the grant's remaining life, never below 5.
+- Every decision past client authentication writes a `delegation.exchange` row. A success row carries `grant`, `expires_at`, `user_type` and `role`; every row names the issuer, `k`, the profile, the two freshness settings and the admission rule by names only. Its fields are in [the audit reference](../AUDIT-ACTIONS.md).
+
+**What the verifier checks**, in this order for a token that passed the signature and `iss` check:
+
+| Check | Rule |
+|---|---|
+| Times | `exp` present and ahead; `nbf`, if present, not ahead; `iat` a number at most 60 seconds ahead and no older than the maximum age. |
+| Grant end | The earlier of `iat` plus the maximum age and `exp` must leave at least 5 seconds, or the token is stale. |
+| Access token | `cid` is the registered client id; `scp` holds every required scope; `aud` is exactly the one audience; `uid` is present. |
+| ID token | `aud` is exactly the client id; `azp`, if present, is it too; a header `typ`, if present, is `JWT`; no `cid`, `scp`, `scope` or `client_id` claim; `sub` is present. |
+| Person | The id is 1 to 128 printable ASCII characters. A `sub` or id that is a reserved name is refused `reserved_principal`. |
+| Admission | The `required_claim`, the group, and for an ID token the email domains. A miss is `subject_token_claim_mismatch`, `outside_scope`, `email_verified_absent`, `email_unverified` or `email_domain`. |
+
+- A grant ends at the earliest of `iat` plus the maximum age, the token's `exp`, and its mint plus `grant_ttl_seconds`.
+- A person disabled only at the provider keeps a grant for at most the maximum age (5 to 10 minutes) plus the 60-second clock allowance after their token was issued. That holds only if the provider issues no new token to a disabled user.
+- A Wardyn suspension of the person, or a revoke of the portal, ends grants at once.
+- Keep Wardyn's clock and the provider's synchronised. A token whose `iat` is more than 60 seconds ahead of Wardyn's clock is refused `subject_token_iat_future`.
+
+**Reaching the provider.**
+
+- Wardyn fetches discovery and keys itself: proxy environment variables never pick the destination, and the fetch goes direct unless the registration has no internal issuer address and the issuer's host is on `WARDYN_DAEMON_PROXY_ALWAYS`. It refuses redirects and caps each answer at 1 MiB.
+- It resolves the host and dials the address it checked. Loopback, link-local, metadata and other reserved addresses are refused for every host.
+- Any host may resolve to a public address. The extra private ranges (RFC 1918, unique-local and CGNAT, no other private space) and the extra CA from `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` apply only to the host and port a registration selects with `internal_issuer` that is also listed in `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS`. Listing a public issuer's host alone grants neither. An `internal_issuer` that is not listed is refused with `address_refused`, and nothing is resolved. Nothing skips verification.
+- Once a discovery or key fetch fails, or breaks a rule above, the issuer fails closed: exchanges answer 503 `temporarily_unavailable`; the audit reason is `portal_issuer_unavailable` and its `cause` is `issuer_unreachable`, `keys_unreachable`, `keys_cooldown`, `keys_off_origin`, `issuer_mismatch`, `address_refused`, `unreachable` or `request_canceled`. A key fetch that breaks a rule drops the keys it brought.
+- A failed fetch is enforced before it is logged or reported, so an exchange already under way is refused while the report runs. While a refusal of a discovery document or key address is in force, every unavailable answer carries that refusal's cause, through later failed retries and outages, until a refresh passes. Then `keys_cooldown` means a verified new key address is waiting for its keys.
+- A token whose key is not known triggers at most one key fetch per 30 seconds. Inside that interval the answer is 503 `temporarily_unavailable`, cause `keys_cooldown`.
+- An outage answer carries `Retry-After`, the rest of the 30-second interval. When a key fetch broke a rule, such as `address_refused`, the wait is zero and the header is left out.
+- Wardyn learns of an outage only at its own fetches.
+- Keys loaded by any fetch, one an unknown key triggers included, reopen an issuer whose discovery is healthy. A failing or refused discovery keeps it closed.
+- A key fetch that breaks a rule drops the keys, their address and the discovery record. Only a newer verified discovery supersedes that, never a key fetch alone.
+- A valid token whose keys reload after an address change gets 503 `temporarily_unavailable` (cause `keys_cooldown`), not `invalid_grant`. A key a successful fetch removed is still refused.
+- Each discovery and key request has its own 10-second bound, and a caller that leaves does not mark the issuer down.
+- A refresh failure counts on `wardyn_portal_issuer_refresh_failures_total{issuer_key,portal,source,cause}`.
+
+**Reaching the issuer through a proxy.**
+
+- For a registration without an internal issuer address, Wardyn uses the daemon proxy when the issuer host is on `WARDYN_DAEMON_PROXY_ALWAYS`. Registrations with an internal issuer address use the direct internal route. Wardyn still resolves the host and checks every address under the rules above, and asks the proxy to connect to an address it checked, never to the name.
+- On the proxy route the issuer is trusted only under `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. With it unset, a registration without an internal issuer address whose issuer host is listed is refused at its exchanges. The proxy must pass the issuer's TLS through uninspected.
+- The warning `portal issuer: refresh failed` names the `route` (`proxy` or `direct`) and a `detail`. A proxied fetch adds `proxy connect failed` (the proxy was not reached), `proxy target failed` (it was, and the issuer was not), `proxy status` and its family, such as `4xx` or `5xx` (the proxy answered the connect with anything but 200; a 302 logs `proxy status 3xx`), `proxy tls failed` (an https proxy's own handshake), `not the proxy` (cause `address_refused`) and `tls handshake failed`. Before any connect, `name not resolved` is an outage, `address refused` is a checked address Wardyn will not use, and `host not comparable` is an issuer host Wardyn cannot compare with the list (cause `address_refused`); `request failed` stands for any other transport error.
+- After a proxy connect, target or status failure, Wardyn tries the next address it checked while addresses and time remain. On the proxy route with no CA file set, the detail is `no proxied issuer roots`.
+
+#### Longer browser sessions
+
+- Without `ui_session_renewal`, a person's browser-app session ends with the grant it was opened under, at the latest `WARDYN_UI_SANDBOX_SESSION_TTL` (default 8 hours) after the ticket was redeemed.
+- With it, the session follows a chain: the grants this portal minted for that person while one of them was live. It ends at the redemption plus `WARDYN_UI_SANDBOX_SESSION_TTL` at the latest, and sooner when no grant of the chain is live.
+- Every new request asks the chain again. It is refused once no grant of the chain is live, the portal is revoked, or the person or the portal's unit refuses. A stream that is already open never follows the chain: it ends at the end it was admitted with.
+- Desktops (the sign-in desktop included), terminals and a helper's support sessions never renew, whatever the portal sets.
+- Only an issuer portal can set it. A registration that sets it on a console portal answers 422 `delegate_renewal_needs_issuer`. This release has longer browser sessions switched on, so a registration is not refused `delegate_renewal_withheld`.
+
+#### What a revoke or a suspension reaches
+
+- A new request, and a new connection, is checked at its own opening with no cached answer: after a revoke of the portal, a suspension or purge of the person, or a change of the portal's unit that leaves the run outside the portal's new unit and the units under it, it is refused at once. A run still under the portal's unit passes.
+- An open connection is re-checked on a beat, and ends at the first check that fails, or at the end it was admitted with. The design limits, counted from the event, are:
+
+| Connection | Re-checked | Each check limited to | Ends within |
+|---|---|---|---|
+| Browser app, including a stream or upgrade | every 30 seconds | 5 seconds | about 35 seconds |
+| Event stream | every 15 seconds | 5 seconds | about 20 seconds |
+| Terminal | every 30 seconds | 5 seconds | about 35 seconds |
+| Desktop | every 30 seconds | 10 seconds | about 40 seconds |
+
+- These are limits the design sets, read from the code. They are not measured times.
+- The person sees the connection drop with no clean close, and is refused when they reconnect.
+- An event stream whose opening check fails answers 403 `revoked`; one that cannot be checked answers 503 `revocation_unavailable`. A ticket for a run that no longer exists is refused 403 `ui_gateway_ticket_invalid`.
+- Every read that decides whether to open a session (the ticket, the run, the desktop's closed set, a terminal's opening) shares one 5-second budget and answers a retryable 503 when it gets no answer. An event stream whose run disappears during setup answers 404 `run_not_found`.
+- Starting the sandbox's side of a connection is limited too. Wardyn must start a local operation or begin sending a remote start within 25 seconds of the check that admitted it; a remote runner can receive and execute it later. A write that never started passes no bytes. An app that needs longer than 25 seconds to start from cold can be refused with a retryable 503 even when nothing was revoked, and a retry may find it started. A write that began in time can still be interrupted with an unknown byte count, a terminal that needed a resume can answer 502 `attach_resume_failed`, and an app's launcher may never become ready. A session that opened in time is not cut by this.
+- A request goes out on a connection of its own, never one shared with another request. A runner reached over a network link refuses a start whose time has passed at the link, and the runner needs no change for it. The bound ends where Wardyn hands the start to the link: a start handed over in time can still be delivered and run later on a busy runner.
+- A terminal opened with a portal ticket attaches through the organisation. On the local route it answers 409 `attach_local_unavailable` with `detail` `issuer_portal`.
+- Every browser-app or desktop connection the dispatch bound gates writes one `ui.dispatch` row when it closes; a terminal does not ([the audit reference](../AUDIT-ACTIONS.md)).
+
+#### Suspend, reactivate and purge a portal's person
+
+A person is one per issuer and provider id, so one suspension reaches them through every portal on that issuer. These routes are API only, and work only on a `delegate:person:` principal; any other principal is refused 422 `portal_person_only`.
+
+1. Find them. `GET /people/portal-person?issuer=<exact issuer>&person_id=<their id at the provider>` answers `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals. `GET /people/{principal}/portals` answers the same shape. Neither carries `purge_after`. An issuer with no binding answers 404 `portal_issuer_not_bound` (check its spelling); a bound issuer with no such person answers 404 `person_not_found`, and asking creates nobody.
+2. Suspend. `POST /people/{principal}/suspend` (admin or security admin) deactivates the person and deletes their grants in one step, so a grant stops at its next request, then sweeps their API tokens and SSH keys and kills every run of theirs. The body is optional: `purge_after_seconds` (0 to ten years, 0 or absent for none) schedules the permanent purge, and a positive value needs a super admin (403 `portal_purge_deadline_operator_only`).
+3. If it answers 503 `portal_lifecycle_incomplete`, a step is still pending. Send the same request again. A sweep also retries pending suspensions and purges every 15 minutes, with or without SCIM set up. A backend failure that continues can leave the work pending across sweeps.
+4. Look at what is stuck. `GET /admin/portal-lifecycle/status` (admin or security admin) answers `deactivated` (`person`, `deactivated_at`, `purge_after`), `pending` (`person`, `step`, `last_error`), `pending_suspensions` and `pending_purges`, naming each person by principal. It answers whether or not SCIM is configured. `GET /scim/status` stays the workforce's view: it lists only the people of its own SCIM issuer and tenant, and no portal person.
+5. Undo it. `POST /people/{principal}/reactivate` (super admin) clears the deactivation and any purge date. Grants, tokens, keys and runs the suspension removed do not come back; the person can exchange a valid, eligible token through a portal again, though the exchange can still be refused for any of its usual reasons.
+6. Or make it permanent. `POST /people/{principal}/purge` (super admin) needs a suspended person (409 `person_not_suspended`, which is also the answer when a reactivation commits first) and cannot be undone: every portal refuses that person for good, and the same issuer and person id can never sign in again. A purge of a person already purged retries its pending steps. A purge at its scheduled date, by the sweep, writes no `person.purge` row.
+
+Each answer reports `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. A purged person answers 409 `person_purged` to a suspend or reactivate. The routes and their reasons are in [the SDK reference](../sdk.md); their audit rows are `person.suspend`, `person.reactivate`, `person.purge` and `identity.deactivate`.
+
+#### Switch issuer portals on
+
+Issuer portals are off in a new deployment. `POST /api/v1/admin/portal-issuers/activate` (admin only) switches them on, once, and nothing ever switches them off.
+
+1. Stop every wardynd older than 0.10.2 that uses this database. An older server does not know the new tables, so it must not run beside one that does.
+2. Wait for the server you call to have sampled the database's other sessions for two minutes. Until then the call answers 409 `portal_issuers_sample_warming` with a `Retry-After`.
+3. Call it with `{"old_servers_stopped": true}`. Without that statement it answers 422 `portal_issuers_statement_required`.
+4. If a session in the sample does not carry a label of 0.10.2 or later, the call answers 409 `portal_issuers_old_server_suspected` with `sessions`, a list of `{"label", "client_addr"}`. Stop them, or check each one and call again with `"confirm_listed_sessions": true`. The override audit row names them as `label@address`.
+5. The answer is 200 with `activated` and `overridden_sessions`. A call after the switch is on answers 200 with `already_activated`.
+
+- A 0.10.2 server labels each of its database sessions `application_name`: `wardynd/<version>/<replica>` for the server and `wardynd-<tool>/<version>` for a subcommand. A label of any other shape, a version before 0.10.2, or none is a suspect; a later version, or a prerelease of 0.10.2, is not.
+- The sample reads the database's own session list every 10 seconds, so it sees only sessions that exist when it looks, and a label is only what the client chose. It is a veto of the statement, never proof that old servers are stopped.
+- The call writes `portal_issuers.activate`, and `portal_issuers.activate_override` when sessions were confirmed past. After the switch each server checks hourly and writes `portal_issuers.old_client_seen` once per label and address per UTC day.
+- A server that cannot read the session sample answers as still warming, never as clean.
+
+#### Retire a binding, change an admission rule
+
+- `DELETE /api/v1/admin/portal-issuers/{k}` retires an issuer binding that never admitted anyone. A binding that a portal, a person, a grant or a stored rule still names answers 409 `portal_issuer_in_use`.
+- `PUT /api/v1/admin/delegates/{id}/admission` changes a portal's group, `portal_managed_admission` or required claim. The body names the rule you read as `expected`. A stale one answers 409 `delegate_admission_stale`.
+- A change in the admission rule counts into `admission_rev`. An exchange that began under the old rule answers 503 `temporarily_unavailable`, with `portal_admission_changed` as its audit reason, and the portal retries under the new one.
+- Both are admin only. With a second human required, a signed-in person's request is a held change that applies when approved. The break-glass admin token applies it directly and writes a `governance.change.bypass` row.
+
+#### The console issuer
+
+- A server with console sign-in configured records its console issuer at boot. Each console issuer a 0.10.2 server boots with stays recorded, so it can never become a portal's issuer on that deployment. The record starts empty at the upgrade: an issuer the console used only before it, or on a server that never booted 0.10.2, is not in it. Do not register a portal on an issuer the console has ever signed in against.
+- Boot refuses to start when the console issuer equals a portal binding's issuer. The message names the portal registrations on that binding, by id and name with revoked ones marked, up to five and then `and N more`. When none names it, it says so.
+- On a split-role install the app role needs `SELECT, INSERT` on `console_issuers` before that boot step can run: see [the migration list](../OPERATIONS.md#splitting-the-migrator-and-app-roles-wardyn_pg_migrate_dsn).

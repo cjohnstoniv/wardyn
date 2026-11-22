@@ -498,7 +498,7 @@ func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, re
 // (a clean FAILED-by-nonzero-exit carries its exit code instead).
 // It reports whether this transition won.
 func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) bool {
-	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
+	applied, err := s.casRunStateEnding(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
 		// applied==false ("a concurrent kill legitimately won") and must not collapse
@@ -644,6 +644,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	killerType, killer := actorFromRequest(r)
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
+	cascadeCtx = withKillConfirm(cascadeCtx)
 
 	applied, killData, serr := s.killLiveRun(cascadeCtx, run, killerType, killer, notStarted)
 	if errors.Is(serr, errKillRunStarted) {
@@ -676,7 +677,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "state": types.RunKilled})
+	s.writeKillAccepted(cascadeCtx, w, run)
 }
 
 // killCASAttempts bounds handleKillRun's re-reads: one per forward move a live run can make under the
@@ -847,17 +848,19 @@ func (s *Server) claimKillTransitionWith(ctx context.Context, run types.AgentRun
 // runner.action.refuse. The login supersede still reads it as a failure.
 func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any, queuedOK bool) map[string]any {
 	id := run.ID
-	if run.State == types.RunQueued {
+	if run.State == types.RunQueued || killWasQueued(ctx) {
 		return s.killQueuedTail(ctx, run, killerType, killer, extra)
 	}
 	killData := map[string]any{}
-	queued := false
+	queued, confirming := false, false
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	var kerr error
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr = s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			if queuedOK && errors.Is(kerr, runner.ErrPendingOnRunner) {
 				queued = true
+			} else if queuedOK && errors.Is(kerr, runner.ErrTeardownConfirming) && markKillConfirming(ctx) {
+				confirming = true // a person's kill, pods terminating: no failure, and the ref stays
 			} else {
 				killData["runner_error"] = auditStep(ctx, auditStepKillSandbox, kerr, slog.String("run_id", id.String()))
 			}
@@ -919,12 +922,14 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	maps.Copy(data, extra)
 	if queued {
 		data["sandbox_stop"] = "queued"
+	} else if confirming {
+		data["sandbox_stop"] = "confirming"
 	}
 	// On revokeCtx, not ctx: a slow kill leaves ctx expired, and the audit row and the reconciles below
 	// would then write and read nothing. It is detached and already bounded, and it shares the
 	// revokes' window so the tail's worst case stays killCascadeTimeout + killRevokeTimeout.
-	s.recordAudit(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill",
-		id.String(), outcome, mustJSON(data)))
+	rctx, kev := killReceiptOf(revokeCtx, s.auditEvent(&id, killerType, killer, "run.kill", id.String(), outcome, mustJSON(data)))
+	s.recordAudit(rctx, kev)
 
 	// A killed workspace run still settles its workspace: verify/scan runs get
 	// the no-result reconcile; a record run's kill IS the normal "Done recording"

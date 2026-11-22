@@ -76,7 +76,7 @@ test.describe("Approvals: a held host request", () => {
     await page.getByRole("tab", { name: /^Decided/ }).click();
     const title = page.getByText(HOST_CALL_CARD.LIST_TITLE("POST", LONG_PATH, HOST));
     await expect(title).toBeVisible();
-    await expect(page.getByText("Allowed for this run")).toBeVisible();
+    await expect(page.getByText("Allowed in this proxy")).toBeVisible();
     // The title wraps (break-all), so its text is never cut to an ellipsis.
     const clipped = await title.evaluate((el) => el.scrollWidth > el.clientWidth);
     expect(clipped).toBe(false);

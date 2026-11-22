@@ -205,9 +205,15 @@ const envAllowAgentTelemetry = "WARDYN_ALLOW_AGENT_TELEMETRY"
 // nothing else about a run changes.
 const envMacOSVMs = "WARDYN_MACOS_VMS"
 
+// envSupportSessions turns on support sessions: a super admin may ask to help inside someone else's running run,
+// and that run's owner may accept (support_grant.go). Off, the default, a request or an accept is refused with
+// 409 support_disabled, every open help session closes at its next re-check, the sweep ends open grants as
+// support_off, and the console is told the option is off (SetupFeatures.SupportSessions).
+const envSupportSessions = "WARDYN_SUPPORT_SESSIONS"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs, envSupportSessions}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than
@@ -701,7 +707,11 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
+//
+// A drive the run got through its issuer portal adds `portal`, the portal's id. portals, when given, maps each such drive
+// id to that portal, set at create from the fold: a team drive mounted through a group allocation names none, so it is
+// never inferred from the portal that created the run.
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount, portals ...map[uuid.UUID]uuid.UUID) {
 	for i := range drives {
 		drive := &drives[i]
 		target := drive.Target
@@ -719,6 +729,11 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy
+		}
+		for _, byDrive := range portals {
+			if portal, ok := byDrive[drive.DriveID]; ok {
+				data["portal"] = portal
+			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
 			driveAuditTarget(drive), "success", mustJSON(data)))

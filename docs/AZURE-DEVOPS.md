@@ -276,9 +276,10 @@ https://<your-wardyn-address>/api/v1/scm/azure-devops/callback
 - A connection captured at console sign-in is captured again at the person's next sign-in.
 - **Offboarding tries to revoke the person's live tokens first.**
 - `DELETE /people/{principal}/credentials`, and the `credentials` scope of `POST /people/{principal}/erasure`, revoke every live token created in their name (each audited `ado_pat.revoke`, reason `offboarding`), then delete the stored grant.
-- A revoke Azure DevOps refuses for good (no permission, say) is audited `ado_pat.revoke.failed`; the erase goes on, and its answer and audit row carry `tokens_revocation_failed: true` and a `detail`: that token works until it expires.
+- A revoke Azure DevOps refuses for good (no permission, say) is audited `ado_pat.revoke.failed`; the erase goes on, and its answer and audit row carry `tokens_revocation_failed: true` and a `detail`: that token may still work until it expires.
 - An erase run again before that token expires says so too.
-- A revoke that does not finish (no answer, a timeout, a server error) erases nothing: the erase answers `503` `credential_erase_revoke_unfinished`, and running it again revokes the token and erases.
+- A revoke that does not finish (no answer, a timeout, a server error) erases no stored credentials. The erase answers `503` `credential_erase_revoke_unfinished`, and running it again is another attempt that revokes the token and erases once the revoke finishes.
+- That holds for stored credentials only. A `POST /people/{principal}/erasure` with several scopes runs `credentials` last, so scopes before it, such as run outputs, tasks and recordings, may already be erased and stay erased; its 503 says which.
 - `/me/scm-access` adds, on a row that creates tokens, `token_mode: minted_pat`, `last_token` (when the newest token was created and expires, once its record is closed when that was and why, and `revoke_failed` or `revoke_pending` when a revoke failed) and `default_profile`.
 
 That has two consequences:
@@ -359,7 +360,7 @@ That has two consequences:
 | `token_mode` | What the run gets on a laptop | Why |
 |---|---|---|
 | `own_pat` | The person's own PAT, only when the Azure DevOps row is theirs and the PAT is stored in their own namespace; otherwise refused ([`internal/api/run_placement_intents.go#Server.localADOOrigin`](../internal/api/run_placement_intents.go)) | It is their credential |
-| `minted_pat` | Off by default. The per-run token, `runner_resident`, on a person's own runner only, behind the delivery policy for the runner's trust class and the connection's opt-in. Otherwise `runner_posture_unmet` (floor or posture unmet) or `placement_credential` | The organisation mints it for the run |
+| `minted_pat` | Off by default. The per-run token, `runner_resident`, on a person's own runner only, behind the delivery policy for the runner's trust class and the connection's opt-in; or `via_org`, behind `runner_via_org` ([below](#via-the-organisation-via_org)). Otherwise `runner_posture_unmet` (floor or posture unmet) or `placement_credential` | The organisation mints it for the run |
 | `bearer` | Refused, opted in or not (`placement_credential`) | The organisation holds the token |
 
 - A super admin opts a connection in with `entra.runner_resident` on `PUT /workspace-providers`. It is off by default and audited on `workspace_provider.write`.
@@ -378,6 +379,25 @@ That has two consequences:
 - Pinned by `TestLocalEligibility_ADOResidentIsOffByDefault` ([`internal/placement/resident_test.go`](../internal/placement/resident_test.go)) and `TestMintedPATLocal_` ([`internal/api/runs_dispatch_ado_pat_local_test.go`](../internal/api/runs_dispatch_ado_pat_local_test.go)).
 - The refusal is `classifyCredential` ([`internal/placement/eligibility.go`](../internal/placement/eligibility.go)).
 - Where each thing lives is in [Managed laptops: client-mode runners](operations/hybrid-laptops.md#where-each-thing-lives). The delivery rules are in [Credential delivery (OD-12)](design/0.9/PLAN.md#7-credential-delivery-od-12).
+
+### Via the organisation (`via_org`)
+
+- `entra.runner_via_org` (labelled "Allow on runners via the server") is a per-connection setting on `PUT /workspace-providers`. It is off by default, applies only to `minted_pat` rows (an `own_pat` row is refused) and needs no `runner_resident`. The switch is the connection's whole consent; the delivery policy must also send `ado_minted_pat` `via_org` (**Keep in the organisation**, under **Governance → Runner credentials**).
+- The token stays on the server. The runner sends the run's Azure DevOps traffic to Wardyn, and the organisation's engine runs the gate, holds and push rules and adds the token. The runner never holds it.
+- **What the runner must meet.** Any runner owner is served, an organisation's cluster runner included. The run is refused (`placement_credential` or `runner_posture_unmet`) unless:
+  - the runner has a known trust class;
+  - the run has no confinement floor, because a runner-asserted class never meets one;
+  - the `ado_minted_pat` row's `require_posture` is met. A Kubernetes runner reports no posture, so a row with `require_posture` refuses every Kubernetes runner;
+  - the runner and the proxy image are 0.10.1 (any release candidate) or later. An older one is refused with "This run was not launched: its runner cannot reach Azure DevOps via the organisation; update wardyn-runnerd and the proxy image to 0.10.1 or later". An image that names no release (a digest, a development tag) passes.
+- **Bounds of the relay**, per run: 16 streams, 8 GiB per server replica (reset on restart) and 10 minutes idle. A request through the organisation's proxy waits at most 9 minutes in all for approvals and sign-in.
+- Every open stream ends, and the engine is released, when the run's runner goes offline or an idle pause takes effect, so Azure DevOps stops at once.
+- **A paused run.** Every request a paused run sends through the organisation (`via_org`) is refused `409 run_paused` until the run is resumed: Azure DevOps, GitHub and `api_key` credentials alike (`refuseViaOrgEndedRun`).
+- **Withdraw.** The token's `via_org` delivery is judged again when the connection's `runner_via_org` switch, token mode or disabled flag, the delivery policy, or the runner's posture changes.
+  - A withdraw revokes the run's tokens at Azure DevOps (`drift`). A write that withdraws also restarts this server replica's organisation proxy for the run, ending its open `via_org` requests. Another replica's organisation proxy is not restarted: its next token refresh is refused, at most 15 minutes later. A later Azure DevOps request is refused (`placement_credential`).
+  - A change made outside those settings is caught at the next token refresh, at most 15 minutes apart while the run uses Azure DevOps. It is refused there without ending the run's other requests.
+  - A change of the runner's trust class does not affect `via_org` delivery: it is never trust-gated (`DeliveryPolicy.Validate`, `DeliveryPolicy.ForTrust`, `ViaOrgADOAdmits`).
+- A global `via_org` row of the delivery policy applies to every runner and turns `runner_resident` off for that class; a per-trust row cannot deliver `via_org` or override one.
+- Pinned by `TestViaOrgADORunnerReady` and `TestHandleViaOrg_ADOGitRouteIsTheGrantsAndBrokered` ([`internal/api`](../internal/api)).
 
 ## Check organisation settings
 

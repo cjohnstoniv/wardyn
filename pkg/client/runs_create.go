@@ -175,7 +175,9 @@ type CreateRunRequest struct {
 	// catalogue shows; the person's legacy drive keeps /home/agent/drive. Each
 	// is authorised through the caller's own grants. Sending both Drive and
 	// Drives is 400 drive_selection_conflict. One drive that cannot be mounted
-	// refuses the run; none is dropped.
+	// refuses the run; none is dropped. A run started through an issuer portal
+	// names only drives a super admin allocated to that portal: any other id,
+	// and the Drive flag, answer 403 drive_not_allocated_to_portal.
 	Drives []DriveAttachment `json:"drives,omitempty"`
 	// KeepWorkFolder keeps the run's work folder (/home/agent/work, and nothing
 	// else: not home, agent settings or /tmp) as the caller's own drive, which

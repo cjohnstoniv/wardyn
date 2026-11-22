@@ -32,7 +32,6 @@ import (
 // looking identical to a complete trail. The filter flags mirror the
 // server-side predicates docs/sdk.md documents on the raw HTTP API.
 func auditCmd(client clientFn) *cobra.Command {
-	var runID string
 	var asJSON bool
 	var limit, offset int
 	var filter sdk.AuditFilter
@@ -40,18 +39,14 @@ func auditCmd(client clientFn) *cobra.Command {
 		Use:   "audit <run-id>",
 		Short: "Show the audit trail for a run",
 		// A positional run id matches the sibling commands (run get, approve,
-		// attach, record synthesize). The deprecated --run flag is still accepted
-		// as an alias for backward compat, so at most one arg is allowed.
+		// attach, record synthesize). At most one arg: the command also has
+		// subcommands.
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Positional id wins; fall back to the deprecated --run flag.
-			if len(args) == 1 {
-				runID = args[0]
-			}
-			if runID == "" {
+			if len(args) == 0 {
 				return fmt.Errorf("run id is required (pass it positionally: wardyn audit <run-id>)")
 			}
-			id, err := parseID("run", runID)
+			id, err := parseID("run", args[0])
 			if err != nil {
 				return err
 			}
@@ -91,8 +86,6 @@ func auditCmd(client clientFn) *cobra.Command {
 			return tw.Flush()
 		},
 	}
-	cmd.Flags().StringVar(&runID, "run", "", "run id (DEPRECATED: pass the run id positionally instead)")
-	_ = cmd.Flags().MarkDeprecated("run", "pass the run id positionally: wardyn audit <run-id>")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 	cmd.Flags().IntVar(&limit, "limit", 0, "max events to return (0 = server default page, currently up to 1000)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "page offset; page forward by offset += the previous page's event count")

@@ -11,7 +11,8 @@
 // in run-detail/failure-block.test.tsx.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { AuditEvent } from "../../lib/types";
 
@@ -326,6 +327,149 @@ describe("RunDetailScreen — a failed ending read", () => {
     failing = false;
     await vi.advanceTimersByTimeAsync(4100);
     expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+    expect(noKillButton()).toBeNull();
+  });
+});
+
+// A kill whose sandbox was still stopping when it finished writes run.kill success with sandbox_stop
+// "confirming"; the stop's result lands later on its own run.kill.confirm row. The page reads that row with
+// its own action filter, hides Kill again while the result is on its way, and offers it again once the trail
+// says the stop failed or the wait ran out with no result.
+describe("RunDetailScreen — a kill whose sandbox stop is still being confirmed", () => {
+  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+  afterEach(() => vi.useRealTimers());
+
+  const confirmingKill = (): AuditEvent => ({ ...kill("success", 0), data: { sandbox_stop: "confirming" } });
+  const confirmRow = (outcome: "success" | "failure"): AuditEvent => ({
+    id: `c-${outcome}`,
+    time: new Date(Date.now() + 1_000).toISOString(),
+    actor_type: "system",
+    actor: "wardynd",
+    action: "run.kill.confirm",
+    outcome,
+    data: outcome === "failure" ? { step: "kill_sandbox", reason: "pod still terminating" } : undefined,
+  });
+  // The run.kill and run.kill.confirm reads answer per action filter, as the server does.
+  function seedConfirm(kills: AuditEvent[], confirms: () => AuditEvent[]) {
+    seed({ kills });
+    getRunMock.mockResolvedValue({ ...RUN, ended_at: new Date(Date.now() - 2_000).toISOString() });
+    listAuditMock.mockImplementation(async (_id: string, o?: { action?: string }) =>
+      o?.action === "run.kill" ? kills : o?.action === "run.kill.confirm" ? confirms() : [],
+    );
+  }
+
+  it("Kill again follows each row of the trail", async () => {
+    const rows: [string, AuditEvent[], AuditEvent[], string, boolean][] = [
+      ["E1 queued", [{ ...kill("success", 0), data: { sandbox_stop: "queued" } }], [], "queued", false],
+      ["E2 confirming", [confirmingKill()], [], "confirming", false],
+      ["E4 confirmed", [confirmingKill()], [confirmRow("success")], "confirmed", false],
+      ["E5 confirm failed", [confirmingKill()], [confirmRow("failure")], "partial", true],
+      ["E6 no sandbox_stop", [kill("success", 0)], [], "confirmed", false],
+      ["E7 other sandbox_stop", [{ ...kill("success", 0), data: { sandbox_stop: "runner_revoked" } }], [], "unconfirmed", true],
+      ["E8 failure", [kill("failure", 0)], [], "partial", true],
+    ];
+    for (const [label, kills, confirms, evidence, offered] of rows) {
+      seedConfirm(kills, () => confirms);
+      const view = renderRun();
+      await waitFor(() => expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", evidence));
+      if (offered) expect(killButton(), label).toBeEnabled();
+      else expect(noKillButton(), label).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it("E2 → a success row lands → E4: the clean copy, no Kill again, and polling stops", async () => {
+    let confirms: AuditEvent[] = [];
+    seedConfirm([confirmingKill()], () => confirms);
+    renderRun();
+    expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+    expect(noKillButton()).toBeNull();
+    // Still polling for the result.
+    const before = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(getRunMock.mock.calls.length).toBeGreaterThan(before);
+    confirms = [confirmRow("success")];
+    await vi.advanceTimersByTimeAsync(4_100);
+    expect(await screen.findByText(/Wardyn stopped and removed the sandbox/)).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirmed");
+    expect(noKillButton()).toBeNull();
+    const calls = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(getRunMock.mock.calls.length).toBe(calls);
+  });
+
+  it("E2 → a failure row lands → E5: teardown not confirmed, the confirm row named, and Kill again offered", async () => {
+    let confirms: AuditEvent[] = [];
+    seedConfirm([confirmingKill()], () => confirms);
+    renderRun();
+    expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+    expect(noKillButton()).toBeNull();
+    confirms = [confirmRow("failure")];
+    await vi.advanceTimersByTimeAsync(4_100);
+    expect(await screen.findByText(/run\.kill\.confirm row names the step that failed/)).toBeInTheDocument();
+    expect(screen.getByText(/teardown is not confirmed/)).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "partial");
+    expect(killButton()).toBeEnabled();
+  });
+
+  it("E2 → the wait lapses with no row → E3: unconfirmed, Kill again offered, and polling stopped", async () => {
+    seedConfirm([confirmingKill()], () => []);
+    renderRun();
+    expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+    expect(noKillButton()).toBeNull();
+    await vi.advanceTimersByTimeAsync(125_000);
+    expect(await screen.findByText(/Wardyn has no record that the sandbox stopped/)).toBeInTheDocument();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "unconfirmed");
+    expect(screen.queryByText(/stopped and removed/)).not.toBeInTheDocument();
+    expect(killButton()).toBeEnabled();
+    const stopped = getRunMock.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(getRunMock.mock.calls.length).toBe(stopped);
+  });
+
+  // Each kill gets its own wait: a kill made after the first wait ran out answers 202 confirming too, and its
+  // result must be read without a reload.
+  for (const outcome of ["success", "failure"] as const) {
+    it(`a re-kill after the wait ran out: E3 → E2 (Kill hidden, polling again) → ${outcome === "success" ? "E4" : "E5"}`, async () => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      let kills: AuditEvent[] = [confirmingKill()];
+      let confirms: AuditEvent[] = [];
+      seedConfirm([], () => confirms);
+      listAuditMock.mockImplementation(async (_id: string, o?: { action?: string }) =>
+        o?.action === "run.kill" ? kills : o?.action === "run.kill.confirm" ? confirms : [],
+      );
+      renderRun();
+      expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(125_000);
+      expect(await screen.findByText(/Wardyn has no record that the sandbox stopped/)).toBeInTheDocument();
+      // The person kills again; the server writes a new run.kill row, still confirming.
+      kills = [...kills, { ...confirmingKill(), id: "k-second", time: new Date(Date.now()).toISOString() }];
+      await user.click(killButton());
+      await user.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "End run" }));
+      expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+      expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", "confirming");
+      expect(noKillButton()).toBeNull();
+      // Polling again, for the new kill's own wait.
+      const before = getRunMock.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(getRunMock.mock.calls.length).toBeGreaterThan(before);
+      confirms = [confirmRow(outcome)];
+      await vi.advanceTimersByTimeAsync(4_100);
+      await waitFor(() =>
+        expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-evidence", outcome === "success" ? "confirmed" : "partial"),
+      );
+      if (outcome === "success") expect(noKillButton()).toBeNull();
+      else expect(killButton()).toBeEnabled();
+    });
+  }
+
+  it("a failed run.kill.confirm read never shows the stop as confirmed", async () => {
+    seedConfirm([confirmingKill()], () => {
+      throw new Error("audit read failed");
+    });
+    renderRun();
+    expect(await screen.findByText(/Wardyn is confirming the stop/)).toBeInTheDocument();
+    expect(screen.queryByText(/stopped and removed/)).not.toBeInTheDocument();
     expect(noKillButton()).toBeNull();
   });
 });

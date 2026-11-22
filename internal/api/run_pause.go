@@ -399,8 +399,8 @@ func (s *Server) thawForExec(ctx context.Context, run types.AgentRun, actorType 
 }
 
 // runLive reports whether run, read under its operation lock, is one a person's presence may resume: RUNNING and not
-// kept. resumeRun thaws the sandbox with no state check of its own, and a run that ended, or was kept, since an
-// earlier read may keep its sandbox for a computer folder's pass back.
+// kept. resumeRun refuses a run that is not (errResumeRunNotLive), as stampPresence and thawForExec do before it:
+// a run that ended, or was kept, since an earlier read may keep its sandbox for a computer folder's pass back.
 func runLive(run types.AgentRun) bool { return run.State == types.RunRunning && !runIsKept(run) }
 
 // noteAgentActive moves the presence clock for the agent's own activity: an
@@ -512,6 +512,11 @@ func (s *Server) resumeClosedRun(ctx context.Context, pauser store.RunPauser, c 
 	_ = s.resumeRun(ctx, pauser, run, types.ActorSystem, "wardynd", "request_closed")
 }
 
+// errResumeRunNotLive is resumeRun's answer for a run that is no longer RUNNING, is kept, or is past its lifetime
+// (runPastLifetime): it thaws nothing, clears nothing and writes no row. A kill or stop that won the terminal write while the run was paused leaves
+// its pause mark, and the sandbox when the stop failed to remove it, for a later request-closed resume to find.
+var errResumeRunNotLive = errors.New("the run is no longer running")
+
 // errResumedSandboxGone is resumeRun's answer when the thaw succeeded but the
 // sandbox is no longer running: a thaw of a missing container is a no-op
 // success, so it is the status re-read that tells the two apart.
@@ -524,9 +529,19 @@ var errResumedSandboxGone = errors.New("the run's sandbox is not running")
 // leave a frozen agent nobody knows about. The re-read keeps a vanished sandbox from
 // reading as a resumed run: its pause stays until the watcher or the
 // reconciler settles the run. The owner's authority is re-checked before the
-// thaw (resumeRefusal): a refusal thaws nothing.
+// thaw (resumeRefusal): a refusal thaws nothing. run is the row its caller read under the run's operation lock,
+// and a run that is not live (runLive) is refused first, before any thaw, clear or row.
 func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run types.AgentRun,
 	actorType types.ActorType, principal, reason string) error {
+	if !runLive(run) {
+		return errResumeRunNotLive
+	}
+	if past, err := s.runPastLifetime(ctx, run); err != nil || past {
+		if err == nil {
+			err = errResumeRunNotLive
+		}
+		return err
+	}
 	data := map[string]any{"reason": reason, "paused_reason": run.PausedReason, "paused_at": run.PausedAt}
 	if err := s.resumeRefusal(ctx, run, actorType, principal, data); err != nil {
 		return err
@@ -566,6 +581,24 @@ func (s *Server) resumeRun(ctx context.Context, pauser store.RunPauser, run type
 			run.ID.String(), "success", mustJSON(data)))
 	}
 	return nil
+}
+
+// runPastLifetime reports whether run's lifetime has run out on the database's clock, by the lease sweep's own
+// rules (leaseRun): lifetimeEndDue, or an end time reached, which the sweep ends or kills the run at. A paused
+// run the sweep has not reached yet is not thawed to run past it. A clock that cannot be read is an error, as the
+// sweep's is: nothing is thawed, and the next resume reads it again.
+func (s *Server) runPastLifetime(ctx context.Context, run types.AgentRun) (bool, error) {
+	if run.EndsAt == nil && run.LifetimeCapAt == nil {
+		return false, nil
+	}
+	now, err := heldRead(ctx, s.dbNow)
+	if err != nil {
+		return false, err
+	}
+	if _, due := lifetimeEndDue(run, now); due {
+		return true, nil
+	}
+	return run.EndsAt != nil && !now.Before(*run.EndsAt), nil
 }
 
 // thawedSandboxRunning re-reads a just-thawed sandbox's status: nil only when
@@ -840,7 +873,7 @@ func (s *Server) handleResumeRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleInternalActivity serves POST /internal/activity: the proxy reporting
-// that bytes moved on one of the run's tunnel or MITM streams in the last
+// that bytes moved on one of the run's tunnel or MITM streams, or its plain via_org requests, in the last
 // minute, so a long download or a model stream in I/O wait is not "nobody
 // there". The run is the verified token's, never one the caller names.
 func (s *Server) handleInternalActivity(w http.ResponseWriter, r *http.Request) {

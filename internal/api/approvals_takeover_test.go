@@ -706,7 +706,7 @@ func TestAttention_TakeoverLeadsAndIsTheOwners(t *testing.T) {
 		pendingRow(runID, types.ApprovalToolCall, `{"tool":"Bash","cmd":"ls"}`, nil),
 		pendingRow(runID, types.ApprovalHumanTakeover, `{"reason":"x"}`, nil),
 	}
-	s.projectHolds(pending)
+	s.projectHolds(context.Background(), pending)
 	owner := httptest.NewRequest(http.MethodGet, "/api/v1/runs", nil).WithContext(memberCtxFor("sub-owner"))
 	if got := s.attention(owner, run, pending, false); got == nil || got.Kind != types.AttentionTakeover || got.By != types.AttentionYou {
 		t.Fatalf("owner: attention = %+v, want takeover by you", got)

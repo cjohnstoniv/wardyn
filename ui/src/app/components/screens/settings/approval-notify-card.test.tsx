@@ -64,10 +64,35 @@ describe("ApprovalNotifyCard", () => {
     expect(screen.queryByRole("button", { name: /save|add|test|send/i })).not.toBeInTheDocument();
   });
 
-  it("says all delivering when nothing failed", async () => {
+  it("says no delivery is marked failed, not that all are delivering, when nothing failed", async () => {
     getStatusMock.mockResolvedValue({ channels: [status.channels[0]] } satisfies ApprovalNotifyStatus);
     render(<ApprovalNotifyCard />);
-    expect(await screen.findByText(COPY.SUMMARY_OK(1))).toBeInTheDocument();
+    expect(await screen.findByText(COPY.SUMMARY_OK(1))).toHaveTextContent("1 channels · No deliveries marked failed in the past hour");
+  });
+
+  it("makes no delivery claim for a channel with no delivery history", async () => {
+    getStatusMock.mockResolvedValue({
+      channels: [{ id: "new", type: "slack", destination_host: "hooks.slack.com", failed_last_hour: 0 }],
+    } satisfies ApprovalNotifyStatus);
+    render(<ApprovalNotifyCard />);
+    const summary = await screen.findByTestId("approval-notify-card-summary");
+    expect(summary).toHaveTextContent("No deliveries marked failed in the past hour");
+    expect(summary).not.toHaveTextContent(/delivering/i);
+  });
+
+  it("makes no delivery claim for a channel whose failed delivery awaits a retry", async () => {
+    getStatusMock.mockResolvedValue({
+      channels: [
+        {
+          id: "retrying", type: "webhook", destination_host: "hooks.example.com",
+          last_error: "http_status:503", last_error_at: ago(60_000), failed_last_hour: 0,
+        },
+      ],
+    } satisfies ApprovalNotifyStatus);
+    render(<ApprovalNotifyCard />);
+    const summary = await screen.findByTestId("approval-notify-card-summary");
+    expect(summary).toHaveTextContent("No deliveries marked failed in the past hour");
+    expect(summary).not.toHaveTextContent(/delivering/i);
   });
 
   it("shows the not-set-up summary and body when no channel is configured", async () => {

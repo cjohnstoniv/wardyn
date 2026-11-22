@@ -438,6 +438,8 @@ func closedEnumChecks() []closedEnumCheck {
 		// Go and rejected by Postgres with every gate green. DERIVED from
 		// types.ApprovalKinds for the reason the state entry above gives.
 		{"approvals", "kind", enumSet(types.ApprovalKinds)},
+		// 0292: the run row's data_out rule, NULL for a run with none on its row.
+		{"agent_runs", "data_out", stringSet(string(types.TransferAllowed), string(types.TransferReview), string(types.TransferBlocked))},
 		// 0118: the notification outbox's own lifecycle, derived for the same reason.
 		{"approval_notifications", "state", enumSet(types.ApprovalNotifyStates)},
 		{"approvals", "decision_scope", stringSet(
@@ -540,9 +542,15 @@ func closedEnumChecks() []closedEnumCheck {
 		// above carry, reused rather than re-enumerated — one Go definition for
 		// "who is this row written against". Pinned here so a fourth subject
 		// type cannot land on two tables' CHECKs and not the third's.
+		//
+		// THIS ONE TABLE DIFFERS: it also accepts types.DriveSubjectPortal (0297),
+		// which names an issuer portal and is a drive allocation's subject only.
+		// capability_grants and governance_assignments never learn it, so they stay
+		// on the four capability subject types.
 		{"user_drive_grants", "subject_type", stringSet(
 			string(types.CapabilitySubjectUser), string(types.CapabilitySubjectGroup),
 			string(types.CapabilitySubjectAll), string(types.CapabilitySubjectUserType),
+			string(types.DriveSubjectPortal),
 		)},
 		// Why the org stopped waiting for a runner's resident erase. The Go set
 		// is store.ResidentAbandon*, which this package cannot import (store

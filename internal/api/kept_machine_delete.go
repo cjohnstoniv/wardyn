@@ -30,7 +30,7 @@ const (
 	keptMachineByOwner         = "owner"
 	keptMachineByAdmin         = "admin"
 	keptMachineByErasure       = "erasure"
-	keptMachineByExpiry        = "expiry"
+	keptMachineByExpiry        = runnerwire.KeptMachineByExpiry
 	keptMachineByNonOwnerKill  = "non_owner_kill"
 	keptMachineByRevokedRunner = "revoked_runner"
 )
@@ -111,6 +111,42 @@ func (s *Server) keptMachineInventory(runnerID uuid.UUID) (map[string]runnerwire
 	return inv, true
 }
 
+// keptExpiryDeleteBlocked reports whether an expiry-driven delete of m must not run now: its Mac is held here
+// and has not said it runs the conditional delete (MacVMCaps.KeptConditionalDelete), so it would remove the
+// folder without rechecking its own deadline. A Mac not held here, or no longer registered, is not blocked:
+// the delete is deferred or record-only, and this is asked again when it is.
+func (s *Server) keptExpiryDeleteBlocked(ctx context.Context, m types.KeptMachine) bool {
+	rn, err := s.keptMachineRunner(ctx, m.RunnerID)
+	if errors.Is(err, store.ErrNotFound) || err == nil && rn.RevokedAt != nil || !s.keptMachinesHeldHere(m.RunnerID) {
+		return false
+	}
+	caps, ok := s.runnerLastCaps(m.RunnerID)
+	return !ok || caps.MacOSVM == nil || !caps.MacOSVM.KeptConditionalDelete
+}
+
+// keptMacNamesStops reports whether the Mac of runnerID says it runs this release's kept machines (it has the
+// conditional delete, which shipped with the stop run in its inventory) and its report names a stop: one it has
+// recorded for an earlier run. For such a Mac the absence of a given run's stop is evidence about that run.
+func (s *Server) keptMacNamesStops(runnerID uuid.UUID, on runnerwire.MacVMKeptMachine) bool {
+	caps, ok := s.runnerLastCaps(runnerID)
+	return ok && caps.MacOSVM != nil && caps.MacOSVM.KeptConditionalDelete && on.StopRunID != ""
+}
+
+// keptMachineHeldElsewhere reports whether m's Mac is registered and not held by this replica: an expiry
+// delete started here would only be tombstoned and deferred, and the replica that holds the Mac may then put
+// it back (a Mac that cannot recheck its deadline), over and over. The holder's own sweep starts it. A Mac
+// no longer registered is nobody's to ask, so its row is closed from any replica.
+func (s *Server) keptMachineHeldElsewhere(ctx context.Context, m types.KeptMachine) bool {
+	rn, err := s.keptMachineRunner(ctx, m.RunnerID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false
+	case err != nil:
+		return true // not known: leave it to the next sweep
+	}
+	return rn.RevokedAt == nil && !s.keptMachinesHeldHere(m.RunnerID)
+}
+
 // keptMachineDeleteReady reports whether m's delete can run from here now: its runner is no longer
 // registered, or this replica holds its Mac and the Mac has not booted it.
 func (s *Server) keptMachineDeleteReady(ctx context.Context, m types.KeptMachine) bool {
@@ -135,6 +171,7 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 	defer cancel()
 	m := d.Machine
 	var res keptMachineDeletion
+	var refusedExpiry bool
 	rn, err := s.keptMachineRunner(sctx, m.RunnerID)
 	switch {
 	case errors.Is(err, store.ErrNotFound) || err == nil && rn.RevokedAt != nil:
@@ -143,9 +180,20 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 		res.outcome = driveReclaimOutcomeFailed
 	case !s.keptMachinesHeldHere(m.RunnerID):
 		res.outcome = driveReclaimOutcomeDeferred
+	case d.By == keptMachineByExpiry && s.keptExpiryDeleteBlocked(sctx, m):
+		// Nothing is sent: the Mac cannot recheck its deadline, so the machine is kept. An inventory that omits
+		// it is no proof the disk is gone (the Mac skips an unreadable or malformed record, and may send a
+		// cached list), so the row stays until its owner or an admin deletes it.
+		res.outcome = driveReclaimOutcomeFailed
 	default:
+		// An expiry-driven delete is the conditional op, which the Mac checks against its own deadline; a
+		// person's or an operator's delete is not conditional.
+		op := runnerwire.KeptMachineOpDelete
+		if d.By == keptMachineByExpiry {
+			op = runnerwire.KeptMachineOpDeleteExpired
+		}
 		out, kerr := s.runnerEndpoint(m.RunnerID).sub.KeptMachine(sctx,
-			runnerwire.KeptMachineArgs{Op: runnerwire.KeptMachineOpDelete, ID: m.ID.String(), By: d.By})
+			runnerwire.KeptMachineArgs{Op: op, ID: m.ID.String(), By: d.By})
 		res.outcome = out.Outcome
 		if kerr == nil && !keptMachineDeleteConfirmed(res.outcome) {
 			res.outcome = keptMachineOutcomeUnconfirmed // an answer this side does not know is no confirmation
@@ -156,6 +204,7 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 			res.outcome = keptMachineOutcomeUnconfirmed
 			if keptMachineDeleteRefused(kerr) {
 				res.outcome = driveReclaimOutcomeFailed
+				refusedExpiry = d.By == keptMachineByExpiry
 			}
 		}
 	}
@@ -171,9 +220,37 @@ func (s *Server) deleteKeptMachine(ctx context.Context, ks store.KeptMachineStor
 			slog.ErrorContext(ctx, "api: clear a kept machine's delete tombstone",
 				slog.String("machine_id", m.ID.String()), slog.String("error", aerr.Error()))
 		}
+		if refusedExpiry {
+			s.deferRefusedKeptExpiry(ctx, ks, m)
+		}
 	}
 	s.auditKeptMachineDelete(ctx, d, res.outcome)
 	return res
+}
+
+// keptExpiryBackoff is how far a deadline the Mac refused to act on moves when its inventory does not say the
+// Mac's own.
+const keptExpiryBackoff = 24 * time.Hour
+
+// deferRefusedKeptExpiry moves the deadline of m, whose Mac refused an expiry delete because its own record
+// holds a later deadline, forward: to the Mac's, when its inventory lists the machine idle with one later
+// than now, else by keptExpiryBackoff, either within the longest idle allowance. Without it the machine
+// would be tombstoned, refused and put back, with an audit row, on every pass until the Mac's deadline.
+func (s *Server) deferRefusedKeptExpiry(ctx context.Context, ks store.KeptMachineStore, m types.KeptMachine) {
+	now := s.cfg.Now().UTC()
+	until := now.Add(keptExpiryBackoff)
+	if inv, ok := s.keptMachineInventory(m.RunnerID); ok {
+		if on, listed := inv[m.ID.String()]; listed && !on.InUse && on.ExpiresAt.After(now) {
+			until = on.ExpiresAt.UTC()
+		}
+	}
+	if hi := now.AddDate(0, 0, types.KeptMachineIdleDaysMax); until.After(hi) {
+		until = hi
+	}
+	if err := ks.DeferKeptMachineExpiry(ctx, m.ID, until); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.WarnContext(ctx, "api: move a kept machine's deadline after its Mac refused to expire it",
+			slog.String("machine_id", m.ID.String()), slog.String("error", err.Error()))
+	}
 }
 
 // auditKeptMachineDelete writes machine.delete for one attempt: a confirmed or deferred delete is a
@@ -348,6 +425,9 @@ func (s *Server) reconcileKeptMachines(ctx context.Context, ks store.KeptMachine
 // own scrub and size (machine.keep, stop unreported); not listed, still being created and its run long
 // over, it was never made and its row is dropped. A machine whose run is live is left to that run.
 func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineStore, m types.KeptMachine, inv map[string]runnerwire.MacVMKeptMachine) error {
+	if m.RunID != nil && m.State == types.KeptMachineKept {
+		return s.repairKeptMachineExpiry(ctx, ks, m, inv)
+	}
 	if m.RunID == nil || m.State != types.KeptMachineCreating && m.State != types.KeptMachineInUse {
 		return nil
 	}
@@ -362,6 +442,29 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 	on, listed := inv[m.ID.String()]
 	switch {
 	case listed && !on.InUse:
+		// The report settles this run's use only if this run's stop wrote it. An older inventory, one the
+		// runner reused after a failed read, or one from a runner that does not name the stop describes some
+		// earlier use, and its deadline would expire a machine a later run has just used.
+		if !on.ObservesStopOf(m.RunID.String()) {
+			// No stop of this run is on the Mac's record and none will come: the run never reached the Mac (the
+			// control plane stopped between the claim and the create), the Mac's runner is older and wrote
+			// no stop for it, or its report was lost. Once the run has been over a while the machine is given
+			// back to the person, kept and unscrubbed, with a deadline the report did not supply: the one it had
+			// when claimed if the Mac names stops and has none for this run (it never booted, and the Mac's
+			// deadline is still that one), else a fresh one, because a runner that names no stop may have
+			// recorded this run's. The Mac rechecks its own deadline before any expiry delete, so the disk stays
+			// safe, and the run's own stop, if one ever lands, repairs the deadline.
+			if !gone && !s.keptMachineUnstartedPast(ctx, run) {
+				return nil
+			}
+			st := store.KeptMachineStop{ID: m.ID, RunnerID: m.RunnerID, RunID: *m.RunID, Scrubbed: false, DiskBytes: on.Bytes}
+			if m.State == types.KeptMachineInUse && s.keptMacNamesStops(m.RunnerID, on) {
+				st.ExpiresAt = m.ExpiresAt
+			} else {
+				st.ExpiresAt = s.keptMachineExpiry(ctx)
+			}
+			return s.keepKeptMachine(ctx, ks, st, keptMachineStopUnreported, nil)
+		}
 		exp := on.ExpiresAt
 		if exp.IsZero() {
 			exp = s.keptMachineExpiry(ctx) // a listing with no expiry is not one that has passed
@@ -379,6 +482,28 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 	return nil
 }
 
+// repairKeptMachineExpiry sets a kept machine's deadline to the Mac's own when the Mac's idle record is the
+// stop of the run that last held the machine and says something else: an older stop or inventory left the row
+// a deadline that a later use has since moved. Only an inventory that names that stop counts; one that does
+// not (an older runner's, a cached one) changes nothing.
+func (s *Server) repairKeptMachineExpiry(ctx context.Context, ks store.KeptMachineStore, m types.KeptMachine, inv map[string]runnerwire.MacVMKeptMachine) error {
+	on, listed := inv[m.ID.String()]
+	if !listed || !on.ObservesStopOf(m.RunID.String()) || on.ExpiresAt.IsZero() {
+		return nil
+	}
+	exp := on.ExpiresAt
+	if hi := s.cfg.Now().UTC().AddDate(0, 0, types.KeptMachineIdleDaysMax); exp.After(hi) {
+		exp = hi
+	}
+	if exp.Equal(m.ExpiresAt) || !exp.After(s.cfg.Now()) {
+		return nil // a deadline that has passed on the Mac is for its own sweep, or a later expiry, to settle
+	}
+	if err := ks.RepairKeptMachineExpiry(ctx, m.ID, *m.RunID, exp); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
 // claimKill is the kill's claim (claimKillTransition). A person who is not the run's creator, or a
 // service identity, killing a run that is past its queue and not yet ended is the incident lever, and
 // must not leave a person's machine behind: that claim goes through KillRunMarkingKeptMachine, which
@@ -388,6 +513,9 @@ func (s *Server) reconcileKeptMachine(ctx context.Context, ks store.KeptMachineS
 // no write but the claim. The owner's own kill and every system kill mark nothing: the machine is kept
 // as a hard stop. The zero deletion means no intent.
 func (s *Server) claimKill(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string) (bool, store.KeptMachineDeletion, error) {
+	if g, ok := killGuardOf(ctx); ok {
+		return s.claimGuardedKill(ctx, run, killerType, killer, g)
+	}
 	ks, ok := s.cfg.Store.(store.KeptMachineStore)
 	nonOwner := killerType == serviceActorType || killerType == types.ActorHuman && killer != run.CreatedBy
 	if !ok || !nonOwner || run.State.IsTerminal() || run.State == types.RunQueued {
@@ -474,6 +602,12 @@ func (s *Server) expireKeptMachines(ctx context.Context, ks store.KeptMachineSto
 // the outcome; until then it will be deleted. An empty outcome: the machine is in use or another delete
 // has it.
 func (s *Server) expireKeptMachine(ctx context.Context, ks store.KeptMachineStore, m types.KeptMachine) keptMachineDeletion {
+	if s.keptMachineHeldElsewhere(ctx, m) {
+		return keptMachineDeletion{} // the replica that holds its Mac starts the delete
+	}
+	if s.keptExpiryDeleteBlocked(ctx, m) {
+		return keptMachineDeletion{} // its Mac removes its own expired machines in its sweep; no tombstone is started
+	}
 	d, err := ks.BeginKeptMachineDelete(ctx, "", m.ID, keptMachineByExpiry)
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrKeptMachineInUse), errors.Is(err, store.ErrKeptMachineDeleting):
@@ -495,6 +629,14 @@ func (s *Server) finishKeptMachineDeletes(ctx context.Context, ks store.KeptMach
 	var errs []error
 	for _, w := range waiting {
 		if !s.keptMachineDeleteReady(ctx, w.Machine) {
+			continue
+		}
+		if w.By == keptMachineByExpiry && s.keptExpiryDeleteBlocked(ctx, w.Machine) {
+			// A tombstone an earlier control plane left for a Mac that cannot recheck its deadline: the machine
+			// is kept again, not removed.
+			if err := ks.AbortKeptMachineDelete(ctx, w.Machine.ID, w.At); err != nil && !errors.Is(err, store.ErrNotFound) {
+				errs = append(errs, err)
+			}
 			continue
 		}
 		d, err := ks.BeginKeptMachineDelete(ctx, "", w.Machine.ID, w.By)

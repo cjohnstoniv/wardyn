@@ -18,28 +18,15 @@ With SSO (OIDC configured):
 - A key registered against your SSO session lands under your OIDC `sub`, the only principal the gateway's owner check (below) matches against a run you created.
 - A key added here is capped: it never carries the admin override, even for a super admin. See [Bounds](#bounds).
 
-An admin key reaches only runs with no personal owner.
+An admin key reaches only runs with no personal owner. To register one (super admins only):
 
-- Admin view → Settings →
-  **Admin SSH keys** (super admins only) registers a key stamped `admin`,
-  but that stamp opens only runs with no personal owner.
-- There is no
-  break-glass key into a person's run: until the owner-consented support session
-  (#1509) a super admin who needs one asks its owner.
-- Kill, approve, policy,
-  grants, revoke and audit stay with the admin.
+1. In the Admin view, open **Settings**.
+2. Under **Admin SSH keys**, add the key. It is stamped `admin`, but that stamp opens only runs with no personal owner.
 
-**Admin-token / no-SSO / CI deployment only** — the bearer-token curl below
-registers the key against the shared, non-human `admin-token` principal, not
-any human's own identity.
+- There is no break-glass key into a person's run: until the owner-consented support session (#1509) a super admin who needs one asks its owner.
+- Kill, approve, policy, grants, revoke and audit stay with the admin.
 
-- With OIDC configured, `POST` from a bare admin
-  token 422s for exactly this reason instead of silently writing a key
-  that can never authorize anyone's run — use the console (above) instead.
-- A
-  key already stored under a reserved principal (`admin-token`, the local
-  operator seat, a `device:` name) is refused at the gateway while OIDC is
-  configured; without OIDC it keeps working:
+**Admin-token / no-SSO / CI deployment only** — the bearer-token request registers the key against the shared, non-human `admin-token` principal, not any human's own identity:
 
 ```sh
 curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
@@ -47,18 +34,16 @@ curl -sf -X POST "$WARDYN_URL/api/v1/me/ssh-keys" \
   -d '{"name":"laptop","public_key":"'"$(cat ~/.ssh/id_ed25519.pub)"'"}'
 ```
 
-- The key is scoped to **your own principal** — there is no admin view of
-  another human's keys, and `DELETE` on a key you don't own 404s exactly like a
-  nonexistent one (no existence leak).
-- The fingerprint returned (and shown in
-  the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public
-  by design** — it identifies the server/key, it authenticates no one, so
-  showing it is not a disclosure.
-- Registration is first-come, first-served, max `20` keys per principal, and a
-  duplicate add (`POST` of a key already registered — by you or by someone
-  else) 409s with a deliberately generic message:
-  - it does not confirm the key
-    exists under a DIFFERENT account, only that this exact `POST` didn't take.
+- With OIDC configured, `POST` from a bare admin token 422s for exactly this reason instead of silently writing a key that can never authorize anyone's run — use the console (above) instead.
+- A key already stored under a reserved principal (`admin-token`, the local operator seat, a `device:` name) is refused at the gateway while OIDC is configured; without OIDC it keeps working.
+
+### Rules for every registered key
+
+- The key is scoped to **your own principal** — there is no admin view of another human's keys, and `DELETE` on a key you don't own 404s exactly like a nonexistent one (no existence leak).
+- The fingerprint returned (and shown in the console) is the `SHA256:…` form `ssh-keygen -lf` prints; it is **public by design** — it identifies the server/key, it authenticates no one, so showing it is not a disclosure.
+- Registration is first-come, first-served, max `20` keys per principal, and a duplicate add (`POST` of a key already registered — by you or by someone else) 409s with a deliberately generic message:
+  - it does not confirm the key exists under a DIFFERENT account, only that this exact `POST` didn't take.
+- The quota is checked before the duplicate check: a caller already holding 20 keys gets the `422` quota refusal for any otherwise valid add, a duplicate included.
 
 ### Reclaiming a squatted fingerprint
 
@@ -190,7 +175,7 @@ Host wardyn-<run-id>
 
 - The `ProxyCommand` line is there only when the operator set
   `WARDYN_SSH_PROXY_COMMAND` (shown on `/healthz` as `ssh.proxy_command`; see
-  [SSH on a 443-only estate](#ssh-on-a-443-only-estate)).
+  [SSH on a 443-only estate](operations/ssh-443-only.md)).
 - With it, `--print`
   emits `ssh -o ProxyCommand='<proxy-command>' <run-id>@<advertise-host> -p <port>`,
   `--json` carries it as `proxy_command`, and `wardyn run ssh` connects through
@@ -206,8 +191,9 @@ Host wardyn-<run-id>
   connect to, and no "try anyway" affordance that would just fail.
 - **Where a channel starts.** An interactive shell joins the run's shared terminal session, in whatever directory
   that session is in now.
-  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) and an sftp session start
-    in `$HOME`, as OpenSSH does. Give paths under `/home/agent/work` in full.
+  - A command (`ssh <run-id>@<advertise-host> -p <port> <command>` or `wardyn run exec`) tries to start in `$HOME`,
+    and an sftp session starts in the sandbox account's home directory. If that directory cannot be entered, they
+    keep the image's working directory. Give paths under `/home/agent/work` in full.
 
 ### Exec, forward and editor from the CLI
 
@@ -215,7 +201,7 @@ Host wardyn-<run-id>
   - Each word after `--` reaches the sandbox as one argument.
   - For a pipe or a redirect, run a shell: `wardyn run exec <run-id> -- sh -c 'make test | tail'`.
   - With no SSH key, or with the gateway off, `POST /api/v1/runs/{id}/exec` runs one command over HTTP ([sdk.md](sdk.md#running-a-command-in-a-run)).
-    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset.
+    - It is not part of the gateway, so it stays on when `WARDYN_SSH_LISTEN` is unset. Leaving `exec` out of `WARDYN_SSH_CHANNELS` turns it off.
     - Its per-run controls are a `data_out` rule other than `allowed` and `deny_interactive`, which each refuse it, and `deny_task_mode_exec`, which refuses it on a background-only run. Unlike SSH exec, it takes a background-only run, though that run has no SSH access.
     - Like SSH exec, its output is neither masked nor recorded.
 - `wardyn run forward <run-id> [<local-port>:]<sandbox-port>...` is `ssh -L` to the sandbox's loopback ([section 4](#4--l-port-forwarding)), bound to `127.0.0.1` here.
@@ -227,6 +213,7 @@ Host wardyn-<run-id>
   - With no registered key they stop with one line naming `wardyn ssh-key ensure`. They never create a key.
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
+- An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials. `sftp` also covers `wardyn sync`, and `exec` also covers `POST /runs/{id}/exec` ([ENV.md](ENV.md#wardyn_ssh_channels)).
 - When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 
 ### Without SSH: `wardyn attach`
@@ -245,166 +232,11 @@ Host wardyn-<run-id>
 
 ### From a cluster
 
-- Nothing above changes when wardynd runs in Kubernetes — the gateway is the
-  same listener, and the client commands are identical.
-- What the operator owes
-  is a route to it and an address to advertise.
-- Four pieces, all documented
-  where they are implemented:
-  - **Getting traffic in.** `ssh.enabled` adds the SSH port to wardynd's
-    *existing* Service, so by default SSH inherits whatever exposure HTTP has.
-  - `make kind-quickstart` publishes it as a NodePort and prints the ready-made
-    `ssh -p 2222 <run-id>@127.0.0.1` line — POC-grade, single command
-    ([chart README, Quickstart](../deploy/helm/wardyn/README.md#quickstart)).
-  - To expose SSH differently from the console — its own `LoadBalancer` while
-    HTTP stays internal `ClusterIP` — the chart README carries a minimal
-    bring-your-own Service targeting the same pods
-    ([Split SSH exposure](../deploy/helm/wardyn/README.md#split-ssh-exposure)).
-  - **The address clients are told to use.** `ssh.advertiseHost`
-    (`WARDYN_SSH_ADVERTISE`) is what the run-detail card and `/healthz` print.
-  - It is advisory copy only — the gateway binds `WARDYN_SSH_LISTEN`, not this
-    — but in a cluster the bind and the reachable address always differ.
-  - So an
-    unset value hands every user a `127.0.0.1` that is not theirs.
-  - The chart
-    never guesses it; see
-    [`values.yaml`'s `ssh` block](../deploy/helm/wardyn/values.yaml) and
-    [ENV.md](ENV.md).
-  - **The host key across pod churn.** There is no host key in the chart and no
-    volume for one: wardynd generates an ed25519 key on first boot and persists
-    it in the secret store.
-  - So the fingerprint your users pinned survives a
-    rolling upgrade — *as long as the age key does*.
-  - Lose the age key and the
-    pod crash-loops before the gateway listens, which is a connection refused
-    rather than a silently changed fingerprint.
-  - See OPERATIONS,
-    ["The SSH host key survives restarts"](OPERATIONS.md#the-ssh-host-key-survives-restarts--because-the-age-key-does).
-  - **Caveat, unchanged by the substrate.** `sftp` and `-L` exec binaries inside
-    the *sandbox*, not in wardynd's pod, so a BYOI run still needs
-    `sftp-server`/`socat` — see [Image contract](#image-contract-byoi).
-  - A
-    cluster install does not supply them on the image's behalf.
+- Moved to [SSH gateway in a cluster](operations/ssh-from-a-cluster.md).
 
 ### SSH on a 443-only estate
 
-- Some estates let nothing in but port 443, terminated by a TLS-terminating
-  listener in front of the cluster (an Istio ingress gateway, say).
-- The SSH
-  gateway's listener is plain TCP, so `ssh` cannot reach it there as it is.
-- The
-  recipe wraps SSH in TLS on each person's computer and lets the listener
-  unwrap it:
-
-1. The listener terminates TLS on 443 under a hostname of its own and passes
-   the bytes, as plain TCP, to the Service's `ssh` port.
-2. `ssh.proxyCommand` (`WARDYN_SSH_PROXY_COMMAND`) tells each person's `ssh`
-   to open that TLS connection first.
-   - The run-detail card and
-     `wardyn run ssh` carry it, so the copy-paste command works.
-
-- In your own values file (Istio installed from its own charts; the Wardyn
-  chart ships no Istio template, and `extraObjects` keeps these objects beside
-  your values instead of in a fork of the chart):
-
-```yaml
-ssh:
-  enabled: true
-  advertiseHost: ssh.example.com   # the listener's own hostname for SSH
-  proxyCommand: openssl s_client -quiet -verify_return_error -verify_hostname %h -connect %h:443 -servername %h
-
-networkPolicy:
-  ingress:
-    from:
-      - podSelector: {}            # keep the same-namespace default peer
-      - namespaceSelector:         # and admit the ingress gateway's namespace
-          matchLabels:
-            kubernetes.io/metadata.name: istio-ingress
-
-extraObjects:
-  - apiVersion: networking.istio.io/v1
-    kind: Gateway
-    metadata:
-      name: wardyn-ssh
-      namespace: istio-ingress     # the gateway pods' namespace
-    spec:
-      selector:
-        istio: ingressgateway      # your ingress gateway pods' labels
-      servers:
-        - port:
-            number: 443
-            name: tls-wardyn-ssh
-            protocol: TLS          # never HTTPS
-          tls:
-            mode: SIMPLE
-            credentialName: wardyn-ssh-tls
-          hosts:
-            - ssh.example.com
-  - apiVersion: networking.istio.io/v1
-    kind: VirtualService
-    metadata:
-      name: wardyn-ssh
-    spec:
-      hosts:
-        - ssh.example.com
-      gateways:
-        - istio-ingress/wardyn-ssh
-      tcp:
-        - match:
-            - port: 443
-          route:
-            - destination:
-                host: '{{ include "wardyn.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local'
-                port:
-                  # Keep ssh.port above 1023: the gateway listens on 443 and
-                  # forwards to it. wardynd runs non-root with every capability
-                  # dropped, and on a runtime that does not allow unprivileged
-                  # low ports (the default before containerd 2.0) a lower port
-                  # rolls out Ready with no SSH listener behind it.
-                  number: 2222     # ssh.port
-```
-
-- **`protocol: TLS`, not `HTTPS`.** `HTTPS` attaches an HTTP filter to the
-  server and breaks SSH; `TLS` with `tls.mode: SIMPLE` terminates TLS and
-  hands the `tcp:` route the raw stream.
-- **The certificate.** `credentialName` names a `kubernetes.io/tls` Secret for
-  the SSH hostname.
-  - The Secret lives in the namespace of the gateway pods,
-    which is where the recipe also puts the Gateway.
-- **The Gateway's namespace.** `istio-ingress` here is the estate's own
-  gateway namespace: the Gateway sits beside the gateway pods, and the
-  VirtualService names it as `<namespace>/<name>`.
-  - Your Helm identity needs
-    rights to create Istio Gateways in that namespace, and the namespace must
-    already exist.
-- **The NetworkPolicy.** Setting `networkPolicy.ingress.from` replaces the
-  same-namespace default, so list it again; the ssh rule passes the other
-  named peers through.
-  - The same peer list also applies to the console `http`
-    rule, so the gateway namespace can reach the console port too; a
-    `podSelector` for the gateway pods on that peer narrows it.
-- **The proxy command.** `-servername %h` only sends SNI, which the listener
-  routes on; `-verify_hostname %h` is what checks that the certificate names
-  the host, and `-verify_return_error` makes a failed check end the
-  connection.
-  - Port 443 is written out because `%p` expands to the advertised
-    SSH port (the chart always renders `host:ssh.port`; the `-p <port>` on the
-    card is harmless, the proxy command ignores it).
-  - When the listener's
-    certificate is not from a publicly trusted CA, add `-CAfile <path>` naming
-    a file every person keeps the CA at, e.g. `-CAfile ~/.ssh/wardyn-ca.pem`
-    (ssh runs the command through the person's shell, so `~` expands).
-  - Each
-    person needs `openssl` on their computer.
-  - The daemon never runs this value
-    and refuses to boot on a control character, a newline, a single quote, or
-    more than 512 bytes ([ENV.md](ENV.md)).
-- **Host keys are unaffected.** The SSH handshake runs end to end inside the
-  tunnel, so the fingerprint on the card is still the one to verify.
-- **Audit source IPs become the listener's.** The gateway sees the ingress
-  gateway pod's address, so `ssh.*` audit rows record that, not the person's.
-- **Nothing else needs it.** The browser terminal and `wardyn attach`
-  already ride the console's own 443.
+- Moved to [SSH on a 443-only estate](operations/ssh-443-only.md).
 
 ## 3. sftp
 
@@ -438,6 +270,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 - A laptop delete or rename reaches the sandbox only for a file this sync sent and the sandbox left unchanged. A sandbox edit is kept and listed as a conflict. An empty, unreadable or ignored laptop directory deletes nothing.
 - A sandbox delete removes a laptop file only under `--pull-deletes`, if the laptop copy is unchanged. Deletes are listed first, capped by `--max-pull-deletes` (20; over it, none), and moved into `~/.local/state/wardyn/sync/<run-id>-deleted/`.
 - `--git` sends the current branch as a git bundle (no hooks, no config). The sandbox fetches it into a new hook-free repository, or into `refs/remotes/laptop/<branch>` if one exists.
+- With `WARDYN_SYNC_DENY` patterns set, `--git` reads the bundle in a repository of its own (with none set it skips this). It refuses the branch if a commit adds a path (even one later removed or renamed), or the tip holds one, that matches. The error names that path and pattern. Remove the path from history or change the pattern.
 - `--pull-commits` fetches the sandbox's later commits, as a verified bundle, into the laptop branch `wardyn/sync-<run>`, never the working tree. Both git flags run once, over an SSH exec channel, from the top of a work tree.
 - Never syncs `.git/`, `.envrc`, `.direnv/`, `.vscode/tasks.json`, `.vscode/launch.json`, `.idea/runConfigurations/`, `.idea/workspace.xml`.
 - A file changed on both sides since the last sync is not pulled: the laptop's copy wins and the path is listed. Only a runner's pass back keeps a conflict copy ([hybrid laptops](operations/hybrid-laptops.md)).
@@ -454,7 +287,7 @@ Rules, enforced by the CLI (the gateway only relays bytes) and not overridable:
 
 `wardyn run --task ... --local-folder ./project` creates the run, waits for its sandbox and syncs the folder in once. The agent starts only after that pass completes, within `WARDYN_LOCAL_FOLDER_SEED_WAIT` (10 minutes) and the run's end. A failed or missing pass fails the run with a reason naming the folder. `wardyn sync <run-id> ./project` can seed it within the wait. Audit: `run.seed.hold`, `run.seed`.
 
-Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
+Interactive runs, background-only runs, exec-less (krun) runtimes and deployments without an SSH gateway, or whose operator left `sftp` out of `WARDYN_SSH_CHANNELS` (the sync follows it), refuse `local_folder` (`local_folder_unsupported`). A Linux VM sandbox is held and synced the same way, through its guest agent ([Linux VM sandboxes](operations/linux-vm-sandboxes.md#what-a-run-gets)).
 
 `rsync` works too, over `wardyn run ssh --config`'s `Host` block; add `--chmod=F644,D755` to pull. It applies none of the conflict, collision or size rules, so prefer `wardyn sync --pull`:
 
@@ -519,7 +352,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
 - **How they are tested**: the nightly job `ssh-editors-live` runs the real clients in a container against a live gateway (`make test-e2e-ssh-editors`, [`test/editors/`](../test/editors/)). Versions are pinned there by sha256: Mutagen 0.18.1, IntelliJ IDEA 2026.2.3.
   - JetBrains: an sftp upload of the IDE, an exec unpack, the headless `remote-dev-server.sh`, and a TLS handshake with the backend through `-L`. Gateway's GUI thin client is not run.
   - Mutagen: `sync create`, a flush each way, a byte compare.
-- **Mutagen needs one link.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. A normal `sshd` starts commands in `$HOME`; the gateway starts them in the sandbox's working directory, so the agent is not found. Once per sandbox, before `mutagen sync create`:
+- **Mutagen finds its agent through `$HOME`.** It runs its agent by the relative path `.mutagen/agents/<version>/mutagen-agent`. Commands start in `$HOME`, as under `sshd`, so it is found. Only where `$HOME` is unset or cannot be entered do they keep the image's working directory and miss it; in such a sandbox, once, before `mutagen sync create`:
 
 ```sh
 ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
@@ -532,102 +365,7 @@ ssh <host> 'mkdir -p ~/.mutagen && ln -sfn ~/.mutagen .mutagen'
 
 ## 6. Other tools over SSH (scripted access)
 
-- Everything above assumes a human typing `ssh` or pasting a `Host` block by
-  hand.
-- An external tool — an IDE or an agent workbench that wants to drive the sandbox itself — needs the same three facts (host, port, username) without a human copying them out of the console.
-- Plus one thing the console card never had to solve:
-  - knowing when the sandbox is actually ready to open, not merely RUNNING.
-- Four commands, each doing one part:
-
-```sh
-wardyn ssh-key ensure                                    # once per machine
-
-# --description "external:<tool>" is what makes the run page say tool-managed.
-# This command prints the run, including its id.
-wardyn run --agent claude-code --interactive --json \
-  --description "external:<tool>" \
-  --policy-file examples/policies/remote-workspace.yaml
-wardyn run wait-ready <id> --json                        # -> {"workspace":{"vcs":"git","path":"..."}}
-wardyn run ssh <id> --json                                   # -> {"host","port","username","host_key_fingerprint","command"}
-```
-
-- **`wardyn ssh-key ensure`** ([`cmd/wardyn/sshkey.go`](../cmd/wardyn/sshkey.go)) generates an ed25519
-  keypair at `~/.wardyn/id_ed25519` the first time it runs (`0600`, plus a
-  `0644` `.pub` sibling) and registers the public half via `POST
-  /api/v1/me/ssh-keys` unless its fingerprint is already on the account.
-- Idempotent, so a script can run it on every launch with no "already done"
-  branch to write — a second call neither regenerates the key nor re-registers
-  it.
-- `--path` picks a different keypair; the default is deliberately **not**
-  `~/.ssh/id_ed25519` — a key an external tool dials sandboxes with should be
-  revocable from Settings (`/account`) without touching your everyday identity.
-- **`wardyn run wait-ready <run-id>`** ([`cmd/wardyn/run_wait_ready.go`](../cmd/wardyn/run_wait_ready.go)) blocks
-  past what `run --wait` waits for.
-- `--wait` waits for a TERMINAL state (and is refused outright on an interactive run, which never reaches one on its own);
-  - `wait-ready` waits for the run to become usable from outside: RUNNING,
-    *and* its workspace readable through the same in-sandbox exec channel the
-    console's Files-changed widget polls (`GET /runs/{id}/files`,
-    [`internal/api/run_files.go`](../internal/api/run_files.go)).
-- Those are
-  different moments — the workspace clone lands **after** the sandbox comes
-  up, so a tool that opens the instant the run turns RUNNING routinely finds an
-  empty directory.
-- A run that names a repo (`--repo`, or a workspace whose
-  sources include a repo) automatically waits for `vcs:"git"`; pass `--expect-git`
-  to require that for a workspace-sourced run too.
-- A terminal state reached
-  before ready fails fast — FAILED exits `1` (with the dispatch failure reason
-  when audit carries one, the same lookup `run --wait` uses), any other
-  terminal state exits `2`.
-- And `--timeout` (default `5m`, must be positive)
-  exits `124` rather than hanging a script forever.
-- The timeout bounds the
-  requests too, and does not stop the run: on a `124` the run keeps running and
-  holds its sandbox and credentials until it ends (see
-  [ci-jobs-as-runs.md](ci-jobs-as-runs.md), "On `124`, kill the run").
-- **`wardyn run ssh <run-id> --json`** ([`cmd/wardyn/ssh.go`](../cmd/wardyn/ssh.go)) is the same `/healthz`
-  read `--print`/`--config` use, shaped for a program instead of a terminal:
-  `{"host", "port", "username", "host_key_fingerprint", "command"}`.
-- `port` is
-  always populated — `22` when the gateway's advertised address names none
-  — so a caller never has to reimplement ssh's own default the way a bare
-  `--print` command's absent `-p` flag implies it.
-- `host_key_fingerprint` comes
-  straight off `/healthz` (the same `ED25519 SHA256:…` line the console card
-  shows) — verify it out-of-band the same way you would any new SSH host;
-  `wardyn run ssh` does not do that for you.
-- `command` is the literal `ssh …`
-  invocation `--print` would emit, so a caller that just wants to shell out
-  rather than reimplement the client can.
-- **Never-reap and push namespace.** A session like this has no Wardyn-visible
-  activity between whatever the human or the tool's own agent does in that
-  tool's own UI.
-- So set `auto_stop_after_sec: -1` — never `0`: both mean "never
-  reaped" to the reaper, but `-1` states the omission was deliberate on a run
-  like this, not a policy that simply forgot the field (see
-  [`examples/policies/remote-workspace.yaml`](../examples/policies/remote-workspace.yaml)).
-- That holds only under a ceiling with no positive `auto_stop_after_sec` (or for an admin). A member under the shipped default ceiling is cut to 3600s unless the operator raises it, as the Channel budget notes below.
-
-- If the tool's own agent commits and pushes under a branch name it picked itself — not the `wardyn/<run-id>/*` namespace `agent-run` sets up —
-  - the git-broker's default confinement refuses that push with no way to tell the external tool why.
-- `git_push_any_branch: true` is the per-run opt-out (see [docs/POLICIES.md](POLICIES.md)'s `git_push_any_branch` row).
-- **Channel budget.** `session` (shell/exec/sftp) and `direct-tcpip` (`-L`
-  forwards) draw from the **same** per-run cap,
-  [`WARDYN_SSH_MAX_SESSIONS_PER_RUN`](ENV.md#wardyn_ssh_max_sessions_per_run)
-  (default `4`), so an editor holding open a shell, an sftp session and two
-  `-L` forwards has used the whole budget.
-- A fifth channel of any kind is refused, not queued.
-- `wardyn-sync` has its own cap of `2`; a `session` channel over the shared cap may only become one.
-- **Under SSO, register the key as yourself.** Authorization is owner-only
-  (above): the run has to be created by the **same principal** that registered
-  the key.
-- A key registered with the deployment's admin token can never
-  satisfy that for a human's run — `POST /me/ssh-keys` 422s the attempt
-  outright once OIDC is configured ([§1](#1-register-a-public-key)).
-- Point
-  `wardyn ssh-key ensure` and `wardyn run` at your **own** API token
-  (`WARDYN_TOKEN`) rather than `WARDYN_ADMIN_TOKEN`, or register the key from
-  the console instead of the CLI.
+- Moved to [Other tools over SSH (scripted access)](SSH-SCRIPTED-ACCESS.md).
 
 ## Image contract (BYOI)
 
@@ -727,6 +465,11 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
   - A fresh admin key on a person's run is
     refused with reason `run_owner_only`, at connect and again at every new channel
     of an open connection.
+  - The one exception is a support helper: a super admin's fresh, uncapped key enters a person's run while the run's owner has accepted their help request and ticked a terminal, commands, files or forward door.
+    - Each channel kind needs its own door (shell, exec, sftp and sync, forward); an unticked kind is refused with its own sentence and an `ssh.channel.reject` row with reason `support_door_not_granted`.
+    - The helper is governed as the owner is: `deny_interactive`, the channel switch and `data_out` all apply, and the admin exemption never does.
+    - The connection is re-checked on every keepalive; a revoked, expired or unreadable grant refuses new channels and closes it.
+    - The success row on `ssh.authenticate` carries `support_grant` and `entry` `support`.
   - A member's key never satisfies the override — only the
     owner check does, same as before.
   - Existing admin-stamped keys are not revoked:
@@ -843,13 +586,4 @@ wardyn run ssh <id> --json                                   # -> {"host","port"
 
 ## Migration & internals
 
-- Registered keys live in `ssh_public_keys` (migration `0033`), keyed by the
-  SHA256 fingerprint (computed server-side from the parsed key — a caller
-  cannot choose or forge one).
-- The gateway and the `/me/ssh-keys` REST surface
-  are both in `internal/api` ([`sshgateway.go`](../internal/api/sshgateway.go), [`sshgateway_channels.go`](../internal/api/sshgateway_channels.go),
-  [`sshkeys.go`](../internal/api/sshkeys.go)), next to [`attach.go`](../internal/api/attach.go).
-- The SSH shell path bridges through the
-  exact same `Runner.Attach` call and masked recorder the browser terminal
-  uses, so there is only one interactive-shell code path to keep correct, not
-  two that could drift.
+- Moved to [SSH gateway internals](operations/ssh-internals.md).

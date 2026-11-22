@@ -306,8 +306,9 @@ func TestBuildableModes(t *testing.T) {
 	refuse := []Mode{ModeRefuse}
 	resident := []Mode{ModeRunnerResident, ModeRefuse}
 	viaOrg := []Mode{ModeViaOrg, ModeRefuse}
+	viaOrgResident := []Mode{ModeViaOrg, ModeRunnerResident, ModeRefuse}
 	want := map[string][]Mode{
-		ClassADOMintedPAT: resident, ClassAPIKey: viaOrg, ClassAWSSSOBearer: refuse, ClassAzureFoundryToken: refuse,
+		ClassADOMintedPAT: viaOrgResident, ClassAPIKey: viaOrg, ClassAWSSSOBearer: refuse, ClassAzureFoundryToken: refuse,
 		ClassBedrockBearer: refuse, ClassBedrockRoleCreds: refuse, ClassCloudSTS: refuse, ClassEnvSecret: resident,
 		ClassFileSecret: resident, ClassGitPATBroker: refuse, ClassGitPATHelper: resident, ClassGitHubToken: viaOrg,
 		ClassOAuthSubscription: {ModeOwn}, ClassSSHKey: resident,

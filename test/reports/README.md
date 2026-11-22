@@ -38,5 +38,7 @@ make ui-test                     # vitest + coverage -> test/reports/ui/
 cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e2e/
 ```
 
+`make test-report-docker` with `WARDYN_TEST_DOCKER=1` needs the Docker daemon on the machine running the tests, since TestL0_HostAddressUnreachable reads its network bridge's address from that host and the report fails when it skips.
+
 The Go report driver is `scripts/test-report.sh` — `go test -json` plus
 `go tool cover`, no extra runtimes.

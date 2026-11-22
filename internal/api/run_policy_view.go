@@ -258,6 +258,10 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	served := envelope.RunPolicySpec
+	// data_out as the doors read it: the run row's rule when it keeps one (runDataOutRule).
+	if run.DataOut != nil && *run.DataOut != served.DataOut.DataOut() {
+		served.DataOut = *run.DataOut
+	}
 	for _, h := range ev.restartHosts {
 		if !slices.Contains(served.DeniedDomains, h) {
 			served.DeniedDomains = append(served.DeniedDomains, h)
@@ -305,7 +309,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !restarted && slices.Equal(out.AllowedDomains, served.AllowedDomains) {
-		resp.HostMarks = envelope.HostMarks
+		resp.HostMarks = scopedHostMarks(envelope.HostMarks)
 	}
 	resp.InspectionLeftTo = s.inspectionLeftTo(ctx, run.ID, sc)
 	writeJSON(w, http.StatusOK, resp)

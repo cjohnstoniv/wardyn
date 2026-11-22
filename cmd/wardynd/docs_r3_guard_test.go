@@ -535,16 +535,18 @@ func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
 	)
 }
 
-// TestTestGapsDocReflectsCoverpkgCoverage pins docs/TEST-GAPS.md's
-// "Untested" bucket claim to test-report.sh's actual go test invocation, now
-// that -coverpkg=./... makes cross-package coverage count.
+// TestTestGapsDocReflectsCoverpkgCoverage pins the "Untested" bucket claim in
+// the report scripts/test-gaps.sh writes (test/reports/go/TEST-GAPS.md,
+// gitignored, so the generator's template is what is checked) to
+// test-report.sh's actual go test invocation, now that -coverpkg=./... makes
+// cross-package coverage count.
 //
 // The union profile the inventory is built from now runs `go test` with
 // -coverpkg=./..., so Go instruments the whole module for every test binary:
 // a func exercised solely through a DIFFERENT package's tests is counted
 // covered here too. The old "same-package-only" blind spot is closed — the
-// doc and its generator template in scripts/test-gaps.sh must say so, not
-// still warn that the bucket undercounts.
+// generator template in scripts/test-gaps.sh must say so, not still warn that
+// the bucket undercounts.
 func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 	// Pin the flag on the `go test -json` INVOCATION line, not anywhere in the
 	// file: the script's own comment block mentions -coverpkg too, and a
@@ -568,15 +570,14 @@ func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
 	mustNotSay(t, gen, "scripts/test-gaps.sh (header comment)",
 		"no test in the SAME PACKAGE reaches",
 	)
-
-	doc := readDoc(t, "docs/TEST-GAPS.md")
-	mustNotSay(t, doc, "docs/TEST-GAPS.md",
+	// The echo lines write the report text, with the backticks escaped for the shell.
+	mustNotSay(t, gen, "scripts/test-gaps.sh (report template)",
 		"## Untested — no test in the SAME PACKAGE reaches these",
-		"WITHOUT `-coverpkg`",
+		"WITHOUT \\`-coverpkg\\`",
 	)
-	mustSay(t, doc, "docs/TEST-GAPS.md",
-		"no test anywhere in the tree reaches it",
-		"WITH `-coverpkg=./...`",
+	mustSay(t, gen, "scripts/test-gaps.sh (report template)",
+		"no test anywhere in the tree reaches it, not merely",
+		"WITH \\`-coverpkg=./...\\`",
 		"## Untested — no test in the tree reaches these",
 	)
 }

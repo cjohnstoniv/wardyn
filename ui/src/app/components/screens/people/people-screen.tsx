@@ -30,11 +30,11 @@ import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus,
 import { AccessPanel, type AccessLoadState } from "../setup/access-panel";
 import { ScimCard } from "../settings/scim-card";
 import { AddPersonDialog } from "./add-person-dialog";
+import { FindPortalPerson } from "./find-portal-person";
 import { PersonDrawer } from "./person-drawer";
-import { personState, roleLabel, STATE_LABEL, type PersonState } from "./people-format";
+import { personState, roleLabel, STATE_LABEL, STATE_TONE } from "./people-format";
 
 const PAGE_SIZE = 50;
-const STATE_TONE: Record<PersonState, "success" | "warning" | "neutral"> = { active: "success", deactivated: "warning", never: "neutral" };
 type StateFilter = "all" | "active" | "deactivated";
 
 // The access panel's own fetch, the same one the Getting Started People step owns. Only the super
@@ -175,6 +175,8 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>{P.COL_PERSON}</TableHead>
+                <TableHead>{P.COL_ISSUER}</TableHead>
+                <TableHead>{P.COL_INTERNAL}</TableHead>
                 <TableHead>{P.COL_ROLE}</TableHead>
                 <TableHead>{P.COL_LAST}</TableHead>
                 <TableHead>{P.COL_STATE}</TableHead>
@@ -190,6 +192,16 @@ function PeopleTable({ onOpen, reloadKey }: { onOpen: (p: PersonSummary) => void
                       <button type="button" className="max-w-[16rem] truncate text-left hover:underline" title={p.email || p.principal} onClick={(e) => { e.stopPropagation(); onOpen(p); }}>
                         {p.email || p.principal}
                       </button>
+                    </TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-xs" title={p.issuer || undefined}>
+                      {p.issuer || <span className="font-sans text-sm text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-xs" title={p.internal_address || undefined}>
+                      {p.internal_address || (
+                        <span className="font-sans text-sm text-muted-foreground">
+                          —{p.issuer ? ` ${P.INTERNAL_FROM_ISSUER}` : ""}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>{p.role ? roleLabel(p.role) : "—"}</TableCell>
                     <TableCell className="text-muted-foreground" title={p.last_signed_in_at ? absoluteTime(p.last_signed_in_at) : undefined}>
@@ -229,6 +241,13 @@ export function PeopleScreen() {
   const { access, state, reload } = useAccess(operator);
   const [reloadKey, setReloadKey] = React.useState(0);
   const [selected, setSelected] = React.useState<PersonSummary | null>(null);
+  // What the operator last chose to look at. A lookup still in flight when they open a row, dismiss the drawer
+  // or look up someone else is no longer wanted, and must not open its person over that choice.
+  const intent = React.useRef(0);
+  const choose = (p: PersonSummary | null) => {
+    intent.current++;
+    setSelected(p);
+  };
   const [adding, setAdding] = React.useState(false);
   // A drawer action or an add re-reads the first page, and the open person on their own: after Load more
   // they are not on that page, and the drawer's counts and disabled buttons follow what the action did.
@@ -271,7 +290,8 @@ export function PeopleScreen() {
           {P.TABLE_TITLE}
         </h2>
         <div className="overflow-hidden rounded-xl border border-border bg-card">
-          <PeopleTable onOpen={setSelected} reloadKey={reloadKey} />
+          <FindPortalPerson intent={intent} onFound={setSelected} />
+          <PeopleTable onOpen={choose} reloadKey={reloadKey} />
         </div>
       </section>
 
@@ -281,7 +301,7 @@ export function PeopleScreen() {
 
       <PersonDrawer
         person={selected}
-        onClose={() => setSelected(null)}
+        onClose={() => choose(null)}
         onChanged={refresh}
       />
       <AddPersonDialog open={adding} onOpenChange={setAdding} onAdded={refresh} />

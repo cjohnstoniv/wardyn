@@ -348,7 +348,7 @@ func (s *Server) reviveBelowBoundaryFloor(ctx context.Context, run types.AgentRu
 
 // boundaryAdmitApproval is the boundary's bound on an egress approval (approvals.go's egress_host
 // gate is the member's): in hard_limits no decider admits a host it denies or does not allow, on any
-// run, a break-glass run's included. ok=false: the 403 is written and the approval stays pending. It returns the run, read here when the gate before it had not.
+// run, a break-glass run's included. ok=false: the 403 is written and the approval stays pending. A run that cannot be read refuses the approve (503 run_unreadable, approvalRunUnreadable). It returns the run, read here when the gate before it had not.
 func (s *Server) boundaryAdmitApproval(w http.ResponseWriter, r *http.Request, ap types.ApprovalRequest, run types.AgentRun, haveRun bool) (types.AgentRun, bool, bool) {
 	b, err := s.governanceBoundary(r.Context())
 	if err != nil {
@@ -360,7 +360,7 @@ func (s *Server) boundaryAdmitApproval(w http.ResponseWriter, r *http.Request, a
 	}
 	if !haveRun {
 		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-			writeServerError(w, r, "get run", err)
+			approvalRunUnreadable(w, r, err)
 			return run, false, false
 		}
 		haveRun = true

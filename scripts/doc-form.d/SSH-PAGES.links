@@ -1,0 +1,5 @@
+# The must-link rule in scripts/check-doc-links.sh applies to these docs.
+docs/operations/ssh-from-a-cluster.md
+docs/operations/ssh-443-only.md
+docs/SSH-SCRIPTED-ACCESS.md
+docs/operations/ssh-internals.md

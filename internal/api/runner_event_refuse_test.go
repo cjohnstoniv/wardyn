@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ type refuseStoreFake struct {
 	store.RunnerStore
 	resultErr, spoolErr, runErr, refuseErr error
 	run                                    types.AgentRun
+	fullFor                                time.Duration // what RefuseRunnerEvent answers: the runner's window full for that much more
 
 	mu    sync.Mutex
 	calls []store.RunnerEventRefusal
@@ -46,11 +48,11 @@ func (f *refuseStoreFake) GetRun(context.Context, uuid.UUID) (types.AgentRun, er
 	return f.run, f.runErr
 }
 
-func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, error) {
+func (f *refuseStoreFake) RefuseRunnerEvent(_ context.Context, _ uuid.UUID, r store.RunnerEventRefusal, _ func(context.Context, types.AuditEvent) (types.AuditEvent, error)) (bool, time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, r)
-	return r.ActionID != nil, f.refuseErr
+	return r.ActionID != nil, f.fullFor, f.refuseErr
 }
 
 func (f *refuseStoreFake) recorded() []store.RunnerEventRefusal {
@@ -175,7 +177,7 @@ func TestRefusalRowBeforeAck(t *testing.T) {
 	}
 	calls := fake.recorded()
 	sum := sha256.Sum256(data)
-	if len(calls) != 1 || !calls[0].Row || calls[0].Marker || calls[0].Summary != nil || calls[0].Kind != runnerwire.EventSpool ||
+	if len(calls) != 1 || calls[0].Kind != runnerwire.EventSpool ||
 		calls[0].Code != runnerwire.RefusalShape || calls[0].Sentinel != errRunnerEventShape.Error() ||
 		calls[0].PayloadSHA256 != hex.EncodeToString(sum[:]) || calls[0].PayloadBytes != len(data) || calls[0].RunID == nil || *calls[0].RunID != runID {
 		t.Fatalf("RefuseRunnerEvent calls = %+v, want one row of codes, hash and size", calls)
@@ -188,77 +190,139 @@ func TestRefusalRowBeforeAck(t *testing.T) {
 	}
 }
 
-// One runner writes at most 32 rows in an hour, the 33rd marked; the rest are counted and summarised by the first
-// row of a later window. Each runner has its own count.
-func TestRefusalRowsBounded(t *testing.T) {
-	now := time.Now().UTC()
-	start := now
+// The bound on refusal rows is the store's, counted in the transaction that writes them: no replica plans or counts a
+// refusal itself, so two replicas hand every refusal of one runner to the store, each with its own hash, and
+// acknowledge each one it records. The one refusal a replica holds back is a rate_limited one in a window the store
+// already reported full, which would get no row (TestRateLimitedRefusalSkipsAFullWindow); these are not.
+func TestRefusalBoundIsTheStores(t *testing.T) {
+	now := time.Now()
 	fake := &refuseStoreFake{}
-	srv := refuseTestServer(fake, &now)
+	replicas := []*Server{refuseTestServer(fake, &now), refuseTestServer(fake, &now)}
 	runnerID, runID := uuid.New(), uuid.New()
-	refuse := func(id uuid.UUID, i int) {
-		t.Helper()
-		data := []byte(fmt.Sprintf(`{"n":%d}`, i)) // distinct events: dedupe could not bound these
-		err := srv.eventFromRunner(t.Context(), id, "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: data})
+	// Past the 33 rows a window writes, and distinct events: dedupe could not bound these.
+	const n = 70
+	payload := func(i int) []byte { return []byte(fmt.Sprintf(`{"n":%d}`, i)) }
+	for i := range n {
+		err := replicas[i%2].eventFromRunner(t.Context(), runnerID, "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: payload(i)})
 		var refusal *runnerwire.EventRefusal
 		if !errors.As(err, &refusal) {
-			t.Fatalf("refusal %d = %v", i, err)
+			t.Fatalf("refusal %d = %v, want an EventRefusal", i, err)
 		}
-	}
-	for i := range 133 {
-		now = start.Add(time.Duration(i) * time.Second)
-		refuse(runnerID, i)
 	}
 	calls := fake.recorded()
-	rows, markers := 0, 0
+	if len(calls) != n {
+		t.Fatalf("%d RefuseRunnerEvent calls, want %d: a replica dropped a refusal the store must count", len(calls), n)
+	}
 	for i, c := range calls {
-		if c.Row {
-			rows++
+		if sum := sha256.Sum256(payload(i)); c.PayloadSHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("call %d carries %s, want the hash of refusal %d", i, c.PayloadSHA256, i)
 		}
-		if c.Marker {
-			markers++
-			if i != runnerEventRefuseRows {
-				t.Errorf("marker on refusal %d, want %d", i+1, runnerEventRefuseRows+1)
-			}
-		}
-		if c.Summary != nil {
-			t.Errorf("summary inside the first window: %+v", c.Summary)
-		}
-	}
-	if len(calls) != 133 || rows != runnerEventRefuseRows+1 || markers != 1 {
-		t.Fatalf("%d calls, %d rows, %d markers: want 133, %d, 1", len(calls), rows, markers, runnerEventRefuseRows+1)
-	}
-	refuse(uuid.New(), 0)
-	if other := fake.recorded()[133]; !other.Row || other.Marker {
-		t.Fatalf("a second runner shares the first one's bound: %+v", other)
-	}
-	now = start.Add(runnerEventRefuseWindow)
-	refuse(runnerID, 133)
-	last := fake.recorded()[134]
-	if !last.Row || last.Marker || last.Summary == nil || last.Summary.Suppressed != 100 || !last.Summary.WindowStart.Equal(start) ||
-		!last.Summary.WindowEnd.Equal(start.Add(runnerEventRefuseWindow)) {
-		t.Fatalf("first refusal of the next window = %+v (summary %+v), want its row and a summary of 100", last, last.Summary)
 	}
 }
 
-// A runner that suppressed rows and then goes quiet (revoked, say) owes its summary for a day; after that its window
-// is dropped by the next refusal of any other runner, instead of staying in memory.
-func TestRefusalWindowOwingASummaryIsDroppedAfterADay(t *testing.T) {
-	start := time.Now().UTC()
-	var r runnerEventRefusals
-	quiet, other := uuid.New(), uuid.New()
-	for range runnerEventRefuseRows + 6 {
-		r.count(quiet, start)
+// A refusal reads an overflow summary's interval for the store, and a sequenced record's place never depends on it.
+func TestRefusalReadsTheSpoolPlace(t *testing.T) {
+	now := time.Now()
+	runID, spoolID := uuid.New(), uuid.New()
+	hash := strings.Repeat("a", 64)
+	for name, tc := range map[string]struct {
+		data string
+		want *store.RunnerEventRefusalSpool
+	}{
+		"summary": {`{"spool_id":"` + spoolID.String() + `","seq":0,"hash":"` + hash + `","count":2,"drop_end":5,"later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Hash: hash, Count: 2, DropEnd: 5}},
+		"summary with an unreadable interval": {`{"spool_id":"` + spoolID.String() + `","seq":0,"hash":"` + hash + `","count":"x","drop_end":5,"later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Hash: hash}},
+		"sequenced record": {`{"spool_id":"` + spoolID.String() + `","seq":2,"hash":"` + hash + `","count":"x","later":1}`,
+			&store.RunnerEventRefusalSpool{RunID: runID, SpoolID: spoolID, Seq: 2, Hash: hash}},
+		"data with no place": {`{`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &refuseStoreFake{}
+			err := refuseTestServer(fake, &now).eventFromRunner(t.Context(), uuid.New(), "", runnerwire.Event{Kind: runnerwire.EventSpool, RunID: &runID, Data: []byte(tc.data)})
+			var refusal *runnerwire.EventRefusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("err = %v, want an EventRefusal", err)
+			}
+			calls := fake.recorded()
+			if len(calls) != 1 {
+				t.Fatalf("RefuseRunnerEvent calls = %+v, want one", calls)
+			}
+			if got := calls[0].Spool; (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("spool place = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
-	r.count(other, start.Add(runnerEventRefuseWindow))
-	if _, ok := r.byRunner[quiet]; !ok {
-		t.Fatal("a window that suppressed rows was dropped before its summary was owed for a day")
+}
+
+// Once the store reports a runner's refusal window full, this replica sends that runner's later rate_limited refusals
+// no further until the window ends: no store call, so no transaction, lock or log line. Another code still reaches the
+// store, another runner is not held back, and the first refusal after the window's end asks the store again.
+func TestRateLimitedRefusalSkipsAFullWindow(t *testing.T) {
+	now := time.Now()
+	fake := &refuseStoreFake{fullFor: time.Minute}
+	srv := refuseTestServer(fake, &now)
+	logs := captureSlog(t)
+	runnerID := uuid.New()
+	ctx, ev := validWorkloadFrame(t)
+	refuse := func(id uuid.UUID, cause error, want string, calls int) {
+		t.Helper()
+		var refusal *runnerwire.EventRefusal
+		if err := srv.classifyRunnerEvent(ctx, id, ev, cause); !errors.As(err, &refusal) || refusal.Code != want {
+			t.Fatalf("refusal = %v, want an acknowledged %q", err, want)
+		}
+		if got := len(fake.recorded()); got != calls {
+			t.Fatalf("%d RefuseRunnerEvent calls, want %d", got, calls)
+		}
 	}
-	if _, _, sum := r.plan(quiet, start.Add(runnerEventRefuseWindow)); sum == nil || sum.Suppressed != 5 {
-		t.Fatalf("summary owed after an hour = %+v, want 5 suppressed", sum)
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // the store reports the window full
+	before := logs.String()
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // skipped
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 1) // skipped
+	if got := logs.String(); got != before {
+		t.Fatalf("skipped refusals logged %q, want no line", strings.TrimPrefix(got, before))
 	}
-	r.count(other, start.Add(runnerEventRefuseOwedKeep))
-	if _, ok := r.byRunner[quiet]; ok {
-		t.Fatal("a window that suppressed rows stayed in memory a day after it opened")
+	refuse(runnerID, errReportShape, runnerwire.RefusalShape, 2)                      // another code reaches the store
+	refuse(uuid.New(), errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 3) // another runner is asked for
+	now = now.Add(time.Minute)
+	fake.fullFor = 0 // a new window, with room
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 4)
+	refuse(runnerID, errWorkloadEventRateLimited, runnerwire.RefusalRateLimited, 5) // a row written holds nothing back
+}
+
+// The full windows a replica keeps are capped at workloadEventMaxRunners: with that many live, a new runner's full
+// window is not kept, so its rate_limited refusals keep reaching the store; an entry whose window has ended is pruned
+// first, which makes room for it.
+func TestRefusalFullWindowCacheIsCapped(t *testing.T) {
+	now := time.Now()
+	fake := &refuseStoreFake{fullFor: time.Hour}
+	srv := refuseTestServer(fake, &now)
+	ctx, ev := validWorkloadFrame(t)
+	ended := uuid.New()
+	srv.eventRefusals.noteWindow(ended, time.Minute, now)
+	for range workloadEventMaxRunners - 1 {
+		srv.eventRefusals.noteWindow(uuid.New(), time.Hour, now)
+	}
+	newcomer := uuid.New()
+	refuse := func(calls int) {
+		t.Helper()
+		var refusal *runnerwire.EventRefusal
+		if err := srv.classifyRunnerEvent(ctx, newcomer, ev, errWorkloadEventRateLimited); !errors.As(err, &refusal) || refusal.Code != runnerwire.RefusalRateLimited {
+			t.Fatalf("refusal = %v, want an acknowledged %q", err, runnerwire.RefusalRateLimited)
+		}
+		if got := len(fake.recorded()); got != calls {
+			t.Fatalf("%d RefuseRunnerEvent calls, want %d", got, calls)
+		}
+	}
+	refuse(1)
+	refuse(2) // not kept: the cap is reached with live windows
+	now = now.Add(time.Minute)
+	refuse(3) // the ended entry is pruned, which makes room
+	refuse(3) // kept now: skipped
+	if _, ok := srv.eventRefusals.full[ended]; ok {
+		t.Fatal("an ended window is still kept")
+	}
+	if n := len(srv.eventRefusals.full); n != workloadEventMaxRunners {
+		t.Fatalf("%d windows kept, want %d", n, workloadEventMaxRunners)
 	}
 }

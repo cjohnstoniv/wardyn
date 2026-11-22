@@ -84,6 +84,10 @@ const (
 	ReasonDriveNotFound       Reason = "drive_not_found"
 	ReasonDriveTargetConflict Reason = "drive_target_conflict"
 	ReasonDriveNotInPool      Reason = "drive_not_in_pool"
+	// ReasonDriveNotAllocatedToPortal: a run through an issuer portal named a drive that is not allocated to that
+	// portal, or asked for the legacy drive flag. 403, audited, one body for every cause: another portal's drive, a
+	// group's, the person's, nobody's, or an id that names nothing.
+	ReasonDriveNotAllocatedToPortal Reason = "drive_not_allocated_to_portal"
 	// ReasonRoleStampStale: an API token's role and group stamp is older than
 	// WARDYN_ROLE_STAMP_TTL. Its owner signs in again to re-stamp it.
 	ReasonRoleStampStale Reason = "role_stamp_stale"
@@ -130,6 +134,16 @@ const (
 	// ReasonDecisionScopeAboveRule: a decision_scope that reaches further than the unit deciders rule allows
 	// (its max_scope, and never always under a rule), for every decider.
 	ReasonDecisionScopeAboveRule Reason = "decision_scope_above_rule"
+	// ReasonRunPaused: a paused run's sandbox asked the organisation to forward a request for a credential delivered
+	// via_org. 409, audited with run_state paused; the run is served again once it is resumed.
+	ReasonRunPaused Reason = "run_paused"
+	// ReasonSupportDoorNotGranted: a support helper's entry asked for a door its owner did not tick.
+	ReasonSupportDoorNotGranted Reason = "support_door_not_granted"
+	// ReasonSupportGrantEnded: a support helper's entry named a grant that has ended (expired, revoked,
+	// signed out, or its run is over).
+	ReasonSupportGrantEnded Reason = "support_grant_ended"
+	// ReasonSupportHelperDecision: a person who helped in a run asked to decide one of its holds.
+	ReasonSupportHelperDecision Reason = "support_helper_decision"
 )
 
 // Refusal is one reason's registry row.
@@ -174,6 +188,7 @@ var refusals = map[Reason]Refusal{
 	ReasonRunOwnerOnly:                   {Effect: EffectDeny, Audit: true, Sentence: "only the person who started this run can open it interactively"},
 	ReasonRecordingGoverned:              {Effect: EffectDeny, Audit: true},
 	ReasonRunTerminal:                    {Effect: EffectDeny, Audit: true},
+	ReasonRunPaused:                      {Effect: EffectConflict, Audit: true},
 	ReasonSecondHumanRequired:            {Effect: EffectDeny, Audit: true},
 	ReasonRunQuota:                       {Effect: EffectUnprocessable},
 	ReasonModelProviderUnavailable:       {Effect: EffectUnprocessable, Audit: true},
@@ -188,6 +203,7 @@ var refusals = map[Reason]Refusal{
 	ReasonDriveNotFound:                  {Effect: EffectUnprocessable, Audit: true},
 	ReasonDriveTargetConflict:            {Effect: EffectUnprocessable, Audit: true},
 	ReasonDriveNotInPool:                 {Effect: EffectUnprocessable, Audit: true},
+	ReasonDriveNotAllocatedToPortal:      {Effect: EffectDeny, Audit: true},
 	ReasonRoleStampStale:                 {Effect: EffectUnauthenticated, Audit: true, Sentence: "this token's role is out of date: its owner must sign in again to refresh it"},
 	ReasonAuditExportPartitionFilter:     {Effect: EffectBadRequest},
 	ReasonKeyDomainUnknown:               {Effect: EffectUnprocessable, Audit: true},
@@ -202,6 +218,9 @@ var refusals = map[Reason]Refusal{
 	ReasonUnitScopeDenied:                {Effect: EffectDeny, Audit: true, Sentence: "this is outside the units you administer"},
 	ReasonNotADecider:                    {Effect: EffectDeny, Audit: true},
 	ReasonDecisionScopeAboveRule:         {Effect: EffectDeny, Audit: true},
+	ReasonSupportDoorNotGranted:          {Effect: EffectDeny, Audit: true, Sentence: "the run's owner did not allow this kind of help"},
+	ReasonSupportGrantEnded:              {Effect: EffectDeny, Audit: true, Sentence: "this help session has ended"},
+	ReasonSupportHelperDecision:          {Effect: EffectDeny, Audit: true, Sentence: "you helped in this run, so you cannot decide its holds"},
 }
 
 // Lookup returns reason's registry row; false for a reason nobody registered,

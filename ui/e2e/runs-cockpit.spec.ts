@@ -226,6 +226,48 @@ test.describe("Run cockpit — a kill queued for an offline runner", () => {
   });
 });
 
+// A kill whose sandbox was still stopping when it finished (run.kill success with data.sandbox_stop
+// "confirming") waits for its run.kill.confirm row: until then it never says the sandbox was removed, and Kill
+// again stays hidden; a failed confirm says teardown is not confirmed and offers Kill again. The rows are
+// spliced: the hermetic backend has no pod that outlives its kill.
+test.describe("Run cockpit — a kill whose sandbox stop is still being confirmed", () => {
+  async function openWith(page: Page, confirm: unknown[]) {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const list = (await (await page.request.get("api/v1/runs?limit=1000", { headers: auth })).json()) as { id: string; task: string }[];
+    const id = list.find((r) => r.task === "e2e fixture 7")!.id;
+    const at = new Date().toISOString();
+    await page.route(/\/api\/v1\/audit\?/, async (route) => {
+      const action = new URL(route.request().url()).searchParams.get("action");
+      if (action === "run.kill") {
+        return route.fulfill({ json: [{ id: "k1", time: at, actor_type: "human", actor: "alice", action: "run.kill", outcome: "success", data: { sandbox_stop: "confirming" } }] });
+      }
+      if (action === "run.kill.confirm") return route.fulfill({ json: confirm });
+      return route.fallback();
+    });
+    await page.goto(`runs/${id}`);
+    return page.getByTestId("run-failure-block");
+  }
+
+  test("no result yet: Wardyn is confirming the stop, never removed, and Kill again is hidden", async ({ page }) => {
+    const block = await openWith(page, []);
+    await expect(block).toHaveAttribute("data-evidence", "confirming");
+    await expect(block).toContainText("Wardyn is confirming the stop");
+    await expect(block).not.toContainText("stopped and removed the sandbox");
+    await expect(page.getByRole("button", { name: /^End run/ })).toHaveCount(0);
+  });
+
+  test("a failed confirm: teardown is not confirmed, and Kill again is offered", async ({ page }) => {
+    const later = new Date(Date.now() + 60_000).toISOString();
+    const block = await openWith(page, [
+      { id: "c1", time: later, actor_type: "system", actor: "wardynd", action: "run.kill.confirm", outcome: "failure", data: { step: "kill_sandbox", reason: "pod still terminating" } },
+    ]);
+    await expect(block).toHaveAttribute("data-evidence", "partial");
+    await expect(block).toContainText("teardown is not confirmed");
+    await expect(block).toContainText("The run.kill.confirm row names the step that failed");
+    await expect(page.getByRole("button", { name: /^End run/ })).toBeEnabled();
+  });
+});
+
 // R4-F037: the attach card's OFF paragraphs are claims about the DEPLOYMENT
 // ("Off on this deployment... an operator turns it on by setting
 // WARDYN_SSH_LISTEN"). lib/api/health.ts swallows a non-ok /healthz into a

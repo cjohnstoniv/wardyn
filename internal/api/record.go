@@ -296,8 +296,7 @@ func recordLaunchAuditDetail(lerr error) string {
 }
 
 // handleRecordWorkspace launches one named OPEN recording sandbox:
-// POST /workspaces/{id}/record {"name": "...", "confined": false}
-// ("task_key" is accepted as a deprecated alias for name). The operator drives
+// POST /workspaces/{id}/record {"name": "...", "confined": false}. The operator drives
 // the session through the attach terminal and finishes it with the normal run
 // kill ("Done recording"); confined=true replays under the approved egress set.
 // 202 with the run id; 503 no runner; 409 while another import step is live.
@@ -308,11 +307,9 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	// Named recording sessions: the operator names a session ("build & test",
 	// "agent dev loop", …) and drives it in an attached terminal; there is no
-	// derived build/test/contribute taxonomy. Back-compat: accept the legacy
-	// task_key as an alias for name so old clients don't hard-break.
+	// derived build/test/contribute taxonomy.
 	var req struct {
-		Name    string `json:"name"`
-		TaskKey string `json:"task_key"` // deprecated alias for name
+		Name string `json:"name"`
 		// Confined = a VERIFY session: default-deny egress limited to the approved
 		// set, to re-run the same steps under least privilege. Default false = a
 		// learning session with open egress (the Record step).
@@ -327,9 +324,6 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	label := strings.TrimSpace(req.Name)
-	if label == "" {
-		label = strings.TrimSpace(req.TaskKey)
-	}
 	key := recordSessionKey(label)
 	if key == "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonRecordSessionNameRequired, "record session needs a name (letters/digits) — e.g. \"build & test\"")

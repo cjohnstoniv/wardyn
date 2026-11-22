@@ -181,6 +181,15 @@ func wantCLIReason(t *testing.T, w *httptest.ResponseRecorder, code int, reason 
 	}
 }
 
+// wantCLIDetail checks the detail of a refused refresh: the end it names, or "" for none.
+func wantCLIDetail(t *testing.T, w *httptest.ResponseRecorder, detail string) {
+	t.Helper()
+	var b errorBody
+	if err := json.Unmarshal(w.Body.Bytes(), &b); err != nil || b.Detail != detail {
+		t.Fatalf("refused refresh %s, want detail %q", w.Body, detail)
+	}
+}
+
 func TestPG_CLISignIn_FlowAndApprovePageData(t *testing.T) {
 	e := newCLIEnv(t)
 	if w := e.req(http.MethodGet, "/healthz", "", nil, "", "", ""); !strings.Contains(w.Body.String(), `"cli_sign_in":true`) ||
@@ -433,13 +442,16 @@ func TestPG_CLISession_RefreshRotatesAndReuseEndsTheSession(t *testing.T) {
 	// An old secret with a proof by a key that is not the device's changes nothing.
 	route := "/api/v1/cli/sessions/" + g1.SessionID.String() + "/refresh"
 	_, stranger, _ := ed25519.GenerateKey(rand.Reader)
-	wantCLIReason(t, c.refreshWith(g1.SessionID, g1.Secret, c.proofAt(route, g1.SessionID, g1.Secret, e.clock, stranger)),
-		http.StatusUnauthorized, reasonCLISessionInvalid)
+	w = c.refreshWith(g1.SessionID, g1.Secret, c.proofAt(route, g1.SessionID, g1.Secret, e.clock, stranger))
+	wantCLIReason(t, w, http.StatusUnauthorized, reasonCLISessionInvalid)
+	wantCLIDetail(t, w, "")
 	if code, _ := e.me(g2.AccessToken); code != http.StatusOK {
 		t.Fatalf("an invalid proof ended the session: GET /me = %d", code)
 	}
 	// The old secret with the device's own proof is a reuse: the session ends with every token it holds.
-	wantCLIReason(t, c.refresh(g1.SessionID, g1.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+	w = c.refresh(g1.SessionID, g1.Secret)
+	wantCLIReason(t, w, http.StatusUnauthorized, reasonCLISessionInvalid)
+	wantCLIDetail(t, w, "")
 	ev := lastAuditEvent(t, e.h.audit.snapshot(), "cli.session.reuse_detected")
 	if ev.Target != g1.SessionID.String() || !strings.Contains(string(ev.Data), `"machine":"pm-laptop"`) || !strings.Contains(string(ev.Data), `"address"`) {
 		t.Fatalf("reuse_detected = %+v %s, want the session, the machine and the address", ev, ev.Data)
@@ -449,7 +461,9 @@ func TestPG_CLISession_RefreshRotatesAndReuseEndsTheSession(t *testing.T) {
 			t.Fatalf("an access token of the reused session = %d, want 401", code)
 		}
 	}
-	wantCLIReason(t, c.refresh(g2.SessionID, g2.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+	w = c.refresh(g2.SessionID, g2.Secret)
+	wantCLIReason(t, w, http.StatusUnauthorized, reasonCLISessionInvalid)
+	wantCLIDetail(t, w, "")
 	if got, _ := e.pg.GetCLISession(context.Background(), g1.SessionID); got.EndReason != types.CLISessionEndReuseDetected {
 		t.Fatalf("session = %+v, want ended as reuse_detected", got)
 	}
@@ -463,17 +477,18 @@ func TestPG_CLISession_EveryCutRefusesAtRefresh(t *testing.T) {
 		cut          func(e *cliEnv, g types.CLISessionGrant)
 		wantCode     int
 		ended        bool
+		detail       string
 	}{
 		{"a revoke written elsewhere", "revoked", func(e *cliEnv, _ types.CLISessionGrant) {
 			if _, err := e.pool.Exec(ctx, `INSERT INTO oidc_session_revocations (sub, revoked_at) VALUES ('sub-user', clock_timestamp())`); err != nil {
 				e.t.Fatal(err)
 			}
-		}, http.StatusUnauthorized, true},
+		}, http.StatusUnauthorized, true, ""},
 		{"a sessions-only cut written elsewhere", "revoked", func(e *cliEnv, _ types.CLISessionGrant) {
 			if _, err := e.pool.Exec(ctx, `INSERT INTO oidc_session_cuts (sub, cut_at) VALUES ('user@corp.example', clock_timestamp())`); err != nil {
 				e.t.Fatal(err)
 			}
-		}, http.StatusUnauthorized, true},
+		}, http.StatusUnauthorized, true, ""},
 		{"deactivation", "deactivated", func(e *cliEnv, _ types.CLISessionGrant) {
 			if _, err := e.pg.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-user", Issuer: "https://idp.example", Email: "user@corp.example"}, time.Now().UTC()); err != nil {
 				e.t.Fatal(err)
@@ -481,24 +496,29 @@ func TestPG_CLISession_EveryCutRefusesAtRefresh(t *testing.T) {
 			if _, err := e.pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() WHERE principal = 'sub-user'`); err != nil {
 				e.t.Fatal(err)
 			}
-		}, http.StatusUnauthorized, true},
+		}, http.StatusUnauthorized, true, ""},
 		{"a stale role stamp", "role_stamp_stale", func(e *cliEnv, g types.CLISessionGrant) {
 			e.srv.cfg.RoleStampTTL = time.Hour
 			if _, err := e.pool.Exec(ctx, `UPDATE cli_sessions SET identity_stamped_at = now() - interval '2 hours' WHERE id = $1`, g.SessionID); err != nil {
 				e.t.Fatal(err)
 			}
-		}, http.StatusUnauthorized, false},
+		}, http.StatusUnauthorized, false, ""},
 		{"a lost api_token feature", "capability_feature", func(e *cliEnv, _ types.CLISessionGrant) {
 			if _, err := e.pg.UpsertCapabilityGrant(ctx, types.CapabilityGrant{SubjectType: types.CapabilitySubjectAll, Capability: capFeature,
 				Value: featureAPIToken, Effect: types.CapabilityDeny}); err != nil {
 				e.t.Fatal(err)
 			}
-		}, http.StatusForbidden, false},
+		}, http.StatusForbidden, false, ""},
 		{"Sign out on this computer's row", "ended", func(e *cliEnv, g types.CLISessionGrant) {
 			if w := e.req(http.MethodDelete, "/api/v1/me/cli-sessions/"+g.SessionID.String(), "", e.user, "", "", ""); w.Code != http.StatusNoContent {
 				e.t.Fatalf("sign out = %d %s", w.Code, w.Body)
 			}
-		}, http.StatusUnauthorized, true},
+		}, http.StatusUnauthorized, true, types.CLISessionEndSignedOut},
+		{"a cut that already ended the session", "ended", func(e *cliEnv, g types.CLISessionGrant) {
+			if _, err := e.pool.Exec(ctx, `UPDATE cli_sessions SET ended_at = now(), end_reason = 'sessions_cut' WHERE id = $1`, g.SessionID); err != nil {
+				e.t.Fatal(err)
+			}
+		}, http.StatusUnauthorized, true, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newCLIEnv(t)
@@ -509,6 +529,7 @@ func TestPG_CLISession_EveryCutRefusesAtRefresh(t *testing.T) {
 			if w.Code != c.wantCode {
 				t.Fatalf("refresh after %s = %d %s, want %d", c.name, w.Code, w.Body, c.wantCode)
 			}
+			wantCLIDetail(t, w, c.detail)
 			ev := lastAuditEvent(t, e.h.audit.snapshot(), "cli.session.refresh_refused")
 			if !strings.Contains(string(ev.Data), `"reason":"`+c.reason+`"`) {
 				t.Fatalf("refresh_refused = %s, want reason %s", ev.Data, c.reason)
@@ -540,7 +561,9 @@ func TestPG_CLISession_IdleAndAbsoluteExpiry(t *testing.T) {
 	}
 	g = decodeJSON[types.CLISessionGrant](t, w)
 	idle.advance(time.Hour)
-	wantCLIReason(t, c.refresh(g.SessionID, g.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+	w = c.refresh(g.SessionID, g.Secret)
+	wantCLIReason(t, w, http.StatusUnauthorized, reasonCLISessionInvalid)
+	wantCLIDetail(t, w, types.CLISessionEndIdle)
 	if got, _ := idle.pg.GetCLISession(context.Background(), g.SessionID); got.EndReason != types.CLISessionEndIdle {
 		t.Fatalf("session = %+v, want ended as idle", got)
 	}
@@ -554,7 +577,9 @@ func TestPG_CLISession_IdleAndAbsoluteExpiry(t *testing.T) {
 		t.Fatalf("refresh 30 min before the end = %d %+v, want an access token that ends with the session", w.Code, g2)
 	}
 	abs.advance(31 * time.Minute)
-	wantCLIReason(t, c.refresh(g2.SessionID, g2.Secret), http.StatusUnauthorized, reasonCLISessionInvalid)
+	w = c.refresh(g2.SessionID, g2.Secret)
+	wantCLIReason(t, w, http.StatusUnauthorized, reasonCLISessionInvalid)
+	wantCLIDetail(t, w, types.CLISessionEndExpired)
 	if got, _ := abs.pg.GetCLISession(context.Background(), g.SessionID); got.EndReason != types.CLISessionEndExpired {
 		t.Fatalf("session = %+v, want ended as expired", got)
 	}
@@ -598,9 +623,17 @@ func TestPG_CLISession_SessionCutsEndCLISessionsAtOnce(t *testing.T) {
 				if code, _ := e.me(personal.Token); code != http.StatusOK {
 					t.Fatalf("the personal API token after Sign out everywhere = %d, want it to keep working", code)
 				}
+			}
+			// The receipt counts what this cut ended; an admin cut repeated after it ends none, so says 0.
+			if c.name != "SCIM suspension" {
 				ev := lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke")
 				if !strings.Contains(string(ev.Data), `"cli_sessions_ended":1`) {
-					t.Fatalf("session.revoke = %s, want cli_sessions_ended 1", ev.Data)
+					t.Fatalf("session.revoke after %s = %s, want cli_sessions_ended 1", c.name, ev.Data)
+				}
+				c.cut(e)
+				ev = lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke")
+				if !strings.Contains(string(ev.Data), `"cli_sessions_ended":0`) {
+					t.Fatalf("a second %s = %s, want cli_sessions_ended 0: the sessions were already ended", c.name, ev.Data)
 				}
 			}
 		})
@@ -823,5 +856,31 @@ func TestPG_CLISession_EndedDuringRefreshIsNotReuse(t *testing.T) {
 	}
 	if got, _ := e.pg.GetCLISession(context.Background(), g.SessionID); got.EndReason != types.CLISessionEndSignedOut {
 		t.Fatalf("session = %+v, want it to keep its own end reason", got)
+	}
+}
+
+// A provider logout cut counts the CLI sessions it ended on its own session.revoke row, as an admin's cut
+// does, and a repeat of it, finding none left, says 0.
+func TestPG_CLISession_ProviderLogoutRowCarriesTheCount(t *testing.T) {
+	ctx := context.Background()
+	e := newCLIEnv(t)
+	_, g := e.signIn(e.super, nil)
+	logout := func() []byte {
+		cctx, _ := store.WithCLIEnded(ctx)
+		if err := oidc.CutSessions(cctx, e.rev, "sub-super"); err != nil {
+			t.Fatal(err)
+		}
+		e.srv.auditIdPLogout(httptest.NewRequest(http.MethodPost, "/auth/backchannel-logout", nil).WithContext(cctx),
+			"idp_back_channel_logout", "sub-super", nil)
+		return lastAuditEvent(t, e.h.audit.snapshot(), "session.revoke").Data
+	}
+	if got := logout(); !strings.Contains(string(got), `"cli_sessions_ended":1`) {
+		t.Fatalf("provider logout row = %s, want cli_sessions_ended 1", got)
+	}
+	if got, _ := e.pg.GetCLISession(ctx, g.SessionID); got.EndedAt == nil {
+		t.Fatalf("CLI session after the provider logout = %+v, want ended", got)
+	}
+	if got := logout(); !strings.Contains(string(got), `"cli_sessions_ended":0`) {
+		t.Fatalf("a repeated provider logout row = %s, want cli_sessions_ended 0", got)
 	}
 }

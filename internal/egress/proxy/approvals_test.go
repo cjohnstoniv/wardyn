@@ -77,7 +77,7 @@ func TestApprovalExpiredPendingIsAskedAgain(t *testing.T) {
 			defer cp.Close()
 			ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 			ap.mu.Lock()
-			ap.hosts["egress.test"] = &hostApproval{state: apPending, approvalID: oldID, lastPoll: time.Now().Add(-2 * pollInterval)}
+			ap.hosts["egress.test"] = &hostApproval{state: apPending, approvalID: oldID, lastPoll: time.Now().Add(-2 * pendingPollFloor)}
 			ap.mu.Unlock()
 
 			if res := ap.Resolve(context.Background(), "egress.test"); res.State != apExpired || res.ApprovalID != oldID {

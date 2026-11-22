@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,8 +40,25 @@ func (s PG) Ping(ctx context.Context) error {
 // runReservedCols and runInsertOnlyCols column, in order (TestCreateRunBindsEveryInsertColumn).
 var createRunSQL = `
 		INSERT INTO agent_runs (` + runInsertCols + `, ` + runReservedCols + `, ` + runInsertOnlyCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,` + runnerPoolFence + `,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64)
 		RETURNING ` + runCols
+
+// createPortalRunSQL is createRunSQL for a run that mounts a portal's drive (types.AgentRun.PortalDrives): the
+// created_via value is the portal read through its own row, locked FOR SHARE, only while it is not revoked. A revoked
+// portal yields NULL, which agent_runs_portal_drive_fence refuses (runInsertErr). One statement, so no revoke can slip
+// between the check and the row: a revoke is an UPDATE of that row and waits for the share lock, and an insert that
+// waited reads the row again once the revoke has committed. The lock must stay FOR SHARE: FOR KEY SHARE does not
+// conflict with that UPDATE. $34 is created_via's own placeholder.
+var createPortalRunSQL = strings.Replace(createRunSQL, ",$34,", ",(SELECT id FROM delegates WHERE id = $34 AND revoked_at IS NULL FOR SHARE),", 1)
+
+// runInsertFor is the insert for r: plain, which is createRunSQL, or its portal-fenced form when r mounts a portal's
+// drive. Every writer passes createRunSQL itself, so a census of the writers still finds them.
+func runInsertFor(r types.AgentRun, plain string) string {
+	if r.PortalDrives {
+		return createPortalRunSQL
+	}
+	return plain
+}
 
 // runnerPoolFence is the value of the runner_pool_id column in createRunSQL: the pool read through its
 // own row, locked FOR SHARE, only when it is still active at the revision the run was admitted against.
@@ -49,11 +67,17 @@ var createRunSQL = `
 // admission and the row. $43 and $44 are the pool id and revision columns' own placeholders.
 const runnerPoolFence = `(SELECT id FROM runner_pools WHERE id = $43 AND revision = $44 AND state = 'active' FOR SHARE)`
 
-// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go); any other error passes through unchanged.
+// runInsertErr names a pool-fence failure (ErrRunnerPoolStale, store_runner_pools.go) and a portal-fence failure
+// (ErrPortalRevoked); any other error passes through unchanged.
 func runInsertErr(err error) error {
 	var pe *pgconn.PgError
-	if errors.As(err, &pe) && pe.Code == "23514" && pe.ConstraintName == "agent_runs_runner_pool_binding" {
-		return ErrRunnerPoolStale
+	if errors.As(err, &pe) && pe.Code == "23514" {
+		switch pe.ConstraintName {
+		case "agent_runs_runner_pool_binding":
+			return ErrRunnerPoolStale
+		case "agent_runs_portal_drive_fence":
+			return ErrPortalRevoked
+		}
 	}
 	return err
 }
@@ -86,7 +110,7 @@ func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, er
 			args[2] = anchor.Translate(r.UpdatedAt)
 		}
 		stampRunTimes(anchor, r, args)
-		if out, e = scanRun(q.QueryRow(ctx, createRunSQL, args...)); e != nil {
+		if out, e = scanRun(q.QueryRow(ctx, runInsertFor(r, createRunSQL), args...)); e != nil {
 			return e
 		}
 		if e = bindRunCreateKey(ctx, q, out.ID); e != nil || !keep {
@@ -178,7 +202,7 @@ func (s PG) CreateRunUnderCap(ctx context.Context, r types.AgentRun, limit int) 
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
 	stampRunTimes(anchor, r, args)
-	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
+	created, err := scanRun(tx.QueryRow(ctx, runInsertFor(r, createRunSQL), args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
 	}
@@ -285,7 +309,7 @@ func (s PG) createRunArgs(r types.AgentRun) ([]any, error) {
 		r.LifetimeCapAt, string(r.LifetimeCapSource), r.RunnerPoolID, r.RunnerPoolRevision, string(r.RunnerPoolSelection), r.RunnerPoolExecutor, r.HumanAuthor, walls,
 		string(r.MachineKind.Normalize()), r.BreakGlass, restrictionIDsParam(r.RestrictionIDs), serviceJSON, string(r.Shape), r.ImageInput, r.CorrelationID, viaActor,
 		r.Reserved.CPUMillis, r.Reserved.MemoryMiB, r.Reserved.DiskMiB,
-		localFolder, vmMachine, wallPreset, imageAdmission,
+		localFolder, vmMachine, wallPreset, imageAdmission, r.PortalDrives,
 	}, nil
 }
 
@@ -472,11 +496,13 @@ const runReservedCols = `reserved_cpu_millis, reserved_memory_mib, reserved_disk
 // holds a macOS VM run's picked base alone (types.VMMachine.MacOSBase), until SetRunVMMachine.
 // wall_preset (0248, types.AgentRun.WallPreset) and image_admission (types.AgentRun.ImageAdmission) are in
 // runCols too, and a queued start rewrites both. proxy_addr (0275) is read through COALESCE AS proxy_addr,
-// so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names.
-const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission`
+// so a CTE that RETURNs runCols (promoteQueuedRun's moved) still has the column its SELECT names. data_out
+// (0292, types.AgentRun.DataOut) is written only by RaiseRunDataOut. portal_drives (0297, types.AgentRun.PortalDrives) is in
+// runCols too and never changes after the insert.
+const runInsertOnlyCols = `local_folder, vm_machine, wall_preset, image_admission, portal_drives`
 
 const runCols = runInsertCols + `, failure_hint, status_detail, lost_at, lost_reason, containment_error, containment_error_at, ended_at, paused_at, paused_reason, active_at, end_tightened_at, admitted_at, not_recorded, vm_machine, recording_level, image_arches, service_status, wall_preset, policy_digest, image_admission, ` +
-	`COALESCE(proxy_addr, '') AS proxy_addr`
+	`COALESCE(proxy_addr, '') AS proxy_addr, data_out, portal_drives`
 
 // scanRun is the ONE reader for runCols. A new column is appended to
 // runInsertCols/runCols and to the end of this Scan — appending is the one edit
@@ -485,7 +511,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	var r types.AgentRun
 	var cc, state, autonomyLevel, lostReason, pausedReason, placement, evidenceSource, experience, capSource, poolSelection, notRecorded, machineKind, recordingLevel, shape string
 	var limitsRaw, wallsRaw, vmMachineRaw, serviceRaw, serviceStatusRaw, wallPresetRaw, imageAdmissionRaw, viaActorRaw []byte
-	var containmentErr *string
+	var containmentErr, dataOut *string
 	err := row.Scan(
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
@@ -497,7 +523,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.RunnerPoolID, &r.RunnerPoolRevision, &poolSelection, &r.RunnerPoolExecutor, &r.HumanAuthor, &wallsRaw, &machineKind, &r.BreakGlass, &r.RestrictionIDs, &serviceRaw, &shape, &r.ImageInput, &r.CorrelationID, &viaActorRaw,
 		&r.FailureHint, &r.StatusDetail, &r.LostAt, &lostReason, &containmentErr, &r.ContainmentErrorAt, &r.EndedAt,
 		&r.PausedAt, &pausedReason, &r.ActiveAt, &r.EndTightenedAt, &r.AdmittedAt, &notRecorded, &vmMachineRaw, &recordingLevel, &r.ImageArches, &serviceStatusRaw,
-		&wallPresetRaw, &r.PolicyDigest, &imageAdmissionRaw, &r.ProxyAddr,
+		&wallPresetRaw, &r.PolicyDigest, &imageAdmissionRaw, &r.ProxyAddr, &dataOut, &r.PortalDrives,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound
@@ -519,6 +545,10 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	r.RecordingLevel = types.RecordingLevel(recordingLevel)
 	if containmentErr != nil {
 		r.ContainmentError = *containmentErr
+	}
+	if dataOut != nil {
+		rule := types.TransferRule(*dataOut)
+		r.DataOut = &rule
 	}
 	if err := json.Unmarshal(limitsRaw, &r.RunLimits); err != nil {
 		return types.AgentRun{}, fmt.Errorf("store: unmarshal run limits: %w", err)
@@ -573,7 +603,15 @@ func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolic
 		INSERT INTO run_policies (id, name, created_at, updated_at, spec)
 		VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, created_at, updated_at, spec`
-	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+	var out types.RunPolicy
+	err = s.inTx(ctx, func(tx Querier) error {
+		if err := ruleUIAppCallersQ(ctx, tx, specJSON); err != nil {
+			return err
+		}
+		var serr error
+		out, serr = scanPolicy(tx.QueryRow(ctx, q, p.ID, p.Name, p.CreatedAt, p.UpdatedAt, specJSON))
+		return serr
+	})
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -686,11 +724,13 @@ func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.
 	if err != nil {
 		return types.ApprovalRequest{}, err
 	}
+	// A zero RequestedAt (pgx sends Go's zero time as 0001-01-01, never NULL) means the database's
+	// clock, so the raise and its rejoin stamp share one; an explicit time is stored as given.
 	// INSERT omits decision_scope/decision_expires_at: their SQL DEFAULTs already
 	// mean "no decision"; RETURNING names them so the caller sees those defaults.
 	const q = `
 		INSERT INTO approvals (` + approvalInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		VALUES ($1,$2,$3,$4,$5,$6,COALESCE(NULLIF($7::timestamptz, '0001-01-01 00:00:00+00'::timestamptz), now()),$8,$9,$10,$11)
 		RETURNING ` + approvalCols
 	out, err := scanApproval(tx.QueryRow(ctx, q,
 		a.ID, a.RunID, a.GrantID, string(a.Kind), scopeJSON, string(a.State), a.RequestedAt,
@@ -900,6 +940,11 @@ func GetSiteConfigQ(ctx context.Context, q Querier) (types.SiteConfig, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return types.SiteConfig{}, fmt.Errorf("store: unmarshal site config: %w", err)
 	}
+	grants, err := storedServiceGrants(raw)
+	if err != nil {
+		return types.SiteConfig{}, err
+	}
+	attachServiceGrants(&cfg, grants)
 	return cfg, nil
 }
 
@@ -913,25 +958,8 @@ func (s PG) PutSiteConfig(ctx context.Context, cfg types.SiteConfig) (types.Site
 }
 
 // PutSiteConfigQ is PutSiteConfig on q. A held governance change applies
-// through it inside the decision transaction.
+// through it inside the decision transaction. Each provider row's service grant is lifted out into its own
+// stored key and attached again on every read (store_service_grant.go).
 func PutSiteConfigQ(ctx context.Context, q Querier, cfg types.SiteConfig) (types.SiteConfig, error) {
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: marshal site config: %w", err)
-	}
-	const stmt = `
-		INSERT INTO site_config (singleton, config, updated_at)
-		VALUES (true, $1, now())
-		ON CONFLICT (singleton) DO UPDATE
-			SET config = (site_config.config - $2::text[]) || EXCLUDED.config, updated_at = now()
-		RETURNING config`
-	var out []byte
-	if err := q.QueryRow(ctx, stmt, raw, declaredJSONKeys(cfg)).Scan(&out); err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: put site config: %w", err)
-	}
-	var saved types.SiteConfig
-	if err := json.Unmarshal(out, &saved); err != nil {
-		return types.SiteConfig{}, fmt.Errorf("store: unmarshal saved site config: %w", err)
-	}
-	return saved, nil
+	return PutSiteConfigGrantsQ(ctx, q, cfg, ServiceGrantChange{})
 }

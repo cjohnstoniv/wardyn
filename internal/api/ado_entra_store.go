@@ -183,6 +183,11 @@ type adoEntraBlob struct {
 	// binding still holds without another sign-in.
 	Subject    string    `json:"subject"`
 	CapturedAt time.Time `json:"captured_at"`
+	// CapturedDBAt is CapturedAt on the database's clock, read by the server that captured the sign-in
+	// (databaseStamp), so any server can compare it with a database stamp such as requested_at. Absent on a
+	// capture stored before it existed, when that clock could not be read, or after a server without the field
+	// rewrote the blob: signedInAfter then never counts it.
+	CapturedDBAt time.Time `json:"captured_db_at,omitzero"`
 	// Source names HOW this credential arrived, so a review can tell a
 	// browser sign-in from anything added later. One value today.
 	Source string `json:"source"`
@@ -205,18 +210,30 @@ type adoEntraBlob struct {
 	// clears it.
 	MintBlockedAt time.Time `json:"mint_blocked_at,omitzero"`
 	// Issuer and IDPSubject are an endpoint sign-in's authority and the subject it knows the person by,
-	// kept so a review can say which platform account a person connected. Entra blobs carry neither.
+	// kept so a review can say which platform account a person connected. Entra blobs carry neither, and an
+	// endpoint sign-in captured under require_id_token false holds neither (IDTokenNotRequired).
 	Issuer     string `json:"issuer,omitempty"`
 	IDPSubject string `json:"idp_sub,omitempty"`
 	// CaptureDigest is the provider address and token URL an endpoint sign-in was captured for
 	// (endpointOIDCCaptureDigest). A redemption posts the refresh token only while it matches; an endpoint
 	// sign-in without one reads as no sign-in. Entra blobs carry none.
 	CaptureDigest string `json:"capture_digest,omitempty"`
+	// IDTokenNotRequired marks an endpoint sign-in captured under require_id_token false: it holds no issuer
+	// (no identity token was read), and valid() accepts it in that issuer's place.
+	IDTokenNotRequired bool `json:"id_token_not_required,omitempty"`
 }
 
 // signInEnded reports whether the last renewal found this sign-in unusable
 // until the person signs in again.
 func (b adoEntraBlob) signInEnded() bool { return !b.DeadAt.IsZero() }
+
+// signedInAfter reports whether b was captured after at, a database stamp (an approval's requested_at), by the
+// capture's own database stamp, whichever server reads it. A capture with no stamp never counts: its time is one
+// server's clock, which this one cannot place against the database's, so the request stays pending until a stamped
+// sign-in arrives.
+func (b adoEntraBlob) signedInAfter(at time.Time) bool {
+	return !b.CapturedDBAt.IsZero() && b.CapturedDBAt.After(at)
+}
 
 // adoEntraSourceSignIn is the only capture source in 0.7.10: the interactive
 // browser sign-in this package serves.
@@ -227,7 +244,7 @@ const adoEntraSourceSignIn = "signin"
 // deployment does not have. Not authentication — the authority is the only
 // oracle for that.
 func (b adoEntraBlob) valid() bool {
-	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "") && b.ClientID != "" && b.Subject != ""
+	return b.RefreshToken != "" && len(b.Scopes) > 0 && (b.TenantID != "" || b.Issuer != "" || b.IDTokenNotRequired) && b.ClientID != "" && b.Subject != ""
 }
 
 // adoEntraSecretName is the reserved store name holding one provider row's
@@ -671,8 +688,8 @@ type adoEntraTokenResponse struct {
 
 // tokenAuthority is where, and as whom, one token request is made. An Entra
 // application derives one (ADOEntraConfig.tokenAuthority); an endpoint's own
-// authority (endpoint_oidc.go) builds its own. Only the authorization_code and
-// refresh_token grants are ever posted through it, and never client_credentials.
+// authority (endpoint_oidc.go) builds its own. postToken posts only the authorization_code and refresh_token
+// grants; the one client_credentials request is a provider service grant's mint (provider_service_grant_mint.go).
 type tokenAuthority struct {
 	tokenURL     string
 	clientID     string
@@ -720,6 +737,29 @@ func (s *Server) postEntraToken(ctx context.Context, cfg ADOEntraConfig, ec entr
 // WARDYN_DAEMON_PROXY_URL when set, exactly like every other wardynd-side
 // egress in this package.
 func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Values) (adoEntraTokenResponse, error) {
+	status, out, err := doTokenRequest(ctx, http.DefaultTransport, ta, form)
+	if err != nil {
+		return out, err
+	}
+	if out.Error != "" {
+		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
+			// The console's own application is refused; the stored sign-ins are kept,
+			// so the operator has to learn it from the log.
+			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
+				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
+		}
+		return out, classifyADOEntraError(out.Error, out.ErrorDescription)
+	}
+	if status < 200 || status > 299 || out.AccessToken == "" || out.ExpiresIn <= 0 {
+		return out, fmt.Errorf("%w: unusable token response (status %d)", ErrADOEntraUnavailable, status)
+	}
+	return out, nil
+}
+
+// doTokenRequest posts one token request through rt and decodes the answer: the HTTP status, the whole
+// response and today's transport, read and parse errors, none of it classified. postToken classifies it for
+// the sign-in lanes; the service grant's mint projects it itself and drops what it must not keep.
+func doTokenRequest(ctx context.Context, rt http.RoundTripper, ta tokenAuthority, form url.Values) (int, adoEntraTokenResponse, error) {
 	var out adoEntraTokenResponse
 	if !ta.basicAuth {
 		form.Set("client_id", ta.clientID)
@@ -729,7 +769,7 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ta.tokenURL, bytes.NewReader([]byte(form.Encode())))
 	if err != nil {
-		return out, fmt.Errorf("%w: build token request: %w", ErrADOEntraUnavailable, err)
+		return 0, out, fmt.Errorf("%w: build token request: %w", ErrADOEntraUnavailable, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if ta.basicAuth {
@@ -741,13 +781,13 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	// 307/308. The endpoint does not redirect, so a 3xx is answered as the
 	// unusable response it is.
 	client := &http.Client{
-		Transport:     http.DefaultTransport,
+		Transport:     rt,
 		Timeout:       adoEntraRedeemTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return out, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
+		return 0, out, fmt.Errorf("%w: %w", ErrADOEntraUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	// Bounded read: the body is a handful of fields, and an unbounded read from
@@ -755,26 +795,14 @@ func (s *Server) postToken(ctx context.Context, ta tokenAuthority, form url.Valu
 	// memory.
 	raw, rerr := io.ReadAll(io.LimitReader(resp.Body, 1<<18))
 	if rerr != nil {
-		return out, fmt.Errorf("%w: read token response: %w", ErrADOEntraUnavailable, rerr)
+		return resp.StatusCode, out, fmt.Errorf("%w: read token response: %w", ErrADOEntraUnavailable, rerr)
 	}
 	// An unparseable body is UNAVAILABLE, never a dead credential: only an
 	// error the authority actually named may retire one.
 	if uerr := json.Unmarshal(raw, &out); uerr != nil {
-		return out, fmt.Errorf("%w: parse token response (status %d): %w", ErrADOEntraUnavailable, resp.StatusCode, uerr)
+		return resp.StatusCode, out, fmt.Errorf("%w: parse token response (status %d): %w", ErrADOEntraUnavailable, resp.StatusCode, uerr)
 	}
-	if out.Error != "" {
-		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
-			// The console's own application is refused; the stored sign-ins are kept,
-			// so the operator has to learn it from the log.
-			slog.WarnContext(ctx, "wardynd: the authority refused the console's own application; stored Entra sign-ins are kept until it is fixed",
-				slog.String("oauth_error", out.Error), slog.String("aadsts", aadstsPattern.FindString(out.ErrorDescription)))
-		}
-		return out, classifyADOEntraError(out.Error, out.ErrorDescription)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 || out.AccessToken == "" || out.ExpiresIn <= 0 {
-		return out, fmt.Errorf("%w: unusable token response (status %d)", ErrADOEntraUnavailable, resp.StatusCode)
-	}
-	return out, nil
+	return resp.StatusCode, out, nil
 }
 
 // classifyADOEntraError maps an authority refusal onto one of this lane's four

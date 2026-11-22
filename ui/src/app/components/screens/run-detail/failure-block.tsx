@@ -148,6 +148,15 @@ const KILL_PARTIAL_AUDIT_ROW = "The audit row names the step that failed — rea
 const KILL_PARTIAL_RETRY = "Ending it again re-runs the same teardown; the cascade is safe to repeat.";
 const KILL_PARTIAL_SCRATCH =
   "Whether scratch files remain is not confirmed. Files written to a mounted workspace are still on the host.";
+// A kill whose sandbox was still stopping when it finished: the credentials are revoked, and Wardyn confirms
+// the stop on its own run.kill.confirm row (internal/api/run_kill_confirm.go). None of these says it stopped.
+const KILL_CONFIRMING_TODO = "This page updates when Wardyn records the result (run.kill.confirm in the audit log).";
+const KILL_UNCONFIRMED_TODO =
+  "The run.kill row says the stop was still being confirmed, and no run.kill.confirm row records a result.";
+// A run.kill row whose sandbox_stop is neither absent, queued nor still being confirmed (a revoked runner's sweep).
+const KILL_OTHER_STOP_TODO = "The run.kill row does not record a finished stop.";
+const KILL_CONFIRM_FAILED_ROW =
+  "The run.kill.confirm row names the step that failed — read it before treating this run as contained.";
 
 // What Wardyn cannot take back from a run it has killed: a GitHub token already
 // minted (it lives out its TTL), a git token or SSH key (stored upstream), an
@@ -194,6 +203,8 @@ function killedCopy(
   held: HeldCredentials | undefined,
   localRunner: string | undefined,
   runner: string,
+  confirmFailed = false,
+  otherStop = false,
 ): EndingCopy {
   // The stop waits in the offline runner's queue: credentials are gone, the sandbox is not yet.
   if (evidence === "queued") {
@@ -202,11 +213,30 @@ function killedCopy(
       todo: [KILL_AUDIT_ROW, LOCAL_RUN.KILL_QUEUED_FILES(runner), ...heldLines(held), KILL_START_NEW],
     };
   }
+  if (evidence === "confirming") {
+    return {
+      happened: (elapsed) =>
+        `An operator killed this run ${elapsed} in, and its credentials are revoked. The sandbox was still stopping when the kill finished, so Wardyn is confirming the stop. Until it does, the sandbox may still be live.`,
+      todo: [KILL_CONFIRMING_TODO, KILL_PARTIAL_SCRATCH, ...heldLines(held), KILL_START_NEW],
+    };
+  }
+  if (evidence === "unconfirmed") {
+    return {
+      happened: (elapsed) =>
+        `An operator killed this run ${elapsed} in, and its credentials are revoked, but Wardyn has no record that the sandbox stopped. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.`,
+      todo: [otherStop ? KILL_OTHER_STOP_TODO : KILL_UNCONFIRMED_TODO, KILL_PARTIAL_RETRY, KILL_PARTIAL_SCRATCH, ...heldLines(held)],
+    };
+  }
   if (evidence === "partial") {
     return {
       happened: (elapsed) =>
         `An operator killed this run ${elapsed} in, and a teardown step failed. The state is KILLED, but teardown is not confirmed: the sandbox may still be live, and a credential it held may still work.`,
-      todo: [KILL_PARTIAL_AUDIT_ROW, KILL_PARTIAL_RETRY, KILL_PARTIAL_SCRATCH, ...heldLines(held)],
+      todo: [
+        confirmFailed ? KILL_CONFIRM_FAILED_ROW : KILL_PARTIAL_AUDIT_ROW,
+        KILL_PARTIAL_RETRY,
+        KILL_PARTIAL_SCRATCH,
+        ...heldLines(held),
+      ],
     };
   }
   if (evidence === "unknown") {
@@ -286,6 +316,7 @@ export function RunFailureBlock({
   run,
   audit,
   held,
+  killConfirmWaitOver = false,
   onGoAudit,
 }: {
   run: AgentRun;
@@ -293,10 +324,12 @@ export function RunFailureBlock({
   audit: AuditEvent[];
   /** Credentials the run held that a kill cannot revoke (#1487); absent while loading. */
   held?: HeldCredentials;
+  /** The page's kill wait ran out with a sandbox stop still unconfirmed (use-run-detail.ts). */
+  killConfirmWaitOver?: boolean;
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
 }) {
-  const ending = runEndingFromAudit(run.state, audit);
+  const ending = runEndingFromAudit(run.state, audit, { confirmWaitOver: killConfirmWaitOver });
   const door = useModelAccessDoor();
   const credential = ending?.kind === "credential";
   const dispatchFailure = ending?.kind === "sandbox_create" || ending?.kind === "agent_start" || ending?.kind === "relay_ip_fenced";
@@ -324,7 +357,14 @@ export function RunFailureBlock({
       ? // A revocation whose cascade did not finish is a partial teardown first: its credentials may still work.
         ending.runnerRevoked && ending.evidence === "confirmed"
         ? revokedRunnerCopy(ending.runnerRevoked.online, runnerLabel(run))
-        : killedCopy(ending.evidence, held, run.placement === "local" ? runnerLabel(run) : undefined, runnerLabel(run))
+        : killedCopy(
+            ending.evidence,
+            held,
+            run.placement === "local" ? runnerLabel(run) : undefined,
+            runnerLabel(run),
+            ending.confirmFailed,
+            ending.otherStop,
+          )
       : ENDING_COPY[ending.kind];
   // The ending event's own timestamp bounds the run's lifetime; without one
   // (a truncated trail) fall back to when the run ended, then to its last

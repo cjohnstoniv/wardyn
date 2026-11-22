@@ -269,7 +269,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk kind-survival-walk k6-kind-conformance k6-workload-e2e kind-acceptance-walks hybrid-walk kind-upgrade-walk"
+          watched="task-e2e-live ssh-e2e-live test-drive ci-mode-dogfood docker-tagged-live byoi-e2e-live ui-sandbox-e2e-live kind-sso-walk kek-conformance fuzz gvisor-cc2-live kind-sso-ado-walk compose-sso-roles daemon-proxy-secret-kind provider-subscription-docker-pg managed-settings-drift runner-compat-walk kind-survival-walk k6-kind-conformance k6-workload-e2e kind-acceptance-walks hybrid-walk kind-upgrade-walk ssh-editors-live"
           echo "watched=${watched}" >> "$GITHUB_OUTPUT"
           choice=build
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
@@ -320,7 +320,8 @@ jobs:
       # YAML key, so the script matches that prefix instead.
       # daemon-proxy-secret-kind (T-59, #719), provider-subscription-docker-pg
       # (T-17, #677) and managed-settings-drift (#1395) each joined after a
-      # green hosted run (see nightly.yml's own comment on each job).
+      # green hosted run (see nightly.yml's own comment on each job). ssh-editors-live
+      # (#2988) is watched too (nightly.yml's comment on the job).
       # runner-compat-walk joined before its first hosted run, on purpose: it is
       # the check that a released runner and a released organisation keep working
       # with this tag (nightly.yml's own comment on the job).
@@ -1339,7 +1340,7 @@ jobs:
           if grep -Eiq '\.(ipsw|img)$' <<<"$payload"; then echo "::error::the package payload lists a macOS image"; exit 1; fi
           pkgutil --expand-full wardyn-runnerd.pkg "$RUNNER_TEMP/pkg"
           # The package installs on macOS 26: no binary slice and no Distribution os-version asks for more.
-          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && v[2] + 0 > 0)) }'; }
+          above26() { awk -v m="$1" 'BEGIN { split(m, v, "."); exit !(v[1] + 0 > 26 || (v[1] + 0 == 26 && (v[2] + 0 > 0 || v[3] + 0 > 0))) }'; }
           for b in wardyn-runnerd wardyn wardyn-macvm wardyn-guest-agent; do
             f="$(find "$RUNNER_TEMP/pkg" -path "*/Payload/usr/local/wardyn/bin/$b" -type f)"
             mins="$(otool -arch all -l "$f" | awk '$1 == "minos" { print $2 }')"

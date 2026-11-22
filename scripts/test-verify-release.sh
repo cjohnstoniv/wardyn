@@ -60,7 +60,8 @@ echo "docker $*" >> "${LOG}"
 case "$*" in
   *"buildx imagetools inspect"*) [ -z "${IMG_ERR:-}" ] || { echo "${IMG_ERR}" >&2; exit 1; } ;;&
   *"buildx imagetools inspect"*"Manifest.Digest"*) echo '"sha256:0000000000000000000000000000000000000000000000000000000000000001"' ;;
-  *"buildx imagetools inspect"*) echo "linux/amd64 linux/arm64 " ;;
+  # A tag repointed after its digest was read: a platform list asked of the tag (not of a digest) is the replacement's.
+  *"buildx imagetools inspect"*) if [ -n "${REPOINT:-}" ] && [[ "$*" != *"@sha256:"* ]]; then echo "linux/amd64 linux/arm64 linux/s390x "; else echo "linux/amd64 linux/arm64 "; fi ;;
   *) echo "docker: mutating or unexpected verb: $*" >&2; exit 99 ;;
 esac
 STUB
@@ -125,7 +126,7 @@ chmod +x "${bin}"/*
 run() {
   : > "${dir}/log"
   rc=0
-  out="$(PATH="${bin}:${PATH}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" OMIT="${OMIT:-}" DL_FAIL="${DL_FAIL:-}" TAMPER="${TAMPER:-}" UNLISTED="${UNLISTED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
+  out="$(PATH="${bin}:${PATH}" REPOINT="${REPOINT:-}" NO_PKG="${NO_PKG:-}" NO_INSTALL_CLI="${NO_INSTALL_CLI:-}" CHART_UNSIGNED="${CHART_UNSIGNED:-}" OMIT="${OMIT:-}" DL_FAIL="${DL_FAIL:-}" TAMPER="${TAMPER:-}" UNLISTED="${UNLISTED:-}" RELEASE_TITLE="${RELEASE_TITLE-Wardyn v$1}" APP_VER="${APP_VER:-}" IMG_ERR="${IMG_ERR:-}" LOG="${dir}/log" DIR="${dir}" VER="$1" SIGNER_TAG="$2" SIGFORM="$3" "${VERIFY}" "$1" 2>&1)" || rc=$?
 }
 
 for form in bundle sigpem; do
@@ -262,6 +263,18 @@ IMG_ERR='ERROR: docker: unknown command: docker buildx' run 0.8.3 v0.8.3 bundle
 [ "${rc}" != 0 ] && printf '%s' "${out}" | grep 'FAIL wardynd: no index digest' >/dev/null && printf '%s' "${out}" | grep 'unknown command: docker buildx' >/dev/null \
   || fail "a failed imagetools call did not surface its stderr: $(printf '%s' "${out}" | head -4)"
 pass "an imagetools failure reports its cause"
+
+# 3c2. the tag is resolved once: the platform list comes from the digest cosign verifies, not from the tag
+# looked up again, which a repair may have repointed in between.
+REPOINT=1 run 0.8.3 v0.8.3 bundle
+nimg="$(wc -l < "${dir}/images.txt")"
+[ "${rc}" = 0 ] || fail "a repointed tag changed the exit code to ${rc}: $(printf '%s' "${out}" | grep FAIL | head -3)"
+! printf '%s' "${out}" | grep 's390x' >/dev/null || fail "an OK line reports the platforms of a replacement index, not of the verified digest: $(printf '%s' "${out}" | grep s390x | head -1)"
+[ "$(printf '%s' "${out}" | grep -c '^OK   .*@sha256:0*1  \[linux/amd64 linux/arm64 \]$' || true)" = "${nimg}" ] \
+  || fail "not every image reported the verified digest's platforms: $(printf '%s' "${out}" | grep '^OK   .*@sha256' | head -3)"
+[ "$(grep -c '^docker buildx imagetools inspect ghcr.io/cjohnstoniv/.*@sha256:0*1 --format {{range' "${dir}/log" || true)" = "${nimg}" ] \
+  || fail "the platform list was not read from the verified digest: $(grep 'range' "${dir}/log" | head -3)"
+pass "the platform list is read from the digest that is verified, not from the tag again"
 
 # 3d. the chart is held to its own signature and to this release's appVersion (#2227).
 CHART_UNSIGNED=1 run 0.8.3 v0.8.3 bundle

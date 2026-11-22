@@ -175,7 +175,7 @@ const statusDetailMacPrepDone = "prep: done"
 // statusDetailMacPrepRunning is written before the prep starts, so a restart of the control plane during it
 // leaves a mark: sweepRunWatchers fails a run adopted with it (failInterruptedMacPrep) instead of leaving it
 // RUNNING with its window refused for good. macPrepDone stays an equality check on statusDetailMacPrepDone.
-const statusDetailMacPrepRunning = "prep: running"
+const statusDetailMacPrepRunning = types.RunStatusDetailMacPrepRunning
 
 // macPrepInterruptedMsg is the sentence of a run whose prep a restart of the control plane cut short.
 const macPrepInterruptedMsg = "This run's setup was interrupted when the server restarted. Start a new run."

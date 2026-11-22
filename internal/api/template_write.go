@@ -62,7 +62,7 @@ func writeTemplateDiagnostics(w http.ResponseWriter, diags ...client.TemplateDia
 // templateForSave holds a save to the door for owner and kind, and returns the
 // row to store: the door's normalised document, and the name and description
 // the request gives or, left out, the document's.
-func templateForSave(req client.TemplateSaveRequest, owner types.TemplateOwner, kind types.TemplateKind) (types.RunTemplate, []client.TemplateDiagnostic) {
+func templateForSave(req client.TemplateSaveRequest, owner types.TemplateOwner, kind types.TemplateKind, held []types.GrantSpec) (types.RunTemplate, []client.TemplateDiagnostic) {
 	doc, diags := validateTemplateDocument(req.Document, owner)
 	if len(diags) > 0 {
 		return types.RunTemplate{}, diags
@@ -71,6 +71,11 @@ func templateForSave(req client.TemplateSaveRequest, owner types.TemplateOwner, 
 		if diags := templatePolicyKindRefusals(doc); len(diags) > 0 {
 			return types.RunTemplate{}, diags
 		}
+	}
+	// A gated api_key grant is refused as it is in a policy, when this save adds or changes it: held is
+	// what the revision being replaced already carried.
+	if err := authoredAPIKeyApprovalRefusal(rawEligibleGrants(doc.Intent.Raw("inline_policy")), held); err != nil {
+		return types.RunTemplate{}, []client.TemplateDiagnostic{*templateInvalid("inline_policy.eligible_grants", err.Error())}
 	}
 	d := &templateDecoder{}
 	text := func(path, given, inDoc string, max int) string {
@@ -102,6 +107,15 @@ func templateForSave(req client.TemplateSaveRequest, owner types.TemplateOwner, 
 	return types.RunTemplate{Owner: owner, Kind: kind, Name: name, Description: desc, Document: body}, nil
 }
 
+// storedTemplateGrants is the eligible_grants in the inline_policy of a stored template document.
+func storedTemplateGrants(document json.RawMessage) []types.GrantSpec {
+	var doc client.TemplateDocument
+	if json.Unmarshal(document, &doc) != nil {
+		return nil
+	}
+	return rawEligibleGrants(doc.Intent.Raw("inline_policy"))
+}
+
 // writeTemplateStoreErr answers a store refusal of a write.
 func writeTemplateStoreErr(w http.ResponseWriter, r *http.Request, err error) {
 	var limit *store.TemplateLimitError
@@ -118,6 +132,9 @@ func writeTemplateStoreErr(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeTemplateNotFound(w)
 	default:
+		if writePortalRulingError(w, err) { // a UI-app caller naming a portal person of an unbound issuer
+			return
+		}
 		writeServerError(w, r, "write template", err)
 	}
 }
@@ -162,7 +179,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeTemplateDiagnostics(w, *templateInvalid("kind", "must be template or policy"))
 		return
 	}
-	t, diags := templateForSave(req, owner, kind)
+	t, diags := templateForSave(req, owner, kind, nil)
 	if len(diags) > 0 {
 		writeTemplateDiagnostics(w, diags...)
 		return
@@ -221,7 +238,7 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		writeTemplateDiagnostics(w, *diag)
 		return
 	}
-	t, diags := templateForSave(req, cur.Owner, cur.Kind)
+	t, diags := templateForSave(req, cur.Owner, cur.Kind, storedTemplateGrants(cur.Document))
 	if len(diags) > 0 {
 		writeTemplateDiagnostics(w, diags...)
 		return
@@ -296,7 +313,7 @@ func (s *Server) handleCopyTemplate(w http.ResponseWriter, r *http.Request) {
 	if doc.Name != "" {
 		doc.Name = name
 	}
-	t, diags := templateForSave(client.TemplateSaveRequest{Name: name, Description: src.Description, Document: doc}, to, src.Kind)
+	t, diags := templateForSave(client.TemplateSaveRequest{Name: name, Description: src.Description, Document: doc}, to, src.Kind, rawEligibleGrants(doc.Intent.Raw("inline_policy")))
 	if len(diags) > 0 {
 		writeTemplateDiagnostics(w, diags...)
 		return

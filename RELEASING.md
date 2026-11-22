@@ -14,7 +14,8 @@
   - `macos` (not required) and `macos-xcode-27` (not required),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
   - `conformance-k8s-agent-sandbox` (not required),
-  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `licenses`, `license-headers`, `gitleaks`),
+  - `staticcheck` (a matrix job: `staticcheck-tagless`, `staticcheck-docker`, `staticcheck-k8s`), `gates-staticcheck` (the required `gates (staticcheck)`), `dco`, `ci-ran`, `train-suites`, `mixed-version`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
@@ -55,7 +56,7 @@
     - a red preflight fails every downstream release job, so catching it before pushing the tag is still cheaper than a failed release run.
 - **Nightly coverage is not a reliable signal until it has run green for 7 consecutive nights.**
   - `preflight-green` only proves the latest nightly on the tag's tree was green, not that the lane it ran is stable —
-    - a lane that just started passing after weeks red (see [`docs/CI.md`](docs/CI.md)'s nightly section) can still be one flake away from red again.
+    - a lane that just started passing after weeks red (see [`docs/REPO-CI.md`](docs/REPO-CI.md)'s nightly section) can still be one flake away from red again.
   - Until a lane has 7 consecutive green nightlies, a 0.8 issue whose DONE WHEN cites "nightly coverage" for that lane needs its own separately-run proof too, not just a green `preflight-green`.
 
 - Run the local gate first:
@@ -119,7 +120,7 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
    keeps today's behaviour.
 3. **Release PR.** When the milestone's release-gating issues are closed, one
    PR carries steps 1 and 1b below — the CHANGELOG rename, the version strings,
-   the ROADMAP row, [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md) — and nothing else.
+   the ROADMAP row — and nothing else.
    - The same PR regenerates the GPL source offer from the previous tag's published digests (header of [`scripts/gpl-source-offer.sh`](scripts/gpl-source-offer.sh)).
 4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
    commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
@@ -329,11 +330,6 @@ crash or a usage limit resumes with the same command:
      - pointing at the CHANGELOG's now-dated entry
        instead of `[Unreleased]`.
    - ROADMAP.md carries no per-version narrative to flip any more — CHANGELOG.md is the only per-release detail.
-   - **Also regenerate [`docs/TEST-GAPS.md`](docs/TEST-GAPS.md): `make test-gaps`** (needs the union
-     coverage profile `make ci`/`cover-check` already produced this run) —
-     - a past review found the generator gained a Kubernetes-gated bucket with
-       nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
-       `make test-gaps` is a standalone target, not in `make ci`.
    - **Also snapshot the proxy config key set:** generate the previous-release key set AT THE TAG
      (check out the tag, run the golden with `WARDYN_UPDATE_GOLDEN=1 go test ./internal/egress/proxy/
      -run TestConfigKeySet`) rather than copying `current.txt` —
@@ -514,7 +510,7 @@ JSON
 - Run as written, the command drops nothing that is required now and adds those four contexts.
 - The PATCH replaces the whole list, so read the live list back first: a context that is live and missing from this body would be dropped.
 
-- Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/CI.md](docs/CI.md), "Incremental CI"), so each is an eligible context.
+- Every context in the list reports on every pull request, as skipped when the change cannot affect it ([docs/REPO-CI.md](docs/REPO-CI.md), "Incremental CI"), so each is an eligible context.
 - `notices` is the copyleft / unreviewed-dependency gate, and the `trivy` checks are the only CVE scan of the ten images a release publishes.
 - Each image has its own `trivy-<image>` job reporting as `trivy (<image>)` — adding an image to [`.github/workflows/ci.yml`](.github/workflows/ci.yml) means adding its job, adding its context here **and** re-running the PATCH, or that image merges unscanned.
 - [`scripts/test-claims-match-code.sh`](scripts/test-claims-match-code.sh) (C6) fails if this list and those jobs drift
@@ -539,7 +535,7 @@ JSON
 - Every `nightly.yml` job is such a job, `buildx-smoke` (the multi-arch build) included.
 - `ci.yml`'s change classifier (#932) is not such a filter:
   - a required job whose work a change cannot affect is skipped by a job-level `if:` and reports as skipped, which branch protection accepts, and it runs whenever the classification is missing.
-- The one required matrix job, `gates`, never skips that way: a skipped matrix reports a single check with its name unexpanded, never the per-cell contexts ([docs/CI.md](docs/CI.md), "Incremental CI").
+- The one required matrix job, `gates`, never skips that way: a skipped matrix reports a single check with its name unexpanded, never the per-cell contexts ([docs/REPO-CI.md](docs/REPO-CI.md), "Incremental CI").
 - A job's check name is its `name:` when it sets one, otherwise its job id, so renaming either is the same protection change as deleting the job.
 
 ## Container images
@@ -549,7 +545,7 @@ JSON
   - [`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml) builds and pushes `wardynd` only, to `ghcr.io/cjohnstoniv/wardynd` (`:latest`, `:sha-<commit>`).
   - **Signed (keyless, by digest) but not SBOM- or provenance-attested**, and under the `publish-image.yml@refs/heads/main` certificate identity — not the exact `release.yml@refs/tags/vX.Y.Z` one every command in [`docs/VERIFY.md`](docs/VERIFY.md) pins, so that page's recipes structurally cannot verify these tags.
   - See [docs/VERIFY.md](docs/VERIFY.md) "The continuous lane" for the regexp that can.
-  - The compose stack still always builds from source (see [docs/CI.md](docs/CI.md)).
+  - The compose stack pulls release tags or builds, never these.
 - **Release (every `vX.Y.Z` tag).**
   - [`.github/workflows/release.yml`](.github/workflows/release.yml) builds and
     pushes all NINE images a release ships —
@@ -576,7 +572,7 @@ JSON
       `wardyn-runner-units.tar.gz`, `wardyn-licenses.tar.gz`, `wardyn-runnerd.pkg` and a cosign-signed `SHA256SUMS` to the Release —
     - failing if any asset did not land (the required set is the `for want in …`
       list in `release.yml`'s "Assert every required asset actually landed").
-  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/CI.md](docs/CI.md)).
+  - `wardyn-runnerd.pkg`, the macOS runner package, comes from the `runner-pkg` job and stays unsigned until the owner adds the `APPLE_DEVELOPER_ID_*` and `APPLE_NOTARY_*` secrets ([docs/REPO-CI.md](docs/REPO-CI.md)).
   - The supply-chain artifacts are no longer yours to remember; the demo videos
     in step 7 still are.
   - Each is a **multi-arch index** covering `linux/amd64` and `linux/arm64`

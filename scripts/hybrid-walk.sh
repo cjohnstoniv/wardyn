@@ -174,6 +174,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 # shellcheck source=scripts/lib/common.sh
 source "${ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/walk-api.sh
+source "${ROOT}/scripts/lib/walk-api.sh"
 # shellcheck source=scripts/lib/runner-limits.sh
 source "${ROOT}/scripts/lib/runner-limits.sh"
 
@@ -286,16 +288,7 @@ compose() {
     docker compose -p "${PROJECT}" -f "${COMPOSE_FILE}" -f "${OVERRIDE_FILE}" --profile sso "$@"
 }
 
-api() {
-  local method="$1" path="$2" body="${3:-}"
-  if [[ -n "${body}" ]]; then
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "${body}"
-  else
-    curl -sS --max-time "${CURL_MAX_TIME}" -o "${TMPDIR}/resp.json" -w '%{http_code}' -X "${method}" "${BASE}${path}" \
-      -H "Authorization: Bearer ${ADMIN_TOKEN}"
-  fi
-}
+api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${TMPDIR}/resp.json" "${CURL_MAX_TIME}" "$@"; }
 
 psql1() { docker exec "${PROJECT}-postgres" psql -U wardyn -d wardyn -tAc "$1" 2>&1; }
 

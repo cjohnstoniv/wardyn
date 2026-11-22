@@ -349,7 +349,7 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 	listOpts := metav1.ListOptions{LabelSelector: labelRun + "=" + runID.String()}
 	// Never a force delete here either: a zero grace removes the pods without
 	// the kubelet confirming, and the wait below would then prove nothing.
-	waitBound := teardownWaitBound(gracePeriodSeconds)
+	waitBound := teardownWaitFor(gracePeriodSeconds)
 	gracePeriodSeconds = runnerGrace(gracePeriodSeconds)
 
 	// The agent-sandbox backend's Sandbox goes first: its controller makes a deleted pod again. A
@@ -376,10 +376,28 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 	// window. Wait for pods to actually be gone (not merely marked for
 	// deletion) first. Bounded at grace+slack (teardownWaitBound).
 	if err := d.waitPodsGone(ctx, ns, listOpts, waitBound); err != nil {
+		if cerr := d.stopConfirming(ctx, err, func() ([]corev1.Pod, error) {
+			pods, lerr := d.clientset.CoreV1().Pods(ns).List(ctx, listOpts)
+			if lerr != nil {
+				return nil, lerr
+			}
+			return pods.Items, nil
+		}); cerr != nil {
+			return cerr
+		}
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 	if drifted != nil {
 		if err := d.waitPodGone(ctx, ns, drifted, waitBound); err != nil {
+			if cerr := d.stopConfirming(ctx, err, func() ([]corev1.Pod, error) {
+				got, gerr := d.clientset.CoreV1().Pods(ns).Get(ctx, drifted.Name, metav1.GetOptions{})
+				if gerr != nil || got.UID != drifted.UID {
+					return nil, gerr // gone, or another pod of its name: not this one
+				}
+				return []corev1.Pod{*got}, nil
+			}); cerr != nil {
+				return cerr
+			}
 			return fmt.Errorf("k8s: teardown: waiting for the relabelled agent pod to terminate before dropping NetworkPolicies: %w", err)
 		}
 	}
@@ -465,6 +483,9 @@ func teardownWaitBound(grace *int64) time.Duration {
 	return time.Duration(*runnerGrace(grace))*time.Second + slack
 }
 
+// teardownWaitFor is teardownWaitBound; a test shortens it to reach the wait's timeout.
+var teardownWaitFor = teardownWaitBound
+
 // waitPodsGone polls until no pod matches listOpts (the H3 ordering guard).
 // A timeout here is a real error, not best-effort: proceeding without this
 // proof reopens the open-egress window. teardown is idempotent, so a retry
@@ -477,6 +498,28 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 		}
 		return len(pods.Items) == 0, nil
 	})
+}
+
+// stopConfirming is teardown's answer to a wait that ran out. When the wait ended on its own timeout
+// (the caller's ctx is still live) and list finds pods, all of them already marked for deletion, it
+// returns runner.ErrTeardownConfirming: the kubelet is still stopping them, which is not a failure, and
+// a retry completes the sweep. Anything else (the caller's ctx done, a list error, no pods left, a pod
+// not marked for deletion) returns nil and the caller keeps its own error. Either way nothing after the
+// wait has run: H3, the NetworkPolicies stay until the pods are gone.
+func (d *Driver) stopConfirming(ctx context.Context, waitErr error, list func() ([]corev1.Pod, error)) error {
+	if ctx.Err() != nil || !errors.Is(waitErr, context.DeadlineExceeded) {
+		return nil
+	}
+	pods, err := list()
+	if err != nil || len(pods) == 0 {
+		return nil
+	}
+	for i := range pods {
+		if pods[i].DeletionTimestamp == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("k8s: teardown: %w: %d pods terminating", runner.ErrTeardownConfirming, len(pods))
 }
 
 // waitPodGone blocks until pod no longer exists; another pod of its name is not it.

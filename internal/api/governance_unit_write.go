@@ -208,7 +208,9 @@ func finishGovernanceUnitRequest(req governanceUnitRequest) (governanceUnitReque
 		if req.keepsSecrets {
 			spec = withoutKeptSecrets(spec)
 		}
-		if err := validateAuthoredPolicySpec(spec); err != nil {
+		// The api_key approval rule is judged by buildGovernanceUnit against the stored row, which a
+		// decode cannot see; every write, dry run and replay of a standalone ceiling reaches it.
+		if err := validateAuthoredSpecBase(spec); err != nil {
 			return governanceUnitRequest{}, "invalid ceiling: " + err.Error()
 		}
 	}
@@ -296,20 +298,22 @@ func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Q
 // admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
 // (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
 // caller's write (q nil) is judged by the exemption alone. A unit admin's exemption reads the envelopes
-// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one.
+// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one. A write it
+// holds comes with its review (unitWriteVerdict), a rename's shift named as one.
 func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
-	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	p types.GovernanceUnit, res *ResolvedUnit) (bool, *changeReview, error) {
 	if q != nil {
 		ctx = withUnitScopeTx(ctx, q)
 	}
-	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
-		return false, nil
-	}
-	if q == nil {
-		return true, nil
+	exempt, review := s.unitWriteVerdict(withGovernanceMemberships(ctx, assignments), all, p, res)
+	if !exempt || q == nil {
+		return exempt, review, nil
 	}
 	shift, err := unitRenameShiftQ(ctx, q, all, p.ID, p.Name)
-	return len(shift.activates)+len(shift.vacates) == 0, err
+	if applies := len(shift.activates)+len(shift.vacates) == 0; applies || err != nil {
+		return applies, nil, err
+	}
+	return false, s.unitWriteReview(withGovernanceMemberships(ctx, assignments), all, p, res, heldRename), nil
 }
 
 // writeGovernanceUnit is the shared body of POST and PUT: build the row under the graph lock,
@@ -333,12 +337,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
-	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	if msg != "" {
+	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
@@ -387,6 +386,9 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			heldReq = kept
 			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
+			if err == nil {
+				err = ruleUnitUIAppCallers(r.Context(), q, p)
+			}
 			effective = res
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
 			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
@@ -397,9 +399,9 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if !unitAdmin {
 				appliesQ = nil
 			}
-			applies, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
+			applies, review, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
 			if err == nil && !applies {
-				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
+				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep, review: review}
 				return p, errHoldForApproval
 			}
 			return p, err
@@ -635,7 +637,7 @@ func (s *Server) buildGovernanceUnit(createdBy string, super bool, id uuid.UUID,
 		req.Ceiling.WorkspaceMounts = out
 		keep.ceiling, keep.setsHostPath = held, sets
 		// A standalone row's ceiling is judged in full here, an empty one included (decode skips it).
-		if err := validateAuthoredPolicySpec(req.Ceiling); err != nil {
+		if err := validateAuthoredPolicySpecHolding(req.Ceiling, s.storedCeilingGrants(all, id)); err != nil {
 			return p, nil, keep, writeRefusal(http.StatusBadRequest, specRefusalReason(err, reasonGovernanceUnitRequestInvalid), "invalid ceiling: %v", err)
 		}
 		// The structural bound (governance_grantbound.go). A profile may narrow the
@@ -729,7 +731,7 @@ func (s *Server) checkGraphWrite(p types.GovernanceUnit, all []types.GovernanceU
 		return p, nil, err
 	}
 	if p.Composed() {
-		if ref := s.checkOverlay(p, chain); ref != nil {
+		if ref := s.checkOverlay(p, chain, s.storedCeilingGrants(all, p.ID)); ref != nil {
 			return p, nil, ref
 		}
 	}
@@ -764,8 +766,9 @@ func unsatisfiableWrite(err error, name string) error {
 
 // checkOverlay is the strict, write-time reading of an overlay against its resolved base: a value
 // outside the base, a grant the base does not hold, or an overlay that would make the effective
-// policy invalid is the author's to fix.
-func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUnit) *unitWriteError {
+// policy invalid is the author's to fix. A gated api_key grant is refused only when this write adds or
+// changes it: stored is the effective grants of the row being replaced, which, with the base's, are held.
+func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUnit, stored []types.GrantSpec) *unitWriteError {
 	base := s.deploymentAuthority()
 	var baseAuthored types.ResourceLimits
 	if len(chain) > 1 {
@@ -803,7 +806,7 @@ func (s *Server) checkOverlay(p types.GovernanceUnit, chain []types.GovernanceUn
 			return writeRefusal(http.StatusBadRequest, reasonGovernanceOverlayInvalid,
 				"overlay_limits: raises the member size above what the profile it builds on allows: %s", strings.Join(raises, ", "))
 		}
-		if verr := validateAuthoredPolicySpec(eff.Ceiling); verr != nil && validatePolicySpec(base.Ceiling) == nil {
+		if verr := validateAuthoredPolicySpecHolding(eff.Ceiling, append(slices.Clone(base.Ceiling.EligibleGrants), stored...)); verr != nil && validatePolicySpec(base.Ceiling) == nil {
 			return writeRefusal(http.StatusBadRequest, specRefusalReason(verr, reasonGovernanceOverlayInvalid), "invalid overlay: %v", verr)
 		}
 	}

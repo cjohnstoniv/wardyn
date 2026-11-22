@@ -107,6 +107,11 @@ var isOperatorCensus = map[string]int{
 	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// A drive's allocation to an issuer portal is the super admin's write; a security admin is refused.
+	"user_drives_portal.go:upsertPortalDriveGrant": 1,
+	// A suspend that sets a purge deadline schedules the permanent act, so it is the super admin's, as the
+	// purge route is; a security admin is refused before anything is written.
+	"person_suspend.go:handleSuspendPortalPerson": 1,
 	// Which runner a drive's second place is bound to is named to an operator and that runner's owner only.
 	"user_drives_second_place.go:boundRunnerName": 1,
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
@@ -127,6 +132,11 @@ var isOperatorCensus = map[string]int{
 	"govern_admin.go:runUngoverned": 1,
 	// An owner who is not an operator reads the requirement rows a workspace inherits from a source as a member does.
 	"workspace_inherited_rows.go:withholdInheritedRows": 1,
+	// Help sessions, authz only, as ungovernedCallerCensus classifies them: who may ask to help in a run (a super
+	// admin signed in as a person; every door re-checks the grant, supportMayEnter), and which refusal a super
+	// admin gets (support_not_allowed rather than the run_not_found shape). Neither admits a run policy.
+	"support_entry.go:supportCaller":         1,
+	"support_grant.go:refuseNotSupportParty": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to

@@ -55,6 +55,14 @@ func TestRunnerRuntimeAdvertisesBoundFolders(t *testing.T) {
 	}
 }
 
+// The runner's proxy forwards Azure DevOps git to the organisation, and the caps say so: the organisation sends a
+// via_org Azure DevOps token to no runner that does not.
+func TestRunnerRuntimeAdvertisesViaOrgADO(t *testing.T) {
+	if !composedCaps(t, runtimeExtras{noPosture: true, arch: "amd64"}).ViaOrgADO {
+		t.Fatal("the runner's caps do not say via_org_ado")
+	}
+}
+
 // A k8s runner sends its caps again when a canary re-check changes the NetworkPolicy verdict, so the
 // organisation's health and audit see it mid-session, not only at the next session.
 func TestRunnerRuntimeResendsCapsOnNetPolChange(t *testing.T) {

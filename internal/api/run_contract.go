@@ -17,6 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runnerpool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -152,11 +153,6 @@ func workspaceTargetShape(target string) error {
 	return runner.ValidateAuthoredTarget(target)
 }
 
-// pathWithin reports whether inner is outer or lies under it.
-func pathWithin(inner, outer string) bool {
-	return inner == outer || strings.HasPrefix(inner, outer+"/")
-}
-
 // workspaceTargetsRefusal checks the shape of the workspaces[] list: at most
 // maxRunWorkspaces, each id once, workspace_id equal to the first entry when both are sent, each target
 // and each repos entry well formed. Whether the targets collide is answered
@@ -185,7 +181,7 @@ func workspaceTargetsRefusal(req createRunRequest) *runRefusal {
 		}
 		seen[id] = true
 		if t := sel.Target; t != "" {
-			if drive && pathWithin(t, runner.DriveTarget) && path.IsAbs(t) && path.Clean(t) == t {
+			if drive && pathutil.Within(runner.DriveTarget, t) && path.IsAbs(t) && path.Clean(t) == t {
 				return overlapRefusal(t, "", runDriveName, runner.DriveTarget)
 			}
 			if err := workspaceTargetShape(t); err != nil {
