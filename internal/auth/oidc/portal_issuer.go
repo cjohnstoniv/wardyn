@@ -90,7 +90,8 @@ const (
 )
 
 // PortalRefusal is a refusal. Reason is the audit reason; Cause names the coarse cause of an outage and is
-// never upstream text; RetryAfter is set for a key cooldown.
+// never upstream text; RetryAfter is the rest of the retry interval for a key cooldown or an outage, and 0 under a
+// rule refusal.
 type PortalRefusal struct {
 	Reason     string
 	Cause      string
@@ -655,8 +656,8 @@ func (v *portalVerifier) refresh(now time.Time) (string, time.Duration, uint64) 
 // address's keys are loaded and good, whichever fetch loaded them; otherwise closed under cause, or left as it is
 // when cause is "". Discovery and the key set are read under one lock, so a key success and a refresh outcome
 // never publish out of order, and a discovery that failed or was refused is never reopened by a key success.
-// While a rule refusal stands, its cause stays the closed cause; settle returns the cause the verifier is closed
-// under, or cause when it is open.
+// While a rule refusal stands, its cause stays the closed cause and is what settle returns; otherwise settle returns
+// cause as given, which is "" when the caller gave none.
 func (v *portalVerifier) settle(cause string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
