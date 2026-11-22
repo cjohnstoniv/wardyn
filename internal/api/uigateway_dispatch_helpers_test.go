@@ -29,10 +29,11 @@ type dispatchStart struct {
 }
 
 // dispatchH is one relay stdin write as the fake driver saw it: the time it returned, an upper bound for its
-// bytes' hand-off, and how many bytes it took.
+// bytes' hand-off, how many bytes it took, and the first of them (a request's first write holds its request line).
 type dispatchH struct {
-	at time.Time
-	n  int
+	at   time.Time
+	n    int
+	head string
 }
 
 // dispatchRunner is sshFakeRunner with every start recorded, a stall hook per start kind, a thaw, and each
@@ -102,7 +103,7 @@ type dispatchStdin struct {
 func (s dispatchStdin) Write(p []byte) (int, error) {
 	n, err := s.WriteCloser.Write(p)
 	s.r.mu.Lock()
-	s.r.hs = append(s.r.hs, dispatchH{time.Now(), n})
+	s.r.hs = append(s.r.hs, dispatchH{time.Now(), n, string(p[:min(n, 64)])})
 	s.r.mu.Unlock()
 	return n, err
 }
@@ -153,6 +154,19 @@ func (r *dispatchRunner) bytesAtOrAfter(by time.Time) (late, all int) {
 		}
 	}
 	return late, all
+}
+
+// firstWrite is when the driver's first write holding marker returned (H for the request that carries it in its
+// path); false when none did.
+func (r *dispatchRunner) firstWrite(marker string) (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, h := range r.hs {
+		if strings.Contains(h.head, marker) {
+			return h.at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // pausingStore is the issuer rig's store as a run pauser, so a paused run is thawed through the runner.
