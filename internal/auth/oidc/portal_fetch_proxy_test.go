@@ -152,6 +152,7 @@ type fakeProxyAction struct {
 	phrase string        // http: the refusal's reason phrase and body
 	hang   bool          // never answer
 	drop   bool          // http: close the connection after the CONNECT request, with no status line
+	cut    string        // http: write this start of a status line, then close
 	delay  time.Duration // answer after this long
 	to     string        // the tunnel's destination; "" is the proxy's backend
 }
@@ -363,6 +364,9 @@ func (fp *fakeProxy) serve(raw net.Conn, pc *fakeProxyConn) {
 	time.Sleep(a.delay)
 	switch {
 	case a.drop:
+		return
+	case a.cut != "":
+		fmt.Fprint(conn, a.cut)
 		return
 	case a.hang:
 		drain(br, pc)
@@ -828,6 +832,24 @@ func TestPortalProxyFetch_ConnectTargetIsCheckedAddress(t *testing.T) {
 			t.Parallel()
 			fp := newFakeProxy(t, kind)
 			fp.set(func(fp *fakeProxy) { fp.route = refuseV6(fakeProxyAction{drop: true}) })
+			fi := newFakeIssuer(t, issuerCert(t, ca))
+			if took, err := run(t, fp, fi); err != nil {
+				t.Fatalf("fetch failed after %v: %v", took, err)
+			}
+			if targets, _ := fp.targetList(); !slices.Equal(targets, []string{proxyTestV6At, proxyTestV4At}) {
+				t.Fatalf("CONNECT targets %v, want the IPv6 address and then the IPv4 one", targets)
+			}
+			if fi.count() != 1 {
+				t.Fatalf("the issuer served %d requests, want 1", fi.count())
+			}
+		})
+	}
+
+	for _, kind := range []string{"http", "https"} {
+		t.Run(kind+" proxy cuts the status line on the IPv6 address", func(t *testing.T) {
+			t.Parallel()
+			fp := newFakeProxy(t, kind)
+			fp.set(func(fp *fakeProxy) { fp.route = refuseV6(fakeProxyAction{cut: "HTTP/1.1 2"}) })
 			fi := newFakeIssuer(t, issuerCert(t, ca))
 			if took, err := run(t, fp, fi); err != nil {
 				t.Fatalf("fetch failed after %v: %v", took, err)
