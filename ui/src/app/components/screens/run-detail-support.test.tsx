@@ -486,6 +486,48 @@ describe("support strip: the consent answer shows even when the next read fails"
     expect(screen.queryByTestId("support-active")).toBeNull();
   });
 
+  // A poll's answer and the accept's answer land in one batch, so the accept's change cannot be computed at once
+  // (the hook already has an update queued). The read the accept then starts must still be newer than that change.
+  async function acceptBatchedWithPoll(after: SupportStatus) {
+    let resolvePoll!: (s: SupportStatus) => void;
+    let resolveAccept!: (g: SupportGrantView) => void;
+    let resolveAfter!: (s: SupportStatus) => void;
+    api.accept.mockReturnValue(new Promise<SupportGrantView>((r) => (resolveAccept = r)));
+    api.status
+      .mockResolvedValueOnce({ doors_offered: OFFERED, open: grant() })
+      .mockReturnValueOnce(new Promise<SupportStatus>((r) => (resolvePoll = r)))
+      .mockReturnValueOnce(new Promise<SupportStatus>((r) => (resolveAfter = r)));
+    const user = userEvent.setup();
+    mount({ principal: "maya" });
+    await user.click(await screen.findByRole("button", { name: "Review request" }));
+    await user.click(screen.getByRole("checkbox", { name: /Terminal/ }));
+    await user.click(screen.getByRole("radio", { name: "30 minutes" }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(api.accept).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "read again", hidden: true }));
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolvePoll({ doors_offered: OFFERED, open: grant() });
+      resolveAccept(active());
+    });
+    await waitFor(() => expect(api.status).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      resolveAfter({ doors_offered: OFFERED, ...after });
+    });
+  }
+
+  it("an accept answered in the same batch as a poll still lets its re-read that shows it ended win", async () => {
+    await acceptBatchedWithPoll({ open: null, ended: active({ state: "ended", end_reason: "revoked" }) });
+    expect(await screen.findByTestId("support-ended")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
+  it("an accept answered in the same batch as a poll still lets its re-read that shows a replacement win", async () => {
+    await acceptBatchedWithPoll({ open: grant({ grant: "g-2", helper: "pat" }) });
+    expect(await screen.findByText("pat asked to help in this run")).toBeTruthy();
+    expect(screen.queryByTestId("support-active")).toBeNull();
+  });
+
   it("control: under StrictMode, an accept whose read agrees shows the grant open", async () => {
     await acceptThenRead({ open: active() });
     expect(await screen.findByTestId("support-active")).toBeTruthy();
