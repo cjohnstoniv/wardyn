@@ -398,6 +398,15 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// release above, so a holder never outlives its exec.
 	defer func() { _ = holder.mux.Close() }()
 
+	s.finishAttachSession(ctx, finishCtx, pumpCtx, cancel, r, c, run, id, principalType, principal, opts, wa, holder, la, readOnly, releaseHolder, cut)
+}
+
+// finishAttachSession is handleAttachWS's tail: the opening session.attach row,
+// the pump, and the recording, session.detach audit and socket close after it.
+func (s *Server) finishAttachSession(ctx, finishCtx, pumpCtx context.Context, cancel context.CancelFunc, r *http.Request,
+	c *websocket.Conn, run types.AgentRun, id uuid.UUID, principalType types.ActorType, principal string,
+	opts runner.AttachOptions, wa *webAttach, holder *attachHolder, la *localAttach, readOnly bool,
+	releaseHolder func() (announce func()), cut *streamCut) {
 	// The first of two session.attach rows: the holder is registered and its exec
 	// is being opened. The audit log is append-only and hash-chained, so the
 	// outcome is a second row, never an update; this one exists before any
