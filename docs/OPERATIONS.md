@@ -4964,14 +4964,14 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Make one** (super admin).
 
 1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
-2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`, or to an issuer portal (below). Any other subject type, and `home_override`, are refused.
+2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`, or to an issuer portal (below). The allowed recipients are groups and eligible issuer portals. Any other subject type, and `home_override`, are refused.
 3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
 
-**What a member's run sees.**
+**What a member's run sees** (a group allocation).
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
 - Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
-- People outside the allocated groups never get the mount.
+- For a group allocation, people outside the allocated groups never get the mount.
 - A team drive in a host folder also mounts in a macOS VM, shared at the same `/Users/agent/shared/<name-slug>`, read-only as allocated; a runner that predates drives refuses the run at create.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
@@ -4979,11 +4979,11 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Allocated to an issuer portal** (super admin).
 
 - Send `POST /api/v1/drives/grants` with `subject_type: portal`, the portal's id as `subject` and `additional: true`. The portal must be registered with its own identity issuer and not revoked. The drive must be `docker_volume` or `k8s_pvc_static` with no second place. A security admin is refused.
-- A run started through that portal mounts the drive, and only that portal can then reach the run (`portal_run_scope`), even after the allocation or the portal is gone.
+- The allocation does not mount the drive by itself. To mount it, include its id in the run's drives list. Once mounted, other issuer portals cannot reach that run (`portal_run_scope`), even if the allocation is removed or the creating portal is revoked.
 - A queued run starts with no wider mode than it was admitted with, and read-only when none was recorded.
 - While a portal holds the drive, an edit that would stop it being a team drive answers 409, and one that adds a second place or moves it off those two backends answers 422. Nothing is written; remove the portal's allocation first.
 
-**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to, and the people whose runs start through an allocated issuer portal, share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
 
 **Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
 
@@ -5132,7 +5132,7 @@ kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
   - A portal's allocation moves on `backend` only.
   - A change that moves none is written without confirmation, and its audit row has `rehomed` false.
 - Changing `team` is refused 409 while any allocation (group, person or portal) holds the drive, whatever else the request carries. Remove the allocations first.
-- An allocation written while the drive's `team` or write setting changes answers 409 `user_drive_grant_conflict`. Read the drive and send the allocation again.
+- An allocation written while the drive's `team` or write setting changes and the changed rule invalidates that allocation answers 409 `user_drive_grant_conflict`. Read the drive and send the allocation again.
 
 Confirming is an API action, deliberately:
 
