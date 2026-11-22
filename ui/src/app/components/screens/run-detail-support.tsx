@@ -82,6 +82,8 @@ export interface RunSupport {
   refresh: () => Promise<void>;
   /** Show a grant the server just confirmed as ended, and drop any status read that started before it. */
   applyEnded: (ended: SupportGrantView) => void;
+  /** Show the grant an accept or a decline returned, so the banner follows the answer even if the next read fails; a late accept for a grant no longer shown open changes nothing. */
+  applyAnswered: (answered: SupportGrantView) => void;
 }
 
 /**
@@ -98,6 +100,13 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   const isOwner = !!run?.created_by && principal === run.created_by;
   const mayRead = on && !!run && (isOwner || operator || securityOperator);
   const [status, setStatus] = React.useState<SupportStatus | null>(null);
+  // The status every change is computed from, kept beside the read numbers outside rendering: a change reads and
+  // writes it at once, so no deferred or replayed state updater can reorder a change against a read.
+  const current = React.useRef<SupportStatus | null>(null);
+  const commit = React.useCallback((next: SupportStatus | null) => {
+    current.current = next;
+    setStatus(next);
+  }, []);
   const runId = run?.id;
   // Each status read takes the next number; an applied change (a read's answer or a confirmed end) records its
   // number, and an answer to a read numbered below it started earlier and is dropped.
@@ -110,27 +119,43 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
       const next = await support.status(runId);
       if (n < appliedSeq.current) return;
       appliedSeq.current = n;
-      setStatus(next);
+      commit(next);
     } catch (e) {
       if (n < appliedSeq.current) return;
       // Not a party to this run's help (a 404, or a not-found reason): nothing to show. Any other failure keeps
       // the last answer, so one failed read neither shuts a helper's terminal nor drops the owner's banner.
       if (e instanceof HttpError && (e.status === 404 || e.reason.endsWith("not_found"))) {
         appliedSeq.current = n;
-        setStatus(null);
+        commit(null);
       }
     }
-  }, [mayRead, runId]);
-  const applyEnded = React.useCallback((ended: SupportGrantView) => {
-    appliedSeq.current = ++readSeq.current;
-    // The end closes the grant it names: a different grant that is open on the run now stays shown.
-    // A different ended grant already shown stays when it ended later than this confirmation.
-    setStatus((prev) => ({
-      ...prev,
-      open: prev?.open?.grant === ended.grant ? null : (prev?.open ?? null),
-      ended: prev?.ended && prev.ended.grant !== ended.grant && endedLater(prev.ended, ended) ? prev.ended : ended,
-    }));
-  }, []);
+  }, [mayRead, runId, commit]);
+  const applyEnded = React.useCallback(
+    (ended: SupportGrantView) => {
+      appliedSeq.current = ++readSeq.current;
+      // The end closes the grant it names: a different grant that is open on the run now stays shown.
+      // A different ended grant already shown stays when it ended later than this confirmation.
+      const prev = current.current;
+      commit({
+        ...prev,
+        open: prev?.open?.grant === ended.grant ? null : (prev?.open ?? null),
+        ended: prev?.ended && prev.ended.grant !== ended.grant && endedLater(prev.ended, ended) ? prev.ended : ended,
+      });
+    },
+    [commit],
+  );
+  const applyAnswered = React.useCallback(
+    (answered: SupportGrantView) => {
+      if (answered.state !== "active") return applyEnded(answered);
+      // An accept's answer can arrive late: it applies only while this same grant is still the one shown open.
+      // A read that already showed it ended, or a different grant open, is newer than the answer and stays.
+      const prev = current.current;
+      if (prev?.open?.grant !== answered.grant) return;
+      appliedSeq.current = ++readSeq.current;
+      commit({ ...prev, open: answered });
+    },
+    [applyEnded, commit],
+  );
   React.useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -147,7 +172,7 @@ export function useRunSupport(run: RunDetail | null): RunSupport {
   const helping = viewer === "helper" && open?.state === "active";
   const helperDoors = helping ? (open?.doors ?? []) : null;
   const helperTerminal = !!helperDoors?.includes("terminal");
-  return { on: mayRead, viewer, status, open, helperTerminal, helperDoors, refresh, applyEnded };
+  return { on: mayRead, viewer, status, open, helperTerminal, helperDoors, refresh, applyEnded, applyAnswered };
 }
 
 /** The door chips of a banner, in the board's order. */
@@ -176,7 +201,7 @@ const BANNER = "mb-0 flex flex-wrap items-start justify-between gap-3 rounded-lg
 
 /** The run page's support strip: the Request help button, or the banner for the grant in front of the viewer. */
 export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport }) {
-  const { viewer, open, status, refresh, applyEnded } = sup;
+  const { viewer, open, status, refresh, applyEnded, applyAnswered } = sup;
   const operator = useOperator();
   const principal = usePrincipal();
   const [requesting, setRequesting] = React.useState(false);
@@ -273,8 +298,9 @@ export function RunSupportStrip({ run, sup }: { run: RunDetail; sup: RunSupport 
           grant={open}
           recordedDoors={open.recorded_doors ?? status?.recorded_doors ?? []}
           onClose={() => setReviewing(false)}
-          onAnswered={() => {
+          onAnswered={(answered) => {
             setReviewing(false);
+            if (answered) applyAnswered(answered);
             void refresh();
           }}
         />
