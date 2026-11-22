@@ -620,8 +620,8 @@ const (
 
 // reclaimMacDisk is deleteMemberDrive's substrate step for a disk drive: the Mac
 // it is kept on deletes its image (reclaim_drive). A Mac no longer registered
-// keeps the image and the row goes (MAC-D12), with no call and so no issue; an offline one, or one this replica
-// does not hold, keeps the claim for its reconnect (MAC-D10); one whose run has the disk refuses (MAC-D11). A run
+// keeps the image and the row goes, with no call and so no issue; an offline one, or one this replica
+// does not hold, keeps the claim for its reconnect; one whose run has the disk refuses. A run
 // of the owner's still starting may attach the disk, so it refuses too. The issue is made just before the
 // call. The Mac answers a refusal typed only as in use, which is definitive.
 func (s *Server) reclaimMacDisk(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, mount types.DriveMount) memberDriveDeletion {
