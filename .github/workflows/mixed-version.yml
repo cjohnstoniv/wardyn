@@ -131,7 +131,10 @@ jobs:
                 || { echo "::error::postgres:16 pinned digest $pg_digest unavailable"; exit 1; }
               docker tag "docker.io/library/postgres@$pg_digest" postgres:16 ;;
           esac
-          kind load docker-image postgres:16 --name wardyn-mixed
+          # postgres:16 is a multi-arch index whose other platforms' content the local store lacks, which
+          # `kind load` (it imports all platforms) refuses: import this platform's image only.
+          docker save --platform linux/amd64 postgres:16 \
+            | docker exec -i wardyn-mixed-control-plane ctr --namespace=k8s.io images import --digests - >/dev/null
           kubectl create namespace "$NS"
           age_key=$(docker run --rm wardyn/wardynd:kind-test -gen-age-key)
           kubectl -n "$NS" create secret generic wardyn-postgres-dsn \
