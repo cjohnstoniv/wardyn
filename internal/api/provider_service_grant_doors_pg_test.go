@@ -293,13 +293,15 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	// The cookie lane refuses a service principal before any route runs (401 reserved_principal); the others reach
 	// the route and are refused there.
 	callers := map[string]struct {
-		c    *http.Cookie
-		want int
-	}{"security admin": {secAdmin, http.StatusForbidden}, "service": {svc, http.StatusUnauthorized}, "person": {f.person, http.StatusForbidden}}
+		c      *http.Cookie
+		want   int
+		reason string // checked only when set: the service cookie's refusal is the reserved principal's
+	}{"security admin": {secAdmin, http.StatusForbidden, ""}, "service": {svc, http.StatusUnauthorized, "reserved_principal"}, "person": {f.person, http.StatusForbidden, ""}}
 	for name, k := range callers {
 		for _, m := range []string{http.MethodPut, http.MethodDelete} {
-			if w := f.do(m, f.secretPath("corp-a"), k.c, body); w.Code != k.want {
-				t.Errorf("%s %s the secret route = %d, want %d", name, m, w.Code, k.want)
+			w := f.do(m, f.secretPath("corp-a"), k.c, body)
+			if w.Code != k.want || (k.reason != "" && respReason(w) != k.reason) {
+				t.Errorf("%s %s the secret route = %d %s, want %d %s", name, m, w.Code, w.Body.String(), k.want, k.reason)
 			}
 		}
 	}
@@ -349,8 +351,8 @@ func TestServiceGrant_SecretRouteOperatorOnlyNeverReturnsValue_PG(t *testing.T) 
 	}
 	before := stored()
 	for _, m := range []string{http.MethodPut, http.MethodDelete} {
-		if w := do(t, f.srv, m, "/api/v1"+f.secretPath("corp-a"), tok, string(raw)); w.Code != http.StatusForbidden {
-			t.Errorf("a service token's %s on the secret route = %d %s, want 403", m, w.Code, w.Body.String())
+		if w := do(t, f.srv, m, "/api/v1"+f.secretPath("corp-a"), tok, string(raw)); w.Code != http.StatusForbidden || respReason(w) != "service_scope" {
+			t.Errorf("a service token's %s on the secret route = %d %s, want 403 service_scope", m, w.Code, w.Body.String())
 		}
 	}
 	if after := stored(); !bytes.Equal(after, before) {
