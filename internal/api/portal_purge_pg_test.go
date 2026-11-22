@@ -76,13 +76,22 @@ func TestPortalPurge_TombstoneRefusesExchangeAndBlanksEmail_PG(t *testing.T) {
 	if !l.allDone(t, ident.ID) {
 		t.Errorf("ledger not done after the purge:\n%s", ledgerText(t, l.pool, ident.ID))
 	}
-	if got := l.freshExchange(t, "u1"); got != http.StatusBadRequest {
-		t.Errorf("exchange after the purge = %d, want 400", got)
-	}
-	l.ver.subj = l.person("u1", "")
-	l.ver.subj.IssuedAt = time.Now()
-	if got := l.exchange(t, l.d.ID, l.cred, "subject-token").Code; got != http.StatusBadRequest {
-		t.Errorf("exchange through another portal after the purge = %d, want 400", got)
+	// One fresh, otherwise eligible exchange through each portal: the one the person signed in through, with the
+	// verified email its admission asks for, and the fixture's other portal on the same issuer. Each is refused as a
+	// deactivated identity.
+	deniedBefore := len(l.deniedReasons())
+	for _, p := range []struct {
+		name string
+		id   uuid.UUID
+		cred string
+	}{{"the sign-in portal", idPortal.ID, idCred}, {"another portal", l.d.ID, l.cred}} {
+		time.Sleep(50 * time.Millisecond)
+		l.ver.subj = l.person("u1", "")
+		l.ver.subj.Email, l.ver.subj.EmailVerified = "pat@corp.example", true
+		l.ver.subj.IssuedAt = time.Now()
+		if got := l.exchange(t, p.id, p.cred, "subject-token").Code; got != http.StatusBadRequest {
+			t.Errorf("exchange through %s after the purge = %d, want 400", p.name, got)
+		}
 	}
 	if n := l.count(t, `SELECT count(*) FROM principal_identities WHERE principal = $1`, principal); n != 1 {
 		t.Errorf("identity rows for the purged person = %d, want the one tombstone", n)
@@ -90,7 +99,11 @@ func TestPortalPurge_TombstoneRefusesExchangeAndBlanksEmail_PG(t *testing.T) {
 	if n := l.count(t, `SELECT count(*) FROM portal_grants WHERE principal = $1`, principal); n != 0 {
 		t.Errorf("portal_grants rows after the purge = %d, want 0", n)
 	}
-	for _, r := range l.deniedReasons() {
+	denied := l.deniedReasons()
+	if len(denied) != deniedBefore+2 {
+		t.Errorf("denied exchanges after the purge = %d, want one per portal (2)", len(denied)-deniedBefore)
+	}
+	for _, r := range denied {
 		if r != string(oidc.DenialIdentityDeactivated) {
 			t.Errorf("denied reason = %s, want %s", r, oidc.DenialIdentityDeactivated)
 		}
