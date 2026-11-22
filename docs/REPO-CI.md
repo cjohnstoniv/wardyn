@@ -54,7 +54,8 @@ The agent script defaults to `/tmp/wardyn`; deployment behavior is unchanged.
 | `ui` | 60 | 4.5 | 4.8 | 20 |
 | `conformance` | 60 | 4.2 | 4.7 | 45 |
 | `envbuild-integration` | 60 | 3.6 | 4.0 | 20 |
-| `gates (staticcheck)` | 60 | 2.7 | 2.9 | 15 |
+| `staticcheck` (tagless, docker, docker,k8s matrix; checks `staticcheck (staticcheck-…)`) | – | pending | pending | 40 |
+| `gates-staticcheck` (aggregator, check `gates (staticcheck)`) | – | pending | pending | 10 |
 | `helm-install-test` | – | pending | pending | 20 |
 | `vm` | – | pending | pending | 30 |
 | `trivy-wardynd` (check `trivy (wardynd)`) | 50 | 2.0 | 2.5 | 40 |

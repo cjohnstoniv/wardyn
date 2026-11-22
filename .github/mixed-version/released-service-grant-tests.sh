@@ -92,8 +92,10 @@ wait "$probe" 2>/dev/null || [ $? -gt 128 ] || fail "the probe wardynd did not s
 
 names=$(IFS='|'; echo "${TESTS[*]}")
 phase build the api test binary
-# Two workers, as ci.yml prebuilds it: the compile is the job's memory peak.
-go test -race -c -p 2 -o "$BIN/api.test" ./internal/api/
+# The compile is the job's memory peak: two workers, a soft heap limit and internal/api without DWARF, as ci.yml's
+# prebuild sets them (scripts/ci-api-prebuild.sh has the measured figures).
+GOMAXPROCS=2 GOMEMLIMIT=10GiB GOFLAGS="-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w" \
+	go test -race -c -p 2 -o "$BIN/api.test" ./internal/api/
 phase run ${TESTS[*]}
 test_dir=$(mktemp -d "$RUNNER_TEMP/v0101-tests.XXXXXX")
 (cd "$test_dir" && WARDYN_TEST_PG="$PG/wardyn?sslmode=disable" WARDYN_TEST_V0101_WARDYND="$BIN/wardynd" WARDYN_TEST_V0101_CLI="$BIN/wardyn" \
