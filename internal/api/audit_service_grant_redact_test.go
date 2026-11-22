@@ -20,6 +20,7 @@ const (
 	grantTokenHost     = "idp.internal.example"
 	grantFormTokenHost = "form-idp.elsewhere.example"
 	grantFormBaseHost  = "form-gateway.elsewhere.example"
+	grantAudienceHost  = "llm-api.internal.example"
 )
 
 // grantHostFixture is a service grant's mint, a refused secret write and an admin's secret delete, their data
@@ -34,7 +35,7 @@ func grantHostFixture() []types.AuditEvent {
 	}
 	return []types.AuditEvent{
 		{ID: uuid.New(), Action: "model_provider.service_grant.mint", Outcome: "success",
-			Data: data(map[string]any{"scope": "llm", "trigger": "refresh", "replica": "r1", "egress": "direct"})},
+			Data: data(map[string]any{"scope": "llm", "audience": "https://" + grantAudienceHost, "trigger": "refresh", "replica": "r1", "egress": "direct"})},
 		{ID: uuid.New(), Action: "model_provider.service_grant.secret_write", Outcome: "failure",
 			Data: data(map[string]any{"base_host": grantGatewayHost, "reason": reasonServiceGrantDestinationChanged,
 				"body_token_host": grantFormTokenHost, "body_base_host": grantFormBaseHost})},
@@ -43,13 +44,13 @@ func grantHostFixture() []types.AuditEvent {
 	}
 }
 
-// A security_admin reads a service grant's rows without the token endpoint's host or a refused form's hosts,
-// each named in redacted_fields, and keeps the configured gateway's base_host. A super admin reads every host as
-// recorded. Both feed reads.
+// A security_admin reads a service grant's rows without the token endpoint's host, a mint's audience and scope,
+// or a refused form's hosts, each named in redacted_fields, and keeps the configured gateway's base_host. A super
+// admin reads every host as recorded. Both feed reads.
 func TestAuditHostDetail_ServiceGrantTokenAndFormHostsBelowSuperAdmin(t *testing.T) {
 	const mint, write = "model_provider.service_grant.mint", "model_provider.service_grant.secret_write"
 	withheld := map[string][]string{
-		mint:  {"token_host"},
+		mint:  {"audience", "scope", "token_host"},
 		write: {"body_base_host", "body_token_host", "token_host"},
 		"model_provider.service_grant.secret_delete": {"token_host"},
 	}
@@ -63,7 +64,7 @@ func TestAuditHostDetail_ServiceGrantTokenAndFormHostsBelowSuperAdmin(t *testing
 		}
 		for _, ev := range rows {
 			data := string(ev.Data)
-			for _, h := range []string{grantTokenHost, grantFormTokenHost, grantFormBaseHost} {
+			for _, h := range []string{grantTokenHost, grantFormTokenHost, grantFormBaseHost, grantAudienceHost} {
 				if strings.Contains(data, h) {
 					t.Errorf("%s: security_admin read %s %s, want no %s", path, ev.Action, data, h)
 				}
@@ -84,6 +85,8 @@ func TestAuditHostDetail_ServiceGrantTokenAndFormHostsBelowSuperAdmin(t *testing
 			want := []string{grantTokenHost}
 			if ev.Action != mint {
 				want = append(want, grantGatewayHost)
+			} else {
+				want = append(want, grantAudienceHost)
 			}
 			if ev.Action == write {
 				want = append(want, grantFormTokenHost, grantFormBaseHost)

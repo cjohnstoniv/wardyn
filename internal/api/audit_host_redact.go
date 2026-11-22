@@ -64,10 +64,11 @@ var auditHostViews = map[string]auditHostView{
 	"workload.launch_refused": {withhold: []string{"policy_pin", "policy_digest"}},
 	"workload.delete":         {withhold: []string{"policy_pin"}},
 	// A service grant's token endpoint host: GET /model-providers keeps the record super-only, and the endpoint may
-	// be a private host apart from the gateway. A refused secret write also names its form's hosts, which no one
-	// configured. base_host is served: the configured gateway is the host the member-safe provider view names
-	// (providerHost).
-	"model_provider.service_grant.mint":          {withhold: []string{"token_host"}},
+	// be a private host apart from the gateway. A mint row's audience and scope are as free-form (an audience is
+	// often a private API's URL), so they go with it. A refused secret write also names its form's hosts, which
+	// no one configured. base_host is served: the configured gateway is the host the member-safe provider view
+	// names (providerHost).
+	"model_provider.service_grant.mint":          {withhold: []string{"audience", "scope", "token_host"}},
 	"model_provider.service_grant.secret_write":  {withhold: []string{"body_base_host", "body_token_host", "token_host"}},
 	"model_provider.service_grant.secret_delete": {withhold: []string{"token_host"}},
 }
