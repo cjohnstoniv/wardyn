@@ -22,7 +22,7 @@ func TestMigration_DriveDeleteFence_Backfill_PG(t *testing.T) {
 	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000001", "legacy-docker", "docker_volume", "2100-01-01", nil, nil)
 	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000002", "marked-docker", "docker_volume", "2020-01-01", "2020-01-02", nil)
 	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000003", "legacy-pvc", "k8s_pvc", "2020-01-01", nil, nil)
-	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000006", "legacy-mac", "mac_disk", "2020-01-01", nil, "00000000-0000-0000-0000-0000000000a1")
+	pgExec(t, pool, member, "00000000-0000-0000-0000-000000000006", "legacy-mac", "mac_disk", "2100-01-01", nil, "00000000-0000-0000-0000-0000000000a1")
 	pgExec(t, pool, `INSERT INTO user_drives (id, name, backend) VALUES ('00000000-0000-0000-0000-000000000004', 'admin-drive', 'docker_volume')`)
 
 	migrateBefore(t, pool, "0300")

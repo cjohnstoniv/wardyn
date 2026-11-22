@@ -78,13 +78,15 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 		status  int
 		reason  string
 		kept    bool
+		held    bool // the claim stays: the answer did not say nothing was touched
 		audit   string
 	}{
-		{"deleted", runner.DriveReclaimDeleted, nil, http.StatusNoContent, "", false, "deleted"},
-		{"already absent", runner.DriveReclaimAlreadyAbsent, nil, http.StatusNoContent, "", false, "already_absent"},
-		{"in use", "", runner.ErrDriveInUse, http.StatusConflict, reasonMemberDriveInUse, true, "refused"},
-		{"not this drive's", "", runner.ErrDriveNotReclaimable, http.StatusConflict, reasonMemberDriveInUse, true, "refused"},
-		{"substrate failed", "", errors.New("daemon down"), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, "failed"},
+		{"deleted", runner.DriveReclaimDeleted, nil, http.StatusNoContent, "", false, false, "deleted"},
+		{"already absent", runner.DriveReclaimAlreadyAbsent, nil, http.StatusNoContent, "", false, false, "already_absent"},
+		{"in use", "", runner.ErrDriveInUse, http.StatusConflict, reasonMemberDriveInUse, true, false, "refused"},
+		{"not this drive's, said untouched", "", runner.Untouched(runner.ErrDriveNotReclaimable), http.StatusConflict, reasonMemberDriveInUse, true, false, "refused"},
+		{"not this drive's, not said untouched", "", runner.ErrDriveNotReclaimable, http.StatusConflict, reasonMemberDriveInUse, true, true, "refused"},
+		{"substrate failed", "", errors.New("daemon down"), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newMemberDriveStore()
@@ -103,8 +105,8 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 				t.Fatalf("substrate calls = %+v, want one for the owner's object", rn.calls)
 			}
 			got, kept := st.drives[d.ID]
-			if kept != tc.kept || kept && got.DeleteStartedAt != nil {
-				t.Errorf("row kept = %v (tombstone %v), want kept = %v with the tombstone cleared", kept, got.DeleteStartedAt, tc.kept)
+			if kept != tc.kept || kept && (got.DeleteStartedAt != nil) != tc.held {
+				t.Errorf("row kept = %v (tombstone %v), want kept = %v with the claim held = %v", kept, got.DeleteStartedAt, tc.kept, tc.held)
 			}
 			if n := countAction(rec, "drive.member.delete"); n != 1 {
 				t.Fatalf("drive.member.delete rows = %d, want 1", n)
