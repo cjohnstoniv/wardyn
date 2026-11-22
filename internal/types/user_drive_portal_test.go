@@ -19,7 +19,7 @@ func TestPortalTeamDrive_FolderPerPortalAndDrive(t *testing.T) {
 	d2 := UserDrive{ID: uuid.New(), Name: "other", Backend: DriveBackendDockerVolume, ObjectScheme: DriveObjectSchemeID, Team: true}
 	object := func(d UserDrive, p uuid.UUID) string { return DrivePortalObjectName(d, DrivePortalHome(d, p)) }
 
-	if DrivePortalHome(d1, portalA) != DrivePortalHome(d1, portalA) {
+	if first, again := DrivePortalHome(d1, portalA), DrivePortalHome(d1, portalA); first != again {
 		t.Fatal("DrivePortalHome is not deterministic")
 	}
 	home := DrivePortalHome(d1, portalA)

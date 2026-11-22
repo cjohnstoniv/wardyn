@@ -329,6 +329,7 @@ func newRemoteModel(link *sync.Mutex) *remoteModel {
 		m.aborted.Store(true)
 		if !m.closeFirst.Load() {
 			link.Lock() // the ExecClose call
+			//lint:ignore SA2001 a barrier, not a critical section
 			link.Unlock()
 		}
 	})}

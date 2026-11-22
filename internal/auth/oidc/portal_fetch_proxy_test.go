@@ -1487,6 +1487,7 @@ func TestPortalProxyFetch_NoIssuerRootsRefused(t *testing.T) {
 			hook := func(o *PortalIssuersOptions) {
 				o.OnRefreshFailure = func(f PortalRefreshFailure) {
 					h.pi.mu.Lock() // the hook runs with the verifiers' mutex released
+					//lint:ignore SA2001 a barrier, not a critical section
 					h.pi.mu.Unlock()
 					mu.Lock()
 					hooks = append(hooks, f)
