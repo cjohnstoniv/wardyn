@@ -256,7 +256,11 @@ func (p *PortalIssuers) VerifyDetail(ctx context.Context, reg PortalRegistration
 	}
 	tok, err := v.idv.Verify(ctx, raw)
 	if err != nil {
-		return PortalSubject{}, v.underRefusal(verifyFailure(box, err))
+		failure := verifyFailure(box, err)
+		if failure.Cause == portalCauseKeysUnreachable {
+			failure.RetryAfter = v.outageWait() // this exchange's own key fetch failed: the door's answer for an outage
+		}
+		return PortalSubject{}, v.underRefusal(failure)
 	}
 	// A refresh can have failed, or withdrawn the key this token was verified under, since the health check
 	// above: look again before anything is admitted.

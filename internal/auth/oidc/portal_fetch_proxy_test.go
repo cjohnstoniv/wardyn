@@ -1099,8 +1099,8 @@ func TestPortalProxyFetch_ProxyDownWarmVerifier(t *testing.T) {
 		first := h.wantUnavailable(h.kidToken("k2", 1), portalCauseKeysUnreachable)
 		h.clock.Advance(10 * time.Second)
 		second := h.wantUnavailable(h.token(h.accessClaims()), portalCauseIssuerDown)
-		if first.RetryAfter != 0 || second.RetryAfter != 20*time.Second {
-			t.Fatalf("Retry-After %v then %v, want none and then 20 s", first.RetryAfter, second.RetryAfter)
+		if first.RetryAfter != portalKeyCooldown || second.RetryAfter != 20*time.Second {
+			t.Fatalf("Retry-After %v then %v, want 30 s and then 20 s", first.RetryAfter, second.RetryAfter)
 		}
 		h.clock.Advance(21 * time.Second)
 		h.wantUnavailable(h.token(h.accessClaims()), portalCauseUnreachable)

@@ -906,6 +906,17 @@ func TestPortalRetryAfter_OutageSameAtDoorAndSuccessPoint(t *testing.T) {
 			}
 		})
 	}
+	t.Run("unknown kid key outage", func(t *testing.T) {
+		// The last refresh is more than a retry interval old: the exchange whose own key fetch failed answers the
+		// rest of the retry interval, as the door does.
+		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+		warmPortal(h)
+		h.clock.Advance(portalKeyCooldown + time.Second)
+		h.idp.set(func(f *fakeIdP) { f.keyStatus = http.StatusInternalServerError })
+		if r := h.wantUnavailable(h.kidToken("k2", 1), portalCauseKeysUnreachable); r.RetryAfter != portalKeyCooldown {
+			t.Fatalf("the key fetch's own caller: Retry-After = %v, want %v", r.RetryAfter, portalKeyCooldown)
+		}
+	})
 	t.Run("never loaded", func(t *testing.T) {
 		h := newPortalHarness(t, "example.com", true, "/oauth2/a")
 		h.idp.set(func(f *fakeIdP) { f.discStatus = http.StatusInternalServerError })
