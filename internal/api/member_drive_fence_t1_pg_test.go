@@ -11,6 +11,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"runtime"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -73,6 +75,36 @@ type fencePausedWorker struct {
 	paused, resume chan struct{}
 	calls          atomic.Int32
 	starting       atomic.Bool
+	once           sync.Once
+}
+
+// release lets a parked worker go; it is safe to call any number of times.
+func (s *fencePausedWorker) release() { s.once.Do(func() { close(s.resume) }) }
+
+// watch registers the worker's end: whatever the test does, the worker is released and joined when it ends, and
+// awaitPaused is how the test learns the worker reached its issue.
+func (s *fencePausedWorker) watch(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	t.Cleanup(func() {
+		s.release()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Error("the parked worker did not finish after it was released")
+		}
+	})
+}
+
+// awaitPaused waits, for a bounded time, for the worker to park; a worker that ended first never will.
+func (s *fencePausedWorker) awaitPaused(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-s.paused:
+	case <-done:
+		t.Fatal("the worker finished without reaching its issue")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the worker did not reach its issue within 30 s")
+	}
 }
 
 func newFencePausedWorker(pg store.PG) *fencePausedWorker {
@@ -119,7 +151,8 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 		e.fenceAgedClaim(run, drive) // the claim Q reads is a minute old, equal to its run's end
 		done := make(chan struct{})
 		go func() { defer close(done); e.srv.finishQueuedKeptDrive(ctx, run.ID) }()
-		<-w.paused
+		w.watch(t, done)
+		w.awaitPaused(t, done)
 		// K takes the claim over, is answered definitively, and clears; L is then admitted with the drive.
 		d, sk, err := e.pg.BeginMemberDriveDeleteAdmin(ctx, drive)
 		if err != nil {
@@ -135,7 +168,7 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 		if got := e.askForKeptDrive(pool, run); got.Code != http.StatusCreated {
 			t.Fatalf("a later run asking for the cleared drive = %d %s, want 201", got.Code, got.Body)
 		}
-		close(w.resume)
+		w.release()
 		<-done
 		afterwards(t, e, drive, calls)
 	})
@@ -152,7 +185,8 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 		e.fenceEndKept(run) // the run's end finds the owner's claim and takes none
 		done := make(chan struct{})
 		go func() { defer close(done); e.srv.deleteMemberDrive(ctx, w, d, started, memberDriveByOwner) }()
-		<-w.paused
+		w.watch(t, done)
+		w.awaitPaused(t, done)
 		// K takes the claim over and fails before its call: the owner has a run starting, so it clears at its pre-flight.
 		dk, sk, err := e.pg.BeginMemberDriveDeleteAdmin(ctx, drive)
 		if err != nil {
@@ -164,7 +198,7 @@ func TestPG_DriveFence_ResumedWorkerMakesNoCall(t *testing.T) {
 		if got := e.askForKeptDrive(pool, run); got.Code != http.StatusCreated {
 			t.Fatalf("a later run asking for the cleared drive = %d %s, want 201", got.Code, got.Body)
 		}
-		close(w.resume)
+		w.release()
 		<-done
 		afterwards(t, e, drive, calls)
 	})
@@ -262,6 +296,156 @@ func TestPG_DriveFence_CrashOnEitherSideOfTheIssue(t *testing.T) {
 			t.Errorf("after the in-use answer over an odd count: marked = %v, count = %d, exists = %v; want still deleting at 3", marked, n, e.keptDriveExists(run))
 		}
 	})
+}
+
+// fenceLostSession is the store of a worker whose issue runs on a connection of its own, whose backend a second
+// connection terminates (pg_terminate_backend, as killLockHolder in locks_pg_test.go does) on one side of the
+// issue's commit. The issue is the store's own statement, run on a one-connection pool. Before the commit: the
+// backend is killed first, so the statement is never applied. After it: the statement commits, then the backend is
+// killed, and the worker never reads the reply. atLoss is what an independent connection read just after the kill.
+type fenceLostSession struct {
+	store.PG
+	t           *testing.T
+	solo        store.PG
+	soloPool    *pgxpool.Pool
+	admin       *pgxpool.Pool
+	afterCommit bool
+	atLoss      fenceMark
+	soloErr     error
+}
+
+// fenceMark is a drive's mark and issue count as an independent connection reads them.
+type fenceMark struct {
+	marked bool
+	issues int
+}
+
+func readFenceMark(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (fenceMark, error) {
+	var m fenceMark
+	err := pool.QueryRow(ctx, `SELECT delete_started_at IS NOT NULL, delete_issues FROM user_drives WHERE id = $1`, id).Scan(&m.marked, &m.issues)
+	return m, err
+}
+
+func (s *fenceLostSession) kill(ctx context.Context, pid uint32) {
+	var ok bool
+	if err := s.admin.QueryRow(ctx, `SELECT pg_terminate_backend($1)`, int32(pid)).Scan(&ok); err != nil || !ok {
+		s.t.Errorf("terminate backend %d = %v, %v; want true", pid, ok, err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := s.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE pid = $1`, int32(pid)).Scan(&n); err == nil && n == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.t.Errorf("backend %d still listed 10 s after it was terminated", pid)
+}
+
+func (s *fenceLostSession) IssueMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) (int, error) {
+	conn, err := s.soloPool.Acquire(ctx)
+	if err != nil {
+		return 0, err
+	}
+	pid := conn.Conn().PgConn().PID()
+	conn.Release()
+	if s.afterCommit {
+		if _, err := s.solo.IssueMemberDriveDelete(ctx, id, started, n); err != nil {
+			s.t.Errorf("the issue before the kill: %v", err)
+			return 0, err
+		}
+	}
+	s.kill(ctx, pid)
+	var rerr error
+	if s.atLoss, rerr = readFenceMark(ctx, s.admin, id); rerr != nil {
+		s.t.Errorf("read the drive after the kill: %v", rerr)
+	}
+	if s.afterCommit {
+		return 0, errors.New("the session was lost after the commit, before the reply was read")
+	}
+	_, s.soloErr = s.solo.IssueMemberDriveDelete(ctx, id, started, n)
+	return 0, s.soloErr
+}
+
+// The issuing session's backend is terminated on each side of the issue's commit (row 10, hosted). Before: nothing
+// was applied and nothing called; after: the count is odd and nothing called. Either way, read from an independent
+// connection, and what the next holder can do follows from the count.
+func TestPG_DriveFence_BackendLostOnEitherSideOfTheIssue(t *testing.T) {
+	ctx := context.Background()
+	lost := func(t *testing.T, afterCommit bool) (*queueEnv, types.RunnerPool, *atomic.Int32, *fenceLostSession, types.AgentRun, uuid.UUID) {
+		e, pool := keepEnv(t, 3)
+		var calls atomic.Int32
+		e.srv.cfg.Runner = reclaimCounts{&keepPoolRunner{e.runner}, &calls}
+		run, drive := e.fenceKeptRun(pool)
+		e.fenceEndKept(run)
+		cfg := e.poolEnv.pool.Config()
+		cfg.MaxConns, cfg.MinConns = 1, 0
+		soloPool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(soloPool.Close)
+		w := &fenceLostSession{PG: e.pg, t: t, solo: store.NewPG(soloPool), soloPool: soloPool, admin: e.poolEnv.pool, afterCommit: afterCommit}
+		e.srv.cfg.Store = w
+		done := make(chan struct{})
+		go func() { defer close(done); e.srv.finishQueuedKeptDrive(ctx, run.ID) }()
+		select {
+		case <-done:
+		case <-time.After(60 * time.Second):
+			t.Fatal("the cleanup did not return after its session was lost")
+		}
+		e.srv.cfg.Store = e.pg
+		if calls.Load() != 0 {
+			t.Fatalf("substrate calls after the session was lost = %d, want 0", calls.Load())
+		}
+		return e, pool, &calls, w, run, drive
+	}
+
+	t.Run("terminated before the commit", func(t *testing.T) {
+		e, pool, _, w, run, drive := lost(t, false)
+		if w.soloErr == nil {
+			t.Error("the issue on the terminated session answered without an error")
+		}
+		if w.atLoss != (fenceMark{marked: true, issues: 0}) {
+			t.Errorf("at the loss: %+v; want the claim at count 0 (nothing was applied)", w.atLoss)
+		}
+		// The worker's own pre-flight clear (nothing issued) then ran on a healthy connection: admissible at 2.
+		if m, err := readFenceMark(ctx, e.poolEnv.pool, drive); err != nil || m != (fenceMark{marked: false, issues: 2}) {
+			t.Errorf("after the worker returned: %+v, %v; want unmarked at count 2", m, err)
+		}
+		if got := e.askForKeptDrive(pool, run); got.Code != http.StatusCreated {
+			t.Errorf("a later run asking for the drive = %d %s, want 201", got.Code, got.Body)
+		}
+	})
+
+	t.Run("terminated after the commit", func(t *testing.T) {
+		e, pool, calls, w, run, drive := lost(t, true)
+		if w.atLoss != (fenceMark{marked: true, issues: 1}) {
+			t.Errorf("at the loss: %+v; want the claim at count 1 (the issue committed)", w.atLoss)
+		}
+		// The worker's clear (nothing known issued) matches no row: the count moved.
+		if m, err := readFenceMark(ctx, e.poolEnv.pool, drive); err != nil || m != (fenceMark{marked: true, issues: 1}) {
+			t.Errorf("after the worker returned: %+v, %v; want still marked at count 1", m, err)
+		}
+		if got := e.askForKeptDrive(pool, run); got.Code != http.StatusUnprocessableEntity {
+			t.Errorf("a later run asking for the drive = %d %s, want 422 while it is deleting", got.Code, got.Body)
+		}
+		fenceAgeMark(e, drive)
+		d, started, err := e.pg.BeginMemberDriveDeleteAdmin(ctx, drive)
+		if err != nil || d.DeleteIssues != 1 {
+			t.Fatalf("takeover = count %d, %v; want the odd count kept", d.DeleteIssues, err)
+		}
+		e.srv.deleteMemberDrive(ctx, e.pg, d, started, memberDriveByAdmin)
+		if e.keptDriveExists(run) || calls.Load() != 1 {
+			t.Errorf("drive exists = %v, calls = %d; want the later holder to finish it with one call", e.keptDriveExists(run), calls.Load())
+		}
+	})
+}
+
+// fenceAgeMark makes the drive's mark a minute old, so a takeover may replace it.
+func fenceAgeMark(e *queueEnv, drive uuid.UUID) {
+	e.t.Helper()
+	e.exec(`UPDATE user_drives SET delete_started_at = now() - interval '61 seconds' WHERE id = $1`, drive)
 }
 
 // A claim whose cleanup never ran (the process stopped between the end and its cleanup) stays hidden from its owner
