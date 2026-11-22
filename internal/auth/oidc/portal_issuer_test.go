@@ -167,7 +167,7 @@ func TestPortalIssuer_PrincipalCaseVariantsDistinct(t *testing.T) {
 	if a == b {
 		t.Fatal("ids that differ only in case gave one principal")
 	}
-	if strings.ToLower(a) != a || strings.ToLower(b) != b || strings.ToLower(a) == strings.ToLower(b) {
+	if strings.ToLower(a) != a || strings.ToLower(b) != b || strings.EqualFold(a, b) {
 		t.Fatalf("principals are not case-stable and distinct under lowercasing: %q %q", a, b)
 	}
 	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
@@ -190,7 +190,7 @@ func TestPortalIssuer_ExactIssuerBytesHashed(t *testing.T) {
 		}
 		seen[k] = iss
 	}
-	if PortalIssuerKey(base) != PortalIssuerKey(base) {
+	if seen[PortalIssuerKey(base)] != base {
 		t.Fatal("the key is not deterministic")
 	}
 	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
@@ -320,4 +320,19 @@ func TestPortalVerifier_IssRequiresExactMember(t *testing.T) {
 		})
 	}
 	h.mustAdmit(h.mintRaw("k1", 0, body(fmt.Sprintf(`"iss":%q`, iss)), nil))
+}
+
+// A token is a compact JWS. The flattened JSON form of a validly signed token is refused as an invalid token
+// before any discovery or key fetch.
+func TestPortalIssuer_JSONSerializedTokenRefusedBeforeFetch(t *testing.T) {
+	h := newPortalHarness(t, "example.com", true, "/oauth2/a")
+	p := strings.Split(h.token(h.accessClaims()), ".")
+	flat := fmt.Sprintf(`{"protected":%q,"payload":%q,"signature":%q}`, p[0], p[1], p[2])
+	r := h.wantRefusal(flat, SubjectTokenInvalid)
+	if r.Class != PortalRefusedToken {
+		t.Fatalf("refusal = %+v, want the token class", r)
+	}
+	if d, k := h.idp.hits(); d != 0 || k != 0 {
+		t.Fatalf("a JSON-serialized token cost (%d,%d) discovery and key fetches, want none", d, k)
+	}
 }
