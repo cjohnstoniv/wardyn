@@ -54,7 +54,7 @@ export function StaleNote({ onRetry }: { onRetry: () => void }) {
     <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-xs text-muted-foreground">
       <span>{STALE_NOTE}</span>
       <Button variant="outline" size="sm" onClick={onRetry}>
-        <RotateCw className="size-3.5" /> {STATES.RETRY}
+        <RotateCw className="size-3.5" /> {retryLabel}
       </Button>
     </div>
   );
@@ -139,11 +139,17 @@ export function ErrorState({
   action,
   as,
   title,
+  icon: Icon = AlertTriangle,
+  retryLabel = STATES.RETRY,
   size = "page",
 }: {
   message?: string;
   /** Replaces "Something went wrong" — say what could not be reached or loaded. */
   title?: string;
+  /** Replaces the warning triangle, for a failure whose icon says what failed. */
+  icon?: React.ElementType;
+  /** Replaces "Retry" on the built-in retry button. */
+  retryLabel?: string;
   /** "compact" is the quieter in-card look, matching EmptyState's; "page" is for a whole-page failure. */
   size?: "page" | "compact";
   onRetry?: () => void;
@@ -160,7 +166,7 @@ export function ErrorState({
   return (
     <div data-size={size} className={cn("flex flex-col items-center justify-center gap-3 px-6 text-center", compact ? "py-8" : "py-16")}>
       <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
-        <AlertTriangle className="size-5" />
+        <Icon className="size-5" />
       </div>
       <div className="space-y-1">
         <Heading className="text-foreground">{title ?? STATES.ERROR_TITLE}</Heading>
