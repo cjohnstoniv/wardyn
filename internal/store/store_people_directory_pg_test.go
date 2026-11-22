@@ -665,6 +665,11 @@ func TestPG_PeopleDirectory_FirstSignInIsNotProvisioning(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET principal = $1, last_login_at = $2, scim_external_id = 'ext-old' WHERE object_id = $3`, hPrincipal, second, hOID); err != nil {
 		t.Fatal(err)
 	}
+	// The first-login trigger stamps first_login_at from that first last_login_at, as it does for a 0.10.1 replica's
+	// sign-in; a row from before the column had none, so clear it (the trigger fires only on last_login_at).
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET first_login_at = NULL WHERE object_id = $1`, hOID); err != nil {
+		t.Fatal(err)
+	}
 	page, err := st.ListPeopleDirectory(ctx, store.PeopleDirectoryFilter{})
 	if err != nil {
 		t.Fatal(err)
