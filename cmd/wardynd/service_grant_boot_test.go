@@ -101,7 +101,8 @@ func TestServeStartsServiceGrantRefresherWithoutRunner(t *testing.T) {
 }
 
 // insideLeaderGo reports whether the selector at the end of stack is handed to leaderGo: as an
-// argument (a method value), or called as a statement of a function literal that is the argument.
+// argument (a method value), or called as the only statement of a function literal that is the
+// argument, with the literal's own context as its one argument.
 // A bare reference, a call anywhere else, or a literal that is not leaderGo's argument is not.
 func insideLeaderGo(stack []ast.Node) bool {
 	i := len(stack) - 1 // the selector
@@ -114,9 +115,14 @@ func insideLeaderGo(stack []ast.Node) bool {
 			return false
 		}
 		_, stmt := stack[i-2].(*ast.ExprStmt)
-		_, body := stack[i-3].(*ast.BlockStmt)
-		_, lit := stack[i-4].(*ast.FuncLit)
-		if !stmt || !body || !lit {
+		body, isBody := stack[i-3].(*ast.BlockStmt)
+		lit, isLit := stack[i-4].(*ast.FuncLit)
+		if !stmt || !isBody || !isLit {
+			return false
+		}
+		// The call is the literal's only statement, so nothing in the literal can skip it, and it runs on
+		// the literal's own context (the one leaderGo cancels when the lease is lost), not another.
+		if len(body.List) != 1 || !passesOwnParam(lit, stack[i-1].(*ast.CallExpr)) {
 			return false
 		}
 		i -= 4
@@ -139,4 +145,14 @@ func insideLeaderGo(stack []ast.Node) bool {
 		return fn.Sel.Name == "leaderGo"
 	}
 	return false
+}
+
+// passesOwnParam reports whether lit has one named parameter and call has that parameter as its one argument.
+func passesOwnParam(lit *ast.FuncLit, call *ast.CallExpr) bool {
+	params := lit.Type.Params.List
+	if len(params) != 1 || len(params[0].Names) != 1 || len(call.Args) != 1 {
+		return false
+	}
+	arg, ok := call.Args[0].(*ast.Ident)
+	return ok && arg.Name == params[0].Names[0].Name
 }
