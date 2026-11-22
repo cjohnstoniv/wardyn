@@ -134,7 +134,7 @@ func (s *Server) finishPortalPurge(ctx context.Context, st portalLifecycleStore,
 // and the same issuer and person id can never sign in again. A person already purged is a retry: it finishes any
 // step still pending and answers 200.
 func (s *Server) handlePurgePortalPerson(w http.ResponseWriter, r *http.Request) {
-	st, ident, ok := s.resolvePortalPerson(w, r, "person.purge")
+	st, ident, ok := s.resolvePortalPerson(w, r, s.portalRefusal(r, "person.purge"))
 	if !ok {
 		return
 	}
@@ -255,7 +255,7 @@ func portalPersonOf(p types.PortalPerson) portalPersonView {
 // used, each with its assigned unit (run_in_under) and when it was revoked, revoked history kept. A person is
 // one per issuer and provider id, so only that person's own portals are listed.
 func (s *Server) handlePortalPersonPortals(w http.ResponseWriter, r *http.Request) {
-	st, ident, ok := s.resolvePortalPerson(w, r, "")
+	st, ident, ok := s.resolvePortalPerson(w, r, nil)
 	if !ok {
 		return
 	}
