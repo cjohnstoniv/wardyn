@@ -9,6 +9,7 @@ Wardyn's own [`ci.yml`](../.github/workflows/ci.yml) runs on every pull request 
 - `pull_request:` carries no `branches:` filter — that field matches the PR's *base*, and the 0.8 working practice stacks work on `<kind>/<issue#>-<slug>` branches, not on `main`, so a filtered trigger gave a stacked PR no checks at all.
 - `push:` stays narrow to `main`, `master` and `feature/**`, since every other commit already gets a run from its own PR.
 - It has no `release/**`: `release.yml` accepts CI by tree, and [`release-branch-checks.yml`](../.github/workflows/release-branch-checks.yml) runs only DCO and gitleaks there.
+- Code scanning is `codeql.yml` (CodeQL advanced setup): Go, JavaScript and TypeScript, Python and the workflows, on every push to `main` and `release/**`, on pull requests into them, weekly and on dispatch. Every job skips until the repository variable `WARDYN_CODEQL_ADVANCED` is `true`. A pull request analysis reports only the lines it changed, so a release is judged on a push or dispatch analysis of its exact tree.
 - The push-gate DCO exemption for GitHub-made merges needs gpg and GitHub's web-flow key id `B5690EEEBB952194`; if GitHub rotates that key, update the id in the Makefile's `dco` recipe.
 - [`scripts/ci-parity-local.sh`](../scripts/ci-parity-local.sh) runs changed packages under `-race`, then a throwaway Postgres (pool guard, `localhost` DSN).
 - `make candidate-preflight` vets release candidates.
