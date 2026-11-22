@@ -54,7 +54,7 @@ export function StaleNote({ onRetry }: { onRetry: () => void }) {
     <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-xs text-muted-foreground">
       <span>{STALE_NOTE}</span>
       <Button variant="outline" size="sm" onClick={onRetry}>
-        <RotateCw className="size-3.5" /> {retryLabel}
+        <RotateCw className="size-3.5" /> {STATES.RETRY}
       </Button>
     </div>
   );
@@ -176,7 +176,7 @@ export function ErrorState({
       </div>
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          <RotateCw className="size-3.5" /> {STATES.RETRY}
+          <RotateCw className="size-3.5" /> {retryLabel}
         </Button>
       )}
       {action}
