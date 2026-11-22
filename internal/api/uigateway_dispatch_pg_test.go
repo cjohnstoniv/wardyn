@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -417,7 +418,7 @@ func dispatchPct(ds []time.Duration, p float64) time.Duration {
 // maxUIConnsPerRun requests in flight gets every asset (200 and the app's body), with no slot refusal; the case
 // held at the slot cap records its outcome only.
 func TestUIRelayIssuerPortal_SingleUseCostMeasured_PG(t *testing.T) {
-	load := func(rig *dispatchRig, c *http.Cookie, n int) (lat []time.Duration, served, refused int, other []int) {
+	load := func(rig *dispatchRig, c *http.Cookie, n int) (lat []time.Duration, served, refused int, other []string) {
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 		for i := 0; i < n; i++ {
@@ -432,10 +433,10 @@ func TestUIRelayIssuerPortal_SingleUseCostMeasured_PG(t *testing.T) {
 				switch {
 				case r.Code == http.StatusOK && r.Body.String() == "sandbox app":
 					served++
-				case r.Code == http.StatusServiceUnavailable:
+				case r.Code == http.StatusServiceUnavailable && dispatchReason(r) == reasonUIGatewayConnCapReached:
 					refused++
 				default:
-					other = append(other, r.Code)
+					other = append(other, fmt.Sprintf("%d %s", r.Code, dispatchReason(r)))
 				}
 			}()
 		}
