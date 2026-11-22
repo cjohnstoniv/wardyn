@@ -232,4 +232,20 @@ describe("DeleteConfirmDialog — a very long name", () => {
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     expect(toastSuccess).toHaveBeenCalledWith("Access token for github.com disconnected");
   });
+
+  it("the confirm is the destructive variant, not re-typed classes", () => {
+    render(
+      <DeleteConfirmDialog
+        name="anthropic-api-key"
+        entity="secret"
+        description="test"
+        onOpenChange={() => {}}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+        onDeleted={() => {}}
+      />,
+    );
+    const confirm = screen.getByRole("button", { name: /delete secret/i });
+    expect(confirm).toHaveClass("bg-destructive");
+    expect(confirm).not.toHaveClass("bg-danger");
+  });
 });
