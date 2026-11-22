@@ -62,7 +62,7 @@ var lateAddCensus = map[string]int{
 	"runs_autonomy.go unionADOEntraLane":                        1,
 	"runs_cli_github.go confineBrokerEgress":                    1,
 	"runs_create_requirements.go applyWorkspaceRequirementsFor": 1,
-	"runs_dispatch.go dispatchRun":                              1,
+	"runs_dispatch.go planArtifactRedirection":                  1,
 	"runs_dispatch_ado_inject.go authorADOEntraInjection":       2,
 	"runs_dispatch_cli_aws.go authorAWSCLI":                     1,
 	"runs_dispatch_cli_azure.go authorAzureCLI":                 1,
