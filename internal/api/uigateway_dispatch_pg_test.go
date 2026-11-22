@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -82,6 +83,9 @@ type dispatchStall struct {
 	typed bool
 	// noStart: no relay or probe exec is started at all.
 	noStart bool
+	// connWait: entered is closed when the request asks the relay's transport for a connection (httptrace's
+	// GetConn), past its one authority check, not by arm.
+	connWait bool
 }
 
 func dispatchStalls() []dispatchStall {
@@ -92,7 +96,7 @@ func dispatchStalls() []dispatchStall {
 			ps.touch = func(ctx context.Context) { _ = stall(entered, release)(ctx) }
 			rig.srv.cfg.Store = ps
 		}},
-		{name: "b inside the connection wait", typed: true, arm: func(t *testing.T, rig *dispatchRig, c *http.Cookie, entered, release chan struct{}) {
+		{name: "b inside the connection wait", typed: true, connWait: true, arm: func(t *testing.T, rig *dispatchRig, c *http.Cookie, _, _ chan struct{}) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 			for i := 0; i < maxUIConnsPerRun; i++ { // the port's connections are all held: the next request waits in the transport
@@ -104,7 +108,6 @@ func dispatchStalls() []dispatchStall {
 				defer rig.dr.mu.Unlock()
 				return len(rig.dr.hs) >= maxUIConnsPerRun
 			})
-			close(entered)
 		}},
 		{name: "c a stalled thaw", typed: true, arm: func(_ *testing.T, rig *dispatchRig, _ *http.Cookie, entered, release chan struct{}) {
 			rig.pausing(true, nil)
@@ -173,8 +176,17 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 				_, held := rig.dr.bytesAtOrAfter(time.Now()) // the stall's own requests' bytes (b's held connections), not this request's
 				t0 := time.Now()
 				by := t0.Add(rig.fresh) // at or before the request's dispatch time
-				ans := rig.relayAsync(context.Background(), "/", c)
-				<-entered
+				ctx := context.Background()
+				if st.connWait { // nothing between GetConn and the transport's wait for a connection can refuse it
+					var once sync.Once
+					ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GetConn: func(string) { once.Do(func() { close(entered) }) }})
+				}
+				ans := rig.relayAsync(ctx, "/", c)
+				select {
+				case <-entered:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the request never reached its stall")
+				}
 				rig.revokePortal(t)
 				if after {
 					time.Sleep(time.Until(by) + 200*time.Millisecond)
