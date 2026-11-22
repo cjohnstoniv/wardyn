@@ -74,6 +74,19 @@ func (f *fakeDelegateStore) GetDelegateByRaw(_ context.Context, raw string) (typ
 	return d, nil
 }
 
+// GetDelegateByID makes every store that embeds the fake a store.DelegateReader, as the Postgres store is: each
+// delegated run request reads its portal's row for the unit pin (portalPinOf), and a store that cannot read it
+// answers 503 portal_unit_unavailable. A revoked row is still read, as the Postgres read returns it.
+func (f *fakeDelegateStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.delegates[id]
+	if !ok {
+		return types.Delegate{}, store.ErrNotFound
+	}
+	return d, nil
+}
+
 func (f *fakeDelegateStore) ListDelegates(context.Context) ([]types.Delegate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -246,10 +259,12 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 
 // delegatedOutputStore keeps memRunOutputs' rows while still offering the
 // portal capability: memRunOutputs embeds only store.Store, so on its own it
-// would hide store.DelegateStore from the delegated lane.
+// would hide store.DelegateStore from the delegated lane, and the portal read
+// by id (store.DelegateReader) the unit pin check makes.
 type delegatedOutputStore struct {
 	*memRunOutputs
 	store.DelegateStore
+	store.DelegateReader
 	store.RunsByCreatorPager
 }
 
@@ -260,7 +275,8 @@ func newDelegatedOutputServer(t *testing.T, person string, shape ...func(*Config
 	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
 		ast = c.Store.(*authzStore)
 		mem = newMemRunOutputs(c.Store)
-		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, RunsByCreatorPager: ast}
+		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, DelegateReader: ast.fakeDelegateStore,
+			RunsByCreatorPager: ast}
 		for _, f := range shape {
 			f(c)
 		}

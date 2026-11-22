@@ -226,7 +226,12 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayAppNotDeclared, uiNoDesktopMsg)
 		return
 	}
-	if s.macOSDesktopSignInsOff(r.Context(), run) {
+	off, err := s.macOSDesktopSignInsOffRead(r.Context(), run)
+	if err != nil && !ta.admitBy.IsZero() {
+		refuseIssuerOpeningUnread(r.Context(), w, "site config", uiSessionUnverifiableMsg, err)
+		return
+	}
+	if off {
 		s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", uiDesktopAppName, "denied",
 			ta.withVia(map[string]any{"reason": "the agent does not allow sign-ins in a desktop, which a macOS desktop cannot block"}))
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
@@ -260,7 +265,15 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
 		return
 	}
-	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
+	if sess.closedUnread { // an issuer portal's session whose Closed set could not be read in its bound
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
+	checkStart := time.Now() // an issuer portal's open stream is re-checked from here (desktopIssuerCut)
+	actx, acancel := issuerAdmitCtx(r.Context(), sess)
+	end, de := s.uiReassertRelayEnd(actx, sess)
+	acancel()
+	if de != nil {
 		writeErrorReason(w, de.status, de.reason, de.msg)
 		return
 	}
@@ -292,7 +305,7 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		}
 		s.serveDesktopViewer(w, r, runID, boot, http.StatusOK)
 	case rest == uiDesktopRFB:
-		s.serveDesktopRFB(w, r, sess)
+		s.serveDesktopRFB(w, r, sess, checkStart, end)
 	case rest == uiDesktopClose && r.Method == http.MethodPost:
 		if err := s.closeDesktop(r.Context(), sess); err != nil {
 			slog.WarnContext(r.Context(), "wardynd: desktop Close could not be stored", "run_id", runID, "err", err)
@@ -379,26 +392,34 @@ func (s *Server) serveDesktopViewer(w http.ResponseWriter, r *http.Request, runI
 // serveDesktopRFB carries the VM's display between the viewer's WebSocket and the runner, re-checking
 // the person and the run as uiDial does, and ending at the session's bound, at Close, when the run
 // stops, or when the person may no longer enter it.
-func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession) {
+func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess uiSession, checkStart, end time.Time) {
+	viewer := &viewerHijack{ResponseWriter: w}
+	// An issuer portal's stream is cut from beside it, from before its setup reads and the upgrade, so neither
+	// they nor the start lock and the dial below delay its re-check; a cut ends their context.
+	base, upgrade, cut, stopCut := s.desktopIssuerCut(r, viewer, sess, checkStart, end)
+	defer stopCut()
+	// Its setup reads run under the session's opening deadline (issuerAdmitCtx), on the cut's context, so a read
+	// that stalls answers 503 within the bound; the stream then lives on base.
+	actx, acancel := issuerAdmitCtx(base, sess)
+	defer acancel()
 	// The run's desktop rules, read once before the socket opens: rules that cannot be read refuse the
 	// stream, never relay it under the defaults (runDesktopPolicy, as the novnc relay does).
-	_, rules, _, err := s.runDesktopPolicy(r.Context(), sess.Run)
+	_, rules, _, err := s.runDesktopPolicy(actx, sess.Run)
 	if err != nil {
 		slog.WarnContext(r.Context(), "wardynd: desktop rules unreadable; the desktop stream is refused", "run_id", sess.Run, "err", err)
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopRulesUnreadable, desktopRulesUnreadableMsg)
 		return
 	}
 	// A recorded run's stream keeps no frames while the run's row says its agent is paused to sign in or
 	// a take over is open, from the first frame and at each vmSignInRecheck after; a mark or take over
 	// that cannot be read refuses the stream rather than record it.
-	signIn, err := s.watchVMSignIn(r.Context(), sess.Run)
+	signIn, err := s.watchVMSignIn(actx, sess.Run)
 	if err != nil {
-		writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
+		writeErrorReason(upgrade, http.StatusServiceUnavailable, reasonDesktopSignInsUnavailable, desktopSignInsUnreadableMsg)
 		return
 	}
 	defer signIn.stop()
-	viewer := &viewerHijack{ResponseWriter: w}
-	ws, err := websocket.Accept(viewer, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
+	ws, err := websocket.Accept(upgrade, r, &websocket.AcceptOptions{Subprotocols: []string{"binary"}})
 	if err != nil {
 		return // Accept answered the request
 	}
@@ -406,7 +427,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	// ctx ends the stream at the bound and at Close; the socket itself lives on the request, so the
 	// stream can tell the viewer why before it goes.
 	// A window that opens on the Mac ends a stream with control with errMacWindowTookControl as its cause.
-	yielding, yield := context.WithCancelCause(r.Context())
+	yielding, yield := context.WithCancelCause(base)
 	defer yield(nil)
 	ctx, cancel := context.WithDeadline(yielding, time.Unix(sess.Expires, 0))
 	defer cancel()
@@ -502,13 +523,14 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		yielded()
 		_ = c.Close(desktopCloseWindowOpen, desktopWindowOpenMsg)
 	}
-	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened)
+	s.relayDesktopStream(r.Context(), ctx, sess, c, ws, conn, viewer, filtered, windowOpened, cut != nil)
 }
 
 // relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
-// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB).
+// re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB). With
+// watched set, the run's re-check runs beside the stream (desktopIssuerCut) and only the Closed set is read here.
 func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession, c desktopSocket, ws *websocket.Conn,
-	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func()) {
+	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func(), watched bool) {
 	done := make(chan struct{}, 2)
 	go func() {
 		_ = relayViewer(reqCtx, ws, filtered)
@@ -520,6 +542,10 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 	go func() { _, _ = io.Copy(&wsUnframer{w: conn}, filtered); done <- struct{}{} }()
 	tick := time.NewTicker(cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck))
 	defer tick.Stop()
+	recheck := tick.C
+	if watched {
+		recheck = nil
+	}
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
 	for {
@@ -546,7 +572,7 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 				_ = c.Close(code, why)
 				return
 			}
-		case <-tick.C:
+		case <-recheck:
 			if _, code, why := s.desktopBoundedRunCheck(ctx, sess); code != 0 {
 				_ = c.Close(code, why)
 				return
@@ -714,6 +740,10 @@ type viewerHijack struct {
 	frames *rfbfilter.ClientFrames
 }
 
+// Unwrap hands the server's writer to http.ResponseController, so a deadline set on the viewer reaches the
+// connection: an issuer portal's cut interrupts a blocked handshake flush through it (desktopIssuerCut).
+func (v *viewerHijack) Unwrap() http.ResponseWriter { return v.ResponseWriter }
+
 func (v *viewerHijack) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, brw, err := http.NewResponseController(v.ResponseWriter).Hijack()
 	if err != nil {
@@ -733,6 +763,10 @@ type checkedConn struct {
 }
 
 func (c checkedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// NetConn is the hijacked connection under the check, so a cut closes the transport itself (closeRawConn), not
+// through a TLS close.
+func (c checkedConn) NetConn() net.Conn { return c.Conn }
 
 // wsUnframer writes the payloads of the filter's frames. They are the unmasked frames the framers
 // made, re-encoded by the filter, so no mask is ever set.

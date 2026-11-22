@@ -188,7 +188,7 @@ func run() error {
 	logTrustedCA(trustedCACount, trustedCAPEM)
 	// installTrustedCA + WARDYN_DAEMON_PROXY_URL mutate the shared http.DefaultTransport in place, and
 	// the service grant's transport comes out — see installBootTransport (kept out of run(), which is low-branching).
-	serviceGrantTr, err := installBootTransport(http.DefaultTransport, trustedCAPool, f)
+	serviceGrantTr, alwaysRt, err := installBootTransport(http.DefaultTransport, trustedCAPool, f)
 	if err != nil {
 		return err
 	}
@@ -411,7 +411,7 @@ func run() error {
 	bootKeys.ensureGatewayClientCA(bootCtx, gatewayClientCA)
 	// Console sign-in's issuer is recorded, and refused when a portal binding already uses it, after the
 	// migrations and before this replica serves a request; the portal verifier set is built after that.
-	portalIssuers, portalFailures, err := bootPortalIssuers(bootCtx, pool, f, lm.operator, st, feats.authn)
+	portalIssuers, portalFailures, err := bootPortalIssuers(bootCtx, pool, f, lm.operator, st, feats.authn, alwaysRt, trustedCAPEM)
 	if err != nil {
 		return err
 	}

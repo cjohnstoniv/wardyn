@@ -135,7 +135,8 @@ func TestServiceGrant_SecretDeleteRetiresMask(t *testing.T) {
 	if f.masked(svcClientSecret) {
 		t.Error("the route's DELETE left the secret masked")
 	}
-	// A gone read.
+	// A gone read refuses at once; the next pass's reconciliation retires the mask. Until then the value stays
+	// masked, which only hides more.
 	g := newSvcFixWithSecret(t)
 	g.mustToken(serviceGrantTriggerRefresh)
 	g.sec.mu.Lock()
@@ -145,6 +146,7 @@ func TestServiceGrant_SecretDeleteRetiresMask(t *testing.T) {
 	if se := svcErr(t, func() error { _, err := g.token(serviceGrantTriggerResolve); return err }()); se.reason != svcReasonSecretGone {
 		t.Fatalf("a gone record: %+v", se)
 	}
+	g.srv.reconcileServiceGrantMasks(context.Background())
 	g.sweep()
 	if g.masked(svcClientSecret) {
 		t.Error("a gone read left the secret masked")

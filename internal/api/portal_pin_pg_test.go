@@ -82,6 +82,8 @@ func TestPortalPin_DisjointPinsIsolatedOnEveryOwnerPath_PG(t *testing.T) {
 // tree, and onPath would answer true for the deleted id).
 func TestPortalPin_DeletedPinUnitRefused_PG(t *testing.T) {
 	e := newAuthorityEnv(t)
+	// The filtered list (view=user) projects attention, which reads pending approvals from the store.
+	e.h.srv.cfg.Approvals = attentionApprovals{ApprovalService: e.h.srv.cfg.Approvals, st: e.st}
 	b := e.bind(t)
 	pin := e.unit(t, types.GovernanceUnit{Name: "doomed", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}})
 	d := e.portal(t, b, &pin.ID)
@@ -128,6 +130,7 @@ func TestPortalPin_DeletedPinUnitRefused_PG(t *testing.T) {
 // only the in-pin rows.
 func TestPortalPin_ListFilteredToPin_PG(t *testing.T) {
 	e := newAuthorityEnv(t)
+	e.h.srv.cfg.Approvals = attentionApprovals{ApprovalService: e.h.srv.cfg.Approvals, st: e.st}
 	d := e.portal(t, e.bind(t), &e.plat.ID)
 	person, tok := e.person(t, d, "alice")
 	const page = 5

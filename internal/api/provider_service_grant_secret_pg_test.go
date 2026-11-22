@@ -9,6 +9,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -172,10 +173,13 @@ func TestServiceGrant_SecretDeletedStopsServing_PG(t *testing.T) {
 	}
 }
 
+// Plant: drop the revision case from serviceGrantSupersededBy; the held mint then publishes token 1 and the
+// caller's check fails.
 func TestServiceGrant_RotateWhileMintPending_PG(t *testing.T) {
 	f := newSvcPG(t, true)
 	f.seedOne()
 	row := f.row("corp-a")
+	ids := f.captureRowIDs()
 	free := svcHoldFirst(t, f.idp)
 	type res struct {
 		tok serviceGrantMinted
@@ -201,9 +205,21 @@ func TestServiceGrant_RotateWhileMintPending_PG(t *testing.T) {
 	if f.idp.count() != 2 {
 		t.Fatalf("requests = %d, want 2", f.idp.count())
 	}
-	rows := f.audit.find(auditServiceGrantMintAction)
-	if len(rows) != 2 || !strings.Contains(string(rows[0].Data), `"superseded":true`) || strings.Contains(string(rows[1].Data), "superseded") {
-		t.Fatalf("mint rows = %d; want two, the first marked superseded", len(rows))
+	got := ids()
+	if len(got) != 2 {
+		t.Fatalf("row ids = %v, want one per request (2)", got)
+	}
+	oldRows, newRows := f.rowsByID(got[0]), f.rowsByID(got[1])
+	if len(oldRows) != 1 || !strings.Contains(string(oldRows[0].Data), `"superseded_by":"revision"`) ||
+		len(newRows) != 1 || strings.Contains(string(newRows[0].Data), "superseded") {
+		t.Fatalf("mint rows = %v and %v; want one each, the first superseded by the revision", oldRows, newRows)
+	}
+	copies := f.awaitSink(t, got...)
+	all := string(mustJSON(f.mintRows())) + string(mustJSON(copies))
+	for _, leak := range []string{svcClientSecret, svcSecretTwo, svcToken(1), svcToken(2)} {
+		if strings.Contains(all, leak) {
+			t.Errorf("a mint row or its sink copy carries %q", leak)
+		}
 	}
 	if st, ok := f.pgStatus("corp-a", f.srv.svcGrant.replica()); !ok || st.Outcome != "ok" || st.ValidUntil == nil {
 		t.Errorf("status = %+v, %v, want the second mint's", st, ok)
@@ -286,24 +302,37 @@ func TestServiceGrant_DirectRotationOverlappingDeleteFailsClosed_PG(t *testing.T
 	f.seedOne()
 	row := f.row("corp-a")
 	name := f.secretNameOf("corp-a")
-	// A rotation written in the store while the grant's removal is deleting: the mint answers gone, or the
-	// record is kept; no request ever reaches an identity provider with a value of the removed grant.
-	var armed atomic.Bool
-	armed.Store(true)
+	// A rotation written in the store itself while the grant's removal deletes the record. It moves no revision,
+	// so the removal's revision-guarded delete removes the rotated record too: that fails closed, the mint answers
+	// gone, final and definitive, and no request reaches an identity provider.
+	var fired atomic.Bool
+	var revAtDelete string
 	f.sec.mu.Lock()
+	revBefore := f.sec.revOf(name)
 	f.sec.hold = func(op, n string) {
-		if op == "delete" && n == name && armed.CompareAndSwap(true, false) {
-			f.sec.set(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: row.BaseURL, ClientSecret: svcSecretTwo}))
+		if op == "delete" && n == name && fired.CompareAndSwap(false, true) {
+			f.sec.rotateInPlace(name, mustJSON(serviceGrantRecord{V: 1, TokenURL: svcTokenURL, ClientID: svcClientID, BaseURL: row.BaseURL, ClientSecret: svcSecretTwo}))
+			f.sec.mu.Lock()
+			revAtDelete = f.sec.revOf(name)
+			f.sec.mu.Unlock()
 		}
 	}
 	f.sec.mu.Unlock()
-	if w := f.do(http.MethodDelete, f.secretPath("corp-a"), f.admin, nil); w.Code != http.StatusConflict && w.Code != http.StatusNoContent {
-		t.Fatalf("DELETE = %d %s", w.Code, w.Body.String())
-	}
-	f.removeGrant("corp-a")
 	before := f.idp.count()
-	if _, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.row("corp-a")), "", serviceGrantTriggerRefresh); err == nil {
-		t.Fatal("a mint for a removed grant succeeded")
+	f.removeGrant("corp-a")
+	if !fired.Load() {
+		t.Fatal("the grant's removal never deleted the record: the rotation did not overlap it")
+	}
+	if revAtDelete != revBefore || revBefore == "" {
+		t.Fatalf("the revision the delete saw = %q, want the stored %q: a rotation in the store moves none", revAtDelete, revBefore)
+	}
+	if f.sec.has(name) {
+		t.Fatal("the rotated record outlived the removal's delete")
+	}
+	_, err := f.srv.serviceGrantToken(context.Background(), svcRowWithGrant(f.row("corp-a")), "", serviceGrantTriggerRefresh)
+	var se *serviceGrantError
+	if !errors.As(err, &se) || se.reason != svcReasonSecretGone || !se.definitive || !se.final || se.sent {
+		t.Fatalf("the mint after the removal = %v (%+v), want a final, definitive %s that sent nothing", err, se, svcReasonSecretGone)
 	}
 	if f.idp.count() != before {
 		t.Fatalf("a request reached the identity provider after the removal (%d new)", f.idp.count()-before)
@@ -371,19 +400,33 @@ func TestServiceGrant_FailedRotationKeepsGrantMinting_PG(t *testing.T) {
 	}
 }
 
+// Plant: leave previous_valid_until out of a failure row's data; that row, read by its id once settled, then fails
+// its check.
 func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	clock := &svcClock{t: time.Now().UTC()}
 	f := newSvcPGClocked(t, true, clock)
 	f.seedOne()
+	ids := f.captureRowIDs()
 	if _, err := f.tokenOf("corp-a", serviceGrantTriggerRefresh); err != nil {
 		t.Fatal(err)
 	}
-	mintRows := func() []types.AuditEvent { return f.audit.find(auditServiceGrantMintAction) }
-	rows := mintRows()
-	if len(rows) != 1 || rows[0].Outcome != "success" || f.idp.count() != 1 {
-		t.Fatalf("after one success: %d rows, %d requests", len(rows), f.idp.count())
+	// rowOf waits for the n-th request's row and returns it: a failure row settles after its attempt's answer.
+	var copies []types.AuditEvent
+	rowOf := func(n int) types.AuditEvent {
+		t.Helper()
+		got := ids()
+		if len(got) <= n {
+			t.Fatalf("row ids = %v, want at least %d", got, n+1)
+		}
+		f.awaitRows(t, got[n])
+		copies = append(copies, f.awaitSink(t, got[n])...)
+		return f.rowsByID(got[n])[0]
 	}
-	data := string(rows[0].Data)
+	first := rowOf(0)
+	if len(f.mintRows()) != 1 || first.Outcome != "success" || f.idp.count() != 1 {
+		t.Fatalf("after one success: %d rows, %d requests", len(f.mintRows()), f.idp.count())
+	}
+	data := string(first.Data)
 	for _, want := range []string{`"client_id":"svc-client"`, `"expires_at"`, `"trigger":"refresh"`} {
 		if !strings.Contains(data, want) {
 			t.Errorf("success row %s lacks %s", data, want)
@@ -401,17 +444,18 @@ func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	if _, err := f.tokenOf("corp-a", serviceGrantTriggerRefresh); err != nil {
 		t.Fatalf("the cached token should cover the failure: %v", err)
 	}
+	second := rowOf(1)
 	clock.Advance(10 * time.Minute) // expired: the next failure holds no earlier token
 	_, _ = f.tokenOf("corp-a", serviceGrantTriggerRefresh)
-	rows = mintRows()
-	if len(rows) != 3 || f.idp.count() != 3 {
-		t.Fatalf("rows = %d, requests = %d, want one row per request sent (3)", len(rows), f.idp.count())
+	third := rowOf(2)
+	if n := len(f.mintRows()); n != 3 || f.idp.count() != 3 {
+		t.Fatalf("rows = %d, requests = %d, want one row per request sent (3)", n, f.idp.count())
 	}
-	if d := string(rows[1].Data); rows[1].Outcome != "failure" || !strings.Contains(d, `"reason":"invalid_scope"`) || !strings.Contains(d, `"oauth_error":"invalid_scope"`) ||
+	if d := string(second.Data); second.Outcome != "failure" || !strings.Contains(d, `"reason":"invalid_scope"`) || !strings.Contains(d, `"oauth_error":"invalid_scope"`) ||
 		!strings.Contains(d, `"http_status":400`) || !strings.Contains(d, `"client_id":"svc-client"`) || !strings.Contains(d, "previous_valid_until") {
 		t.Errorf("failure row with a live earlier token = %s", d)
 	}
-	if d := string(rows[2].Data); strings.Contains(d, "previous_valid_until") {
+	if d := string(third.Data); strings.Contains(d, "previous_valid_until") {
 		t.Errorf("a failure row after the token expired names previous_valid_until: %s", d)
 	}
 	f.idp.mu.Lock()
@@ -419,18 +463,19 @@ func TestServiceGrant_MintAuditRows_PG(t *testing.T) {
 	f.idp.mu.Unlock()
 	clock.Advance(2 * time.Minute)
 	_, _ = f.tokenOf("corp-a", serviceGrantTriggerRefresh)
-	if rows = mintRows(); len(rows) != 4 {
-		t.Fatalf("rows = %d, want 4", len(rows))
+	fourth := rowOf(3)
+	if n := len(f.mintRows()); n != 4 {
+		t.Fatalf("rows = %d, want 4", n)
 	}
 	f.audit.mu.Lock()
-	all := string(mustJSON(f.audit.rows))
+	all := string(mustJSON(f.audit.rows)) + string(mustJSON(f.mintRows())) + string(mustJSON(copies))
 	f.audit.mu.Unlock()
 	for _, leak := range []string{svcClientSecret, svcToken(1), "secret words", "made_up_code_xyz", "error_description"} {
 		if strings.Contains(all, leak) {
 			t.Errorf("an audit row carries %q", leak)
 		}
 	}
-	if last := string(rows[3].Data); !strings.Contains(last, `"oauth_error":"other"`) {
+	if last := string(fourth.Data); !strings.Contains(last, `"oauth_error":"other"`) {
 		t.Errorf("an unrecognised error code was not recorded as other: %s", last)
 	}
 }

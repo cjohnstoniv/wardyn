@@ -546,6 +546,13 @@ type KeptMachineStore interface {
 	DropUnstartedKeptMachine(ctx context.Context, id, runID uuid.UUID) error
 	// BeginKeptMachineDelete tombstones owner's kept machine (an empty owner means any owner).
 	BeginKeptMachineDelete(ctx context.Context, owner string, id uuid.UUID, by string) (KeptMachineDeletion, error)
+	// RepairKeptMachineExpiry sets a kept machine's deadline to the Mac's own for the stop of run runID, only
+	// while the machine is kept with no delete started or intended and that run is the one that last held it.
+	// ErrNotFound when it is not, or the deadline already is the Mac's.
+	RepairKeptMachineExpiry(ctx context.Context, id, runID uuid.UUID, expiresAt time.Time) error
+	// DeferKeptMachineExpiry moves a kept machine's deadline forward to expiresAt, only while no delete is
+	// started or intended and the deadline is earlier. ErrNotFound otherwise.
+	DeferKeptMachineExpiry(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
 	// AbortKeptMachineDelete puts a machine back to kept while it carries started (never a kill's).
 	AbortKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
 	// FinishKeptMachineDelete removes the row only while it carries started.

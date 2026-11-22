@@ -170,6 +170,9 @@ func unprocessable(reason, field, format string, args ...any) *registrationRefus
 // deployment's host list, in the order a caller can fix them. A held registration's approval runs it again.
 // It does not read the pin or the user type, which need the store.
 func validatePortalRow(d types.Delegate) *registrationRefusal {
+	if d.UISessionRenewal && !uiSessionRenewalShips {
+		return unprocessable(reasonDelegateRenewalWithheld, "ui_session_renewal", "ui_session_renewal: longer browser sessions are not available in this release")
+	}
 	for _, check := range []func(types.Delegate) *registrationRefusal{
 		portalProfileRefusal, portalListsRefusal, portalAdmissionRefusal, portalGrantRefusal, portalAddressRefusal,
 	} {

@@ -242,7 +242,7 @@ func (s PG) PortalChainLive(ctx context.Context, delegateID uuid.UUID, principal
 func (s PG) StampPortalUsed(ctx context.Context, id uuid.UUID, at time.Time) error {
 	if _, err := s.Pool.Exec(ctx, `
 		UPDATE delegates SET last_used_at = $1
-		 WHERE id = (SELECT id FROM delegates WHERE id = $2 AND (last_used_at IS NULL OR last_used_at < $1 - interval '1 minute') FOR NO KEY UPDATE SKIP LOCKED)`,
+		 WHERE id = (SELECT id FROM delegates WHERE id = $2 AND (last_used_at IS NULL OR last_used_at < $1::timestamptz - interval '1 minute') FOR NO KEY UPDATE SKIP LOCKED)`,
 		at, id); err != nil {
 		return fmt.Errorf("store: stamp portal use: %w", err)
 	}

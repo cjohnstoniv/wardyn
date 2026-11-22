@@ -6,6 +6,7 @@ package auditsign
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -160,11 +161,13 @@ type Signer struct {
 
 // announcementNS names the audit.checkpoint.create rows: a row's id is derived from the statement it
 // announces, so any replica can tell the announcement of the newest stored checkpoint from other rows.
-var announcementNS = uuid.NewSHA1(uuid.NameSpaceOID, []byte("wardyn audit checkpoint announcement"))
+// Both ids are SHA-256 name-based (UUID version 8): SHA-1 is refused under GODEBUG=fips140=only, and this
+// var is built at package init.
+var announcementNS = uuid.NewHash(sha256.New(), uuid.NameSpaceOID, []byte("wardyn audit checkpoint announcement"), 8)
 
 // announcementID is the id of the audit.checkpoint.create row for the checkpoint with this statement.
 func announcementID(statement string) uuid.UUID {
-	return uuid.NewSHA1(announcementNS, []byte(statement))
+	return uuid.NewHash(sha256.New(), announcementNS, []byte(statement), 8)
 }
 
 // Run ticks every interval until ctx ends, the first tick at once.

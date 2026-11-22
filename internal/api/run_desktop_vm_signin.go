@@ -88,11 +88,17 @@ func desktopSignInsOff(sc types.SiteConfig, scErr error, agent string) bool {
 // read-only, so where a Linux desktop keeps no sign-ins a macOS one is refused (its guest turns the
 // desktop off as well).
 func (s *Server) macOSDesktopSignInsOff(ctx context.Context, run types.AgentRun) bool {
+	off, _ := s.macOSDesktopSignInsOffRead(ctx, run)
+	return off
+}
+
+// macOSDesktopSignInsOffRead is macOSDesktopSignInsOff with the roster's read error, which also answers off.
+func (s *Server) macOSDesktopSignInsOffRead(ctx context.Context, run types.AgentRun) (bool, error) {
 	if !run.MachineKind.IsMacOSVM() {
-		return false
+		return false, nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	return desktopSignInsOff(sc, err, run.Agent)
+	return desktopSignInsOff(sc, err, run.Agent), err
 }
 
 // signInsKept is a store that keeps a desktop's sign-ins: a Linux guest's memory, or a macOS guest's

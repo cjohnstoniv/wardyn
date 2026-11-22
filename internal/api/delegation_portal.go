@@ -219,7 +219,7 @@ func (s *Server) portalExchange(w http.ResponseWriter, r *http.Request, d types.
 		return
 	}
 	if !exists {
-		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, "user_type_unknown", nil)
+		deny(http.StatusBadRequest, "invalid_grant", subj.Principal, string(authz.ReasonUserTypeUnknown), nil)
 		return
 	}
 	// A display value for the People page only: the email claim of an ID token, the login name of an access
@@ -443,7 +443,7 @@ func (p *PortalRefreshFailures) Record(f oidc.PortalRefreshFailure) {
 
 // write appends the counter in the exposition format. A counter nothing has recorded renders only its header.
 func (p *PortalRefreshFailures) write(w io.Writer) {
-	fmt.Fprint(w, "# HELP wardyn_portal_issuer_refresh_failures_total Failed refreshes of an issuer portal's discovery document or keys, by issuer key, portal (delegate id), source (scheduled or unknown_kid) and coarse cause. While one is failing the issuer's exchanges answer 503.\n"+
+	fmt.Fprint(w, "# HELP wardyn_portal_issuer_refresh_failures_total Failed refreshes of an issuer portal's discovery document or keys, by issuer key, portal (delegate id), source (scheduled, unknown_kid, or verifier for a verifier the proxied route refused to build) and coarse cause. While one is failing the issuer's exchanges answer 503.\n"+
 		"# TYPE wardyn_portal_issuer_refresh_failures_total counter\n")
 	if p == nil {
 		return

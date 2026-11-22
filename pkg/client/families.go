@@ -576,7 +576,8 @@ func (c *Client) ListSSHKeys(ctx context.Context, opts ...ListOpts) ([]types.SSH
 // principal and returns the stored record (201). POST /api/v1/me/ssh-keys.
 // Fails closed on the server: 422 for private-key material, more than one key,
 // or an admin-token caller on an SSO deployment (such a key could never
-// authorize a human's run); 409 when the fingerprint is already registered.
+// authorize a human's run); 409 when the fingerprint is already registered,
+// unless the caller already holds the key cap, which answers 422 first.
 func (c *Client) AddSSHKey(ctx context.Context, name, publicKey string) (types.SSHPublicKey, error) {
 	var out types.SSHPublicKey
 	err := c.do(ctx, http.MethodPost, "/api/v1/me/ssh-keys",
@@ -780,6 +781,9 @@ type DriveRequest struct {
 // Additional the drive is allocated BESIDE the subject's others, keyed on
 // (subject_type, subject, drive_id).
 type DriveGrantRequest struct {
+	// SubjectType is user, group, all or user_type, or portal: a super admin's allocation of a team drive to an
+	// issuer portal, which names the portal by its id in canonical lowercase form in Subject, needs Additional, and
+	// answers with the folder's object_name.
 	SubjectType CapabilitySubjectType `json:"subject_type"`
 	Subject     string                `json:"subject"`
 	DriveID     uuid.UUID             `json:"drive_id"`
@@ -946,6 +950,8 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 		}
 		doc.Drives[i].UserDrive = saved
 	}
+	// A portal allocation's answer names the folder (object_name); the fresh read below does not carry it.
+	objectNames := map[uuid.UUID]string{}
 	for i, g := range doc.Grants {
 		req := DriveGrantRequest{
 			SubjectType: g.SubjectType, Subject: g.Subject, DriveID: g.DriveID,
@@ -976,8 +982,16 @@ func (c *Client) ApplyDrivesResult(ctx context.Context, doc DrivesDocument) (Dri
 			return res, err
 		}
 		doc.Grants[i] = saved
+		if saved.ObjectName != "" {
+			objectNames[saved.ID] = saved.ObjectName
+		}
 	}
 	var err error
 	res.Document, err = c.GetDrives(ctx)
+	for i, g := range res.Document.Grants {
+		if name, ok := objectNames[g.ID]; ok {
+			res.Document.Grants[i].ObjectName = name
+		}
+	}
 	return res, err
 }

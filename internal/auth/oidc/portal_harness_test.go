@@ -17,7 +17,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
-	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -44,7 +43,7 @@ var (
 )
 
 // portalTestHosts are the names the test server's certificate carries.
-var portalTestHosts = []string{"example.com", "idp.internal.test", "other.example.org", "accounts.google.com"}
+var portalTestHosts = []string{"example.com", "idp.internal.test", "other.example.org", "accounts.google.com", "login.corp.example"}
 
 func portalTestCerts(t testing.TB) {
 	t.Helper()
@@ -408,5 +407,3 @@ func (h *portalHarness) wantUnavailable(raw, cause string) PortalRefusal {
 	}
 	return r
 }
-
-func (h *portalHarness) hostURL() string { return fmt.Sprintf("https://example.com:%s", h.idp.port()) }

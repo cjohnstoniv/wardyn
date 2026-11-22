@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,7 @@ func newSvcLaunchPG(t *testing.T) *svcLaunchPG {
 	if cfg.MaskRegistry == nil {
 		cfg.MaskRegistry = secretmask.NewRegistry()
 	}
+	cfg.RunnerAuditPrepare = svcPrepare(cfg.MaskRegistry, new(atomic.Int64))
 	e.h.srv.router = e.h.srv.routes()
 	ctx := context.Background()
 	if _, err := e.st.PutSiteConfig(ctx, types.SiteConfig{}); err != nil {
@@ -243,13 +245,24 @@ func TestServiceGrant_FirstLaunchAfterConfigureNoPriorMint_PG(t *testing.T) {
 		t.Fatalf("token requests after the launch = %d, want the dispatch's one", f.idp.count())
 	}
 	var triggers []string
-	for _, ev := range f.h.audit.snapshot() {
-		if ev.Action == auditServiceGrantMintAction {
-			var d map[string]any
-			_ = json.Unmarshal(ev.Data, &d)
-			trigger, _ := d["trigger"].(string)
-			triggers = append(triggers, trigger)
+	evs, err := f.pool.Query(context.Background(), `SELECT data FROM audit_events WHERE action=$1 ORDER BY seq`, auditServiceGrantMintAction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var datas [][]byte
+	for evs.Next() {
+		var d []byte
+		if err := evs.Scan(&d); err != nil {
+			t.Fatal(err)
 		}
+		datas = append(datas, d)
+	}
+	evs.Close()
+	for _, data := range datas { // the mint rows live in audit_events, not the recorder
+		var d map[string]any
+		_ = json.Unmarshal(data, &d)
+		trigger, _ := d["trigger"].(string)
+		triggers = append(triggers, trigger)
 	}
 	if len(triggers) != 1 || triggers[0] != serviceGrantTriggerDispatch {
 		t.Fatalf("mint rows by trigger = %v, want one dispatch mint", triggers)

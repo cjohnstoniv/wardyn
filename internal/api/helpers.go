@@ -514,15 +514,20 @@ func (s *Server) getRunAuthorized(w http.ResponseWriter, r *http.Request, id uui
 func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id uuid.UUID,
 	allow func(*http.Request, types.AgentRun) bool) (types.AgentRun, bool) {
 	run, ok := s.getRunOr404(w, r, id)
-	if !ok {
+	if !ok || !s.authorizeLoadedRun(w, r, run, allow) {
 		return types.AgentRun{}, false
 	}
+	return run, true
+}
+
+// authorizeLoadedRun is getRunAuthorizedBy's authorization of a run already loaded (an issuer portal's event
+// stream reads its own, runEventsOpeningRun): the predicate, the pin, and the not-owner refusal, byte-identical
+// to a missing run's 404. It reports whether the caller may go on.
+func (s *Server) authorizeLoadedRun(w http.ResponseWriter, r *http.Request, run types.AgentRun,
+	allow func(*http.Request, types.AgentRun) bool) bool {
 	if allow(r, run) {
 		// An issuer portal's pin, after the owner predicate has passed (portal_pin.go).
-		if s.portalRunInPin(r.Context(), run).write(s, w, r) {
-			return types.AgentRun{}, false
-		}
-		return run, true
+		return !s.portalRunReachable(r.Context(), run).write(s, w, r)
 	}
 	// Audited AFTER confirming the run genuinely exists — a truly-missing
 	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
@@ -530,7 +535,7 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 	// is byte-identical to getRunOr404's either way, including its wire
 	// reason (AsIf, #656 slice 3) — not_owner stays the audit row's own.
 	s.refuse(w, r, authz.Deny(authz.ReasonNotOwner, run.ID.String(), "run not found").OnRun(run.ID).AsIf(authz.Reason(reasonRunNotFound)))
-	return types.AgentRun{}, false
+	return false
 }
 
 // scopedWorkspaceWrite is the shared body of the operator-owned single-column
