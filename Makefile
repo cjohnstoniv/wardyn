@@ -1569,6 +1569,9 @@ HELM_TEST_IMAGE_TAG  ?= kind-test
 # is that file mode renders none).
 HELM_TEST_SET ?=
 HELM_TEST_ASSERT_NO_SECRETKEYREF ?=
+# The readiness cut (scripts/kind-readiness-db-cut.sh) runs on the default leg only: the legs that pass
+# HELM_TEST_SET install the same chart a different way and would repeat it.
+HELM_TEST_DB_CUT ?= $(if $(strip $(HELM_TEST_SET)),0,1)
 
 helm-install-test: ## kind: postgres + helm install the loaded image + prove /healthz (needs a kind cluster up, see ci.yml)
 	@echo "==> Postgres ($(HELM_TEST_NAMESPACE))"
@@ -1621,6 +1624,7 @@ helm-install-test: ## kind: postgres + helm install the loaded image + prove /he
 		exit 1; \
 	fi; \
 	echo "/healthz OK (200) via kubectl port-forward -> Service -> Pod"
+	@if [ "$(HELM_TEST_DB_CUT)" = "1" ]; then ./scripts/kind-readiness-db-cut.sh "$(HELM_TEST_NAMESPACE)" "$(HELM_TEST_RELEASE)"; fi
 	@echo "==> server-side dry-run of the optional objects (Ingress + default-policy ConfigMap): helm-lint is grep-over-render, this is the one lane that hands them to a real API server's schema validation"
 	@manifest=$$(mktemp) || exit 1; \
 	trap 'rm -f "$$manifest"' EXIT; \
