@@ -56,8 +56,12 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 		switch {
 		case res.err != nil:
 			errs = append(errs, fmt.Errorf("member drive %q: %w", d.Name, res.err))
-		case res.driverErr != nil:
+		case res.driverErr != nil && res.untouched:
 			errs = append(errs, fmt.Errorf("member drive %q is in use or not reclaimable and was kept: %w", d.Name, res.driverErr))
+		case res.driverErr != nil:
+			// Refused after the issue without the substrate saying nothing changed (a Kubernetes claim already
+			// terminating): the drive is held and its storage may be going, so only the underlying error is kept.
+			errs = append(errs, fmt.Errorf("Wardyn could not confirm that deletion of storage for drive %q finished: %w", d.Name, res.driverErr))
 		case res.reason == reasonMemberDriveDeleteUnavailable:
 			errs = append(errs, fmt.Errorf("member drive %q was kept: this server cannot delete its storage", d.Name))
 		case res.reason == reasonMemberDriveInUse:
