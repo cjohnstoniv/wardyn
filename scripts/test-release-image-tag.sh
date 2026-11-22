@@ -281,23 +281,16 @@ PIN_REQUIRE=1 publisher_pin_guard < "$PI" || fail "the publishing job in publish
 
 # The publishing job's steps and what they run are pinned whole, so a line added to a step or a step added to the job
 # fails until this test is edited with it. The list of step starts drops the ref after an action's name (a version
-# bump is not a change), and each run block is compared with its comments and blank lines dropped and every line
-# trimmed. The pin guard above names the lines that touch the copied-out files; this is the check that nothing else
-# was added next to them.
+# bump is not a change), and the whole job is compared line by line with its comments and blank lines dropped and every
+# line trimmed, so a line added to any step (a shell, an env that a shell reads) is a difference. The pin guard above
+# names the lines that touch the copied-out files; this is the check that nothing else was added next to them.
 publisher_step_starts() { awk '/^  publish-image:$/ { on = 1; next } /^  [A-Za-z0-9_-]+:$/ { on = 0 } on && /^      - /' | sed -E 's/@[^ ]+( #.*)?$//'; }
-publisher_run_block() { # STEP-NAME: that step's run text; reads the workflow on stdin
-  awk -v want="$1" '
+publisher_job_lines() { # the publishing job whole, from stdin: every line but comments and blank ones, each trimmed, an action's ref dropped
+  awk '
 function trim(x) { sub(/^[[:space:]]+/, "", x); sub(/[[:space:]]+$/, "", x); return x }
-/^  [A-Za-z0-9_-]+:$/ { on = ($1 == "publish-image:"); cur = ""; grab = 0; next }
+/^  [A-Za-z0-9_-]+:$/ { on = ($1 == "publish-image:"); next }
 !on { next }
-/^      - name: / { cur = $0; sub(/^      - name: /, "", cur); grab = 0; next }
-/^      - / { cur = ""; grab = 0; next }
-cur != want { next }
-/^        run: \|$/ { grab = 1; next }
-/^        run: / { t = $0; sub(/^        run: /, "", t); print trim(t); next }
-grab && /^          / { t = trim($0); if (t != "" && t !~ /^#/) print t; next }
-grab && trim($0) == "" { next }
-grab { grab = 0 }
+{ t = trim($0); if (t == "" || t ~ /^#/) next; if (t ~ /(^|[[:space:]])uses: /) sub(/@[^ ]+( #.*)?$/, "", t); print t }
 '
 }
 PIN_STEPS='      - uses: actions/checkout
@@ -311,12 +304,96 @@ PIN_STEPS='      - uses: actions/checkout
       - name: Check the image reports its revision
       - name: Sign the pushed image (keyless, by digest)
       - name: Point the remaining tags at the signed image'
-PIN_RUN_CHECK='set -euo pipefail
+PIN_JOB="$(cat <<'PIN_JOB_END'
+needs: gate
+if: needs.gate.outputs.green == 'true'
+concurrency:
+group: publish-image
+cancel-in-progress: false
+runs-on: ubuntu-26.04
+timeout-minutes: 20
+env:
+DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+steps:
+- uses: actions/checkout
+with:
+ref: ${{ needs.gate.outputs.sha }}
+- uses: docker/setup-qemu-action
+- uses: docker/setup-buildx-action
+- uses: docker/login-action
+with:
+registry: ghcr.io
+username: ${{ github.actor }}
+password: ${{ secrets.GITHUB_TOKEN }}
+- name: Log in to Docker Hub (skipped when the secret is absent, e.g. a fork)
+uses: docker/login-action
+if: env.DOCKERHUB_USERNAME != ''
+with:
+username: ${{ env.DOCKERHUB_USERNAME }}
+password: ${{ secrets.DOCKERHUB_TOKEN }}
+- name: Compute image tags
+id: tags
+env:
+REF_TYPE: ${{ github.ref_type }}
+REF_NAME: ${{ github.ref_name }}
+EXTRA_TAG: ${{ inputs.extra_tag }}
+SHA: ${{ needs.gate.outputs.sha }}
+run: |
+set -euo pipefail
+backfill='^0\.[0-4]\.[0-9]+$'
+if [ -n "${EXTRA_TAG:-}" ] && ! [[ "$EXTRA_TAG" =~ $backfill ]]; then
+echo "::error::extra_tag must be a 0.0.x to 0.4.x backfill tag (got ${EXTRA_TAG}); release tags come from release.yml"; exit 1
+fi
+if [ "$REF_TYPE" = "tag" ] && ! [[ "${REF_NAME#v}" =~ $backfill ]]; then
+echo "::error::refusing to publish tag ref ${REF_NAME}: release.yml owns release image tags; only 0.0.x to 0.4.x backfills run here"; exit 1
+fi
+tags=("ghcr.io/cjohnstoniv/wardynd:sha-${SHA::7}")
+if [ "$REF_TYPE" = "branch" ] && [ "$REF_NAME" = "main" ]; then
+tip="$(git ls-remote origin refs/heads/main | cut -f1)"
+[ -n "$tip" ] || { echo "::error::could not read main's tip"; exit 1; }
+if [ "$tip" = "$SHA" ]; then
+tags+=("ghcr.io/cjohnstoniv/wardynd:latest")
+else
+echo "::notice::$SHA is not main's tip ($tip); not moving :latest"
+fi
+fi
+if [ "$REF_TYPE" = "tag" ]; then
+tags+=("ghcr.io/cjohnstoniv/wardynd:${REF_NAME#v}")
+fi
+if [ -n "${EXTRA_TAG:-}" ]; then
+tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
+fi
+{
+echo "first_tag=${tags[0]}"
+echo "later_tags<<TAGEOF"
+printf '%s\n' "${tags[@]:1}"
+echo "TAGEOF"
+if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
+} >> "$GITHUB_OUTPUT"
+- uses: sigstore/cosign-installer
+- uses: docker/build-push-action
+id: build
+with:
+context: .
+file: deploy/compose/Dockerfile.wardynd
+push: true
+platforms: linux/amd64,linux/arm64
+provenance: false
+build-args: |
+REVISION=${{ steps.tags.outputs.revision }}
+tags: ${{ steps.tags.outputs.first_tag }}
+- name: Check the image reports its revision
+env:
+IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+REVISION: ${{ steps.tags.outputs.revision }}
+REF_NAME: ${{ github.ref_name }}
+run: |
+set -euo pipefail
 reports() {
 if [ -n "$REVISION" ]; then
-case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '"'"'$2'"'"', want it to end in +${REVISION::9}"; exit 1;; esac
+case "$2" in *"+${REVISION::9}") ;; *) echo "::error::$1 printed '$2', want it to end in +${REVISION::9}"; exit 1;; esac
 elif [ "$2" != "${REF_NAME#v}" ]; then
-echo "::error::$1 printed '"'"'$2'"'"', want the release version ${REF_NAME#v}"; exit 1
+echo "::error::$1 printed '$2', want the release version ${REF_NAME#v}"; exit 1
 fi
 }
 run_in_image() {
@@ -324,7 +401,7 @@ docker run --rm --platform linux/amd64 --network none --read-only --cap-drop ALL
 --security-opt no-new-privileges --entrypoint "$1" "$IMAGE_REF" version
 }
 cli="$(run_in_image /usr/local/bin/wardyn)" || { echo "::error::wardyn version failed in the image"; exit 1; }
-got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI'"'"'s version command failed in the image"; exit 1; }
+got="$(run_in_image /host/wardyn-linux-amd64)" || { echo "::error::the host CLI's version command failed in the image"; exit 1; }
 reports "wardyn in the image" "$cli"
 reports "the linux/amd64 host CLI in the image" "$got"
 for arch in amd64 arm64; do
@@ -347,24 +424,33 @@ grep -aqF "$REVISION" "$f" \
 fi
 done
 done
-echo "image reports: $got"'
-PIN_RUN_SIGN='cosign sign --yes "${IMAGE_REF}"'
-PIN_RUN_RETAG='set -euo pipefail
+echo "image reports: $got"
+- name: Sign the pushed image (keyless, by digest)
+env:
+IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+run: cosign sign --yes "${IMAGE_REF}"
+- name: Point the remaining tags at the signed image
+env:
+IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
+DIGEST: ${{ steps.build.outputs.digest }}
+LATER_TAGS: ${{ steps.tags.outputs.later_tags }}
+run: |
+set -euo pipefail
 while IFS= read -r t; do
 [ -n "$t" ] || continue
 docker buildx imagetools create --tag "$t" "$IMAGE_REF"
-now="$(docker buildx imagetools inspect "$t" --format '"'"'{{.Manifest.Digest}}'"'"')"
+now="$(docker buildx imagetools inspect "$t" --format '{{.Manifest.Digest}}')"
 [ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
-done <<< "$LATER_TAGS"'
+done <<< "$LATER_TAGS"
+PIN_JOB_END
+)"
 publisher_whole_pin() { # reads the workflow on stdin; prints each difference, exits 1 on any
-  local wf rc=0 pair name want got
+  local wf rc=0 got
   wf="$(cat)"
   got="$(publisher_step_starts <<<"$wf")"
   [ "$got" = "$PIN_STEPS" ] || { echo "the publishing job's steps are not the pinned list: $got"; rc=1; }
-  for pair in 'Check the image reports its revision|PIN_RUN_CHECK' 'Sign the pushed image (keyless, by digest)|PIN_RUN_SIGN' 'Point the remaining tags at the signed image|PIN_RUN_RETAG'; do
-    name="${pair%%|*}"; want="${pair##*|}"; got="$(publisher_run_block "$name" <<<"$wf")"
-    [ "$got" = "${!want}" ] || { echo "the run block of '$name' is not the pinned text"; rc=1; }
-  done
+  got="$(publisher_job_lines <<<"$wf")"
+  [ "$got" = "$PIN_JOB" ] || { echo "the publishing job's lines are not the pinned text:"; diff <(printf '%s\n' "$PIN_JOB") <(printf '%s\n' "$got") | head -20; rc=1; }
   return $rc
 }
 publisher_whole_pin < "$PI" || fail "publish-image.yml's publishing job differs from the pinned steps and run blocks (lines above)"
@@ -384,6 +470,11 @@ plant p5 'cosign sign --yes' '      - run: /home/runner/work/_temp/arm64/host/wa
 plant p6 'cosign sign --yes' '      - name: Look' '        run: echo hi'
 for n in p1 p2 p3 p4 p5 p6; do
   if publisher_whole_pin < "$WORK/plant-$n.yml" >/dev/null; then fail "the whole-block pin accepts the plant $n"; fi
+done
+plant s1 'cosign sign --yes' '        shell: bash -e {0}'
+plant s2 'cosign sign --yes' '        env:' '          BASH_ENV: /tmp/evil.sh'
+for n in s1 s2; do
+  if publisher_whole_pin < "$WORK/plant-$n.yml" >/dev/null; then fail "the whole-job pin accepts the plant $n (a shell line or a BASH_ENV env added to a step)"; fi
 done
 plant c1 'docker rm "$cid"' '            # a comment'
 publisher_whole_pin < "$WORK/plant-c1.yml" >/dev/null || fail "the whole-block pin refuses an added comment"
