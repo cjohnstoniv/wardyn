@@ -28,7 +28,7 @@ import (
 // runForwardCmd returns `wardyn run forward <run-id> [local:]port...`: ssh -L
 // to the sandbox's own loopback through the SSH gateway, or, with the gateway
 // off and the operator's WARDYN_ATTACH_FORWARD on, over the organisation. It
-// reaches nothing the gateway's -L does not already allow (docs/SSH.md §4).
+// reaches nothing the gateway's -L does not already allow (docs/SSH.md, section 4).
 func runForwardCmd(client clientFn) *cobra.Command {
 	var advertisedProxy bool
 	cmd := &cobra.Command{
