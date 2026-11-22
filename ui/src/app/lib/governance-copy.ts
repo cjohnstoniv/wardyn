@@ -444,6 +444,8 @@ export const CHANGES = {
     user_type_priority: "User type priority",
     role_mapping: "Role mapping",
     delegate: "Portal registration",
+    delegate_admission: "Portal admission change",
+    portal_issuer_retire: "Portal issuer retirement",
     key_domain_assignment: "Key domain assignment",
     egress_baseline: "Egress baseline",
     runner_pool_use_policy: "Runner pool use policy",
