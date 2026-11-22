@@ -113,6 +113,36 @@ func TestApplyDrivesResult_CarriesSecondPlace(t *testing.T) {
 	}
 }
 
+// A portal allocation's write answers with the folder's object_name, which the fresh read of the document does not
+// carry; the result keeps it, so the caller can create the claim.
+func TestApplyDrivesResult_KeepsAPortalAllocationsObjectName(t *testing.T) {
+	driveID, grantID := uuid.New(), uuid.New()
+	portal := uuid.NewString()
+	stored := client.UserDriveGrant{ID: grantID, SubjectType: client.CapabilitySubjectType("portal"), Subject: portal, DriveID: driveID, Enabled: true}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/v1/drives/grants":
+			answer := stored
+			answer.ObjectName = "wardyn-portal-claim"
+			writeJSON(w, http.StatusCreated, answer)
+		case "GET /api/v1/drives":
+			writeJSON(w, http.StatusOK, client.DrivesDocument{Grants: []client.UserDriveGrant{stored}, GrantTotal: 1})
+		default:
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	res, err := newTestClient(srv).ApplyDrivesResult(context.Background(),
+		client.DrivesDocument{Grants: []client.UserDriveGrant{{SubjectType: client.CapabilitySubjectType("portal"), Subject: portal, DriveID: driveID, Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Document.Grants) != 1 || res.Document.Grants[0].ObjectName != "wardyn-portal-claim" {
+		t.Errorf("document grants = %+v, want the portal allocation with object_name wardyn-portal-claim", res.Document.Grants)
+	}
+}
+
 // A change between two pages of the allocation read must refuse the document:
 // fed back to ApplyDrives it would restore a partial set. One added ahead of
 // the rows already read repeats a row; one removed there makes the next page

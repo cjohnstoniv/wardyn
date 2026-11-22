@@ -285,6 +285,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DIRECTORY_TENANT` | string | (unset = derived from `WARDYN_OIDC_ISSUER`) | Entra tenant id or verified domain for the connector; unset, it is derived from a commercial-cloud issuer such as `https://login.microsoftonline.com/<tenant>/v2.0`, and any other issuer is a boot refusal (flag `-directory-tenant`). [Details](#wardyn_directory_tenant) |
 | `WARDYN_DIRECTORY_CLIENT_ID` | string | (unset = reuses `WARDYN_OIDC_CLIENT_ID`) | Client id of a dedicated, least-privilege app registration for the directory read; the three directory vars are set together or not at all (flag `-directory-client-id`). [Details](#wardyn_directory_client_id) |
 | `WARDYN_DIRECTORY_CLIENT_SECRET` 🔒 | string | (unset = reuses `WARDYN_OIDC_CLIENT_SECRET`) | Client secret of that dedicated app registration (flag `-directory-client-secret`); `WARDYN_DIRECTORY_PROVIDER=entra` is refused at boot when neither this nor `WARDYN_OIDC_CLIENT_SECRET` is set. [Details](#wardyn_directory_client_secret) |
+| `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` | CSV (`host[:port]`) | (unset = none) | hosts an issuer portal's `internal_issuer` may name (flag `-portal-internal-issuer-hosts`), and the only ones reached at a private address, for discovery and keys only. Another host is refused `delegate_internal_issuer_not_allowed`; no portal field lifts this |
+| `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` | string (path) | (unset) | PEM CA bundle added to the system roots for `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` only (flag `-portal-internal-issuer-ca-file`). An unreadable file refuses boot, as does a non-empty one with no certificate. No setting skips verification |
+| `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` | string (path) | (unset) | PEM bundle of the only roots an issuer portal's issuer is trusted under when `WARDYN_DAEMON_PROXY_ALWAYS` lists its host (flag `-portal-proxied-issuer-ca-file`); unset, such a portal is refused. [Details](#wardyn_portal_proxied_issuer_ca_file) |
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire; `0` or negative turns the sweeper off (boot warning). It then expires nothing: a pending approval stays pending past its run's wait budget unless the client that raised it withdraws it (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
 | `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
@@ -366,7 +369,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
-| `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`). [Details](#wardyn_sync_deny) |
+| `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`), and `--git` refuses a branch whose history holds a matching path. [Details](#wardyn_sync_deny) |
 | `WARDYN_LOCAL_FOLDER_SEED_WAIT` | duration | `10m` | how long a run holds its agent for its `local_folder`'s first sync (flag `-local-folder-seed-wait`). [Details](#wardyn_local_folder_seed_wait) |
 | `WARDYN_COMPUTER_FOLDERS` | bool | `false` | let a run take a folder from its creator's own folder-only runner (flag `-computer-folders`). [Details](#wardyn_computer_folders) |
 | `WARDYN_SSH_ROLE_TTL` | duration | `24h` | how stale a registered SSH key's admin-override stamp may be before `sshAuth` refuses the override (flag `-ssh-role-ttl`); since 0.8.5 it bounds only runs with no personal owner. [Details](#wardyn_ssh_role_ttl) |
@@ -403,7 +406,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_DAEMON_PROXY_URL` | string (URL) | (unset = direct) | the forward proxy wardynd's own outbound HTTP calls traverse (flag `-daemon-proxy-url`; `installDaemonProxy`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a malformed value refuses boot. [Details](#wardyn_daemon_proxy_url) |
 | `WARDYN_DAEMON_NO_PROXY` | string (CSV) | (unset) | destinations `WARDYN_DAEMON_PROXY_URL` must not be used for, in `NO_PROXY` spelling (flag `-daemon-no-proxy`; `x/net/http/httpproxy` semantics). Wardynd appends `KUBERNETES_SERVICE_HOST`, any `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` or `WARDYN_OIDC_INTERNAL_ISSUER` host, and the AWS link-local credential endpoints. Ignored when the proxy URL is unset |
 | `WARDYN_DAEMON_PROXY_SECRET` | string (path) | (unset) | path to a file holding one forward-proxy URL that MAY embed `user:pass@` (flag `-daemon-proxy-secret-file`; `installDaemonProxySecret`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)); a group- or world-writable file refuses boot. [Details](#wardyn_daemon_proxy_secret) |
-| `WARDYN_DAEMON_PROXY_ALWAYS` | string (CSV) | (unset) | full host names whose service grant token request always uses the daemon proxy, even past a no-proxy list: `WARDYN_DAEMON_PROXY_URL` or `_SECRET` (http, https), else `HTTPS_PROXY` (also socks5, socks5h, host:port). Boot refuses an unusable proxy or entry. [Details](#wardyn_daemon_proxy_always) |
+| `WARDYN_DAEMON_PROXY_ALWAYS` | string (CSV) | (unset) | host names whose service grant token request and issuer portal fetches (with no internal issuer address) always use the daemon proxy (flag `-daemon-proxy-always`), past a no-proxy list: `WARDYN_DAEMON_PROXY_URL` or `_SECRET` (http, https), else `HTTPS_PROXY` (also socks5, socks5h, host:port). [Details](#wardyn_daemon_proxy_always) |
 | `WARDYN_DEMO_VIDEO_BASE_URL` | string (URL) | (unset) | operator-run mirror base URL re-pointing the Getting Started demo episodes (flag `-demo-video-base-url`; `ValidateDemoVideoBaseURL`, [`internal/api/llm_gateway.go`](../internal/api/llm_gateway.go)) for an air-gapped deployment; unset downloads from GitHub directly. [Details](#wardyn_demo_video_base_url) |
 | `WARDYN_CLI_ARTIFACT_BASE` | string (URL) | (unset) | internal mirror of the release assets, published on the anonymous `/healthz` as `cli_artifact_base` (flag `-cli-artifact-base`; `ValidateCLIArtifactBase`, [`internal/api/cli_artifact_base.go`](../internal/api/cli_artifact_base.go)). The console's install line and `wardyn runner setup` fetch from it; unset publishes nothing. [Details](#wardyn_cli_artifact_base) |
 | `WARDYN_ORG_CA_FINGERPRINTS` | string (CSV) | (unset) | SHA-256 fingerprints of the organisation's CA certificates, published on the anonymous `/healthz` as `org_ca_fingerprints` (flag `-org-ca-fingerprints`; `ParseOrgCAFingerprints`, [`internal/api/org_ca_fingerprints.go`](../internal/api/org_ca_fingerprints.go)) for people to compare with what `wardyn ca add` prints; unset publishes none. [Details](#wardyn_org_ca_fingerprints) |
@@ -1935,6 +1938,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_SYNC_DENY`
 
 - Gitignore-syntax patterns, e.g. `.env*,*.pem`, served as `sync.deny` on `GET /runs/{id}`. No ignore file can re-include one.
+- `wardyn sync --git` sends whole commits. With these patterns set, it reads the bundle in a repository of its own. It checks every path any commit adds (even one later removed or renamed) and the tip's tree; with none set it skips this. A match refuses the send and names the path and pattern.
 - Boot refuses over 64 patterns, one over 256 bytes, or a control character. See [SSH.md](SSH.md#sync-a-directory-wardyn-sync).
 
 ### `WARDYN_LOCAL_FOLDER_SEED_WAIT`
@@ -2252,18 +2256,31 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_DAEMON_PROXY_ALWAYS`
 
-- Host names whose **service grant token request** always goes to the daemon proxy, past `WARDYN_DAEMON_NO_PROXY` and `NO_PROXY` (flag `-daemon-proxy-always`; `serviceGrantTransport`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go)).
-- Only that request, on its own transport. Every other call routes as it did without the list.
+- Host names whose **service grant token request** and **issuer portal discovery and key fetches** always go to the daemon proxy, past `WARDYN_DAEMON_NO_PROXY` and `NO_PROXY` (flag `-daemon-proxy-always`; `serviceGrantTransport`, [`cmd/wardynd/daemon_proxy.go`](../cmd/wardynd/daemon_proxy.go); `newPortalProxyClient`, [`internal/auth/oidc/portal_fetch_proxy.go`](../internal/auth/oidc/portal_fetch_proxy.go)). List the token URL's host as well when it differs from the issuer's.
+- Only those calls, each on its own transport. A portal fetch counts only for a registration with no internal issuer address; one with an internal issuer address stays direct. Every other call routes as it did without the list, and a portal fetch for a host not on the list stays direct.
+- For a proxied portal fetch, wardynd resolves the issuer host itself, refuses a private, loopback, link-local or metadata answer, and asks the proxy to connect to the address it checked, never to the name.
+- A proxied portal fetch checks the issuer's certificate through the tunnel against `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE` only, so the proxy must pass that host's TLS through uninspected and allow a CONNECT to an address. A name wardynd cannot resolve is an outage.
 - The proxy is `WARDYN_DAEMON_PROXY_URL` or `_SECRET`, else `HTTPS_PROXY`.
 - Match: the exact host, case-insensitive; a trailing dot and a port are ignored.
 - A non-ASCII token address matches in its IDNA-ASCII form, so list `xn--` names.
 - Subdomains are **not** included: `login.corp.example` never covers `x.login.corp.example` or `corp.example`.
 - `WARDYN_DAEMON_NO_PROXY` matches as `x/net/http/httpproxy` does: `corp.example` covers it and its subdomains, `.corp.example` or `*.corp.example` only the subdomains, `*` all.
 - Boot refuses an entry that is an IP address, a numeric name such as `127.1`, `localhost`, or not a host name.
-- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a link-local endpoint. It is compared in its IDNA-ASCII form, so a Unicode spelling of either side matches; one that does not convert refuses boot.
+- Boot refuses a host wardynd always reaches directly: the Kubernetes API, the AWS SSO override, the internal issuer, a portal internal issuer host, a link-local endpoint. It is compared in its IDNA-ASCII form, so a Unicode spelling of either side matches; one that does not convert refuses boot.
 - A refusal names the variable and the entry's position, never its text.
 - Boot also refuses with no proxy, or an `HTTPS_PROXY` that is not usable, or a proxy port outside 1 to 65535, so a listed host is never sent direct.
 - Every mode that installs the daemon transport refuses too, key rotation, rewrap and recovery rehearsal included, as for a malformed `WARDYN_DAEMON_PROXY_URL`.
+
+### `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`
+
+- A PEM file of the root certificates that sign the certificates of the issuer hosts `WARDYN_DAEMON_PROXY_ALWAYS` lists, read at boot into a fresh pool (flag `-portal-proxied-issuer-ca-file`; `portalProxiedIssuerRoots`, [`cmd/wardynd/boot_portal.go`](../cmd/wardynd/boot_portal.go)). It is the only trust a proxied issuer portal's discovery and key fetches use.
+- It never uses the system roots or `WARDYN_TRUSTED_CA_FILE`, so a certificate authority the image or the operator added for a TLS-inspecting proxy cannot stand in for the issuer.
+- One pool for the whole installation. Every root in this file is trusted for every listed issuer host, so if two issuers use different private authorities, either authority can vouch for either host. Include only roots you trust for all of them.
+- Boot refuses an unreadable file, an empty one, one with no certificate, and one holding a certificate whose public key is also in a certificate in `WARDYN_TRUSTED_CA_FILE`.
+- That check refuses a shared public key only. An inspection intermediate in `WARDYN_TRUSTED_CA_FILE`, signed by a root in this file, passes, and the pool then accepts what it issues.
+- The key is compared as encoded, algorithm identifier included, so one RSA key under `rsaEncryption` and again under `RSASSA-PSS` is not matched.
+- Name the provider's own roots, never the proxy's inspection CA; include every root your provider publishes for the issuer host.
+- Unset while `WARDYN_DAEMON_PROXY_ALWAYS` is set: boot logs a warning, and each registration without an internal issuer address whose issuer host is listed is refused at its exchanges, with `no proxied issuer roots` in the log.
 
 ### `WARDYN_DEMO_VIDEO_BASE_URL`
 

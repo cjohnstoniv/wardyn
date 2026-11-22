@@ -27,6 +27,7 @@ const maxSyncIgnoreFile = 1 << 20
 // matches any number of directories. Matched case- and normalisation-
 // insensitively (syncFold), as the denylist is.
 type syncPattern struct {
+	text     string // the line as written, for an error that names the pattern
 	segs     []string
 	negate   bool
 	dirOnly  bool
@@ -53,7 +54,7 @@ func parseSyncPattern(line string) (syncPattern, bool) {
 	if line == "" || strings.HasPrefix(line, "#") {
 		return syncPattern{}, false
 	}
-	var p syncPattern
+	p := syncPattern{text: line}
 	switch {
 	case strings.HasPrefix(line, "!"):
 		p.negate, line = true, line[1:]
@@ -148,13 +149,19 @@ func (ig *syncIgnore) load(root *os.Root, dir string) {
 // orgDenied reports a path the organisation's wall covers. No ignore file can
 // take it back.
 func (ig *syncIgnore) orgDenied(rel string, isDir bool) bool {
-	matched := false
+	_, denied := ig.orgDeniedBy(rel, isDir)
+	return denied
+}
+
+// orgDeniedBy is orgDenied plus the line of the pattern that decided it.
+func (ig *syncIgnore) orgDeniedBy(rel string, isDir bool) (string, bool) {
+	matched, by := false, ""
 	for _, p := range ig.org {
 		if p.match(rel, isDir) {
-			matched = !p.negate
+			matched, by = !p.negate, p.text
 		}
 	}
-	return matched
+	return by, matched
 }
 
 // ignored reports a path the tree's ignore files leave out. The walks ask it on

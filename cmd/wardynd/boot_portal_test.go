@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -63,5 +64,22 @@ func TestPortalInternalIssuerHosts_ListAndCABundle(t *testing.T) {
 	}
 	if _, err := portalIssuerOptions("idp.corp.example", pem, "ops-seat", counter); err != nil {
 		t.Fatalf("reading the bundle is the verifier's to judge, not the option builder's: %v", err)
+	}
+}
+
+func TestPortalRegistrationsText_NamesBounded(t *testing.T) {
+	regs := []portalReg{{id: "id-a", name: "alpha"}, {id: "id-b", name: "beta", revoked: true}}
+	if got, want := portalRegistrationsText(2, regs), `portal registrations: id-a "alpha", id-b "beta" (revoked)`; got != want {
+		t.Errorf("two portals on one issuer = %q, want %q", got, want)
+	}
+	if got := portalRegistrationsText(0, nil); got != "no portal registration names it" {
+		t.Errorf("an orphaned binding = %q", got)
+	}
+	var many []portalReg
+	for i := range portalRegistrationMax {
+		many = append(many, portalReg{id: fmt.Sprintf("id-%d", i), name: fmt.Sprintf("p%d", i)})
+	}
+	if got := portalRegistrationsText(portalRegistrationMax+3, many); strings.Count(got, `"p`) != portalRegistrationMax || !strings.HasSuffix(got, " and 3 more") {
+		t.Errorf("%d registrations = %q, want %d named and the rest counted", portalRegistrationMax+3, got, portalRegistrationMax)
 	}
 }

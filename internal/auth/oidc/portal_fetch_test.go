@@ -513,7 +513,7 @@ func TestPortalFetch_StalledHandshakeClosesSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	t.Cleanup(func() { _ = ln.Close() })
 	accepted := make(chan net.Conn, 1)
 	go func() {
 		c, err := ln.Accept()

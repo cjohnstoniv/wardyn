@@ -926,14 +926,7 @@ func (s *Server) adminRoutes(operatorOnly chi.Router, securityOps chi.Router) {
 	// case — see reconcile.go) and deliberately not a ticker; see
 	// handleSweepSandboxes for the cost argument.
 	operatorOnly.Post("/admin/sandboxes/sweep", s.handleSweepSandboxes)
-	// Standing runs (run_revive.go). SUPER: a restart replaces the proxy of
-	// runs the caller does not own, under each owner's own ceiling, and the
-	// listing reads the whole fleet.
-	operatorOnly.Get("/admin/runs/proxy-window", s.handleAdminProxyWindow)
-	operatorOnly.Post("/admin/runs/restart", s.handleAdminRestartRuns)
-	// Entra app re-registration remedy (identity_unbind.go). SUPER: it re-opens a
-	// person's identity row to a different sign-in principal.
-	operatorOnly.Post("/admin/identities/{id}/unbind", s.handleUnbindIdentity)
+	s.mountDriveAndRunAdminRoutes(operatorOnly)
 }
 
 // mountInternalRoutes is the internal sidecar surface: every route here is

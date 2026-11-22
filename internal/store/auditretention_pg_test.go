@@ -481,6 +481,10 @@ func TestPG_RetentionPolicyCooldown(t *testing.T) {
 	if w := scalar[int](t, c.pool, `SELECT audit_retention_window()`); w != 90 {
 		t.Errorf("window after the date = %d, want 90", w)
 	}
+	// The status says the same without a set-policy call: 90 effective, nothing pending, though the stored pair remains.
+	if st, err = pg.AuditRetentionStatus(ctx); err != nil || st.Policy.EffectiveDays != 90 || st.Policy.PendingDays != nil || st.Policy.PendingEffectiveAt != nil {
+		t.Fatalf("status after the date = %+v, err %v, want 90 effective and no pending pair", st.Policy, err)
+	}
 	ch, err = pg.SetAuditRetentionPolicy(ctx, 90)
 	if err != nil || ch.Outcome != "applied" || ch.EffectiveDays != 90 || ch.PendingDays != nil {
 		t.Fatalf("the boot after the date = %+v, err %v, want applied", ch, err)
@@ -524,5 +528,31 @@ func TestRetentionSQLLiveRunStatesAreTheNonTerminalOnes(t *testing.T) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("0162 treats %v as live, types.NonTerminalRunStates is %v", got, want)
+	}
+}
+
+// The retention mark an audit export reads between pages moves when a partition is dropped and not when rows are
+// only appended: a drop placed between two reads is seen, ordinary traffic is not mistaken for one.
+func TestPG_AuditRetentionMarkMovesOnlyOnADrop(t *testing.T) {
+	c := newRetChain(t)
+	ctx := context.Background()
+	pg := store.NewPG(c.pool)
+	before, err := pg.AuditRetentionMark(ctx)
+	if err != nil {
+		t.Fatalf("AuditRetentionMark: %v", err)
+	}
+	if before != 0 {
+		t.Fatalf("mark before any drop = %d, want 0", before)
+	}
+	appendAuditRow(t, c.pool, "test.mark.append")
+	if got, err := pg.AuditRetentionMark(ctx); err != nil || got != before {
+		t.Fatalf("mark after an append = %d, %v; want it unchanged at %d", got, err, before)
+	}
+	if _, err := c.drop("audit_events_legacy", c.digest(t, "audit_events_legacy"), "ops@example.com"); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	after, err := pg.AuditRetentionMark(ctx)
+	if err != nil || after == before {
+		t.Fatalf("mark after a drop = %d, %v; want it moved from %d", after, err, before)
 	}
 }

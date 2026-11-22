@@ -24,6 +24,15 @@ import { FakeBroadcastChannel } from "../test/fake-broadcast-channel";
 import { AUTH_CHANNEL, COALESCE_MS, resetAuthSyncForTest } from "./lib/api/auth-sync";
 
 const mockState = vi.hoisted(() => ({ claim: true }));
+// The stub's slow person action settles when a test resolves this.
+const personAction = vi.hoisted(() => {
+  const o = { promise: Promise.resolve(), resolve: () => {}, reset: () => {} };
+  o.reset = () => {
+    o.promise = new Promise<void>((r) => (o.resolve = r));
+  };
+  o.reset();
+  return o;
+});
 
 // One stub for /runs and /admin/providers: a draft, a Save, a poll, and where it is.
 vi.mock("./components/screens/runs", async () => {
@@ -34,6 +43,7 @@ vi.mock("./components/screens/runs", async () => {
   const { useRegisterUnsaved } = await import("./lib/unsaved-registry");
   const { useWriteDropped } = await import("./lib/use-write-dropped");
   const copy = await import("./lib/reauth-copy");
+  const { accountToast, signInGeneration } = await import("./lib/account-toasts");
   function Dropped() {
     const [dropped] = useWriteDropped("note");
     return dropped ? <p>{copy.REAUTH_DIALOG.WRITE_DROPPED}</p> : null;
@@ -52,6 +62,19 @@ vi.mock("./components/screens/runs", async () => {
           onClick={() => void core.wfetch("/stub-save", { method: "PUT", body: "{}", save: "note" }).catch(() => {})}
         >
           Save note
+        </button>
+        {/* A person-naming action: one that finishes at once, and one that finishes when the test says. */}
+        <button type="button" onClick={() => accountToast("success", "Signed dana@example.org out everywhere.", signInGeneration())}>
+          Post person toast
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const startedUnder = signInGeneration();
+            void personAction.promise.then(() => accountToast("success", "Removed keys for late@example.org.", startedUnder));
+          }}
+        >
+          Start slow person action
         </button>
         {/* A write that is not a Save (a background grade, say). */}
         <button type="button" onClick={() => void core.wfetch("/stub-grade", { method: "POST", body: "{}" }).catch(() => {})}>
@@ -516,6 +539,59 @@ describe("App — a deliberate sign-out (#483)", () => {
 
   // #2100, M12: signing out ends the Wardyn session only; an SSO person is told, on the sign-in screen,
   // to leave the work account too, once the server has confirmed the sign-out.
+  describe("notifications that name a person", () => {
+    async function openConsole() {
+      personAction.reset();
+      render(
+        <MemoryRouter initialEntries={["/runs"]}>
+          <App />
+        </MemoryRouter>,
+      );
+      await screen.findByLabelText("Note");
+      const header = screen.getByRole("banner");
+      await waitFor(() => expect(within(header).getByText("cj")).toBeInTheDocument());
+      return header;
+    }
+    async function signOutFrom(header: HTMLElement) {
+      const headerButtons = within(header).getAllByRole("button");
+      await user.click(headerButtons[headerButtons.length - 1]);
+      await user.click(within(await screen.findByRole("menu")).getByText("Sign out"));
+      await screen.findByText("Admin token", { exact: true });
+    }
+
+    it("a displayed person notification is gone on the signed-out screen", async () => {
+      const header = await openConsole();
+      await user.click(screen.getByRole("button", { name: "Post person toast" }));
+      await screen.findByText("Signed dana@example.org out everywhere.");
+      await signOutFrom(header);
+      await waitFor(() => expect(screen.queryByText("Signed dana@example.org out everywhere.")).toBeNull());
+    });
+
+    it("an action that finishes after the sign-out posts nothing", async () => {
+      const header = await openConsole();
+      await user.click(screen.getByRole("button", { name: "Start slow person action" }));
+      await signOutFrom(header);
+      await act(async () => {
+        personAction.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.queryByText("Removed keys for late@example.org.")).toBeNull();
+    });
+
+    it("the sign-out failure notice, which names no one, still shows on the gate", async () => {
+      const header = await openConsole();
+      await user.click(screen.getByRole("button", { name: "Post person toast" }));
+      await screen.findByText("Signed dana@example.org out everywhere.");
+      daemon.dead = true;
+      await signOutFrom(header);
+      expect((await screen.findAllByText(SHELL.SIGN_OUT_FAILED_TITLE)).length).toBeGreaterThan(0);
+      await waitFor(() => expect(screen.queryByText("Signed dana@example.org out everywhere.")).toBeNull());
+    });
+  });
+
   describe("the identity-provider reminder", () => {
     async function signOut(over: Partial<typeof ME> = {}) {
       daemon.me = { ...ME, ...over };

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ func (l *maskLab) svcReplica(idp *svcIdP) replica {
 	cfg.Secrets = sec
 	cfg.RecordingStore = rs
 	cfg.MaskRegistry = reg
+	cfg.RunnerAuditPrepare = svcPrepare(reg, new(atomic.Int64))
 	cfg.MaskManifests = maskmanifest.New(l.pool, sec.SubjectKeys(), reg)
 	cfg.ADORunPATs = adorunpat.New(l.pool, sec.SubjectKeys())
 	cfg.ServiceGrantTransport = idp

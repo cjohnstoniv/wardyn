@@ -9,11 +9,16 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"slices"
+	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -67,18 +72,26 @@ func (s *Server) writeServiceGrantStatus(ctx context.Context, p types.ModelProvi
 	} else if e != nil {
 		row.Outcome, row.Reason, row.OAuthError, row.HTTPStatus, row.Egress = "failed", e.reason, e.oauthError, e.httpStatus, e.egress
 	}
-	// Detached from the caller, and bounded: a status write that hangs must not hold the caller's lock or pass.
-	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceGrantStatusWriteBound)
+	// Under the attempt's context (detached from the caller, and bounded by the attempt), with its own bound inside
+	// it: a status write that hangs must not hold the caller's lock or pass.
+	wctx, cancel := context.WithTimeout(ctx, serviceGrantStatusWriteBound)
 	defer cancel()
 	if err := gs.UpsertServiceGrantStatus(wctx, row); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not record a service grant's status", slog.String("provider", p.ID), slog.Any("err", err))
 	}
 }
 
-// auditServiceGrantMint writes the row for one request sent: a success, a failure, or a success marked
-// superseded when a rotation or an edit overtook it. It never carries the token, the secret,
-// error_description or the response body.
-func (s *Server) auditServiceGrantMint(ctx context.Context, p types.ModelProvider, trigger string, sent time.Time, tok *serviceGrantMinted, e *serviceGrantError, superseded bool) {
+// serviceGrantMintEvent is the request's one mint row: a success (cause ""), a success marked superseded with
+// superseded_by=cause, or a failure (e != nil), with a fixed id and time, prepared as the serving recorder chain
+// prepares a row (cfg.RunnerAuditPrepare: target cap, then data and target masked against the global corpus).
+// It never carries the token, the secret, error_description or the response body, and no request stamp: the
+// mint is a shared system action.
+func (s *Server) serviceGrantMintEvent(id uuid.UUID, at time.Time, p types.ModelProvider, trigger string, sent time.Time,
+	tok *serviceGrantMinted, e *serviceGrantError, cause string,
+) (types.AuditEvent, error) {
+	if s.cfg.RunnerAuditPrepare == nil {
+		return types.AuditEvent{}, errors.New("no audit preparation is configured")
+	}
 	g := p.OIDC.ServiceGrant
 	host := ""
 	if u, err := url.Parse(g.TokenURL); err == nil {
@@ -96,20 +109,231 @@ func (s *Server) auditServiceGrantMint(ctx context.Context, p types.ModelProvide
 		if tok.scope != "" {
 			data["scope"] = tok.scope
 		}
-		if superseded {
-			data["superseded"] = true
-		}
 	case e != nil:
 		outcome = "failure"
 		data["reason"], data["oauth_error"], data["http_status"], data["egress"] = e.reason, e.oauthError, e.httpStatus, e.egress
-		s.svcGrant.mu.Lock()
-		if prev, ok := s.svcGrant.cache[p.UID]; ok && prev.expiresAt.After(sent) {
-			data["previous_valid_until"] = prev.expiresAt.UTC().Format(time.RFC3339)
-		}
-		s.svcGrant.mu.Unlock()
+		func() {
+			s.svcGrant.mu.Lock()
+			defer s.svcGrant.mu.Unlock()
+			if prev, ok := s.svcGrant.cache[p.UID]; ok && prev.expiresAt.After(sent) {
+				data["previous_valid_until"] = prev.expiresAt.UTC().Format(time.RFC3339)
+			}
+		}()
 	}
-	s.recordAudit(context.WithoutCancel(ctx), s.auditEvent(nil, types.ActorSystem, serviceGrantActor,
-		auditServiceGrantMintAction, p.ID, outcome, mustJSON(data)))
+	if cause != "" {
+		data["superseded"], data["superseded_by"] = true, cause
+	}
+	ev := types.AuditEvent{ID: id, Time: at, ActorType: types.ActorSystem, Actor: serviceGrantActor,
+		Action: auditServiceGrantMintAction, Target: p.ID, Outcome: outcome, Data: mustJSON(data)}
+	return s.cfg.RunnerAuditPrepare(context.Background(), ev)
+}
+
+// serviceGrantMintCandidates is the success row and the row for each cause of superseded_by, all with id and at.
+func (s *Server) serviceGrantMintCandidates(id uuid.UUID, at time.Time, p types.ModelProvider, trigger string,
+	sent time.Time, tok *serviceGrantMinted,
+) (map[string]types.AuditEvent, error) {
+	out := make(map[string]types.AuditEvent, len(serviceGrantSupersededCauses)+1)
+	for _, cause := range append([]string{""}, serviceGrantSupersededCauses...) {
+		ev, err := s.serviceGrantMintEvent(id, at, p, trigger, sent, tok, nil, cause)
+		if err != nil {
+			return nil, err
+		}
+		out[cause] = ev
+	}
+	return out, nil
+}
+
+// settleServiceGrantRow records ev off the attempt's path and closes the returned channel when done: the database
+// row, or the spool when the database cannot take it. ambiguous marks a fallback for a publication whose COMMIT
+// answer was lost: its sink copy is sent only as the row the database holds. It owns the request's permit and
+// releases it once the row is recorded, spooled, or logged as lost or unconfirmed.
+func (s *Server) settleServiceGrantRow(ev types.AuditEvent, ambiguous bool, release func()) <-chan struct{} {
+	done := make(chan struct{})
+	s.goBackground(func() {
+		defer close(done)
+		defer release()
+		defer s.recoverServiceGrantSettle(ev.ID)
+		s.svcGrant.stop("settle.begin")
+		err := errors.New("no service grant store")
+		if gs, ok := s.serviceGrantStore(); ok {
+			sctx, c := context.WithTimeout(context.Background(), serviceGrantPublishBound)
+			canonical, serr := gs.SettleServiceGrantMint(sctx, ev)
+			c()
+			if serr == nil {
+				s.emitServiceGrantRow(canonical)
+				return
+			}
+			err = serr
+		}
+		ambiguous = ambiguous || errors.Is(err, store.ErrServiceGrantCommitUnknown)
+		var aerr error
+		if s.cfg.AuditSpool != nil {
+			spool := s.cfg.AuditSpool.Append
+			if s.svcGrant.spoolAppend != nil {
+				spool = s.svcGrant.spoolAppend
+			}
+			if aerr = spool(ev); aerr == nil {
+				slog.Error("wardynd: AUDIT WRITE FAILED: the mint row is spooled", slog.String("action", ev.Action),
+					slog.String("event_id", ev.ID.String()), slog.Any("err", err))
+				if !ambiguous {
+					s.emitServiceGrantRow(ev) // no hashes, as the recorder chain sends a row its store write lost
+				} else {
+					slog.Error("wardynd: service grant mint row's sink copy withheld: whether the publication committed is unknown; the database row is canonical",
+						slog.String("event_id", ev.ID.String()))
+				}
+				return
+			}
+		}
+		msg, disposition := "wardynd: AUDIT WRITE FAILED: the mint row is in neither the database nor a spool", "lost"
+		switch {
+		case aerr != nil:
+			msg, disposition = "wardynd: AUDIT WRITE FAILED: AUDIT FALLBACK SPOOL FAILED (EVENT LOST): the mint row's line may still be in the spool", "unconfirmed"
+		case ambiguous:
+			msg, disposition = "wardynd: AUDIT WRITE FAILED: the mint row may be in the database; a commit's answer was lost", "unconfirmed"
+		}
+		attrs := []any{slog.String("event_id", ev.ID.String()), slog.String("disposition", disposition),
+			slog.String("action", ev.Action), slog.String("outcome", ev.Outcome), slog.Any("err", err),
+			slog.Bool("commit_unknown", ambiguous), slog.Bool("spool_append_failed", aerr != nil)}
+		if aerr != nil {
+			attrs = append(attrs, slog.Any("spool_err", aerr))
+		}
+		slog.Error(msg, attrs...)
+	})
+	return done
+}
+
+// recoverServiceGrantSettle ends a settle that panicked, in the store, the spool or a sink, with one ERROR line.
+func (s *Server) recoverServiceGrantSettle(id uuid.UUID) {
+	if r := recover(); r != nil {
+		slog.Error("wardynd: a service grant mint row's settle panicked; the row may be lost",
+			slog.String("event_id", id.String()), slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+	}
+}
+
+var serviceGrantSIEMQueue = 64 // var so tests can shorten it
+
+// serviceGrantSIEM is this replica's queue of mint-row sink copies. mu owns all of it, so each submission ends
+// exactly once: taken by the worker for the sink, or dropped (queue full, replica stopping, or still queued at the stop).
+type serviceGrantSIEM struct {
+	mu      sync.Mutex
+	q       []types.AuditEvent
+	running bool      // a worker is draining q
+	sending uuid.UUID // the copy the worker has taken for the sink; uuid.Nil when none
+	stopped bool      // terminal: set once by StopServiceGrantSIEM, never cleared
+	drops   int64
+}
+
+// serviceGrantSIEMStopping reports whether the queue takes no more copies. The caller holds the queue's mu.
+func (s *Server) serviceGrantSIEMStopping() bool {
+	return s.svcGrant.siem.stopped || (s.cfg.BaseCtx != nil && s.cfg.BaseCtx.Err() != nil)
+}
+
+// emitServiceGrantRow hands a recorded mint row to this replica's sink worker and never waits.
+func (s *Server) emitServiceGrantRow(ev types.AuditEvent) {
+	q := &s.svcGrant.siem
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	switch {
+	case s.serviceGrantSIEMStopping():
+		q.drops++
+		slog.Warn("wardynd: a service grant mint row's sink copy was dropped: the replica is stopping",
+			slog.String("event_id", ev.ID.String()), slog.String("copy", "dropped"))
+		return
+	case len(q.q) >= serviceGrantSIEMQueue:
+		q.drops++
+		slog.Warn("wardynd: a service grant mint row's sink copy was dropped: the queue is full",
+			slog.String("event_id", ev.ID.String()), slog.String("copy", "dropped"))
+		return
+	}
+	q.q = append(q.q, ev)
+	if !q.running {
+		q.running = true
+		s.goBackground(s.serviceGrantSIEMWorker)
+	}
+}
+
+// serviceGrantSIEMNext takes the queue's head for the sink, or ends the worker when the queue is empty or stopping.
+func (s *Server) serviceGrantSIEMNext() (types.AuditEvent, bool) {
+	q := &s.svcGrant.siem
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if s.serviceGrantSIEMStopping() || len(q.q) == 0 {
+		q.running, q.sending = false, uuid.Nil
+		return types.AuditEvent{}, false
+	}
+	ev := q.q[0]
+	q.q = q.q[1:]
+	q.sending = ev.ID
+	return ev, true
+}
+
+// serviceGrantSIEMWorker sends queued copies to the sink in queue order, and runs only while copies are queued.
+func (s *Server) serviceGrantSIEMWorker() {
+	q := &s.svcGrant.siem
+	held := uuid.Nil
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		slog.Error("wardynd: a service grant mint row's sink copy panicked in the sink",
+			slog.String("event_id", held.String()), slog.String("copy", "unconfirmed"),
+			slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		q.running, q.sending = false, uuid.Nil
+		if len(q.q) > 0 && !s.serviceGrantSIEMStopping() {
+			q.running = true
+			s.goBackground(s.serviceGrantSIEMWorker)
+		}
+	}()
+	for {
+		ev, ok := s.serviceGrantSIEMNext()
+		if !ok {
+			return
+		}
+		held = ev.ID
+		s.svcGrant.stop("siem.emit")
+		if gs, ok := s.serviceGrantStore(); ok {
+			if sink := gs.ServiceGrantSIEM(); sink != nil {
+				_ = sink.Emit(context.WithoutCancel(s.cfg.BaseCtx), ev)
+			}
+		}
+	}
+}
+
+// StopServiceGrantSIEM ends the queue for good: copies still queued are dropped, counted and logged, and every
+// later copy is dropped on arrival. cmd/wardynd calls it before the audit sinks close. It reports whether this
+// call did the stopping.
+func (s *Server) StopServiceGrantSIEM() bool {
+	q := &s.svcGrant.siem
+	ids, sending, stopped := func() ([]string, uuid.UUID, bool) {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		if q.stopped {
+			return nil, uuid.Nil, false
+		}
+		q.stopped = true
+		q.drops += int64(len(q.q))
+		ids := make([]string, 0, len(q.q))
+		for _, ev := range q.q {
+			ids = append(ids, ev.ID.String())
+		}
+		q.q = nil
+		return ids, q.sending, true
+	}()
+	if !stopped {
+		return false
+	}
+	if len(ids) > 0 {
+		slog.Warn("wardynd: service grant mint row sink copies were dropped at the stop",
+			slog.Int("dropped", len(ids)), slog.Any("event_ids", ids), slog.String("copy", "dropped"))
+	}
+	if sending != uuid.Nil {
+		slog.Warn("wardynd: a service grant mint row's sink copy may still reach the sink after the stop",
+			slog.String("event_id", sending.String()), slog.String("copy", "unconfirmed"))
+	}
+	return true
 }
 
 // thisReplicaServiceGrantFailure is this replica's latest recorded outcome for the row under its live digest:

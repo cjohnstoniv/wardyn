@@ -1343,80 +1343,258 @@ func TestAuditCmd_TruncatedPageWarnsOnStderr(t *testing.T) {
 // logTail (`wardyn run logs`)
 // --------------------------------------------------------------------------
 
-// TestLogTail_Filter_DedupesSameSecondBoundary is the real bug this type
-// exists to prevent: the server's Since filter round-trips through RFC3339
-// (1-second resolution), so re-polling with since=<last event's second> can
-// legitimately return that same event again. filter must drop it, not
-// re-print it, while still admitting a genuinely new event landing in that
-// same second.
-func TestLogTail_Filter_DedupesSameSecondBoundary(t *testing.T) {
-	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	e1 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "run.dispatch"}
-	e2 := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.allow"} // same second, different event
-
-	var tail logTail
-	first, tail := tail.filter([]types.AuditEvent{e1})
-	if len(first) != 1 || first[0].ID != e1.ID {
-		t.Fatalf("first poll = %v, want just e1", first)
-	}
-
-	// Re-poll returns the server's whole since-inclusive page: e1 again
-	// (same second) plus the genuinely new e2.
-	second, tail := tail.filter([]types.AuditEvent{e1, e2})
-	if len(second) != 1 || second[0].ID != e2.ID {
-		t.Fatalf("second poll = %v, want just the new event e2 (e1 must be deduped)", second)
-	}
-
-	// A third poll with nothing new yields nothing.
-	third, _ := tail.filter([]types.AuditEvent{e1, e2})
-	if len(third) != 0 {
-		t.Errorf("third poll = %v, want no events (both already seen)", third)
+// trailFetch serves a run's audit trail newest first in pages of size, as the server does for ?order=desc, and
+// says whether more remain. trail is oldest first; a test changes it between polls.
+func trailFetch(trail *[]types.AuditEvent, size int, calls *int) logFetch {
+	return func(offset int) ([]types.AuditEvent, bool, error) {
+		if calls != nil {
+			*calls++
+		}
+		desc := slices.Clone(*trail)
+		slices.Reverse(desc)
+		if offset > len(desc) {
+			offset = len(desc)
+		}
+		page := desc[offset:]
+		if len(page) > size {
+			return page[:size], true, nil
+		}
+		return page, false, nil
 	}
 }
 
-// TestLogTail_Filter_AdvancesPastSecondBoundary: a later-second event resets
-// the dedup set to just that event, so an even-later re-poll of the SAME
-// later event is also correctly deduped (not just the original second).
-func TestLogTail_Filter_AdvancesPastSecondBoundary(t *testing.T) {
-	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	t1 := t0.Add(time.Second)
-	e1 := types.AuditEvent{ID: uuid.New(), Time: t0}
-	e2 := types.AuditEvent{ID: uuid.New(), Time: t1}
-
-	var tail logTail
-	_, tail = tail.filter([]types.AuditEvent{e1, e2})
-	if !tail.since.Equal(t1) {
-		t.Fatalf("tail.since = %v, want %v (the later event's time)", tail.since, t1)
+func logIDs(events []types.AuditEvent) []string {
+	var out []string
+	for _, e := range events {
+		out = append(out, e.Action)
 	}
-	again, _ := tail.filter([]types.AuditEvent{e1, e2})
-	if len(again) != 0 {
-		t.Errorf("re-poll of the same page = %v, want nothing new", again)
+	return out
+}
+
+// TestLogTail_Poll_PrintsEachEventOnceOldestFirst: a poll returns what no earlier poll returned, oldest first,
+// and stops reading at the first event it has seen, so a quiet poll costs one read however long the trail is.
+func TestLogTail_Poll_PrintsEachEventOnceOldestFirst(t *testing.T) {
+	t0 := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	ev := func(action string) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: t0, Action: action}
+	}
+	trail := []types.AuditEvent{ev("a"), ev("b"), ev("c")}
+	calls := 0
+	var tail logTail
+
+	got, err := tail.poll(trailFetch(&trail, 1000, &calls))
+	if err != nil || !slices.Equal(logIDs(got), []string{"a", "b", "c"}) {
+		t.Fatalf("first poll = %v, %v, want a b c", logIDs(got), err)
+	}
+	calls = 0
+	if got, _ = tail.poll(trailFetch(&trail, 2, &calls)); len(got) != 0 || calls != 1 {
+		t.Errorf("quiet poll = %v after %d reads, want nothing after one read", logIDs(got), calls)
+	}
+	trail = append(trail, ev("d"), ev("e"), ev("f"))
+	if got, _ = tail.poll(trailFetch(&trail, 2, nil)); !slices.Equal(logIDs(got), []string{"d", "e", "f"}) {
+		t.Errorf("poll across pages = %v, want d e f once, oldest first", logIDs(got))
 	}
 }
 
-// TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime: the server pages by
-// chain seq, and an event's time is stamped before it waits for the chain
-// lock, so seq order can run against time order. The earlier-time event that
-// follows must still be emitted, now and on a later poll.
-func TestLogTail_Filter_KeepsLowerSeqEventWithEarlierTime(t *testing.T) {
+// TestLogTail_Poll_FindsAnEventStoredLateWhateverItsTime: the server pages by chain seq, and a spooled event is
+// stored after newer ones with the time it was stamped with long before. Its place in the trail, not its time,
+// is what the poll reads.
+func TestLogTail_Poll_FindsAnEventStoredLateWhateverItsTime(t *testing.T) {
 	t0 := time.Now().UTC().Truncate(time.Second)
-	b := types.AuditEvent{ID: uuid.New(), Time: t0.Add(2 * time.Millisecond), Action: "credential.mint"}
-	a := types.AuditEvent{ID: uuid.New(), Time: t0, Action: "egress.deny"} // higher seq, earlier time
-
+	newest := types.AuditEvent{ID: uuid.New(), Time: t0.Add(30 * time.Second), Action: "newest"}
+	trail := []types.AuditEvent{{ID: uuid.New(), Time: t0, Action: "first"}, newest}
 	var tail logTail
-	got, tail := tail.filter([]types.AuditEvent{b, a})
-	if len(got) != 2 || got[1].ID != a.ID {
-		t.Fatalf("one page = %v, want both events with the earlier-time one kept", got)
+	if _, err := tail.poll(trailFetch(&trail, 1000, nil)); err != nil {
+		t.Fatal(err)
 	}
+	trail = append(trail, types.AuditEvent{ID: uuid.New(), Time: t0.Add(-time.Minute), Action: "replayed"})
+	if got, _ := tail.poll(trailFetch(&trail, 1000, nil)); !slices.Equal(logIDs(got), []string{"replayed"}) {
+		t.Errorf("poll = %v, want just the replayed event", logIDs(got))
+	}
+}
 
-	// A late-draining event with an older time than the newest one seen.
-	late := types.AuditEvent{ID: uuid.New(), Time: t0.Add(-time.Second), Action: "run.dispatch"}
-	got, tail = tail.filter([]types.AuditEvent{b, a, late})
-	if len(got) != 1 || got[0].ID != late.ID {
-		t.Fatalf("later poll = %v, want just the late event", got)
+// TestLogTail_Poll_SurvivesRetentionDroppingTheOldestRows: retention can remove the oldest rows between polls,
+// which shortens the trail from the front. A position counted from the start would then run ahead of the trail
+// and skip the next event for good; nothing here is counted from the start.
+func TestLogTail_Poll_SurvivesRetentionDroppingTheOldestRows(t *testing.T) {
+	ev := func(action string) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), Action: action}
 	}
-	if want := tail.since.Add(-logTailMargin); !tail.sinceFilter().Equal(want) {
-		t.Errorf("sinceFilter = %v, want %v (newest event time less the margin)", tail.sinceFilter(), want)
+	old, recent := ev("old"), ev("recent")
+	trail := []types.AuditEvent{old, recent}
+	var tail logTail
+	if got, _ := tail.poll(trailFetch(&trail, 1000, nil)); len(got) != 2 {
+		t.Fatalf("first poll = %v, want both events", logIDs(got))
+	}
+	trail = append(slices.Clone(trail[1:]), ev("appended")) // old is dropped, one event is appended
+	if got, _ := tail.poll(trailFetch(&trail, 1000, nil)); !slices.Equal(logIDs(got), []string{"appended"}) {
+		t.Errorf("poll after the prune = %v, want just the appended event", logIDs(got))
+	}
+	trail = []types.AuditEvent{ev("only")} // the newest event seen is gone too
+	if got, _ := tail.poll(trailFetch(&trail, 1000, nil)); !slices.Equal(logIDs(got), []string{"only"}) {
+		t.Errorf("poll after every seen event was dropped = %v, want the one event there is", logIDs(got))
+	}
+}
+
+// TestLogTail_Poll_ReturnsAnEventOnceWhenRowsShiftBetweenPages: rows appended between two page reads move the
+// older events down, so one event can be on both pages.
+func TestLogTail_Poll_ReturnsAnEventOnceWhenRowsShiftBetweenPages(t *testing.T) {
+	ev := func(action string) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), Action: action}
+	}
+	trail := []types.AuditEvent{ev("a"), ev("b"), ev("c")}
+	inner := trailFetch(&trail, 2, nil)
+	reads := 0
+	var tail logTail
+	got, err := tail.poll(func(offset int) ([]types.AuditEvent, bool, error) {
+		reads++
+		if reads == 2 {
+			trail = append(trail, ev("late")) // lands between the first page and the second
+		}
+		return inner(offset)
+	})
+	if err != nil || !slices.Equal(logIDs(got), []string{"a", "b", "c"}) {
+		t.Errorf("poll = %v, %v, want a b c once each", logIDs(got), err)
+	}
+}
+
+// TestLogTail_Poll_SurvivesRetentionDroppingRowsBetweenPages: the oldest rows can go between two page reads of one
+// poll as well. Pages are counted from the newest end, which retention never touches, so nothing is skipped.
+func TestLogTail_Poll_SurvivesRetentionDroppingRowsBetweenPages(t *testing.T) {
+	ev := func(action string) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), Action: action}
+	}
+	trail := []types.AuditEvent{ev("a"), ev("b"), ev("c"), ev("d"), ev("e")}
+	inner := trailFetch(&trail, 2, nil)
+	reads := 0
+	var tail logTail
+	got, err := tail.poll(func(offset int) ([]types.AuditEvent, bool, error) {
+		reads++
+		if reads == 2 {
+			trail = trail[2:] // a and b are dropped between the first page and the second
+		}
+		return inner(offset)
+	})
+	if err != nil || !slices.Equal(logIDs(got), []string{"c", "d", "e"}) {
+		t.Errorf("poll = %v, %v, want c d e: the rows still there, each once", logIDs(got), err)
+	}
+}
+
+func TestLogTail_Poll_ReturnsTheFetchError(t *testing.T) {
+	var tail logTail
+	boom := errors.New("boom")
+	if got, err := tail.poll(func(int) ([]types.AuditEvent, bool, error) { return nil, false, boom }); !errors.Is(err, boom) || got != nil {
+		t.Errorf("poll = %v, %v, want the fetch error", got, err)
+	}
+}
+
+// logsTrailServer serves one run's audit trail and state as the daemon does: newest first for ?order=desc, paged
+// by offset, and applying since. change runs under the lock on each audit read, with its 1-based number, before
+// the answer is built; the run reads as completed once completedAfter audit reads have been served.
+func logsTrailServer(t *testing.T, runID uuid.UUID, trail *[]types.AuditEvent, completedAfter int, change func(poll int)) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		mu.Lock()
+		defer mu.Unlock()
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/audit") {
+			state := types.RunRunning
+			if polls >= completedAfter {
+				state = types.RunCompleted
+			}
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: state})
+			return
+		}
+		polls++
+		change(polls)
+		var since time.Time
+		if v := r.URL.Query().Get("since"); v != "" {
+			since, _ = time.Parse(time.RFC3339, v)
+		}
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		var match []types.AuditEvent
+		for _, e := range *trail {
+			if !e.Time.Before(since) {
+				match = append(match, e)
+			}
+		}
+		if r.URL.Query().Get("order") == "desc" {
+			slices.Reverse(match)
+		}
+		_ = json.NewEncoder(w).Encode(match[min(offset, len(match)):])
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func wantEachPrintedOnce(t *testing.T, out string, actions ...string) {
+	t.Helper()
+	for _, want := range actions {
+		if n := strings.Count(out, want); n != 1 {
+			t.Errorf("%s printed %d times, want once:\n%s", want, n, out)
+		}
+	}
+}
+
+// TestLogsCmd_FollowFindsAReplayedEventOlderThanTheNewestOne: an audit event the daemon spooled and stored
+// after newer ones keeps its original time. Twenty seconds separate it from the newest event already printed,
+// so a time window behind that event would have passed it for good; following by what was printed finds it.
+func TestLogsCmd_FollowFindsAReplayedEventOlderThanTheNewestOne(t *testing.T) {
+	runID := uuid.New()
+	t0 := time.Now().UTC().Truncate(time.Second)
+	ev := func(action string, after time.Duration) types.AuditEvent {
+		return types.AuditEvent{ID: uuid.New(), Time: t0.Add(after), Action: action, Outcome: "success"}
+	}
+	trail := []types.AuditEvent{ev("run.dispatch", 0), ev("egress.decision", 20*time.Second)}
+	srv := logsTrailServer(t, runID, &trail, 3, func(poll int) {
+		if poll == 2 { // the spool drains: stored last, stamped long ago
+			trail = append(trail, ev("credential.mint", time.Second))
+		}
+	})
+	out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+		root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+	})
+	if err != nil {
+		t.Fatalf("run logs returned error: %v", err)
+	}
+	wantEachPrintedOnce(t, out, "run.dispatch", "egress.decision", "credential.mint")
+}
+
+// TestLogsCmd_FollowKeepsPrintingAfterRetentionDropsTheOldestRows: retention removes the oldest event between two
+// polls and one event is appended. The trail is two events long again, which is where a position counted from
+// the start would sit, so it would skip the appended event for good; following by what was printed does not.
+// A live run keeps its partitions, so the case that matters is a finished run: the follower is draining the
+// completion and teardown events after the state flipped when an old partition goes.
+func TestLogsCmd_FollowKeepsPrintingAfterRetentionDropsTheOldestRows(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		completedAfter int
+	}{
+		{"a run that finished before the follower's second read", 0},
+		{"a run that finishes while it follows", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runID := uuid.New()
+			t0 := time.Now().UTC().Truncate(time.Second)
+			ev := func(action string, ago time.Duration) types.AuditEvent {
+				return types.AuditEvent{ID: uuid.New(), Time: t0.Add(-ago), Action: action, Outcome: "success"}
+			}
+			trail := []types.AuditEvent{ev("run.dispatch", 3*time.Minute), ev("run.complete", 2*time.Minute)}
+			srv := logsTrailServer(t, runID, &trail, tc.completedAfter, func(poll int) {
+				if poll == 2 { // the oldest row is dropped and the teardown event is appended
+					trail = append(slices.Clone(trail[1:]), ev("run.teardown", 0))
+				}
+			})
+			out, err := runCmdWithTimeout(t, func(root *cobra.Command) {
+				root.SetArgs([]string{"run", "logs", runID.String(), "--interval", "1ms", "--url", srv.URL, "--token", "tok"})
+			})
+			if err != nil {
+				t.Fatalf("run logs returned error: %v", err)
+			}
+			wantEachPrintedOnce(t, out, "run.dispatch", "run.complete", "run.teardown")
+		})
 	}
 }
 
@@ -2371,7 +2549,7 @@ func TestLogsCmd_NonFollowUnknownRunErrors(t *testing.T) {
 
 // TestLogsCmd_NonFollowFollowsTruncatedPages: the per-run audit page caps at
 // 1000 events server-side. --follow recovers from that for free on its next
-// poll (`since` has advanced); one-shot mode returned after the first page and
+// poll (the offset has advanced); one-shot mode returned after the first page and
 // printed a silently cut-off log.
 func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	runID := uuid.New()
@@ -2410,8 +2588,7 @@ func TestLogsCmd_NonFollowFollowsTruncatedPages(t *testing.T) {
 	}
 }
 
-// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped within one second, more than a page and
-// all within logTailMargin, against a server that applies since and offset as the real one does.
+// TestLogsCmd_PagesADenseTrailByOffset: 2500 events stamped in one second, more than a page, against a server that applies since and offset as the real one does.
 // Each poll pages on by offset under one filter, so every event prints once; restarting from since
 // alone re-read the first page and stopped there.
 func TestLogsCmd_PagesADenseTrailByOffset(t *testing.T) {
@@ -2438,6 +2615,9 @@ func TestLogsCmd_PagesADenseTrailByOffset(t *testing.T) {
 			if !e.Time.Before(since) {
 				match = append(match, e)
 			}
+		}
+		if r.URL.Query().Get("order") == "desc" {
+			slices.Reverse(match)
 		}
 		page := match[min(offset, len(match)):]
 		if len(page) > 1000 {

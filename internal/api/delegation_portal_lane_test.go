@@ -23,6 +23,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/audit/sinks"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/entrafake"
@@ -126,7 +127,7 @@ func TestOldEntryPoints_RefuseIssuerPortalArtifacts(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.SetBasicAuth(d.ID.String(), cred)
 	w := httptest.NewRecorder()
-	old.Handler().ServeHTTP(w, r)
+	panicFails(t, old.Handler()).ServeHTTP(w, r)
 	if w.Code == http.StatusOK {
 		t.Errorf("a wdi_ credential exchanged at the old view: %d %s", w.Code, w.Body.String())
 	}
@@ -253,13 +254,15 @@ func TestPortalHardRefusals_EveryDoor(t *testing.T) {
 	h := newExchHarness(t)
 	d, _ := h.seedPortal(nil)
 	tok, _ := h.portalGrantFor(d, oidc.PortalPrincipal(portalTestIssuer, "u1"))
-	doors := []struct{ method, pattern, path, body string }{
-		{http.MethodPost, "POST /api/v1/me/tokens", "/api/v1/me/tokens", `{"name":"x"}`},
-		{http.MethodPost, "POST /api/v1/me/ssh-keys", "/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAA"}`},
-		{http.MethodPut, "PUT /api/v1/secrets/{name}", "/api/v1/secrets/k", `{"value":"v"}`},
-		{http.MethodPut, "PUT /api/v1/me/secrets/{name}", "/api/v1/me/secrets/k", `{"value":"v"}`},
-		{http.MethodDelete, "DELETE /api/v1/me/secrets/{name}", "/api/v1/me/secrets/k", ``},
-		{http.MethodPut, "PUT /api/v1/shared-secrets/{name}", "/api/v1/shared-secrets/k", `{"value":"v"}`},
+	// listedReason is the door's own refusal once the route is listed, where it is not delegation_scope: the
+	// shared-secret routes sit behind the operator gate, which a portal person (always the user role) never passes.
+	doors := []struct{ method, pattern, path, body, listedReason string }{
+		{http.MethodPost, "POST /api/v1/me/tokens", "/api/v1/me/tokens", `{"name":"x"}`, ""},
+		{http.MethodPost, "POST /api/v1/me/ssh-keys", "/api/v1/me/ssh-keys", `{"public_key":"ssh-ed25519 AAAA"}`, ""},
+		{http.MethodPut, "PUT /api/v1/secrets/{name}", "/api/v1/secrets/k", `{"value":"v"}`, ""},
+		{http.MethodPut, "PUT /api/v1/me/secrets/{name}", "/api/v1/me/secrets/k", `{"value":"v"}`, ""},
+		{http.MethodDelete, "DELETE /api/v1/me/secrets/{name}", "/api/v1/me/secrets/k", ``, ""},
+		{http.MethodPut, "PUT /api/v1/shared-secrets/{name}", "/api/v1/shared-secrets/k", `{"value":"v"}`, string(authz.ReasonAdminSurface)},
 	}
 	// Each door is asked twice: with the allow-list as it is, and with the route added to it, so the answer
 	// is the door's own refusal and does not rest on the list.
@@ -272,6 +275,12 @@ func TestPortalHardRefusals_EveryDoor(t *testing.T) {
 			delete(delegationAllowed, dr.pattern)
 			if w.Code != http.StatusForbidden && w.Code != http.StatusNotFound {
 				t.Errorf("%s (listed=%v) = %d %s, want a refusal", dr.pattern, listed, w.Code, w.Body.String())
+			}
+			if listed && dr.listedReason != "" {
+				if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"reason":"`+dr.listedReason+`"`) {
+					t.Errorf("%s (listed=%v) = %d %s, want 403 %s", dr.pattern, listed, w.Code, w.Body.String(), dr.listedReason)
+				}
+				continue
 			}
 			if w.Code == http.StatusForbidden && !strings.Contains(w.Body.String(), "delegation_scope") && !strings.Contains(w.Body.String(), reasonAPITokenFromDelegatedToken) {
 				t.Errorf("%s (listed=%v) refused as %s, want delegation_scope", dr.pattern, listed, w.Body.String())

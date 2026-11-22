@@ -137,6 +137,9 @@ type govRefusal struct {
 	write func(w http.ResponseWriter, r *http.Request)
 	// why is a short label for the error text.
 	why string
+	// failure, when set, is the class an approval refused this way records on its failure row; an empty
+	// failure records none.
+	failure string
 }
 
 func (e *govRefusal) Error() string { return "governance change refused: " + e.why }
@@ -491,9 +494,9 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 
 // answerFailedDecision writes the response for a decision that did not commit as asked, and the audit
 // rows that record it: a lapsed change is moved to expired (governance.change.expire), and an approval
-// that failed for a stale target, a change no longer pending or an error is recorded as
-// governance.change.approve with outcome failure and that class, beside a failed bypass row when the
-// admin token spent one.
+// that failed for a stale target, a change no longer pending, an error or a refusal that names a failure
+// class is recorded as governance.change.approve with outcome failure and that class, beside a failed
+// bypass row when the admin token spent one.
 func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, head types.GovernanceChange, approve, bypass bool,
 	actorType types.ActorType, principal string, err error) {
 	ctx := r.Context()
@@ -512,6 +515,9 @@ func (s *Server) answerFailedDecision(w http.ResponseWriter, r *http.Request, he
 	var write *unitWriteError
 	switch {
 	case errors.As(err, &refusal):
+		if refusal.failure != "" {
+			failed(refusal.failure)
+		}
 		refusal.write(w, r)
 	case errors.As(err, &notPending):
 		if notPending.Lapsed {

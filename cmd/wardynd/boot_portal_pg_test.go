@@ -8,17 +8,28 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,26 +75,6 @@ func portalBootPool(t *testing.T, tag string) *pgxpool.Pool {
 	return pool
 }
 
-// bindPortalIssuer registers a binding the way a portal registration does, under the registry lock.
-func bindPortalIssuer(t *testing.T, pool *pgxpool.Pool, issuer string) {
-	t.Helper()
-	ctx := context.Background()
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := store.LockPortalIssuerRegistry(ctx, tx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.NewPG(pool).BindPortalIssuerQ(ctx, tx, issuer, "", "uid", "test"); err != nil {
-		t.Fatalf("bind %s: %v", issuer, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func recordedConsoleIssuers(t *testing.T, pool *pgxpool.Pool) []types.ConsoleIssuer {
 	t.Helper()
 	got, err := store.NewPG(pool).ConsoleIssuersQ(context.Background(), pool)
@@ -95,11 +86,11 @@ func recordedConsoleIssuers(t *testing.T, pool *pgxpool.Pool) []types.ConsoleIss
 
 func TestConsoleIssuer_BootRefusedOnPortalOverlap_PG(t *testing.T) {
 	pool := portalBootPool(t, "ovl")
-	bindPortalIssuer(t, pool, "https://idp.portal.example/oauth2/default")
+	bindIssuerAs(t, pool, "https://idp.portal.example/oauth2/default")
 	// The same issuer in another spelling that is equal under norm: refused, and nothing recorded.
 	err := recordConsoleIssuer(context.Background(), pool, "HTTPS://IDP.portal.example:443/oauth2/default/", "r1")
-	if !errors.Is(err, errConsoleIssuerIsPortal) {
-		t.Fatalf("a console issuer equal to a binding's: %v, want the boot refusal", err)
+	if !errors.Is(err, errConsoleIssuerIsPortal) || !strings.Contains(err.Error(), "no portal registration names it") {
+		t.Fatalf("a console issuer equal to a binding no registration names: %v, want the boot refusal saying so", err)
 	}
 	if got := recordedConsoleIssuers(t, pool); len(got) != 0 {
 		t.Fatalf("a refused boot recorded %+v", got)
@@ -110,6 +101,58 @@ func TestConsoleIssuer_BootRefusedOnPortalOverlap_PG(t *testing.T) {
 	}
 	if got := recordedConsoleIssuers(t, pool); len(got) != 1 {
 		t.Fatalf("recorded = %+v, want one", got)
+	}
+}
+
+// TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG: two portals share the clashing issuer, and the
+// refusal names both registrations, the revoked one marked, and no portal of another issuer; with more than
+// the bound it names that many and counts the rest. The refusal reads through its own transaction, so a pool
+// of one connection answers it.
+func TestConsoleIssuer_BootRefusalNamesSharedIssuerPortals_PG(t *testing.T) {
+	pool := portalBootPool(t, "ovlnames")
+	singleCfg, err := pgxpool.ParseConfig(pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleCfg.MaxConns = 1
+	single, err := pgxpool.NewWithConfig(context.Background(), singleCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(single.Close)
+	ctx := context.Background()
+	b := bindIssuerAs(t, pool, "https://idp.shared.example/oauth2/default")
+	one, _ := registerIssuerPortal(t, pool, b, "shared-one")
+	two, _ := registerIssuerPortal(t, pool, b, "shared-two")
+	if _, _, err := store.NewPG(pool).RevokeDelegate(ctx, two.ID, time.Now(), false); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := registerIssuerPortal(t, pool, bindIssuerAs(t, pool, "https://idp.other.example/"), "other")
+	refuse := func() string {
+		t.Helper()
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		err := recordConsoleIssuer(rctx, single, "https://idp.shared.example/oauth2/default", "r1")
+		if !errors.Is(err, errConsoleIssuerIsPortal) {
+			t.Fatalf("a console issuer portals share: %v, want the boot refusal", err)
+		}
+		return err.Error()
+	}
+	msg := refuse()
+	for _, want := range []string{one.ID.String() + ` "shared-one"`, two.ID.String() + ` "shared-two" (revoked)`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q does not name %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, other.ID.String()) || strings.Contains(msg, "could not be read") {
+		t.Errorf("refusal %q names a portal of another issuer, or lost the names", msg)
+	}
+	for i := range portalRegistrationMax {
+		registerIssuerPortal(t, pool, b, fmt.Sprintf("shared-more-%d", i))
+	}
+	msg = refuse()
+	if n := strings.Count(msg, ` "shared-`); n != portalRegistrationMax || !strings.Contains(msg, " and 2 more)") {
+		t.Errorf("refusal with %d registrations = %q, want %d named and 2 counted", portalRegistrationMax+2, msg, portalRegistrationMax)
 	}
 }
 
@@ -154,13 +197,115 @@ func TestConsoleIssuer_OIDCUnsetRecordsNothing_PG(t *testing.T) {
 	if err := recordConsoleIssuer(ctx, pool, "https://login.one.example/", "r2"); err != nil {
 		t.Fatal(err)
 	}
-	bindPortalIssuer(t, pool, "https://third.example/oauth2")
+	bindIssuerAs(t, pool, "https://third.example/oauth2")
 }
 
-// TestSplitRole_AppRolePortalExchangeRevokeRetire_PG: migrations run as the migrator, then the application
-// role (the runbook's grants: DML on the tables, EXECUTE on audit_append, no ownership) boots and writes what
-// an issuer portal's exchange, a revoke, a retirement and the console-issuer record write, with no permission
-// error.
+// firstNewMigration is the first migration after the last release: the split-role test grants the app role
+// the runbook's baseline as of the schema before it.
+const firstNewMigration = "0294"
+
+// newMigrationSQL is the text of every migration from firstNewMigration on, read from the source tree.
+func newMigrationSQL(t *testing.T) []string {
+	t.Helper()
+	const dir = "../../internal/db/migrations"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".sql") && e.Name() >= firstNewMigration {
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, string(b))
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no migration from %s on in %s", firstNewMigration, dir)
+	}
+	return out
+}
+
+var createdTable = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)`)
+
+// grantBlocks is each DO block of sql that grants something: a migration's own grant to the app role.
+func grantBlocks(sql string) []string {
+	var out []string
+	for {
+		i := strings.Index(sql, "DO $")
+		if i < 0 {
+			return out
+		}
+		rest := sql[i+len("DO $"):]
+		j := strings.IndexByte(rest, '$')
+		if j < 0 {
+			return out
+		}
+		tag := "$" + rest[:j] + "$"
+		body := rest[j+1:]
+		k := strings.Index(body, tag)
+		if k < 0 {
+			return out
+		}
+		if block := sql[i : len(sql)-len(body)+k+len(tag)]; strings.Contains(block, "GRANT ") {
+			out = append(out, block)
+		}
+		sql = body[k+len(tag):]
+	}
+}
+
+// grantSplitRoleBaseline gives role, on the migrated schema mig points at, what the split-role runbook
+// (docs/OPERATIONS.md, "Splitting the migrator and app roles", steps 1 to 3b) grants an app role on the last
+// release's schema, without step 4's default privileges. The tables the newer migrations created are taken
+// back, and those migrations' own grant blocks run again as the migrator, as they run on an upgrade: so a new
+// table reaches the role only through its migration's grant.
+func grantSplitRoleBaseline(t *testing.T, mig *pgxpool.Pool, schema, role string) {
+	t.Helper()
+	ctx := context.Background()
+	stmts := []string{
+		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
+		fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO %s`, schema, role),
+		`REVOKE UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_events FROM ` + role,
+		`REVOKE INSERT ON audit_events FROM ` + role,
+		`REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON audit_partition_meta, audit_chain_anchors FROM ` + role,
+		`DO $$
+DECLARE p regclass;
+BEGIN
+  FOR p IN SELECT inhrelid::regclass FROM pg_inherits WHERE inhparent = 'audit_events'::regclass LOOP
+    EXECUTE format('REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES ON %s FROM ` + role + `', p);
+  END LOOP;
+END $$`,
+		`GRANT EXECUTE ON FUNCTION
+  audit_append(uuid, timestamptz, uuid, text, text, text, text, text, text, jsonb),
+  audit_ensure_partitions(integer),
+  audit_partition_digest(text),
+  audit_retention_drop(text, text, text, text),
+  audit_retention_set_policy(integer),
+  audit_retention_partitions(text, boolean),
+  audit_retention_window() TO ` + role,
+	}
+	sqls := newMigrationSQL(t)
+	for _, sql := range sqls {
+		for _, m := range createdTable.FindAllStringSubmatch(sql, -1) {
+			stmts = append(stmts, `REVOKE ALL ON `+m[1]+` FROM `+role)
+		}
+	}
+	for _, sql := range sqls {
+		stmts = append(stmts, grantBlocks(sql)...)
+	}
+	for _, q := range stmts {
+		if _, err := mig.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+}
+
+// TestSplitRole_AppRolePortalExchangeRevokeRetire_PG: migrations run as the migrator; the application role
+// holds the runbook's baseline and the new migrations' own grants, nothing more. It boots, registers a portal,
+// exchanges, revokes the portal, retires an unused binding, records the console issuer and writes and updates a
+// service grant status, with no permission error. Taking back one grant a write needs makes that write fail.
 func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	dsn, admin := portalPGSchema(t, "split")
 	ctx := context.Background()
@@ -175,11 +320,11 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 	schema := u.Query().Get("search_path")
 	role := fmt.Sprintf("wardyn_pb_r_%d", time.Now().UnixNano()%1_000_000_000)
 	const pw = "pb-test-pw"
-	first, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 2*time.Minute, false)
+	mig, err := connectAndMigrate(ctx, dsn, "", 30*time.Second, 2*time.Minute, false)
 	if err != nil {
 		t.Fatalf("migrate as the migrator: %v", err)
 	}
-	first.Close()
+	t.Cleanup(mig.Close)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s'`, role, pw)); err != nil {
 		t.Fatalf("create role: %v", err)
 	}
@@ -187,16 +332,7 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 		_, _ = admin.Exec(context.Background(), `DROP OWNED BY `+role)
 		_, _ = admin.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
 	})
-	for _, q := range []string{
-		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
-		fmt.Sprintf(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %s TO %s`, schema, role),
-		fmt.Sprintf(`GRANT USAGE ON ALL SEQUENCES IN SCHEMA %s TO %s`, schema, role),
-		fmt.Sprintf(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %s TO %s`, schema, role),
-	} {
-		if _, err := admin.Exec(ctx, q); err != nil {
-			t.Fatalf("%s: %v", q, err)
-		}
-	}
+	grantSplitRoleBaseline(t, mig, schema, role)
 	appURL := *u
 	appURL.User = url.UserPassword(role, pw)
 	app, err := connectAndMigrate(ctx, appURL.String(), dsn, 30*time.Second, 2*time.Minute, false)
@@ -204,37 +340,158 @@ func TestSplitRole_AppRolePortalExchangeRevokeRetire_PG(t *testing.T) {
 		t.Fatalf("the application role boot: %v", err)
 	}
 	t.Cleanup(app.Close)
-	st := store.NewPG(app)
+	rec, _, _, _, err := buildAuditChain(t.Context(), "", "", "", app, secretmask.NewRegistry(), newAuditSealSource(audit.SealOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	as := func(q string) {
+		t.Helper()
+		if _, err := mig.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	count := func(q string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := mig.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		return n
+	}
+
+	// Register and exchange as the app role.
 	const issuer = "https://idp.split.example/oauth2/default"
-	tx, err := app.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		t.Fatal(err)
+	p, cred := registerIssuerPortal(t, app, bindIssuerAs(t, app, issuer), "split-portal")
+	// An ended grant the exchange's sweep must delete once its grant commits, as the app role.
+	ended := func() uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := mig.Exec(ctx, `
+			INSERT INTO portal_grants (id, delegate_id, token_sha256, principal, user_type, chain_id, subject_issued_at, created_at, expires_at)
+			VALUES ($1, $2, $3, $4, 'standard', $1, now() - interval '2 hours', now() - interval '2 hours', now() - interval '1 hour')`,
+			id, p.ID, "ended-"+id.String(), oidc.PortalPrincipal(issuer, "ended")); err != nil {
+			t.Fatalf("seed an ended grant: %v", err)
+		}
+		return id
 	}
-	if err := store.LockPortalIssuerRegistry(ctx, tx); err != nil {
-		t.Fatalf("the registry lock as the app role: %v", err)
+	gone := ended()
+	h := newPortalAPI(t, store.NewPG(app), rec, app, "u1")
+	w := portalExchangeOn(h, p, cred)
+	if w.Code != http.StatusOK {
+		t.Fatalf("exchange as the app role = %d %s", w.Code, w.Body)
 	}
-	b, err := st.BindPortalIssuerQ(ctx, tx, issuer, "", "uid", "split")
-	if err != nil {
-		t.Fatalf("bind as the app role: %v", err)
+	var out struct {
+		AccessToken string `json:"access_token"`
 	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || out.AccessToken == "" {
+		t.Fatalf("exchange response %s: %v", w.Body, err)
 	}
-	// Retiring a binding no portal uses, and recording a console issuer, as the app role.
-	rtx, err := app.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		t.Fatal(err)
+	u1 := oidc.PortalPrincipal(issuer, "u1")
+	if n := count(`SELECT count(*) FROM portal_grants WHERE principal = $1`, u1); n != 1 {
+		t.Fatalf("portal grants of the person = %d, want 1", n)
 	}
-	if err := store.LockPortalIssuerRegistry(ctx, rtx); err != nil {
-		t.Fatal(err)
+	if n := count(`SELECT count(*) FROM principal_identities WHERE principal = $1 AND introduction_audited_at IS NOT NULL`, u1); n != 1 {
+		t.Fatalf("delivered introductions = %d, want the person's introduction appended and marked as the app role", n)
 	}
-	if err := st.RetirePortalIssuerQ(ctx, rtx, b.IssuerKey, nil); err != nil {
-		t.Fatalf("retire as the app role: %v", err)
+	if n := count(`SELECT count(*) FROM audit_events WHERE action = 'delegation.exchange' AND outcome = 'success' AND target = $1`, u1); n != 1 {
+		t.Fatalf("successful exchange rows = %d, want 1", n)
 	}
-	if err := rtx.Commit(ctx); err != nil {
-		t.Fatalf("commit the retirement as the app role: %v", err)
+	// The two writes after the grant's commit only log a failure, so the test reads what they wrote: the
+	// portal's last use (UPDATE on delegates) and the sweep of ended grants (UPDATE and DELETE on portal_grants).
+	if n := count(`SELECT count(*) FROM delegates WHERE id = $1 AND last_used_at IS NOT NULL`, p.ID); n != 1 {
+		t.Fatal("the exchange did not stamp the portal's last use as the app role")
 	}
+	if n := count(`SELECT count(*) FROM portal_grants WHERE id = $1`, gone); n != 0 {
+		t.Fatal("the exchange's sweep did not delete the ended grant as the app role")
+	}
+	// Without DELETE on portal_grants the exchange still answers, and the ended grant stays: the check above can fail.
+	as(`REVOKE DELETE ON portal_grants FROM ` + role)
+	kept := ended()
+	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(app), rec, app, "u3"), p, cred); w.Code != http.StatusOK {
+		t.Fatalf("exchange without DELETE on portal_grants = %d %s, want 200 with the sweep failing", w.Code, w.Body)
+	}
+	if n := count(`SELECT count(*) FROM portal_grants WHERE id = $1`, kept); n != 1 {
+		t.Fatalf("ended grant rows without DELETE = %d, want it left in place", n)
+	}
+	as(`GRANT DELETE ON portal_grants TO ` + role)
+	// The exchange's grant write needs INSERT on portal_grants, which only 0294's grant gives this role.
+	as(`REVOKE INSERT ON portal_grants FROM ` + role)
+	if w := portalExchangeOn(newPortalAPI(t, store.NewPG(app), rec, app, "u2"), p, cred); w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "mint portal grant failed") {
+		t.Fatalf("exchange without INSERT on portal_grants = %d %s, want 500 at the grant write", w.Code, w.Body)
+	}
+	if n := count(`SELECT count(*) FROM portal_grants WHERE principal = $1`, oidc.PortalPrincipal(issuer, "u2")); n != 0 {
+		t.Fatalf("an exchange that could not write its grant left %d grants", n)
+	}
+	as(`GRANT INSERT ON portal_grants TO ` + role)
+
+	// Revoke the portal as the app role: its grant ends.
+	revoke := httptest.NewRequest(http.MethodDelete, "/api/v1/admin/delegates/"+p.ID.String(), nil)
+	revoke.Header.Set("Authorization", "Bearer "+portalAPIAdminToken)
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, revoke)
+	if rw.Code != http.StatusNoContent {
+		t.Fatalf("revoke the portal as the app role = %d %s", rw.Code, rw.Body)
+	}
+	me := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	me.Header.Set("Authorization", "Bearer "+out.AccessToken)
+	mw := httptest.NewRecorder()
+	h.ServeHTTP(mw, me)
+	if mw.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /me with the revoked portal's grant = %d, want 401", mw.Code)
+	}
+
+	// Retire a binding no portal uses, as the app role.
+	st := store.NewPG(app)
+	retire := func(key string) error {
+		t.Helper()
+		tx, err := app.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if err := store.LockPortalIssuerRegistry(ctx, tx); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RetirePortalIssuerQ(ctx, tx, key, nil); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+	if err := retire(bindIssuerAs(t, app, "https://idp.unused.example/").IssuerKey); err != nil {
+		t.Fatalf("retire an unused binding as the app role: %v", err)
+	}
+	// The retirement deletes the binding, which needs DELETE on portal_issuers.
+	as(`REVOKE DELETE ON portal_issuers FROM ` + role)
+	var pgErr *pgconn.PgError
+	if err := retire(bindIssuerAs(t, app, "https://idp.unused-two.example/").IssuerKey); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("retire without DELETE on portal_issuers: %v, want permission denied (42501)", err)
+	}
+	as(`GRANT DELETE ON portal_issuers TO ` + role)
+
 	if err := recordConsoleIssuer(ctx, app, "https://login.split.example/", "split-1"); err != nil {
 		t.Fatalf("record the console issuer as the app role: %v", err)
+	}
+
+	// Record a service grant's token request outcome, then a later one, as the app role: 0295's grant covers
+	// the insert and the update, and the later failure keeps the last success and its expiry.
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	until := at.Add(time.Hour)
+	row := store.ServiceGrantStatusRow{ProviderUID: "split-provider", ReplicaID: "split-1", ReplicaHost: "split-host",
+		GrantDigest: "d1", ClientID: "c1", Outcome: "ok", AttemptedAt: at, LastOKAt: &at, ValidUntil: &until}
+	if err := st.UpsertServiceGrantStatus(ctx, row); err != nil {
+		t.Fatalf("write a service grant status as the app role: %v", err)
+	}
+	later := at.Add(time.Minute)
+	row.Outcome, row.Reason, row.AttemptedAt, row.LastOKAt, row.ValidUntil = "failed", "service_grant_refused", later, nil, nil
+	if err := st.UpsertServiceGrantStatus(ctx, row); err != nil {
+		t.Fatalf("update the service grant status as the app role: %v", err)
+	}
+	got, err := st.ServiceGrantStatuses(ctx, []string{"split-provider"})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("read the service grant status as the app role: %d rows, %v; want 1", len(got), err)
+	}
+	if g := got[0]; g.Outcome != "failed" || g.Reason != "service_grant_refused" || !g.AttemptedAt.Equal(later) ||
+		g.LastOKAt == nil || !g.LastOKAt.Equal(at) || g.ValidUntil == nil || !g.ValidUntil.Equal(until) {
+		t.Fatalf("stored service grant status %+v, want the later failure with the earlier success and expiry kept", g)
 	}
 }

@@ -527,6 +527,8 @@ commands are the ones in "Back them up" and "Restore them", and in
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
 
+**Disk drives on Macs.** A `mac_disk` drive's image sits on one Mac runner, outside every volume above. The inventory lists it as `mac_disk_images`, naming the Mac and the image. Quiesce its writers and copy it sparse: `cp -c` on the same APFS volume, otherwise `rsync --sparse` ([steps](operations/recovery-rehearsal.md#take-a-set)). A rehearsal keeps the image under the scratch set and never touches the Mac. Restore it only in a real recovery, on the Mac `home_runner_id` names with its writers quiesced, never over a working image.
+
 **Manifest and rehearsal.** `-recovery-manifest` ties the dump to the spool, recordings and drive bytes, `-recovery-verify` refuses a mismatched pair, and `-recovery-rehearse` proves the set on a scratch database: [Recovery set and restore rehearsal](operations/recovery-rehearsal.md).
 
 **Rules for every row.**
@@ -962,7 +964,7 @@ wardyn audit verify receipt.json --keys keys.json; echo $?
 - A run's receipt is a page: at most 1,000 events, cut at that cap or at the first row not yet checkpointed. When it ends early the CLI names the next `--after-seq`. Explicit events past a cap get 413. Caps: 10 checkpoints carry their row hashes (at most 100,000 hashes in all), 500 more between them carry only the signed statement so the `prev` chain verifies, and an export page holds 1,000 checkpoints.
 - `wardyn audit checkpoints` downloads the signed checkpoints alone. `verify` reports that as "signature checked, inclusion not checked": it shows none was removed, not that a row is in the log. Only a receipt checks inclusion.
 - Both commands need an administrator or `security_admin`. An administrator's receipt carries every field. A `security_admin` gets host detail withheld from some events; they stay linked into the signed list, but their content is unchecked, which is exit 3.
-- `verify` never fetches. Exit 0: every receipted row is what was signed. 1: a check failed, with the seq and reason. 2: the file or keys could not be read, or bad usage. 3: nothing failed but some events were withheld; the first line says how many.
+- `verify` never fetches. Exit 0: every receipted row is what was signed. 1: a check failed, with the seq and reason. 2: bad usage, or an unreadable file or keys. 3: nothing failed but some events were withheld; the first line says how many. A complete verified report that could not be written exits 2. A failed check keeps exit 1, and withheld events keep exit 3.
 - A receipt that carries a run's policy rows also reports each stamped row's `policy_digest` as `linked` (a verified `run.policy.resolve` or `run.policy.generation` row in the bundle has matching policy content), `unlinked`, or `masked` (the row it would link to is host-masked); `unknown` stamps are never a mismatch. The match is by equal digest only. It does not prove the run was enforced under that policy.
 
 **Check one receipt by hand** (`openssl` 3 and `jq`; no Wardyn code):
@@ -1216,6 +1218,7 @@ takes effect when, from its own clock:
   - The pending value and its date are stored, so a restart never moves the date, and setting the same value at
     every boot for 29 days leaves it where it was.
   - Restating the current value withdraws a pending decrease.
+  - `GET /audit/retention` shows a decrease as pending only until its date. After that the new window is the effective one, though the sweeper may not yet have rewritten the stored row.
 - the boot that records a change writes an `audit.retention.set` audit row.
 
 Set the same value on every replica. `GET /audit/retention` (`wardyn audit retention`) shows the effective and the
@@ -1385,7 +1388,7 @@ erases one person's retained records by explicit scope, in one audited act
 - Erasure is reported complete (`200`, `outcome` success) only when every scope asked for finished.
 - An email address another identity also holds is never used to match, because it cannot prove whose a record is.
   A record found only by that address keeps it.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 - No scope reaches runners, invitations or service identities; a [purge](#what-a-purge-removes) does, but a retired
   service identity keeps its last sponsor.
 - These records keep a person's name or address after every scope, on purpose. No scope removes them, and Wardyn has no `DELETE /people/{principal}`:
@@ -1404,7 +1407,8 @@ erases one person's retained records by explicit scope, in one audited act
     `secret_owner_generations` below would. Its `erased_at` tells the run token sweep which refused token records
     an erase kept.
   - `secret_owner_generations` keeps the subject id (below).
-- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted`, and
+- The `credentials` scope's detail counts the token history it deleted, `pats_deleted` and `delegated_deleted` (delegated tokens and
+  issuer-portal grants together; the record of which portals a portal person used goes with them, uncounted), and
   `live_left`, the Azure DevOps token rows still live because Azure DevOps has not confirmed them revoked. Run the
   erasure again once they expire to delete them. `run_create_keys_deleted` counts their `POST /runs` idempotency keys.
 
@@ -1534,6 +1538,7 @@ erases one person's retained records by explicit scope, in one audited act
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
 - A SCIM request naming a user by id answers not found for a user of another issuer or tenant; group requests ignore such a user named as a member.
+- A group `PATCH` whose earlier member operation failed answers that failure first, as a 5xx the identity provider retries. A member add that reaches a group being deleted answers 404 only when nothing earlier failed.
 
 | Provisioning event | What Wardyn does |
 |---|---|
@@ -1957,7 +1962,7 @@ Moved to [api-tokens.md](operations/api-tokens.md#tokens-for-a-person-who-never-
 
 ### Delegated run management (portals)
 
-Moved to [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals).
+Moved to [api-tokens.md](operations/api-tokens.md#delegated-run-management-portals). Portals with their own identity issuer, and the one-time step that switches them on, are in the same page ([issuer portals](operations/api-tokens.md#portals-with-their-own-identity-issuer)).
 
 ### Three roles, and who sets the walls
 
@@ -2000,7 +2005,8 @@ enforces, not a re-derivation:
 | Mark | Meaning |
 |---|---|
 | Inspected | Wardyn opens this traffic to add a credential or check it, so the sandbox must trust Wardyn's certificate. |
-| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Apps that pin their certificate work here. |
+| Partly inspected | Wardyn opens only the destinations listed with it, so the sandbox must trust Wardyn's certificate for them. The rest of what this entry allows passes through unread. |
+| Tunnel only | Wardyn passes this traffic through without reading it. It sees only the host name. Wardyn leaves the TLS connection intact, but a corporate upstream proxy that inspects traffic can still break an app that pins its certificate. |
 
 **Who can read it.**
 
@@ -3894,6 +3900,16 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   plan the window.
 - `--wait` (below) is what keeps it short.
 
+### Upgrading to 0.10.2: drives from before the upgrade
+
+- There is no rolling upgrade across 0.10.2: stop every older replica before the first 0.10.2 one starts. The chart's `Recreate` strategy does this; on Compose, `docker compose up -d` replaces the single `wardynd` container.
+- Upgrade the organisation first, then upgrade and restart each Mac runner. Until a Mac runner is upgraded and restarted, the disk drives created before the upgrade on that Mac are held: listed, but a run cannot attach them. If a Mac's drives stay held after its runner restarted, restart the runner again.
+- Docker volume drives created before the upgrade are held until an administrator releases them. After the old `wardynd` has stopped, restart dockerd (or confirm no drive removal was in flight), then call `POST /api/v1/admin/drives/legacy-docker/release`. The release is audited with your name as `drive.legacy_docker.release`; it answers `{released, event_id}`, and after an interrupted call it answers `{released: 0, replayed: [...]}` once it has delivered that call's record.
+- A run created before the upgrade that attaches a held drive fails at dispatch ("Drive NAME is waiting for an administrator to finish the upgrade and cannot be used yet." for Docker, "Drive NAME is waiting for its Mac to be upgraded and restarted." for a Mac). Start it again after the release. A held drive still counts toward the per-person drive limit; a person at the limit can delete a held drive to make room.
+- Migration `0299_drive_delete_fence` adds `user_drives.delete_issues`, `user_drives.legacy_unsettled` and the `drive_legacy_releases` table. If the app role is not one of the roles it grants to and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, grant it `SELECT, INSERT, UPDATE` on `drive_legacy_releases` as soon as the migration has run, or the release route fails.
+- The migration marks every delete the older daemon left marked, including claims that never reached a runner, but not a delete it had already cleared after an error, which is why the holds exist. A 0.10.1 binary refuses to start over it (`db: this database records <N> migration(s) this wardynd does not ship`); to go back, restore the pre-upgrade dump.
+- A kept work folder whose delete was claimed but never ran (a crash) stays marked deleting and hidden, still counting against its owner's drive limit, until an administrator deletes it.
+
 ### Before you upgrade: a large recording store
 
 - Migration `0216` reads every stored recording once, so a large recording store in Postgres can need more than the default `WARDYN_MIGRATE_TIMEOUT` of 5 minutes.
@@ -4164,6 +4180,9 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0291` (`0291_runner_event_refusal_windows`) creates `runner_event_refusal_windows`: each runner's current window of `runner.event.refuse` rows (its start, the rows it wrote and the refusals it suppressed), so the bound holds across replicas and restarts. The next window overwrites the row; a row goes with its runner. The migration grants `SELECT, INSERT, UPDATE` on it to every role granted `UPDATE` on `runner_spool_cursors`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no refusal is recorded, and a runner resends each event the organisation refuses.
 - `0292` (`0292_agent_runs_data_out`) adds the nullable `agent_runs.data_out` (`0001`'s table): the run's `data_out` rule, written at dispatch and kept when audit retention removes the run's policy records. Existing runs are filled from the policy records retention has kept, except a run at policy generation 2 or later whose current generation's record is missing: it is left NULL and its rule reads as unreadable. Any other run with none left is set to `blocked` if it predates the newest record retention removed, plus a day, and is not queued, pending or starting with no sandbox. No grant changes.
 - `0293` (`0293_run_support_grants`) creates `run_support_grants`: each request by a super admin to help inside another person's running run, with the owner's answer, the doors and minutes the owner allowed, and when and why the grant ended. It adds `support_grant` and `support_expires` to `attach_tickets` (`0026`'s table) and `support` to `run_attach_leases` (`0129`'s), and runs `CREATE OR REPLACE FUNCTION run_support_grants_end_with_run()` for a trigger on `agent_runs` (`0001`'s table) that ends a run's open grant in the statement that stops the run or marks it lost. The function runs as the migrator, so a run write never fails for want of this table's grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on the table to every role granted `DELETE` on `run_attach_leases`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no support request or answer is recorded, and approving and denying approval holds works as before. The run watcher's sweep (which needs `SELECT` and `UPDATE`), its list of live grants and the check of whether a person was a run's helper skip a role without `SELECT` on the table, and erasing a person's run tasks skips the grant blank for a role without `INSERT`, which can have written no row; a role with `INSERT` but not `UPDATE` fails that erasure.
+- `0294` (`0294_portal_issuer`) adds the issuer-portal columns to `delegates` (`0094`'s table; `issuer` is empty on every existing row, which is a console portal as before) and the portal person's columns to `principal_identities` (`0113`'s table). It creates `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and `CREATE FUNCTION principal_identities_portal_lifecycle()` for a trigger on `principal_identities` that refuses a portal person's deactivation deadline, reactivation or purge written by anything but the portal's own store writes, whatever binary sends the SQL. It refuses to run, naming the count, while a `delegates` row with no issuer has an empty `scope_group`: set a group on each, or revoke the portal and delete the row, then upgrade. The migration grants `SELECT, INSERT` on `console_issuers`, and `SELECT, INSERT, UPDATE, DELETE` on the other three, to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then a server with console sign-in configured does not start, because at boot it reads `portal_issuers` and records its console issuer in `console_issuers`.
+- `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
+- `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4586,6 +4605,8 @@ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set ima
     probe window is derived from `WARDYN_MIGRATE_TIMEOUT` (above): if your table is larger than the figures cover,
     raise the timeout rather than letting the probe kill a migration that is making progress.
 
+- **Switching on 0.10.2's issuer portals and service grants.** Both stay off until an admin calls `POST /api/v1/admin/portal-issuers/activate`, once, after every older wardynd is stopped. The steps and what the call checks are under [issuer portals](operations/api-tokens.md#switch-issuer-portals-on). Until then a write that adds a service grant to a model provider answers 409 `service_grants_not_activated`.
+
 ### Backup: what `pg_dump` carries here, and what it does not
 
 - The chart renders no database.
@@ -4931,7 +4952,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - A SCIM purge **lists** the person's drives, by name, in `person.deprovision`, and `GET /scim/status` shows them. It deletes nothing.
 - Delete each with `DELETE /api/v1/drives/member/{id}`, or erase the person with the `member_drives` scope of `POST /api/v1/people/{principal}/erasure`.
 - The erasure deletes the same way a delete does and fails the scope, naming the drive, if one is in use. Retry once the run ends.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive. See "Team drives".
 
 **Orphans.**
 
@@ -4946,28 +4967,36 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 ### Team drives
 
-- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, instead of one folder per person.
+- A **team drive** is an admin drive that gives the groups it is allocated to **one shared folder**, and each allocated issuer portal a folder of its own, instead of one folder per person.
 - It is off by default. Turn it on with `storage.user_drive.team_drives: true` in the workspace providers (`PUT /api/v1/workspace-providers`).
-- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person, as every drive did before.
+- With the switch off, `team: true` on a drive write answers 422, and a drive already marked team resolves per person for a group allocation, as every drive did before. A portal allocation is refused instead and mounts nothing.
 
 **Make one** (super admin).
 
 1. `POST /api/v1/drives` with `team: true` on a `host_path`, `k8s_pvc_static` or `docker_volume` drive. A `k8s_pvc` claim mounts in one pod at a time, so it is refused.
-2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`. Any other subject type, and `home_override`, are refused.
-3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only.
+2. Allocate it to groups with `POST /api/v1/drives/grants`, `subject_type: group`, or to an issuer portal (below). The allowed recipients are groups and eligible issuer portals. Any other subject type, and `home_override`, are refused.
+3. An allocation is **read-only** unless it sets `members_can_write: true`, which needs a writable drive. Only a super admin may set it; the security-admin tier allocates read-only to groups. A portal allocation needs a super admin even when read-only.
 
-**What a member's run sees.**
+**What a member's run sees** (a group allocation).
 
 - The folder mounts at `/home/agent/shared/<name-slug>`, read-only unless the allocation says `members_can_write`. A run asking to write a read-only one is refused.
 - Its home segment is `t-` plus 20 hex characters, derived from the drive id: `<host_root>/t-…` on `host_path` (create that directory; Wardyn never creates one on a share) and a claim or volume named `wardyn-drive-<drive-id-hex>-<home>` (`id` scheme; under `slug` the drive's name-slug stands in for the id, see `object_scheme`) with that home. `POST /api/v1/drives/preview` for any group member prints it.
-- People outside the allocated groups never get the mount.
+- For a group allocation, people outside the allocated groups never get the mount.
 - A team drive in a host folder also mounts in a macOS VM, shared at the same `/Users/agent/shared/<name-slug>`, read-only as allocated; a runner that predates drives refuses the run at create.
 - `GET /api/v1/me/drives` marks the row `team: true` and lists in `shared_with` the caller's own groups that carry the allocation, never anyone else's.
 - Every run's mount writes `run.drive.mount` with `team: true` and `mounted_by`, the person whose run mounted it.
 
-**Before you upgrade.** Turning on `storage.user_drive.team_drives` lets the members of the groups a team drive is allocated to share one folder. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to the whole group. The switch is off by default; a team drive is admin-made and allocated to groups only, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+**Allocated to an issuer portal** (super admin).
 
-**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to the whole group. Keep allocations read-only unless the group needs a shared working area.
+- Send `POST /api/v1/drives/grants` with `subject_type: portal`, the portal's id as `subject` and `additional: true`. The portal must be registered with its own identity issuer and not revoked. The drive must be `docker_volume` or `k8s_pvc_static` with no second place. A security admin is refused.
+- On `k8s_pvc_static`, create the claim named by the allocation response's `object_name` before the first run: a missing static claim is a refusal, not a create. A `docker_volume` folder is made on first use.
+- The allocation does not mount the drive by itself. To mount it, include its id in the run's drives list. Once mounted, other issuer portals cannot reach that run (`portal_run_scope`), even if the allocation is removed or the creating portal is revoked.
+- A queued run starts with no wider mode than it was admitted with, and read-only when none was recorded.
+- While a portal holds the drive, an edit that would stop it being a team drive answers 409, and one that adds a second place or moves it off those two backends answers 422. Nothing is written; remove the portal's allocation first.
+
+**Before you upgrade.** Turning on `storage.user_drive.team_drives` shares folders between people. Members of the allocated groups share the team folder. Each allocated issuer portal has a separate folder for the people who mount the drive through that portal. Anyone with access to a folder can read files another person left there. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to everyone who shares that folder. The switch is off by default; a team drive is admin-made and allocated to groups or eligible issuer portals, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
+
+**Security.** One person's agent reads, and with `members_can_write` may run, files another person's agent wrote there. Any secret an agent writes there is visible to everyone who shares that folder. Keep allocations read-only unless they need a shared working area.
 
 **What differs by backend.**
 
@@ -4978,8 +5007,8 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 **Changing and removing.**
 
 - `team` cannot change while the drive is allocated (409). Remove the allocations first.
-- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once the group no longer needs it.
-- A team drive's files are kept by design: they belong to the drive's groups, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
+- A person's reclaim (`POST /api/v1/drives/{id}/reclaim`, a leaver's cleanup) refuses a team drive (422): a team drive's files belong to its groups and portals and are not reclaimed per person. A person's erasure never touches one either. Remove the folder on the substrate, as for any drive, once nobody needs it.
+- A team drive's files are kept by design: they belong to the drive's groups and portals, so erasing or deprovisioning a person does not remove what their agents wrote to a team drive.
 
 ### User drives on Kubernetes
 
@@ -5108,6 +5137,13 @@ kubectl -n <runsNamespace> get pvc -l wardyn.drive=<drive-id>
       name plays no part in that scheme's minted name.)
   - and `object_scheme` itself
     (see "Legacy rows keep their old object name, permanently" below).
+- The 409 and the confirmation apply only to a change that moves an allocation's storage object.
+  - A person's or group's allocation of an ordinary drive moves on any of the five.
+  - A group's allocation of a team drive moves on `backend`, on `host_root` for a host path only, and on a rename or `object_scheme` change only where some place of the drive is not a host path. A `home_template` change never moves it.
+  - A portal's allocation moves on `backend` only.
+  - A change that moves none is written without confirmation, and its audit row has `rehomed` false.
+- Changing `team` is refused 409 while any allocation (group, person or portal) holds the drive, whatever else the request carries. Remove the allocations first.
+- An allocation written while the drive's `team` or write setting changes and the changed rule invalidates that allocation answers 409 `user_drive_grant_conflict`. Read the drive and send the allocation again.
 
 Confirming is an API action, deliberately:
 

@@ -498,7 +498,7 @@ func (s *Server) finalizeRunTailOrdered(ctx context.Context, runID uuid.UUID, re
 // (a clean FAILED-by-nonzero-exit carries its exit code instead).
 // It reports whether this transition won.
 func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.RunState, hint string) bool {
-	applied, err := s.casRunState(ctx, runID, from, types.RunFailed)
+	applied, err := s.casRunStateEnding(ctx, runID, from, types.RunFailed)
 	if err != nil {
 		// "The compensator itself failed" is categorically different from
 		// applied==false ("a concurrent kill legitimately won") and must not collapse

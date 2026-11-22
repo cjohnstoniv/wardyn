@@ -306,6 +306,27 @@ func (s PG) BeginKeptMachineDelete(ctx context.Context, owner string, id uuid.UU
 	return KeptMachineDeletion{}, ErrKeptMachineInUse
 }
 
+// RepairKeptMachineExpiry sets the deadline of a kept machine to expiresAt, the Mac's own record of the stop of
+// run runID, while that run is the one that last held the machine and no delete is started or intended. It
+// corrects a deadline an older stop or an older inventory left, so that a machine used later is neither
+// expired early nor refused a resume as expired. ErrNotFound when the machine is not in that state, or the
+// deadline already is expiresAt.
+func (s PG) RepairKeptMachineExpiry(ctx context.Context, id, runID uuid.UUID, expiresAt time.Time) error {
+	return keptMachineExec(ctx, s, "repair", `UPDATE kept_machines SET expires_at = $3
+		WHERE id = $1 AND run_id = $2 AND state = 'kept' AND delete_started_at IS NULL AND delete_intent_at IS NULL
+		  AND expires_at <> $3`, id, runID, expiresAt)
+}
+
+// DeferKeptMachineExpiry moves the deadline of a kept machine forward to expiresAt, while no delete is started
+// or intended and the deadline is earlier. It is the organisation's answer to a Mac that refused an expiry
+// delete because its own deadline is later: the row stops asking until then. ErrNotFound when the machine is
+// not in that state or its deadline already is expiresAt or later.
+func (s PG) DeferKeptMachineExpiry(ctx context.Context, id uuid.UUID, expiresAt time.Time) error {
+	return keptMachineExec(ctx, s, "defer", `UPDATE kept_machines SET expires_at = $2
+		WHERE id = $1 AND state = 'kept' AND delete_started_at IS NULL AND delete_intent_at IS NULL
+		  AND expires_at < $2`, id, expiresAt)
+}
+
 // AbortKeptMachineDelete puts a machine whose delete failed back to kept,
 // only while it carries the tombstone started. A kill's tombstone is never
 // aborted: that machine is deleted whatever it takes. ErrNotFound otherwise.

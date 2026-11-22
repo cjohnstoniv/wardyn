@@ -185,7 +185,7 @@ function BoundaryImpact({ report }: { report: BoundaryReport }) {
         <Tile n={people.length} label={BOUNDARY_DRY_RUN.TILE_PEOPLE(people.length)} />
       </div>
       {none ? (
-        <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_CHANGE}</Chip>
+        <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_POLICY_CHANGE}</Chip>
       ) : (
         groups.map(
           (g) =>
@@ -211,6 +211,13 @@ function BoundaryImpact({ report }: { report: BoundaryReport }) {
   );
 }
 
+// Who an affected assignment names: its kind and subject, or Everyone when it names no one.
+function subjectText(p: { subject_type: string; subject: string }): string {
+  if (!p.subject) return CHANGE_REVIEW.SUBJECT_EVERYONE;
+  const kind = p.subject_type === "group" ? CHANGE_REVIEW.SUBJECT_GROUP : p.subject_type === "user" ? CHANGE_REVIEW.SUBJECT_PERSON : p.subject_type;
+  return `${kind} · ${p.subject}`;
+}
+
 function TreeImpact({ impact }: { impact: ChangeImpact }) {
   const people = impact.people ?? [];
   const units = new Set(people.map((p) => p.unit_id)).size;
@@ -219,7 +226,7 @@ function TreeImpact({ impact }: { impact: ChangeImpact }) {
   return (
     <div className="space-y-3" data-testid="change-impact-tree">
       <div className="grid grid-cols-3 gap-2">
-        <Tile n={people.length} label={CHANGE_REVIEW.PEOPLE} />
+        <Tile n={people.length} label={CHANGE_REVIEW.ASSIGNMENTS} />
         <Tile n={units} label={CHANGE_REVIEW.UNITS} />
         <Tile n={runsTotal} label={CHANGE_REVIEW.LIVE_RUNS_WALLS} />
       </div>
@@ -232,7 +239,7 @@ function TreeImpact({ impact }: { impact: ChangeImpact }) {
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>{CHANGE_REVIEW.COL_PERSON}</TableHead>
+                <TableHead>{CHANGE_REVIEW.COL_ASSIGNED_TO}</TableHead>
                 <TableHead>{CHANGE_REVIEW.COL_UNIT}</TableHead>
                 <TableHead>{CHANGE_REVIEW.COL_WHAT_CHANGES}</TableHead>
               </TableRow>
@@ -240,7 +247,7 @@ function TreeImpact({ impact }: { impact: ChangeImpact }) {
             <TableBody>
               {people.slice(0, SHOWN).map((p) => (
                 <TableRow key={p.membership_id}>
-                  <TableCell className="align-top">{p.subject}</TableCell>
+                  <TableCell className="align-top">{subjectText(p)}</TableCell>
                   <TableCell className="align-top">{p.unit_name}</TableCell>
                   <TableCell className="align-top">
                     {p.error ? <Mono className="text-foreground">{p.error}</Mono> : <Moves changes={p.changes} />}

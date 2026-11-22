@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -385,5 +386,100 @@ func TestPrintVerifyReportEscapesTheBundlesText(t *testing.T) {
 	got := buf.String()
 	if strings.ContainsAny(got, "\x1b\r\x07") || strings.Count(got, "\n") != 6 || strings.Contains(got, "\nVERIFIED") || strings.Contains(got, "\nevent seq 3") {
 		t.Fatalf("report = %q, want every field escaped onto its own line", got)
+	}
+}
+
+// A flag the command does not know, or gives a bad value, is bad usage (exit 2), never the 1 of a failed check; a
+// real verification failure is still 1.
+func TestAuditVerify_FlagErrorsExitTwo(t *testing.T) {
+	f := newReceiptFixture(t)
+	for name, args := range map[string][]string{
+		"unknown flag":      {"audit", "verify", f.bundle, "--keys", f.keys, "--no-such-flag"},
+		"bad boolean value": {"audit", "verify", f.bundle, "--keys", f.keys, "--json=maybe"},
+		"keys without path": {"audit", "verify", f.bundle, "--keys"},
+	} {
+		if _, _, code := runAudit(t, args...); code != 2 {
+			t.Errorf("%s: exit %d, want 2", name, code)
+		}
+	}
+	tampered := f.b
+	tampered.Checkpoints = append([]auditreceipt.Checkpoint(nil), f.b.Checkpoints...)
+	ev := tampered.Checkpoints[1].Events[0]
+	ev.Row.Action = "run.rewritten"
+	tampered.Checkpoints[1].Events = []auditreceipt.Event{ev}
+	f.writeBundle(t, tampered)
+	if _, _, code := runAudit(t, "audit", "verify", f.bundle, "--keys", f.keys); code != 1 {
+		t.Errorf("an edited row: exit %d, want 1", code)
+	}
+}
+
+// writeWithheld writes a bundle that verifies but has an event served without host detail: exit 3.
+func (f *receiptFixture) writeWithheld(t *testing.T) {
+	t.Helper()
+	withheld := f.b
+	wr := receiptChain(5, 4, *f.rows[0][3].RowHash, "run.policy.resolve")
+	data := `{"redacted_fields": ["workspace_mounts"]}`
+	wr[1].Data, wr[1].PrevHash = &data, wr[0].RowHash
+	wr[1].RowHash = strPtr(auditreceipt.RowHash(wr[1]))
+	for i := 2; i < 4; i++ {
+		wr[i].PrevHash = wr[i-1].RowHash
+		wr[i].RowHash = strPtr(auditreceipt.RowHash(wr[i]))
+	}
+	c1 := f.b.Checkpoints[0]
+	c1.Events = nil
+	c2 := signCheckpoint(f.priv, wr, c1.Statement)
+	c2.Events = []auditreceipt.Event{{Index: 1, Row: wr[1], RedactedFields: []string{"workspace_mounts"}}}
+	withheld.Checkpoints = []auditreceipt.Checkpoint{f.b.Checkpoints[0], c2}
+	f.writeBundle(t, withheld)
+}
+
+func (f *receiptFixture) writeTampered(t *testing.T) {
+	t.Helper()
+	tampered := f.b
+	tampered.Checkpoints = append([]auditreceipt.Checkpoint(nil), f.b.Checkpoints...)
+	ev := tampered.Checkpoints[1].Events[0]
+	ev.Row.Action = "run.rewritten"
+	tampered.Checkpoints[1].Events = []auditreceipt.Event{ev}
+	f.writeBundle(t, tampered)
+}
+
+// The report's write errors are not dropped, in either format: a verified bundle whose report cannot be written
+// exits 2, and a failed (1) or incomplete (3) verdict keeps its own code with the write error in its message.
+// With a writer that works the codes are 0, 1 and 3.
+func TestAuditVerify_ReportWriteFailure(t *testing.T) {
+	f := newReceiptFixture(t)
+	for _, c := range []struct {
+		name          string
+		write         func(*testing.T)
+		okExit, wantW int
+	}{
+		{"verified", func(t *testing.T) { f.writeBundle(t, f.b) }, 0, 2},
+		{"failed", f.writeTampered, 1, 1},
+		{"incomplete", f.writeWithheld, 3, 3},
+	} {
+		for _, format := range []string{"text", "json"} {
+			t.Run(c.name+"/"+format, func(t *testing.T) {
+				c.write(t)
+				args := []string{"audit", "verify", f.bundle, "--keys", f.keys}
+				if format == "json" {
+					args = append(args, "--json")
+				}
+				if _, _, code := runAudit(t, args...); code != c.okExit {
+					t.Fatalf("a working writer: exit %d, want %d", code, c.okExit)
+				}
+				root := rootCmd()
+				root.SetArgs(args)
+				root.SetOut(failingWriter{})
+				root.SetErr(io.Discard)
+				err := root.Execute()
+				if err == nil || exitCodeFor(err) != c.wantW || !strings.Contains(err.Error(), "no space left on device") {
+					t.Fatalf("a failing writer: %v (exit %d), want exit %d naming the write error", err, exitCodeFor(err), c.wantW)
+				}
+			})
+		}
+	}
+	var buf bytes.Buffer
+	if err := printVerifyReport(&buf, auditreceipt.Report{Format: auditreceipt.ReceiptFormat}); err != nil {
+		t.Errorf("a writable report returned %v", err)
 	}
 }

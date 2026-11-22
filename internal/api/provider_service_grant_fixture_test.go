@@ -20,11 +20,15 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -63,6 +67,8 @@ type svcReq struct {
 	Header http.Header
 	Form   url.Values
 	Raw    string
+	// Deadline is the request context's deadline (zero when it has none).
+	Deadline time.Time
 }
 
 // svcAnswer is what the scripted identity provider does with a request. Zero means the default success.
@@ -76,9 +82,25 @@ type svcAnswer struct {
 
 // svcIdP is the identity provider: an http.RoundTripper that records each request and answers from respond.
 type svcIdP struct {
-	mu      sync.Mutex
-	reqs    []svcReq
-	respond func(n int, r svcReq) svcAnswer
+	mu       sync.Mutex
+	reqs     []svcReq
+	respond  func(n int, r svcReq) svcAnswer
+	inflight int
+	top      int // the most requests in flight at once
+}
+
+// peak is the most requests that were in flight at once.
+func (i *svcIdP) peak() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.top
+}
+
+// inFlight is the number of requests in flight now.
+func (i *svcIdP) inFlight() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.inflight
 }
 
 func svcToken(n int) string { return fmt.Sprintf("svc-access-token-%04d-0123456789abcdefghijkl", n) }
@@ -95,10 +117,18 @@ func (i *svcIdP) RoundTrip(req *http.Request) (*http.Response, error) {
 	raw, _ := io.ReadAll(req.Body)
 	form, _ := url.ParseQuery(string(raw))
 	r := svcReq{Method: req.Method, URL: req.URL.String(), Header: req.Header.Clone(), Form: form, Raw: string(raw)}
+	r.Deadline, _ = req.Context().Deadline()
 	i.mu.Lock()
 	i.reqs = append(i.reqs, r)
 	n, fn := len(i.reqs), i.respond
+	i.inflight++
+	i.top = max(i.top, i.inflight)
 	i.mu.Unlock()
+	defer func() {
+		i.mu.Lock()
+		i.inflight--
+		i.mu.Unlock()
+	}()
 	a := svcOK(n, 3600)
 	if fn != nil {
 		if got := fn(n, r); got.Status != 0 || got.Err != nil {
@@ -131,7 +161,8 @@ func (i *svcIdP) requests() []svcReq {
 func (i *svcIdP) count() int { return len(i.requests()) }
 
 // svcSecrets is an operator-namespace secret store that keeps a revision per name, can fail or hold each
-// operation, and records what it was asked. For("") is the store itself; another owner gets an empty view.
+// operation, and records what it was asked. For("") is the store itself; another owner gets a view of its own,
+// empty at first and kept, so a person's sign-in stored through it is there on the next read.
 type svcSecrets struct {
 	mu     sync.Mutex
 	m      map[string][]byte
@@ -141,9 +172,19 @@ type svcSecrets struct {
 	getErr error
 	putErr error
 	delErr error
+	// putPartial makes Put store the value and then answer ErrRowNotWritten: the value reached the external
+	// store but its row was not written.
+	putPartial bool
+	// revDeadlines are the context deadlines Revision was called with, in order (zero when none).
+	revDeadlines []time.Time
+	// afterRev runs after a Revision call has its answer, outside the store's lock; it may block.
+	afterRev func()
+	// revDelay makes the next Revision call under a context with a deadline take this long, or end at the deadline.
+	revDelay time.Duration
 	// hold runs before each operation, outside the store's lock; it may block.
-	hold  func(op, name string)
-	calls []string
+	hold   func(op, name string)
+	calls  []string
+	owners map[string]*svcSecrets // For(owner)'s views
 }
 
 func newSvcSecrets() *svcSecrets { return &svcSecrets{m: map[string][]byte{}, rev: map[string]int{}} }
@@ -173,6 +214,9 @@ func (s *svcSecrets) Put(ctx context.Context, name string, v []byte) error {
 	}
 	s.m[name] = append([]byte(nil), v...)
 	s.rev[name]++
+	if s.putPartial {
+		return secretstore.ErrRowNotWritten
+	}
 	return nil
 }
 
@@ -216,16 +260,34 @@ func (s *svcSecrets) revOf(name string) string {
 }
 
 // Revision implements secretstore.Revisioned.
-func (s *svcSecrets) Revision(_ context.Context, name string) (string, error) {
+func (s *svcSecrets) Revision(ctx context.Context, name string) (string, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	dl, bounded := ctx.Deadline()
+	s.revDeadlines = append(s.revDeadlines, dl)
+	delay := s.revDelay
+	if bounded {
+		s.revDelay = 0 // one read only: the publish's, not the failure's re-reads after it
+	}
+	s.mu.Unlock()
+	if delay > 0 && bounded {
+		select { // a store read that takes delay and honours its context's deadline, as a database read does
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	s.mu.Lock()
+	rev, err, after := s.revOf(name), s.revErr, s.afterRev
 	if s.noRev {
-		return "", secretstore.ErrNoRevision
+		rev, err = "", secretstore.ErrNoRevision
+	} else if err != nil {
+		rev = ""
 	}
-	if s.revErr != nil {
-		return "", s.revErr
+	s.mu.Unlock()
+	if after != nil {
+		after() // the read has its answer; the caller has not yet seen it
 	}
-	return s.revOf(name), nil
+	return rev, err
 }
 
 func (s *svcSecrets) List(context.Context) ([]string, error) {
@@ -268,7 +330,17 @@ func (s *svcSecrets) For(owner string) secretstore.Store {
 	if owner == "" {
 		return s
 	}
-	return newSvcSecrets()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owners == nil {
+		s.owners = map[string]*svcSecrets{}
+	}
+	v, ok := s.owners[owner]
+	if !ok {
+		v = newSvcSecrets()
+		s.owners[owner] = v
+	}
+	return v
 }
 
 // set writes a value as a direct writer would (another process, the external store), bumping its revision and
@@ -278,6 +350,14 @@ func (s *svcSecrets) set(name string, v []byte) {
 	defer s.mu.Unlock()
 	s.m[name] = append([]byte(nil), v...)
 	s.rev[name]++
+}
+
+// rotateInPlace writes a value in the store itself, as a rotation in the external store does: the value changes
+// and the revision the database keeps for it does not, so no revision check can see it.
+func (s *svcSecrets) rotateInPlace(name string, v []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[name] = append([]byte(nil), v...)
 }
 
 func (s *svcSecrets) has(name string) bool {
@@ -319,9 +399,235 @@ type svcStore struct {
 	getErr func() error
 	// docErr, when set, is asked before each read of the grant keys and claims; an error fails the read.
 	docErr func() error
+	// rows is the double's audit_events, appended by a publication or a settle; pubSeq is its last seq. Both are
+	// guarded by gmu, which an append takes inside pubMu; a read takes gmu alone.
+	rows   []types.AuditEvent
+	pubSeq int64
+	// pubMu (capacity 1) stands for the chain lock: a wait on it ends with its context, as a lock wait does.
+	pubMu chan struct{}
+	sink  audit.Sink
+	// publishGate runs before a publication's reads; insertGate after Decide and before BeforeCommit (its error is
+	// a definite failure); commitGate at the commit (any error is ambiguous, landed or not); settleGate before a
+	// settle takes pubMu. Read under gmu.
+	publishGate func(ctx context.Context) error
+	insertGate  func(ctx context.Context) error
+	commitGate  func(ctx context.Context, ev types.AuditEvent) (land bool, err error)
+	settleGate  func(ctx context.Context) error
+	// lastStatusSlack is the time left to the context's deadline at the last status write.
+	lastStatusSlack time.Duration
+}
+
+// lockPub takes pubMu, or gives up when ctx ends.
+func (s *svcStore) lockPub(ctx context.Context) (func(), error) {
+	select {
+	case s.pubMu <- struct{}{}:
+		return func() { <-s.pubMu }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// appendRow appends ev as the next row, with the double's chain hashes, and returns its seq. The caller holds pubMu.
+func (s *svcStore) appendRow(ev *types.AuditEvent) int64 {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	s.pubSeq++
+	ev.PrevHash, ev.RowHash = fmt.Sprintf("h%d", s.pubSeq-1), fmt.Sprintf("h%d", s.pubSeq)
+	s.rows = append(s.rows, *ev)
+	return s.pubSeq
+}
+
+func (s *svcStore) PublishServiceGrantMint(ctx context.Context, p store.ServiceGrantPublish) (types.AuditEvent, bool, int64, error) {
+	unlock, err := s.lockPub(ctx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	s.gmu.Lock()
+	pg, ig, cg := s.publishGate, s.insertGate, s.commitGate
+	s.gmu.Unlock()
+	if pg != nil {
+		if err := pg(ctx); err != nil {
+			return types.AuditEvent{}, false, 0, err
+		}
+	}
+	sc, err := s.GetSiteConfig(ctx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	doc, err := s.ServiceGrantDoc(ctx)
+	if err != nil {
+		return types.AuditEvent{}, false, 0, err
+	}
+	ev, published := p.Decide(sc, doc, nil)
+	if ig != nil {
+		if err := ig(ctx); err != nil {
+			return types.AuditEvent{}, false, 0, err
+		}
+	}
+	if p.BeforeCommit != nil {
+		p.BeforeCommit()
+	}
+	land, cerr := true, error(nil)
+	if cg != nil {
+		land, cerr = cg(ctx, ev)
+	}
+	var seq int64
+	if land {
+		seq = s.appendRow(&ev)
+	}
+	if cerr != nil {
+		return types.AuditEvent{}, false, 0, fmt.Errorf("%w: %w", store.ErrServiceGrantCommitUnknown, cerr)
+	}
+	return ev, published, seq, nil
+}
+
+func (s *svcStore) SettleServiceGrantMint(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return types.AuditEvent{}, err
+	}
+	s.gmu.Lock()
+	g := s.settleGate
+	s.gmu.Unlock()
+	if g != nil {
+		if err := g(ctx); err != nil {
+			return types.AuditEvent{}, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return types.AuditEvent{}, err
+	}
+	unlock, err := s.lockPub(ctx)
+	if err != nil {
+		return types.AuditEvent{}, err
+	}
+	defer unlock()
+	s.gmu.Lock()
+	for _, r := range s.rows {
+		if r.ID == ev.ID && r.Time.Equal(ev.Time) {
+			s.gmu.Unlock()
+			return r, nil
+		}
+	}
+	s.gmu.Unlock()
+	s.appendRow(&ev)
+	return ev, nil
+}
+
+func (s *svcStore) ServiceGrantSIEM() audit.Sink { return s.sink }
+
+// rowsOf are the double's rows with id, in order.
+func (s *svcStore) rowsOf(id uuid.UUID) []types.AuditEvent {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	var out []types.AuditEvent
+	for _, r := range s.rows {
+		if r.ID == id {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// setGates sets the double's gates under gmu; a nil argument leaves that gate as it is.
+func (s *svcStore) setGates(publish, insert func(context.Context) error, commit func(context.Context, types.AuditEvent) (bool, error), settle func(context.Context) error) {
+	s.gmu.Lock()
+	defer s.gmu.Unlock()
+	if publish != nil {
+		s.publishGate = publish
+	}
+	if insert != nil {
+		s.insertGate = insert
+	}
+	if commit != nil {
+		s.commitGate = commit
+	}
+	if settle != nil {
+		s.settleGate = settle
+	}
+}
+
+// svcSink is a collecting audit sink. Emit counts its entry, then waits on gate when set; once closed, a copy is
+// recorded in afterClose instead, as a webhook that accepts a copy after its flusher stopped.
+type svcSink struct {
+	mu         sync.Mutex
+	entered    atomic.Int64
+	evs        []types.AuditEvent
+	gate       chan struct{}
+	closed     bool
+	afterClose []types.AuditEvent
+	panicNext  bool // the next Emit panics, once
+}
+
+func (k *svcSink) Name() string { return "svc-sink" }
+
+func (k *svcSink) Emit(_ context.Context, ev types.AuditEvent) error {
+	k.entered.Add(1)
+	k.mu.Lock()
+	gate, boom := k.gate, k.panicNext
+	k.panicNext = false
+	k.mu.Unlock()
+	if boom {
+		panic("svc sink: a planted panic")
+	}
+	if gate != nil {
+		<-gate
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.closed {
+		k.afterClose = append(k.afterClose, ev)
+		return nil
+	}
+	k.evs = append(k.evs, ev)
+	return nil
+}
+
+// copies are the sink's copies, in order.
+func (k *svcSink) copies() []types.AuditEvent {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]types.AuditEvent(nil), k.evs...)
+}
+
+// copiesOf counts the sink's copies with id.
+func (k *svcSink) copiesOf(id uuid.UUID) int {
+	n := 0
+	for _, ev := range k.copies() {
+		if ev.ID == id {
+			n++
+		}
+	}
+	return n
+}
+
+// svcPrepare is the serving chain's run-less preparation (cmd/wardynd's maskingRecorder.prepare): the target cap,
+// then Data and a non-empty Target masked against the global corpus. It counts its calls.
+func svcPrepare(reg *secretmask.Registry, calls *atomic.Int64) func(context.Context, types.AuditEvent) (types.AuditEvent, error) {
+	return func(_ context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+		calls.Add(1)
+		ev.Target = store.CapAuditTarget(ev.Target)
+		if reg != nil {
+			if m := reg.JSONVariantMasker(uuid.Nil); len(m.Secrets()) > 0 {
+				if len(ev.Data) > 0 {
+					ev.Data = json.RawMessage(m.Mask([]byte(ev.Data)))
+				}
+				if ev.Target != "" {
+					ev.Target = string(m.Mask([]byte(ev.Target)))
+				}
+			}
+		}
+		return ev, nil
+	}
 }
 
 func (s *svcStore) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return types.SiteConfig{}, err
+	}
 	s.gmu.Lock()
 	g := s.getErr
 	s.gmu.Unlock()
@@ -372,6 +678,9 @@ func (s *svcStore) PutSiteConfigGrants(ctx context.Context, cfg types.SiteConfig
 }
 
 func (s *svcStore) ServiceGrantDoc(ctx context.Context) (store.ServiceGrantDoc, error) {
+	if err := ctx.Err(); err != nil {
+		return store.ServiceGrantDoc{}, err
+	}
 	s.gmu.Lock()
 	derr := s.docErr
 	s.gmu.Unlock()
@@ -409,12 +718,18 @@ func (s *svcStore) SettleServiceGrantCleanup(_ context.Context, uid, claimID str
 	return true, nil
 }
 
-func (s *svcStore) UpsertServiceGrantStatus(_ context.Context, row store.ServiceGrantStatusRow) error {
+func (s *svcStore) UpsertServiceGrantStatus(ctx context.Context, row store.ServiceGrantStatusRow) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.upsertGate != nil {
 		s.upsertGate(row)
 	}
 	s.gmu.Lock()
 	defer s.gmu.Unlock()
+	if dl, ok := ctx.Deadline(); ok {
+		s.lastStatusSlack = time.Until(dl)
+	}
 	if s.status == nil {
 		s.status = map[string]store.ServiceGrantStatusRow{}
 	}
@@ -468,14 +783,20 @@ func (s *svcStore) statusOf(uid, replica string) (store.ServiceGrantStatusRow, b
 // svcFix is one wired server: the run fixture's custom endpoint row carries a service grant listing svcOwner.
 type svcFix struct {
 	*oidcRunFixture
-	t       *testing.T
-	st      *svcStore
-	sec     *svcSecrets
-	idp     *svcIdP
-	clock   *svcClock
-	uid     string
-	mux     http.Handler
-	records int
+	t     *testing.T
+	st    *svcStore
+	sec   *svcSecrets
+	idp   *svcIdP
+	clock *svcClock
+	uid   string
+	mux   http.Handler
+	sink  *svcSink
+	// prepares counts the mint-row preparations.
+	prepares atomic.Int64
+	// stop cancels the server's BaseCtx.
+	stop  context.CancelFunc
+	idsMu sync.Mutex
+	ids   []uuid.UUID
 }
 
 func newSvcFix(t *testing.T) *svcFix {
@@ -485,10 +806,15 @@ func newSvcFix(t *testing.T) *svcFix {
 	sec := newSvcSecrets()
 	sec.m[oidcSecretRef] = []byte(oidcClientSecret)
 	idp := &svcIdP{}
-	st := &svcStore{azA3Store: rf.st, activated: true, now: clock.Now}
-	f := &svcFix{oidcRunFixture: rf, t: t, st: st, sec: sec, idp: idp, clock: clock, uid: oidcUID}
+	sink := &svcSink{}
+	st := &svcStore{azA3Store: rf.st, activated: true, now: clock.Now, pubMu: make(chan struct{}, 1), sink: sink}
+	f := &svcFix{oidcRunFixture: rf, t: t, st: st, sec: sec, idp: idp, clock: clock, uid: oidcUID, sink: sink}
 	cfg := &rf.srv.cfg
 	cfg.Store, cfg.Secrets, cfg.Now, cfg.ServiceGrantTransport = st, sec, clock.Now, idp
+	cfg.RunnerAuditPrepare = svcPrepare(cfg.MaskRegistry, &f.prepares)
+	base, stop := context.WithCancel(context.Background())
+	cfg.BaseCtx, f.stop = base, stop
+	t.Cleanup(func() { f.quiesce(); stop() })
 	f.setRow(func(p *types.ModelProvider) {
 		o := *p.OIDC
 		o.ServiceGrant = &types.ProviderServiceGrant{
@@ -514,8 +840,6 @@ func (f *svcFix) setRow(edit func(*types.ModelProvider)) {
 }
 
 func (f *svcFix) provider() types.ModelProvider { return f.liveRow(f.t) }
-
-func (f *svcFix) grant() *types.ProviderServiceGrant { return f.provider().OIDC.ServiceGrant }
 
 func (f *svcFix) secretName() string { return serviceGrantSecretName(f.uid) }
 
@@ -550,8 +874,156 @@ func (f *svcFix) mustToken(trigger string) serviceGrantMinted {
 	return tok
 }
 
-// mintRows are the mint audit rows, in order.
-func (f *svcFix) mintRows() []types.AuditEvent { return f.audit.find(auditServiceGrantMintAction) }
+// mintRows are the mint audit rows, in order: rows live in the store, not the recorder.
+func (f *svcFix) mintRows() []types.AuditEvent {
+	f.st.gmu.Lock()
+	defer f.st.gmu.Unlock()
+	var out []types.AuditEvent
+	for _, r := range f.st.rows {
+		if r.Action == auditServiceGrantMintAction {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// quiesce waits until every permit has returned and the background work has ended, so nothing in flight reads a
+// package var after the test restores it. Registered by newSvcFix, after any var a test shortened before it.
+func (f *svcFix) quiesce() {
+	svcQuiesce(f.t, f.srv)
+}
+
+func svcQuiesce(t *testing.T, srv *Server) {
+	deadline := time.Now().Add(serviceGrantPublishBound + 10*time.Second)
+	for srv.svcGrant.permits.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := srv.svcGrant.permits.Load(); n != 0 {
+		t.Errorf("%d service grant permits still held at the end of the test", n)
+	}
+	srv.WaitBackground()
+}
+
+// captureRowIDs records each sent request's mint-row id, in order. Called once, before the first mint.
+func (f *svcFix) captureRowIDs() func() []uuid.UUID {
+	f.srv.svcGrant.rowID = func(id uuid.UUID) {
+		f.idsMu.Lock()
+		defer f.idsMu.Unlock()
+		f.ids = append(f.ids, id)
+	}
+	return func() []uuid.UUID {
+		f.idsMu.Lock()
+		defer f.idsMu.Unlock()
+		return append([]uuid.UUID(nil), f.ids...)
+	}
+}
+
+// svcSettleWait is how long a check waits for a settled row or a sink copy: the longest a settle runs before its
+// row goes to the spool, plus a second.
+func svcSettleWait() time.Duration { return serviceGrantPublishBound + time.Second }
+
+// awaitRows waits until each id has exactly one row in the double.
+func (f *svcFix) awaitRows(t *testing.T, ids ...uuid.UUID) {
+	t.Helper()
+	deadline := time.Now().Add(svcSettleWait())
+	for {
+		ok := true
+		for _, id := range ids {
+			ok = ok && len(f.st.rowsOf(id)) == 1
+		}
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for one row per id %v", ids)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// awaitSink waits until the sink holds a copy of each id and returns those copies, in the order of ids.
+func (f *svcFix) awaitSink(t *testing.T, ids ...uuid.UUID) []types.AuditEvent {
+	t.Helper()
+	return svcAwaitSink(t, f.sink, ids...)
+}
+
+func svcAwaitSink(t *testing.T, k *svcSink, ids ...uuid.UUID) []types.AuditEvent {
+	t.Helper()
+	deadline := time.Now().Add(svcSettleWait())
+	for {
+		got := k.copies()
+		var out []types.AuditEvent
+		for _, id := range ids {
+			for _, ev := range got {
+				if ev.ID == id {
+					out = append(out, ev)
+					break
+				}
+			}
+		}
+		if len(out) == len(ids) {
+			return out
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for sink copies of %v", ids)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// sinkSettled brings every copy the test's attempts will send to the sink: it waits for every settle's permit to
+// return, then drains a marker through the queue. The callers the test started must have returned first.
+func (f *svcFix) sinkSettled(t *testing.T) {
+	t.Helper()
+	svcSinkSettled(t, f.srv, f.sink)
+}
+
+func svcSinkSettled(t *testing.T, srv *Server, k *svcSink) {
+	t.Helper()
+	deadline := time.Now().Add(svcSettleWait())
+	for srv.svcGrant.permits.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the settles: %d permits held", srv.svcGrant.permits.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), svcSettleWait())
+	defer cancel()
+	if err := svcDrainSink(ctx, srv, k); err != nil {
+		t.Fatalf("drain the sink queue: %v", err)
+	}
+}
+
+// svcMarkerAction is the action of drainSink's marker copy; a sink check by id or by mint action skips it.
+const svcMarkerAction = "test.sink_marker"
+
+// drainSink queues one marker copy and returns once the sink holds it, or ctx's error. The worker sends copies in
+// queue order, so every copy queued before the marker has been through Emit by then.
+func (f *svcFix) drainSink(ctx context.Context) error { return svcDrainSink(ctx, f.srv, f.sink) }
+
+func svcDrainSink(ctx context.Context, srv *Server, k *svcSink) error {
+	marker := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), Action: svcMarkerAction}
+	srv.emitServiceGrantRow(marker)
+	for k.copiesOf(marker.ID) == 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+// sinkMintCopies are the sink's mint-row copies, markers skipped.
+func (k *svcSink) mintCopies() []types.AuditEvent {
+	var out []types.AuditEvent
+	for _, ev := range k.copies() {
+		if ev.Action == auditServiceGrantMintAction {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
 
 // body decodes a JSON body into a map.
 func svcBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
@@ -585,8 +1057,22 @@ func (f *svcFix) secretPath() string {
 	return "/model-providers/" + f.provider().ID + "/service-grant/secret"
 }
 
-// auditJSON is every audit row as text, for a leak sweep.
-func (f *svcFix) auditAll() string { return f.auditText() }
+// auditAll is every audit row as text, for a leak sweep: the recorder's, the double's rows and the sink's copies.
+func (f *svcFix) auditAll() string {
+	var b strings.Builder
+	b.WriteString(f.auditText())
+	f.st.gmu.Lock()
+	rows := append([]types.AuditEvent(nil), f.st.rows...)
+	f.st.gmu.Unlock()
+	for _, evs := range [][]types.AuditEvent{rows, f.sink.copies()} {
+		for _, ev := range evs {
+			raw, _ := json.Marshal(ev)
+			b.Write(raw)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
 
 // svcBasic decodes a Basic Authorization header into its two parts, undoing the form encoding.
 func svcBasic(t *testing.T, h string) (id, secret string) {

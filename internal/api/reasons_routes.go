@@ -402,7 +402,7 @@ const (
 	reasonRecordPromoteConflict          = "record_promote_conflict"
 )
 
-// /api/v1/admin/user-types (user_types.go).
+// /api/v1/user-types (user_types.go).
 const (
 	reasonUserTypeRequestInvalid    = "user_type_request_invalid" // the body fails userTypeFromRequest's shape validation
 	reasonUserTypeConflict          = "user_type_conflict"        // the id or name collides with an existing type

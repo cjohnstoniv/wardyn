@@ -51,6 +51,11 @@ regexes = [
     # "real-shaped admin token to keep". Both recurred across five commits.
     '''AGE-SECRET-KEY-1STUB''',
     '''a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718''',
+    # internal/api/provider_service_grant_review_test.go's canned token-endpoint answer:
+    # made-up access and ID token values for a stubbed endpoint. A train's
+    # sign-off copy gives the commit a new id, so a .gitleaksignore fingerprint
+    # cannot follow it.
+    '''\b(at|idt)-0123456789\b''',
     # The k8s day-2 runbook (docs/OPERATIONS.md) quotes wardynd's
     # ephemeral-age-identity warning, which prints the PUBLIC recipient
     # (age1…) — public by construction. It also quotes the Helm chart's

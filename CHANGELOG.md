@@ -11,21 +11,71 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-11-21
+
 ### Added
 
-- Portals with their own identity issuer need new database objects, which migration `0294_portal_issuer` adds: columns on `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that keeps a portal person's suspension deadline, reactivation and purge behind the portal's own writes. WORDING PENDING
+- A portal can sign its people in against its own identity provider: register it with an `issuer` (and an `internal_issuer` when Wardyn must reach the provider at another address). Wardyn verifies the provider's tokens itself and admits a person by the portal's group or by `portal_managed_admission`, and by one more claim it names when you set one. It mints a grant that acts as a `user` in the unit the portal is pinned to and every unit under it, so a portal pinned to a parent unit reaches its child units. The grant lasts at most `grant_ttl_seconds` (300 to 600) and ends at the token's own signed end if that comes first, so read `expires_in` (it can be as low as 5 seconds). These people are never console sign-ins. Issuer portals stay off until an admin calls `POST /admin/portal-issuers/activate`, once, after every older wardynd is stopped ([issuer portals](docs/operations/api-tokens.md#portals-with-their-own-identity-issuer)). Retiring an unused issuer binding is `DELETE /admin/portal-issuers/{k}`, and changing an issuer portal's admission rule is `PUT /admin/delegates/{id}/admission`.
+- Migration `0294_portal_issuer` adds columns to `delegates` and `principal_identities`, the tables `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and a trigger that refuses a portal person's deactivation deadline, reactivation or purge written by anything but the portal's own store writes. It refuses to run, naming the count, while a `delegates` row with no issuer has an empty `scope_group`.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `console_issuers`, and
   `SELECT, INSERT, UPDATE, DELETE` on `portal_issuers`, `portal_grants` and `portal_person_portals`, to every role that was granted `UPDATE` on
   `delegates`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not
   pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as
-  the migration has run. WORDING PENDING
-<!-- WORDING PENDING: the service grant lines below are the minimum the migration guards need; the release notes' wording replaces them. -->
-- A `custom_endpoint` provider's `oidc` block can carry a `service_grant`, a client-credentials grant that lists the service identities allowed to use it. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
+  the migration has run. Until then a server with console sign-in configured does not start.
+- A `custom_endpoint` model provider's `oidc` block can carry a `service_grant`: a client-credentials grant that lists the service identities allowed to use it. An admin writes its client secret with `PUT /model-providers/{id}/service-grant/secret` and removes the grant with `DELETE /model-providers/{id}/service-grant`; a removed grant's secret is deleted by a background clean-up, which `POST /service-grant-cleanups/{uid}/retry` retries. A write that adds a grant answers 409 `service_grants_not_activated` until the same switch-on as issuer portals. Migration `0295_provider_service_grant` adds the table that records each server's last token request for a grant.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
   `provider_service_grant_status` to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If
   the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
   PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no service
-  grant's token request outcome is recorded.
+  grant's token request outcome is recorded. They also grant `SELECT, INSERT, UPDATE` on `drive_legacy_releases` to every
+  role that was granted UPDATE on the user drives table, other than its owner. An app role outside those needs the
+  same grant on that table, or the release of Docker drives created before the upgrade fails.
+- `WARDYN_DAEMON_PROXY_ALWAYS` (flag `-daemon-proxy-always`) names hosts to which wardynd sends a service grant's token request, and the discovery and key fetches of an issuer portal registration with no internal issuer address, through its proxy even when `WARDYN_DAEMON_NO_PROXY` covers them; a proxied portal fetch connects to the address wardynd checked and trusts only the new `WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE`. No other call changes.
+- A super admin can allocate a team drive to an issuer portal, and a run started through that portal can mount it. Migration `0297_portal_team_drives` adds the `portal` subject type to drive allocations and `agent_runs.portal_drives`; it creates no table, so the split-role grants above are unchanged.
+- `WARDYN_PORTAL_INTERNAL_ISSUER_HOSTS` lists the hosts an issuer portal's `internal_issuer` may name, and `WARDYN_PORTAL_INTERNAL_ISSUER_CA_FILE` adds a CA bundle for those hosts only. A failed refresh of an issuer's discovery or keys counts on `wardyn_portal_issuer_refresh_failures_total`.
+- The audit log has rows for these: `portal_issuers.activate`, `portal_issuers.activate_override`, `portal_issuers.old_client_seen`, `portal_issuer.retire`, `delegate.admission.change`, and `model_provider.service_grant.mint`, `.secret_write` and `.secret_delete`. A portal person's first exchange writes one `person.create` row, which carries no email.
+- `GET /runs?service=1` returns only the runs started with Keep it running, and the Runs page's Services segment uses it, so the segment no longer depends on which page of runs was loaded.
+- `POST /api/v1/admin/drives/legacy-docker/release` (administrators) releases Docker drives created before the upgrade, which 0.10.2 holds until released; the call is audited as `drive.legacy_docker.release`.
+
+### Changed
+
+- The server and its subcommands name their database sessions in `application_name`: `wardynd/<version>/<replica>` for the server and `wardynd-<tool>/<version>` for a subcommand. The issuer portal switch-on reads these labels to tell a 0.10.2 server from an older one.
+- A person-erasure `credentials` count, `delegated_deleted`, now includes issuer-portal grants, and the erasure deletes the record of which portals a portal person used.
+- A run's policy view marks an allow entry that Wardyn opens only some destinations of as Partly inspected, and the answer's `host_marks.partial` lists those entries. A Tunnel only entry says Wardyn leaves the TLS connection intact, though a corporate upstream proxy that inspects traffic can still break an app that pins its certificate.
+- The Mac recovery steps copy a `mac_disk` image with `cp -c` on the same APFS volume, and with `rsync --sparse` otherwise.
+- A macOS VM run whose create fails after the Mac was asked now keeps its kept work folder (unmarked and attachable) instead of dropping it; delete it from the drive list if it is not wanted.
+
+### Fixed
+
+- `wardyn run output` on a terminal now shows the DEL character as `\x7f`, as the help text promised.
+- `wardynd -recovery-rehearse` now reports a key fingerprint failure first when the platform key file differs from the one recorded in the set's manifest, or is unset. Manifests from older versions skip that comparison.
+- `make agent-image-claude-code-multiarch` refuses `AWS_CLI_INSTALL=staged`, since one staged zip is one architecture. Build each architecture separately, or leave it unset.
+- Images published per commit report `<version>+<commit>` in `wardyn --version` and in `/healthz`. Release images and tagged builds still report the bare version.
+- On an Intel Mac, the runner package no longer sets up the virtual machine ledger, which needs Apple silicon, so the install no longer fails there. On Apple silicon a failure there still fails the install.
+- The release build's check that every macOS binary loads on macOS 26 now also refuses a minimum of 26.0.1 or any other 26.0 patch.
+- `wardyn-runnerd doctor` now fails a start the runner refused before any stage, and keeps that failure until the runner next connects, instead of reporting it as stopped.
+- The Runs page's Services segment is read by the server, so it no longer shows an empty or partial list when the loaded page of runs holds few service runs. A segment that cannot show them all says so and offers to look further back.
+- The approval notification card says "No deliveries marked failed in the past hour" when none failed.
+- The boundary review shows a change's Data out value and lock, and says "No existing policies would change" when none would.
+- A service with no health reading for 10 minutes reads Health unknown.
+- The audit retention status stops showing a decrease as pending once its date has passed.
+- A notification that names a person is dismissed on sign-out, and a late one from a request started before it is not shown.
+- A run past its lifetime cap whose files are kept no longer offers Extend and revive: the banner shows the retention date and says the run cannot be revived, and a request to move its end is refused 409 `run_end_wait_max_lifetime`, naming that date.
+- An archived approval that was cancelled because its run was lost now says so, instead of a fixed sentence.
+- A run's header shows its end time from `ended_at`, so a late teardown no longer moves it.
+- A Mac kept machine is no longer expired and deleted on a stale or cached idle report. A Mac on 0.10.2 rechecks its own deadline before an expiry delete, and one that refuses because its deadline is later makes the machine take that deadline instead of being asked every minute.
+- A resumed kept machine whose run ended without its stop being reported, because of an older runner or a lost report, no longer stays in use. After the run has been over for ten minutes, Wardyn can return a resumed machine to kept when its Mac lists it as idle, even if the stop report was lost.
+- An expired kept machine on a Mac that is away stays kept until the Mac returns.
+- A SCIM group delete now removes every member who joined while it ran, cutting their sessions and revoking the API tokens that carry the group before it answers 204. A member add that reaches a group being deleted answers 404, where it answered 500, and a PATCH whose earlier member operation failed answers that failure first.
+- `audit.receipt.create` counts in `redacted` only the events the receipt carries, so an event withheld for the next page of a run's receipt is no longer counted.
+- A delayed clean-up no longer deletes a kept folder that a later run used. When a run that asked to keep its work folder ends without starting (cancelled or timed out in the queue, or its runner pool removed), the statement that ends it also begins the delete of its folder, so no other run is offered the folder before the clean-up has deleted it or, when the runner has it in use or the person has a run starting, cleared that mark and kept it. A folder whose delete the person had already begun is left to that delete: if it fails the folder is the person's, and the clean-up of the run does not delete it. A run that asks for the folder as its source run ends is refused it as one still held, and is not left holding a folder it cannot mount.
+
+### Before you upgrade
+
+- A `delegates` row with no issuer and an empty `scope_group` stops migration `0294`. Set a group on each, or revoke the portal and delete the row.
+- Issuer portals and model-provider service grants are off until an admin switches them on. Stop every wardynd older than 0.10.2 first: an older server does not know the new tables.
+- `wardyn sync --git` now reads the git bundle it is about to send, in a repository of its own. It refuses the branch if a commit in it adds a path (even one later removed or renamed away), or its tip holds one, that matches one of your organisation's `WARDYN_SYNC_DENY` patterns. If your patterns name build output or other paths that were ever committed, such as `node_modules/`, `*.log` or `dist/`, every branch that ever committed one is refused. The error names the first path and pattern, and the working-tree sync is unaffected. Rewrite the branch history or change the patterns. A refused history does not stop `--pull-commits`, and under `--watch` it is a warning. A shallow clone is refused with an error until you run `git fetch --unshallow`, and a SHA-256 repository is checked as one. With no patterns set, Wardyn skips the history scan and its shallow-clone check.
+- Update each Mac runner to 0.10.2. A Mac on an older release is sent no expiry delete for a kept machine and removes expired ones in its own sweep only.
 
 ### Fixed
 

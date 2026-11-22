@@ -36,6 +36,7 @@ type keptMacTransport struct {
 	mu      sync.Mutex
 	fail    keptMacFailure
 	deleted []string
+	ops     []string // the op of each call, in order
 }
 
 // keptMacFailure is how the Mac's kept_machine call goes wrong.
@@ -55,6 +56,7 @@ func (t *keptMacTransport) Call(_ context.Context, method string, args, out any,
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.ops = append(t.ops, a.Op)
 	if t.fail == keptMacRefuses {
 		return runnerwire.Refuse("kept machine %s is running on this Mac", a.ID)
 	}
@@ -71,6 +73,13 @@ func (t *keptMacTransport) Call(_ context.Context, method string, args, out any,
 	}
 	*out.(*runnerwire.KeptMachineResult) = runnerwire.KeptMachineResult{Outcome: outcome}
 	return nil
+}
+
+// opsAsked is the op of each kept_machine call this Mac has had.
+func (t *keptMacTransport) opsAsked() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.ops...)
 }
 
 func (t *keptMacTransport) asked() []string {
@@ -132,10 +141,23 @@ func (k *keptFixture) inventory(t *testing.T, ms ...runnerwire.MacVMKeptMachine)
 	inventoryOf(t, k.sub, ms...)
 }
 
-// inventoryOf sends sub's caps: its Mac keeps machines, and holds ms.
+// inventoryOf sends sub's caps: its Mac keeps machines, rechecks an expired machine's deadline before it
+// deletes it (KeptConditionalDelete), and holds ms.
 func inventoryOf(t *testing.T, sub *remote.Substrate, ms ...runnerwire.MacVMKeptMachine) {
 	t.Helper()
-	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true, Kept: &runnerwire.MacVMKept{Machines: ms}}})
+	sendInventory(t, sub, true, ms...)
+}
+
+// legacyInventoryOf is inventoryOf for a runner of the earlier release: it keeps machines but does not say it
+// runs the conditional delete.
+func legacyInventoryOf(t *testing.T, sub *remote.Substrate, ms ...runnerwire.MacVMKeptMachine) {
+	t.Helper()
+	sendInventory(t, sub, false, ms...)
+}
+
+func sendInventory(t *testing.T, sub *remote.Substrate, conditional bool, ms ...runnerwire.MacVMKeptMachine) {
+	t.Helper()
+	data, err := json.Marshal(runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true, KeptConditionalDelete: conditional, Kept: &runnerwire.MacVMKept{Machines: ms}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +550,7 @@ func TestInventoryKeepsAMachineWhoseStopReportNeverCame(t *testing.T) {
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	exp := time.Now().Add(20 * 24 * time.Hour).UTC().Truncate(time.Second)
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 7 << 30, ExpiresAt: exp})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 7 << 30, StopRunID: k.run.ID.String(), ExpiresAt: exp})
 	k.sweep(t)
 	got, _ := k.row(t, m.ID)
 	if got.State != types.KeptMachineKept || got.Scrubbed || got.DiskBytes != 7<<30 || !got.ExpiresAt.Equal(exp) {
@@ -548,7 +570,7 @@ func TestReconcileIgnoresAnotherRunnersInventory(t *testing.T) {
 	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	b := k.claimedMac(t, k.owner)
 	macB := &keptMacTransport{capsTransport: capsTransport{online: true}}
-	inventoryOf(t, k.connect(b.ID, macB), runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 9 << 30, Scrubbed: true,
+	inventoryOf(t, k.connect(b.ID, macB), runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 9 << 30, Scrubbed: true, StopRunID: k.run.ID.String(),
 		ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
 	k.srv.runnerMacOSVMDisks(k.ctx, b.ID, []runner.MacOSVMDisk{diskReport(k.run.ID, &runner.KeptScrub{When: "stop", Outcome: keptScrubDone})})
 	k.sweep(t)
@@ -558,7 +580,7 @@ func TestReconcileIgnoresAnotherRunnersInventory(t *testing.T) {
 	if keeps := k.rows(t, "machine.keep", m.ID); len(keeps) != 0 || len(macB.asked()) != 0 {
 		t.Fatalf("machine.keep %v, Mac B asked %v; want neither", keeps, macB.asked())
 	}
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 2 << 30, ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 2 << 30, StopRunID: k.run.ID.String(), ExpiresAt: time.Now().Add(24 * time.Hour).UTC()})
 	k.sweep(t)
 	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || got.DiskBytes != 2<<30 {
 		t.Fatalf("after Mac A's own inventory: %+v; want kept at A's size", got)

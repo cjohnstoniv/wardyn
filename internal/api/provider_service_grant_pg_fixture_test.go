@@ -14,12 +14,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"filippo.io/age"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	secretspg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -34,6 +42,19 @@ type svcPG struct {
 	audit  *memAudit
 	admin  *http.Cookie
 	person *http.Cookie
+	// sealed, when set, is the Postgres secret store every server of the fixture uses instead of sec, sealed
+	// under ageKey, so a released wardynd given the same key reads the same records.
+	sealed *secretspg.Store
+	ageKey string
+	// sink collects this server's mint-row copies; prepares counts its mint-row preparations.
+	sink     *svcSink
+	prepares *atomic.Int64
+	// stop cancels this server's BaseCtx.
+	stop context.CancelFunc
+	// observer is a pool of its own for every probe, so a probe never asks a pool a holder or a server uses.
+	observer *pgxpool.Pool
+	idsMu    *sync.Mutex
+	ids      *[]uuid.UUID
 }
 
 // newSvcPG builds the fixture over a throwaway database. activated is the 0.10.2 switch-on.
@@ -45,14 +66,47 @@ func newSvcPG(t *testing.T, activated bool) *svcPG {
 // newSvcPGClocked is newSvcPG with the server reading clock when it is set.
 func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
 	t.Helper()
+	return newSvcPGWith(t, activated, clock, false)
+}
+
+// newSvcPGSealed is newSvcPG with the Postgres secret store, sealed under a key of its own, for every server.
+func newSvcPGSealed(t *testing.T, activated bool) *svcPG {
+	t.Helper()
+	return newSvcPGWith(t, activated, nil, true)
+}
+
+func newSvcPGWith(t *testing.T, activated bool, clock *svcClock, sealed bool) *svcPG {
+	t.Helper()
 	pool := throwawayPGPool(t)
 	ctx := context.Background()
 	pg := store.NewPG(pool)
 	if _, err := pg.PutSiteConfig(ctx, types.SiteConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	f := &svcPG{t: t, pool: pool, pg: pg, sec: newSvcSecrets(), idp: &svcIdP{}, audit: &memAudit{}}
+	sink := &svcSink{}
+	pg.SIEM = sink
+	f := &svcPG{t: t, pool: pool, pg: pg, sec: newSvcSecrets(), idp: &svcIdP{}, audit: &memAudit{}, sink: sink,
+		prepares: new(atomic.Int64), idsMu: new(sync.Mutex), ids: new([]uuid.UUID)}
+	obs, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.observer = obs
+	t.Cleanup(obs.Close)
 	f.sec.m[oidcSecretRef] = []byte(oidcClientSecret)
+	if sealed {
+		id, err := age.GenerateX25519Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.sealed, err = secretspg.New(pool, id); err != nil {
+			t.Fatal(err)
+		}
+		f.ageKey = id.String()
+		if err := f.sealed.Put(ctx, oidcSecretRef, []byte(oidcClientSecret)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if activated {
 		f.activate()
 	}
@@ -60,13 +114,17 @@ func newSvcPGClocked(t *testing.T, activated bool, clock *svcClock) *svcPG {
 	cfg := baseTestConfig(h, pg)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Audit = f.audit
-	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), f.idp
+	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.secrets(), secretmask.NewRegistry(), f.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
 	if clock != nil {
 		cfg.Now = clock.Now
 	}
+	cfg.RunnerAuditPrepare = svcPrepare(cfg.MaskRegistry, f.prepares)
+	base, stop := context.WithCancel(context.Background())
+	cfg.BaseCtx, f.stop = base, stop
 	f.srv = New(cfg)
+	t.Cleanup(func() { svcQuiesce(t, f.srv); stop() })
 	f.admin = ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin)
 	f.person = ssoSession(t, "sub-person", "person@corp.example", oidc.RoleUser)
 	return f
@@ -83,18 +141,252 @@ func (f *svcPG) newReplica() *svcPG {
 func (f *svcPG) newReplicaClocked(clock *svcClock) *svcPG {
 	f.t.Helper()
 	h := newHarness(f.t)
-	r := &svcPG{t: f.t, pool: f.pool, pg: f.pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person}
+	r := &svcPG{t: f.t, pool: f.pool, pg: f.pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person,
+		sealed: f.sealed, ageKey: f.ageKey, sink: f.sink, prepares: f.prepares, observer: f.observer,
+		idsMu: new(sync.Mutex), ids: new([]uuid.UUID)}
 	cfg := baseTestConfig(h, f.pg)
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Audit = r.audit
-	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.sec, secretmask.NewRegistry(), r.idp
+	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = f.secrets(), secretmask.NewRegistry(), r.idp
 	cfg.AllowTestEndpoints = true
 	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
 	if clock != nil {
 		cfg.Now = clock.Now
 	}
+	cfg.RunnerAuditPrepare = svcPrepare(cfg.MaskRegistry, r.prepares)
+	base, stop := context.WithCancel(context.Background())
+	cfg.BaseCtx, r.stop = base, stop
 	r.srv = New(cfg)
+	f.t.Cleanup(func() { svcQuiesce(f.t, r.srv); stop() })
 	return r
+}
+
+// newIndependentReplica is a second replica with a pool, a store, a sink and a Postgres secret store of its own
+// over the same database, as another wardynd process has. The fixture must be sealed (newSvcPGSealed).
+func (f *svcPG) newIndependentReplica() *svcPG {
+	f.t.Helper()
+	ctx := context.Background()
+	pool, err := db.Connect(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.t.Cleanup(pool.Close)
+	id, err := age.ParseX25519Identity(f.ageKey)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	sealed, err := secretspg.New(pool, id)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	pg := store.NewPG(pool)
+	sink := &svcSink{}
+	pg.SIEM = sink
+	r := &svcPG{t: f.t, pool: pool, pg: pg, sec: f.sec, idp: &svcIdP{}, audit: &memAudit{}, admin: f.admin, person: f.person,
+		sealed: sealed, ageKey: f.ageKey, sink: sink, prepares: new(atomic.Int64), observer: f.observer,
+		idsMu: new(sync.Mutex), ids: new([]uuid.UUID)}
+	h := newHarness(f.t)
+	cfg := baseTestConfig(h, pg)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Audit = r.audit
+	cfg.Secrets, cfg.MaskRegistry, cfg.ServiceGrantTransport = sealed, secretmask.NewRegistry(), r.idp
+	cfg.AllowTestEndpoints = true
+	cfg.HostResolver = func(string) ([]net.IP, error) { return []net.IP{net.ParseIP("203.0.113.9")}, nil }
+	cfg.RunnerAuditPrepare = svcPrepare(cfg.MaskRegistry, r.prepares)
+	base, stop := context.WithCancel(context.Background())
+	cfg.BaseCtx, r.stop = base, stop
+	r.srv = New(cfg)
+	f.t.Cleanup(func() { svcQuiesce(f.t, r.srv); stop() })
+	return r
+}
+
+// captureRowIDs records each sent request's mint-row id on this server, in order. Called once, before the first mint.
+func (f *svcPG) captureRowIDs() func() []uuid.UUID {
+	f.srv.svcGrant.rowID = func(id uuid.UUID) {
+		f.idsMu.Lock()
+		defer f.idsMu.Unlock()
+		*f.ids = append(*f.ids, id)
+	}
+	return func() []uuid.UUID {
+		f.idsMu.Lock()
+		defer f.idsMu.Unlock()
+		return append([]uuid.UUID(nil), *f.ids...)
+	}
+}
+
+// mintRows are the mint rows in audit_events, in seq order, read through the observer.
+func (f *svcPG) mintRows() []types.AuditEvent {
+	f.t.Helper()
+	return f.queryRows(`SELECT id, time, outcome, data FROM audit_events WHERE action=$1 ORDER BY seq`, auditServiceGrantMintAction)
+}
+
+// rowsByID are the rows with id in audit_events, read through the observer.
+func (f *svcPG) rowsByID(id uuid.UUID) []types.AuditEvent {
+	f.t.Helper()
+	return f.queryRows(`SELECT id, time, outcome, data FROM audit_events WHERE id=$1 ORDER BY seq`, id)
+}
+
+func (f *svcPG) queryRows(q string, arg any) []types.AuditEvent {
+	f.t.Helper()
+	rows, err := f.observer.Query(context.Background(), q, arg)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []types.AuditEvent
+	for rows.Next() {
+		var ev types.AuditEvent
+		var data []byte
+		if err := rows.Scan(&ev.ID, &ev.Time, &ev.Outcome, &data); err != nil {
+			f.t.Fatal(err)
+		}
+		ev.Action, ev.Data = auditServiceGrantMintAction, data
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		f.t.Fatal(err)
+	}
+	return out
+}
+
+// sinkRows are this server's sink copies of mint rows.
+func (f *svcPG) sinkRows() []types.AuditEvent { return f.sink.mintCopies() }
+
+// awaitRows waits until each id has exactly one row in audit_events.
+func (f *svcPG) awaitRows(t *testing.T, ids ...uuid.UUID) {
+	t.Helper()
+	deadline := time.Now().Add(svcSettleWait())
+	for {
+		ok := true
+		for _, id := range ids {
+			ok = ok && len(f.rowsByID(id)) == 1
+		}
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for one row per id %v", ids)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// awaitSink waits until this server's sink holds a copy of each id and returns those copies.
+func (f *svcPG) awaitSink(t *testing.T, ids ...uuid.UUID) []types.AuditEvent {
+	t.Helper()
+	return svcAwaitSink(t, f.sink, ids...)
+}
+
+// sinkSettled is svcFix.sinkSettled for this server.
+func (f *svcPG) sinkSettled(t *testing.T) {
+	t.Helper()
+	svcSinkSettled(t, f.srv, f.sink)
+}
+
+// drainSink is svcFix.drainSink for this server.
+func (f *svcPG) drainSink(ctx context.Context) error { return svcDrainSink(ctx, f.srv, f.sink) }
+
+// holdAuditChain holds the audit chain lock on a pool of its own until release.
+func (f *svcPG) holdAuditChain() (release func()) {
+	f.t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		pool.Close()
+		f.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, db.AuditChainLockKey); err != nil {
+		_ = tx.Rollback(ctx)
+		pool.Close()
+		f.t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+			pool.Close()
+		})
+	}
+	f.t.Cleanup(release)
+	return release
+}
+
+// holdRotation starts, on a pool of its own, a transaction that moves the secret's value_rev and waits on the
+// row; it returns at once. commit waits for the UPDATE, commits it and closes the pool.
+func (f *svcPG) holdRotation(owner, name string) (commit func()) {
+	f.t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, f.pool.Config().ConnString())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		pool.Close()
+		f.t.Fatal(err)
+	}
+	updated := make(chan error, 1)
+	go func() {
+		_, err := tx.Exec(ctx, `UPDATE secrets SET value_rev = DEFAULT WHERE owned_by=$1 AND name=$2`, owner, name)
+		updated <- err
+	}()
+	var once sync.Once
+	commit = func() {
+		once.Do(func() {
+			if err := <-updated; err != nil {
+				f.t.Errorf("the held rotation: %v", err)
+				_ = tx.Rollback(ctx)
+			} else if err := tx.Commit(ctx); err != nil {
+				f.t.Errorf("commit the held rotation: %v", err)
+			}
+			pool.Close()
+		})
+	}
+	f.t.Cleanup(commit)
+	return commit
+}
+
+// lockWaiters counts the sessions of this database waiting on a lock whose query names like.
+func (f *svcPG) lockWaiters(like string) int {
+	f.t.Helper()
+	var n int
+	if err := f.observer.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%' || $1 || '%'`, like).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// siteConfigRaw is the stored site_config document, read through the observer.
+func (f *svcPG) siteConfigRaw() []byte {
+	f.t.Helper()
+	var raw []byte
+	if err := f.observer.QueryRow(context.Background(), `SELECT config FROM site_config WHERE singleton`).Scan(&raw); err != nil {
+		f.t.Fatal(err)
+	}
+	return raw
+}
+
+// valueRev is the secret row's value_rev, read through the observer.
+func (f *svcPG) valueRev(owner, name string) string {
+	f.t.Helper()
+	var rev string
+	if err := f.observer.QueryRow(context.Background(), `SELECT value_rev::text FROM secrets WHERE owned_by=$1 AND name=$2`, owner, name).Scan(&rev); err != nil {
+		return ""
+	}
+	return rev
+}
+
+// secrets is the store the fixture's servers use: the sealed Postgres one when set, else the double.
+func (f *svcPG) secrets() secretstore.Store {
+	if f.sealed != nil {
+		return f.sealed
+	}
+	return f.sec
 }
 
 // activate stores the 0.10.2 switch-on mark, as lane 2's activate call does.

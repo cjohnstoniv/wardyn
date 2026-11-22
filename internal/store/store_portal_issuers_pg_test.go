@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/testutil"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -498,11 +499,13 @@ func installWriteGate(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
-// holdWriteGate opens a transaction that holds the gate's lock until the test commits it.
+// holdWriteGate opens a transaction that holds the gate's lock until the test commits it. It runs on a
+// separate session, so the test can open the retirement's pool transaction while it holds the gate without a
+// nested pool acquire.
 func holdWriteGate(t *testing.T, pool *pgxpool.Pool) pgx.Tx {
 	t.Helper()
 	ctx := context.Background()
-	tx, err := pool.Begin(ctx)
+	tx, err := testutil.PGConn(t, pool).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,11 +516,12 @@ func holdWriteGate(t *testing.T, pool *pgxpool.Pool) pgx.Tx {
 	return tx
 }
 
-// sessionBlockedBy is the process id of the one session waiting on holder.
+// sessionBlockedBy is the process id of the one session waiting on holder. It asks from a separate session,
+// as untilBlockedBy does.
 func sessionBlockedBy(t *testing.T, pool *pgxpool.Pool, holder int) int {
 	t.Helper()
 	var pid int
-	if err := pool.QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder).Scan(&pid); err != nil {
+	if err := testutil.PGConn(t, pool).QueryRow(context.Background(), `SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))`, holder).Scan(&pid); err != nil {
 		t.Fatalf("the session waiting on %d: %v", holder, err)
 	}
 	return pid
@@ -536,7 +540,7 @@ func TestPortalIssuersActivate_ConcurrentActivationsOneWinner_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = winner.Rollback(ctx) }()
-	const stamp = "2001-02-03T04:05:06.000007Z"
+	stamp := time.Now().UTC().Add(-time.Hour).Format("2006-01-02T15:04:05") + ".000007Z"
 	if _, err := winner.Exec(ctx, `INSERT INTO site_config (singleton, config, updated_at) VALUES (true, jsonb_build_object($1::text, $2::text), now())`,
 		store.PortalIssuersActivatedKey, stamp); err != nil {
 		t.Fatal(err)

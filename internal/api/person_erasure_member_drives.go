@@ -62,10 +62,16 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 			errs = append(errs, fmt.Errorf("member drive %q was kept: this server cannot delete its storage", d.Name))
 		case res.reason == reasonMemberDriveInUse:
 			errs = append(errs, fmt.Errorf("member drive %q was kept: a run of its owner's is starting", d.Name))
+		case res.reason == reasonMemberDriveBusy:
+			// The claim taken above was consumed or taken over before the issue: no storage call ran.
+			errs = append(errs, fmt.Errorf("member drive %q is being deleted by another request", d.Name))
 		case res.reason == reasonMemberDriveDeleteDeferred:
 			errs = append(errs, fmt.Errorf("member drive %q is being deleted: its Mac is offline, and its disk is removed when it reconnects", d.Name))
 		case res.reason == reasonMemberDriveRecordOnly:
 			deleted++ // its Mac is no longer registered, so only the record was Wardyn's to remove
+		case res.reason != "" && res.issued != 0:
+			// The delete was issued and its end is not confirmed: the drive is held and its storage may be partly or wholly gone.
+			errs = append(errs, fmt.Errorf("Wardyn could not confirm that deletion of storage for drive %q finished.", d.Name))
 		case res.reason != "":
 			errs = append(errs, fmt.Errorf("member drive %q was kept: deleting its storage failed", d.Name))
 		default:

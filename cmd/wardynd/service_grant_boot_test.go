@@ -53,8 +53,12 @@ func TestServeStartsServiceGrantRefresherWithoutRunner(t *testing.T) {
 					fset.Position(sel.Pos()).Line, sel.Sel.Name)
 			}
 		}
-		// The clean-up runs under leader election: the call expression around the selector is an
-		// argument of leaderGo, not a bare go statement or a direct call on every replica.
+		// The refresher is called, not only named: a reference such as `_ = srv.X` starts nothing.
+		if call, ok := stack[len(stack)-2].(*ast.CallExpr); sel.Sel.Name == "StartServiceGrantRefresher" && (!ok || call.Fun != sel) {
+			t.Errorf("boot_serve.go:%d: StartServiceGrantRefresher is referenced, not called", fset.Position(sel.Pos()).Line)
+		}
+		// The clean-up runs under leader election: it is handed to leaderGo, not started by a bare go
+		// statement or a direct call on every replica.
 		if sel.Sel.Name == "RunServiceGrantCleanup" && !insideLeaderGo(stack) {
 			t.Errorf("boot_serve.go:%d: RunServiceGrantCleanup is not started through leaderGo", fset.Position(sel.Pos()).Line)
 		}
@@ -96,21 +100,43 @@ func TestServeStartsServiceGrantRefresherWithoutRunner(t *testing.T) {
 	}
 }
 
-// insideLeaderGo reports whether the selector at the end of stack is within the argument list of
-// a call to leaderGo (the innermost enclosing call expression's function is that name).
+// insideLeaderGo reports whether the selector at the end of stack is handed to leaderGo: as an
+// argument (a method value), or called as a statement of a function literal that is the argument.
+// A bare reference, a call anywhere else, or a literal that is not leaderGo's argument is not.
 func insideLeaderGo(stack []ast.Node) bool {
-	for i := len(stack) - 2; i >= 0; i-- {
-		call, ok := stack[i].(*ast.CallExpr)
-		if !ok {
-			continue
-		}
-		switch fn := call.Fun.(type) {
-		case *ast.Ident:
-			return fn.Name == "leaderGo"
-		case *ast.SelectorExpr:
-			return fn.Sel.Name == "leaderGo"
-		}
+	i := len(stack) - 1 // the selector
+	if i < 1 {
 		return false
+	}
+	if call, ok := stack[i-1].(*ast.CallExpr); ok && call.Fun == stack[i] {
+		// Called: the call is a statement in a function literal's body; go on from the literal.
+		if i < 5 {
+			return false
+		}
+		_, stmt := stack[i-2].(*ast.ExprStmt)
+		_, body := stack[i-3].(*ast.BlockStmt)
+		_, lit := stack[i-4].(*ast.FuncLit)
+		if !stmt || !body || !lit {
+			return false
+		}
+		i -= 4
+	}
+	call, ok := stack[i-1].(*ast.CallExpr)
+	if !ok || call.Fun == stack[i] {
+		return false
+	}
+	arg := false
+	for _, a := range call.Args {
+		arg = arg || a == stack[i]
+	}
+	if !arg {
+		return false
+	}
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name == "leaderGo"
+	case *ast.SelectorExpr:
+		return fn.Sel.Name == "leaderGo"
 	}
 	return false
 }

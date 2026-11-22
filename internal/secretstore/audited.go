@@ -222,6 +222,9 @@ func (a *audited) Revision(ctx context.Context, name string) (string, error) {
 	return r.Revision(ctx, name)
 }
 
+// RevisionRowOwner forwards the wrapped store's RevisionRow owner, or answers ok=false when it keeps none.
+func (a *audited) RevisionRowOwner() (string, bool) { return RevisionRowOf(a.inner) }
+
 // Generation and AdvanceGeneration forward the wrapped store's erase generation
 // (Generational), or answer ErrNoGeneration. Not audited: neither reads a value.
 func (a *audited) Generation(ctx context.Context) (int64, error) {

@@ -294,9 +294,10 @@ describe("support strip: the banner", () => {
 
   it("a late end orders ended grants within one millisecond", async () => {
     // Same millisecond, microseconds apart: the later ended_at wins whichever grant it belongs to.
+    const sec = aheadByHours(-1).slice(0, 19);
     const cases = [
-      { shown: "2026-01-01T00:00:00.400090Z", confirmed: "2026-01-01T00:00:00.400010Z", line: "Nobody answered" },
-      { shown: "2026-01-01T00:00:00.400010Z", confirmed: "2026-01-01T00:00:00.400090Z", line: "you ended it" },
+      { shown: `${sec}.400090Z`, confirmed: `${sec}.400010Z`, line: "Nobody answered" },
+      { shown: `${sec}.400010Z`, confirmed: `${sec}.400090Z`, line: "you ended it" },
     ];
     for (const c of cases) {
       Object.values(api).forEach((m) => m.mockReset());
@@ -325,7 +326,7 @@ describe("support strip: the banner", () => {
   });
 
   it("a late end falls back to requested_at on equal ended_at and ranks a missing ended_at lowest", async () => {
-    const T = "2026-01-01T00:00:00.400010Z";
+    const T = `${aheadByHours(-1).slice(0, 19)}.400010Z`;
     const cases = [
       // Equal ended_at: the shown grant was requested later, so it stays.
       { shown: { ended_at: T, requested_at: SEEN }, confirmed: { ended_at: T, requested_at: REQUESTED }, line: "Nobody answered" },

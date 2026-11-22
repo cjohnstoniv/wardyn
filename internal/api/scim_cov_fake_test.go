@@ -785,6 +785,33 @@ func (s *scimCovStore) CreateScimGroup(_ context.Context, externalID, displayNam
 	return *g, nil
 }
 
+// CreateScimGroupWithMembers is all or nothing, as the store's transaction is: a failure of the member write
+// leaves no group.
+func (s *scimCovStore) CreateScimGroupWithMembers(_ context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (store.ScimGroup, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.enter("CreateScimGroup"); err != nil {
+		return store.ScimGroup{}, err
+	}
+	externalID = strings.TrimSpace(externalID)
+	for _, g := range s.groups {
+		if strings.EqualFold(g.ExternalID, externalID) {
+			return store.ScimGroup{}, store.ErrScimGroupExists
+		}
+	}
+	if err := s.enter("AddScimGroupMembers"); err != nil {
+		return store.ScimGroup{}, err
+	}
+	g := &store.ScimGroup{ID: s.newID(), ExternalID: externalID, DisplayName: displayName, CreatedAt: now}
+	s.groups[g.ID] = g
+	for _, m := range identities {
+		if _, known := s.idents[m]; known && !slices.Contains(s.members[g.ID], m) {
+			s.members[g.ID] = append(s.members[g.ID], m)
+		}
+	}
+	return *g, nil
+}
+
 func (s *scimCovStore) addGroup(externalID, name string, members ...uuid.UUID) store.ScimGroup {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -863,6 +890,9 @@ func (s *scimCovStore) AddScimGroupMembers(_ context.Context, id uuid.UUID, iden
 	if err := s.enter("AddScimGroupMembers"); err != nil {
 		return err
 	}
+	if _, ok := s.groups[id]; !ok {
+		return store.ErrNotFound
+	}
 	for _, m := range identities {
 		if _, known := s.idents[m]; known && !slices.Contains(s.members[id], m) {
 			s.members[id] = append(s.members[id], m)
@@ -877,6 +907,12 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 	if err := s.enter("StartGroupRemoval"); err != nil {
 		return err
 	}
+	s.startGroupRemoval(groupID, identityID)
+	return nil
+}
+
+// startGroupRemoval is StartGroupRemoval's work, under s.mu.
+func (s *scimCovStore) startGroupRemoval(groupID, identityID uuid.UUID) {
 	target := groupID.String()
 	wasMember := slices.Contains(s.members[groupID], identityID)
 	s.members[groupID] = slices.DeleteFunc(s.members[groupID], func(m uuid.UUID) bool { return m == identityID })
@@ -895,7 +931,6 @@ func (s *scimCovStore) StartGroupRemoval(_ context.Context, groupID, identityID 
 			s.jobs = append(s.jobs, &store.DeprovisionJob{IdentityID: identityID, Kind: store.JobKindGroupRemove, Step: step, Target: target})
 		}
 	}
-	return nil
 }
 
 func (s *scimCovStore) ResumeGroupRemoval(_ context.Context, groupID, identityID uuid.UUID) (bool, error) {
@@ -927,7 +962,7 @@ func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UU
 	return out, nil
 }
 
-func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
+func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, tenant string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("DeleteScimGroup"); err != nil {
@@ -935,6 +970,13 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	}
 	if _, ok := s.groups[id]; !ok {
 		return store.ErrNotFound
+	}
+	// Every member of the issuer and tenant still recorded leaves with a removal owed, as the store's delete
+	// opens it.
+	for _, m := range slices.Clone(s.members[id]) {
+		if i, known := s.idents[m]; known && i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant) {
+			s.startGroupRemoval(id, m)
+		}
 	}
 	delete(s.groups, id)
 	delete(s.members, id)
@@ -1185,7 +1227,7 @@ type scimCovPaged struct {
 	errAction string
 }
 
-func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.UUID, f store.AuditFilter, _ store.Page) ([]types.AuditEvent, error) {
+func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.UUID, f store.AuditFilter, page store.Page) ([]types.AuditEvent, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, "QueryAuditEventsFilteredPage")
@@ -1198,6 +1240,9 @@ func (p *scimCovPaged) QueryAuditEventsFilteredPage(_ context.Context, _ *uuid.U
 		if f.Matches(ev) {
 			out = append(out, ev)
 		}
+	}
+	if page.Limit > 0 && len(out) > page.Limit { // the limit applies after the filter, as the store's does
+		out = out[:page.Limit]
 	}
 	return out, nil
 }

@@ -165,6 +165,8 @@ func (s *Stream) Read(b []byte) (int, error) {
 }
 
 // Write sends b as DATA frames of at most MaxDataFrame bytes, waiting for credit.
+// Each frame is checked against the stream's reset with the link's writer held,
+// so after an abort no further frame goes out; n counts the frames that did.
 func (s *Stream) Write(b []byte) (int, error) {
 	if runnerToOrgOnly(s.kind) && s.p.cfg.Org { // the tee and a window flow runner to org only
 		_ = s.Reset(ResetRefused)
@@ -188,7 +190,7 @@ func (s *Stream) Write(b []byte) (int, error) {
 		}
 		// The frame is written under the link's ctx, not the stream's: a reset
 		// that cancels a write in progress would close the shared connection.
-		if err := s.p.send(s.p.ctx, Frame{Type: TypeData, Stream: s.id, Payload: b[written : written+n]}); err != nil {
+		if err := s.p.sendData(s, b[written:written+n]); err != nil {
 			return written, err
 		}
 		written += n
@@ -257,6 +259,18 @@ func (s *Stream) Reset(code uint32) error {
 	}
 	s.p.forget(s.id)
 	return s.p.send(s.p.ctx, Frame{Type: TypeReset, Stream: s.id, Payload: EncodeReset(code)})
+}
+
+// Abort ends the stream at once with code, with no I/O on the link: it never waits on the link's writer
+// or on another stream, and starts no goroutine. A Write waiting for credit returns at once, and one
+// waiting for the writer returns when it frees, its frame dropped: no DATA frame of the stream is
+// admitted after Abort returns. The RESET goes to the reply worker, which writes it after every frame
+// already admitted; until then the stream still counts against MaxStreams. On a stream already reset, by
+// the peer or by an earlier abort, it does nothing.
+func (s *Stream) Abort(code uint32) {
+	if s.abort(code) {
+		s.p.resetLater(s, code)
+	}
 }
 
 // resetQueued is Reset for the read loop: the RESET frame goes to the reply worker rather than being

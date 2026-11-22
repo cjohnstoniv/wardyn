@@ -508,10 +508,18 @@ type MemberDriveStore interface {
 	// MemberDriveOwnerStarting reports whether owner has a run in STARTING, or one with no sandbox
 	// recorded whose dispatcher's watcher lease is younger than leaseFresh.
 	MemberDriveOwnerStarting(ctx context.Context, owner string, leaseFresh time.Duration) (bool, error)
-	// AbortMemberDriveDelete clears only the tombstone started names.
-	AbortMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
-	// FinishMemberDriveDelete removes the row only while it carries started.
-	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time) error
+	// BeginMemberDriveTakeover is the Mac sweep's own claim: only a mark older than a minute, never an unmarked row.
+	BeginMemberDriveTakeover(ctx context.Context, id uuid.UUID) (types.UserDrive, time.Time, error)
+	// IssueMemberDriveDelete makes the claim (started, n) outstanding before the physical call and returns the
+	// count it is now under; ErrNotFound when the pair no longer matches, and then no call is made.
+	IssueMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) (int, error)
+	// ClearMemberDriveClaim gives up a claim nothing was issued under.
+	ClearMemberDriveClaim(ctx context.Context, id uuid.UUID, started time.Time, n int) error
+	// ClearMemberDriveIssued gives up a claim after a refusal that touched nothing, only when the claim was over
+	// an even count and issued is its own issue.
+	ClearMemberDriveIssued(ctx context.Context, id uuid.UUID, started time.Time, claimN, issued int) error
+	// FinishMemberDriveDelete removes the row only while it carries the claim (started, n).
+	FinishMemberDriveDelete(ctx context.Context, id uuid.UUID, started time.Time, n int) error
 	// ListMemberDrives returns one page of every person's drives and the total.
 	ListMemberDrives(ctx context.Context, p Page) ([]types.UserDrive, int, error)
 }
@@ -546,6 +554,13 @@ type KeptMachineStore interface {
 	DropUnstartedKeptMachine(ctx context.Context, id, runID uuid.UUID) error
 	// BeginKeptMachineDelete tombstones owner's kept machine (an empty owner means any owner).
 	BeginKeptMachineDelete(ctx context.Context, owner string, id uuid.UUID, by string) (KeptMachineDeletion, error)
+	// RepairKeptMachineExpiry sets a kept machine's deadline to the Mac's own for the stop of run runID, only
+	// while the machine is kept with no delete started or intended and that run is the one that last held it.
+	// ErrNotFound when it is not, or the deadline already is the Mac's.
+	RepairKeptMachineExpiry(ctx context.Context, id, runID uuid.UUID, expiresAt time.Time) error
+	// DeferKeptMachineExpiry moves a kept machine's deadline forward to expiresAt, only while no delete is
+	// started or intended and the deadline is earlier. ErrNotFound otherwise.
+	DeferKeptMachineExpiry(ctx context.Context, id uuid.UUID, expiresAt time.Time) error
 	// AbortKeptMachineDelete puts a machine back to kept while it carries started (never a kill's).
 	AbortKeptMachineDelete(ctx context.Context, id uuid.UUID, started time.Time) error
 	// FinishKeptMachineDelete removes the row only while it carries started.

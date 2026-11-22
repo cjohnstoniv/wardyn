@@ -2,18 +2,23 @@
 # Copyright 2026 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# portal-artifacts.sh <seed|old-refusals|old-revoke|old-worker>: the issuer-portal half of
+# portal-artifacts.sh <seed|old-refusals|old-revoke|old-worker|old-callback>: the issuer-portal half of
 # .github/workflows/mixed-version.yml. The published v0.10.1 replica (svc/old-wardyn) and this tree's replica
 # (svc/new-wardyn) share one migrated database. seed writes synthetic issuer-portal state into it, in the shapes
-# migration 0294 defines and this tree's store writes; the other three ask the old replica's own entry points
+# migration 0294 defines and this tree's store writes; the others ask the old replica's own entry points
 # about that state:
 #   old-refusals  each issuer-portal artifact is refused at the old server's door, beside a legacy portal it
 #                 still serves;
 #   old-revoke    the old server's DELETE /api/v1/admin/delegates/{id} revokes an issuer portal, and the new
 #                 server then refuses that portal's grant (and still admits another portal's);
-#   old-worker    with the new replica scaled to zero, the old worker takes a queued issuer-portal run whose
-#                 stored grant is "portal:<uuid>", ends it before any authority is bound, and never dispatches it.
-# Needs NS, OLD_IP and ADMIN_TOKEN (the job's env), RUNNER_TEMP, kubectl on the kind cluster, curl, jq, openssl.
+#   old-worker    the new server queues one run through an issuer portal's grant and one through a console
+#                 portal's token (its own POST /api/v1/runs, on a full pool); with the new replica scaled to
+#                 zero, the old worker ends the first before any authority is bound and never dispatches it,
+#                 and binds and starts the second;
+#   old-callback  the old server's SSO callback, against fake-oidc-issuer.py, refuses an issuer-portal
+#                 person's subject and signs in an ordinary one.
+# Needs NS, OLD_IP and ADMIN_TOKEN (the job's env), RUNNER_TEMP, kubectl and helm on the kind cluster, docker,
+# curl, jq, openssl and python3.
 # Every wait is bounded; any failure prints the diagnostics below and exits non-zero.
 set -euo pipefail
 
@@ -37,8 +42,10 @@ diag() {
 		# shellcheck disable=SC1090
 		. "$STATE"
 		psqlc "SELECT id, issuer <> '' AS issuer_portal, revoked_at FROM delegates"
-		psqlc "SELECT id, state, failure_hint, status_detail, sandbox_ref, watcher_owner FROM agent_runs WHERE id IN ('$TICKET_RUN', '${QUEUE_RUN:-$TICKET_RUN}')"
+		psqlc "SELECT id, state, failure_hint, status_detail, sandbox_ref, watcher_owner FROM agent_runs WHERE id IN ('$TICKET_RUN', '${QUEUE_RUN:-$TICKET_RUN}', '${LEGACY_RUN:-$TICKET_RUN}')"
 		psqlc "SELECT run_id, pool_id, owner, authority FROM run_queue"
+		psqlc "SELECT id, scope, revision, limits FROM runner_pools"
+		psqlc "SELECT * FROM remote_runners"
 	fi
 	psqlc "SELECT pid, client_addr, application_name, state, backend_start FROM pg_stat_activity WHERE datname = current_database()"
 	echo "::endgroup::"
@@ -46,7 +53,7 @@ diag() {
 
 cleanup() {
 	local rc=$?
-	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null
+	[ "${#pids[@]}" -eq 0 ] || kill "${pids[@]}" 2>/dev/null || :
 	[ "$rc" -eq 0 ] || diag
 	exit "$rc"
 }
@@ -122,12 +129,13 @@ seed() {
 BEGIN;
 INSERT INTO portal_issuers (issuer_key, issuer, internal_issuer_norm, person_id_claim, created_by)
 VALUES (:'k', :'issuer', :'issuer', 'uid', 'mixed-version-job');
+-- Pinned to the root unit (store.DefaultUnitID): this tree refuses a launch through an unpinned issuer portal.
 INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by,
-                       issuer, internal_issuer, issuer_key, token_profile, user_type, portal_managed_admission)
+                       issuer, internal_issuer, issuer_key, token_profile, user_type, portal_managed_admission, run_in_under)
 VALUES (:'p1', 'mixed-version issuer portal 1', 'mixed-version-portal-1', '', :'p1_sha', 'mixed-version-job',
-        :'issuer', '', :'k', 'okta_access_token', 'standard', true),
+        :'issuer', '', :'k', 'okta_access_token', 'standard', true, '00000000-0000-0000-0000-000000000001'),
        (:'p2', 'mixed-version issuer portal 2', 'mixed-version-portal-2', '', :'p2_sha', 'mixed-version-job',
-        :'issuer', '', :'k', 'okta_access_token', 'standard', true);
+        :'issuer', '', :'k', 'okta_access_token', 'standard', true, '00000000-0000-0000-0000-000000000001');
 INSERT INTO delegates (id, name, idp_client_id, scope_group, credential_sha256, registered_by)
 VALUES (:'lp', 'mixed-version console portal', 'mixed-version-console', 'mixed-version-group', :'lp_sha', 'mixed-version-job');
 INSERT INTO principal_identities (id, principal, issuer, display_email, introduced_by, introduced_issuer,
@@ -218,72 +226,230 @@ no_other_sessions() {
 	psqlc "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND client_addr IS NOT NULL AND host(client_addr) <> '$OLD_IP'"
 }
 
+# launch <name> <bearer>: one real POST /api/v1/runs at the new server; it must queue. Run it in this shell, so
+# its failure ends the step; the run id is in $T/<name>.json.
+launch() {
+	local code
+	code=$(req "$1" -X POST -H "Authorization: Bearer $2" -H 'Content-Type: application/json' \
+		-d '{"experience":"background","workload":{"kind":"command","command":"true"}}' "$NEW/api/v1/runs")
+	[ "$code" = 201 ] || fail "$1: the new server's POST /api/v1/runs answered $code, want 201: $(head -c 600 "$T/$1.json")"
+	jq -e '.state == "QUEUED" and (.id | length) == 36' "$T/$1.json" >/dev/null || fail "$1: the launch did not queue: $(head -c 600 "$T/$1.json")"
+}
+
+# old_worker: two runs queue through this tree's own launch path while the organization pool is full, one through
+# issuer portal 2's grant and one through the console portal's token. With the new replica gone, the old worker
+# takes both: it ends the issuer-portal run before it binds any authority, with the start-failed hint, and
+# dispatches nothing; it binds and starts the console-portal run, whose start rows carry the portal.
 old_worker() {
 	load
-	# Only the old replica may take the row: the new one is scaled to zero, its pods are gone, and no session
-	# but the old replica's remains on the database before the row exists.
+	pf new-wardyn 18080
+	local pool prev rrev filler portal_run legacy_run g n code state new_pods sandbox_ref legacy_hint
+	# The organization pool and the server's own Kubernetes runner, both made at first boot. Their limits go in
+	# through the admin API: the runner's (a runner with none never fits a run), and the pool's, whose cap makes
+	# every launch queue. One slot holder (a row that names no runner and no sandbox) fills that cap.
+	pool=$(psqlc "SELECT id FROM runner_pools WHERE scope = 'organization'")
+	[ "$(printf '%s\n' "$pool" | grep -c .)" = 1 ] || fail "want one organization pool, have: $pool"
+	rrev=$(psqlc "SELECT revision FROM remote_runners WHERE id = 'k8s'")
+	[ -n "$rrev" ] || fail "the server's Kubernetes runner (remote runner k8s) has no row"
+	code=$(req runner-limits -X PUT -H "$(admin)" -H 'Content-Type: application/json' "$NEW/api/v1/remote-runners/k8s" \
+		-d "{\"revision\":$rrev,\"limits\":{\"runs_at_once\":4,\"total\":{\"cpu_millis\":4000,\"memory_mib\":8192,\"disk_mib\":20480},\"per_run\":{\"cpu_millis\":1000,\"memory_mib\":2048,\"disk_mib\":5120}}}")
+	expect "new PUT /remote-runners/k8s limits" 200 "$code" runner-limits
+	filler=$(uuid)
+	psqlf -v pool="$pool" -v run="$filler" <<'SQL'
+INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target,
+                        runner_pool_id, runner_pool_selection)
+VALUES (:'run', 'mixed-version-slot-holder', 'claude-code', '', 'CC1', 'RUNNING', 'spiffe://wardyn.mixed-version/run/' || :'run',
+        'k8s', :'pool', 'organisation_default');
+SQL
+	prev=$(psqlc "SELECT revision FROM runner_pools WHERE id = '$pool'")
+	code=$(req pool-limits -X PUT -H "$(admin)" -H 'Content-Type: application/json' "$NEW/api/v1/runner-pools/$pool" \
+		-d "{\"revision\":$prev,\"limits\":{\"background\":{},\"barriers\":[],\"max_concurrent_runs\":1}}")
+	expect "new PUT /runner-pools/$pool limits" 200 "$code" pool-limits
+
+	launch launch-portal "$G2_TOKEN"
+	launch launch-legacy "$LT_TOKEN"
+	portal_run=$(jq -r .id "$T/launch-portal.json")
+	legacy_run=$(jq -r .id "$T/launch-legacy.json")
+	save QUEUE_RUN "$portal_run"
+	save LEGACY_RUN "$legacy_run"
+	echo "ok: the new server queued run $portal_run (issuer portal 2) and run $legacy_run (console portal)"
+	# What this tree's producer stored. 0.10.1 decodes the grant into a uuid.UUID, whose text form is 32, 36, 38
+	# or 45 characters; "portal:<uuid>" is 43.
+	g=$(psqlc "SELECT authority->>'grant' FROM run_queue WHERE run_id = '$portal_run'")
+	[ "$g" = "portal:$G2" ] || fail "run $portal_run's stored grant is '$g', want portal:$G2"
+	[ "${#g}" -eq 43 ] || fail "the stored grant is ${#g} characters, not 43"
+	[ "$(psqlc "SELECT authority->>'delegate' FROM run_queue WHERE run_id = '$portal_run'")" = "$P2" ] || fail "run $portal_run's stored delegate is not portal 2"
+	echo "ok: run $portal_run's stored grant is $g"
+	g=$(psqlc "SELECT authority->>'grant' FROM run_queue WHERE run_id = '$legacy_run'")
+	[ "$g" = "$LT" ] || fail "run $legacy_run's stored grant is '$g', want the bare $LT"
+	[ "$(psqlc "SELECT authority->>'delegate' FROM run_queue WHERE run_id = '$legacy_run'")" = "$LP" ] || fail "run $legacy_run's stored delegate is not the console portal"
+	echo "ok: run $legacy_run's stored grant is the bare $g"
+
+	# Only the old replica may take the rows: the new one is scaled to zero, its pods are gone, and no session
+	# but the old replica's remains on the database before the slot frees.
 	kubectl -n "$NS" scale deployment/new-wardyn --replicas=0
-	local gone=0 n
+	local gone=0
 	for _ in $(seq 1 60); do
-		if [ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)" ] && [ "$(no_other_sessions)" = 0 ]; then gone=1; break; fi
+		new_pods=$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)
+		if [ -z "$new_pods" ] && [ "$(no_other_sessions)" = 0 ]; then gone=1; break; fi
 		sleep 2
 	done
 	[ "$gone" = 1 ] || fail "the new replica's pods or database sessions did not go within 120 s"
 	echo "ok: only the old replica ($OLD_IP) is connected"
-	local pool run grant auth
-	pool=$(uuid) run=$(uuid) grant="portal:$G2"
-	save QUEUE_RUN "$run"
-	# 0.10.1 decodes the field into a uuid.UUID, whose text form is 32, 36, 38 or 45 characters; this is 43.
-	[ "${#grant}" -eq 43 ] || fail "the stored grant is ${#grant} characters, not 43"
-	# The authority this tree's queueAuthority marshals for a portal launch, in its field order.
-	auth=$(jq -nc --arg sub "$PERSON" --arg d "$P2" --arg g "$grant" \
-		'{sub: $sub, role: "user", user_type: "standard", groups: [], delegate: $d, grant: $g}')
-	# The pool is a person's pool the portal person cannot see. 0.10.1's admission counts such a pool as free
-	# and leaves the run to its start, and the start is what this asks about: no runner, executor or k8s room
-	# decides anything here.
-	psqlf -v pool="$pool" -v run="$run" -v person="$PERSON" -v p2="$P2" -v auth="$auth" <<'SQL'
+	for r in "$portal_run" "$legacy_run"; do
+		[ "$(psqlc "SELECT state FROM agent_runs WHERE id = '$r'")" = QUEUED ] || fail "run $r left the queue while the pool was full"
+	done
+	# Free the slot and raise the cap past both runs, so neither waits on the other.
+	psqlf -v pool="$pool" -v run="$filler" <<'SQL'
 BEGIN;
-INSERT INTO runner_pools (id, name, scope, owner, created_by)
-VALUES (:'pool', 'mixed-version queue', 'user', 'mixed-version-pool-owner', 'mixed-version-job');
-INSERT INTO agent_runs (id, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target,
-                        created_via, user_type, runner_pool_id)
-VALUES (:'run', :'person', 'claude-code', '', 'CC1', 'QUEUED', 'spiffe://wardyn.mixed-version/run/' || :'run', 'k8s',
-        :'p2', 'standard', :'pool');
-INSERT INTO run_queue (run_id, pool_id, owner, deadline_at, authority, launch)
-VALUES (:'run', :'pool', :'person', now() + interval '1 hour', (:'auth')::jsonb, '{}'::jsonb);
+UPDATE agent_runs SET state = 'STOPPED' WHERE id = :'run';
+UPDATE runner_pools SET limits = jsonb_set(limits, '{max_concurrent_runs}', '4'), revision = revision + 1 WHERE id = :'pool';
 COMMIT;
 SQL
-	echo "queued run $run on pool $pool with grant $grant"
 	# The old worker's leader sweep promotes every ten seconds once it holds the lease the new replica left.
-	local state=""
+	state=""
 	for _ in $(seq 1 60); do
-		state=$(psqlc "SELECT state FROM agent_runs WHERE id = '$run'")
+		state=$(psqlc "SELECT state FROM agent_runs WHERE id = '$portal_run'")
 		case "$state" in
-		STARTING | RUNNING | WAITING_FOR_CONFIRMATION) fail "the old worker started run $run ($state)" ;;
+		STARTING | RUNNING | WAITING_FOR_CONFIRMATION) fail "the old worker started run $portal_run ($state)" ;;
 		QUEUED | PENDING) sleep 5 ;;
 		*) break ;;
 		esac
 	done
-	[ "$state" = FAILED ] || fail "run $run is $state after 300 s, want FAILED"
+	[ "$state" = FAILED ] || fail "run $portal_run is $state after 300 s, want FAILED"
 	[ "$(no_other_sessions)" = 0 ] || fail "a session other than the old replica's joined the database during the wait"
-	[ -z "$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)" ] || fail "a new-replica pod came back"
-	local hint
-	hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$run'")
-	[ "$hint" = "$START_FAILED_HINT" ] || fail "run $run failure_hint is '$hint', want '$START_FAILED_HINT'"
-	echo "ok: run $run is FAILED with the start-failed hint"
-	[ "$(psqlc "SELECT count(*) FROM run_queue WHERE run_id = '$run'")" = 0 ] || fail "run $run still has a queue row"
-	[ "$(psqlc "SELECT sandbox_ref FROM agent_runs WHERE id = '$run'")" = "" ] || fail "run $run has a sandbox_ref"
+	new_pods=$(kubectl -n "$NS" get pods -l app.kubernetes.io/instance=new -o name)
+	[ -z "$new_pods" ] || fail "a new-replica pod came back"
+	# 0.10.1 writes the terminal state before the hint, and the refusal's audit row after both, so each is
+	# waited for on its own.
+	local hint=""
+	for _ in $(seq 1 30); do
+		hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$portal_run'")
+		[ "$hint" = "$START_FAILED_HINT" ] && break
+		sleep 2
+	done
+	[ "$hint" = "$START_FAILED_HINT" ] || fail "run $portal_run failure_hint is '$hint' after 60 s, want '$START_FAILED_HINT'"
+	echo "ok: run $portal_run is FAILED with the start-failed hint"
+	[ "$(psqlc "SELECT count(*) FROM run_queue WHERE run_id = '$portal_run'")" = 0 ] || fail "run $portal_run still has a queue row"
+	sandbox_ref=$(psqlc "SELECT sandbox_ref FROM agent_runs WHERE id = '$portal_run'")
+	[ "$sandbox_ref" = "" ] || fail "run $portal_run has a sandbox_ref"
 	# Nothing was dispatched for it: no pod, job or other workload anywhere names the run.
-	n=$(kubectl get pods,jobs,deployments,statefulsets,replicasets -A -o json | jq --arg r "$run" '[.items[] | select(tostring | contains($r))] | length')
-	[ "$n" = 0 ] || fail "$n cluster object(s) name run $run"
-	echo "ok: no pod or job names run $run"
+	n=$(kubectl get pods,jobs,deployments,statefulsets,replicasets -A -o json | jq --arg r "$portal_run" '[.items[] | select(tostring | contains($r))] | length')
+	[ "$n" = 0 ] || fail "$n cluster object(s) name run $portal_run"
+	echo "ok: no pod or job names run $portal_run"
 	pf old-wardyn 18081
-	local code
-	code=$(req queue-audit -H "$(admin)" "$OLD/api/v1/audit?action=run.queue.start&target=$run")
-	expect "old audit read" 200 "$code" queue-audit
-	jqok "one run.queue.start failure (queue_start_refused) and no success" queue-audit \
-		'([.[] | select(.outcome == "failure" and .data.reason == "queue_start_refused")] | length == 1)
-		 and ([.[] | select(.outcome == "success")] | length == 0)'
+	local refused=0
+	for _ in $(seq 1 24); do
+		code=$(req queue-audit -H "$(admin)" "$OLD/api/v1/audit?action=run.queue.start&target=$portal_run")
+		if [ "$code" = 200 ] && jq -e 'any(.[]; .outcome == "failure" and .data.reason == "queue_start_refused")' "$T/queue-audit.json" >/dev/null; then
+			refused=1
+			break
+		fi
+		sleep 5
+	done
+	[ "$refused" = 1 ] || fail "the old server shows no run.queue.start refusal for run $portal_run within 120 s (last answer $code): $(head -c 600 "$T/queue-audit.json")"
+	# Its one row is written before any authority is bound, so it carries no portal.
+	jqok "one run.queue.start failure (queue_start_refused) with no portal on it, and no success" queue-audit \
+		'([.[] | select(.outcome == "failure" and .data.reason == "queue_start_refused" and .data.via == null)] | length == 1)
+		 and ([.[] | select(.outcome == "success" or .data.via != null)] | length == 0)'
+	# The control: the old worker bound the console portal's run to its portal and started it.
+	local bound=0
+	for _ in $(seq 1 24); do
+		code=$(req legacy-audit -H "$(admin)" "$OLD/api/v1/audit?action=run.queue.start&target=$legacy_run")
+		if [ "$code" = 200 ] && jq -e 'length > 0' "$T/legacy-audit.json" >/dev/null; then bound=1; break; fi
+		sleep 5
+	done
+	[ "$bound" = 1 ] || fail "the old worker wrote no run.queue.start row for run $legacy_run within 120 s"
+	jqok "run $legacy_run's start succeeded, bound to the console portal and its token" legacy-audit --arg d "$LP" --arg g "$LT" \
+		'([.[] | select(.outcome == "success" and .data.via.delegate == $d and .data.via.grant == $g)] | length == 1)
+		 and ([.[] | select(.outcome == "failure")] | length == 0)'
+	state=$(psqlc "SELECT state FROM agent_runs WHERE id = '$legacy_run'")
+	[ "$state" != QUEUED ] || fail "run $legacy_run is still QUEUED after its start"
+	legacy_hint=$(psqlc "SELECT failure_hint FROM agent_runs WHERE id = '$legacy_run'")
+	[ "$legacy_hint" != "$START_FAILED_HINT" ] || fail "run $legacy_run ended with the start-failed hint"
+	echo "ok: run $legacy_run left the queue as $state"
+}
+
+# sign_in <dir> <sub> <email>: one browser sign-in at the old server through the fake issuer, on the cookie jar
+# <dir>/jar. Every header file stays in <dir>, the private directory beside the jar, never in $T, which the
+# diagnostics print; an error names the status and path only, never a cookie or a redirect's query. Writes the
+# callback's status and Location to <dir>/signin.out; run it in this shell, so its own failure ends the step.
+sign_in() {
+	local dir=$1 sub=$2 email=$3 loc code
+	code=$(curl -sS -o /dev/null -D "$dir/login.hdr" -c "$dir/jar" -b "$dir/jar" -w '%{http_code}' "$OLD/auth/login")
+	[ "$code" = 302 ] || fail "GET /auth/login answered $code, want 302"
+	loc=$(sed -n 's/^[Ll]ocation: *//p' "$dir/login.hdr" | tr -d '\r')
+	case "$loc" in "$ISSUER/authorize?"*) ;; *) fail "/auth/login sent the browser to ${loc%%\?*}, want $ISSUER/authorize" ;; esac
+	loc="$loc&mv_sub=$(jq -rn --arg v "$sub" '$v|@uri')&mv_email=$(jq -rn --arg v "$email" '$v|@uri')"
+	code=$(curl -sS -o /dev/null -D "$dir/authorize.hdr" -w '%{http_code}' "$loc")
+	[ "$code" = 302 ] || fail "GET $ISSUER/authorize answered $code, want 302"
+	loc=$(sed -n 's/^[Ll]ocation: *//p' "$dir/authorize.hdr" | tr -d '\r')
+	case "$loc" in "$OLD/auth/callback?"*) ;; *) fail "the fake issuer sent the browser to ${loc%%\?*}, want $OLD/auth/callback" ;; esac
+	code=$(curl -sS -o /dev/null -D "$dir/callback.hdr" -c "$dir/jar" -b "$dir/jar" -w '%{http_code}' "$loc")
+	printf '%s %s\n' "$code" "$(sed -n 's/^[Ll]ocation: *//p' "$dir/callback.hdr" | tr -d '\r')" >"$dir/signin.out"
+}
+
+# live_session <jar>: the jar holds an unexpired wardyn_session cookie (curl drops one the server expired).
+live_session() { awk -F'\t' '$6 == "wardyn_session" && $7 != "" { found = 1 } END { exit !found }' "$1"; }
+
+# old_callback: the released server's SSO callback refuses an issuer-portal person's subject (a delegate:
+# principal, reserved at v0.10.1) as 0.10.1 answers it: a redirect to the sign-in error page with
+# auth_error=sign_in_refused, no live session, and an auth.fail row naming reserved_principal. An ordinary
+# subject through the same issuer signs in. The old replica is upgraded in place with the issuer's settings,
+# so this runs after every other check that asks it.
+old_callback() {
+	load
+	local gw keydir jar code loc cid=mixed-version-console control=mixed-version-console-person
+	gw=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}' | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' | head -n1)
+	[ -n "$gw" ] || fail "the kind network has no IPv4 gateway"
+	ISSUER="http://$gw:5556"
+	# The key, the cookie jar and every sign-in header file stay out of $T, which the diagnostics print.
+	keydir=$(mktemp -d "$RUNNER_TEMP/oidc.XXXXXX")
+	chmod 700 "$keydir"
+	openssl genrsa -out "$keydir/key.pem" 2048 2>/dev/null
+	python3 -I .github/mixed-version/fake-oidc-issuer.py "$gw" 5556 "$keydir/key.pem" "$cid" >"$T/fake-issuer.log" 2>&1 &
+	pids+=("$!")
+	for _ in $(seq 1 20); do
+		if curl -fsS -o "$T/discovery.json" "$ISSUER/.well-known/openid-configuration" 2>/dev/null; then break; fi
+		sleep 1
+	done
+	jqok "the fake issuer serves its discovery document" discovery --arg i "$ISSUER" '.issuer == $i'
+
+	helm upgrade old ./deploy/helm/wardyn --namespace "$NS" --reuse-values \
+		--set-string env.WARDYN_OIDC_ISSUER="$ISSUER" \
+		--set-string env.WARDYN_OIDC_CLIENT_ID="$cid" \
+		--set-string env.WARDYN_OIDC_REDIRECT_URL="$OLD/auth/callback" \
+		--set-string env.WARDYN_OIDC_OPERATOR_EMAILS=ops@mixed-version.invalid \
+		--set-json "networkPolicy.egress.extra=[{\"to\":[{\"ipBlock\":{\"cidr\":\"$gw/32\"}}],\"ports\":[{\"port\":5556,\"protocol\":\"TCP\"}]}]"
+	kubectl -n "$NS" rollout status deployment/old-wardyn --timeout=300s || fail "the old replica did not come back with the issuer configured"
+	pf old-wardyn 18081
+	jar="$keydir/jar"
+
+	: >"$jar"
+	sign_in "$keydir" "$PERSON" person-1@mixed-version.invalid
+	read -r code loc <"$keydir/signin.out"
+	[ "$code" = 302 ] || fail "GET $OLD/auth/callback for the portal person's subject answered $code, want 302"
+	[ "$loc" = "/?auth_error=sign_in_refused" ] || fail "GET $OLD/auth/callback for the portal person's subject sent the browser to ${loc%%\?*} (query withheld), want /?auth_error=sign_in_refused"
+	echo "ok: callback with subject $PERSON -> 302 $loc"
+	! live_session "$jar" || fail "the refused callback left a live wardyn_session cookie"
+	echo "ok: no live session after the refused callback"
+	code=$(req me-refused -b "$jar" "$OLD/api/v1/me")
+	expect "old /me on the refused sign-in's cookies" 401 "$code" me-refused
+	expect "old audit read of auth.fail" 200 "$(req audit-callback -H "$(admin)" "$OLD/api/v1/audit?action=auth.fail&actor=wardyn/oidcCallback")" audit-callback
+	jqok "one auth.fail row from the callback names reserved_principal" audit-callback \
+		'[.[] | select(.target == "/auth/callback" and .outcome == "failure" and .data.reason == "reserved_principal")] | length == 1'
+
+	: >"$jar"
+	sign_in "$keydir" "$control" person@mixed-version.invalid
+	read -r code loc <"$keydir/signin.out"
+	[ "$code" = 302 ] || fail "GET $OLD/auth/callback for an ordinary subject answered $code, want 302"
+	case "$loc" in "" | *auth_error*) fail "GET $OLD/auth/callback for an ordinary subject sent the browser to ${loc%%\?*} (query withheld), want a page without auth_error" ;; esac
+	echo "ok: callback with subject $control -> 302 ${loc%%\?*}"
+	live_session "$jar" || fail "the ordinary sign-in set no wardyn_session cookie"
+	code=$(req me-control -b "$jar" "$OLD/api/v1/me")
+	expect "old /me on the ordinary sign-in's session" 200 "$code" me-control
+	jqok "the ordinary sign-in's principal is its subject" me-control --arg p "$control" '.principal == $p'
+	rm -rf "$keydir"
 }
 
 case "${1:-}" in
@@ -291,5 +457,6 @@ seed) seed ;;
 old-refusals) old_refusals ;;
 old-revoke) old_revoke ;;
 old-worker) old_worker ;;
-*) fail "usage: $0 <seed|old-refusals|old-revoke|old-worker>" ;;
+old-callback) old_callback ;;
+*) fail "usage: $0 <seed|old-refusals|old-revoke|old-worker|old-callback>" ;;
 esac

@@ -109,7 +109,7 @@ func TestKeptStopThatWroteNoRecordWaitsForTheMacsInventory(t *testing.T) {
 	}
 	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	macExpiry := time.Now().UTC().AddDate(0, 0, 1).Truncate(time.Second) // the recovery's: the record's own 1 day
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: macExpiry})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: k.run.ID.String(), ExpiresAt: macExpiry})
 	k.sweep(t)
 	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || !got.ExpiresAt.Equal(macExpiry) {
 		t.Fatalf("after the sweep: %s expires %s, want kept and the Mac's %s", got.State, got.ExpiresAt, macExpiry)
@@ -123,7 +123,7 @@ func TestKeptReconcileExpiryIsCappedAtTheLongestAllowance(t *testing.T) {
 	m := k.machine(t, k.owner, k.rn.ID, k.run.ID, "dev", types.KeptMachineInUse)
 	k.exec(t, `UPDATE agent_runs SET state = 'KILLED', ended_at = now() WHERE id = $1`, k.run.ID)
 	before := time.Now().UTC()
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: before.AddDate(0, 0, 400)})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: k.run.ID.String(), ExpiresAt: before.AddDate(0, 0, 400)})
 	k.sweep(t)
 	got, _ := k.row(t, m.ID)
 	lo, hi := before.AddDate(0, 0, types.KeptMachineIdleDaysMax), time.Now().UTC().AddDate(0, 0, types.KeptMachineIdleDaysMax)
@@ -149,7 +149,7 @@ func TestKeptReconcileLeavesAnUnrecoveredRecordInUse(t *testing.T) {
 		t.Fatalf("machine.keep = %v, want none while the Mac lists it in use", keeps)
 	}
 	macExpiry := time.Now().UTC().AddDate(0, 0, 3).Truncate(time.Second)
-	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, ExpiresAt: macExpiry})
+	k.inventory(t, runnerwire.MacVMKeptMachine{ID: m.ID.String(), Bytes: 1 << 30, StopRunID: k.run.ID.String(), ExpiresAt: macExpiry})
 	k.sweep(t)
 	if got, _ := k.row(t, m.ID); got.State != types.KeptMachineKept || !got.ExpiresAt.Equal(macExpiry) {
 		t.Fatalf("after the recovery: %s expires %s, want kept and the Mac's %s", got.State, got.ExpiresAt, macExpiry)

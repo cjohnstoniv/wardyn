@@ -528,8 +528,15 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		resolved.Paused = true
 		return resolved, nil
 	}
+	if team && tier == types.DriveSubjectPortal {
+		return portalResolvedDrive(resolved)
+	}
 	if team {
 		return teamResolvedDrive(resolved, tier)
+	}
+	if tier == types.DriveSubjectPortal {
+		// With team drives off a portal's drive is never a per-person folder: it mounts nothing.
+		return nil, fmt.Errorf("%w: %s", errDriveUnmountable, driveTeamOffMsg)
 	}
 	// The managed non-hash refusal, repeated — and repeated for the same reason
 	// the home-override tier gate below is, on a row written by an older binary

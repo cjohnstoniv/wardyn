@@ -8,8 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -78,13 +81,18 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 		status  int
 		reason  string
 		kept    bool
+		held    bool // the claim stays: the answer did not say nothing was touched
 		audit   string
 	}{
-		{"deleted", runner.DriveReclaimDeleted, nil, http.StatusNoContent, "", false, "deleted"},
-		{"already absent", runner.DriveReclaimAlreadyAbsent, nil, http.StatusNoContent, "", false, "already_absent"},
-		{"in use", "", runner.ErrDriveInUse, http.StatusConflict, reasonMemberDriveInUse, true, "refused"},
-		{"not this drive's", "", runner.ErrDriveNotReclaimable, http.StatusConflict, reasonMemberDriveInUse, true, "refused"},
-		{"substrate failed", "", errors.New("daemon down"), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, "failed"},
+		{"deleted", runner.DriveReclaimDeleted, nil, http.StatusNoContent, "", false, false, "deleted"},
+		{"already absent", runner.DriveReclaimAlreadyAbsent, nil, http.StatusNoContent, "", false, false, "already_absent"},
+		{"in use", "", runner.ErrDriveInUse, http.StatusConflict, reasonMemberDriveInUse, true, false, "refused"},
+		{"not this drive's, said untouched", "", runner.Untouched(runner.ErrDriveNotReclaimable), http.StatusConflict, reasonMemberDriveInUse, true, false, "refused"},
+		{"not this drive's, not said untouched", "", runner.ErrDriveNotReclaimable, http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
+		{"claim already terminating", "", fmt.Errorf("k8s: drive: claim is already Terminating: %w", runner.ErrDriveNotReclaimable), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
+		{"substrate failed", "", errors.New("daemon down"), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
+		{"empty reply", "", nil, http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
+		{"unrecognised reply", "purged", nil, http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true, true, "failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newMemberDriveStore()
@@ -95,7 +103,10 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 			if tc.reason == "" && w.Code != tc.status {
 				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
 			} else if tc.reason != "" {
-				wantReason(t, w, tc.status, tc.reason)
+				body := wantReason(t, w, tc.status, tc.reason)
+				if tc.reason == reasonMemberDriveDeleteFailed && body.Error != "Wardyn could not confirm that deletion finished." {
+					t.Errorf("message = %q, want the could-not-confirm sentence", body.Error)
+				}
 			}
 			home, _ := types.DriveHomeName(d, aliceSub, "")
 			if len(rn.calls) != 1 || rn.calls[0].ObjectName != types.DriveObjectName(d, home) ||
@@ -103,8 +114,11 @@ func TestMemberDriveDeleteDestroysThenRemoves(t *testing.T) {
 				t.Fatalf("substrate calls = %+v, want one for the owner's object", rn.calls)
 			}
 			got, kept := st.drives[d.ID]
-			if kept != tc.kept || kept && got.DeleteStartedAt != nil {
-				t.Errorf("row kept = %v (tombstone %v), want kept = %v with the tombstone cleared", kept, got.DeleteStartedAt, tc.kept)
+			if kept != tc.kept || kept && (got.DeleteStartedAt != nil) != tc.held {
+				t.Errorf("row kept = %v (tombstone %v), want kept = %v with the claim held = %v", kept, got.DeleteStartedAt, tc.kept, tc.held)
+			}
+			if tc.held && kept && got.DeleteIssues != 1 {
+				t.Errorf("held row's issue count = %d, want the one issued call (1)", got.DeleteIssues)
 			}
 			if n := countAction(rec, "drive.member.delete"); n != 1 {
 				t.Fatalf("drive.member.delete rows = %d, want 1", n)
@@ -297,4 +311,223 @@ func TestAdminListAndDeleteMemberDrives(t *testing.T) {
 	other := seedMemberDrive(st, bobSub, "Busy")
 	w = memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": other.ID.String()})
 	wantReason(t, w, http.StatusConflict, reasonUserDriveReclaimConflict)
+}
+
+// sequencedRunner answers its nth reclaim with replies[n] (the last repeats).
+type sequencedRunner struct {
+	memberDriveRunner
+	replies []reclaimReply
+}
+
+type reclaimReply struct {
+	outcome runner.DriveReclaimOutcome
+	err     error
+}
+
+func (r *sequencedRunner) ReclaimDrive(_ context.Context, m types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	r.calls = append(r.calls, m)
+	rep := r.replies[min(len(r.calls), len(r.replies))-1]
+	return rep.outcome, rep.err
+}
+
+// TestMemberDriveDeleteHoldsWhatItCannotConfirm (design test 2: rows 2, 4, 5 and the allowlist): an answer
+// that is not an affirmative deleted or already_absent, and every error that is not a typed refusal, leaves the
+// row held at the issued count (deleting, so hidden) with a 503 and a failed audit row that never says nothing was
+// removed. The owner's immediate retry is busy and makes no call; a retry after the claim has aged gets the
+// substrate's later answer and the row goes. Through the owner's route and the admin's.
+func TestMemberDriveDeleteHoldsWhatItCannotConfirm(t *testing.T) {
+	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
+	routes := []struct {
+		by         string
+		call       func(srv *Server, id string) *httptest.ResponseRecorder
+		retryCode  int
+		busyReason string
+	}{
+		{memberDriveByOwner, func(srv *Server, id string) *httptest.ResponseRecorder { return deleteMyDrive(srv, aliceSub, id) }, http.StatusNoContent, reasonMemberDriveBusy},
+		{memberDriveByAdmin, func(srv *Server, id string) *httptest.ResponseRecorder {
+			return memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": id})
+		}, http.StatusOK, reasonMemberDriveBusy},
+	}
+	for _, rt := range routes {
+		for _, tc := range []struct {
+			name  string
+			first reclaimReply
+			retry reclaimReply
+			want  string // the retry's audit outcome
+		}{
+			{"completed after it returned an error", reclaimReply{err: errors.New("context deadline exceeded")}, reclaimReply{outcome: runner.DriveReclaimAlreadyAbsent}, "already_absent"},
+			{"partial remove", reclaimReply{err: errors.New("removed the volume, left its lock")}, reclaimReply{outcome: runner.DriveReclaimDeleted}, "deleted"},
+			{"claim terminating", reclaimReply{err: fmt.Errorf("k8s: drive: claim is already Terminating: %w", runner.ErrDriveNotReclaimable)}, reclaimReply{outcome: runner.DriveReclaimAlreadyAbsent}, "already_absent"},
+			{"empty reply", reclaimReply{}, reclaimReply{outcome: runner.DriveReclaimDeleted}, "deleted"},
+			{"unrecognised reply", reclaimReply{outcome: "purged"}, reclaimReply{outcome: runner.DriveReclaimDeleted}, "deleted"},
+		} {
+			t.Run(rt.by+"/"+tc.name, func(t *testing.T) {
+				st := newMemberDriveStore()
+				d := seedMemberDrive(st, aliceSub, "Notes")
+				rn := &sequencedRunner{replies: []reclaimReply{tc.first, tc.retry}}
+				srv, rec := memberDriveServer(st, rn, "docker")
+				id := d.ID.String()
+
+				body := wantReason(t, rt.call(srv, id), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed)
+				if body.Error != "Wardyn could not confirm that deletion finished." || strings.Contains(body.Error, "Nothing was removed") {
+					t.Errorf("message = %q, want the could-not-confirm sentence and no promise the files survived", body.Error)
+				}
+				got, kept := st.drives[d.ID]
+				if !kept || !got.Deleting() || got.DeleteIssues != 1 {
+					t.Fatalf("row kept = %v, deleting = %v, issues = %d; want held at the one issued call", kept, got.Deleting(), got.DeleteIssues)
+				}
+				if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "failed" || data["by"] != rt.by {
+					t.Errorf("audit = %v, want outcome failed by %s", data, rt.by)
+				}
+				wantReason(t, rt.call(srv, id), http.StatusConflict, rt.busyReason)
+				if len(rn.calls) != 1 {
+					t.Fatalf("substrate calls = %d after an immediate retry, want 1", len(rn.calls))
+				}
+
+				st.now = st.now.Add(2 * time.Minute) // the claim has aged: the retry takes it over
+				if w := rt.call(srv, id); w.Code != rt.retryCode {
+					t.Fatalf("retry = %d, want %d: %s", w.Code, rt.retryCode, w.Body.String())
+				}
+				if _, kept := st.drives[d.ID]; kept || len(rn.calls) != 2 {
+					t.Errorf("after the retry kept = %v, substrate calls = %d; want the row gone after two calls", kept, len(rn.calls))
+				}
+				if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != tc.want {
+					t.Errorf("retry audit = %v, want outcome %s", data, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// A typed refusal is the only definitive no-touch answer through the admin route: in use and untouched are a
+// 409 with the claim given up (issue count 2), and a refusal that did not say untouched is the held failure.
+func TestMemberDriveAdminDeleteRefusalsAreTypedOnly(t *testing.T) {
+	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		reason string
+		held   bool
+	}{
+		{"in use", runner.ErrDriveInUse, http.StatusConflict, reasonUserDriveReclaimConflict, false},
+		{"untouched", runner.Untouched(runner.ErrDriveNotReclaimable), http.StatusConflict, reasonUserDriveReclaimConflict, false},
+		{"terminating", fmt.Errorf("Terminating: %w", runner.ErrDriveNotReclaimable), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newMemberDriveStore()
+			d := seedMemberDrive(st, aliceSub, "Notes")
+			rn := &memberDriveRunner{reclaimRunner: reclaimRunner{err: tc.err}}
+			srv, rec := memberDriveServer(st, rn, "docker")
+			w := memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": d.ID.String()})
+			body := wantReason(t, w, tc.status, tc.reason)
+			if strings.Contains(body.Error, "Nothing was removed") {
+				t.Errorf("message = %q promises the files survived", body.Error)
+			}
+			got := st.drives[d.ID]
+			if got.Deleting() != tc.held || tc.held && got.DeleteIssues != 1 || !tc.held && got.DeleteIssues != 2 {
+				t.Errorf("deleting = %v, issues = %d; want held = %v", got.Deleting(), got.DeleteIssues, tc.held)
+			}
+			want := "refused"
+			if tc.held {
+				want = "failed"
+			}
+			if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != want || data["by"] != "admin" {
+				t.Errorf("audit = %v, want outcome %s by admin", data, want)
+			}
+		})
+	}
+}
+
+// The same boundary on a disk drive: a Mac's successful reply with no outcome or one this server does not know
+// leaves the row held at the issued count with a failed audit (the image may survive), and an error after a partial
+// remove does the same; the retry's already_absent answer then removes the row.
+func TestMacDiskDeleteHoldsWhatItCannotConfirm(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		first macReclaimReply
+	}{
+		{"empty reply", macReclaimReply{}},
+		{"unrecognised reply", macReclaimReply{res: runnerwire.ReclaimDriveResult{Outcome: "purged"}}},
+		{"partial remove", macReclaimReply{err: errors.New("remove lock: permission denied")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, st, tr, d := macDiskDeleteRig(t)
+			tr.replies = []macReclaimReply{tc.first, {res: runnerwire.ReclaimDriveResult{Outcome: runner.DriveReclaimAlreadyAbsent}}}
+			rec := srv.cfg.Audit.(*recRecorder)
+			tomb, started, err := st.BeginMemberDriveDelete(context.Background(), aliceSub, d.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := srv.deleteMemberDrive(context.Background(), st, tomb, started, memberDriveByOwner)
+			if res.reason != reasonMemberDriveDeleteFailed || res.outcome != driveReclaimOutcomeFailed || res.err != nil {
+				t.Fatalf("deletion = %+v, want the ambiguous failure", res)
+			}
+			got, kept := st.drives[d.ID]
+			if !kept || !got.Deleting() || got.DeleteIssues != 1 || tr.asked != 1 {
+				t.Fatalf("kept = %v, deleting = %v, issues = %d, Mac asked %d; want held at one issue after one ask", kept, got.Deleting(), got.DeleteIssues, tr.asked)
+			}
+			if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "failed" {
+				t.Errorf("audit = %v, want outcome failed", data)
+			}
+			st.now = st.now.Add(2 * time.Minute)
+			tomb, started, err = st.BeginMemberDriveDelete(context.Background(), aliceSub, d.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res := srv.deleteMemberDrive(context.Background(), st, tomb, started, memberDriveByOwner); res.reason != "" {
+				t.Fatalf("retry = %+v, want success", res)
+			}
+			if _, kept := st.drives[d.ID]; kept || tr.asked != 2 {
+				t.Errorf("after the retry kept = %v, Mac asked %d; want the row gone after two asks", kept, tr.asked)
+			}
+		})
+	}
+}
+
+// failSecondStartingRead answers the first read of the owner's starting runs and fails every later one, so the
+// delete's read past the claim fails before any call is made.
+type failSecondStartingRead struct {
+	*memberDriveStore
+	reads int
+}
+
+func (s *failSecondStartingRead) MemberDriveOwnerStarting(ctx context.Context, owner string, d time.Duration) (bool, error) {
+	s.reads++
+	if s.reads > 1 {
+		return false, errors.New("starting runs unreadable")
+	}
+	return s.memberDriveStore.MemberDriveOwnerStarting(ctx, owner, d)
+}
+
+// A failure before the call (the starting-run read past the claim) answers 503 with the same sentence as an
+// ambiguous failure after it, but nothing was issued: the claim is given up (tombstone cleared, count moved on by
+// two) and the drive is not held. The message must not claim it is.
+func TestMemberDriveDeleteFailedBeforeTheCallIsNotHeld(t *testing.T) {
+	adminCtx := operatorCtx("sub-admin", "admin@corp.example", "admin")
+	for by, call := range map[string]func(srv *Server, id string) *httptest.ResponseRecorder{
+		memberDriveByOwner: func(srv *Server, id string) *httptest.ResponseRecorder { return deleteMyDrive(srv, aliceSub, id) },
+		memberDriveByAdmin: func(srv *Server, id string) *httptest.ResponseRecorder {
+			return memberCall(adminCtx, srv.handleDeleteMemberDriveAdmin, http.MethodDelete, "/x", "", map[string]string{"id": id})
+		},
+	} {
+		t.Run(by, func(t *testing.T) {
+			st := newMemberDriveStore()
+			d := seedMemberDrive(st, aliceSub, "Notes")
+			rn := &memberDriveRunner{reclaimRunner: reclaimRunner{outcome: runner.DriveReclaimDeleted}}
+			srv, rec := memberDriveServer(st, rn, "docker")
+			srv.cfg.Store = &failSecondStartingRead{memberDriveStore: st}
+			body := wantReason(t, call(srv, d.ID.String()), http.StatusServiceUnavailable, reasonMemberDriveDeleteFailed)
+			if body.Error != "Wardyn could not confirm that deletion finished." {
+				t.Errorf("message = %q", body.Error)
+			}
+			got, kept := st.drives[d.ID]
+			if !kept || got.Deleting() || got.DeleteIssues != 2 || len(rn.calls) != 0 {
+				t.Errorf("kept = %v, deleting = %v, issues = %d, calls = %d; want kept, claim given up (issues 2), no call", kept, got.Deleting(), got.DeleteIssues, len(rn.calls))
+			}
+			if data := driveAuditData(t, rec, "drive.member.delete"); data["outcome"] != "failed" || data["by"] != by {
+				t.Errorf("audit = %v, want outcome failed by %s", data, by)
+			}
+		})
+	}
 }

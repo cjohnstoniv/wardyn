@@ -68,8 +68,12 @@ func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess
 		release()
 		return nil, uiFail(ctx, http.StatusConflict, reasonDesktopSigninRunnerUnsupported, desktopSigninRunnerMsg)
 	}
+	if uiDispatchPast(ctx) { // an issuer portal's request starts nothing at or after its dispatch time
+		release()
+		return nil, uiDispatchRefusal(ctx)
+	}
 	// The relay starts under the run's start lock, on the run as it stands there (startFresh).
-	execSess, err := startFresh(s, ctx, run.ID, uiLiveRunWords, execStartBudget, func(ctx context.Context, run types.AgentRun) (*runner.ExecSession, error) {
+	execSess, err := startFresh(s, uiStartCtx(ctx), run.ID, uiLiveRunWords, execStartBudget, func(ctx context.Context, run types.AgentRun) (*runner.ExecSession, error) {
 		return se.ExecStreamAs(ctx, run.SandboxRef, runner.SigninPersonUser, runner.ExecSpec{
 			Argv: []string{"socat", "-", "UNIX-CONNECT:" + desktopSigninSocket},
 		})
@@ -81,9 +85,9 @@ func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess
 	keepCtx, stopKeepalive := context.WithCancel(context.WithoutCancel(ctx))
 	go s.attachKeepalive(keepCtx, sess.Run)
 	s.auditUISession(sess, "ui.open", desktopSigninSocket, "success", map[string]any{"app": sess.App})
-	return &uiConn{execConn: newExecConn(execSess, run.SandboxRef+":"+desktopSigninApp), closeFn: func() {
+	return s.uiGate(ctx, &uiConn{execConn: newExecConn(execSess, run.SandboxRef+":"+desktopSigninApp), closeFn: func() {
 		stopKeepalive()
 		release()
 		s.auditUISession(sess, "ui.close", desktopSigninSocket, "success", map[string]any{"app": sess.App})
-	}}, nil
+	}}, execSess, sess, desktopSigninSocket), nil
 }

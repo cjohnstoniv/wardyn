@@ -226,6 +226,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			peer := ep.link.ReadyPeer()
 			sameSession := func() bool { return peer != nil && ep.link.ReadyPeer() == peer }
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
+			go s.releaseLegacyMacDrives(s.cfg.BaseCtx, id, ep.sub, sameSession)
 			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
 		},
 	}, nil

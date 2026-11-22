@@ -160,7 +160,7 @@ func serviceRenewsLater(run types.AgentRun, now time.Time) bool {
 // the sweep goes on with it: the new end on success, the row it was given on any other outcome.
 // The bool says the run's end is renewal's to move, so the sweep sends no run.ending_soon: the run
 // was renewed this pass, or it is a service renewal will renew when its half-life opens and whose
-// owner still has the authority a renewal needs (extendRefusal). A unit of an hour or less opens the
+// owner still has the authority a renewal needs (extendRefusal) and the identity and sponsor are live (serviceRunLive). A unit of an hour or less opens the
 // warning window before the half-life, and every renewal would warn.
 // The write is the PATCH route's compare-and-set, so a person's edit, a re-clamp or a lost
 // race leaves the end alone and writes no audit row. An owner whose authority to extend is
@@ -170,12 +170,13 @@ func (s *Server) renewServiceLease(ctx context.Context, leaser store.RunLeaser, 
 	// the boundary is read only for a run that is about to renew.
 	if _, ok := planServiceRenewal(run, 0, now); !ok {
 		// Quiet only while the renewal it waits for will be allowed: a run whose owner lost the
-		// authority to extend is warned now, not first at its half-life. With no warning due there is
+		// authority to extend, or whose service identity or sponsor is no longer live, is warned now,
+		// not first at its half-life. With no warning due there is
 		// nothing to quiet, so the owner's authority is read only inside the warning window.
 		if !serviceRenewsLater(run, now) {
 			return run, false
 		}
-		return run, !endingSoonDue(run, now) || s.extendRefusal(ctx, run, false) == nil
+		return run, !endingSoonDue(run, now) || s.renewalWillBeAllowed(ctx, run)
 	}
 	boundarySec, err := s.boundaryEndCap(ctx, run)
 	if err != nil {
@@ -276,6 +277,17 @@ func endingSoonDue(run types.AgentRun, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// renewalWillBeAllowed is whether the renewal a run waits for will pass both checks renewServiceLease makes
+// at the half-life: the service identity and its sponsor are still live (serviceRunLive), and the owner
+// still has the authority to extend (extendRefusal). A check that cannot be answered counts as a refusal,
+// as it does there, so the run is warned.
+func (s *Server) renewalWillBeAllowed(ctx context.Context, run types.AgentRun) bool {
+	if live, err := s.serviceRunLive(ctx, run); err != nil || !live {
+		return false
+	}
+	return s.extendRefusal(ctx, run, false) == nil
 }
 
 // serviceRunLive reports whether the service identity that created run still carries the authority it

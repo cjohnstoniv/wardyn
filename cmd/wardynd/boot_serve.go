@@ -227,6 +227,8 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
+	// Every replica retries the owed audit rows of a release of the legacy Docker drives, with portals on or off.
+	go goSafe("legacy.docker.release.retry", func() { srv.RunLegacyDockerReleaseRetry(rootCtx) })
 	startPortalActivationMonitor(rootCtx, srv)
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
 	startPortalLifecycleSweeper(rootCtx, leader, srv, portalLifecycleSweepInterval)
@@ -290,6 +292,15 @@ func warnSmallPool(maxConns int32) {
 	}
 	slog.Warn("wardynd: pool_max_conns below 4 — the lifecycle reaper's tick and the terminal-sandbox sweep's tick can overlap, each holding one connection for its lock while its queries take another; requests can block waiting for a connection. Below 6, a sign-in during a tick is not serialized (auth.signin_unserialized)",
 		slog.Int("pool_max_conns", int(maxConns)))
+}
+
+// seedBootState writes what a rebuilt or upgraded database starts with, before anything is served: the network
+// settings from WARDYN_SITE_CONFIG_SEED_FILE (nil seeds nothing), then the remote-provided runner pool.
+func seedBootState(ctx context.Context, srv *api.Server, seed *api.SiteConfigSeed) error {
+	if err := srv.SeedSiteConfig(ctx, seed); err != nil {
+		return err
+	}
+	return srv.BootstrapRunnerPools(ctx)
 }
 
 // bindSSHGatewayEarly is WARDYN_SSH_BIND_EARLY: with it on, the SSH gateway's address is bound before the
@@ -487,6 +498,10 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
 		}
 	}()
+
+	// Declared after the fanout drain, so it runs before it on every exit, the serve-error return included: the
+	// service grant queue dequeues no copy after it, and logs as unconfirmed the one its worker may still hold.
+	defer srv.StopServiceGrantSIEM()
 
 	// Declared after the fanout drain, so it runs BEFORE it: the open dry-run
 	// denial windows write their summaries while the sinks and the pool are
