@@ -271,7 +271,7 @@ memberOps:
 		s.scimServerError(w, r, "update the group", err)
 		return
 	}
-	// An earlier removal that failed answers 5xx first: its ledger stays pending, and the 404 would tell the
+	// An earlier operation that failed answers 5xx first: a removal's ledger stays pending, and the 404 would tell the
 	// identity provider the request was settled.
 	if gone {
 		writeSCIMError(w, scim.NewError(http.StatusNotFound, "", "no such group"))

@@ -139,7 +139,7 @@ func buildPortalIssuers(f *bootFlags, localOperator string, st store.PG, route *
 		slog.Info("wardynd: proxied issuer portal trust configured (WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE)",
 			slog.String("path", strings.TrimSpace(*f.portalProxiedIssuerCAFile)), slog.Int("cert_count", n))
 	case route != nil:
-		slog.Warn("WARDYN_DAEMON_PROXY_ALWAYS is set and WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE is not: an issuer portal whose issuer host is listed is refused")
+		slog.Warn("WARDYN_DAEMON_PROXY_ALWAYS is set and WARDYN_PORTAL_PROXIED_ISSUER_CA_FILE is not: an issuer portal registration with no internal issuer address whose issuer host is listed is refused")
 	}
 	p, err := oidc.NewPortalIssuers(opts)
 	if err != nil {

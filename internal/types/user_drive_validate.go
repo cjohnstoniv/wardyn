@@ -124,7 +124,7 @@ func ValidateTeamDriveGrant(d UserDrive, g UserDriveGrant) error {
 		return nil
 	}
 	if g.SubjectType != CapabilitySubjectGroup && g.SubjectType != DriveSubjectPortal {
-		return fmt.Errorf("subject_type: a team drive is allocated to groups only, not %q", g.SubjectType)
+		return fmt.Errorf("subject_type: a team drive is allocated to groups or eligible issuer portals, not %q", g.SubjectType)
 	}
 	if strings.TrimSpace(g.HomeOverride) != "" {
 		return fmt.Errorf("home_override: a team drive has one folder for the whole group")
