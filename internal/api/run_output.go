@@ -407,8 +407,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	// its recording is served to their grant; a recovery that failed or left a gap is answered as if the run had no
 	// recording at all.
 	reader := s.recordingReader(r, run) && !delegated
-	commandReader := reader || (delegated && !run.Interactive && types.IsPortalPersonPrincipal(run.CreatedBy) &&
-		run.CreatedBy == principalFromRequest(r))
+	commandReader := reader || (delegated && portalReadsOwnCommandOutput(r, run))
 	if commandReader {
 		row, found, err = s.repairRecordingOutput(r.Context(), run, row, found)
 		if errors.Is(err, store.ErrRunOutputErased) {
@@ -424,8 +423,7 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	// A withheld source answers as a run with no such row. A non-owner who is not an operator (a security admin) is
 	// audited not_owner for another person's terminal text; a portal's withheld source writes no refusal row, since
 	// its grant was refused nothing it may read.
-	if found && ((row.Source == paneSnapshotSource && !reader) ||
-		(row.Source == recordingOutputSource && (!commandReader || (!reader && row.CaptureGap)))) {
+	if found && sourceWithheld(row, reader, commandReader) {
 		if !delegated {
 			s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
 		}
@@ -491,6 +489,25 @@ func (s *Server) auditRunOutputRead(r *http.Request, run types.AgentRun, source 
 	actorType, actor := actorFromRequest(r)
 	s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, auditRunOutputRead, run.ID.String(), "success",
 		mustJSON(map[string]string{"source": source})))
+}
+
+// portalReadsOwnCommandOutput is whether a delegated request reads the command output of a non-interactive run
+// that the request's own issuer-portal person created.
+func portalReadsOwnCommandOutput(r *http.Request, run types.AgentRun) bool {
+	return !run.Interactive && types.IsPortalPersonPrincipal(run.CreatedBy) && run.CreatedBy == principalFromRequest(r)
+}
+
+// sourceWithheld is whether row's source is one this caller may not read: the pane snapshot without the recordings
+// rule, or recording-derived output to a caller who reads neither the recording nor its command output, or, for a
+// command-output reader only, a recovery that left a gap.
+func sourceWithheld(row store.RunOutput, reader, commandReader bool) bool {
+	switch row.Source {
+	case paneSnapshotSource:
+		return !reader
+	case recordingOutputSource:
+		return !commandReader || (!reader && row.CaptureGap)
+	}
+	return false
 }
 
 // auditRunOutputRead is the audit action of an operator reading another person's recording-derived output.
