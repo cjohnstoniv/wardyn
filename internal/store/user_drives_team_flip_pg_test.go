@@ -186,6 +186,8 @@ func TestPG_DriveRegistration_AbsentIDWaitsForTheRegistrationInFlight(t *testing
 	// Read on another goroutine: this one holds the lock's connection, and the pool guard fails a nested acquire.
 	var waiting int
 	onAnotherGoroutine(t, func() {
+		ctx, cancel := observeCtx()
+		defer cancel()
 		if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_drives WHERE id = $1`, id).Scan(&waiting); err != nil {
 			t.Errorf("count the id's rows: %v", err)
 		}
