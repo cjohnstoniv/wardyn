@@ -320,10 +320,11 @@ func TestDelegation_RunOutputReadsTheOwnersTail(t *testing.T) {
 	}
 }
 
-// Option A of #1423: a portal reads command output only. A row recovered from
-// the recording, or an interactive run's pane snapshot, stays the person's own:
-// the delegated read is refused with delegation_scope naming the portal, and the
-// person's own session reads the same row.
+// Option A of #1423: a console portal reads command output only. A row recovered
+// from the recording, or an interactive run's pane snapshot, stays the person's
+// own: the delegated read answers as a run with no such row, writes no refusal
+// row and one run.output.refuse row naming the portal, and the person's own
+// session reads the same row.
 func TestDelegation_RunOutputRecordingDerived(t *testing.T) {
 	const person = "sub-person"
 	// With the row withheld the read falls through to the run's own answer: an
@@ -338,17 +339,10 @@ func TestDelegation_RunOutputRecordingDerived(t *testing.T) {
 			if w.Code != http.StatusConflict || errorReason(w) != wantReason || strings.Contains(w.Body.String(), "from the recording") {
 				t.Fatalf("delegated read: %d %s, want 409 %s and none of the row", w.Code, w.Body, wantReason)
 			}
-			rec := srv.cfg.Audit.(*recRecorder)
-			var rows []types.AuditEvent
-			for _, ev := range rec.snapshot() {
-				if ev.Action == authz.AuditAction {
-					rows = append(rows, ev)
-				}
+			if reasons := auditReasons(t, srv, authz.AuditAction); len(reasons) != 0 {
+				t.Fatalf("a withheld row wrote refusal rows: %v", reasons)
 			}
-			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"delegation_scope"`) ||
-				!strings.Contains(string(rows[0].Data), `"delegate":"`+via.Delegate.String()+`"`) {
-				t.Fatalf("refusal rows = %+v, want one delegation_scope row naming the portal", rows)
-			}
+			wantRefuseRow(t, srv, id, wantReason, http.StatusConflict, via)
 
 			own := doSSO(t, srv, http.MethodGet, path, ssoSession(t, person, "person@corp.example", oidc.RoleUser), "")
 			if own.Code != http.StatusOK || !strings.Contains(own.Body.String(), `"source":"`+source+`"`) {

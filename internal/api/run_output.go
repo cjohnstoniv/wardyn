@@ -402,9 +402,14 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 	// The recording gate covers stored bytes, recovery facts and source reads,
 	// including when the configured recording backend has since been disabled.
 	_, delegated := audit.DelegationFrom(r.Context())
-	// A portal reads command output only: the recording, and what is derived from it, stay the person's own (#1423).
+	// A portal never reads the pane snapshot, nor is told whether a recording failed, left a gap or was erased. An
+	// issuer portal's own person has no console door, so their non-interactive run's command output recovered from
+	// its recording is served to their grant; a recovery that failed or left a gap is answered as if the run had no
+	// recording at all.
 	reader := s.recordingReader(r, run) && !delegated
-	if reader {
+	commandReader := reader || (delegated && !run.Interactive && types.IsPortalPersonPrincipal(run.CreatedBy) &&
+		run.CreatedBy == principalFromRequest(r))
+	if commandReader {
 		row, found, err = s.repairRecordingOutput(r.Context(), run, row, found)
 		if errors.Is(err, store.ErrRunOutputErased) {
 			s.fenceRunOutput(id)
@@ -416,12 +421,14 @@ func (s *Server) handleRunOutput(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if found && (row.Source == paneSnapshotSource || row.Source == recordingOutputSource) && !reader {
-		denial := authz.Deny(authz.ReasonNotOwner, id.String(), "")
-		if delegated {
-			denial = authz.Deny(authz.ReasonDelegationScope, id.String(), "")
+	// A withheld source answers as a run with no such row. A non-owner who is not an operator (a security admin) is
+	// audited not_owner for another person's terminal text; a portal's withheld source writes no refusal row, since
+	// its grant was refused nothing it may read.
+	if found && ((row.Source == paneSnapshotSource && !reader) ||
+		(row.Source == recordingOutputSource && (!commandReader || (!reader && row.CaptureGap)))) {
+		if !delegated {
+			s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonNotOwner, id.String(), "").OnRun(id))
 		}
-		s.recordRefusal(r.Context(), r, denial.OnRun(id))
 		found = false
 	}
 	// A final row was masked before it was stored, so it needs no manifest here:
@@ -489,6 +496,9 @@ func (s *Server) auditRunOutputRead(r *http.Request, run types.AgentRun, source 
 // auditRunOutputRead is the audit action of an operator reading another person's recording-derived output.
 const auditRunOutputRead = "run.output.read"
 
+// auditRunOutputRefuse is the audit action of a portal's delegated read that could serve no output.
+const auditRunOutputRefuse = "run.output.refuse"
+
 // servesFinalRow reports whether a read serves runID's stored final row. A
 // recording that yielded nothing does not hide a tail this process holds: the
 // tail is read instead.
@@ -505,37 +515,42 @@ func (s *Server) servesFinalRow(runID uuid.UUID, row store.RunOutput, found bool
 // the only caller told of a recording erasure.
 func (s *Server) refuseNoRunOutput(w http.ResponseWriter, r *http.Request, run types.AgentRun, row store.RunOutput, found, reader bool) {
 	uncaptured, captureKnown := s.execOutputCapture(r.Context(), run)
+	status, reason, msg := http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run"
 	switch {
 	case found:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
-			"this run's output is still being captured: read it again shortly")
+		msg = "this run's output is still being captured: read it again shortly"
 	case reader && row.RecordingErased:
 		// Last, not first: the fence covers the derived copy only, and direct
 		// stdout this process or another replica still holds was served above.
-		writeErrorReason(w, http.StatusGone, reasonRecordingErased, "recordings for this run have been erased")
+		status, reason, msg = http.StatusGone, reasonRecordingErased, "recordings for this run have been erased"
 	case run.Interactive:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputInteractive, s.interactiveNothingKept(run, reader))
+		reason, msg = reasonRunOutputInteractive, s.interactiveNothingKept(run, reader)
 	case uncaptured && s.recordingMayHoldOutput(r.Context(), run, reader):
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotCaptured,
-			"Output isn't captured for Kubernetes runs yet. The run's recording has it.")
+		reason, msg = reasonRunOutputNotCaptured,
+			"Output isn't captured for Kubernetes runs yet. The run's recording has it."
 	case uncaptured: // nothing was captured and no recording arrived, so nothing expired either
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
 	case !captureKnown:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept,
-			"no output is kept for this run: the runner's capture capability could not be read")
+		msg = "no output is kept for this run: the runner's capture capability could not be read"
 	case s.cfg.RunOutputRetention > 0 && run.EndedAt != nil:
-		switch expired, err := s.runOutputExpiredNow(r.Context(), run); {
-		case err != nil:
+		expired, err := s.runOutputExpiredNow(r.Context(), run)
+		if err != nil {
 			writeServerError(w, r, "read the database's clock", err)
-		case expired:
-			writeErrorReason(w, http.StatusGone, reasonRunOutputExpired,
-				"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended")
-		default:
-			writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
+			return
 		}
-	default:
-		writeErrorReason(w, http.StatusConflict, reasonRunOutputNotKept, "no output is kept for this run")
+		if expired {
+			status, reason, msg = http.StatusGone, reasonRunOutputExpired,
+				"this run's output has expired: it is kept for WARDYN_RUN_OUTPUT_RETENTION_DAYS after the run ended"
+		}
 	}
+	// A portal's read that ends here (not_kept, not_captured, interactive, or the retention window's expired) is
+	// recorded with the public answer only, whatever was withheld, so the row tells the operator what the portal was
+	// told and nothing about a recording. A console read writes none.
+	if _, delegated := audit.DelegationFrom(r.Context()); delegated {
+		actorType, actor := actorFromRequest(r)
+		s.recordAudit(r.Context(), s.auditEvent(&run.ID, actorType, actor, auditRunOutputRefuse, run.ID.String(), "failure",
+			mustJSON(map[string]any{"reason": reason, "status": status})))
+	}
+	writeErrorReason(w, status, reason, msg)
 }
 
 // recordingMayHoldOutput is whether run_output_not_captured's pointer at the run's recording can

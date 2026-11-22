@@ -277,10 +277,17 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   The runner that served the run decides between `stdout` and `recording`:
   only a recorded run on a Kubernetes runner under the session recorder reads `recording`
   (OPERATIONS.md "Run output").
-  The latter two retain the recording's owner-or-operator privacy
-  gate, even after recording is disabled.
-  A portal's delegated token reads `stdout` output only; for the other two
-  it gets the 409 a run with no such row gives, audited `delegation_scope`.
+  `pane_snapshot` and `recording` keep the recording's owner-or-operator privacy gate,
+  even after recording is disabled. A portal never reads `pane_snapshot`. An issuer
+  portal's grant reads `stdout` and a successful `recording` recovery of its person's
+  own runs; a recording that is missing, failed or erased answers it as a run with no
+  recording. A console portal's delegated token reads `stdout` only. A withheld source
+  falls through to the run's stdout tail or shared chunks when there are any (200,
+  `source: stdout`), and otherwise to the answer a run with no such row gives (409).
+  A portal's withheld source writes no refusal row. When a portal's read answers
+  `run_output_not_captured`, `run_output_not_kept`, `run_output_interactive` or the
+  retention window's `run_output_expired`, it writes `run.output.refuse` with the same
+  reason, once per read.
 - `incomplete` on `stdout` says bytes may be missing.
   On `recording` it is always true and says the output cannot be vouched byte-complete.
 - `capture_gap` says capture or recovery
