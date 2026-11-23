@@ -246,8 +246,12 @@ const dedicatedLockReleaseWait = 2 * time.Second
 // concurrent use; it is valid until release, which unlocks and then closes it
 // within dedicatedLockReleaseWait. Unlock comes first so the lock is free when
 // release returns, not when the server notices the socket is gone.
+//
+// It dials with the pool's own settings and sets no TCP keepalives: a holder cut
+// off from the server for a minute must not lose a lock that guards the whole
+// process, such as the single-instance lock, which has no watcher to notice.
 func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgx.Conn, release func(), ok bool, err error) {
-	conn, err = dialDedicated(ctx, pool)
+	conn, err = pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("db: dial advisory lock conn: %w", err)
 	}
@@ -269,10 +273,10 @@ func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64
 	}, true, nil
 }
 
-// dialDedicated dials one session for a process-lifetime lock outside pool, from
-// pool's own connection settings with the lock connections' TCP keepalives
-// (lockConnConfig, setLockKeepalives), so a vanished holder's lock is freed in
-// about a minute. The sweeper election connection is dialled here too.
+// dialDedicated dials the sweeper election's session outside pool, from pool's
+// own connection settings with the lock connections' TCP keepalives
+// (lockConnConfig, setLockKeepalives), so a vanished leader's families are freed
+// in about a minute. TryAdvisoryLockDedicated does not use it.
 func dialDedicated(ctx context.Context, pool *pgxpool.Pool) (*pgx.Conn, error) {
 	conn, err := pgx.ConnectConfig(ctx, lockConnConfig(pool.Config().ConnConfig))
 	if err != nil {
