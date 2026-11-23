@@ -139,6 +139,8 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.DesktopWatermark: whether every desktop view must show the viewer's name and the run id.
+  desktop_watermark?: SiteDesktopWatermark;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
   // types.SiteConfig.FeatureSwitches: the features new in 0.11, each off until an admin turns it on. Absent reads
@@ -697,6 +699,11 @@ export interface SiteMacOSVM {
   kept_machine_idle_days?: number;
   /** Kept machines one person may have. 1 to 4; absent reads 1. */
   max_kept_machines_per_person?: number;
+}
+
+/** Go: types.SiteDesktopWatermark (SiteConfig.desktop_watermark). */
+export interface SiteDesktopWatermark {
+  required?: boolean;
 }
 
 /** Go: types.SiteFeatureSwitches (SiteConfig.features): one key per feature new in 0.11. Absent reads every one off. */

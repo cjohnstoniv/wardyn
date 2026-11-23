@@ -585,6 +585,7 @@ export interface RunDetail extends AgentRun {
   macos_disk?: RunMacOSDisk;
   wall_preset?: RunWallPreset; // the preset the run was launched with, never its spec (GET /runs/{id} only)
   machine?: RunMachine; // the kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none
+  desktop_watermark?: { who: string; run: string; required: boolean }; // who is viewing and whether the organisation requires the watermark (GET /runs/{id}, desktop runs only)
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing

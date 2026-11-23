@@ -248,6 +248,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // The desktop watermark rule of the site config: one switch.
+  it("SiteDesktopWatermark (`desktop_watermark` in site config): full parity with the TS mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteDesktopWatermark");
+    expect(goTags).toEqual(["required"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteDesktopWatermark");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
   it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
