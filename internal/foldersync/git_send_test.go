@@ -239,15 +239,60 @@ func TestSendGitScript_HashMismatchWritesNoRef(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			cfg := func() string {
+				b, err := os.ReadFile(filepath.Join(dir, ".git", "config"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(b)
+			}
+			wantCfg, wantFormat := cfg(), g.run(dir, "rev-parse", "--show-object-format")
 			out, errs, rc := g.send(dir)
 			if rc == 0 || out != "" {
 				t.Fatalf("a send into a repository of the other hash: out %q rc %d stderr %q; want it refused", out, rc, errs)
+			}
+			if c.mark && !(strings.Contains(errs, "sha1") && strings.Contains(errs, "sha256")) {
+				t.Errorf("stderr %q does not name both hashes", errs)
+			}
+			// The repository is exactly as it was and git still opens it.
+			if got := cfg(); got != wantCfg {
+				t.Errorf("the refused send changed .git/config:\n%s\nwas:\n%s", got, wantCfg)
+			}
+			if got := g.run(dir, "rev-parse", "--show-object-format"); got != wantFormat {
+				t.Errorf("the repository's object format is %s, was %s", got, wantFormat)
 			}
 			// Read the files, not through git: a half-made repository of the other hash may not open any more.
 			for _, ref := range []string{"refs/remotes/laptop/feature/x", "refs/heads/feature/x", "packed-refs"} {
 				if exists(filepath.Join(dir, ".git", ref)) {
 					t.Errorf("the refused send wrote %s", ref)
 				}
+			}
+		})
+	}
+}
+
+// A half-made repository of the bundle's own hash is not initialised again, and the send finishes it.
+func TestSendGitScript_SameHashHalfMadeRepoIsFinished(t *testing.T) {
+	for _, sha256 := range []bool{false, true} {
+		name := "sha1"
+		if sha256 {
+			name = "sha256"
+		}
+		t.Run(name, func(t *testing.T) {
+			g := newGitRigHash(t, sha256)
+			dir := g.box(t.TempDir())
+			initArgs := []string{"init", "-q"}
+			if sha256 {
+				initArgs = append(initArgs, "--object-format=sha256")
+			}
+			g.run(dir, initArgs...)
+			if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			out, errs, rc := g.send(dir)
+			g.wantSetUp(dir, out, errs, rc)
+			if f := g.run(dir, "rev-parse", "--show-object-format"); f != name {
+				t.Errorf("the repository uses %s, want %s", f, name)
 			}
 		})
 	}

@@ -393,7 +393,7 @@ const (
 
 // sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
 // dir's repository, or sets one up in the bundle's hash (sha256 for a 64-character
-// tip, SHA-1 otherwise). Setting up runs in an if condition, so a
+// tip, SHA-1 otherwise). A repository git can already open is not initialised again: a mismatch of hash ends the send, naming both. Setting up runs in an if condition, so a
 // failed step fails the send (set -e ignores a failure inside an AND-list).
 //
 // No send removes a .git or anything in one but the marker: another send, or
@@ -423,11 +423,16 @@ const (
 // not one.
 func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
-	init := "GIT_DEFAULT_HASH=sha1 git init -q --template="
+	hash, mk := "sha1", "GIT_DEFAULT_HASH=sha1 git init -q --template="
 	if sha256 {
 		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
-		init = "git init -q --template= --object-format=sha256"
+		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
 	}
+	// A repository git can already open is never initialised again: one of the bundle's hash is kept, and one of the
+	// other hash ends the send with nothing changed.
+	init := "{ if oh=$(git rev-parse --show-object-format 2>/dev/null); then [ \"$oh\" = " + hash + " ] || " +
+		"{ echo \"the repository in the synced directory uses $oh object names and this send uses " + hash + "; it is left as it is\" >&2; exit 1; }; " +
+		"else " + mk + "; fi; }"
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
 	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
