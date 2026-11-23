@@ -87,6 +87,8 @@ type pauseClocks struct {
 	probes    map[uuid.UUID]*probeState
 	diskRoot  map[uuid.UUID]diskRootSample
 	denied    map[uuid.UUID]time.Time // the pause a refused resume already audited (firstDenial)
+	// When pruneStale last swept presence, activity and diskRoot.
+	presenceSwept, activitySwept, diskRootSwept time.Time
 }
 
 // thawRetryFloor is the first wait before an input retries a thaw that failed;
@@ -159,6 +161,10 @@ type diskRootSample struct {
 // figure is an uncapped, informational one (the walk counts the image too), and
 // a minute is well inside how fast it moves.
 const runDiskRootTTL = time.Minute
+
+// diskRootKeep is how long setRootSample keeps a sample once its map is large: a stale sample is still shown when a
+// walk is refused (run_resources.go), so only one this old, from a run long gone quiet, is dropped.
+const diskRootKeep = 10 * runDiskRootTTL
 
 // probeWait is how often beginSample looks for the walks it is waiting out.
 const probeWait = 10 * time.Millisecond
@@ -258,9 +264,10 @@ func (c *pauseClocks) rootSample(id uuid.UUID, now time.Time) (kb string, fresh 
 func (c *pauseClocks) setRootSample(id uuid.UUID, kb string, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.diskRoot == nil || len(c.diskRoot) > 4096 {
+	if c.diskRoot == nil {
 		c.diskRoot = map[uuid.UUID]diskRootSample{}
 	}
+	pruneStale(c.diskRoot, func(d diskRootSample) time.Time { return d.at }, diskRootKeep, now, &c.diskRootSwept)
 	c.diskRoot[id] = diskRootSample{kb: kb, at: now}
 }
 
@@ -278,10 +285,11 @@ func (c *pauseClocks) stampDue(presence bool, id uuid.UUID, now time.Time) bool 
 func (c *pauseClocks) stamped(presence bool, id uuid.UUID, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	m := c.clock(presence)
-	if len(m) > 4096 {
-		clear(m)
+	m, swept := c.clock(presence), &c.activitySwept
+	if presence {
+		swept = &c.presenceSwept
 	}
+	pruneStale(m, stampTime, presenceStampEvery, now, swept)
 	m[id] = now
 }
 

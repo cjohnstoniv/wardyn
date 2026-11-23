@@ -491,85 +491,74 @@ func TestSweepTerminalSandboxes_BoundsAHungRecovery(t *testing.T) {
 	}
 }
 
-// pagerSweepStore extends sweepStore with a working ListRunsPage — the same
-// offset/limit windowing real Postgres does over runs, in original order —
-// so SweepTerminalSandboxesPage's store.Pager path can be exercised directly.
-// The store.Pager interface's other methods are dead code for this fixture:
-// stubbed only to satisfy the interface, never called by the sweep.
-type pagerSweepStore struct {
+// keysetSweepStore extends sweepStore with a working ListRunsKeyset — the same
+// cursor windowing real Postgres does over runs, in original order — so
+// SweepTerminalSandboxesAfter's store.RunsKeysetPager path can be exercised
+// directly. The cursor's ID locates the next index.
+type keysetSweepStore struct {
 	sweepStore
 }
 
-func (s *pagerSweepStore) ListRunsPage(_ context.Context, p store.Page) ([]types.AgentRun, error) {
-	start := min(p.Offset, len(s.runs))
+func (s *keysetSweepStore) ListRunsKeyset(_ context.Context, after store.RunCursor, limit int) ([]types.AgentRun, error) {
+	start := 0
+	if after.ID != uuid.Nil {
+		start = len(s.runs)
+		for i, r := range s.runs {
+			if r.ID == after.ID {
+				start = i + 1
+				break
+			}
+		}
+	}
 	end := len(s.runs)
-	if p.Limit > 0 && start+p.Limit < end {
-		end = start + p.Limit
+	if limit > 0 && start+limit < end {
+		end = start + limit
 	}
 	return s.runs[start:end], nil
 }
 
-func (s *pagerSweepStore) ListPoliciesPage(context.Context, store.Page) ([]types.RunPolicy, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) ListWorkspacesPage(context.Context, store.Page) ([]types.Workspace, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) ListApprovalsPage(context.Context, types.ApprovalState, store.Page) ([]types.ApprovalRequest, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) QueryAuditEventsPage(context.Context, uuid.UUID, store.Page) ([]types.AuditEvent, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) QueryRecentAuditEventsPage(context.Context, store.Page) ([]types.AuditEvent, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) QueryAuditEventsFilteredPage(context.Context, *uuid.UUID, store.AuditFilter, store.Page) ([]types.AuditEvent, error) {
-	return nil, nil
-}
-func (s *pagerSweepStore) ListUserDriveGrantsPage(context.Context, store.Page) ([]types.UserDriveGrant, error) {
-	return nil, nil
-}
+var _ store.RunsKeysetPager = (*keysetSweepStore)(nil)
 
-var _ store.Pager = (*pagerSweepStore)(nil)
-
-// TestSweepTerminalSandboxesPage_BoundsToOnePageViaPager is #710's store.Pager
-// pin: given a Pager-implementing store, SweepTerminalSandboxesPage reads
-// exactly page.Limit runs (never the whole table) and only probes/sweeps the
+// TestSweepTerminalSandboxesAfter_BoundsToOnePageViaKeysetPager is #710's pager
+// pin: given a RunsKeysetPager-implementing store, SweepTerminalSandboxesAfter reads
+// exactly limit runs (never the whole table) and only probes/sweeps the
 // orphans that page contains — the second page's orphan is untouched by a
 // call scoped to the first. The first page also holds a terminal run with NO
 // SandboxRef (skipped, never probed), so swept (1) != pageLen (2) here — the
 // production reality, where an orphan is rare — which a pageLen that quietly
 // collapsed to swept would pass right through.
-func TestSweepTerminalSandboxesPage_BoundsToOnePageViaPager(t *testing.T) {
+func TestSweepTerminalSandboxesAfter_BoundsToOnePageViaKeysetPager(t *testing.T) {
 	h := newHarness(t)
 	firstPageOrphan := sweepRun(types.RunCompleted, "sbx-page1")
 	firstPageSettled := sweepRun(types.RunFailed, "") // terminal, no ref: skipped, not swept
 	secondPageOrphan := sweepRun(types.RunCompleted, "sbx-page2")
-	fake := &pagerSweepStore{sweepStore: sweepStore{runs: []types.AgentRun{firstPageOrphan, firstPageSettled, secondPageOrphan}}}
+	fake := &keysetSweepStore{sweepStore: sweepStore{runs: []types.AgentRun{firstPageOrphan, firstPageSettled, secondPageOrphan}}}
 	rr := &sweepAliveRunner{fakeRunner: &fakeRunner{}}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rr
 	cfg.Broker = h.broker
 	srv := New(cfg)
 
-	swept, pageLen, err := srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 2, Offset: 0})
+	swept, pageLen, next, err := srv.SweepTerminalSandboxesAfter(context.Background(), store.RunCursor{}, 2)
 	if err != nil {
 		t.Fatalf("sweep page: %v", err)
 	}
 	if pageLen != 2 {
-		t.Errorf("pageLen = %d, want 2 (Limit bounds the read, independent of how many were swept)", pageLen)
+		t.Errorf("pageLen = %d, want 2 (the limit bounds the read, independent of how many were swept)", pageLen)
 	}
 	if swept != 1 {
 		t.Errorf("swept = %d, want 1 (only the orphan; the ref-less row is skipped, not swept)", swept)
+	}
+	if want := (store.RunCursor{CreatedAt: firstPageSettled.CreatedAt, ID: firstPageSettled.ID}); next != want {
+		t.Errorf("next = %+v, want the page's last run %+v", next, want)
 	}
 	if len(rr.stopped) != 1 || rr.stopped[0] != "sbx-page1" {
 		t.Errorf("StopSandbox calls = %v, want exactly [sbx-page1] — the second page's orphan must be untouched", rr.stopped)
 	}
 
-	// The second page reaches the orphan the first page's Limit excluded.
-	// It comes back SHORT (1 run, Limit 2) — the wrap signal the ticker reads.
-	swept, pageLen, err = srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 2, Offset: 2})
+	// The second page reaches the orphan the first page's limit excluded.
+	// It comes back SHORT (1 run, limit 2) — the wrap signal the ticker reads.
+	swept, pageLen, _, err = srv.SweepTerminalSandboxesAfter(context.Background(), next, 2)
 	if err != nil {
 		t.Fatalf("sweep page 2: %v", err)
 	}
@@ -584,26 +573,29 @@ func TestSweepTerminalSandboxesPage_BoundsToOnePageViaPager(t *testing.T) {
 	}
 }
 
-// TestSweepTerminalSandboxesPage_FallsBackToUnboundedWithoutPager: a store
-// that does not implement store.Pager (a test double without it) still gets
-// swept — SweepTerminalSandboxesPage falls back to the unbounded ListRuns
-// read rather than silently sweeping nothing.
-func TestSweepTerminalSandboxesPage_FallsBackToUnboundedWithoutPager(t *testing.T) {
+// TestSweepTerminalSandboxesAfter_FallsBackToUnboundedWithoutKeysetPager: a store
+// that does not implement store.RunsKeysetPager (a test double without it) still gets
+// swept — SweepTerminalSandboxesAfter falls back to the unbounded ListRuns
+// read rather than silently sweeping nothing, and hands back the zero cursor.
+func TestSweepTerminalSandboxesAfter_FallsBackToUnboundedWithoutKeysetPager(t *testing.T) {
 	h := newHarness(t)
 	orphan := sweepRun(types.RunCompleted, "sbx-fallback")
-	fake := &sweepStore{runs: []types.AgentRun{orphan}} // no ListRunsPage — not a store.Pager
+	fake := &sweepStore{runs: []types.AgentRun{orphan}} // no ListRunsKeyset — not a store.RunsKeysetPager
 	rr := &sweepAliveRunner{fakeRunner: &fakeRunner{}}
 	cfg := baseTestConfig(h, fake)
 	cfg.Runner = rr
 	cfg.Broker = h.broker
 	srv := New(cfg)
 
-	swept, pageLen, err := srv.SweepTerminalSandboxesPage(context.Background(), store.Page{Limit: 1})
+	swept, pageLen, next, err := srv.SweepTerminalSandboxesAfter(context.Background(), store.RunCursor{}, 1)
 	if err != nil {
 		t.Fatalf("sweep page: %v", err)
 	}
 	if pageLen != 1 || swept != 1 {
 		t.Errorf("pageLen=%d swept=%d, want 1 and 1 (fallback sweeps the one run it has)", pageLen, swept)
+	}
+	if next != (store.RunCursor{}) {
+		t.Errorf("next = %+v, want the zero cursor", next)
 	}
 	if len(rr.stopped) != 1 || rr.stopped[0] != "sbx-fallback" {
 		t.Errorf("StopSandbox calls = %v, want exactly [sbx-fallback]", rr.stopped)

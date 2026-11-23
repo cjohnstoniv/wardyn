@@ -53,8 +53,11 @@ type Server struct {
 	locks lockState
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
-	lastTouchMu sync.Mutex
-	lastTouch   map[uuid.UUID]time.Time
+	lastTouchMu    sync.Mutex
+	lastTouch      map[uuid.UUID]time.Time
+	lastTouchSwept time.Time // when pruneStale last swept lastTouch
+	// healthzCache holds /healthz's last probe for cfg.HealthzProbeTTL (healthz_cache.go). Zero value is ready.
+	healthzCache healthzProbeCache
 	// keepaliveEvery overrides attachKeepaliveInterval for THIS server only. It
 	// exists so a test can watch the keepalive tick without waiting 30 real
 	// seconds; nothing sets it in production and the zero value means "use the

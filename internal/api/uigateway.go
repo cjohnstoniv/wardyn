@@ -845,12 +845,10 @@ func (s *Server) uiAppReady(key string) bool {
 func (s *Server) markUIAppReady(key string) {
 	s.uiReadyMu.Lock()
 	defer s.uiReadyMu.Unlock()
+	now := s.cfg.Now()
 	if s.uiReady == nil {
 		s.uiReady = map[string]time.Time{}
-	} else if len(s.uiReady) > 1024 {
-		// Pruned wholesale past a bound, like shouldTouch's map: the worst case
-		// is one extra probe per live app.
-		clear(s.uiReady)
 	}
-	s.uiReady[key] = s.cfg.Now()
+	pruneStale(s.uiReady, stampTime, uiReadyTTL, now, &s.uiReadySwept)
+	s.uiReady[key] = now
 }

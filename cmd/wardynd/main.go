@@ -471,6 +471,7 @@ func run() error {
 		DesktopSignins:       *f.desktopSignins == "on",
 		StartAfterReadback:   *f.startAfterReadback == "on",
 		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
+		HealthzProbeTTL:      2 * time.Second,
 		CLIArtifactBase:      knobs.cliArtifactBase,
 		OrgCAFingerprints:    knobs.orgCAFingerprints,
 		RunnerTarget:         runnerTarget,

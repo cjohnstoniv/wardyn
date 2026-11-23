@@ -156,8 +156,8 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	// TestReconcileOnBoot_SweepsOrphanedTerminalSandbox's teardown run twice.
 	// Its earlier rejection (unpaged ListRuns, so cost grows with run history
 	// forever; and needing leader election) is answered where it actually
-	// runs: SweepTerminalSandboxesPage bounds each tick to one
-	// store.Pager.ListRunsPage page, so per-tick cost is constant regardless of
+	// runs: SweepTerminalSandboxesAfter bounds each tick to one
+	// store.RunsKeysetPager.ListRunsKeyset page, so per-tick cost is constant regardless of
 	// run history. Election is NOT free, though: claimSingleInstance
 	// (cmd/wardynd/single_instance.go) holds db.SingleInstanceLockKey for the
 	// whole process lifetime only in the DEFAULT configuration — a deployment

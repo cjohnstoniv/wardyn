@@ -383,6 +383,34 @@ func (s PG) ListRunsPage(ctx context.Context, p Page) ([]types.AgentRun, error) 
 	return collect(ctx, s.Pool, "list", "runs", q, args, scanRun)
 }
 
+// RunCursor is a place in ListRunsKeyset's order: the run read last. The zero value starts at the newest run.
+type RunCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// RunsKeysetPager reads runs newest first from a cursor, for a sweep that must reach every run however many are
+// created meanwhile: an OFFSET page moves by every new run, so a busy deployment re-reads its newest page. Kept out
+// of Pager for the reason Pager is kept out of Store.
+type RunsKeysetPager interface {
+	ListRunsKeyset(ctx context.Context, after RunCursor, limit int) ([]types.AgentRun, error)
+}
+
+var _ RunsKeysetPager = PG{}
+
+// ListRunsKeyset — see RunsKeysetPager. agent_runs_created_at_idx serves the order and the bound; id breaks a
+// created_at tie, so no run is read twice or skipped at a page boundary.
+func (s PG) ListRunsKeyset(ctx context.Context, after RunCursor, limit int) ([]types.AgentRun, error) {
+	q := `SELECT ` + runCols + ` FROM agent_runs`
+	var args []any
+	if after.ID != uuid.Nil {
+		args = append(args, after.CreatedAt, after.ID)
+		q += ` WHERE (created_at, id) < ($1, $2)`
+	}
+	q, args = Page{Limit: limit}.appendTo(q+` ORDER BY created_at DESC, id DESC`, args)
+	return collect(ctx, s.Pool, "list", "runs by keyset", q, args, scanRun)
+}
+
 // ListPoliciesPage returns policies in reverse creation order, bounded by p
 // (run_policies_created_at_idx covers the ORDER BY).
 func (s PG) ListPoliciesPage(ctx context.Context, p Page) ([]types.RunPolicy, error) {

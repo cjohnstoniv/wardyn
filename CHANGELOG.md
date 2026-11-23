@@ -53,6 +53,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - When a Docker runner restarts, each run keeps its network until the lapse time the runner saved from that run's last lease, at most 65 minutes after the restart, instead of losing it until it is revived; the server's fresh lease then continues the run. A run past that time, one whose creation did not finish, one whose last change failed or whose last start or command lost its result, and one already being contained are cut off at once as before, and so is every run at the first restart after upgrading the runner. A runner restarting in a loop still cuts each run off at its saved time.
 - A run started with `--image` reuses the wrapped image an earlier run of the same creator built from the same base image, runner tools and wrap recipe, instead of wrapping it again, while the server keeps running. Runs started with the admin token share one creator. A `--devcontainer-repo` run still builds on every run. A reused build's `run.build` audit row carries `cache_hit`.
 - Starting a Docker sandbox reads the Docker Engine's details once instead of twice.
+- The Runs board reads ended runs through a new index on their end time, live and ended runs as two ordered reads, and a member's list that includes sponsored service runs through the creator index, so reading a page of the board no longer walks the caller's whole run history.
+- The attention badge and the "Needs you" filter read only runs that can need attention.
+- `/healthz` reuses its runner, network-policy and sensor reads for up to 2 seconds, one read at a time. A stalled database still fails it.
+- The audit screen re-reads the kernel sensor's health every 30 seconds instead of on every refresh.
+- The Runs board reads its hidden-run counts on load and once a minute instead of on every poll. `GET /api/v1/runs` takes `counts=skip` to leave the two hidden-count headers out.
+- The terminal-sandbox retry sweep pages by run creation time and id, so runs created between sweeps no longer hold it on its newest page.
+- Debounce and ready caches drop only expired entries when they grow large, instead of forgetting every entry.
 
 ### Fixed
 
@@ -122,6 +129,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
 - If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
 - The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
+- Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
 
 ## [0.10.3] — 2026-11-23
 
