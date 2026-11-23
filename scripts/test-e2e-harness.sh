@@ -31,7 +31,9 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -83,7 +85,15 @@ for name in ("-listen", "-ui-sandbox-listen", "-internal-listen"):
     assert host in ("127.0.0.1", "127.0.0.2", "::1"), f"unsafe effective bind: {flags[name]}"
     class Server(http.server.ThreadingHTTPServer):
         address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    server = Server((host, int(port)), Handler)
+    try:
+        server = Server((host, int(port)), Handler)
+    except OSError as error:
+        holder = ""
+        if shutil.which("ss"):
+            holder = subprocess.run(["ss", "-Hltnp", f"sport = :{port}"], capture_output=True, text=True).stdout.strip()
+        Path(os.environ["E2E_TEST_EVENTS"], f"bindfail-{os.getpid()}.json").write_text(json.dumps({
+            "addr": flags[name], "errno": error.errno, "error": str(error), "holder": holder}))
+        raise
     listeners.append(server.socket.getsockname()[:2])
     threading.Thread(target=server.serve_forever, daemon=True).start()
 Path(os.environ["E2E_TEST_EVENTS"], f"bind-{os.getpid()}.json").write_text(json.dumps({
@@ -98,6 +108,7 @@ cp "${tmp}/repo/.e2e-bin/wardynd" "${tmp}/repo/.e2e-bin/basepathproxy"
 cat > "${tmp}/bin/docker" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${E2E_TEST_EVENTS}/docker.log"
+trap 'printf "rc=%s %s\n" "$?" "$*" >> "${E2E_TEST_EVENTS}/docker-rc.log"' EXIT
 # One refused start on request: records the address the lane tried, then fails the readiness probe.
 if [[ "$1" == exec && "$*" == *pg_isready* && -n "${E2E_TEST_FAIL_ONCE:-}" && -e "${E2E_TEST_FAIL_ONCE}" ]]; then
   rm -f "${E2E_TEST_FAIL_ONCE}"
@@ -181,11 +192,15 @@ cd "${tmp}/repo"
 
 run_wrapper() {
   rm -f "${E2E_TEST_EVENTS}/"*
-  ./scripts/run-ui-e2e.sh "$@" > "${tmp}/wrapper.log" 2>&1 || { cat "${tmp}/wrapper.log"; die "canonical wrapper failed"; }
-  [[ -z "$(find .e2e-bin -name 'token-*' -print -quit)" ]] || die "down retained a bearer file"
+  ./scripts/run-ui-e2e.sh "$@" > "${tmp}/wrapper.log" 2>&1 || { cat "${tmp}/wrapper.log"; dump_events; die "canonical wrapper failed"; }
+  [[ -z "$(find .e2e-bin -name 'token-*' -print -quit)" ]] || { dump_events; die "down retained a bearer file"; }
+}
+dump_events() {
+  echo "--- fake docker exit codes" >&2; cat "${E2E_TEST_EVENTS}/docker-rc.log" >&2 2>/dev/null || echo "(none)" >&2
+  local f; for f in "${E2E_TEST_EVENTS}"/bindfail-*.json; do [[ -e "${f}" ]] && { echo "--- ${f##*/}" >&2; cat "${f}" >&2; }; done
 }
 check_events() {
-  python3 - "$@" <<'PY' || { cat "${tmp}/wrapper.log"; die "unexpected client events"; }
+  python3 - "$@" <<'PY' || { cat "${tmp}/wrapper.log"; dump_events; die "unexpected client events"; }
 import hashlib
 import json
 import os
