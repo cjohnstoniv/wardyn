@@ -146,7 +146,7 @@ func refuseLiveSeat(ctx context.Context, q Querier, where string, arg any) error
 
 func (s PG) UpdateWindowsLicencePool(ctx context.Context, id uuid.UUID, revision int64, name *string, seats *int) (types.WindowsLicencePool, error) {
 	var out types.WindowsLicencePool
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		p, err := lockWindowsPool(ctx, tx, id, revision)
 		if err != nil {
 			return err
@@ -177,7 +177,7 @@ func (s PG) UpdateWindowsLicencePool(ctx context.Context, id uuid.UUID, revision
 
 func (s PG) DeleteWindowsLicencePool(ctx context.Context, id uuid.UUID) (types.WindowsLicencePool, error) {
 	var out types.WindowsLicencePool
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		if _, err := lockWindowsPool(ctx, tx, id, 0); err != nil {
 			return err
 		}
@@ -202,7 +202,7 @@ func (s PG) AddWindowsLicenceHolder(ctx context.Context, poolID uuid.UUID, subje
 	if types.NormalizeWindowsLicenceSubject(subject) == "" {
 		return out, errors.New("name the person who holds the seat")
 	}
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		p, err := lockWindowsPool(ctx, tx, poolID, 0)
 		if err != nil {
 			return err
@@ -225,7 +225,7 @@ func (s PG) AddWindowsLicenceHolder(ctx context.Context, poolID uuid.UUID, subje
 // that order, so a writer that also waited for the pool row could deadlock with it.
 func (s PG) RemoveWindowsLicenceHolder(ctx context.Context, poolID uuid.UUID, subject string) (types.WindowsLicenceHolder, error) {
 	var out types.WindowsLicenceHolder
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		h, err := scanWindowsHolder(tx.QueryRow(ctx, `SELECT `+windowsHolderCols+` FROM windows_licence_holders
 			WHERE pool_id = $1 AND lower(subject) = pg_catalog.lower(pg_catalog.btrim($2)) FOR UPDATE`, poolID, subject))
 		if err != nil {
@@ -298,7 +298,7 @@ func lockWindowsImage(ctx context.Context, tx pgx.Tx, id uuid.UUID, revision int
 
 func (s PG) UpdateWindowsImage(ctx context.Context, id uuid.UUID, revision int64, name *string, poolID *uuid.UUID) (types.WindowsImage, error) {
 	var out types.WindowsImage
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		img, err := lockWindowsImage(ctx, tx, id, revision)
 		if err != nil {
 			return err
@@ -329,7 +329,7 @@ func (s PG) UpdateWindowsImage(ctx context.Context, id uuid.UUID, revision int64
 
 func (s PG) RetireWindowsImage(ctx context.Context, id uuid.UUID) (types.WindowsImage, error) {
 	var out types.WindowsImage
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		if _, err := lockWindowsImage(ctx, tx, id, 0); err != nil {
 			return err
 		}
@@ -376,7 +376,7 @@ func (s PG) WindowsLaunchCheck(ctx context.Context, ref, subject string) (Window
 
 func (s PG) DeleteWindowsLicenceHoldersOf(ctx context.Context, subjects []string) (int64, error) {
 	var n int64
-	err := pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginTxFunc(ctx, s.Pool, pgx.TxOptions{IsoLevel: pgx.ReadCommitted}, func(tx pgx.Tx) error {
 		var err error
 		n, err = deleteWindowsLicenceHolders(ctx, tx, lowerForms(subjects))
 		return err
