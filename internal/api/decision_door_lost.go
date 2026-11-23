@@ -58,13 +58,19 @@ func (e *runUnreadableError) Unwrap() error { return e.Err }
 //
 // At the decision door, a post whose token names its run and is refused here leaves one run.report.drop row
 // on that run (noteDecisionReportLost): a run that cannot be read, or an expired token within the bound
-// noteExpiredDecisionPost keeps.
+// noteExpiredDecisionPost keeps. A 503 to a batch the proxy will send again leaves none: only its last attempt
+// is a loss. Every answer there says the door takes batches (advertiseDecisionBatch).
 func (s *Server) refuseRunToken(w http.ResponseWriter, r *http.Request, err error) {
+	if r.URL.Path == decisionsDoor {
+		advertiseDecisionBatch(w)
+	}
 	var unreadable *runUnreadableError
 	if errors.As(err, &unreadable) {
 		slog.ErrorContext(r.Context(), "api: read the run behind a revoked token at the decision door",
 			slog.String("run_id", unreadable.RunID.String()), slog.Any("err", unreadable.Err))
-		s.noteDecisionReportLost(r, unreadable.RunID, reportLostUnreadable)
+		if !decisionPostRetried(r) { // a batch the proxy sends again is not lost yet
+			s.noteDecisionReportLost(r, unreadable.RunID, reportLostUnreadable)
+		}
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonInternalLivenessReadFailed, "read run failed; retry")
 		return
 	}
@@ -96,9 +102,10 @@ func answerDecisionPost(w http.ResponseWriter, kept bool) {
 	writeJSON(w, http.StatusAccepted, nil)
 }
 
-// decisionGate is the writer internalAuth hands the liveness gate (refuseTerminalRun): at the decision door, a
-// 503 the gate answers is noted on the run's trail (noteDecisionReportLost); every other door, and every
-// other answer, is written as it is.
+// decisionGate is the writer internalAuth hands the liveness gate (refuseTerminalRun): at the decision door,
+// every answer says the door takes batches, and a 503 the gate answers is noted on the run's trail
+// (noteDecisionReportLost) unless it answers a batch the proxy will send again; every other door's answer is
+// written as it is.
 func (s *Server) decisionGate(w http.ResponseWriter, r *http.Request, claims *identity.Claims) http.ResponseWriter {
 	if r.URL.Path != decisionsDoor {
 		return w
@@ -115,7 +122,8 @@ type decisionGateWriter struct {
 }
 
 func (w decisionGateWriter) WriteHeader(code int) {
-	if code == http.StatusServiceUnavailable {
+	advertiseDecisionBatch(w.ResponseWriter)
+	if code == http.StatusServiceUnavailable && !decisionPostRetried(w.r) {
 		w.s.noteDecisionReportLost(w.r, w.runID, reportLostUnreadable)
 	}
 	w.ResponseWriter.WriteHeader(code)

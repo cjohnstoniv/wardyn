@@ -18,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
-	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -29,10 +28,17 @@ import (
 // it as an append-only audit event. The action is egress.<decision> with
 // actor_type=agent (the proxy acts on behalf of the run). The run id is taken
 // from the verified token claims, NOT from the body (the body is advisory).
+// A post of the batch media type is a batch of records (handlePostDecisionBatch);
+// every answer says this door takes batches (advertiseDecisionBatch).
 func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
+	advertiseDecisionBatch(w)
 	claims, err := claimsFromContext(r)
 	if err != nil {
 		writeErrorReason(w, http.StatusUnauthorized, reasonMissingRunClaims, "missing run claims")
+		return
+	}
+	if decisionBatchPost(r) {
+		s.handlePostDecisionBatch(w, r, claims)
 		return
 	}
 	var dl egress.DecisionLog
@@ -43,18 +49,9 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		s.refuseDecisionLog(w, r, claims.RunID)
 		return
 	}
-	normalizeN1Decision(&dl)
-
+	decisionRecord(&dl, s.decisionRequest(r))
 	runID := claims.RunID
-	// Relayed is not serialised: a via_org engine's post marks a relayed row with DecisionRelayedHeader.
-	// Only the engine's in-process call for a VM run is trusted with it; anyone else's copy is dropped.
-	relayedMark := r.Header.Get(proxy.DecisionRelayedHeader) == "1"
-	r.Header.Del(proxy.DecisionRelayedHeader)
-	if relayedMark && viaOrgCall(r.Context()) {
-		if run, ok := liveRunFromContext(r.Context()); ok && run.MachineKind.IsVM() {
-			dl.Request.Relayed = true
-		}
-	}
+	ctx := r.Context()
 
 	// A model call's token counts (rule source llm:usage) are a count and not an egress decision: they are
 	// stored as usage and write no egress row, so a metered call is one decision row plus one usage row.
@@ -63,127 +60,20 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		s.ingestModelUsage(w, r, runID, dl.Usage)
 		return
 	}
-
-	// A DNS query the run's sandbox asked (internal/egress/proxy/dns_audit.go) is its own row, not an
-	// egress decision, and not agent activity: a run that only asks names idles out.
-	if dl.DNS != nil {
-		fields := map[string]any{}
-		dl.DNS.AuditFields(fields)
-		data, _ := json.Marshal(fields)
-		ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID, egress.DNSQueryAction, dl.DNS.Name, dl.DNS.AuditOutcome(), data)
-		ev.SourceIP = r.RemoteAddr
-		s.recordAudit(r.Context(), ev)
+	if dl.DNS == nil {
+		kind, isOver := s.decisionRunOver(ctx)
+		s.decisionTouch(ctx, runID, kind, isOver, dl)
+	}
+	primary, extra := s.decisionEvents(ctx, claims, r.RemoteAddr, dl)
+	if !decisionDurable(dl) {
+		s.recordAudit(ctx, *primary)
 		writeJSON(w, http.StatusAccepted, nil)
 		return
 	}
-
-	// An egress decision means the agent actually did something, so it resets the
-	// idle clock the reaper reads (agent_runs.updated_at) — the seam
-	// internal/lifecycle documents. Best-effort like the attach keepalive; a nil
-	// Store (test harness) and an unknown run id are both non-events.
-	// ponytail: only runs that make egress calls stay alive — a pure-local-compute
-	// run is still wall-clocked. Runner-reported liveness is the upgrade path.
-	// Debounced: a chatty agent can emit many decisions a second, and each touch
-	// is an UPDATE on the same agent_runs row; the reaper thresholds are minutes,
-	// so one touch per touchDebounce per run loses nothing.
-	// An allowed request is activity, a refused one is not (egress.CountsAsActivity): a run that is only
-	// being refused idles out. The run's kind comes from the liveness gate's read, for the macOS boot hosts.
-	// A run that is over reaches this door only inside its tail grace (terminalGraceRoutes): its last
-	// decisions are kept on its trail and, as on the runner spool, are not activity.
-	kind, isOver := s.decisionRunOver(r.Context())
-	if s.cfg.Store != nil && s.shouldTouch(runID, kind, dl) && !isOver() {
-		_ = s.cfg.Store.TouchRun(r.Context(), runID)
-	}
-	// The same decision moves the pause's presence clock (run_pause.go).
-	if decisionIsActivity(kind, dl) && s.pause.stampDue(false, runID, s.cfg.Now()) && !isOver() {
-		s.noteAgentActive(r.Context(), runID)
-	}
-
-	// A synthetic "bypass" decision is PURELY an LLM-inspection coverage signal
-	// (an opaque CONNECT to a model host that could not be inspected). Emit only
-	// the llm.scan.bypass degradation event — not a duplicate egress.allow for
-	// the tunnel, which the real CONNECT decision already recorded.
-	if dl.Scan != nil && dl.Scan.Action == "bypass" {
-		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
-		writeJSON(w, http.StatusAccepted, nil)
-		return
-	}
-
-	fields := map[string]any{
-		"host":        dl.Request.Host,
-		"port":        dl.Request.Port,
-		"method":      dl.Request.Method,
-		"path":        dl.Request.Path,
-		"rule_source": dl.RuleSource,
-		"approval_id": dl.ApprovalID,
-	}
-	// Streak-summary only: an ordinary decision's data column stays as it was.
-	if dl.Repeat > 0 {
-		fields["repeat"] = dl.Repeat
-	}
-	// Cause/Via ride a dial- or tunnel-shaped failure only (egress.DecisionLog's
-	// own doc comments) — absent on every ordinary decision, same as repeat above.
-	if dl.Cause != "" {
-		fields["cause"] = dl.Cause
-	}
-	if dl.Via != "" {
-		fields["via"] = dl.Via
-	}
-	// The allow of an opaque CONNECT to a model host; counted by RunOpaqueTunnels.
-	if dl.ModelTunnel {
-		fields["model_tunnel"] = true
-	}
-	// A desktop VM's relay flow id, and the port rule's dry-run mark.
-	if dl.Flow != "" {
-		fields["flow"] = dl.Flow
-	}
-	if dl.PortRule != "" {
-		fields["port_rule"] = dl.PortRule
-	}
-	// The id the gateway's access log shares with this row; absent on a run with no gateway route.
-	if dl.GatewayCallID != "" {
-		fields["gateway_call_id"] = dl.GatewayCallID
-	}
-	// The id the gateway or its provider assigned to the attempt; absent where none was read.
-	if dl.GatewayRequestID != "" {
-		fields["gateway_request_id"] = dl.GatewayRequestID
-	}
-	// Whose refusal a deny was ("refusal", egress.Refusal); absent on an unclassified row.
-	dl.Refusal.AuditFields(fields)
-	if dl.MatchedRule != "" {
-		fields["matched_rule"] = dl.MatchedRule // the tool_rules key behind a policy:tool-* row
-	}
-	// A Bedrock data-plane refusal the proxy relayed (bedrock_dataplane_fault.go). A run that is over takes
-	// its hint on a write that leaves updated_at, which the terminal tail grace is counted from, so a post
-	// kept inside the grace cannot open it again.
-	if dl.UpstreamFault != "" {
-		fields["upstream_fault"] = dl.UpstreamFault
-		s.noteBedrockDataPlaneFault(r.Context(), runID, dl.UpstreamFault)
-	}
-	data, _ := json.Marshal(fields)
-	outcome := decisionOutcome(dl.Decision)
-	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
-		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
-	ev.SourceIP = r.RemoteAddr
-	kept := s.recordAuditDurably(r.Context(), ev)
-	// wardyn_egress_denies_total is exposed as "denied by policy", and it
-	// is the only egress counter Wardyn has. Some rows arrive here as
-	// egress.Deny without being a denial by policy; isPolicyDeny (metrics.go)
-	// lists every one and says why. Counting them would page operators for
-	// policy denials that never happened and make the true deny rate unreadable
-	// off the series. Each still records its egress.deny AUDIT row unchanged —
-	// only the counter is scoped. llm_routes.go's gatewayTarget GUARD refusal
-	// has its own rule_source, so it counts here like any other guard denial.
-	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
-		s.metrics.egressDenied()
-	}
-	s.countReauthTimeout(r.Context(), dl)
-
-	// Optional outbound content-inspection summary rides the same decision. When
-	// present it becomes a SEPARATE, content-free llm.scan.* audit event so the
-	// model-channel inspection is independently visible/queryable in the log.
-	if dl.Scan != nil {
-		s.recordLLMScanAudit(r.Context(), runID, claims.SPIFFEID, r.RemoteAddr, dl.Scan, dl.Request.Host)
+	kept := s.recordAuditDurably(ctx, *primary)
+	s.decisionAfter(ctx, dl)
+	for _, ev := range extra {
+		s.recordAudit(ctx, ev)
 	}
 	answerDecisionPost(w, kept)
 }
@@ -214,10 +104,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 	if sc == nil {
 		return
 	}
-	action, outcome, data := egress.ScanAudit(sc, host)
-	ev := s.auditEvent(&runID, types.ActorAgent, actor, action, host, outcome, data)
-	ev.SourceIP = sourceIP
-	s.recordAudit(ctx, ev)
+	s.recordAudit(ctx, s.llmScanAuditEvent(runID, actor, sourceIP, sc, host))
 }
 
 // groundtruthBatch is the POST /api/v1/internal/groundtruth body: a batch of
