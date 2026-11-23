@@ -711,9 +711,9 @@ What each extra container gets:
 - Its own `disk_mib` limit when the run sets one: each container's writes are bounded by it.
 
 Have it listen on `127.0.0.1`: the agent and the gateway reach it there, and a port bound to every address can be
-reachable from the node the pod runs on. (r1: L5)
+reachable from the node the pod runs on.
 
-What an extra container changes in a run (r1: M7):
+What an extra container changes in a run:
 - It runs what the agent sends it. Tool rules, the autonomy level and the harness's own walls bind the agent, not
   what an extra container does for it over `127.0.0.1`, so an image grant for one is a grant of what that image
   will run.
@@ -724,7 +724,7 @@ What an extra container changes in a run (r1: M7):
 
 Who may add one: the image needs what `image` needs, an image grant for a member and the digest rule, and image
 admission checks each image. The verdicts are on the `201`'s run under `containers` and on the `run.create` row.
-The run's page and `GET /runs/{id}` do not list extra containers in this release. (r1: L6)
+The run's page and `GET /runs/{id}` do not list extra containers in this release.
 
 The run starts when every extra container is running; one that cannot start fails the run with its name. One that
 exits later stays down and the run goes on. Its output is its container log, not part of the run's recording.
@@ -741,7 +741,7 @@ exits later stays down and the run goes on. Its output is its container log, not
 
 Presets, run documents and a workload's `intent` carry `containers` like every other field. The New Run screens have
 no control for them: set them in the run document. A copy of a run that did not keep its setup is made from its
-`run.create` row and does not carry them, as it does not carry `image`. (r1: M4)
+`run.create` row and does not carry them, as it does not carry `image`.
 
 ## Kept machines
 
