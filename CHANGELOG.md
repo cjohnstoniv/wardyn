@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Computer folders: at the end of a run on a Kubernetes runner, or on a runner older than 0.10.0, Wardyn now stops the sandbox's network proxy before it brings the folder's changes back, so the agent has no network while they come back. The agent is left running during that copy. If the proxy can't be stopped, or a runner can't cut its agent off, no copy back runs, the sandbox is stopped and the run records why.
+
+### Before you upgrade
+
+- Computer folders on Kubernetes in server mode: a **Both ways** folder no longer comes back from a run that ends while its agent is still running (a stop, an idle or maximum-age stop, a lease end). The run is stopped without its changes, and the run records that they were not brought back.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
