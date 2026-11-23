@@ -847,6 +847,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/wall-presets/{id}":    {class: classMember},
 	"PUT /api/v1/wall-presets/{id}":    {class: classMember},
 	"DELETE /api/v1/wall-presets/{id}": {class: classMember},
+	// Repeating schedules (run_schedule_repeat.go): member at the router; the handler scopes to the owner, an
+	// operator may list, pause and delete, and one the caller may not see is the missing 404.
+	"GET /api/v1/run-schedules":              {class: classMember},
+	"POST /api/v1/run-schedules":             {class: classMember},
+	"POST /api/v1/run-schedules/{id}/pause":  {class: classMember},
+	"POST /api/v1/run-schedules/{id}/resume": {class: classMember},
+	"DELETE /api/v1/run-schedules/{id}":      {class: classMember},
 	// PUT/DELETE moved here from classAdmin in 0.7 (migration `0050`,
 	// per-principal secrets): self-service, scoped to the caller's OWN row at
 	// the STORE (secretOwnerFromRequest) — same shape as /me/ssh-keys and

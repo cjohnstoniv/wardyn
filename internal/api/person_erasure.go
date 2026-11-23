@@ -299,6 +299,13 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	// A repeating schedule's stored request holds task text too, and a schedule left in place would book a new
+	// queued run after the cancel below.
+	if se, ok := s.cfg.Store.(runScheduleEraser); ok {
+		if _, err := se.DeleteRunSchedulesOf(ctx, person); err != nil {
+			return nil, err
+		}
+	}
 	cancelled, err := s.cancelQueuedRunsOf(ctx, person, "person_erased")
 	if err != nil {
 		return nil, err

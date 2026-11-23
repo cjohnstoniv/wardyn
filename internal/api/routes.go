@@ -374,6 +374,7 @@ func (s *Server) routes() chi.Router {
 			// Launch presets (#1143): named bundles of run-create fields. See
 			// presets.go for the read/write split.
 			s.mountPresetRoutes(r, operatorOnly)
+			s.mountRunScheduleRoutes(r) // repeating schedules, owner-scoped in the handlers (run_schedule_repeat.go)
 
 			// Workspace management (onboarding of local dirs + repos a run may
 			// attach), gated to authenticated humans (SSO session or admin token).

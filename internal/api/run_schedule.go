@@ -17,7 +17,7 @@ import (
 
 // One-time scheduled runs: a create with start_at waits in its pool's queue as a QUEUED run that no
 // promotion judges before that time (store.queuePage), then starts through the queue's own start, which
-// re-checks everything as the owner. Repeating schedules are not built.
+// re-checks everything as the owner.
 
 // envScheduledRuns switches scheduled runs on; off (the default) refuses start_at.
 const envScheduledRuns = "WARDYN_SCHEDULED_RUNS"
