@@ -558,6 +558,7 @@ func run() error {
 		RefuseGitPATBrokerOff:    *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:      *f.proxyResponseScrub,
 		CanonicalPushRepos:       *f.pushHoldCanonicalRepos,
+		PushHoldRemovals:         *f.pushHoldRemovals,
 		AttachLocal:              strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
 		FileSecretPlaceholders:   *f.fileSecretPlaceholders,

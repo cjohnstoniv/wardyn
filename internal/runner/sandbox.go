@@ -253,6 +253,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
+		PushHoldRemovals:     pc.PushHoldRemovals,
 		Attribution:          pc.Attribution,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,

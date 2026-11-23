@@ -297,6 +297,9 @@ type bootFlags struct {
 	// multiAgentTasks lets a background agent task run several agents side by side
 	// (off by default in 0.10.0).
 	multiAgentTasks *bool
+	// pushHoldRemovals holds a push that removes a require_review_paths file from a
+	// branch it updates, on GitHub and Azure DevOps (off by default in 0.10.4).
+	pushHoldRemovals *bool
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
@@ -658,6 +661,7 @@ func parseBootFlags() *bootFlags {
 		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "on", `"on" (the default): a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; "off" (or any other value) keeps every attach on the relay`),
 		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
+		pushHoldRemovals:         flagBool("push-hold-removals", "WARDYN_PUSH_HOLD_REMOVALS", false, "have each run's egress proxy hold a GitHub or Azure DevOps push that removes a require_review_paths file from a branch it updates, as it holds one that changes it (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
 

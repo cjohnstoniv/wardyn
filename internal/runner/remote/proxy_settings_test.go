@@ -31,8 +31,9 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 	runnerwire.ProxySettingLocalModels: func(pc *runner.ProxyConfig) {
 		pc.LocalModels = map[string]types.LocalModelSettings{"http://models.internal:11434": {}}
 	},
-	runnerwire.ProxySettingKubeAPI:        func(pc *runner.ProxyConfig) { pc.KubeAPI = &proxy.KubeAPIGrant{} },
-	runnerwire.ProxySettingCanonicalRepos: func(pc *runner.ProxyConfig) { pc.CanonicalPushRepos = true },
+	runnerwire.ProxySettingKubeAPI:          func(pc *runner.ProxyConfig) { pc.KubeAPI = &proxy.KubeAPIGrant{} },
+	runnerwire.ProxySettingCanonicalRepos:   func(pc *runner.ProxyConfig) { pc.CanonicalPushRepos = true },
+	runnerwire.ProxySettingPushHoldRemovals: func(pc *runner.ProxyConfig) { pc.PushHoldRemovals = true },
 	runnerwire.ProxySettingGatewayIdentity: func(pc *runner.ProxyConfig) {
 		pc.GatewayIdentity = []proxy.GatewayIdentityRoute{{Host: "gw.corp.example", Port: 443, ProviderID: "p", Audience: "a"}}
 	},
