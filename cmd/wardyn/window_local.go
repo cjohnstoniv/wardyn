@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -66,7 +67,7 @@ func runLocalWindow(ctx context.Context, c *sdk.Client, run types.AgentRun, out 
 	}
 	lc, why := openLocalWindowSocket(ctx, c, run)
 	if lc == nil {
-		return errors.New("a window onto a Linux VM run opens only on the computer its runner is on: " + why)
+		return localDiscoveryFailed(ctx, c, run, why)
 	}
 	defer lc.conn.Close()
 	if _, err := c.OpenLocalWindow(ctx, run.ID, lc.nonce); err != nil {
@@ -105,6 +106,25 @@ func runLocalWindow(ctx context.Context, c *sdk.Client, run types.AgentRun, out 
 	fmt.Fprintln(out, localWindowEnds["client_closed"].sentence)
 	return nil
 }
+
+// localDiscoveryFailed asks the organisation to open the window with no nonce when this computer's runner
+// handed none out, so a refusal the organisation would give anyway (the feature turned off, not your
+// computer, the runner offline ...) is shown in its own words. The organisation checks the nonce only after
+// those, and before it reserves the window or calls the runner, so only its missing-nonce answer leaves the
+// local reason to say.
+func localDiscoveryFailed(ctx context.Context, c *sdk.Client, run types.AgentRun, why string) error {
+	local := errors.New("a window onto a Linux VM run opens only on the computer its runner is on, and that runner " +
+		"handed out no window nonce here (" + why + "); a runner picks up a change to the window setting when it next connects")
+	_, err := c.OpenLocalWindow(ctx, run.ID, "")
+	var ae *sdk.APIError
+	if err == nil || (errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Reason == localNonceMissingReason) {
+		return local
+	}
+	return sentenceError(err)
+}
+
+// localNonceMissingReason is the organisation's answer to an open with no nonce.
+const localNonceMissingReason = "invalid_request_body"
 
 // endError is nil for an end that is not a refusal, and otherwise the end's sentence as an error.
 func endError(reason string) error {

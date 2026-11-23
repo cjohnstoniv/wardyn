@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/localviewer"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // windowFixture is a Linux VM run on a runner of this computer: the runner's socket hands out a window
@@ -35,11 +36,14 @@ type windowFixture struct {
 	hello  map[string]any
 	conn   net.Conn // the CLI's connection, once it said hello
 	posted string   // the local_nonce the CLI posted
+	posts  int      // how many opens the CLI posted
 	got    []byte   // what the viewer wrote to the runner
 	done   chan struct{}
+	// answer, when set before the CLI says hello, answers the hello in place of a window nonce.
+	answer func(c net.Conn)
 }
 
-func newWindowFixture(t *testing.T, grant func(w http.ResponseWriter), end string) *windowFixture {
+func newWindowFixture(t *testing.T, grant func(w http.ResponseWriter, c net.Conn), end string) *windowFixture {
 	t.Helper()
 	f := &windowFixture{runID: uuid.New(), runnerID: uuid.New(), done: make(chan struct{})}
 	sockDir, err := os.MkdirTemp("", "ww") // short: a unix socket path is at most 104 bytes on macOS
@@ -66,7 +70,12 @@ func newWindowFixture(t *testing.T, grant func(w http.ResponseWriter), end strin
 		}
 		f.mu.Lock()
 		f.hello, f.conn = h, c
+		answer := f.answer
 		f.mu.Unlock()
+		if answer != nil {
+			answer(c)
+			return
+		}
 		_ = writeLocalJSONForTest(c, localHelloOK, map[string]string{"runner_id": f.runnerID.String(), "nonce": "nonce-1"})
 	}()
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,10 +91,11 @@ func newWindowFixture(t *testing.T, grant func(w http.ResponseWriter), end strin
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			f.mu.Lock()
 			f.posted = body.Nonce
+			f.posts++
 			c := f.conn
 			f.mu.Unlock()
 			if grant != nil {
-				grant(w)
+				grant(w, c)
 				return
 			}
 			_ = writeLocalJSONForTest(c, localBound, map[string]any{})
@@ -204,7 +214,7 @@ func TestWindowLocalGrantBoundEnd(t *testing.T) {
 // The organisation's refusal is its own sentence, and the viewer never starts.
 func TestWindowLocalRefusalIsTheServersSentence(t *testing.T) {
 	const sentence = "Windows onto Linux VM runs are turned off for this organisation."
-	f := newWindowFixture(t, func(w http.ResponseWriter) {
+	f := newWindowFixture(t, func(w http.ResponseWriter, _ net.Conn) {
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": sentence, "reason": "local_window_site_off"})
 	}, "")
@@ -230,5 +240,170 @@ func TestWindowLocalNeedsLinux(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.hello != nil {
 		t.Fatalf("the runner was asked for a nonce: %v", f.hello)
+	}
+}
+
+// refuse answers an open as the organisation does: status, reason and sentence.
+func refuse(status int, reason, sentence string) func(http.ResponseWriter, net.Conn) {
+	return func(w http.ResponseWriter, _ net.Conn) {
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": sentence, "reason": reason})
+	}
+}
+
+// With no window nonce on this computer (here, no pointer file), the CLI still asks the organisation, with
+// no nonce, and shows its refusal; only the organisation's missing-nonce answer leaves the local reason.
+func TestWindowLocalNoNonceAsksTheOrganisation(t *testing.T) {
+	const siteOff = "Opening a Linux VM run in a window on your own computer is turned off for this install."
+	for _, tc := range []struct {
+		name    string
+		grant   func(http.ResponseWriter, net.Conn)
+		wantErr string
+	}{
+		{"the organisation refuses first", refuse(http.StatusForbidden, "local_window_site_off", siteOff), siteOff},
+		{"the organisation needs the nonce", refuse(http.StatusBadRequest, "invalid_request_body", "The request needs local_nonce."),
+			"opens only on the computer its runner is on, and that runner handed out no window nonce here (no usable pointer file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWindowFixture(t, tc.grant, "")
+			empty := t.TempDir()
+			localAttachDir = func() (string, error) { return empty, nil }
+			localViewerRun = func(context.Context, io.ReadWriteCloser, string) error {
+				t.Error("the viewer started with no nonce")
+				return nil
+			}
+			_, err := execCmdCapture(t, "window", f.runID.String(), "--url", f.srv.URL, "--token", "t")
+			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to start %q", err, tc.wantErr)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.posts != 1 || f.posted != "" || f.hello != nil {
+				t.Fatalf("posts=%d posted=%q hello=%v, want one open with no nonce and no hello", f.posts, f.posted, f.hello)
+			}
+		})
+	}
+}
+
+// A macOS VM run still opens through the Mac window route, and its refusal is that open's sentence: the run
+// read answers 200, so the refusal comes from the open.
+func TestWindowMacRefusalIsTheOpensSentence(t *testing.T) {
+	const sentence = "This run's Mac isn't connected to this server."
+	id := uuid.New()
+	var mu sync.Mutex
+	var last string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		last = r.Method + " " + r.URL.Path
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: id, State: types.RunRunning, MachineKind: types.MachineMacOSVM})
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": sentence})
+	}))
+	t.Cleanup(srv.Close)
+	_, err := execCmdCapture(t, "window", id.String(), "--url", srv.URL, "--token", "t")
+	if err == nil || err.Error() != sentence || exitCodeFor(err) != 3 {
+		t.Fatalf("err = %v (exit %d), want exactly %q with exit 3", err, exitCodeFor(err), sentence)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := "POST /api/v1/runs/" + id.String() + "/desktop/window"; last != want {
+		t.Fatalf("last request = %q, want %q", last, want)
+	}
+}
+
+// The window hello's answers, as openLocalWindowSocket reads them.
+func TestOpenLocalWindowSocket(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		remote  bool
+		answer  func(f *windowFixture) func(net.Conn)
+		wantWhy string
+	}{
+		{name: "the run is not on a person's runner", remote: true, wantWhy: "the run is not on a person's runner"},
+		{name: "the runner refuses the hello", answer: func(*windowFixture) func(net.Conn) {
+			return func(c net.Conn) {
+				_ = writeLocalJSONForTest(c, localRefuse, map[string]string{"reason": "too_many_pending"})
+			}
+		}, wantWhy: "the runner refused: too_many_pending"},
+		{name: "the socket answers for another runner", answer: func(*windowFixture) func(net.Conn) {
+			return func(c net.Conn) {
+				_ = writeLocalJSONForTest(c, localHelloOK, map[string]string{"runner_id": uuid.NewString(), "nonce": "nonce-1"})
+			}
+		}, wantWhy: "the runner's socket answered for another runner"},
+		{name: "the socket closes", answer: func(*windowFixture) func(net.Conn) {
+			return func(c net.Conn) { _ = c.Close() }
+		}, wantWhy: "the runner's socket closed: "},
+		{name: "a window nonce", wantWhy: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWindowFixture(t, nil, "")
+			if tc.answer != nil {
+				f.mu.Lock()
+				f.answer = tc.answer(f)
+				f.mu.Unlock()
+			}
+			run := types.AgentRun{ID: f.runID, Placement: types.PlacementLocal, RunnerID: &f.runnerID, RunnerName: "laptop"}
+			if tc.remote {
+				run.Placement = types.PlacementRemote
+			}
+			lc, why := openLocalWindowSocket(context.Background(), &sdk.Client{BaseURL: f.srv.URL}, run)
+			if lc != nil {
+				defer lc.conn.Close()
+			}
+			if tc.wantWhy == "" {
+				if lc == nil || lc.nonce != "nonce-1" || lc.runner != "laptop" {
+					t.Fatalf("lc = %+v, why = %q", lc, why)
+				}
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				if f.hello["kind"] != "window" {
+					t.Fatalf("hello = %v, want kind window", f.hello)
+				}
+				return
+			}
+			if lc != nil || !strings.HasPrefix(why, tc.wantWhy) {
+				t.Fatalf("lc = %v, why = %q, want it to start %q", lc, why, tc.wantWhy)
+			}
+		})
+	}
+}
+
+// The frames before the bind: the runner's refusal or end is its sentence, anything else is a protocol
+// failure, and the viewer never starts.
+func TestWindowLocalFramesBeforeBind(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		send    func(c net.Conn)
+		wantErr string
+	}{
+		{"the runner ends the window", func(c net.Conn) {
+			_ = writeLocalJSONForTest(c, localEnd, map[string]string{"reason": "runner_link_lost"})
+		}, "The runner lost its link to the organisation"},
+		{"the runner refuses", func(c net.Conn) {
+			_ = writeLocalJSONForTest(c, localRefuse, map[string]string{"reason": "nonce_kind_mismatch"})
+		}, "The runner was asked for a terminal on a window's nonce"},
+		{"an unexpected frame", func(c net.Conn) { _ = writeLocalFrame(c, localData, []byte("RFB")) },
+			"the runner's socket sent an unexpected frame before the window opened"},
+		{"the socket closes", func(c net.Conn) { _ = c.Close() }, "the runner's socket closed before the window opened"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWindowFixture(t, func(w http.ResponseWriter, c net.Conn) {
+				tc.send(c)
+				_ = json.NewEncoder(w).Encode(map[string]any{"grant_id": uuid.New(), "runner_id": uuid.New(), "runner": "laptop"})
+			}, "")
+			localViewerRun = func(context.Context, io.ReadWriteCloser, string) error {
+				t.Error("the viewer started before the bind")
+				return nil
+			}
+			_, err := execCmdCapture(t, "window", f.runID.String(), "--url", f.srv.URL, "--token", "t")
+			if err == nil || !strings.HasPrefix(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to start %q", err, tc.wantErr)
+			}
+		})
 	}
 }
