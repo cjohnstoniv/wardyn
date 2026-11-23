@@ -151,7 +151,7 @@ func (p *Proxy) serveViaOrg(w http.ResponseWriter, r *http.Request, route ViaOrg
 		return
 	}
 	host, port := splitHostPort(authority, 443)
-	p.mitmConnect(w, r, host, port, nil)
+	p.mitmConnect(w, r, host, port, nil, false)
 }
 
 // forwardViaOrg sends one sandbox request to the organisation's via_org route,

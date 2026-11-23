@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A connection the run's proxy terminates TLS for (an inspected model host, a token-injection host, or a host a request rule names) now counts toward the run's limit of 1,024 open tunnels, as an uninspected tunnel already did. It is also closed if the sandbox has not finished its TLS handshake within 30 seconds. Once the handshake is done, nothing changes for the connection: a long streamed answer is unaffected.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

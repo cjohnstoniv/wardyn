@@ -285,20 +285,21 @@ type Proxy struct {
 
 	now func() time.Time
 
-	// openTunnels counts the run's opaque tunnels (openTunnel) from before the
-	// dial to the tunnel's end; maxTunnels bounds it (maxOpenTunnels; tests lower it).
+	// openTunnels counts the run's CONNECT tunnels, opaque (openTunnel) and terminated
+	// (mitmConnect), from before the dial or hijack to the tunnel's end; maxTunnels bounds it
+	// (maxOpenTunnels; tests lower it).
 	openTunnels atomic.Int32
 	maxTunnels  int32
 	meterOff    bool // Config.DisableModelUsage: no model-token metering; the zero value meters
 	noNetwork   bool // Config.NoNetwork: refuse every sandbox request (literalIPGuard, noNetworkDial)
 }
 
-// maxOpenTunnels is the most opaque CONNECT tunnels a run's proxy holds at once,
-// failed and pending dials included: the desktop VM relay's maxOpaqueTunnels
-// (internal/vmnet/relay.go), so both egress paths bound a run the same way. A
-// tunnel past it is refused with ruleSourceTunnelLimit and a retry hint; it
-// never evicts an established one. Intercepted (MITM) tunnels are not counted,
-// nor a relay flow resumed from its ask, which already holds the relay's slot.
+// maxOpenTunnels is the most CONNECT tunnels a run's proxy holds at once, opaque and
+// terminated (MITM) alike, failed and pending dials included: the desktop VM relay's
+// maxOpaqueTunnels (internal/vmnet/relay.go), so both egress paths bound a run the same way.
+// A tunnel past it is refused with ruleSourceTunnelLimit and a retry hint (takeTunnelSlot); it
+// never evicts an established one. A relay flow resumed from its ask is not counted: it already
+// holds the relay's slot.
 const maxOpenTunnels = 1024
 
 // ruleSourceTunnelLimit is the deny reason for a tunnel past maxOpenTunnels.
