@@ -40,6 +40,7 @@ listing="$(cat <<EOF
 {"id":11,"key":"gomod-Linux-$h","created_at":"2026-10-19T02:00:00Z"}
 {"id":12,"key":"gotools-Linux-$o","created_at":"2026-10-18T05:00:00Z"}
 {"id":13,"key":"gotools-Linux-$h","created_at":"2026-10-19T02:00:00Z"}
+{"id":14,"key":"go-docker-Linux-$h-2223","created_at":"2026-10-19T04:00:00Z"}
 EOF
 )"
 # Run 222 saved go-unit and go-test-pg-api-2. It deletes the older go-unit
