@@ -86,7 +86,7 @@ the ADMIN pre-authorized.
 
 - **Subjects, and the group snapshot's ceiling.**
 - A grant's `subject_type` is
-  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits),
+  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits, while an allow on the email counts only when sign-in vouches for the email: [`WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`](../ENV.md#wardyn_capability_grants_verified_email), on by default),
   - `group` (the login-time union of the ID token's `roles` and `groups` claims, lowercased and deduped — so Entra App Roles are grantable for free),
   - `user_type` (everyone of one user type, named by the type's id),
   - or `all` (every signed-in human).
