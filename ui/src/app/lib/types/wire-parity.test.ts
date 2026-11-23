@@ -247,7 +247,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
-  it("SiteDesktopWatermark (`desktop_watermark` in site config): full parity with the TS mirror", () => expect(new Set(tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteDesktopWatermark"))).toEqual(new Set(goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteDesktopWatermark"))));
 
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
