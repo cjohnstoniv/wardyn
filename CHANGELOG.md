@@ -15,6 +15,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The run's policy view, its Policy tab and `wardyn run policy` show each host-scoped secret that went in as its value, and why (#3741).
 - The run page shows a repository clone that was skipped or failed; images from this release report it (#3159).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_clone_status` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then a run's
+  repository clone outcome is not recorded.
 
 ## [0.10.2] — 2026-11-22
 

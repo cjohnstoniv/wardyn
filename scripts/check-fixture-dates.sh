@@ -270,6 +270,8 @@ declare -A ALLOWLIST=(
   # compares the printed date and time to those literals; the conformance self-test passes a fixed now in as the clock.
   ["cmd/wardyn-runnerd/macos_vm_machines_test.go"]=5
   ["test/conformance/macvm/kept_test.go"]=1
+  ["internal/api/run_clone_status_test.go"]=1 # the fixture's injected clock: the server reads it through cfg.Now, never the wall clock
+  ["internal/api/run_policy_as_value_test.go"]=1 # passthrough only: the epoch audit row times are offset from, shown as given
 )
 
 fail=0
