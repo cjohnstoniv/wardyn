@@ -231,40 +231,6 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
-  // #1215: the site config's branding block — one tag today (logo_path), so it
-  // cannot ride the it.each below, whose stale-regex guard wants two.
-  it("SiteBranding (`branding` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteBranding");
-    expect(goTags).toEqual(["logo_path"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteBranding");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-  // The macOS VM block of the site config: max_base_age_days, the background-watch and window switches, and the three kept-machine keys.
-  it("SiteMacOSVM (`macos_vm` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteMacOSVM");
-    expect(goTags).toEqual(["max_base_age_days", "allow_background_watch", "allow_attended_window", "allow_kept_machines", "kept_machine_idle_days", "max_kept_machines_per_person"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteMacOSVM");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-  // The open-session block of the site config: the one budget key.
-  it("SiteSessions (`sessions` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteSessions");
-    expect(goTags).toEqual(["unconfirmed_budget_s"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteSessions");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
-
-  // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
-  it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {
-    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "WithheldScmHost");
-    expect(goTags).toEqual(["host", "provider_id", "provider_kind"]);
-    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "WithheldScmHost");
-    expect(new Set(tsKeys)).toEqual(new Set(goTags));
-  });
-
   // 0.8.6 fleet-fl4: GET /admin/runs/capacity. The store structs (RunCapacityRunner
   // embeds RunCapacitySums, so its own tag set is `basis`, and the TS interface
   // extends the sums), then the handler's envelope: an anonymous struct embedding

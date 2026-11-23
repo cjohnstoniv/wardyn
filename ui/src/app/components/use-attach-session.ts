@@ -86,9 +86,10 @@ const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 export const OWNER_JOINED_REASON = "The run's owner joined";
 
 // The authority contract (internal/api/attach_authority.go): an open socket
-// whose sign-in stopped authorizing it (signed out, revoked, expired, or a
-// check that could not be answered) is closed with 4401 and the reason
-// "session ended". Reconnecting would only fail the same check, so like a
+// whose sign-in stopped authorizing it (signed out, revoked or expired) is
+// closed with 4401 and the reason "session ended". A check that gets no answer
+// closes 1013 once the session budget runs out, which takes the reconnect path
+// below. Reconnecting would only fail the same check, so like a
 // take-over it is final: no retry. The one exception is a session renewed
 // since the socket opened: the socket keeps the expiry its handshake saw, so
 // it ends at that while the session lives on, and a fresh ticket opens it again.

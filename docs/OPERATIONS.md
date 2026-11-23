@@ -2288,10 +2288,29 @@ predates it.
 
 Moved to [integrations.md](operations/integrations.md#integrations).
 
+## Open sessions while the database is unreachable
+
+- An open terminal, desktop, window on a Mac, app session, inbound stream or SSH connection checks every 30 seconds
+  that its person may still use it. A check that answers no (signed out, revoked, an ended grant, a profile that now
+  denies it) ends the session at that check.
+- A check that gets no answer, because the database is unreachable or slow, does not end it. The session asks
+  again every 5 seconds and ends only when no check has answered for the session budget, counted from the first one
+  that got none. A terminal takes no input meanwhile.
+- Set the budget with `"sessions": {"unconfirmed_budget_s": N}` in `PUT /site-config`, or in Settings, Open
+  sessions. N is 0 to 120 seconds; the default is 30. With 0 a session ends at the first check that gets no answer;
+  an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each wardynd reads the setting at most once a minute, and a session keeps the budget it started
+  with.
+- So a database outage ends an open session at most 30 seconds plus the budget after its last good check: 60
+  seconds by default, 150 at 120. A terminal closes in a way the console reconnects on, and a desktop viewer
+  retries. An inbound stream also keeps its own 30-second grace since its last good check.
+- Every such wait writes a `session.unconfirmed` audit row, at a budget of 0 too: `rode_through` when a check
+  answered again, `ended` when the budget ran out, `refused` when a check that answered no ended the session
+  inside the wait, `closed` when the session ended by itself inside the wait.
+
 ## Network: upstream proxy and egress redirects
 
 - `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
-- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
+- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `sessions`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
 - It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
 - Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
