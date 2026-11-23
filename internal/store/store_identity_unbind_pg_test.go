@@ -266,3 +266,33 @@ func TestPG_MintRunnerRegistrationToken_RefusesADeactivatedOwner(t *testing.T) {
 		t.Fatalf("mint for a deactivated owner = %v, want ErrIdentityDeactivated", err)
 	}
 }
+
+// TestPG_CreateRunner_RefusesADeactivatedOwnerUnderTheGuard: with an identity guard on the context the
+// runner insert is refused for a deactivated owner and creates no row; without one it still inserts.
+func TestPG_CreateRunner_RefusesADeactivatedOwnerUnderTheGuard(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	now := time.Now().UTC()
+	row, err := st.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: "sub-runner-owner", Issuer: "https://login.example/" + uuid.NewString() + "/v2.0"}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guarded := store.WithIdentityGuard(ctx, store.IdentityGuard{Principal: "sub-runner-owner", Epoch: -1})
+	if _, err := st.CreateRunner(guarded, newRunner("sub-runner-owner")); err != nil {
+		t.Fatalf("create for a live owner: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE principal_identities SET deactivated_at = now() WHERE id = $1`, row.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateRunner(guarded, newRunner("sub-runner-owner")); !errors.Is(err, store.ErrIdentityDeactivated) {
+		t.Fatalf("create for a deactivated owner = %v, want ErrIdentityDeactivated", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runners WHERE owner = 'sub-runner-owner'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("runners of the owner = %d, %v; want 1 (the refused insert left no row)", n, err)
+	}
+	if _, err := st.CreateRunner(ctx, newRunner("sub-runner-owner")); err != nil {
+		t.Fatalf("create with no guard on the context: %v", err)
+	}
+}

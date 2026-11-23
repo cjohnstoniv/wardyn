@@ -74,12 +74,16 @@ refuse_shared_write() { # FILE
   if [ -L "$1" ]; then
     own="$(stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1" 2>/dev/null || true)"
     [ "${own}" = "$(id -u)" ] || die "wardyn-desktop.sh: $1 is a symlink owned by uid ${own:-unknown}, not by uid $(id -u). Ship the file from MDM as a regular file or a root-owned link, then re-run."
-    # Whoever can write the link's directory can replace the link between this check and the read.
+    # Another account that owns, or may write, the link's directory could replace the link between this check and
+    # the read. A link is kept only in a directory no other account can write, sticky or not.
     st="$(stat -c '%a %u' "$(dirname "$1")" 2>/dev/null || stat -f '%OLp %u' "$(dirname "$1")" 2>/dev/null || true)"
     [ -n "${st}" ] || die "wardyn-desktop.sh: cannot stat $(dirname "$1") — refusing a link whose directory's mode and owner are unknown"
     perm=$(( 8#${st%% *} ))
-    if [ "${st##* }" != "$(id -u)" ] || [ $(( perm & 0022 )) -ne 0 ]; then
-      die "wardyn-desktop.sh: $1 is a symlink in $(dirname "$1"), a directory owned by uid ${st##* } and/or group/world-writable (mode ${st%% *}), so another account can replace the link. Ship the file from MDM as a regular file, or keep the link in a directory only root can write, then re-run."
+    if [ "${st##* }" != "$(id -u)" ]; then
+      die "wardyn-desktop.sh: $1 is a symlink in $(dirname "$1"), a directory owned by uid ${st##* }, not uid $(id -u), so that account can replace the link. Ship the file from MDM as a regular file, or keep the link in a directory only root can write, then re-run."
+    fi
+    if [ $(( perm & 0022 )) -ne 0 ]; then
+      die "wardyn-desktop.sh: $1 is a symlink in $(dirname "$1"), a group/world-writable directory (mode ${st%% *}). A link is kept only in a directory no other account can write, sticky bit or not. Ship the file from MDM as a regular file, or keep the link in a directory only root can write, then re-run."
     fi
   fi
   st="$(stat -L -c '%a %u' "$1" 2>/dev/null || stat -L -f '%OLp %u' "$1" 2>/dev/null || true)"

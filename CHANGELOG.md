@@ -73,11 +73,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - macOS VMs: when Apple's framework refuses a base preparation's install VM because this Mac already runs the most macOS VMs it allows, the runner records the slot it cannot account for, as it already did for the preparation's other VM starts. Not yet run on a real Mac ([#3696](https://github.com/cjohnstoniv/wardyn/issues/3696)).
 - VM runs: a guest's repeat of a connection attempt Wardyn just refused (a retransmitted SYN) is refused again at once, without asking the proxy a second time. Before, it briefly held a tunnel slot, which at the run's tunnel limit could refuse a real connection with a false tunnel-limit report ([#3932](https://github.com/cjohnstoniv/wardyn/issues/3932)).
 - `wardyn-runnerd doctor` and `status.json`: a start refused with no stage stays the reported failure when the computer's clock moved back between starts. An older refusal at a stage no longer replaces it.
+- On a desktop install, the launcher's refusal of a symlinked envelope file now says which check failed: the link's directory is owned by another account, or other accounts can write to it, with or without the sticky bit.
 
 ### Security
 
 - A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
 - A revive of a run on a registered runner is now refused when the runner's wardyn-runnerd no longer carries a proxy setting the run uses, such as host rules, no network or forge hosts, as a new run on that runner is refused. Before, only a model list was checked, so a runner that had been replaced by an older build could restart the run's proxy without the other settings.
+- `WARDYN_RELAY_ALLOWED_SOURCES` now reads an IPv4-mapped IPv6 prefix, such as `::ffff:10.1.0.0/112`, as the IPv4 prefix it maps, so the sources it names are admitted instead of none. A value that names no prefix or address, such as `,` or only spaces, now stops `wardyn-runnerd serve` at start instead of admitting every source.
+- A runner registration whose owner is suspended after the registration token is spent, and before the runner is created, is now refused (`403`, `identity_deactivated`) and creates no runner.
 
 ### Before you upgrade
 
@@ -96,6 +99,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Helm chart: to keep readiness on Postgres, set `readinessProbe.path: /readyz`. A values file or `--set` that names a
   path keeps it, and `helm upgrade --reuse-values` keeps the previous release's `/readyz`. To see the path in use:
   `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
+- If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
 
 ## [0.10.3] — 2026-11-23
 

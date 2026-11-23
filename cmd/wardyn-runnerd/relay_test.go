@@ -423,3 +423,46 @@ func TestRunnerRelayAllowedSourcesNarrowOnlyWhenSet(t *testing.T) {
 		_ = c.Close()
 	}
 }
+
+func TestRunnerRelayAllowedSourcesReadMappedPrefixesAndRefuseAnEmptyList(t *testing.T) {
+	for _, v := range []string{" ", ",", " , ,"} {
+		if got, err := parseRelaySources(v); err == nil {
+			t.Fatalf("%q = %v, nil; a value that names no prefix must be refused, not read as no list", v, got)
+		}
+	}
+	if got, err := parseRelaySources(""); err != nil || got != nil {
+		t.Fatalf("empty = %v, %v; want no list", got, err)
+	}
+	for in, want := range map[string]string{"::ffff:10.1.0.0/112": "10.1.0.0/16", "::ffff:10.1.2.3": "10.1.2.3/32"} {
+		if got, err := parseRelaySources(in); err != nil || !slices.Equal(got, []netip.Prefix{netip.MustParsePrefix(want)}) {
+			t.Fatalf("%q = %v, %v; want [%s]", in, got, err, want)
+		}
+	}
+	if got, err := parseRelaySources("::ffff:0:0/95"); err == nil {
+		t.Fatalf("a mapped prefix shorter than /96 was accepted: %v", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	opened := make(chan *runnerwire.Stream, 1)
+	r, addr := onlineRelay(ctx, t, 0, opened)
+	src, err := parseRelaySources("::ffff:127.0.0.0/104")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.sources = src
+	r.mu.Unlock()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-opened:
+	case <-ctx.Done():
+		t.Fatal("a mapped loopback prefix opened no relay stream for a connection from loopback")
+	}
+}

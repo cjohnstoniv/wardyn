@@ -92,7 +92,9 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 // set, is the runner's limit set and its Runs at once; without it the runner declares no limits and
 // r.MaxRuns 0 is types.RunnerMaxRunsDefault. r.OwnerKind is the redeemed token's (empty is person); the
 // trust class on r is ignored: a person's runner starts personal and an org runner org_cluster, the only
-// class the coupling CHECK allows it.
+// class the coupling CHECK allows it. With an IdentityGuard on ctx the insert reads the owner's identity
+// rows FOR SHARE in its own transaction and is refused with ErrIdentityDeactivated for a deactivated,
+// purged or cut owner.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
 		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name, arch,
@@ -107,8 +109,12 @@ func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, err
 	if r.OwnerKind == types.RunnerOwnerOrg {
 		kind, trust = types.RunnerOwnerOrg, types.RunnerTrustOrgCluster
 	}
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
-		r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+	var out types.Runner
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanRunner(qr.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
+			r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+		return e
+	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict

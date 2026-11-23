@@ -558,6 +558,19 @@ out="$(f185_run "${md}")"; chmod 0700 "${md}"
   || fail "wardyn-desktop.sh went on past a symlinked wardyn.env in a world-writable directory"
 grep -q 'wardyn.env is a symlink in .* group/world-writable' <<<"${out}" \
   || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env in a directory another account can write. Got: $(printf '%s' "${out}" | tail -1)"
+# ...and a sticky group/world-writable directory is refused the same way: by its mode, never with a claim that
+# another account can replace the link (the sticky bit stops that; the launcher refuses the mode anyway).
+md="$(f185_fixture 0600)"
+mkdir "${md}/real"; mv "${md}/wardyn.env" "${md}/real/wardyn.env"; ln -s real/wardyn.env "${md}/wardyn.env"
+chmod 1777 "${md}"
+out="$(f185_run "${md}")"; chmod 0700 "${md}"
+[ ! -e "${md}/PWNED" ] \
+  || fail "wardyn-desktop.sh went on past a symlinked wardyn.env in a sticky world-writable directory"
+grep -q 'wardyn.env is a symlink in .*, a group/world-writable directory (mode 1777)' <<<"${out}" \
+  || fail "wardyn-desktop.sh did not refuse a symlinked wardyn.env in a sticky directory by its mode. Got: $(printf '%s' "${out}" | tail -1)"
+if grep -q 'can replace the link' <<<"${out}"; then
+  fail "the refusal of a link in a sticky directory owned by the launcher's uid still says another account can replace it"
+fi
 echo "test-desktop-profile: envelope file trust-boundary invariants PASS"
 
 # ── #1493: the published port the launcher probes is the one compose publishes ─
