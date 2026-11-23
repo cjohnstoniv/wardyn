@@ -137,6 +137,11 @@ var isOperatorCensus = map[string]int{
 	// admin gets (support_not_allowed rather than the run_not_found shape). Neither admits a run policy.
 	"support_entry.go:supportCaller":         1,
 	"support_grant.go:refuseNotSupportParty": 1,
+	// The Walls view, display only, it grants nothing: a gate's addr (an upstream proxy's host:port) and an inner
+	// node's suffix are host detail, the super admin's as on the audit reads (auditRowsFor). Every caller who
+	// reaches the route gets the same gates and inner nodes without them; neither call admits or refuses a run.
+	"walls_run.go:handleRunWalls":          1,
+	"walls_topology_org.go:wallsTopoGates": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to
