@@ -65,8 +65,9 @@ type Server struct {
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
-	pingEvery     time.Duration
-	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	pingEvery      time.Duration
+	authorityTest  attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	sessionBudgets sessionBudgetState     // the site's open-session budget as last read, and the tests' overrides (session_budget.go)
 	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
 	localCovered    func(runID uuid.UUID) bool

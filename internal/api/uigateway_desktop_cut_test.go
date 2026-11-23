@@ -24,7 +24,7 @@ func viewerCut(w http.ResponseWriter, r *http.Request, cutAt time.Time) (context
 	viewer := &viewerHijack{ResponseWriter: w}
 	ctx, cancel := context.WithCancel(r.Context())
 	c := newStreamCut(viewer, time.Now().Add(time.Hour), cancel)
-	c.watch(ctx, cutAt, time.Hour, time.Second, func(context.Context) error { return errTestRevoked })
+	c.watch(ctx, cutAt, time.Hour, time.Second, nil, func(context.Context) error { return errTestRevoked })
 	return ctx, c, c.Writer(viewer)
 }
 

@@ -77,6 +77,8 @@ type streamCut struct {
 	watching bool
 	conn     net.Conn // the switched connection, once registered
 	closers  []func()
+	fenceOn  bool          // the session budget's window is open
+	fence    func(on bool) // the stream's input fence, once its holder exists (setFence); must not take mu
 
 	done   chan struct{} // closed by End: the watch starts no new lookup
 	exited chan struct{} // closed when the watch returns
@@ -90,20 +92,24 @@ func newStreamCut(w http.ResponseWriter, hardEnd time.Time, cancel context.Cance
 }
 
 // watch runs the stream's authority on its own goroutine: check at first, then every every after it, each
-// lookup bounded by bound and never past the end, and the end itself on a timer. The first check that does
-// not pass, a lookup that panics or outlives its bound, and the end each cut the stream once.
-func (c *streamCut) watch(ctx context.Context, first time.Time, every, bound time.Duration, check func(context.Context) error) {
+// lookup bounded by bound and never past the end, and the end itself on a timer. The first check that
+// refuses, a lookup that panics, and the end each cut the stream once; a lookup that outlives its bound or
+// fails to answer cuts it once the session budget b has run out. A nil b is strict: the first check that does
+// not pass cuts. A retry never moves the regular tick, and a tick always re-arms it.
+func (c *streamCut) watch(ctx context.Context, first time.Time, every, bound time.Duration, b *sessionBudget, check func(context.Context) error) {
 	c.mu.Lock()
 	c.watching = true
 	c.mu.Unlock()
 	go func() {
 		defer close(c.exited)
+		defer b.leave()
 		end := time.NewTimer(time.Until(c.hardEnd))
 		defer end.Stop()
 		tick := time.NewTimer(time.Until(first))
 		defer tick.Stop()
 		next := first
 		for {
+			fromTick := false // per pass: only this pass's tick moves the regular clock
 			select {
 			case <-c.done:
 				if !time.Now().Before(c.hardEnd) {
@@ -114,23 +120,52 @@ func (c *streamCut) watch(ctx context.Context, first time.Time, every, bound tim
 				c.Cut()
 				return
 			case <-tick.C:
+				fromTick = true
+			case <-b.retryC():
 			}
 			if c.isEnding() {
 				return // End began: it waits only for a lookup already running
 			}
-			if !c.lookup(ctx, bound, check) {
+			if v := b.observe("authority", c.lookup(ctx, bound, check)); v.ends() {
+				if v == budgetSpent {
+					b.end()
+				}
 				c.Cut()
 				return
 			}
-			next = next.Add(every) // a tick already passed runs at once
-			tick.Reset(time.Until(next))
+			if fromTick {
+				next = next.Add(every) // a tick already passed runs at once
+				tick.Reset(time.Until(next))
+			}
 		}
 	}()
 }
 
+// fenced is the session budget's fence for a stream whose input holder is made after the watch starts: it keeps
+// the window's state and tells the fence setFence registered, if any.
+func (c *streamCut) fenced(on bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fenceOn = on
+	if c.fence != nil {
+		c.fence(on)
+	}
+}
+
+// setFence registers the stream's input fence and replays a window that is already open.
+func (c *streamCut) setFence(f func(on bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fence = f
+	if c.fenceOn {
+		f(true)
+	}
+}
+
 // lookup runs one check under its own deadline, the earlier of bound and the end, on a context End never
-// cancels. A panic is recovered and logged, and is a failed check.
-func (c *streamCut) lookup(parent context.Context, bound time.Duration, check func(context.Context) error) bool {
+// cancels. It returns the check's answer; a panic is recovered and logged and answers errStreamLookupPanic (a
+// refusal), and a check that outlives its bound or the stream's end answers an unconfirmed error.
+func (c *streamCut) lookup(parent context.Context, bound time.Duration, check func(context.Context) error) error {
 	dl := time.Now().Add(bound)
 	if c.hardEnd.Before(dl) {
 		dl = c.hardEnd
@@ -149,9 +184,9 @@ func (c *streamCut) lookup(parent context.Context, bound time.Duration, check fu
 	}()
 	select {
 	case err := <-res:
-		return err == nil
+		return err
 	case <-ctx.Done():
-		return false
+		return unconfirmed(ctx.Err())
 	}
 }
 

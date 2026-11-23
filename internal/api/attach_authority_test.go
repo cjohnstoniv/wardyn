@@ -4,6 +4,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -344,7 +345,8 @@ func wantAuthEnded(t *testing.T, ends [2]<-chan error) {
 }
 
 // TestAttachAuthority_CutsEndOpenSockets: every way a sign-in stops authorizing ends an open terminal,
-// writer and observer, on both lanes, at the first check.
+// writer and observer, on both lanes, at the first check. A lookup that fails or runs out of its bound is not a
+// cut: it rides the session budget (TestAttachAuthority_RidesAnUnansweredCheck, ..._ZeroBudget...).
 func TestAttachAuthority_CutsEndOpenSockets(t *testing.T) {
 	type cut struct {
 		name  string
@@ -364,12 +366,6 @@ func TestAttachAuthority_CutsEndOpenSockets(t *testing.T) {
 		}},
 		{name: "admin revoke", lanes: both, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
 			_ = rig.rev.RevokeSub(context.Background(), holderOwner)
-		}},
-		{name: "one failed lookup", lanes: both, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
-			rig.rev.setFail(2) // one for each socket: each must end on its own first failure
-		}},
-		{name: "one lookup past its bound", lanes: both, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
-			rig.rev.setHang(2)
 		}},
 		{name: "cookie expiry", lanes: []string{"cookie", "ticket+cookie"}, apply: func(t *testing.T, rig *authorityRig, _ *http.Cookie) {
 			rig.offset.Store(int64(time.Hour + time.Second))
@@ -460,10 +456,11 @@ func TestAttachAuthority_AnotherPersonsCookieDoesNotBoundATicket(t *testing.T) {
 }
 
 type closeOrder struct {
-	mu     sync.Mutex
-	events []string
-	holder *attachHolder
-	done   chan struct{}
+	mu       sync.Mutex
+	events   []string
+	holder   *attachHolder
+	done     chan struct{}
+	wantCode websocket.StatusCode // zero: attachAuthEndedCode
 }
 
 func (o *closeOrder) Close(code websocket.StatusCode, reason string) error {
@@ -473,31 +470,44 @@ func (o *closeOrder) Close(code websocket.StatusCode, reason string) error {
 		o.events = append(o.events, "close-before-input-stopped")
 	}
 	o.events = append(o.events, "close "+reason)
-	if code != attachAuthEndedCode {
+	if want := cmp.Or(o.wantCode, attachAuthEndedCode); code != want {
 		o.events = append(o.events, "wrong code")
 	}
 	return nil
 }
 
 // TestEndAttachAuthority_ClosesBeforeCancel: input stops first, then the close frame is sent, and
-// only then is the socket's context cancelled.
+// only then is the socket's context cancelled. When the session budget ran out the close is 1013 with its
+// own reason, in the same order.
 func TestEndAttachAuthority_ClosesBeforeCancel(t *testing.T) {
-	o := &closeOrder{holder: &attachHolder{}, done: make(chan struct{})}
-	endAttachAuthority(o, o.holder, func() {
-		o.mu.Lock()
-		o.events = append(o.events, "cancel")
-		o.mu.Unlock()
-		close(o.done)
-	})
-	select {
-	case <-o.done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the socket context was never cancelled")
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if got := strings.Join(o.events, ", "); got != "close session ended, cancel" {
-		t.Fatalf("order = %q, want the close frame, then cancel", got)
+	for _, tc := range []struct {
+		name  string
+		spent bool
+		code  websocket.StatusCode
+		want  string
+	}{
+		{"a refusal", false, attachAuthEndedCode, "close session ended, cancel"},
+		{"the budget ran out", true, websocket.StatusTryAgainLater, "close " + sessionUnconfirmedReason + ", cancel"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &closeOrder{holder: &attachHolder{}, done: make(chan struct{}), wantCode: tc.code}
+			endAttachAuthority(o, o.holder, func() {
+				o.mu.Lock()
+				o.events = append(o.events, "cancel")
+				o.mu.Unlock()
+				close(o.done)
+			}, tc.spent)
+			select {
+			case <-o.done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("the socket context was never cancelled")
+			}
+			o.mu.Lock()
+			defer o.mu.Unlock()
+			if got := strings.Join(o.events, ", "); got != tc.want {
+				t.Fatalf("order = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -686,4 +696,305 @@ func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 			t.Fatalf("check = %v, want nil", err)
 		}
 	})
+}
+
+// watchedSocket is an attach socket whose input-dropped frames and end a test reads.
+type watchedSocket struct {
+	c     *websocket.Conn
+	drops chan int64
+	end   chan error
+}
+
+// dialWatched is dial that keeps the input-dropped control frames instead of discarding them.
+func (rig *authorityRig) dialWatched(t *testing.T, cookie *http.Cookie, ticket string, wantReadOnly bool) *watchedSocket {
+	t.Helper()
+	url := "ws" + strings.TrimPrefix(rig.ts.URL, "http") + "/api/v1/runs/" + rig.run.ID.String() + "/attach"
+	opts := &websocket.DialOptions{}
+	if ticket != "" {
+		url += "?ticket=" + ticket
+	}
+	if cookie != nil {
+		opts.HTTPHeader = http.Header{"Cookie": {cookie.String()}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, url, opts)
+	if err != nil {
+		t.Fatalf("dial attach: %v", err)
+	}
+	t.Cleanup(func() { _ = c.CloseNow() })
+	if mode := readAttachMode(t, c); mode.ReadOnly != wantReadOnly {
+		t.Fatalf("attach mode read_only = %v, want %v", mode.ReadOnly, wantReadOnly)
+	}
+	ws := &watchedSocket{c: c, drops: make(chan int64, 64), end: make(chan error, 1)}
+	go func() {
+		for {
+			typ, data, err := c.Read(context.Background())
+			if err != nil {
+				ws.end <- err
+				return
+			}
+			var msg attachInputDroppedMsg
+			if typ == websocket.MessageText && json.Unmarshal(data, &msg) == nil && msg.Type == "input-dropped" {
+				ws.drops <- msg.Bytes
+			}
+		}
+	}()
+	return ws
+}
+
+// pairWatched is pair with watched sockets: the writer first, then the observer.
+func (rig *authorityRig) pairWatched(t *testing.T, lane string, cookie *http.Cookie) [2]*watchedSocket {
+	t.Helper()
+	var out [2]*watchedSocket
+	for i, readOnly := range []bool{false, true} {
+		tk, sent := "", cookie
+		if lane != "cookie" {
+			tk = rig.ticket(t, cookie)
+		}
+		if lane == "ticket" {
+			sent = nil
+		}
+		out[i] = rig.dialWatched(t, sent, tk, readOnly)
+	}
+	return out
+}
+
+func (rig *authorityRig) budget(d, retry time.Duration) {
+	rig.srv.sessionBudgets.test = ptr(d)
+	rig.srv.sessionBudgets.retry = retry
+}
+
+// wantClosedWith waits for each socket's end and holds it to code and reason.
+func wantClosedWith(t *testing.T, socks [2]*watchedSocket, code websocket.StatusCode, reason string) {
+	t.Helper()
+	for i, ws := range socks {
+		select {
+		case err := <-ws.end:
+			var ce websocket.CloseError
+			if !errors.As(err, &ce) || ce.Code != code || ce.Reason != reason {
+				t.Fatalf("socket %d (0 writer, 1 observer) ended with %v, want close %d %q", i, err, code, reason)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("socket %d (0 writer, 1 observer) is still open", i)
+		}
+	}
+}
+
+func (rig *authorityRig) wantNoDetach(t *testing.T, reason string) {
+	t.Helper()
+	for _, ev := range rig.audit.snapshot() {
+		if ev.Action == "session.detach" && strings.Contains(string(ev.Data), reason) {
+			t.Errorf("session.detach = %s, want none with reason %q", ev.Data, reason)
+		}
+	}
+}
+
+// resultsOf is the result of each session.unconfirmed row, and the surface of the first.
+func resultsOf(data []map[string]any) (results []string) {
+	for _, d := range data {
+		results = append(results, d["result"].(string))
+	}
+	return results
+}
+
+// TestAttachAuthority_RidesAnUnansweredCheck: a terminal whose re-check gets no answer stays open, takes no input
+// and tells its client so while the window is open, takes input again once a check answers, and writes one
+// rode_through row per socket and no session.detach.
+func TestAttachAuthority_RidesAnUnansweredCheck(t *testing.T) {
+	for _, lane := range []string{"cookie", "ticket"} {
+		t.Run(lane, func(t *testing.T) {
+			rig := newAuthorityRig(t, 0)
+			rig.budget(time.Minute, 10*time.Millisecond)
+			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			sess := waitForSession(t, rig.srv.cfg.Runner.(*holderTestRunner), 0)
+			rig.rev.setFail(1 << 30)
+			time.Sleep(10 * authorityTick) // well past 3 authority intervals
+			for i, ws := range socks {
+				select {
+				case err := <-ws.end:
+					t.Fatalf("socket %d ended while its check had no answer: %v", i, err)
+				default:
+				}
+			}
+			if err := socks[0].c.Write(context.Background(), websocket.MessageBinary, []byte("lost")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case n := <-socks[0].drops:
+				if n != int64(len("lost")) {
+					t.Fatalf("input-dropped bytes = %d, want %d", n, len("lost"))
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("the writer's input was dropped without telling its client")
+			}
+			rig.rev.setFail(0)
+			waitFor(t, "the window to close on both sockets", func() bool {
+				rows, _ := unconfirmedRows(rig.audit)
+				return len(rows) == 2
+			})
+			if err := socks[0].c.Write(context.Background(), websocket.MessageBinary, []byte("kept")); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "the input after the window", func() bool {
+				sess.mu.Lock()
+				defer sess.mu.Unlock()
+				for _, w := range sess.writes {
+					if strings.Contains(string(w), "kept") {
+						return true
+					}
+				}
+				return false
+			})
+			sess.mu.Lock()
+			for _, w := range sess.writes {
+				if strings.Contains(string(w), "lost") {
+					t.Error("input typed while the window was open reached the shell")
+				}
+			}
+			sess.mu.Unlock()
+			_, data := wantUnconfirmedRows(t, rig.audit, 2)
+			for _, d := range data {
+				if d["result"] != "rode_through" || d["surface"] != sessionSurfaceTerminal {
+					t.Errorf("row %v, want rode_through on the terminal", d)
+				}
+			}
+			rig.wantNoDetach(t, "")
+		})
+	}
+}
+
+// TestAttachAuthority_BudgetEndsWithAReconnectingClose: with every lookup failing, the socket closes 1013 with the
+// unconfirmed reason once the budget has run, records it as the detach reason, and writes one ended row.
+func TestAttachAuthority_BudgetEndsWithAReconnectingClose(t *testing.T) {
+	for _, lane := range []string{"cookie", "ticket"} {
+		t.Run(lane, func(t *testing.T) {
+			rig := newAuthorityRig(t, 0)
+			rig.budget(100*time.Millisecond, 10*time.Millisecond)
+			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			failedAt := time.Now()
+			rig.rev.setFail(1 << 30)
+			wantClosedWith(t, socks, websocket.StatusTryAgainLater, sessionUnconfirmedReason)
+			if d := time.Since(failedAt); d < 100*time.Millisecond {
+				t.Errorf("closed %v after the first failure, want at least the 100 ms budget", d)
+			}
+			rig.wantDetachReasons(t, 2, sessionUnconfirmedReason)
+			_, data := wantUnconfirmedRows(t, rig.audit, 2)
+			if got := resultsOf(data); got[0] != "ended" || got[1] != "ended" {
+				t.Errorf("results = %v, want two ended", got)
+			}
+		})
+	}
+}
+
+// TestAttachAuthority_RevokeInsideTheWindowEndsAtOnce: a definite revoke that answers while the window is open
+// ends the socket at the next retry, with the refusal's close, and the window's one row is refused.
+func TestAttachAuthority_RevokeInsideTheWindowEndsAtOnce(t *testing.T) {
+	for _, lane := range []string{"cookie", "ticket"} {
+		t.Run(lane, func(t *testing.T) {
+			rig := newAuthorityRig(t, 0)
+			rig.budget(time.Hour, 10*time.Millisecond)
+			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			rig.rev.setFail(1 << 30)
+			time.Sleep(6 * authorityTick) // the window is open on both sockets
+			_ = rig.rev.RevokeSub(context.Background(), holderOwner)
+			rig.rev.setFail(0)
+			wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
+			_, data := wantUnconfirmedRows(t, rig.audit, 2)
+			if got := resultsOf(data); got[0] != "refused" || got[1] != "refused" {
+				t.Errorf("results = %v, want two refused and no ended", got)
+			}
+		})
+	}
+}
+
+// TestAttachAuthority_ZeroBudgetEndsAtTheFirstUnansweredCheck: at budget 0 a lookup that fails, and one that runs
+// out of its bound, each end the socket at that check with the reconnecting close.
+func TestAttachAuthority_ZeroBudgetEndsAtTheFirstUnansweredCheck(t *testing.T) {
+	for name, apply := range map[string]func(*authorityRig){
+		"one failed lookup":         func(rig *authorityRig) { rig.rev.setFail(2) },
+		"one lookup past its bound": func(rig *authorityRig) { rig.rev.setHang(2) },
+	} {
+		for _, lane := range []string{"cookie", "ticket"} {
+			t.Run(lane+"/"+name, func(t *testing.T) {
+				rig := newAuthorityRig(t, 0)
+				rig.budget(0, 10*time.Millisecond)
+				socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+				apply(rig)
+				wantClosedWith(t, socks, websocket.StatusTryAgainLater, sessionUnconfirmedReason)
+				rig.wantDetachReasons(t, 2, sessionUnconfirmedReason)
+			})
+		}
+	}
+}
+
+// TestAttachAuthority_MissingRunEndsAtOnce: a run the store no longer has is an answer, not a failed read.
+func TestAttachAuthority_MissingRunEndsAtOnce(t *testing.T) {
+	for _, lane := range []string{"cookie", "ticket"} {
+		t.Run(lane, func(t *testing.T) {
+			rig := newAuthorityRig(t, 0)
+			rig.budget(time.Hour, 10*time.Millisecond)
+			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			rig.ast.mu.Lock()
+			delete(rig.ast.runs, rig.run.ID)
+			rig.ast.mu.Unlock()
+			wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
+		})
+	}
+}
+
+// unmeetableStore adds a restriction that denies every placement to the rig's store: the run's profile
+// composition then meets to nothing, a *composer.OverlayError wrapped by foldRestrictionLimits.
+type unmeetableStore struct {
+	*authorityUnits
+	id uuid.UUID
+}
+
+func (s *unmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
+	deny := []types.Placement{types.PlacementLocal, types.PlacementRemote}
+	return []types.Restriction{{ID: s.id, Name: "walled", Limits: types.RestrictionLimits{DenyPlacements: &deny}}}, nil
+}
+
+// TestAttachAuthority_UnmeetableRestrictionEndsAtOnce: a profile composition nothing satisfies refuses again on
+// every later check, so it ends the socket at the next check instead of riding the budget.
+func TestAttachAuthority_UnmeetableRestrictionEndsAtOnce(t *testing.T) {
+	rig := newAuthorityRigWith(t, 30*time.Minute, func(c *Config) { c.GovernAdminRuns = true })
+	rig.budget(time.Hour, 10*time.Millisecond)
+	restriction := uuid.New()
+	rig.srv.cfg.Store = &unmeetableStore{authorityUnits: rig.units, id: restriction}
+	rig.ast.mu.Lock()
+	rig.run.OperatorOwned, rig.run.RestrictionIDs = false, []uuid.UUID{restriction}
+	rig.ast.runs[rig.run.ID] = rig.run
+	rig.ast.mu.Unlock()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+rig.run.ID.String()+"/attach", nil)
+	ta := ticketActor{actorType: types.ActorHuman, principal: holderOwner, role: oidc.RoleUser, authorizedAt: time.Now()}
+	check := rig.srv.attachAuthority(r.WithContext(withTicketActor(r.Context(), ta)), rig.run.ID)
+	if err := check(context.Background()); !errors.Is(err, errAttachAuthorityEnded) || errors.Is(err, errSessionUnconfirmed) {
+		t.Fatalf("ticket lane check = %v, want a refusal that is not unconfirmed", err)
+	}
+	socks := rig.pairWatched(t, "cookie", rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+	wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
+	noUnconfirmedRows(t, rig.audit)
+}
+
+// TestAttachAuthority_SocketEndingInsideAWindowWritesClosed: a client that leaves while the window is open
+// writes the window's closed row, and the socket's detach reason is not the unconfirmed one.
+func TestAttachAuthority_SocketEndingInsideAWindowWritesClosed(t *testing.T) {
+	for _, lane := range []string{"cookie", "ticket"} {
+		t.Run(lane, func(t *testing.T) {
+			rig := newAuthorityRig(t, 0)
+			rig.budget(time.Hour, 10*time.Millisecond)
+			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			rig.rev.setFail(1 << 30)
+			time.Sleep(6 * authorityTick) // the window is open on both sockets
+			for _, ws := range socks {
+				_ = ws.c.Close(websocket.StatusNormalClosure, "bye")
+			}
+			_, data := wantUnconfirmedRows(t, rig.audit, 2)
+			if got := resultsOf(data); got[0] != "closed" || got[1] != "closed" {
+				t.Errorf("results = %v, want two closed and no ended", got)
+			}
+			rig.wantNoDetach(t, sessionUnconfirmedReason)
+		})
+	}
 }

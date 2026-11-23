@@ -50,7 +50,7 @@ func (s *Server) attachPromotionCheck(r *http.Request, runID uuid.UUID, cut *str
 	check := s.attachAuthority(r, runID)
 	return func(ctx context.Context) (time.Time, bool) {
 		start := time.Now()
-		if !cut.lookup(ctx, s.attachAuthorityLookupBound(), check) {
+		if cut.lookup(ctx, s.attachAuthorityLookupBound(), check) != nil {
 			cut.Cut()
 			return start, false
 		}
