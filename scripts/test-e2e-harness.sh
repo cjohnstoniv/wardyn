@@ -197,7 +197,7 @@ run_wrapper() {
 }
 dump_events() {
   echo "--- fake docker exit codes" >&2; cat "${E2E_TEST_EVENTS}/docker-rc.log" >&2 2>/dev/null || echo "(none)" >&2
-  local f; for f in "${E2E_TEST_EVENTS}"/bindfail-*.json; do [[ -e "${f}" ]] && { echo "--- ${f##*/}" >&2; cat "${f}" >&2; }; done
+  local f; for f in "${E2E_TEST_EVENTS}"/bindfail-*.json; do if [[ -e "${f}" ]]; then echo "--- ${f##*/}" >&2; cat "${f}" >&2; fi; done
 }
 check_events() {
   python3 - "$@" <<'PY' || { cat "${tmp}/wrapper.log"; dump_events; die "unexpected client events"; }
