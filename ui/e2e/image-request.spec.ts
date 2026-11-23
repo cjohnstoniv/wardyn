@@ -281,6 +281,12 @@ function imageChange(id: string, proposedBy: string) {
 
 async function openChanges(page: Page, list: object[]) {
   await page.route("**/api/v1/governance/changes*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: list }) : route.fallback()));
+  // The page reads its change by id, so that read is spliced from the same list.
+  await page.route("**/api/v1/governance/changes/*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    const hit = (list as { id: string }[]).find((c) => c.id === id);
+    return route.request().method() === "GET" && hit ? route.fulfill({ json: hit }) : route.fallback();
+  });
   await asRealSecurityAdmin(page);
   await gotoConsole(page, "admin");
   await navTo(page, "Governance");
@@ -288,7 +294,7 @@ async function openChanges(page: Page, list: object[]) {
 }
 
 test.describe("governance: image requests on the Changes tab", () => {
-  test("Changes shows the image row and drawer", async ({ page }) => {
+  test("Changes shows the image row and page", async ({ page }) => {
     const label = `${CHANGES.KIND.governance_image_request} · ${CHANGES.OP.create}`;
     const sentence =
       "the target, or the deployment default, has changed since this change was proposed: it was not applied and is now stale; propose it again";
@@ -305,7 +311,6 @@ test.describe("governance: image requests on the Changes tab", () => {
 
     // Another person's request: five rows, then Approve answered stale.
     await page.getByRole("button", { name: label, exact: true }).first().click();
-    const drawer = page.getByRole("dialog");
     for (const [name, value] of [
       [IMG.ROW_PERSON, "dana.reyes"],
       [IMG.ROW_IMAGE, NAME],
@@ -313,19 +318,18 @@ test.describe("governance: image requests on the Changes tab", () => {
       [IMG.ROW_ASKED_UNDER, IMG.ASKED_UNDER("Payments")],
       [IMG.ROW_WRITES, IMG.WRITES],
     ]) {
-      await expect(drawer.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) })).toContainText(value);
+      await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) })).toContainText(value);
     }
-    await expect(drawer.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
-    await drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true }).click();
-    await expect(drawer.getByText(CHANGES.DECIDE_REFUSED_TITLE, { exact: true })).toBeVisible();
-    await expect(drawer.getByText(sentence, { exact: true })).toBeVisible();
-    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: CHANGES.APPROVE, exact: true }).click();
+    await expect(page.getByText(CHANGES.DECIDE_REFUSED_TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(sentence, { exact: true })).toBeVisible();
 
-    // The viewer's own request: Withdraw request, and Approve off.
+    // The viewer's own request, from the queue again: Withdraw request, and Approve off.
+    await page.goBack();
     await page.getByRole("button", { name: label, exact: true }).nth(1).click();
-    const own = page.getByRole("dialog");
-    await expect(own.getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST, exact: true })).toBeEnabled();
-    await expect(own.getByText(CHANGE_NOTE.OWN_REQUEST, { exact: true })).toBeVisible();
-    await expect(own.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST, exact: true })).toBeEnabled();
+    await expect(page.getByText(CHANGE_NOTE.OWN_REQUEST, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
   });
 });

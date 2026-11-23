@@ -11,7 +11,7 @@ import { CHANGE_REVIEW } from "../src/app/lib/change-review-copy";
 
 // ---------------------------------------------------------------------------
 // Four-eyes on governance writes (0.8.6): a covered write is held for a second human, the console shows
-// it on the Changes tab, and a different human approves it there.
+// it on the Changes tab, and a different human approves it on the change's own page.
 //
 // The daemon must boot with WARDYN_GOVERNANCE_SECOND_HUMAN on, which turns EVERY covered governance write
 // of every other spec into a held change. So the switch is on for this spec alone: ci.yml runs it in its
@@ -93,29 +93,31 @@ test.describe("governance — a covered write waits for a second human", () => {
     await page.getByRole("tab", { name: CHANGES.TAB_COUNT(1) }).click();
 
     await page.getByRole("button", { name: CHANGE_LABEL, exact: true }).click();
-    const drawer = page.getByRole("dialog");
-    await expect(drawer.getByText(NAME, { exact: true }).first()).toBeVisible();
-    // The server's own diff, last and closed: open it to read the changed field, before and after.
-    await drawer.getByText(CHANGE_REVIEW.RAW_DIFF, { exact: true }).click();
-    await expect(drawer.getByText("limits.max_concurrent_runs", { exact: true })).toBeVisible();
-    // R1-0098: the approver's drawer carries the notes, under the existing heading.
-    await expect(drawer.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
-    for (const n of notes) await expect(drawer.getByText(n, { exact: true })).toBeVisible();
+    // The change opens on its own page, not in a dialog.
+    await expect(page).toHaveURL(/\/admin\/governance\/changes\/[^/?#]+$/);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByText(NAME, { exact: true }).first()).toBeVisible();
+    // R1-0098: the approver sees the notes, under the existing heading.
+    await expect(page.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
+    for (const n of notes) await expect(page.getByText(n, { exact: true })).toBeVisible();
     // The proposer's note, and the way to change it.
-    const why = drawer.getByTestId("change-note");
+    const why = page.getByTestId("change-note");
     await expect(why.getByText(CHANGE_NOTE.WHY_TITLE, { exact: true })).toBeVisible();
     await expect(why.getByText(NOTE_REASON, { exact: true })).toBeVisible();
     await expect(why.getByText(NOTE_TICKET, { exact: true })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: CHANGE_NOTE.EDIT, exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: CHANGE_NOTE.EDIT, exact: true })).toBeVisible();
+    // The server's own diff, last: open its tab to read the changed field, before and after.
+    await page.getByRole("tab", { name: CHANGE_REVIEW.RAW_DIFF, exact: true }).click();
+    await expect(page.getByText("limits.max_concurrent_runs", { exact: true })).toBeVisible();
     // No unit admin governs this profile, so only security can decide it: the own-change note says so
     // in place of OWN_NOTE.
-    await expect(drawer.getByText(CHANGE_NOTE.OWN_SECURITY_TITLE, { exact: true })).toBeVisible();
-    await expect(drawer.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
-    await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
-    await expect(drawer.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
+    await expect(page.getByText(CHANGE_NOTE.OWN_SECURITY_TITLE, { exact: true })).toBeVisible();
+    await expect(page.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
   });
 
-  test("the second security admin approves it in the drawer", async ({ page }) => {
+  test("the second security admin approves it on the change page", async ({ page }) => {
     await asRealSecurityAdmin2(page);
     await gotoConsole(page, "admin");
     await navTo(page, "Governance");
@@ -129,14 +131,13 @@ test.describe("governance — a covered write waits for a second human", () => {
     await page.getByRole("radio", { name: CHANGE_NOTE.FILTER_ALL, exact: true }).click();
 
     await page.getByRole("button", { name: CHANGE_LABEL, exact: true }).click();
-    const drawer = page.getByRole("dialog");
-    const why = drawer.getByTestId("change-note");
+    const why = page.getByTestId("change-note");
     await expect(why.getByText(NOTE_REASON, { exact: true })).toBeVisible();
     await expect(why.getByText(NOTE_TICKET, { exact: true })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: CHANGE_NOTE.EDIT, exact: true })).toHaveCount(0);
-    await expect(drawer.getByRole("button", { name: CHANGE_NOTE.ADD, exact: true })).toHaveCount(0);
-    await expect(drawer.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
-    await drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true }).click();
+    await expect(page.getByRole("button", { name: CHANGE_NOTE.EDIT, exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: CHANGE_NOTE.ADD, exact: true })).toHaveCount(0);
+    await expect(page.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: CHANGES.APPROVE, exact: true }).click();
 
     await expect(page.getByText(CHANGES.TOAST_APPROVED, { exact: true })).toBeVisible();
     await expect(page.getByText(CHANGES.EMPTY_TITLE, { exact: true })).toBeVisible();

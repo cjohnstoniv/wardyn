@@ -4,12 +4,12 @@
  */
 
 // Requests on the Changes tab: an elevation request reads as a request (its length line, its person → unit
-// target, a three-row drawer), a person's own request offers Withdraw request, and the kinds that had no
+// target, a three-row page), a person's own request offers Withdraw request, and the kinds that had no
 // label now have one. Strings are read by constant.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("../../../lib/api/runner-pools", () => ({
@@ -19,6 +19,7 @@ vi.mock("../../../lib/api/runner-pools", () => ({
 const getChangeMock = vi.fn();
 const rejectMock = vi.fn();
 const approveMock = vi.fn();
+const impactMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -28,6 +29,7 @@ vi.mock("../../../lib/api/governance", async () => {
       getChange: (...a: unknown[]) => getChangeMock(...a),
       rejectChange: (...a: unknown[]) => rejectMock(...a),
       approveChange: (...a: unknown[]) => approveMock(...a),
+      getChangeImpact: (...a: unknown[]) => impactMock(...a),
     },
   };
 });
@@ -37,6 +39,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange } from "../../../lib/types";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ChangeReviewPage } from "./change-review-page";
 import { ChangesTab } from "./changes";
 
 function elevation(over: Partial<GovernanceChange> = {}): GovernanceChange {
@@ -77,11 +80,26 @@ function renderTab(changes: GovernanceChange[], principal = "bo@example.com") {
   );
 }
 
+// The change on its own page, as the row opens it.
+function renderPage(c: GovernanceChange, principal = "bo@example.com") {
+  getChangeMock.mockResolvedValue(c);
+  render(
+    <MemoryRouter initialEntries={[`/admin/governance/changes/${c.id}`]}>
+      <OperatorProvider operator={false} securityOperator={false} principal={principal}>
+        <Routes>
+          <Route path="/admin/governance/changes/:id" element={<ChangeReviewPage />} />
+        </Routes>
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   getChangeMock.mockReset();
-  getChangeMock.mockResolvedValue({});
   rejectMock.mockReset();
   approveMock.mockReset();
+  impactMock.mockReset();
+  impactMock.mockResolvedValue({ computed: "none", not_computed: "kind", as_of: aheadByHours(0) });
 });
 
 describe("an elevation request in the list", () => {
@@ -110,71 +128,60 @@ describe("an elevation request in the list", () => {
   });
 });
 
-describe("an elevation request's drawer", () => {
+describe("an elevation request's page", () => {
   it("shows Person, Unit and Length rows, the target in the title, and keeps the full diff", async () => {
-    renderTab([elevation()]);
-    await userEvent.click(screen.getByRole("button", { name: "Elevation · New" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("heading", { name: /Elevation · New\s*alice → Payments/ })).toBeInTheDocument();
-    const rows = within(dialog).getAllByRole("row").map((r) => r.textContent);
+    renderPage(elevation());
+    expect(await screen.findByRole("heading", { level: 1, name: /Elevation · New\s*alice → Payments/ })).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").map((r) => r.textContent);
     expect(rows).toEqual([
       `${CHANGE_NOTE.ELEV_PERSON}alice`,
       `${CHANGE_NOTE.ELEV_UNIT}Payments`,
       `${CHANGE_NOTE.ELEV_LENGTH}${CHANGE_NOTE.ELEV_LENGTH_VALUE("4 hours")}`,
     ]);
-    expect(within(dialog).getByText(CHANGES.DIFF_FULL)).toBeInTheDocument();
-    expect(within(dialog).getByTestId("change-note")).toHaveTextContent("Production incident");
+    expect(screen.getByText(CHANGES.DIFF_FULL)).toBeInTheDocument();
+    expect(screen.getByTestId("change-note")).toHaveTextContent("Production incident");
   });
 
   it("someone else's request keeps Reject and Approve and the decider's reason", async () => {
-    renderTab([elevation()]);
-    await userEvent.click(screen.getByRole("button", { name: "Elevation · New" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByLabelText(CHANGES.REASON_LABEL)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: CHANGES.REJECT })).toBeEnabled();
-    expect(within(dialog).getByRole("button", { name: CHANGES.APPROVE })).toBeEnabled();
-    expect(within(dialog).queryByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeNull();
+    renderPage(elevation());
+    expect(await screen.findByLabelText(CHANGES.REASON_LABEL)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGES.REJECT })).toBeEnabled();
+    expect(screen.getByRole("button", { name: CHANGES.APPROVE })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeNull();
   });
 });
 
 describe("a person's own request", () => {
   it("reads Withdraw request with the request note, no reason field, and Approve off", async () => {
-    renderTab([elevation()], "alice");
-    await userEvent.click(screen.getByRole("button", { name: "Elevation · New" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeEnabled();
-    expect(within(dialog).queryByRole("button", { name: CHANGES.REJECT })).toBeNull();
-    expect(within(dialog).getByText(CHANGE_NOTE.OWN_REQUEST)).toBeInTheDocument();
-    expect(within(dialog).queryByText(CHANGES.OWN_NOTE)).toBeNull();
-    expect(within(dialog).queryByLabelText(CHANGES.REASON_LABEL)).toBeNull();
-    expect(within(dialog).getByRole("button", { name: CHANGES.APPROVE })).toBeDisabled();
+    renderPage(elevation(), "alice");
+    expect(await screen.findByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: CHANGES.REJECT })).toBeNull();
+    expect(screen.getByText(CHANGE_NOTE.OWN_REQUEST)).toBeInTheDocument();
+    expect(screen.queryByText(CHANGES.OWN_NOTE)).toBeNull();
+    expect(screen.queryByLabelText(CHANGES.REASON_LABEL)).toBeNull();
+    expect(screen.getByRole("button", { name: CHANGES.APPROVE })).toBeDisabled();
   });
 
   it("Withdraw request posts a rejection with no reason", async () => {
     rejectMock.mockResolvedValue({});
-    renderTab([elevation()], "alice");
-    await userEvent.click(screen.getByRole("button", { name: "Elevation · New" }));
+    renderPage(elevation(), "alice");
     await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST }));
     expect(rejectMock).toHaveBeenCalledWith("e1", "");
   });
 
   it("an own image request reads the same way", async () => {
-    renderTab([image()], "alice");
-    await userEvent.click(screen.getByRole("button", { name: "Image · New" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeInTheDocument();
-    expect(within(dialog).getByText(CHANGE_NOTE.OWN_REQUEST)).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText(CHANGES.REASON_LABEL)).toBeNull();
+    renderPage(image(), "alice");
+    expect(await screen.findByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST })).toBeInTheDocument();
+    expect(screen.getByText(CHANGE_NOTE.OWN_REQUEST)).toBeInTheDocument();
+    expect(screen.queryByLabelText(CHANGES.REASON_LABEL)).toBeNull();
   });
 
   it("an own ordinary change keeps Reject, the reason field and OWN_NOTE", async () => {
     const own = elevation({ id: "g1", target_kind: "governance_unit", op: "update", target_key: "team-a", diff: { changed: [] } });
-    renderTab([own], "alice");
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: CHANGES.REJECT })).toBeInTheDocument();
-    expect(within(dialog).getByLabelText(CHANGES.REASON_LABEL)).toBeInTheDocument();
-    expect(within(dialog).getByText(CHANGES.OWN_NOTE)).toBeInTheDocument();
+    renderPage(own, "alice");
+    expect(await screen.findByRole("button", { name: CHANGES.REJECT })).toBeInTheDocument();
+    expect(screen.getByLabelText(CHANGES.REASON_LABEL)).toBeInTheDocument();
+    expect(screen.getByText(CHANGES.OWN_NOTE)).toBeInTheDocument();
   });
 });
 

@@ -85,10 +85,14 @@ export type ViewVerdict =
 // part of the pathname). Every other /admin/* path still refuses them. UX only: the server's authz is the gate.
 export const UNIT_ADMIN_SCREENS: readonly string[] = ["/admin/governance", "/admin/audit"];
 
+// A change's own page, the one path under /admin/governance a unit admin may also open: they decide the changes the
+// Changes tab lists, and the tab opens each on this page. Never widened to the rest of /admin/governance.
+const UNIT_ADMIN_CHANGE_PAGE = /^\/admin\/governance\/changes\/[^/]+$/;
+
 export function viewVerdict(path: string, access: ViewAccess, unitAdmin = false): ViewVerdict {
   const p = path.length > 1 ? path.replace(/\/+$/, "") : path;
   if (viewOfPath(p) === "admin") {
-    if (access === "user-only") return unitAdmin && UNIT_ADMIN_SCREENS.includes(p) ? { kind: "pass" } : { kind: "refuse" };
+    if (access === "user-only") return unitAdmin && (UNIT_ADMIN_SCREENS.includes(p) || UNIT_ADMIN_CHANGE_PAGE.test(p)) ? { kind: "pass" } : { kind: "refuse" };
     // Entering admin authority is always a click: there is no user→admin twin.
     if (access === "session-user") return { kind: "to-admin" };
     return { kind: "pass" };

@@ -8,7 +8,7 @@
 // read them from here.
 //
 // Strings marked "not on the board" are wording the approved board does not draw.
-import type { ChangeVerdict, HeldBecause, RiskLevel } from "./types";
+import type { ApprovalDropped, ApproverTier, ChangeVerdict, HeldBecause, RiskLevel } from "./types";
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
@@ -151,3 +151,92 @@ export function entriesLabel(field: string): string {
       return CHANGE_REVIEW.AFFECTED;
   }
 }
+
+// The words of a change's own page: its header, the approvals panel and the decision footer. The panel counts
+// nothing itself; every number in these sentences comes from the server's approvals block.
+//
+// Strings marked "not on the board" are wording the approved board does not draw.
+export const CHANGE_APPROVALS = {
+  /** "Governance › Changes", a link back to the queue. */
+  BREADCRUMB: (governance: string, changes: string) => `${governance} › ${changes}`,
+  TAB_EFFECT: "Effect",
+  /** Names the tab strip for assistive technology; not on the board. */
+  TABS_LABEL: "Sections of this change",
+  /** Shown in place of the page while the change is read; not on the board. */
+  LOADING: "Loading this change",
+  /** Shown over a change that is no longer waiting; not on the board. */
+  DECIDED: { applied: "This change was applied.", rejected: "This change was rejected.", expired: "This change expired." } as Record<string, string>,
+  /** The counts row under the verdict; not on the board. */
+  IMPACT_SUMMARY: (units: number, runs: number) => `${units} ${CHANGE_REVIEW.UNITS} · ${runs} ${CHANGE_REVIEW.LIVE_RUNS_WALLS}`,
+
+  TITLE: "Approvals",
+  PROGRESS: (have: number, required: number) => `${have} of ${required} approved`,
+  WAITING: (have: number, required: number) => `Waiting: ${have} of ${required}`,
+  ONE_PERSON: "One person decides",
+
+  /** The rule line. A required 1 is not on the board; with the security rule on, the clause stays. */
+  RULE: (required: number, security: boolean) => {
+    if (required <= 1) return security ? "Needs 1 approval, from a security admin. The proposer never counts." : "Needs 1 approval. The proposer never counts.";
+    return security
+      ? `Needs ${required} approvals, at least one from a security admin. The proposer never counts.`
+      : `Needs ${required} approvals. The proposer never counts.`;
+  },
+  TIER: {
+    security_admin: "Security admin",
+    super_admin: "Admin",
+    unit_admin: "Unit admin",
+  } as Record<ApproverTier, string>,
+  /** A unit admin names the unit when the server does. */
+  TIER_UNIT: (unit: string) => `unit admin of ${unit}`,
+  APPROVED_ENTRY: (approver: string, when: string, tier: string) => `${approver} approved ${when} · ${tier}`,
+  /** The proposer's line: they started the change and never count toward it. */
+  PROPOSER: (who: string) => `${who} proposed this and doesn't count`,
+  DROPPED: (approver: string, why: string, at?: string) =>
+    `${approver}'s approval no longer counts: ${why}${at ? ` at ${at}` : ""}.`,
+  WHY_DROPPED: {
+    role_removed: (tier: string) => `their ${tier} role was removed`,
+    /** not on the board. */
+    deactivated: () => "they were deactivated",
+    /** not on the board. */
+    token_revoked: () => "the token they approved with was revoked",
+    /** not on the board. */
+    session_revoked: () => "their sessions were revoked after they approved",
+    /** not on the board. */
+    grant_removed: () => "their unit admin grant no longer covers this change",
+    /** not on the board. */
+    cant_confirm: () => "their role can't be confirmed",
+  } as Record<ApprovalDropped, (tier: string) => string>,
+
+  CAN_APPROVE: "Can approve",
+  ELIGIBLE: (who: string, tier: string) => `${who} · ${tier}`,
+  /** not on the board. */
+  UNCONFIRMED: (n: number) => `and ${n} ${plural(n, "person", "people")} whose role can't be confirmed`,
+  /** not on the board. */
+  TOO_MANY: "and more people than Wardyn counts",
+  /** not on the board. */
+  NEVER_SIGNED_IN: "People who have never signed in can't approve until they do.",
+
+  /** The final clause shows to the proposer only. */
+  CANT_REACH_COUNT: (required: number, still: number, remaining: number, expires: string, proposer: boolean) =>
+    `This change can't reach ${required} approvals: it still needs ${still}, and only ${remaining} more can approve it. It expires ${expires} unless someone is given the right to approve it${proposer ? ", or you withdraw it." : "."}`,
+  /** Proposed: carries no number, since the blocker is the missing security admin. */
+  CANT_REACH_SECURITY: (expires: string, proposer: boolean) =>
+    `This change can't be approved: it needs a security admin, and no one who can still approve it is one. It expires ${expires} unless someone is given the right to approve it${proposer ? ", or you withdraw it." : "."}`,
+  /** not on the board. */
+  CANT_CONFIRM: (required: number) =>
+    `Wardyn can't confirm this change can reach ${required} approvals: some people who could approve it can't be counted.`,
+  CANNOT_BE_LAST: "Your approval can't be the last one: one must come from a security admin.",
+
+  REASON_REQUIRED_LABEL: "Reason (required to reject)",
+  STATUS_COUNTS: (n: number, required: number) => `Your approval counts ${n} of ${required}.`,
+  STATUS_LAST: "Yours is the last approval needed. The change applies when you approve.",
+  STATUS_APPROVED: (when: string, still: number) => `You approved ${when}. Waiting for ${still} more.`,
+  TAKE_BACK: "Take back my approval",
+  WITHDRAW: "Withdraw",
+  REJECT_NOTE: "Rejecting ends this change for everyone. It doesn't apply and its approvals are dropped.",
+  REASON_NEEDED: "Write a reason to reject. It is kept with the change.",
+  STALE: (target: string, proposer: string) =>
+    `This change is stale: ${target} changed after it was proposed. It can't apply, and its approvals are void. Ask ${proposer} to propose it again.`,
+  /** The toast after a take-back; not on the board. */
+  TOAST_TAKEN_BACK: "Approval taken back",
+} as const;

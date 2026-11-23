@@ -31,8 +31,14 @@ function elevation(proposedBy: string) {
 }
 
 async function openChanges(page: Page, list: object[]) {
-  // The list route only: `*` stops at "/", so a change read by id is not spliced.
+  // The list route: `*` stops at "/", so a change read by id is not caught by it.
   await page.route("**/api/v1/governance/changes*", (route) => (route.request().method() === "GET" ? route.fulfill({ json: list }) : route.fallback()));
+  // The page reads its change by id, so that read is spliced from the same list.
+  await page.route("**/api/v1/governance/changes/*", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    const hit = (list as { id: string }[]).find((c) => c.id === id);
+    return route.request().method() === "GET" && hit ? route.fulfill({ json: hit }) : route.fallback();
+  });
   await asRealSecurityAdmin(page);
   await gotoConsole(page, "admin");
   await navTo(page, "Governance");
@@ -48,19 +54,17 @@ test.describe("governance — requests on the Changes tab", () => {
     await expect(row).toContainText("alice → Payments");
 
     await page.getByRole("button", { name: label, exact: true }).click();
-    const drawer = page.getByRole("dialog");
-    await expect(drawer.getByText(CHANGE_NOTE.ELEV_LENGTH_VALUE("4 hours"), { exact: true })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
-    await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeEnabled();
+    await expect(page.getByText(CHANGE_NOTE.ELEV_LENGTH_VALUE("4 hours"), { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: CHANGES.REJECT, exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeEnabled();
   });
 
   test("the same change from the viewer offers Withdraw request", async ({ page }) => {
     await openChanges(page, [elevation(VIEWER)]);
     await page.getByRole("button", { name: `${CHANGES.KIND.governance_elevation} · ${CHANGES.OP.create}`, exact: true }).click();
-    const drawer = page.getByRole("dialog");
-    await expect(drawer.getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST, exact: true })).toBeEnabled();
-    await expect(drawer.getByText(CHANGE_NOTE.OWN_REQUEST, { exact: true })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: CHANGE_NOTE.WITHDRAW_REQUEST, exact: true })).toBeEnabled();
+    await expect(page.getByText(CHANGE_NOTE.OWN_REQUEST, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
   });
 
   test("a deciders change reads Deciders · Set", async ({ page }) => {
@@ -120,15 +124,16 @@ test.describe("a unit admin's own change", () => {
       await page.getByRole("tab", { name: new RegExp(`^${CHANGES.TAB}`) }).click();
       await page.getByRole("button", { name: new RegExp(`^${CHANGES.KIND.governance_membership} ·`) }).first().click();
 
-      const drawer = page.getByRole("dialog");
-      await expect(drawer.getByText(CHANGE_NOTE.OWN_SECURITY_TITLE, { exact: true })).toBeVisible();
-      await expect(drawer.getByText(CHANGE_NOTE.OWN_SECURITY_BODY, { exact: true })).toBeVisible();
-      await expect(drawer.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
-      await expect(drawer.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
+      // A unit admin may open a change's own page, and decide nothing here: only security can.
+      await expect(page).toHaveURL(new RegExp(`/admin/governance/changes/${changeId}$`));
+      await expect(page.getByText(CHANGE_NOTE.OWN_SECURITY_TITLE, { exact: true })).toBeVisible();
+      await expect(page.getByText(CHANGE_NOTE.OWN_SECURITY_BODY, { exact: true })).toBeVisible();
+      await expect(page.getByText(CHANGES.OWN_NOTE, { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: CHANGES.APPROVE, exact: true })).toBeDisabled();
 
-      await drawer.getByRole("button", { name: CHANGE_NOTE.ADD, exact: true }).click();
-      await drawer.getByLabel(CHANGE_NOTE.WHY_LABEL, { exact: true }).fill("Give the member this profile");
-      await drawer.getByRole("button", { name: CHANGE_NOTE.SAVE, exact: true }).click();
+      await page.getByRole("button", { name: CHANGE_NOTE.ADD, exact: true }).click();
+      await page.getByLabel(CHANGE_NOTE.WHY_LABEL, { exact: true }).fill("Give the member this profile");
+      await page.getByRole("button", { name: CHANGE_NOTE.SAVE, exact: true }).click();
       await expect(page.getByText(CHANGE_NOTE.SAVED, { exact: true })).toBeVisible();
     } finally {
       if (changeId) await page.request.post(`/api/v1/governance/changes/${changeId}/reject`, { headers: auth, data: {} });

@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// An image request on the Changes tab: its row (label, line, target), its drawer (five rows, the full digest),
-// the requester's view, and a stale answer to Approve. Strings are the approved copy's, spelled out.
+// An image request on the Changes tab: its row (label, line, target), its page (five rows, the full digest), the
+// requester's view, and a stale answer to Approve. Strings are the approved copy's, spelled out.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock("../../../lib/api/runner-pools", () => ({
@@ -33,6 +33,7 @@ import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ChangeReviewPage } from "./change-review-page";
 import { ChangesTab } from "./changes";
 
 const HEX = "4f2a91c3" + "0".repeat(56);
@@ -64,33 +65,31 @@ function renderTab(changes: GovernanceChange[], principal = "bo@example.com") {
   );
 }
 
-const open = async () => {
-  await userEvent.click(screen.getByRole("button", { name: "Image · New" }));
-  return screen.findByRole("dialog");
-};
+// The change on its own page, as the row opens it.
+function renderPage(c: GovernanceChange, principal = "bo@example.com") {
+  getChangeMock.mockResolvedValue(c);
+  render(
+    <MemoryRouter initialEntries={[`/admin/governance/changes/${c.id}`]}>
+      <OperatorProvider operator={false} securityOperator={false} principal={principal}>
+        <Routes>
+          <Route path="/admin/governance/changes/:id" element={<ChangeReviewPage />} />
+        </Routes>
+      </OperatorProvider>
+    </MemoryRouter>,
+  );
+}
 
 beforeEach(() => {
   getChangeMock.mockReset();
-  getChangeMock.mockResolvedValue({});
   approveMock.mockReset();
 });
 
-describe("the change drawer's size", () => {
-  // An inline max-width of 98vw beat the 680px cap, so the drawer filled the screen at every width.
-  it("is capped by its class, not widened by an inline max-width, and keeps the title clear of Close", async () => {
-    renderTab([image()]);
-    const dialog = await open();
-    expect(dialog.style.maxWidth).toBe("");
-    expect(dialog.className).toContain("sm:max-w-[680px]");
-    expect(dialog.querySelector('[data-slot="sheet-header"]')!.className).toContain("pr-10");
-  });
-
+describe("the page title", () => {
   // jsdom measures no layout; this pins the structure. Each part of the title is a flex item of its own that may
   // shrink and break anywhere, since min-w-0 on the title does not reach an anonymous text item.
-  it("makes every part of the drawer title shrinkable and breakable", async () => {
-    renderTab([image()]);
-    const dialog = await open();
-    const title = dialog.querySelector('[data-slot="sheet-title"]')!;
+  it("makes every part of the title shrinkable and breakable", async () => {
+    renderPage(image());
+    const title = await screen.findByRole("heading", { level: 1 });
     expect(title.children.length).toBeGreaterThanOrEqual(2);
     for (const part of Array.from(title.children)) {
       expect(part.className).toContain("min-w-0");
@@ -123,12 +122,11 @@ describe("an image request in the list", () => {
   });
 });
 
-describe("an image request's drawer", () => {
+describe("an image request's page", () => {
   it("shows five rows with the full digest, the target in the title, and keeps the full diff", async () => {
-    renderTab([image()]);
-    const dialog = await open();
-    expect(within(dialog).getByRole("heading", { name: /Image · New\s*dana\.reyes → build-tools@sha256:4f2a91c3…/ })).toBeInTheDocument();
-    const rows = within(dialog).getAllByRole("row").map((r) => r.textContent);
+    renderPage(image());
+    expect(await screen.findByRole("heading", { level: 1, name: /Image · New\s*dana\.reyes → build-tools@sha256:4f2a91c3…/ })).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").map((r) => r.textContent);
     expect(rows).toEqual([
       "Persondana.reyes",
       "Imageghcr.io/acme/build-tools",
@@ -136,40 +134,37 @@ describe("an image request's drawer", () => {
       "Asked underPayments, their default profile",
       "Approving writesAn allow grant of exactly this image for this person. It holds in any profile they run in. The digest rule, a deny of the image and image admission still apply at every launch.",
     ]);
-    expect(within(dialog).getByText(`sha256:${HEX}`)).toHaveClass("break-all");
-    expect(within(dialog).getByText("Show full before and after")).toBeInTheDocument();
-    expect(within(dialog).getByTestId("change-note")).toHaveTextContent("The nightly build needs the new toolchain");
-    expect(within(dialog).getByTestId("change-note")).toHaveTextContent("INC-2210");
+    expect(screen.getByText(`sha256:${HEX}`)).toHaveClass("break-all");
+    expect(screen.getByText("Show full before and after")).toBeInTheDocument();
+    expect(screen.getByTestId("change-note")).toHaveTextContent("The nightly build needs the new toolchain");
+    expect(screen.getByTestId("change-note")).toHaveTextContent("INC-2210");
   });
 
   it("someone else's request keeps Reject and Approve and the decider's reason", async () => {
-    renderTab([image()]);
-    const dialog = await open();
-    expect(within(dialog).getByLabelText("Reason for your decision (optional)")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Reject" })).toBeEnabled();
-    expect(within(dialog).getByRole("button", { name: "Approve" })).toBeEnabled();
-    expect(within(dialog).queryByRole("button", { name: "Withdraw request" })).toBeNull();
+    renderPage(image());
+    expect(await screen.findByLabelText("Reason for your decision (optional)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Withdraw request" })).toBeNull();
   });
 
   it("the requester sees Withdraw request, the request note, no reason field, and Approve off", async () => {
-    renderTab([image()], "dana.reyes");
-    const dialog = await open();
-    expect(within(dialog).getByRole("button", { name: "Withdraw request" })).toBeEnabled();
-    expect(within(dialog).getByText("You asked for this, so someone else must approve it. You can withdraw it.")).toBeInTheDocument();
-    expect(within(dialog).queryByLabelText("Reason for your decision (optional)")).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "Reject" })).toBeNull();
-    expect(within(dialog).getByRole("button", { name: "Approve" })).toBeDisabled();
+    renderPage(image(), "dana.reyes");
+    expect(await screen.findByRole("button", { name: "Withdraw request" })).toBeEnabled();
+    expect(screen.getByText("You asked for this, so someone else must approve it. You can withdraw it.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reason for your decision (optional)")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
   });
 
   it("Approve answered stale shows the server's sentence under the refusal heading", async () => {
     const sentence =
       "the target, or the deployment default, has changed since this change was proposed: it was not applied and is now stale; propose it again";
     approveMock.mockRejectedValue(new HttpError(409, sentence, "governance_change_stale"));
-    renderTab([image()]);
-    const dialog = await open();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
-    expect(await within(dialog).findByText("Couldn't decide this change")).toBeInTheDocument();
-    expect(within(dialog).getByText(sentence)).toHaveClass("font-mono");
-    expect(approveMock).toHaveBeenCalledWith("i1");
+    renderPage(image());
+    await userEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("Couldn't decide this change")).toBeInTheDocument();
+    expect(screen.getByText(sentence)).toHaveClass("font-mono");
+    expect(approveMock).toHaveBeenCalledWith("i1", undefined);
   });
 });
