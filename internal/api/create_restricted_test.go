@@ -119,7 +119,7 @@ func TestCreatePolicy_RestrictedIsRestrictedBeforeTheRowExists(t *testing.T) {
 			t.Errorf("a plain create wrote availability audits: %v", audits)
 		}
 	})
-	for _, query := range []string{"restricted=yes", "restricted=", "restricted=true&restricted=false"} {
+	for _, query := range []string{"restricted=yes", "restricted=", "restricted=true&restricted=false", "restricted=tru%", "x=%zz&restricted=true"} {
 		t.Run("a refused flag "+query, func(t *testing.T) {
 			st := &restrictOrderStore{capStore: &capStore{}}
 			srv := New(baseTestConfig(newHarness(t), st))

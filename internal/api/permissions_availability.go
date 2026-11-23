@@ -193,10 +193,15 @@ func (s *Server) writeAvailability(r *http.Request, kind, value string, restrict
 }
 
 // createRestricted reads a create's ?restricted. Absent is false and a single "true" is true; any other value, an empty
-// one or a repeated parameter is refused 400 with reason, so a misspelled flag never creates the resource open.
+// one or a repeated parameter, or a query string that does not parse (url.Query would drop the bad pair and read the
+// flag as absent), is refused 400 with reason, so a misspelled flag never creates the resource open.
 func createRestricted(w http.ResponseWriter, r *http.Request, reason string) (restricted, ok bool) {
-	vals, present := r.URL.Query()["restricted"]
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	vals, present := query["restricted"]
 	switch {
+	case err != nil:
+		writeErrorReason(w, http.StatusBadRequest, reason, `restricted: only "true" is accepted`)
+		return false, false
 	case !present:
 		return false, true
 	case len(vals) == 1 && vals[0] == "true":
