@@ -25,6 +25,7 @@ import type {
 import type { PlacementValue } from "../types/new-run-contract";
 import type { PolicyProvenance } from "../types/runs";
 import type { Boundary, BoundaryChange } from "./boundary";
+import type { ApprovalCounts, ApprovalCountsWrite } from "../types/approval-counts";
 import type { GovernanceChangeApprover } from "../types/governance-change";
 import type { GovernanceEnvelope } from "../types/governance-envelope";
 import type { RestrictionLimits, RestrictionSpec, RestrictionView } from "./restrictions";
@@ -703,13 +704,38 @@ export const governance = {
     return asJson<GovernanceChange>(res);
   },
 
-  // POST /api/v1/governance/changes/{id}/approve -> 200 the change, applied. The server judges who may
+  // POST /api/v1/governance/changes/{id}/approve -> 200 the change: applied, or still pending with its approvals
+  // block when more people must approve. The reason is optional and sent only when given. The server judges who may
   // approve (another human, with the authority to make that write): a 403 or 409 reaches the caller as an
   // HttpError whose message is its own sentence. A role-mapping change that applied but could not revoke
   // every token holding the old role adds tokens_revocation_failed and the remedy in detail.
-  async approveChange(id: string): Promise<GovernanceChange & { tokens_revocation_failed?: boolean; detail?: string }> {
-    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, { method: "POST", asPerson: true });
+  async approveChange(id: string, reason?: string): Promise<GovernanceChange & { tokens_revocation_failed?: boolean; detail?: string }> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+      asPerson: true,
+      ...(reason ? { body: JSON.stringify({ reason }) } : {}),
+    });
     return asJson<GovernanceChange & { tokens_revocation_failed?: boolean; detail?: string }>(res);
+  },
+
+  // DELETE /api/v1/governance/changes/{id}/approval -> 200 the change, without the caller's approval. 404 when the
+  // caller has no counting approval to take back.
+  async takeBackApproval(id: string): Promise<GovernanceChange> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/approval`, { method: "DELETE", asPerson: true });
+    return asJson<GovernanceChange>(res);
+  },
+
+  // GET /api/v1/governance/approval-counts -> 200 how many approvals each kind of change needs (security tier).
+  async getApprovalCounts(): Promise<ApprovalCounts> {
+    const res = await wfetch("/governance/approval-counts", { method: "GET" });
+    return asJson<ApprovalCounts>(res);
+  },
+
+  // PUT /api/v1/governance/approval-counts -> 200 the counts (the admin token only), or PendingChangeError when held
+  // for a second approver (every person's edit). The body replaces every row.
+  async putApprovalCounts(body: ApprovalCountsWrite): Promise<ApprovalCounts> {
+    const res = await wfetch("/governance/approval-counts", { method: "PUT", asPerson: true, body: JSON.stringify(body) });
+    return asJson<ApprovalCounts>(res);
   },
 
   // POST /api/v1/governance/changes/{id}/reject -> 200 the change, rejected. The reason is optional and is
