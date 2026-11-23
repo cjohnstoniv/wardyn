@@ -1704,7 +1704,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - `0` (the default) leaves every change to one approver and changes nothing else. Elevation requests, image requests and run node records always have one decider, whatever this is set to.
 - A change keeps the count it was proposed with: unsetting or lowering this later never lowers a held change's count, and raising it raises the count of the changes already held.
 - An approval counts only while its person is still eligible on their latest sign-in record; the last approval re-checks every earlier one, and a person can take their own back (`DELETE /governance/changes/{id}/approval`).
-- Read only while `WARDYN_GOVERNANCE_SECOND_HUMAN` is on, or for a change that needs a security admin among its approvers.
+- Independent of `WARDYN_GOVERNANCE_SECOND_HUMAN`: the minimum is read for every held change of a kind with more than one decider, including one held with that switch off.
 
 ### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 

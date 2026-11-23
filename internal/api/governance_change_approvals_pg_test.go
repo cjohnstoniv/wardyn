@@ -1399,3 +1399,99 @@ func TestPG_Approvals_TheViewerCannotBeLast(t *testing.T) {
 		t.Errorf("the first approver = %v, want %s", v, viewerApproved)
 	}
 }
+
+// TestPG_Approvals_TakeBackNeverUsesAnUnvouchedEmail: a take-back deletes the caller's own approval. A caller
+// whose email claim sign-in does not vouch for, and who shares an approver's stored email, is told they hold no
+// approval and nothing is deleted; the approver's own take-back deletes it and the retract row names whose
+// approval went.
+func TestPG_Approvals_TakeBackNeverUsesAnUnvouchedEmail(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	counting := func() int {
+		t.Helper()
+		var n int
+		if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM governance_change_approvals WHERE change_id = $1 AND dropped = ''`, ch.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	const twin = "sub-ap-twin"
+	adminEmail := uaSubAdminA + "@corp.example"
+	e.grant(e.a, types.CapabilitySubjectUser, twin)
+	e.record(twin, adminEmail, []string{apGroupUsers}, nil, false)
+	w := e.call(e.sessionOf(twin, adminEmail), http.MethodDelete, approvalPath(ch.ID), "")
+	if w.Code != http.StatusNotFound || wireReason(t, w) != reasonGovernanceChangeApprovalNotFound {
+		t.Fatalf("a take-back by an unvouched email = %d %s, want 404 %s", w.Code, w.Body, reasonGovernanceChangeApprovalNotFound)
+	}
+	if n := counting(); n != 1 {
+		t.Fatalf("approvals that count = %d after the unvouched take-back, want the approver's own still there", n)
+	}
+
+	if w := e.call(e.adminA, http.MethodDelete, approvalPath(ch.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("the approver's own take-back = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := counting(); n != 0 {
+		t.Errorf("approvals that count = %d after the take-back, want none", n)
+	}
+	rows := e.audits("governance.change.retract")
+	if len(rows) != 1 {
+		t.Fatalf("%d retract rows, want one", len(rows))
+	}
+	if d := auditData(t, rows[0]); d["approver"] != uaSubAdminA || d["have"] != float64(0) {
+		t.Errorf("retract data = %v, want the deleted approver %s and have 0", d, uaSubAdminA)
+	}
+}
+
+// TestPG_Approvals_AnInactiveFinalApproverIsRefused: an approver the people directory counts as inactive is
+// refused as an approver is, on whatever session they still hold, and writes no row; the page says not_eligible.
+func TestPG_Approvals_AnInactiveFinalApproverIsRefused(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	e.deactivate(uaSubPeerA)
+	if w := e.call(e.peerA, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusForbidden {
+		t.Fatalf("an inactive final approver = %d %s, want 403", w.Code, w.Body)
+	}
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM governance_change_approvals WHERE change_id = $1 AND approver = $2`, ch.ID, uaSubPeerA).Scan(&n); err != nil || n != 0 {
+		t.Errorf("rows for the inactive approver = %d (%v), want none", n, err)
+	}
+	if got := e.changeState(ch.ID); got != types.GovernanceChangePending {
+		t.Errorf("state = %q, want pending", got)
+	}
+	var view map[string]any
+	if err := json.Unmarshal(e.call(e.peerA, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), "").Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := approvalsOf(view)["viewer"].(map[string]any); v == nil || v["state"] != viewerNotEligible {
+		t.Errorf("viewer = %v, want %s", v, viewerNotEligible)
+	}
+}
+
+// TestPG_Approvals_EntriesNameAPrincipalNotAnEmail: the entries of the approvals block name each approval's
+// principal and carry no directory email, whatever email the approval was given with.
+func TestPG_Approvals_EntriesNameAPrincipalNotAnEmail(t *testing.T) {
+	e := newApEnv(t, 3)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	e.approve(e.peerA, ch.ID, http.StatusOK)
+	entries, _ := approvalsOf(e.read(ch.ID))["entries"].([]any)
+	if len(entries) != 2 {
+		t.Fatalf("entries = %v, want the two approvals", entries)
+	}
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		blob, _ := json.Marshal(entry)
+		if strings.Contains(string(blob), "@") || entry["email"] != nil {
+			t.Errorf("entry %s carries an email", blob)
+		}
+		if who, _ := entry["approver"].(string); who != uaSubAdminA && who != uaSubPeerA {
+			t.Errorf("entry names %q, want a principal", who)
+		}
+	}
+}

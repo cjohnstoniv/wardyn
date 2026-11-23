@@ -25,8 +25,10 @@
 -- groups already carry the claim.
 --
 -- The app role is granted the new tables here, found from the catalog and never by name: every role but the
--- owner that holds DELETE on governance_changes gets SELECT, INSERT, UPDATE and DELETE on both. The new columns
--- ride the grants their tables already have. Never a secret.
+-- owner that holds UPDATE on governance_changes gets SELECT, INSERT, UPDATE and DELETE on both. UPDATE is the
+-- privilege every path that writes a change uses (a decision, an expiry, an erasure); nothing deletes from that
+-- table, so DELETE would leave out a role granted per table without it. The new columns ride the grants their
+-- tables already have. Never a secret.
 ALTER TABLE governance_changes
     ADD COLUMN IF NOT EXISTS required_approvals INT NOT NULL DEFAULT 1 CHECK (required_approvals BETWEEN 1 AND 9),
     ADD COLUMN IF NOT EXISTS require_security BOOLEAN NOT NULL DEFAULT false;
@@ -67,7 +69,7 @@ BEGIN
           CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
           JOIN pg_catalog.pg_roles ro ON ro.oid = a.grantee
          WHERE c.oid = 'governance_changes'::regclass
-           AND a.privilege_type = 'DELETE' AND a.grantee <> c.relowner
+           AND a.privilege_type = 'UPDATE' AND a.grantee <> c.relowner
     LOOP
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON governance_change_approvals TO %I', r.rolname);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON governance_approval_counts TO %I', r.rolname);

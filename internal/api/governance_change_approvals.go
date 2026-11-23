@@ -243,8 +243,9 @@ func (s *Server) sessionUnreadable() *govRefusal {
 
 // callerTier checks the approver against their latest sign-in record and returns the tier their approval is
 // given at: the lower of the tier the record recomputes and the tier the authenticated request carries. A
-// person with no record, one whose role sign-in would now refuse, one whose partial record cannot establish
-// it, or one the predicate no longer admits is refused as an approver is, whatever their older session says.
+// person with no record, one the people directory counts as inactive, one whose role sign-in would now refuse,
+// one whose partial record cannot establish it, or one the predicate no longer admits is refused as an approver
+// is, whatever their older session says.
 func (s *Server) callerTier(ctx context.Context, r *http.Request, q store.Querier, in *recordInputs, kind govKind, principal string) (string, error) {
 	rec, err := store.GetSignInRecordQ(ctx, q, principal)
 	if errors.Is(err, store.ErrNotFound) {
@@ -252,6 +253,9 @@ func (s *Server) callerTier(ctx context.Context, r *http.Request, q store.Querie
 	}
 	if err != nil {
 		return "", err
+	}
+	if rec.Inactive() {
+		return "", s.denyApprover(kind)
 	}
 	v := s.judgeRecord(in, nil, kind.approver, rec)
 	if v.outcome != recordPasses {
@@ -577,8 +581,8 @@ func (s *Server) handleTakeBackGovernanceApproval(w http.ResponseWriter, r *http
 	}
 	actorType, principal := actorFromRequest(r)
 	email := oidcEmailFromContext(ctx)
-	var have int
-	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, store.GovernanceDecision{}, s.takeBack(ctx, principal, email, &have))
+	var taken takenBack
+	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, store.GovernanceDecision{}, s.takeBack(ctx, principal, email, &taken))
 	switch {
 	case errors.Is(err, store.ErrGovernanceApprovalRecorded):
 	case err != nil:
@@ -587,15 +591,23 @@ func (s *Server) handleTakeBackGovernanceApproval(w http.ResponseWriter, r *http
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.retract", out.ID.String(), "success", mustJSON(map[string]any{
 		"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy,
-		"have": have, "required": s.effective(out),
+		"approver": taken.approver, "have": taken.have, "required": s.effective(out),
 	})))
 	s.writeChangeView(w, r, out)
 }
 
+// takenBack is what a take-back leaves for its audit row: whose approval it deleted and how many still count.
+type takenBack struct {
+	approver string
+	have     int
+}
+
 // takeBack is the take-back's body in the transaction that locked the change: the caller's token is read
-// again, their approval that counts is deleted, and the number still counting is left in *have. The
-// sentinel commits the delete and leaves the change as it is.
-func (s *Server) takeBack(ctx context.Context, principal, email string, have *int) store.GovernanceDecideFunc {
+// again, their approval that counts is deleted, and what is left is put in *taken. The approval is the
+// caller's own principal's; the same email counts only when sign-in vouches for every caller's email, so an
+// email it does not vouch for never takes back another person's approval. The sentinel commits the delete
+// and leaves the change as it is.
+func (s *Server) takeBack(ctx context.Context, principal, email string, taken *takenBack) store.GovernanceDecideFunc {
 	return func(q store.Querier, ch types.GovernanceChange) error {
 		if _, err := s.recheckLiveToken(ctx, q); err != nil {
 			return err
@@ -605,7 +617,7 @@ func (s *Server) takeBack(ctx context.Context, principal, email string, have *in
 			return err
 		}
 		own := slices.IndexFunc(rows, func(row store.GovernanceChangeApproval) bool {
-			return row.Counts() && sameHuman(principal, email, row.Approver, row.ApproverEmail)
+			return row.Counts() && (row.Approver == principal || (s.emailTrusted() && sameHuman(principal, email, row.Approver, row.ApproverEmail)))
 		})
 		if principal == "" || own < 0 {
 			return &govRefusal{why: "no approval to take back", write: func(w http.ResponseWriter, r *http.Request) {
@@ -615,7 +627,7 @@ func (s *Server) takeBack(ctx context.Context, principal, email string, have *in
 		if _, err := store.DeleteGovernanceChangeApprovalQ(ctx, q, ch.ID, rows[own].Approver); err != nil {
 			return err
 		}
-		*have = len(rows) - countDropped(rows) - 1
+		taken.approver, taken.have = rows[own].Approver, len(rows)-countDropped(rows)-1
 		return store.ErrGovernanceApprovalRecorded
 	}
 }
