@@ -87,7 +87,9 @@ type auditBatchKey struct {
 // InsertAuditEvents appends evs in order under one take of the chain lock and one append slot, in one
 // transaction: their seqs are contiguous and commit together, or none is written. Under WithAuditReplay an
 // event whose id, time and run are already stored is not appended again, carries the stored hashes and is
-// reported held. On success each ev carries the PrevHash and RowHash the database computed.
+// reported held. On success each ev carries the PrevHash and RowHash the database computed. On an error none
+// is reported held and every ev's hashes are cleared: rows scanned before a later row failed were rolled back,
+// so their hashes are in no chain, and a caller that sends the events on must not pass them along.
 //
 // Each row is appended by the same audit_append call InsertAuditEvent makes, so the chain format, the
 // trigger and the row hash are the single path's. The lock is taken once and held across the appends and the
@@ -99,6 +101,13 @@ func InsertAuditEvents(ctx context.Context, pool *pgxpool.Pool, evs []*types.Aud
 	if len(evs) > maxAuditBatch {
 		return nil, fmt.Errorf("store: audit batch of %d events is over the limit of %d", len(evs), maxAuditBatch)
 	}
+	defer func() {
+		if err != nil {
+			for _, ev := range evs {
+				ev.PrevHash, ev.RowHash = "", ""
+			}
+		}
+	}()
 	data := make([][]byte, len(evs))
 	replay, _ := ctx.Value(auditReplayKey{}).(bool)
 	for i, ev := range evs {

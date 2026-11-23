@@ -209,9 +209,14 @@ func TestInsertAuditEvents_AllOrNothing_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	evs := batchEvents(&run, 5, "bad")
-	evs[2].Outcome = "not-an-outcome" // the table's outcome check refuses it
+	evs[2].Outcome = "not-an-outcome" // the table's outcome check refuses it, after rows 0 and 1 were scanned
 	if _, err := store.InsertAuditEvents(ctx, pool, evs); err == nil {
 		t.Fatal("a batch with a refused row was accepted")
+	}
+	for i, ev := range evs {
+		if ev.PrevHash != "" || ev.RowHash != "" {
+			t.Fatalf("event %d keeps the hashes (%q, %q) of a rolled-back row", i, ev.PrevHash, ev.RowHash)
+		}
 	}
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE run_id = $1`, run).Scan(&n); err != nil || n != 1 {
