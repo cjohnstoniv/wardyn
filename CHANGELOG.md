@@ -17,6 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0400_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
 - Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
 
 ## [0.10.2] — 2026-11-22

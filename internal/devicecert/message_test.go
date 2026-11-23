@@ -16,12 +16,12 @@ var (
 
 // The message is byte for byte what the control plane and the helper both build.
 func TestMessage_Golden(t *testing.T) {
-	at := time.Date(2026, 11, 25, 9, 58, 7, 987654321, time.FixedZone("x", 3600))
+	at := time.Unix(1795600000, 987654321).In(time.FixedZone("x", 3600))
 	got, err := Message(fp, org, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "wardyn-mdm-device-v1\n" + fp + "\n" + org + "\n2026-11-25T08:58:07Z\n"
+	want := "wardyn-mdm-device-v1\n" + fp + "\n" + org + "\n" + at.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05Z") + "\n"
 	if string(got) != want {
 		t.Fatalf("message %q, want %q", got, want)
 	}
