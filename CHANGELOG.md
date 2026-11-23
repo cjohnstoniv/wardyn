@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- On the GitHub App and personal-token git lanes, a push refused because it touches a review path on an unattended run, or because its paths could not be worked out, now reaches git as a rejected ref. Git prints the reason, the paths and what to do, as it already did on the Azure DevOps lane, instead of a bare HTTP 403. The audit row is unchanged.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
