@@ -30,8 +30,18 @@ var (
 // is "created", which Status reads RunStarting, so the runner's observer reports the moved run present.
 func (*Driver) MoveImportReadsPresent() {}
 
-// maxImportLinkBytes bounds the symlinks an import holds back to write after every other entry.
-const maxImportLinkBytes = 64 << 20
+// maxImportLinkBytes bounds the symlinks an import holds back to write after every other entry: each costs
+// its path and target plus heldLinkCost, its record's own size with room for the slice's growth.
+const (
+	maxImportLinkBytes = 64 << 20
+	heldLinkCost       = 64
+)
+
+// heldLink is a symlink an import holds back: only what writing it later needs.
+type heldLink struct {
+	path, link string
+	mode       int64
+}
 
 // bootedMarker is the file the image's boot reads to take its revive branch, so an imported run's seed
 // does not run again (agent-run-lib.sh).
@@ -196,7 +206,7 @@ func reemit(out io.Writer, rd *movepack.Reader) error {
 	hdr := func(name string, mode int64) *tar.Header {
 		return &tar.Header{Name: name, Mode: mode & 0o777, Uid: runner.AgentUID, Gid: runner.AgentUID, ModTime: now}
 	}
-	var links []*tar.Header
+	var links []heldLink
 	held := 0
 	for {
 		h, content, err := rd.Next()
@@ -213,11 +223,10 @@ func reemit(out io.Writer, rd *movepack.Reader) error {
 		case movepack.TypeFile:
 			th.Typeflag, th.Size = tar.TypeReg, h.Size
 		case movepack.TypeSymlink:
-			if held += len(h.Path) + len(h.Link); held > maxImportLinkBytes {
+			if held += len(h.Path) + len(h.Link) + heldLinkCost; held > maxImportLinkBytes {
 				return fmt.Errorf("%w: over %d bytes of symlinks", movepack.ErrCarriedTooLarge, maxImportLinkBytes)
 			}
-			th.Typeflag, th.Linkname = tar.TypeSymlink, h.Link
-			links = append(links, th)
+			links = append(links, heldLink{path: h.Path, link: h.Link, mode: h.Mode})
 			continue
 		default:
 			return fmt.Errorf("%w: entry %q has type %q", movepack.ErrArchiveRefused, h.Path, h.Type)
@@ -237,7 +246,14 @@ func reemit(out io.Writer, rd *movepack.Reader) error {
 	dir.Typeflag = tar.TypeDir
 	file := hdr(marker, 0o644)
 	file.Typeflag = tar.TypeReg
-	for _, th := range append([]*tar.Header{dir, file}, links...) {
+	for _, th := range []*tar.Header{dir, file} {
+		if err := tw.WriteHeader(th); err != nil {
+			return err
+		}
+	}
+	for _, l := range links {
+		th := hdr(l.path, l.mode)
+		th.Typeflag, th.Linkname = tar.TypeSymlink, l.link
 		if err := tw.WriteHeader(th); err != nil {
 			return err
 		}

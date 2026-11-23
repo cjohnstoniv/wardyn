@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"strings"
@@ -161,5 +162,39 @@ func TestLastHost(t *testing.T) {
 		case row.want != "" && (err != nil || got.String() != row.want):
 			t.Errorf("lastHost(%s) = %s, %v; want %s", row.in, got, err, row.want)
 		}
+	}
+}
+
+// TestMoveImport_ManyShortLinksTripTheBound: each symlink an import holds back counts its record as well as
+// its two strings, so many short links reach the bound on held links though their text alone would not
+// (900,000 links of 14 bytes are about 12 MiB of text).
+func TestMoveImport_ManyShortLinksTripTheBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("reads a stream of 900,000 entries")
+	}
+	set := runner.CarriedSet{Roots: []string{"/work"}}
+	pr, pw := io.Pipe()
+	go func() {
+		w, err := movepack.NewWriter(pw, set)
+		if err == nil {
+			err = w.Add(movepack.Header{Path: "work", Type: movepack.TypeDir, Mode: 0o755}, nil)
+		}
+		for i := 0; err == nil && i < 900_000; i++ {
+			err = w.Add(movepack.Header{Path: fmt.Sprintf("work/l%07d", i), Type: movepack.TypeSymlink, Mode: 0o777, Link: "x"}, nil)
+		}
+		if err == nil {
+			_, err = w.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	rd, err := movepack.NewReader(pr, movepack.Options{Set: set})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rd.Close()
+	err = reemit(io.Discard, rd)
+	_ = pr.CloseWithError(errors.New("test done"))
+	if !errors.Is(err, movepack.ErrCarriedTooLarge) || !strings.Contains(err.Error(), "of symlinks") {
+		t.Fatalf("reemit of 900,000 short links = %v; want the held-link bound", err)
 	}
 }
