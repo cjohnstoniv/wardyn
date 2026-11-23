@@ -88,7 +88,7 @@ func TestWinVMSmoke(t *testing.T) {
 		return runner.SandboxSpec{RunID: uuid.New(), Image: image, MachineKind: types.MachineWindowsVM, ConfinementClass: types.CC1, Interactive: true,
 			ProxyConfig: runner.ProxyConfig{RunToken: "tok", ControlPlaneURL: "http://127.0.0.1:8080", Policy: types.RunPolicySpec{
 				FirstUseApproval: types.FirstUseAlwaysDeny, MinConfinementClass: types.CC1}},
-			Resources: runner.Resources{CPUMillis: 2000, MemoryMiB: 4096}}
+			Resources: runner.Resources{CPUMillis: 2000, MemoryMiB: 6144}}
 	}
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
