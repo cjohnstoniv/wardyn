@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -20,10 +22,20 @@ import (
 type restrictOrderStore struct {
 	*capStore
 	createErr error
+	// keepOnErr: CreatePolicy stores the policy and still returns createErr, as a commit whose answer was lost does.
+	keepOnErr bool
 	setErr    error
 	calls     int
 	sawLocked bool
 	lastID    string
+	kept      map[uuid.UUID]bool
+}
+
+func (s *restrictOrderStore) GetPolicy(_ context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	if s.kept[id] {
+		return types.RunPolicy{ID: id}, nil
+	}
+	return types.RunPolicy{}, store.ErrNotFound
 }
 
 func (s *restrictOrderStore) CreatePolicy(_ context.Context, p types.RunPolicy) (types.RunPolicy, error) {
@@ -31,6 +43,12 @@ func (s *restrictOrderStore) CreatePolicy(_ context.Context, p types.RunPolicy) 
 	s.lastID = p.ID.String()
 	s.sawLocked = s.restricted[capPolicy][s.lastID]
 	if s.createErr != nil {
+		if s.keepOnErr {
+			if s.kept == nil {
+				s.kept = map[uuid.UUID]bool{}
+			}
+			s.kept[p.ID] = true
+		}
 		return types.RunPolicy{}, s.createErr
 	}
 	return p, nil
@@ -101,17 +119,19 @@ func TestCreatePolicy_RestrictedIsRestrictedBeforeTheRowExists(t *testing.T) {
 			t.Errorf("a plain create wrote availability audits: %v", audits)
 		}
 	})
-	t.Run("a misspelled flag", func(t *testing.T) {
-		st := &restrictOrderStore{capStore: &capStore{}}
-		srv := New(baseTestConfig(newHarness(t), st))
-		w := do(t, srv, http.MethodPost, "/api/v1/policies?restricted=yes", adminToken, createPolicyBody)
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonPolicyRequestInvalid) || !strings.Contains(w.Body.String(), "restricted") {
-			t.Fatalf("POST = %d %s, want 400 %s naming restricted", w.Code, w.Body, reasonPolicyRequestInvalid)
-		}
-		if st.calls != 0 {
-			t.Error("CreatePolicy was called")
-		}
-	})
+	for _, query := range []string{"restricted=yes", "restricted=", "restricted=true&restricted=false"} {
+		t.Run("a refused flag "+query, func(t *testing.T) {
+			st := &restrictOrderStore{capStore: &capStore{}}
+			srv := New(baseTestConfig(newHarness(t), st))
+			w := do(t, srv, http.MethodPost, "/api/v1/policies?"+query, adminToken, createPolicyBody)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), reasonPolicyRequestInvalid) || !strings.Contains(w.Body.String(), "restricted") {
+				t.Fatalf("POST = %d %s, want 400 %s naming restricted", w.Code, w.Body, reasonPolicyRequestInvalid)
+			}
+			if st.calls != 0 {
+				t.Error("CreatePolicy was called")
+			}
+		})
+	}
 }
 
 // A create that cannot be restricted writes nothing, and one that fails after the restriction lifts it.
@@ -137,6 +157,16 @@ func TestCreatePolicy_RestrictedFailureLeavesNothing(t *testing.T) {
 			t.Error("the restriction stayed after a failed create")
 		}
 	})
+	t.Run("the create fails but may have been stored", func(t *testing.T) {
+		st := &restrictOrderStore{capStore: &capStore{}, createErr: errors.New("connection reset"), keepOnErr: true}
+		srv := New(baseTestConfig(newHarness(t), st))
+		if w := do(t, srv, http.MethodPost, "/api/v1/policies?restricted=true", adminToken, createPolicyBody); w.Code != http.StatusInternalServerError {
+			t.Fatalf("POST = %d %s, want 500", w.Code, w.Body)
+		}
+		if !st.restricted[capPolicy][st.lastID] {
+			t.Error("the restriction was lifted although the policy exists")
+		}
+	})
 	for name, st := range map[string]*restrictOrderStore{
 		"the restriction write fails": {capStore: &capStore{}, setErr: errors.New("db down")},
 		"the restriction read fails":  {capStore: &capStore{restrictErr: errors.New("db down")}},
@@ -159,6 +189,8 @@ type restrictingSiteStore struct {
 	*fakeSiteConfigStore
 	restricted  map[string]map[string]bool
 	lockedAtPut map[string]bool
+	// keepOnErr: PutSiteConfig stores the document and still returns putErr, as a commit whose answer was lost does.
+	keepOnErr bool
 }
 
 func (s *restrictingSiteStore) ListCapabilityRestrictions(context.Context) (map[string]map[string]bool, error) {
@@ -182,6 +214,10 @@ func (s *restrictingSiteStore) PutSiteConfig(ctx context.Context, cfg types.Site
 		for _, p := range cfg.ModelProviders.Providers {
 			s.lockedAtPut[p.ID] = s.restricted[capModelProvider][p.ID]
 		}
+	}
+	if s.keepOnErr && s.putErr != nil {
+		s.cfg = cfg
+		return types.SiteConfig{}, s.putErr
 	}
 	return s.fakeSiteConfigStore.PutSiteConfig(ctx, cfg)
 }
@@ -293,5 +329,19 @@ func TestPutModelProviders_RestrictedFailureLeavesNothing(t *testing.T) {
 	}
 	if !st.restricted[capModelProvider]["r"] {
 		t.Error("r was restricted before the request and must stay so")
+	}
+}
+
+// A save that fails after the restriction but may have been stored keeps the restriction: lifting it would leave
+// a provider that exists open to everyone.
+func TestPutModelProviders_RestrictedKeepsTheRestrictionWhenTheSaveMayHaveLanded(t *testing.T) {
+	st := newRestrictingSiteStore()
+	srv := New(baseTestConfig(newHarness(t), st))
+	st.putErr, st.keepOnErr = errors.New("connection reset"), true
+	if w := do(t, srv, http.MethodPut, "/api/v1/model-providers?restricted=true", adminToken, providersBody("q")); w.Code != http.StatusInternalServerError {
+		t.Fatalf("PUT = %d %s, want 500", w.Code, w.Body)
+	}
+	if !st.restricted[capModelProvider]["q"] {
+		t.Error("q was unrestricted although the document holds it")
 	}
 }

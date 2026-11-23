@@ -482,7 +482,11 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.cfg.Store.CreatePolicy(r.Context(), p)
 	if err != nil {
-		undo()
+		// Lift the restriction only when the policy is known not to exist. A write whose answer was lost may have
+		// committed, and lifting then would leave the policy open to everyone.
+		if _, gerr := s.cfg.Store.GetPolicy(context.WithoutCancel(r.Context()), id); errors.Is(gerr, store.ErrNotFound) {
+			undo()
+		}
 	}
 	if errors.Is(err, store.ErrConflict) {
 		// run_policies.name is UNIQUE — a duplicate name is a

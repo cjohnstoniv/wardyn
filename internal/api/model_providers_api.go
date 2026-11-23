@@ -191,8 +191,12 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	candidate.EffectiveScmHosts = nil
 	candidate.WithheldScmHosts = nil
 	saved, err := s.putSiteConfigGrants(ctx, candidate, plan.change)
-	if err != nil {
-		undo()
+	if err != nil && restricted {
+		// As in handleCreatePolicy: lift only when the stored block is known to hold none of the added providers.
+		now, gerr := s.cfg.Store.GetSiteConfig(context.WithoutCancel(ctx))
+		if gerr == nil && !slices.ContainsFunc(added, func(id string) bool { _, held := modelProviderByID(now.ModelProviders, id); return held }) {
+			undo()
+		}
 	}
 	if writeSiteConfigSaveError(w, r, err) {
 		return

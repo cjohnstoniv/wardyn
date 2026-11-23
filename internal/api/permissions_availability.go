@@ -192,13 +192,14 @@ func (s *Server) writeAvailability(r *http.Request, kind, value string, restrict
 	return s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, restricted, principalFromRequest(r))
 }
 
-// createRestricted reads a create's ?restricted. Absent is false and "true" is true; any other value is refused 400 with
-// reason, so a misspelled flag never creates the resource open.
+// createRestricted reads a create's ?restricted. Absent is false and a single "true" is true; any other value, an empty
+// one or a repeated parameter is refused 400 with reason, so a misspelled flag never creates the resource open.
 func createRestricted(w http.ResponseWriter, r *http.Request, reason string) (restricted, ok bool) {
-	switch r.URL.Query().Get("restricted") {
-	case "":
+	vals, present := r.URL.Query()["restricted"]
+	switch {
+	case !present:
 		return false, true
-	case "true":
+	case len(vals) == 1 && vals[0] == "true":
 		return true, true
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reason, `restricted: only "true" is accepted`)

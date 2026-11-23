@@ -226,7 +226,7 @@ the ADMIN pre-authorized.
 - Security admins are bound like anyone; only the admin tier is exempt.
 - On `image`, the one widening kind, the restriction also switches that one image on for the people listed while the kind stays off for every other image.
 - Turning "Only…" on with no allow row naming the value is refused `400`, since the resource would then be available to nobody.
-- A policy created with `POST /policies?restricted=true`, or a model provider added with `PUT /model-providers?restricted=true`, is restricted before it is written, so it is never available to everyone, not even for a moment. Until its list is written through `POST /permissions/grants`, only admins may use it. If the restriction cannot be written, nothing is created; if the create fails after it, the restriction is lifted. The console does this whenever "Only these" is chosen on a new policy or provider. An organisation `component` always starts restricted.
+- A policy created with `POST /policies?restricted=true`, or a model provider added with `PUT /model-providers?restricted=true`, is restricted before it is written, so it is never available to everyone, not even for a moment. Until its list is written through `POST /permissions/grants`, only admins may use it. If the restriction cannot be written, nothing is created; if the create fails after it, the restriction is lifted once the resource is confirmed absent. The console does this whenever "Only these" is chosen on a new policy or provider. An organisation `component` always starts restricted.
 - `egress_host` and `secret` values can't be restricted (`400`).
 - The value is the rest of the path, so an image ref's slashes need no escaping.
 
