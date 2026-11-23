@@ -266,3 +266,34 @@ func TestDeviceIdentity_SkipLinesStayWithinTheRunnersStderrBudget(t *testing.T) 
 		t.Fatalf("%d bytes, %d lines, last %q", errb.Len(), len(lines), lines[len(lines)-1])
 	}
 }
+
+// The edges of the skip-line cap: 8 refusals get a line each and no count; the 9th is the first counted.
+func TestDeviceIdentity_SkipLineEdges(t *testing.T) {
+	dir, _ := identityFixture(t)
+	args := []string{"device-identity", "--state-dir", dir, "--org-sha256", orgHash(), "--signed-at", identityNow.Format(time.RFC3339)}
+	for _, c := range []struct {
+		refused int
+		lines   int
+		last    string
+	}{
+		{maxSkipLines - 1, maxSkipLines - 1, "skipped the identity"},
+		{maxSkipLines, maxSkipLines, "skipped the identity"},
+		{maxSkipLines + 1, maxSkipLines + 1, "1 more identities skipped"},
+		{maxSkipLines + 2, maxSkipLines + 1, "2 more identities skipped"},
+	} {
+		var ids []deviceIdentity
+		for i := 0; i < c.refused; i++ {
+			ids = append(ids, deviceIdentity{Chain: [][]byte{{byte(i + 1)}}, sign: func([]byte) ([]byte, error) { return nil, errors.New("refused") }})
+		}
+		ids = append(ids, deviceIdentity{Chain: [][]byte{{200}}, sign: func([]byte) ([]byte, error) { return []byte{7}, nil }})
+		d, out, errb := deviceDeps(fakeSource{ids: ids})
+		var rep runnerwire.DeviceCertReport
+		if code := run(context.Background(), args, d); code != 0 || json.Unmarshal(out.Bytes(), &rep) != nil || len(rep.Proofs) != 1 {
+			t.Fatalf("%d refused: exit %d, stdout %q", c.refused, code, out)
+		}
+		lines := strings.Split(strings.TrimSpace(errb.String()), "\n")
+		if len(lines) != c.lines || !strings.Contains(lines[len(lines)-1], c.last) {
+			t.Fatalf("%d refused: %d stderr lines (want %d), last %q", c.refused, len(lines), c.lines, lines[len(lines)-1])
+		}
+	}
+}

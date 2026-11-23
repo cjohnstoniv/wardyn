@@ -268,34 +268,71 @@ func proofOf(n int, b byte) runnerwire.DeviceCertProof {
 	return runnerwire.DeviceCertProof{Chain: [][]byte{bytes.Repeat([]byte{b}, n)}, SignedAt: certNow, Signature: []byte{b}}
 }
 
-// A lone identity over the cap leaves an empty report, which still goes out; the boundary is the cap itself.
+// withSize is a large identity that makes its report, beside small, exactly target bytes: the chain's length steps the
+// size by 4 and the signing time's fraction by 2 to 5, so some pair lands on any target.
+func withSize(t *testing.T, small runnerwire.DeviceCertProof, target int) runnerwire.DeviceCertProof {
+	t.Helper()
+	for d := 0; d <= 4; d++ {
+		at := certNow
+		if d > 0 {
+			at = certNow.Add(time.Duration(int(1e9) / pow10(d))) // a fraction of d digits
+		}
+		build := func(n int) runnerwire.DeviceCertProof {
+			big := proofOf(n, 3)
+			big.SignedAt = at
+			return big
+		}
+		size := func(n int) int { return reportSize(t, []runnerwire.DeviceCertProof{small, build(n)}) }
+		lo, hi := 0, target // the smallest n whose report reaches the target
+		for lo < hi {
+			if mid := (lo + hi) / 2; size(mid) >= target {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		for n := lo; n < lo+3; n++ {
+			if size(n) == target {
+				return build(n)
+			}
+		}
+	}
+	t.Fatalf("no identity makes a report of %d bytes", target)
+	return runnerwire.DeviceCertProof{}
+}
+
+func pow10(d int) int {
+	n := 1
+	for ; d > 0; d-- {
+		n *= 10
+	}
+	return n
+}
+
+// A lone identity over the cap leaves an empty report, which still goes out; a report of exactly the cap goes out
+// whole, and one byte more loses an identity.
 func TestMarshalWithinCap_LoneIdentityAndExactBoundary(t *testing.T) {
 	data, err := marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{proofOf(devicecert.MaxEventBytes, 1)}})
 	var rep runnerwire.DeviceCertReport
 	if err != nil || len(data) > devicecert.MaxEventBytes || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 0 {
 		t.Fatalf("lone oversize identity: %d bytes, %+v, %v", len(data), rep, err)
 	}
-	// The largest identity that still fits beside a small one is kept; one byte more group of base64 drops it.
 	small := proofOf(10, 2)
-	fit := 0
-	for n := devicecert.MaxEventBytes*3/4 - 1000; reportSize(t, []runnerwire.DeviceCertProof{small, proofOf(n, 3)}) <= devicecert.MaxEventBytes; n++ {
-		fit = n
-	}
-	if fit == 0 {
-		t.Fatal("no identity fits")
-	}
-	if gap := devicecert.MaxEventBytes - reportSize(t, []runnerwire.DeviceCertProof{small, proofOf(fit, 3)}); gap < 0 || gap >= 4 {
-		t.Fatalf("the largest fitting report is %d bytes under the cap, want under 4", gap)
-	}
-	data, err = marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{small, proofOf(fit, 3)}})
-	rep = runnerwire.DeviceCertReport{}
-	if err != nil || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 2 {
-		t.Fatalf("a report within the cap lost an identity: %d proofs, %v", len(rep.Proofs), err)
-	}
-	data, err = marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{small, proofOf(fit+1, 3)}})
-	rep = runnerwire.DeviceCertReport{}
-	if err != nil || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 1 || rep.Proofs[0].Signature[0] != 2 {
-		t.Fatalf("a report over the cap kept %d proofs, want only the small one", len(rep.Proofs))
+	for _, c := range []struct {
+		size, proofs int
+	}{{devicecert.MaxEventBytes, 2}, {devicecert.MaxEventBytes + 1, 1}} {
+		big := withSize(t, small, c.size)
+		data, err := marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{small, big}})
+		rep := runnerwire.DeviceCertReport{}
+		if err != nil || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != c.proofs {
+			t.Fatalf("a report of %d bytes kept %d proofs (%v), want %d", c.size, len(rep.Proofs), err, c.proofs)
+		}
+		if c.proofs == 2 && len(data) != devicecert.MaxEventBytes {
+			t.Fatalf("the report sent is %d bytes, want exactly %d", len(data), devicecert.MaxEventBytes)
+		}
+		if c.proofs == 1 && (len(data) > devicecert.MaxEventBytes || rep.Proofs[0].Signature[0] != 2) {
+			t.Fatalf("over the cap by one: %d bytes, kept %v", len(data), rep.Proofs[0].Signature)
+		}
 	}
 }
 
