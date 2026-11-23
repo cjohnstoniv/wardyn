@@ -57,10 +57,15 @@ const (
 		"and the host the member-safe provider view names (providerHost); the token and refused-form hosts are withheld"
 )
 
+// keepAssistant is assistant.settings.write's before and after: the block as assistantAuditView writes it.
+const keepAssistant = "two purpose switches, the run-history switch, record kinds, and each mark's provider id, purposes and " +
+	"model names; it holds no host, path, URL or policy spec"
+
 // auditHostReviewed are the host-shaped fields served as recorded, per action. A host-shaped field on a
 // documented row must be withheld by auditHostViews or named here.
 var auditHostReviewed = map[string]auditHostKeep{
 	"approval.decide":                            {[]string{"host"}, keepEgress},
+	"assistant.settings.write":                   {[]string{"after", "before"}, keepAssistant},
 	"authz.denied":                               {[]string{"host"}, keepEgress},
 	"branding.write":                             {[]string{"support_url"}, "the support link every console reader is shown"},
 	"cli.session.create":                         {[]string{"machine"}, keepMachine},

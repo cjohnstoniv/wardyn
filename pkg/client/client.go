@@ -144,6 +144,9 @@
 //     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
 //     remove one from a group. Authenticated by its own bearer
 //     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
+//   - /api/v1/assistant      — the assistant: its settings (super admin) and a person's
+//     sessions (preview, start, messages, edits, the event stream, end). A console
+//     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /metrics, /readyz      — the operator's scrape and readiness probes

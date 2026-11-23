@@ -90,6 +90,9 @@ var kernelDoors = map[string][]string{
 	"handleMeCapabilities": {"capFeature"},
 	// A sponsor entering a service identity's run: service_attach, asked with the operator step off (F6).
 	"sponsorMayEnter": {"capFeature"},
+	// The assistant: every marked provider the person is not granted is denied to them, for GET /me/assistant,
+	// the preview and start, and each later message, edit and tool call of a session.
+	"assistantLimitsFor": {"capModelProvider"},
 	// The key and sign-in doors, answered as an unknown provider (D-6).
 	"denyProviderAsMissing": {"capModelProvider"},
 	// A workspace read hides a pin to a provider the reader may not use.

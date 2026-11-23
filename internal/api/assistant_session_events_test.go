@@ -69,7 +69,7 @@ func TestAssistantStreamOverTheCapIsRefused(t *testing.T) {
 	r.Header.Set("Accept", "text/event-stream")
 	r.AddCookie(cookie)
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	wantReason(t, w, http.StatusTooManyRequests, reasonAssistantRateLimited)
 	wantReason(t, doSSO(t, srv, http.MethodGet, assistantPath(s.ID, "/events"), cookie, ""), http.StatusTooManyRequests, reasonAssistantRateLimited)
 }
