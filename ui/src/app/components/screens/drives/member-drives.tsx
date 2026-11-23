@@ -352,7 +352,7 @@ export function MemberDrives() {
             <AlertDialogDescription>
               {toWrite
                 ? toWrite.on
-                  ? T.TEAM_WRITE_ALLOW_BODY(toWrite.drive.team_unit_name || "its unit")
+                  ? T.TEAM_WRITE_ALLOW_BODY(toWrite.drive.team_unit_name || T.TEAM_WRITE_ITS_UNIT)
                   : T.TEAM_WRITE_STOP_BODY(toWrite.drive.owner)
                 : ""}
             </AlertDialogDescription>

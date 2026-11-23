@@ -34,6 +34,8 @@ export const MEMBER_DRIVES = {
   TEAM_WRITE_ALLOW_TITLE: (drive: string) => `Let members write to ${drive}?`,
   TEAM_WRITE_ALLOW_BODY: (unit: string) =>
     `Once it's on, any run started by someone in ${unit}, or in a unit below it, can change what the others' runs read and run. Runs that were created before this keep the access they had.`,
+  /** The allow body's unit when the list gives no name for it. */
+  TEAM_WRITE_ITS_UNIT: "its unit",
   TEAM_WRITE_ALLOW: "Allow writing",
   TEAM_WRITE_STOP: "Make read-only",
   /** The word beside the write switch, as the board draws it. Hidden from assistive tech: the switch says it. */
