@@ -9,9 +9,11 @@
 // theirs are told apart by owner. A server with no pool storage answers 501, which this reports as
 // "unavailable" rather than as an empty list.
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { HttpError } from "../../../lib/api/core";
 import { remoteRunners, runnerPools } from "../../../lib/api/runner-pools";
 import type { RemoteRunnerView, RunnerPool, RunnerPoolCatalogueEntry, RunnerPoolMemberView } from "../../../lib/types/runner-pools";
+import { queryClient } from "../../../lib/query-client";
 import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
 
 export interface MyPool {
@@ -31,46 +33,59 @@ export interface MyPoolsData {
   remote: RemoteRunnerView[];
 }
 
+const MY_POOLS_KEY = ["settings", "my-pools"];
+const MY_POOLS_KEY_STR = JSON.stringify(MY_POOLS_KEY);
 const EMPTY: MyPoolsData = { status: "loading", pools: [], defaultId: null, defaultGone: false, remote: [] };
 
 export function useMyPools(enabled: boolean): MyPoolsData & { reload: () => void } {
   const me = usePrincipal();
   const oversees = useSecurityOperator();
-  const [data, setData] = React.useState<MyPoolsData>(EMPTY);
-  const seq = React.useRef(0);
-  const read = React.useCallback(async () => {
-    const mine = ++seq.current;
-    try {
-      const [list, remote] = await Promise.all([runnerPools.list(), remoteRunners.listMine()]);
-      const own = list.pools.filter((p) => p.scope === "user" && (!oversees || p.owner === me));
-      const pools = await Promise.all(
-        own.map(async (entry): Promise<MyPool> => {
-          const [pool, members] = await Promise.all([runnerPools.get(entry.id), runnerPools.members(entry.id)]);
-          return { entry, pool, members };
-        }),
-      );
-      if (mine !== seq.current) return;
-      const def = list.default;
-      setData({
-        status: "ready",
-        pools,
-        remote,
-        defaultId: def?.selection === "personal_default" && def.pool_id && !def.reason && pools.some((p) => p.pool.id === def.pool_id) ? def.pool_id : null,
-        defaultGone: def?.selection === "personal_default" && !!def.reason,
-      });
-    } catch (e) {
-      if (mine !== seq.current) return;
-      setData((d) => ({ ...d, status: e instanceof HttpError && e.status === 501 ? "unavailable" : "error" }));
-    }
-  }, [me, oversees]);
-  // A read that was in flight when the card went away must not set state.
-  const abandon = React.useCallback(() => {
-    seq.current++;
-  }, []);
+  // One key for the card: the shell's placeholder identity changes when /me answers, so the key leaves it out and
+  // an identity change re-reads under the same key below, keeping the pools on screen.
+  const q = useQuery(
+    {
+      queryKey: MY_POOLS_KEY,
+      enabled,
+      queryFn: async (): Promise<Omit<MyPoolsData, "status">> => {
+        const [list, remote] = await Promise.all([runnerPools.list(), remoteRunners.listMine()]);
+        const own = list.pools.filter((p) => p.scope === "user" && (!oversees || p.owner === me));
+        const pools = await Promise.all(
+          own.map(async (entry): Promise<MyPool> => {
+            const [pool, members] = await Promise.all([runnerPools.get(entry.id), runnerPools.members(entry.id)]);
+            return { entry, pool, members };
+          }),
+        );
+        const def = list.default;
+        return {
+          pools,
+          remote,
+          defaultId: def?.selection === "personal_default" && def.pool_id && !def.reason && pools.some((p) => p.pool.id === def.pool_id) ? def.pool_id : null,
+          defaultGone: def?.selection === "personal_default" && !!def.reason,
+        };
+      },
+    },
+    queryClient,
+  );
+  const { refetch } = q;
+
+  const who = `${me}\u0000${oversees}`;
+  const readFor = React.useRef(who);
   React.useEffect(() => {
-    if (enabled) void read();
-    return abandon;
-  }, [enabled, read, abandon]);
-  const reload = React.useCallback(() => void read(), [read]);
-  return { ...data, reload };
+    if (readFor.current === who) return;
+    readFor.current = who;
+    if (enabled) void queryClient.cancelQueries({ queryKey: MY_POOLS_KEY, exact: true }).then(() => refetch());
+  }, [who, enabled, refetch]);
+
+  // The last failure stays on screen while a re-read is in flight; only a read that answers replaces it.
+  const [held, setHeld] = React.useState<{ key: string; error: unknown } | null>(null);
+  React.useEffect(() => {
+    if (q.isSuccess) setHeld(null);
+    else if (q.isError) setHeld({ key: MY_POOLS_KEY_STR, error: q.error });
+  }, [q.isSuccess, q.isError, q.error]);
+  const err = q.isError ? q.error : held?.key === MY_POOLS_KEY_STR ? held.error : null;
+
+  const reload = React.useCallback(() => void refetch(), [refetch]);
+  const status: MyPoolsData["status"] =
+    err !== null ? (err instanceof HttpError && err.status === 501 ? "unavailable" : "error") : q.data !== undefined ? "ready" : "loading";
+  return { ...EMPTY, ...q.data, status, reload };
 }
