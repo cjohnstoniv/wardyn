@@ -481,8 +481,8 @@ type memberDriveDeletion struct {
 	untouched bool
 }
 
-// memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the
-// drive's owner has a run in STARTING: that run may attach the drive, and would meet the tombstone
+// memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the drive's
+// owner has a run in STARTING, or any person has for a team drive: that run may attach it, and would meet the tombstone
 // as drive_not_found. The refusal is audited as deleteMemberDrive audits its own. deleteMemberDrive
 // reads the same thing again past the tombstone, for a run that starts in between.
 func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, by string) (bool, error) {
@@ -524,7 +524,7 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 	case !ok || d.Backend.RunnerTarget() != s.cfg.RunnerTarget || !s.memberDrivesDeletable(sctx):
 		res.outcome, res.reason = driveReclaimOutcomeFailed, reasonMemberDriveDeleteUnavailable
 	default:
-		// Past the claim, a run of the owner's still STARTING may have re-read this drive before it
+		// Past the claim, a run of the owner's (of anyone's, for a team drive) still STARTING may have re-read it before it
 		// (memberDrivesStillThere) and create the drive's object after the reclaim, so the drive counts
 		// as in use until that run leaves STARTING, and until a create whose run was ended on another
 		// replica stops holding its lease. A run that re-reads later meets the claim.
