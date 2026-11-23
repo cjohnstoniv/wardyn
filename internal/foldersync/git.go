@@ -199,7 +199,7 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
 		return fmt.Errorf("send the git bundle: %w", err)
 	}
-	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch))
+	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch, len(head) == 64))
 	if err != nil {
 		return err
 	}
@@ -392,7 +392,8 @@ const (
 )
 
 // sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
-// dir's repository, or sets one up. Setting up runs in an if condition, so a
+// dir's repository, or sets one up in the bundle's hash (sha256 for a 64-character
+// tip, SHA-1 otherwise). Setting up runs in an if condition, so a
 // failed step fails the send (set -e ignores a failure inside an AND-list).
 //
 // No send removes a .git or anything in one but the marker: another send, or
@@ -420,8 +421,13 @@ const (
 // no longer on the branch once the index is built.
 // GIT_DIR keeps git from walking up into a parent repository when .git is
 // not one.
-func sendGitScript(dir, bundle, branch string) string {
+func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
+	init := "GIT_DEFAULT_HASH=sha1 git init -q --template="
+	if sha256 {
+		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
+		init = "git init -q --template= --object-format=sha256"
+	}
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
 	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
@@ -429,7 +435,7 @@ func sendGitScript(dir, bundle, branch string) string {
 		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 1; fi; " +
 		"mkdir .git 2>/dev/null || :; " +
 		"if [ ! -L .git ] && { [ -d " + m + " ] || { [ -z \"$(ls -A .git 2>/dev/null)\" ] && mkdir " + m + " 2>/dev/null; } || [ -d " + m + " ]; }; then " +
-		"if git init -q --template= && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
+		"if " + init + " && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
 		"git fetch -q --no-tags " + b + " " + ref + " && git cat-file -e \"$t^{commit}\" && " +
 		"s= && if { h=$(git rev-parse -q --verify 'HEAD^{commit}') && { ! git merge-base --is-ancestor \"$h\" \"$t\" || ! git symbolic-ref -q HEAD >/dev/null; }; } || " +
 		"{ p=$(git symbolic-ref -q HEAD) && [ \"$p\" != " + ref + " ] && o=$(git rev-parse -q --verify " + ref + ") && ! git merge-base --is-ancestor \"$o\" \"$t\" && s=$p; }; then " +

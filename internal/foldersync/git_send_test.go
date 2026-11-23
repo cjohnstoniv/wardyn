@@ -26,9 +26,14 @@ type gitRig struct {
 	t                           *testing.T
 	git, bin, lap, bundle, head string
 	sent                        []byte
+	sha256                      bool
 }
 
-func newGitRig(t *testing.T) *gitRig {
+func newGitRig(t *testing.T) *gitRig { return newGitRigHash(t, false) }
+
+// newGitRigHash is newGitRig with a laptop repository of the named hash. It skips when the host's git cannot
+// make a SHA-256 repository (git older than 2.29).
+func newGitRigHash(t *testing.T, sha256 bool) *gitRig {
 	real, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("no git on this machine")
@@ -42,7 +47,7 @@ func newGitRig(t *testing.T) *gitRig {
 		"GIT_AUTHOR_NAME": "Dev", "GIT_AUTHOR_EMAIL": "dev@example.com", "GIT_COMMITTER_NAME": "Dev", "GIT_COMMITTER_EMAIL": "dev@example.com"} {
 		t.Setenv(k, v)
 	}
-	g := &gitRig{t: t, git: real, bin: t.TempDir(), lap: t.TempDir(), bundle: filepath.Join(t.TempDir(), "laptop.bundle")}
+	g := &gitRig{t: t, sha256: sha256, git: real, bin: t.TempDir(), lap: t.TempDir(), bundle: filepath.Join(t.TempDir(), "laptop.bundle")}
 	wrapper := "#!/bin/sh\ns=$1; [ \"$1 ${2:-}\" = 'symbolic-ref -q' ] && s=read-HEAD\n[ \"$1 ${4:-}\" = 'rev-parse refs/heads/feature/x' ] && s=read-branch\n[ \"$s\" = \"${FAIL_GIT:-}\" ] && { echo \"git $1 failed\" >&2; exit 1; }\n" +
 		"[ \"$s\" = \"${HOOK_GIT:-}\" ] && [ ! -e \"$HOOK_SH.ran\" ] && { : >\"$HOOK_SH.ran\"; HOOK_GIT= sh \"$HOOK_SH\"; }\n" + shellQuote(real) +
 		" \"$@\"; rc=$?\n[ \"$s\" = \"${CUT_GIT:-}\" ] && kill -9 $PPID\nexit $rc\n"
@@ -50,7 +55,15 @@ func newGitRig(t *testing.T) *gitRig {
 	if err := os.Chmod(filepath.Join(g.bin, "git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	g.run(g.lap, "init", "-q", "-b", "feature/x")
+	initArgs := []string{"init", "-q", "-b", "feature/x"}
+	if sha256 {
+		initArgs = append(initArgs, "--object-format=sha256")
+		if out, err := exec.Command(real, append([]string{"-C", g.lap}, initArgs...)...).CombinedOutput(); err != nil {
+			t.Skipf("this git cannot make a SHA-256 repository: %v: %s", err, out)
+		}
+	} else {
+		g.run(g.lap, initArgs...)
+	}
 	g.write(g.lap, "main.go", "package main\n")
 	g.run(g.lap, "add", "main.go")
 	g.run(g.lap, "commit", "-q", "-m", "first")
@@ -102,7 +115,7 @@ func (g *gitRig) sh(script string, env ...string) (stdout, stderr string, rc int
 // send uploads the bundle again, as SendGit does, and runs the send.
 func (g *gitRig) send(dir string, env ...string) (string, string, int) {
 	g.write(filepath.Dir(g.bundle), filepath.Base(g.bundle), string(g.sent))
-	return g.sh(sendGitScript(dir, g.bundle, "feature/x"), env...)
+	return g.sh(sendGitScript(dir, g.bundle, "feature/x", g.sha256), env...)
 }
 
 func (g *gitRig) pull(dir string) (string, string, int) {
@@ -170,6 +183,72 @@ func TestSendGitScript_ACutSendIsFinishedByTheNext(t *testing.T) {
 			g.cut(dir, point)
 			out, errs, rc := g.send(dir)
 			g.wantSetUp(dir, out, errs, rc)
+		})
+	}
+}
+
+// A SHA-256 history makes a SHA-256 repository in the sandbox, and a SHA-1 one makes a SHA-1 repository even
+// where the host's default hash is SHA-256.
+func TestSendGitScript_SHA256FreshRepo(t *testing.T) {
+	t.Run("a SHA-256 bundle", func(t *testing.T) {
+		g := newGitRigHash(t, true)
+		dir := g.box(t.TempDir())
+		out, errs, rc := g.send(dir)
+		g.wantSetUp(dir, out, errs, rc)
+		if f := g.run(dir, "rev-parse", "--show-object-format"); f != "sha256" {
+			t.Errorf("the sandbox repository uses %s, want sha256", f)
+		}
+	})
+	t.Run("a SHA-1 bundle on a host whose default is SHA-256", func(t *testing.T) {
+		g := newGitRig(t)
+		t.Setenv("GIT_DEFAULT_HASH", "sha256")
+		dir := g.box(t.TempDir())
+		out, errs, rc := g.send(dir)
+		g.wantSetUp(dir, out, errs, rc)
+		if f := g.run(dir, "rev-parse", "--show-object-format"); f != "sha1" {
+			t.Errorf("the sandbox repository uses %s, want sha1", f)
+		}
+	})
+}
+
+// A sandbox repository of the other hash refuses the send, finished or half made, and no ref is written.
+func TestSendGitScript_HashMismatchWritesNoRef(t *testing.T) {
+	for _, c := range []struct {
+		name            string
+		bundle256, mark bool
+	}{
+		{"a SHA-1 repository and a SHA-256 bundle", true, false},
+		{"a half-made SHA-1 repository and a SHA-256 bundle", true, true},
+		{"a SHA-256 repository and a SHA-1 bundle", false, false},
+		{"a half-made SHA-256 repository and a SHA-1 bundle", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newGitRigHash(t, c.bundle256)
+			dir := g.box(t.TempDir())
+			initArgs := []string{"init", "-q"}
+			if !c.bundle256 {
+				initArgs = append(initArgs, "--object-format=sha256")
+				if out, err := exec.Command(g.git, append([]string{"-C", dir}, initArgs...)...).CombinedOutput(); err != nil {
+					t.Skipf("this git cannot make a SHA-256 repository: %v: %s", err, out)
+				}
+			} else {
+				g.run(dir, initArgs...)
+			}
+			if c.mark {
+				if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, errs, rc := g.send(dir)
+			if rc == 0 || out != "" {
+				t.Fatalf("a send into a repository of the other hash: out %q rc %d stderr %q; want it refused", out, rc, errs)
+			}
+			// Read the files, not through git: a half-made repository of the other hash may not open any more.
+			for _, ref := range []string{"refs/remotes/laptop/feature/x", "refs/heads/feature/x", "packed-refs"} {
+				if exists(filepath.Join(dir, ".git", ref)) {
+					t.Errorf("the refused send wrote %s", ref)
+				}
+			}
 		})
 	}
 }
@@ -290,7 +369,7 @@ func TestSendGitScript_ASendThatLosesARaceMovesNothingBack(t *testing.T) {
 			g.run(g.lap, "bundle", "create", "-q", newer, "refs/heads/feature/x")
 			g.write(dir, "two.go", "package main\n")
 			hooks := t.TempDir()
-			g.write(hooks, "other.sh", sendGitScript(dir, g.bundle, "feature/x"))
+			g.write(hooks, "other.sh", sendGitScript(dir, g.bundle, "feature/x", false))
 			g.write(hooks, "hook.sh", "cp "+shellQuote(newer)+" "+shellQuote(g.bundle)+" && sh "+shellQuote(filepath.Join(hooks, "other.sh"))+" >"+shellQuote(filepath.Join(hooks, "out"))+" 2>&1\n")
 			out, errs, rc := g.send(dir, "HOOK_GIT="+c.at, "HOOK_SH="+filepath.Join(hooks, "hook.sh"))
 			other, _ := os.ReadFile(filepath.Join(hooks, "out"))
@@ -330,7 +409,7 @@ func TestSendGitScript_ABranchMovedWithNoIndexKeepsTheMarker(t *testing.T) {
 	g.sent, _ = os.ReadFile(g.bundle)
 	g.write(dir, "two.go", "package main\n")
 	lock := filepath.Join(dir, ".git", "index.lock")
-	g.write(hooks, "other.sh", sendGitScript(dir, older, "feature/x"))
+	g.write(hooks, "other.sh", sendGitScript(dir, older, "feature/x", false))
 	g.write(hooks, "hook.sh", "sh "+shellQuote(filepath.Join(hooks, "other.sh"))+" >/dev/null 2>&1 && : >"+shellQuote(lock)+"\n")
 	out, errs, rc := g.send(dir, "HOOK_GIT=symbolic-ref", "HOOK_SH="+filepath.Join(hooks, "hook.sh"))
 	if rc == 0 || out != "" || !strings.Contains(errs, gitUnfinished) {
@@ -497,9 +576,9 @@ func TestSendGitScript_ABranchANewerSendMovedIsNotTheSandboxsWork(t *testing.T) 
 			g.run(g.lap, "bundle", "create", "-q", g.bundle, "refs/heads/feature/x")
 			g.sent, _ = os.ReadFile(g.bundle)
 			g.write(dir, "two.go", "package main\n")
-			g.write(hooks, "newer.sh", sendGitScript(dir, g.bundle, "feature/x"))
+			g.write(hooks, "newer.sh", sendGitScript(dir, g.bundle, "feature/x", false))
 			g.write(hooks, "hook.sh", "CUT_GIT=update-ref sh "+shellQuote(filepath.Join(hooks, "newer.sh"))+" >/dev/null 2>&1 || :\n")
-			out, errs, rc := g.sh(sendGitScript(dir, older, "feature/x"), "HOOK_GIT=read-branch", "HOOK_SH="+filepath.Join(hooks, "hook.sh"))
+			out, errs, rc := g.sh(sendGitScript(dir, older, "feature/x", false), "HOOK_GIT=read-branch", "HOOK_SH="+filepath.Join(hooks, "hook.sh"))
 			if rc == 0 || out != "" || !strings.Contains(errs, gitUnfinished) || !exists(filepath.Join(dir, sendGitIncomplete)) {
 				t.Fatalf("the older send: out %q rc %d stderr %q, marker %v; want a failed send saying %q and the marker kept", out, rc, errs, exists(filepath.Join(dir, sendGitIncomplete)), gitUnfinished)
 			}
@@ -586,7 +665,7 @@ func TestSendGitScript_HEADPutBackByAnotherSendStays(t *testing.T) {
 			x := t.TempDir()
 			f := func(n string) string { return shellQuote(filepath.Join(x, n)) }
 			g.write(x, "this.bundle", string(g.sent))
-			g.write(x, "this.sh", sendGitScript(dir, filepath.Join(x, "this.bundle"), "feature/x"))
+			g.write(x, "this.sh", sendGitScript(dir, filepath.Join(x, "this.bundle"), "feature/x", false))
 			g.write(x, "this-hook.sh", ": >"+f("paused")+"\ni=0; while [ ! -e "+f("other.done")+" ] && [ $i -lt 1000 ]; do sleep 0.01; i=$((i+1)); done\n")
 			g.write(x, "other-hook.sh", "[ \"$(git symbolic-ref -q HEAD)\" = refs/heads/feature/x ] || { rm -f \"$0.ran\"; exit 0; }\n"+
 				"y=$(printf 'work\\n' | git hash-object -w --stdin) && tr=$(printf '100644 blob %s\\tagent.txt\\n' \"$y\" | git mktree) && "+
