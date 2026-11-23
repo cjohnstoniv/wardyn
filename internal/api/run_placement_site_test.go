@@ -41,8 +41,9 @@ type siteStore struct {
 }
 
 var (
-	_ store.RunnerPoolStore = (*siteStore)(nil)
-	_ store.OrgSiteStore    = (*siteStore)(nil)
+	_ store.RunnerPoolStore    = (*siteStore)(nil)
+	_ store.OrgSiteStore       = (*siteStore)(nil)
+	_ store.PrincipalPrefStore = (*siteStore)(nil)
 )
 
 func (s *siteStore) ListRunnerPoolCatalogue(context.Context, string, bool) ([]store.RunnerPoolCatalogueRow, error) {
@@ -58,6 +59,11 @@ func (s *siteStore) GetPrincipalPref(context.Context, string, string) (json.RawM
 		return nil, store.ErrNotFound
 	}
 	return json.Marshal(s.personal)
+}
+
+// PutPrincipalPref makes siteStore a PrincipalPrefStore, without which placement reads no personal default.
+func (s *siteStore) PutPrincipalPref(context.Context, string, string, json.RawMessage) error {
+	return nil
 }
 
 func (s *siteStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
