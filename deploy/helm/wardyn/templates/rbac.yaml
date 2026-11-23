@@ -7,8 +7,12 @@ serviceaccount.yaml's automount=false default.
 Verbs are EXACT, not "just in case" — every verb below is a verb the
 substrate actually issues; see internal/runner/k8s/{sandbox,lifecycle,exec,
 canary,driver}.go. In particular:
-  - pods: NO watch. Every wait loop (Exec's Wait, teardown's waitPodsGone)
-    polls with Get/List; none of them use a watch.Interface.
+  - pods: watch, for the pod waits only (#4065). One watch per runs namespace, label-selected to
+    Wardyn's own pods, tells a wait (start, Exec's Wait, teardown's waitPodsGone, the canary) when to
+    read again; the wait still decides on its own pods: get or list. A Role without it (an
+    operator-written one under k8s.rbac.create=false) is not an error: the waits poll as before and
+    wardynd logs one warning per namespace. Like list, the verb is namespace-wide: RBAC does not
+    enforce a label selector.
   - ephemeral-storage: NO new verbs. A run's disk cap is a FIELD on the pod this
     substrate already creates (naming.go's resourceRequirements), and the
     kubelet's eviction verdict comes back through pods: get (lifecycle.go's
@@ -228,7 +232,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "delete", "deletecollection"{{ if $agentSandbox.enabled }}, "patch"{{ end }}]
+    verbs: ["create", "get", "list", "watch", "delete", "deletecollection"{{ if $agentSandbox.enabled }}, "patch"{{ end }}]
 {{- if $agentSandbox.enabled }}
   # Experimental agent-sandbox backend (#3863): the dynamic client creates, reads and removes the Sandbox that
   # owns the agent pod (pods: patch above releases the pod's scheduling gate once read-back passes). No watch,

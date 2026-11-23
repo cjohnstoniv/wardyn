@@ -123,11 +123,14 @@ func (c *startClock) remaining() time.Duration {
 	return max(left, k8sPollInterval)
 }
 
-// poll runs check every k8sPollInterval (backing off to capacityPollMax while the pod waits for room)
-// until it reports done, errs, the clock expires, or ctx ends. check returns whether the pod it just
-// read is waiting for room. Each check runs under a context bounded by remaining, so an API server
-// that never answers cannot hold a read past the budgets.
-func (c *startClock) poll(ctx context.Context, check func(ctx context.Context) (done, waitingForRoom bool, err error)) error {
+// poll runs check every k8sPollInterval (backing off to capacityPollMax while the pod waits for room),
+// or sooner when b rings; while the namespace's pod watch is live it waits up to podWatchResync, or the
+// back-off if longer, between reads, until it reports done, errs, the clock expires, or ctx ends. check
+// returns whether the pod it just read is waiting for room. Each check runs under a context bounded by
+// remaining, so an API server that never answers cannot hold a read past the budgets. While the watch
+// is live the last sleep can pass the clock's end by up to podWatchResync; the next read reports the
+// expiry.
+func (c *startClock) poll(ctx context.Context, b *podBell, check func(ctx context.Context) (done, waitingForRoom bool, err error)) error {
 	interval := k8sPollInterval
 	for {
 		checkCtx, cancel := context.WithTimeout(ctx, c.remaining())
@@ -153,12 +156,8 @@ func (c *startClock) poll(ctx context.Context, check func(ctx context.Context) (
 		} else {
 			interval = k8sPollInterval
 		}
-		t := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return ctx.Err()
-		case <-t.C:
+		if err := b.sleep(ctx, interval, max(interval, podWatchResync)); err != nil {
+			return err
 		}
 	}
 }

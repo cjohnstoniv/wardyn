@@ -26,10 +26,11 @@
 #     C9   every fenced "helm install wardyn" recipe across the front-door
 #          docs carries an age-key source and, with k8s.enabled=true, a
 #          runs-namespace choice (X1a-F1/X1c-F1).
-#     R-02 every internal/runner/k8s `.List(` call has a matching "list" verb
-#          on the chart's Role, and every subresource call (pod logs, ephemeral
-#          containers, exec) has its verbs there too — the one thing a
-#          fake-clientset k8s test can never catch.
+#     R-02 every internal/runner/k8s `.List(` and `.Watch(` call has its verb
+#          on both charts' runs Roles (wardyn, wardyn-runnerd), every subresource
+#          call (pod logs, ephemeral containers, exec) has its verbs there too,
+#          and neither Role reads secrets — the one thing a fake-clientset k8s
+#          test can never catch.
 #
 #   MOVED to scripts/test-up-probes.sh (they drive a scripts/up.sh function
 #   against a stub — behavioural tests that belong beside that file's other
@@ -357,7 +358,7 @@ rm -f "${WORK}"/c9-block-*
 [ "${n_blocks}" -ge 3 ] || fail "found only ${n_blocks} fenced 'helm install wardyn' blocks across the front-door docs — this guard would check nothing (C9)"
 pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice and a k8s.proxyImage"
 
-# ── R-02: the chart's Role grants every "list" verb the k8s driver issues ───
+# ── R-02: both charts' runs Roles grant every list and watch the k8s driver issues ───
 #
 # R-02 (v0.7.4) — the chart's Role and the substrate's API calls drifted apart
 # silently: the orphan sweep started LISTING Secrets and NetworkPolicies while
@@ -366,43 +367,60 @@ pass "C9 every fenced 'helm install wardyn' block carries an age-key source and,
 # clientset, which enforces no RBAC at all. This reads the verbs the substrate
 # actually issues out of the code and requires the rendered rule to carry them.
 #
-# Scope: the `list` verb on the namespaced Role, keyed on the RESOURCE each
-# `.List(` call is made on. Deliberately not a full verb audit — it pins the one
-# axis that has now drifted once, and the one a fake clientset can never see.
-# Ceiling: the extractor below requires the accessor and `.List(` on the SAME
-# line; a call split across lines is invisible to it.
+# Scope: the `list` and `watch` verbs on both charts' runs-namespace Roles (the
+# server's k8s-runner Role, runnerd's -runs Role), keyed on the API group and
+# RESOURCE each `.List(` or `.Watch(` call is made on, plus R-02b's subresource
+# rows. One negative: no rule whose resources name secrets or * may grant get,
+# list, watch or *. Deliberately not a full verb audit.
+# Ceilings: the extractor requires the accessor and the call on the SAME line, so
+# a call split across lines is invisible to it. Rules are read from the
+# templates in one shape only (apiGroups first; one-line flow lists of
+# double-quoted items); any other shape fails the guard rather than being
+# skipped.
 k8s_src="${ROOT}/internal/runner/k8s"
-rbac="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml"
-[ -d "${k8s_src}" ] && [ -f "${rbac}" ] || fail "internal/runner/k8s or the chart's rbac.yaml moved — this guard would check nothing (R-02)"
-# Map a client-go typed accessor to the RBAC resource name it needs a verb on.
+# Both charts' runs-namespace Roles: the server's k8s-runner Role and runnerd's <name>-runs Role, which
+# scripts/test-helm-runnerd.sh holds to the server's rule for rule (plus pods: patch).
+rbacs="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml ${ROOT}/deploy/helm/wardyn-runnerd/templates/rbac.yaml"
+[ -d "${k8s_src}" ] || fail "internal/runner/k8s moved — this guard would check nothing (R-02)"
+for f in ${rbacs}; do
+  [ -f "${f}" ] || fail "${f#"${ROOT}/"} moved — this guard would check nothing (R-02)"
+done
+# Map a client-go typed accessor to the RBAC API group and resource it needs a verb on.
 # Non-test sources only: a _test.go file lists PVCs through the FAKE clientset
 # to assert the driver never created one, which is a test's own bookkeeping and
 # not a verb wardynd ever issues (and granting pvc:list would be wrong).
 k8s_files="$(find "${k8s_src}" -maxdepth 1 -name '*.go' ! -name '*_test.go' | sort)"
 [ -n "${k8s_files}" ] || fail "no non-test .go files under internal/runner/k8s — this guard would check nothing (R-02)"
 # Namespaced accessors only (they take the namespace): a cluster-scoped list such as Nodes() is
-# the ClusterRole's to grant, never this Role's.
-# shellcheck disable=SC2086
-grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]+\)\.List\(' ${k8s_files} \
-  | sed -E 's/.*\(\)\.([A-Za-z]+)\(.*/\1/' | sort -u > "${WORK}/k8s-list-kinds"
-[ -s "${WORK}/k8s-list-kinds" ] || fail "no .List( call found in internal/runner/k8s — this guard would check nothing (R-02)"
-# The Role's rules only (not the cluster-scoped ClusterRole): granting a verb
-# there instead would satisfy a whole-file grep while widening every namespace.
-awk '/^---/{r=0} /^kind: Role$/{r=1} r' "${rbac}" > "${WORK}/rbac-role"
-[ -s "${WORK}/rbac-role" ] || fail "rbac.yaml no longer contains a 'kind: Role' block — this guard would check nothing (R-02)"
-while read -r kind; do
-  [ -n "${kind}" ] || continue
-  # Pods -> pods, Secrets -> secrets, NetworkPolicies -> networkpolicies.
-  res="$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')"
-  # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
-  # exits on its first match while the upstream grep is still writing, the
-  # upstream takes SIGPIPE, and pipefail reports the pipeline failed even
-  # when the match was found.
-  _rule_block="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" || true)"
-  grep -q '"list"' <<<"${_rule_block}" \
-    || fail "internal/runner/k8s calls .${kind}(...).List(...) but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"list\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
-done < "${WORK}/k8s-list-kinds"
-pass "R-02 every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"
+# the ClusterRole's to grant, never this Role's. Each output line is "<API group> <Kind>", the core
+# group spelled "core".
+for pair in list:List watch:Watch; do
+  verb="${pair%%:*}" call="${pair#*:}"
+  # shellcheck disable=SC2086
+  grep -hoE "(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]+\)\.${call}\(" ${k8s_files} \
+    | sed -E 's/^(CoreV1|NetworkingV1|RbacV1)\(\)\.([A-Za-z]+)\(.*/\1 \2/; s/^CoreV1 /core /; s/^NetworkingV1 /networking.k8s.io /; s/^RbacV1 /rbac.authorization.k8s.io /' \
+    | sort -u > "${WORK}/k8s-${verb}-kinds"
+  [ -s "${WORK}/k8s-${verb}-kinds" ] || fail "no .${call}( call found in internal/runner/k8s — this guard would check nothing (R-02)"
+done
+# A chart's runs-namespace Role blocks only: kind: Role named *-k8s-runner (server) or *-runs (runnerd).
+# Never the ClusterRole, runnerd's own-namespace Role (secrets get, by design), its workloads Role or
+# the server's ground-truth sensor Role (patch on one named Secret).
+runs_role() {
+  awk 'function flush() { if (role && runs) printf "%s", buf; buf = ""; role = 0; runs = 0 }
+       /^---/ { flush(); next }
+       { buf = buf $0 "\n" }
+       /^kind: Role$/ { role = 1 }
+       /^  name: .*-(k8s-runner|runs)$/ { runs = 1 }
+       END { flush() }' "$1"
+}
+# One line per rule of a runs Role: its field lines joined, comment and template lines dropped, so each
+# check reads one whole rule whatever its field order (resourceNames before verbs, apiGroups not first).
+rules() {
+  awk '/^[[:space:]]*#/ { next }
+       /^  - [A-Za-z]+:/ { if (r != "") print r; r = $0; next }
+       r != "" && /^    [A-Za-z]+:/ { r = r " " $0 }
+       END { if (r != "") print r }' "$1"
+}
 
 # R-02b (#1426) — the same drift on subresources, which no `.List(` ever names:
 # dropping `pods/log get`, `pods/ephemeralcontainers update` or `pods/exec` from
@@ -415,16 +433,58 @@ pass "R-02 every resource internal/runner/k8s lists has a 'list' verb on the cha
 sub_rows='\.GetLogs\(@pods/log@get
 \.UpdateEphemeralContainers\(@pods/ephemeralcontainers@update
 remotecommand\.New(SPDY|WebSocket)Executor\(@pods/exec@get create'
-while IFS='@' read -r pat res verbs; do
-  # shellcheck disable=SC2086
-  _calls="$(grep -hE "${pat}" ${k8s_files} | grep -vE '^[[:space:]]*//' || true)"
-  [ -n "${_calls}" ] || fail "no call matching '${pat}' in internal/runner/k8s — this guard would check nothing (R-02b)"
-  _rule_block="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" || true)"
-  for verb in ${verbs}; do
-    grep -q "\"${verb}\"" <<<"${_rule_block}" \
-      || fail "internal/runner/k8s issues a call matching '${pat}' but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"${verb}\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02b)"
+for f in ${rbacs}; do
+  rel="${f#"${ROOT}/"}"
+  runs_role "${f}" > "${WORK}/rbac-role"
+  [ -s "${WORK}/rbac-role" ] || fail "${rel} no longer contains its runs-namespace Role — this guard would check nothing (R-02)"
+  # Flow-style lists only: a block-style list would hide its items from every check below.
+  if grep -qE '^ +(apiGroups|resources|resourceNames|verbs):[[:space:]]*$' "${WORK}/rbac-role"; then
+    fail "${rel}'s runs Role writes a rule field as a block-style list — R-02 reads flow-style [...] lists only (R-02)"
+  fi
+  # One shape only, so no rule can hide from the checks below: after `rules:`, every line is a comment, a
+  # one-line template directive, or one field written as a one-line flow list of double-quoted items.
+  _odd="$(awk '/^rules:$/ { r = 1; next } r' "${WORK}/rbac-role" \
+    | grep -vE '^[[:space:]]*#|^\{\{-? ?(if|else|end|with|range)[^}]*\}\}$' \
+    | sed -E 's/\{\{-? ?(if|else|end)( [^}]*)?\}\}//g; /^    resourceNames: /s/\{\{[^}]*\}\}//g' \
+    | grep -vE '^(  - apiGroups|    (resources|resourceNames|verbs)): \[("[^"]*"|, )*\]$' || true)"
+  [ -z "${_odd}" ] || fail "${rel}'s runs Role has a rule line outside the one shape R-02 reads (apiGroups first; one-line flow lists of double-quoted items): ${_odd} (R-02)"
+  rules "${WORK}/rbac-role" > "${WORK}/rbac-rules"
+  # CAPTURE, THEN MATCH — never `grep | grep -q` under `pipefail`: `grep -q`
+  # exits on its first match while the upstream grep is still writing, the
+  # upstream takes SIGPIPE, and pipefail reports the pipeline failed even
+  # when the match was found.
+  for verb in list watch; do
+    while read -r grp kind; do
+      [ -n "${kind}" ] || continue
+      if [ "${grp}" = core ]; then grp=""; fi
+      # Pods -> pods, Secrets -> secrets, NetworkPolicies -> networkpolicies.
+      res="$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')"
+      _verbs="$(grep -F "apiGroups: [\"${grp}\"]" "${WORK}/rbac-rules" | grep -F "resources: [\"${res}\"]" | grep -oE 'verbs: \[[^]]*\]' || true)"
+      grep -q "\"${verb}\"" <<<"${_verbs}" \
+        || fail "internal/runner/k8s issues ${verb} on ${kind} but ${rel}'s runs Role grants no \"${verb}\" verb on \"${res}\" in API group \"${grp}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
+    done < "${WORK}/k8s-${verb}-kinds"
   done
-done <<<"${sub_rows}"
-pass "R-02b every subresource call internal/runner/k8s makes has its verbs on the chart's Role"
+  # No Secret read verb, in any configuration: get, list or watch on secrets reads every Secret in the
+  # runs namespace in plaintext, the control plane's own included when runs share its namespace. Every
+  # rule whose resources name secrets or * counts, in any API group; apiGroups first, the other fields in any order.
+  _sec="$(grep -E 'resources: \[[^]]*"(secrets|\*)"' "${WORK}/rbac-rules" || true)"
+  [ -n "${_sec}" ] || fail "${rel}'s runs Role has no secrets rule — this guard would check nothing (R-02)"
+  _sec_verbs="$(grep -oE 'verbs: \[[^]]*\]' <<<"${_sec}" || true)"
+  if grep -qE '"(get|list|watch|\*)"' <<<"${_sec_verbs}"; then
+    fail "${rel}'s runs Role grants a read verb on secrets — the k8s driver never reads a Secret body and the Role must not allow it (R-02)"
+  fi
+  while IFS='@' read -r pat res verbs; do
+    # shellcheck disable=SC2086
+    _calls="$(grep -hE "${pat}" ${k8s_files} | grep -vE '^[[:space:]]*//' || true)"
+    [ -n "${_calls}" ] || fail "no call matching '${pat}' in internal/runner/k8s — this guard would check nothing (R-02b)"
+    _verbs="$(grep -F 'apiGroups: [""]' "${WORK}/rbac-rules" | grep -F "resources: [\"${res}\"]" | grep -oE 'verbs: \[[^]]*\]' || true)"
+    for verb in ${verbs}; do
+      grep -q "\"${verb}\"" <<<"${_verbs}" \
+        || fail "internal/runner/k8s issues a call matching '${pat}' but ${rel}'s runs Role grants no \"${verb}\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02b)"
+    done
+  done <<<"${sub_rows}"
+done
+pass "R-02 both charts' runs Roles grant every list and watch internal/runner/k8s issues, and no Secret read verb"
+pass "R-02b every subresource call internal/runner/k8s makes has its verbs on both charts' runs Roles"
 
 echo "test-claims-match-code: self-test PASS"

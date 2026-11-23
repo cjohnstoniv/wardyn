@@ -479,7 +479,9 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
@@ -617,7 +619,9 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName s
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	var lastReason string
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil

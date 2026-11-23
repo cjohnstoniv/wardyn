@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -486,12 +487,18 @@ func teardownWaitBound(grace *int64) time.Duration {
 // teardownWaitFor is teardownWaitBound; a test shortens it to reach the wait's timeout.
 var teardownWaitFor = teardownWaitBound
 
-// waitPodsGone polls until no pod matches listOpts (the H3 ordering guard).
-// A timeout here is a real error, not best-effort: proceeding without this
-// proof reopens the open-egress window. teardown is idempotent, so a retry
-// completes the sweep once the pod actually terminates.
+// waitPodsGone waits until no pod matches listOpts (the H3 ordering guard). Only the List decides: a
+// pod watch event only wakes it early. A timeout here is a real error, not best-effort: proceeding
+// without this proof reopens the open-egress window. teardown is idempotent, so a retry completes the
+// sweep once the pod actually terminates.
 func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.ListOptions, timeout time.Duration) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+	sel, err := labels.Parse(listOpts.LabelSelector)
+	if err != nil {
+		return fmt.Errorf("k8s: pod selector %q: %w", listOpts.LabelSelector, err)
+	}
+	b := d.podWatch.bell(ns, func(p *corev1.Pod) bool { return sel.Matches(labels.Set(p.Labels)) })
+	defer b.stop()
+	return pollUntil(ctx, b, k8sPollInterval, timeout, func(pollCtx context.Context) (bool, error) {
 		pods, err := d.clientset.CoreV1().Pods(ns).List(pollCtx, listOpts)
 		if err != nil {
 			return false, err
@@ -524,7 +531,9 @@ func (d *Driver) stopConfirming(ctx context.Context, waitErr error, list func() 
 
 // waitPodGone blocks until pod no longer exists; another pod of its name is not it.
 func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, timeout time.Duration) error {
-	return wait.PollUntilContextTimeout(ctx, k8sPollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
+	b := d.podBell(ns, pod.Name)
+	defer b.stop()
+	return pollUntil(ctx, b, k8sPollInterval, timeout, func(pollCtx context.Context) (bool, error) {
 		got, err := d.clientset.CoreV1().Pods(ns).Get(pollCtx, pod.Name, metav1.GetOptions{})
 		if isNotFound(err) {
 			return true, nil

@@ -7,7 +7,8 @@ k8s.readNodes on. Change a verb there and here together, or the test fails.
 Order: Helm creates ClusterRole, ClusterRoleBinding, Role and RoleBinding before any Deployment, on install
 and upgrade alike, so the image never starts ahead of a verb it needs. With rbac.create=false the operator
 must apply them before the image starts, including on an upgrade that adds a verb: runnerd's boot access
-review refuses to start otherwise.
+review refuses to start otherwise. pods: watch is the one exception: without it the pod waits poll and
+runnerd starts (internal/runner/k8s/podwatch.go).
 */}}
 {{- if .Values.rbac.create -}}
 {{- range $ns := include "runnerd.runsNamespaces" . | fromJsonArray }}
@@ -21,7 +22,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["create", "get", "list", "delete", "deletecollection"]
+    verbs: ["create", "get", "list", "watch", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["update"]

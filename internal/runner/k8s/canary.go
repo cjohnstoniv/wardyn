@@ -16,7 +16,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -202,7 +201,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, ns, phaseName string, denyA
 // waitCanaryTerminal polls until the canary container Terminates (returns its exit code) or hits a
 // fast-path terminal Waiting reason (returns an error), bounded by canaryWaitTimeout.
 func (d *Driver) waitCanaryTerminal(ctx context.Context, ns, podName string) (reachedRunning bool, exitCode int32, err error) {
-	pollErr := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	pollErr := pollUntil(ctx, b, k8sPollInterval, canaryWaitTimeout, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(ns).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
