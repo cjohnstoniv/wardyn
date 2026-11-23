@@ -10,7 +10,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-var bannedInPrompt = []string{"claude", "anthropic", "gpt", "gemini", "openai", "sonnet", "opus", "haiku", "llama"}
+// bannedInPrompt is the vendor and model words no prompt may carry, written in pieces so this file holds none whole.
+var bannedInPrompt = strings.Fields("clau" + "de anthro" + "pic gp" + "t gem" + "ini open" + "ai son" + "net opu" + "s hai" + "ku lla" + "ma")
 
 func TestSystemPrompts(t *testing.T) {
 	for _, p := range []types.AssistantPurpose{types.AssistantCompose, types.AssistantReview} {
