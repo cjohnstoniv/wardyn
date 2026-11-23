@@ -37,16 +37,21 @@ type Options struct {
 // Reader reads one stream and applies every rule of it before a caller sees an entry's bytes. Next
 // returns entries in order; its io.EOF comes only after the manifest has been read and matched.
 type Reader struct {
-	o        Options
-	lim      Limits
-	roots    []string
-	cr       *countingReader
-	tr       *tar.Reader
-	d        *digest
-	index    int
-	last     string
-	links    map[string]bool
-	gitDirs  map[string]bool
+	o     Options
+	lim   Limits
+	roots []string
+	cr    *countingReader
+	tr    *tar.Reader
+	d     *digest
+	index int
+	last  string
+	// lastLink is the previous entry when it was a symlink. In the stream's order every descendant of an
+	// entry follows it at once, so only that entry can be a later path's ancestor: the reader keeps no
+	// per-entry state, and its memory grows with the path's depth, never the entry count.
+	lastLink string
+	// gitOpen is the git directories (a directory holding HEAD) the current path is inside, outermost
+	// first. It is kept only for a scan.
+	gitOpen  []string
 	cur      *entry
 	inflated int64
 	m        Manifest
@@ -62,8 +67,7 @@ func NewReader(src io.Reader, o Options) (*Reader, error) {
 	}
 	lim := o.Limits.withDefaults()
 	cr := &countingReader{r: src, max: lim.MaxBytes}
-	return &Reader{o: o, lim: lim, roots: roots, cr: cr, tr: tar.NewReader(cr), d: newDigest(),
-		links: map[string]bool{}, gitDirs: map[string]bool{}}, nil
+	return &Reader{o: o, lim: lim, roots: roots, cr: cr, tr: tar.NewReader(cr), d: newDigest()}, nil
 }
 
 // Next finishes the entry before it (its bytes are read to the end, through the digest and the scan) and
@@ -103,13 +107,12 @@ func (r *Reader) Next() (Header, io.Reader, error) {
 	}
 	r.index++
 	r.last = h.Path
-	switch h.Type {
-	case TypeSymlink:
-		r.links[h.Path] = true
-	case TypeFile:
-		if path.Base(h.Path) == "HEAD" {
-			r.gitDirs[path.Dir(h.Path)] = true
-		}
+	r.lastLink = ""
+	if h.Type == TypeSymlink {
+		r.lastLink = h.Path
+	}
+	if r.o.Detect != nil {
+		r.trackGit(h)
 	}
 	e := &entry{r: r, h: h, src: r.tr, hash: sha256.New()}
 	if r.o.Detect != nil && h.Type == TypeFile {
@@ -207,12 +210,20 @@ func (r *Reader) check(th *tar.Header) (Header, error) {
 	case Excluded(h.Path, r.o.Set.Exclude):
 		return Header{}, at("a path the move leaves out")
 	}
-	for q := path.Dir(h.Path); q != "."; q = path.Dir(q) {
-		if r.links[q] {
-			return Header{}, at("passes through the symlink entry %q", q)
-		}
+	if r.lastLink != "" && under(h.Path, r.lastLink) {
+		return Header{}, at("passes through the symlink entry %q", r.lastLink)
 	}
 	return h, nil
+}
+
+// trackGit leaves the git directories h is not inside, and opens the one whose HEAD h is.
+func (r *Reader) trackGit(h Header) {
+	for n := len(r.gitOpen); n > 0 && !under(h.Path, r.gitOpen[n-1]); n = len(r.gitOpen) {
+		r.gitOpen = r.gitOpen[:n-1]
+	}
+	if h.Type == TypeFile && path.Base(h.Path) == "HEAD" {
+		r.gitOpen = append(r.gitOpen, path.Dir(h.Path))
+	}
 }
 
 // readManifest reads the line after the archive's end and matches it with what was read.

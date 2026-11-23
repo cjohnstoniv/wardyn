@@ -65,19 +65,15 @@ func (r *Reader) startGit(p string) *gitFeed {
 	return g
 }
 
-// inGitObjects splits p, a path under some git directory's objects/, into that directory and the rest.
+// inGitObjects splits p, a path under an open git directory's objects/, into that directory and the rest.
+// The outermost such directory wins.
 func (r *Reader) inGitObjects(p string) (gitDir, rest string, ok bool) {
-	for i := 0; ; {
-		j := strings.Index(p[i:], "/objects/")
-		if j < 0 {
-			return "", "", false
+	for _, gd := range r.gitOpen {
+		if rest, ok := strings.CutPrefix(p, gd+"/objects/"); ok {
+			return gd, rest, true
 		}
-		gd := p[:i+j]
-		if r.gitDirs[gd] {
-			return gd, p[i+j+len("/objects/"):], true
-		}
-		i += j + 1
 	}
+	return "", "", false
 }
 
 // gitPointer reads a .git file, "gitdir: <path>", and refuses a path outside the carried roots.
