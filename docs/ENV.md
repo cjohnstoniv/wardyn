@@ -1480,6 +1480,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The account needs `create` on `serviceaccounts/token` for itself (bind it with `resourceNames`). At each proxy refresh the control plane trades the stored token for a 10-minute one with the cluster's TokenRequest API, trusting only the row's CA bundle.
 - The sandbox gets a `~/.kube/config` with the run's own CA and an inert token. Neither the stored token nor a minted one enters the sandbox.
 - The proxy's door holds each request to the row's namespaces and access (`read` is `GET` only), allows discovery, and refuses cluster-wide resources, Secrets, token requests, `exec`, `attach`, `port-forward`, the API server proxy, ephemeral containers and impersonation.
+- With `write`, pods and workloads must set `automountServiceAccountToken: false` and may not mount or read a Secret, since what a pod prints is readable through its log. They are sent as JSON, a patch may not touch the pod spec (replace the whole object instead), and a JSON Patch is refused.
 - `access: restart` reads like `read` and admits one change: what `kubectl rollout restart` sends to a named deployment in `apps/v1`.
 - That is one strategic merge patch, at most 4 KiB with no `Content-Encoding`, that sets only the `kubectl.kubernetes.io/restartedAt` pod-template annotation (query: none, or `fieldManager=kubectl-rollout`). Anything else is refused with a `403`.
 - The shape was verified against kubectl v0.32.2. A kubectl that shapes the patch differently is refused.

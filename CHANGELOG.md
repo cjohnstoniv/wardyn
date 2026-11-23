@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A run whose kubectl may write can no longer create or replace a pod or workload that mounts a service account token or reads a Secret, and then read it back through the pod's log. Such a pod must set `automountServiceAccountToken: false`. A patch may no longer change a pod or workload's pod spec, and a JSON Patch to one is refused: replace the whole object instead.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

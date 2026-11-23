@@ -19,7 +19,10 @@ package proxy
 // would put a cluster credential, or a shell, inside the sandbox: core Secrets,
 // a service account's token request, exec, attach, port-forward, the API
 // server's proxy, ephemeral containers, any protocol upgrade, and any
-// impersonation header.
+// impersonation header. A write may not create or replace a pod, or a workload
+// that carries a pod spec, unless it sets automountServiceAccountToken: false
+// and mounts or reads no Secret, nor patch one's pod spec, since what the pod
+// prints is readable through its log (kube_api_door_podspec.go).
 
 import (
 	"context"
@@ -232,7 +235,11 @@ func headerHasToken(h http.Header, name, token string) bool {
 
 // serveKubeAPI is the door: judge, resolve, forward.
 func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string, port int) {
-	if err := p.kube.admit(r.Method, adoRawPath(r), r.Header); err != nil {
+	err := p.kube.admit(r.Method, adoRawPath(r), r.Header)
+	if err == nil {
+		err = p.kube.admitPodSpec(r, adoRawPath(r))
+	}
+	if err != nil {
 		p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
 		return
 	}

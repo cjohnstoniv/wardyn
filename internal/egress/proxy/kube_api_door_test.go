@@ -242,13 +242,88 @@ func TestKubeAPI_RefusesOutsideTheRow(t *testing.T) {
 	}
 }
 
-// A row that says write may change its own namespaces.
+// A row that says write may change its own namespaces. A workload's body is
+// judged by TestKubeAPI_PodSpecWrites.
 func TestKubeAPI_WriteInsideTheRow(t *testing.T) {
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		h := newKubeHarness(t, kubeOpts{write: true, trustCA: true})
-		if rec := h.tunnel(t, m, "/apis/apps/v1/namespaces/team-b/deployments/web"); rec.Code != http.StatusOK {
+		if rec := h.tunnel(t, m, "/api/v1/namespaces/team-b/configmaps/web"); rec.Code != http.StatusOK {
 			t.Errorf("%s: status %d body %s", m, rec.Code, rec.Body)
 		}
+	}
+}
+
+// A write of a pod, or of a workload's pod template, is forwarded only when it
+// sets automountServiceAccountToken: false and names no Secret: what the pod
+// prints is readable through its log. A patch that touches the pod spec is
+// refused, since the door cannot see what the object already mounts.
+func TestKubeAPI_PodSpecWrites(t *testing.T) {
+	const (
+		ct      = "Content-Type: application/json"
+		mergeCT = "Content-Type: application/merge-patch+json"
+		pods    = "/api/v1/namespaces/team-a/pods"
+		ok      = `"automountServiceAccountToken":false,"containers":[{"name":"app","image":"busybox"}]`
+	)
+	pod := func(spec string) string {
+		return `{"apiVersion":"v1","kind":"Pod","metadata":{"name":"p"},"spec":{` + spec + `}}`
+	}
+	type tc struct {
+		name, method, target, body string
+		write, admitted            bool
+		hdr                        []string
+	}
+	for _, c := range []tc{
+		{"no automount field", http.MethodPost, pods, pod(`"containers":[{"name":"app","image":"busybox"}]`), true, false, []string{ct}},
+		{"automount true", http.MethodPost, pods, pod(`"automountServiceAccountToken":true,"containers":[]`), true, false, []string{ct}},
+		{"automount false, no secrets", http.MethodPost, pods, pod(ok), true, true, []string{ct}},
+		{"a replace with automount false", http.MethodPut, pods + "/p", pod(ok), true, true, []string{ct}},
+		{"a secret volume", http.MethodPost, pods, pod(ok + `,"volumes":[{"name":"s","secret":{"secretName":"db"}}]`), true, false, []string{ct}},
+		{"a projected secret", http.MethodPost, pods, pod(ok + `,"volumes":[{"name":"s","projected":{"sources":[{"secret":{"name":"db"}}]}}]`), true, false, []string{ct}},
+		{"a projected serviceAccountToken", http.MethodPost, pods, pod(ok + `,"volumes":[{"name":"t","projected":{"sources":[{"serviceAccountToken":{"path":"token"}}]}}]`), true, false, []string{ct}},
+		{"secretKeyRef env", http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"app","env":[{"name":"P","valueFrom":{"secretKeyRef":{"name":"db","key":"p"}}}]}]`), true, false, []string{ct}},
+		{"envFrom secretRef", http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"initContainers":[{"name":"i","envFrom":[{"secretRef":{"name":"db"}}]}]`), true, false, []string{ct}},
+		{"a key in another case", http.MethodPost, pods, pod(ok + `,"Volumes":[{"name":"s","Secret":{"secretName":"db"}}]`), true, false, []string{ct}},
+		{"a repeated automount key", http.MethodPost, pods, pod(ok + `,"AutomountServiceAccountToken":true`), true, false, []string{ct}},
+		{"a Deployment template with a secret volume", http.MethodPost, "/apis/apps/v1/namespaces/team-b/deployments",
+			`{"kind":"Deployment","spec":{"template":{"spec":{` + ok + `,"volumes":[{"name":"s","secret":{"secretName":"db"}}]}}}}`, true, false, []string{ct}},
+		{"a Deployment template that is clean", http.MethodPost, "/apis/apps/v1/namespaces/team-b/deployments",
+			`{"kind":"Deployment","spec":{"template":{"spec":{` + ok + `}}}}`, true, true, []string{ct}},
+		{"a CronJob nested template", http.MethodPost, "/apis/batch/v1/namespaces/team-a/cronjobs",
+			`{"kind":"CronJob","spec":{"jobTemplate":{"spec":{"template":{"spec":{"containers":[{"name":"app"}]}}}}}}`, true, false, []string{ct}},
+		{"a pod template", http.MethodPost, "/api/v1/namespaces/team-a/podtemplates", `{"kind":"PodTemplate","template":{"spec":{}}}`, true, false, []string{ct}},
+		{"a YAML body", http.MethodPost, pods, pod(ok), true, false, []string{"Content-Type: application/yaml"}},
+		{"an encoded body", http.MethodPost, pods, pod(ok), true, false, []string{ct, "Content-Encoding: gzip"}},
+		{"a JSON Patch to pods", http.MethodPatch, pods + "/p", `[{"op":"add","path":"/metadata/labels/a","value":"b"}]`, true, false,
+			[]string{"Content-Type: application/json-patch+json"}},
+		{"a merge patch adding a secret volume", http.MethodPatch, "/apis/apps/v1/namespaces/team-a/deployments/web",
+			`{"spec":{"template":{"spec":{"automountServiceAccountToken":false,"volumes":[{"name":"s","secret":{"secretName":"db"}}]}}}}`, true, false, []string{mergeCT}},
+		{"a merge patch to the pod spec", http.MethodPatch, pods + "/p", `{"spec":{"containers":[{"name":"app","image":"evil"}]}}`, true, false, []string{mergeCT}},
+		{"a merge patch that nulls the template", http.MethodPatch, "/apis/apps/v1/namespaces/team-a/deployments/web", `{"spec":{"template":null}}`, true, false, []string{mergeCT}},
+		{"a strategic merge directive", http.MethodPatch, "/apis/apps/v1/namespaces/team-a/deployments/web", `{"spec":{"$patch":"replace","replicas":1}}`, true, false,
+			[]string{"Content-Type: application/strategic-merge-patch+json"}},
+		{"a merge patch to labels", http.MethodPatch, pods + "/p", `{"metadata":{"labels":{"a":"b"}}}`, true, true, []string{mergeCT}},
+		{"a merge patch to replicas", http.MethodPatch, "/apis/apps/v1/namespaces/team-a/deployments/web", `{"spec":{"replicas":2}}`, true, true, []string{mergeCT}},
+		{"an over-cap body", http.MethodPost, pods, pod(ok + `,"hostname":"` + strings.Repeat("a", kubePodSpecMaxBody) + `"`), true, false, []string{ct}},
+		{"a read-only grant", http.MethodPost, pods, pod(ok), false, false, []string{ct}},
+		{"a configmap is not judged", http.MethodPost, "/api/v1/namespaces/team-a/configmaps", `{"data":{"a":"b"}}`, true, true, []string{ct}},
+		{"GET pods log", http.MethodGet, pods + "/p/log", "", true, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newKubeHarness(t, kubeOpts{write: c.write, trustCA: true})
+			rec := h.tunnelBody(t, c.method, c.target, c.body, c.hdr...)
+			if !c.admitted {
+				h.mustRefuse(t, c.name, rec, kubeAPIRefused)
+				return
+			}
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status %d body %s", rec.Code, rec.Body)
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if len(h.bodies) != 1 || h.bodies[0] != c.body {
+				t.Errorf("the API server got %q, want the judged body", h.bodies)
+			}
+		})
 	}
 }
 
