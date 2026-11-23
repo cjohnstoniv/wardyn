@@ -39,8 +39,27 @@ const componentVMTPM = "vmtpm"
 // of them reaches it.
 const vmtpmStep = "tpm"
 
-// winVMMinMemoryMiB is the smallest memory cap a Windows VM run is given.
+// winVMMinMemoryMiB is the least guest memory a Windows VM boots with: Windows 11's 4 GB minimum.
+// It is the guest's share after qemu.Memory's split, not the run's cap.
 const winVMMinMemoryMiB = 4096
+
+// winGuestMiB is the guest memory a run cap gives a VM; a cap qemu.Memory refuses gives none.
+func winGuestMiB(capMiB int64) int64 {
+	guestMiB, _, err := qemu.Memory(capMiB)
+	if err != nil {
+		return 0
+	}
+	return guestMiB
+}
+
+// winVMMinCapMiB is the smallest run memory cap whose guest share reaches winVMMinMemoryMiB.
+func winVMMinCapMiB() int64 {
+	c := int64(winVMMinMemoryMiB)
+	for winGuestMiB(c) < winVMMinMemoryMiB {
+		c++
+	}
+	return c
+}
 
 // WinVMConfig turns Windows VM sandboxes on; ProbeWindowsVM fills it.
 type WinVMConfig struct {
@@ -114,8 +133,8 @@ func (d *Driver) refuseWinVMSpec(spec runner.SandboxSpec) error {
 		return errors.New("docker: a Windows VM sandbox takes no secret env: it has no guest agent to hand it to")
 	case !spec.Interactive:
 		return errors.New("docker: a Windows VM sandbox is desktop-only: it takes no task or background run")
-	case spec.Resources.MemoryMiB < winVMMinMemoryMiB:
-		return fmt.Errorf("docker: a Windows VM sandbox needs a memory cap of at least %d MiB; this run has %d", winVMMinMemoryMiB, spec.Resources.MemoryMiB)
+	case winGuestMiB(spec.Resources.MemoryMiB) < winVMMinMemoryMiB:
+		return fmt.Errorf("docker: a Windows VM sandbox needs %d MiB of guest memory, which takes a run memory cap of at least %d MiB; this run has %d", winVMMinMemoryMiB, winVMMinCapMiB(), spec.Resources.MemoryMiB)
 	case spec.Resources.DiskMiB > 0 && !spec.Resources.DiskMiBSoft:
 		return errors.New("docker: a Windows VM run can't enforce a disk limit; remove disk_mib")
 	}

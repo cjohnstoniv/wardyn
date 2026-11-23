@@ -162,8 +162,9 @@ func TestRefuseWinVMSpec(t *testing.T) {
 		"record":      {func(*runner.SandboxSpec) {}, "never recorded"},
 		"secret env":  {func(s *runner.SandboxSpec) { s.SecretEnv = map[string]string{"TOKEN": "x"} }, "no secret env"},
 		"task":        {func(s *runner.SandboxSpec) { s.Interactive = false }, "desktop-only"},
-		"low memory":  {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 4095 }, "at least 4096 MiB"},
-		"no memory":   {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 0 }, "at least 4096 MiB"},
+		"low memory":  {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 5118 }, "cap of at least 5119 MiB"},
+		"4096 cap":    {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 4096 }, "cap of at least 5119 MiB"},
+		"no memory":   {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 0 }, "cap of at least 5119 MiB"},
 		"hard disk":   {func(s *runner.SandboxSpec) { s.Resources.DiskMiB = 1024 }, "disk limit"},
 		"linux spec":  {func(s *runner.SandboxSpec) { s.MachineKind = types.MachineLinuxVM }, "unknown machine kind"},
 		"windows off": {nil, "does not offer Windows VM sandboxes"},
@@ -195,6 +196,15 @@ func TestRefuseWinVMSpec(t *testing.T) {
 				t.Fatalf("a refused Windows VM created %d containers", n)
 			}
 		})
+	}
+	// 5119 MiB is the smallest cap whose guest share is 4096 MiB; one MiB less is refused above.
+	if g, _, err := qemu.Memory(5119); err != nil || g != 4096 || winVMMinCapMiB() != 5119 {
+		t.Fatalf("qemu.Memory(5119) = %d, %v; winVMMinCapMiB = %d; want a 4096 MiB guest at 5119", g, err, winVMMinCapMiB())
+	}
+	edge := winSpec()
+	edge.Resources.MemoryMiB = 5119
+	if err := newWinRig(t).d.refuseWinVMSpec(edge); err != nil {
+		t.Fatalf("refuseWinVMSpec refused a 5119 MiB cap (4096 MiB guest): %v", err)
 	}
 	// A disk that names a backing file is refused before it is converted or booted.
 	r := newWinRig(t)
