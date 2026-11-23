@@ -34,7 +34,8 @@ func registerOutageFlags() outageFlags {
 }
 
 // validate refuses a WARDYN_LAPSE_RECOVERY_GRACE that is negative or above 2h, a WARDYN_LAPSE_MASS_SHARE outside
-// 1..100 and a WARDYN_LAPSE_MASS_MIN below 1. An unregistered field is skipped.
+// 1..100, a WARDYN_LAPSE_MASS_MIN below 1 and a WARDYN_ORPHAN_SWEEP_HOLD that is negative or above 24h. An
+// unregistered field is skipped.
 func (o outageFlags) validate() error {
 	if o.lapseRecoveryGrace != nil {
 		if g := *o.lapseRecoveryGrace; g < 0 || g > maxLapseRecoveryGrace {

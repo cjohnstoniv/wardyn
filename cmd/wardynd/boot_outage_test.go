@@ -57,4 +57,13 @@ func TestStoreHealthTrackerIsWired(t *testing.T) {
 	if !strings.Contains(src, "StoreHealth:") {
 		t.Fatal("api.Config must carry StoreHealth:")
 	}
+	for _, want := range []string{
+		"LapseMassSharePct: orZero(f.outage.lapseMassShare)",
+		"LapseMassMin: orZero(f.outage.lapseMassMin)",
+		"OrphanSweepHold: orZero(f.outage.orphanSweepHold)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("main.go must hand the run lease config %q", want)
+		}
+	}
 }
