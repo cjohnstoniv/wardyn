@@ -96,6 +96,13 @@ func (h *runnerHarness) drawReactor(t *testing.T, f fenceSet, draws ...draw) *dr
 			Name: proxyContainerName, ContainerID: fmt.Sprintf("containerd://p%d", n),
 			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, Ready: !fenced,
 		}}
+		// The config-staging init container exited before the proxy started, as on a kubelet: the terminal
+		// arm needs a terminated status for every container the spec declares.
+		initID := fmt.Sprintf("containerd://i%d", n)
+		p.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+			Name: stageProxyConfigInitName, ContainerID: initID,
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed", ContainerID: initID}},
+		}}
 		if err := h.cs.Tracker().Add(p); err != nil {
 			return true, nil, err
 		}
