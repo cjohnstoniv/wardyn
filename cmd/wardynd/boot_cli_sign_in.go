@@ -17,14 +17,15 @@ import (
 // cliSignInFlags are CLI sign-in's settings (docs/ENV.md), off by default; see api.CLISignInConfig. A
 // bootFlags built without registering them, as a test does, leaves the pointers nil, which reads as off.
 type cliSignInFlags struct {
-	enabled, paste, fileStore *bool
-	ttl, idle                 *time.Duration
+	enabled, paste, fileStore, codeEntry *bool
+	ttl, idle                            *time.Duration
 }
 
 func registerCLISignInFlags() cliSignInFlags {
 	return cliSignInFlags{
 		enabled:   flagBool("cli-sign-in", "WARDYN_CLI_SIGN_IN", false, "let wardyn login sign a CLI in through the console, which needs SSO (default false)"),
 		paste:     flagBool("cli-paste-sign-in", "WARDYN_CLI_PASTE_SIGN_IN", false, "let wardyn login --no-browser sign in by pasting a code from the console, on a computer with no browser (default false)"),
+		codeEntry: flagBool("cli-sign-in-code-entry", "WARDYN_CLI_SIGN_IN_CODE_ENTRY", false, "make the approve page ask for the code wardyn login printed instead of showing it, and refuse an approval without it (default false)"),
 		fileStore: flagBool("cli-file-store", "WARDYN_CLI_FILE_STORE", true, "let a computer with no keychain keep its CLI sign-in in a file readable only by its owner, capped at 7 days; off refuses it (default true)"),
 		ttl:       flagDuration("cli-session-ttl", "WARDYN_CLI_SESSION_TTL", 0, "how long a CLI sign-in lasts from approval (duration; 0 = 30 days; 1h to 90 days)"),
 		idle:      flagDuration("cli-session-idle", "WARDYN_CLI_SESSION_IDLE", 0, "end a CLI sign-in that has not renewed for this long (duration; 0 = 7 days; at most the TTL)"),
@@ -57,7 +58,7 @@ func (c cliSignInFlags) config(oidcRedirectURL string) api.CLISignInConfig {
 		u.Path, u.RawPath = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), "/auth/callback"), ""
 		origin = types.CLIOrigin(u)
 	}
-	return api.CLISignInConfig{Enabled: orZero(c.enabled), Paste: orZero(c.paste),
+	return api.CLISignInConfig{Enabled: orZero(c.enabled), Paste: orZero(c.paste), CodeEntry: orZero(c.codeEntry),
 		FileStoreOff: c.fileStore != nil && !*c.fileStore, SessionTTL: orZero(c.ttl), SessionIdle: orZero(c.idle), Origin: origin}
 }
 

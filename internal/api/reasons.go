@@ -490,6 +490,7 @@ const (
 	reasonCLISignInUsed              = "cli_sign_in_used"              // the sign-in link was already approved, denied or redeemed
 	reasonCLISignInExpired           = "cli_sign_in_expired"           // the sign-in link expired
 	reasonCLIAdminNeedsSession       = "cli_admin_needs_session"       // wardyn login --admin without a live CLI sign-in of the approver on that computer
+	reasonCLISignInCodeMismatch      = "cli_sign_in_code_mismatch"     // an approval without the code the CLI printed while WARDYN_CLI_SIGN_IN_CODE_ENTRY is on
 	reasonCLISignInInvalid           = "cli_sign_in_invalid"           // the token call's code, verifier, proof or request is not valid
 	reasonCLISessionInvalid          = "cli_session_invalid"           // the CLI session cannot refresh: unknown, ended, expired, idle, cut, reused or a bad proof
 	reasonCLISessionNotFound         = "cli_session_not_found"         // no such live CLI session of the caller

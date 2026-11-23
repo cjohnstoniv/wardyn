@@ -5,6 +5,7 @@ package types
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"net"
 	"net/url"
@@ -111,6 +112,8 @@ type CLISignInCreateResponse struct {
 	ID        uuid.UUID `json:"id"`
 	UserCode  string    `json:"user_code"`
 	ExpiresIn int       `json:"expires_in"` // seconds; 600
+	// CodeEntry says the approve page asks for UserCode instead of showing it (WARDYN_CLI_SIGN_IN_CODE_ENTRY).
+	CodeEntry bool `json:"code_entry,omitempty"`
 }
 
 // CLISignInView is GET /api/v1/me/cli-sign-ins/{id}: what the approve page shows. The lifetimes are
@@ -135,6 +138,8 @@ type CLISignInView struct {
 	SessionTTLSeconds  int64 `json:"session_ttl_seconds"`
 	SessionIdleSeconds int64 `json:"session_idle_seconds"`
 	AccessTTLSeconds   int64 `json:"access_ttl_seconds"`
+	// CodeEntry says the person must type the code their terminal printed; UserCode is then empty.
+	CodeEntry bool `json:"code_entry,omitempty"`
 }
 
 // CLISignInApproveResponse answers POST /api/v1/me/cli-sign-ins/{id}/approve. Code is K, single use:
@@ -143,6 +148,22 @@ type CLISignInApproveResponse struct {
 	Code          string `json:"code"`
 	CodeExpiresIn int    `json:"code_expires_in"` // seconds: 60 loopback, 300 paste
 	RedirectURL   string `json:"redirect_url,omitempty"`
+}
+
+// CLISignInApproveRequest is the body of POST /api/v1/me/cli-sign-ins/{id}/approve while the approve page
+// asks for the code (CLISignInView.CodeEntry). Otherwise the body is not read.
+type CLISignInApproveRequest struct {
+	UserCode string `json:"user_code"`
+}
+
+// CLIUserCodeMatches reports whether typed is the user code code as a person types it: any letter case,
+// with or without the hyphen and spaces. An empty code matches nothing.
+func CLIUserCodeMatches(code, typed string) bool {
+	norm := func(s string) []byte {
+		return []byte(strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(s)))
+	}
+	want := norm(code)
+	return len(want) > 0 && subtle.ConstantTimeCompare(want, norm(typed)) == 1
 }
 
 // CLISignInDenyResponse answers POST /api/v1/me/cli-sign-ins/{id}/deny. For loopback the console page

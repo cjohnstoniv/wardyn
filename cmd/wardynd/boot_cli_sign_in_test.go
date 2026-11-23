@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,35 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/cliprofile"
 )
+
+// TestCLISignInCodeEntryDefaultsOff pins WARDYN_CLI_SIGN_IN_CODE_ENTRY through the real flag parser: off
+// when unset or empty, on when set to true.
+func TestCLISignInCodeEntryDefaultsOff(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	on := "true"
+	for _, c := range []struct {
+		name string
+		env  *string // nil: unset
+		want bool
+	}{
+		{"unset", nil, false},
+		{"empty", new(string), false},
+		{"true", &on, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ensureUnset(t, "WARDYN_CLI_SIGN_IN_CODE_ENTRY")
+			if c.env != nil {
+				t.Setenv("WARDYN_CLI_SIGN_IN_CODE_ENTRY", *c.env)
+			}
+			os.Args = []string{"wardynd-test"}
+			resetFlags(t)
+			if got := parseBootFlags().cliSignIn.config("").CodeEntry; got != c.want {
+				t.Fatalf("CodeEntry = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
 
 // CLI sign-in is off unless WARDYN_CLI_SIGN_IN is set, paste-back is off unless WARDYN_CLI_PASTE_SIGN_IN is
 // set, and the file store is allowed unless WARDYN_CLI_FILE_STORE is off. Boot refuses a session TTL outside
@@ -22,7 +52,7 @@ func TestCLISignInFlags(t *testing.T) {
 	d := func(v time.Duration) *time.Duration { return &v }
 	b := func(v bool) *bool { return &v }
 	var unset cliSignInFlags
-	if cfg := unset.config(""); cfg.Enabled || cfg.Paste || cfg.FileStoreOff {
+	if cfg := unset.config(""); cfg.Enabled || cfg.Paste || cfg.FileStoreOff || cfg.CodeEntry {
 		t.Fatalf("unregistered flags = %+v, want everything off and the file store allowed", cfg)
 	}
 	for _, c := range []struct {
@@ -43,8 +73,8 @@ func TestCLISignInFlags(t *testing.T) {
 			t.Errorf("ttl %s idle %s: validate = %v, want refusal naming %q", c.ttl, c.idle, err, c.refused)
 		}
 	}
-	cfg := cliSignInFlags{enabled: b(true), paste: b(true), fileStore: b(false), ttl: d(48 * time.Hour)}.config("https://wardyn.corp.example/wardyn/auth/callback")
-	want := api.CLISignInConfig{Enabled: true, Paste: true, FileStoreOff: true, SessionTTL: 48 * time.Hour, Origin: "https://wardyn.corp.example/wardyn"}
+	cfg := cliSignInFlags{enabled: b(true), paste: b(true), fileStore: b(false), codeEntry: b(true), ttl: d(48 * time.Hour)}.config("https://wardyn.corp.example/wardyn/auth/callback")
+	want := api.CLISignInConfig{Enabled: true, Paste: true, FileStoreOff: true, CodeEntry: true, SessionTTL: 48 * time.Hour, Origin: "https://wardyn.corp.example/wardyn"}
 	if cfg != want {
 		t.Fatalf("config = %+v, want %+v", cfg, want)
 	}

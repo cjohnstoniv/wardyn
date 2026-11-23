@@ -1155,6 +1155,7 @@ start.
 | `cli_sign_in_used` | `410` from the same routes: the sign-in was already approved, denied or redeemed. |
 | `cli_sign_in_expired` | `410` from the same routes: the sign-in is older than 10 minutes. |
 | `cli_admin_needs_session` | `409` from `POST /me/cli-sign-ins/{id}/approve`: a `wardyn login --admin` whose computer holds no live CLI sign-in of the approver with that device key. |
+| `cli_sign_in_code_mismatch` | `403` from `POST /me/cli-sign-ins/{id}/approve` while `WARDYN_CLI_SIGN_IN_CODE_ENTRY` is on: the body's `user_code` is missing or is not the code the terminal printed. The sign-in stays open. |
 | `cli_sign_in_invalid` | `401` from `POST /cli/sign-ins/{id}/token`: the code, the verifier, the device proof or the sign-in is not valid. One answer for all, so it tells a caller nothing. |
 | `cli_session_invalid` | `401` from `POST /cli/sessions/{id}/refresh`: the session is unknown, ended, expired or idle, was cut or reused, or the proof is bad. Sign in again. After a valid device proof, `detail` names the end when the session was signed out (`signed_out`), reached its lifetime (`expired`) or went idle (`idle`); a revoke, a cut, a deactivation or a reuse carries no `detail`. |
 | `cli_session_not_found` | `404` from `DELETE /me/cli-sessions/{id}`: no live CLI session of the caller has that id. |

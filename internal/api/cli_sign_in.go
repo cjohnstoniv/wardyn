@@ -59,6 +59,9 @@ type CLISignInConfig struct {
 	Paste bool
 	// FileStoreOff is WARDYN_CLI_FILE_STORE=off: refuse a CLI that reports the file store.
 	FileStoreOff bool
+	// CodeEntry is WARDYN_CLI_SIGN_IN_CODE_ENTRY: the approve page asks for the user code and an approval
+	// must carry it (cliCodeEntered).
+	CodeEntry bool
 	// SessionTTL and SessionIdle are WARDYN_CLI_SESSION_TTL and WARDYN_CLI_SESSION_IDLE; zero is the
 	// default. Boot bounds them (MinCLISessionTTL..MaxCLISessionTTL, idle at most the TTL).
 	SessionTTL, SessionIdle time.Duration
@@ -232,7 +235,7 @@ func (s *Server) handleCreateCLISignIn(w http.ResponseWriter, r *http.Request) {
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
 	writeJSON(w, http.StatusCreated, types.CLISignInCreateResponse{ID: si.ID, UserCode: si.UserCode,
-		ExpiresIn: int(types.CLISignInRequestLife / time.Second)})
+		ExpiresIn: int(types.CLISignInRequestLife / time.Second), CodeEntry: s.cfg.CLISignIn.CodeEntry})
 }
 
 // pendingCLISignIn loads {id} for the approve page and its two decisions: 404 when unknown, 410 with
@@ -284,11 +287,15 @@ func (s *Server) handleGetCLISignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.cfg.CLISignIn
 	approver := requestAddress(r)
-	writeJSON(w, http.StatusOK, types.CLISignInView{ID: si.ID, Machine: si.Machine, UserCode: si.UserCode, Mode: si.Mode,
+	code := si.UserCode
+	if cfg.CodeEntry {
+		code = ""
+	}
+	writeJSON(w, http.StatusOK, types.CLISignInView{ID: si.ID, Machine: si.Machine, UserCode: code, Mode: si.Mode,
 		Store: si.Store, Admin: si.Admin, RequestAddress: si.RequestAddr, ApproverAddress: approver,
 		AddressMatch: si.RequestAddr == approver, CreatedAt: si.CreatedAt, ExpiresAt: si.ExpiresAt,
 		SessionTTLSeconds: int64(cfg.sessionTTL(si.Store) / time.Second), SessionIdleSeconds: int64(cfg.sessionIdle(si.Store) / time.Second),
-		AccessTTLSeconds: int64(s.cliAccessLife() / time.Second)})
+		AccessTTLSeconds: int64(s.cliAccessLife() / time.Second), CodeEntry: cfg.CodeEntry})
 }
 
 // handleApproveCLISignIn is POST /api/v1/me/cli-sign-ins/{id}/approve. It runs mintGuards unchanged and
@@ -301,6 +308,9 @@ func (s *Server) handleApproveCLISignIn(w http.ResponseWriter, r *http.Request) 
 	}
 	si, ok := s.pendingCLISignIn(w, r)
 	if !ok {
+		return
+	}
+	if s.cfg.CLISignIn.CodeEntry && !s.cliCodeEntered(w, r, si) {
 		return
 	}
 	ctx := r.Context()
@@ -356,6 +366,22 @@ func (s *Server) cliAdminSessionOK(w http.ResponseWriter, r *http.Request, si st
 		return false
 	}
 	return true
+}
+
+// cliCodeEntered is WARDYN_CLI_SIGN_IN_CODE_ENTRY's check: the approval's body names the code the CLI
+// printed. False after the 403 and its audit row; the sign-in stays pending.
+func (s *Server) cliCodeEntered(w http.ResponseWriter, r *http.Request, si store.CLISignIn) bool {
+	var body types.CLISignInApproveRequest
+	if decodeStrictMsg(w, r, &body) == "" && types.CLIUserCodeMatches(si.UserCode, body.UserCode) {
+		return true
+	}
+	data := cliSignInAuditData(si, requestAddress(r))
+	data["reason"] = "code_mismatch"
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r), "cli.sign_in.approve",
+		si.ID.String(), "denied", mustJSON(data)))
+	writeErrorReason(w, http.StatusForbidden, reasonCLISignInCodeMismatch,
+		"this is not the code your terminal printed: type it again, or run wardyn login again")
+	return false
 }
 
 // cliSignInAuditData is the data of the approve and deny rows.

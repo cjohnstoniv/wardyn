@@ -144,7 +144,12 @@ func (c *cliClient) refresh(id uuid.UUID, secret string) *httptest.ResponseRecor
 }
 
 func (e *cliEnv) approve(cookie *http.Cookie, id uuid.UUID) *httptest.ResponseRecorder {
-	return e.req(http.MethodPost, "/api/v1/me/cli-sign-ins/"+id.String()+"/approve", "", cookie, "", "", "")
+	return e.approveWith(cookie, id, "")
+}
+
+// approveWith is approve with a request body, the way the approve page sends the typed code.
+func (e *cliEnv) approveWith(cookie *http.Cookie, id uuid.UUID, body string) *httptest.ResponseRecorder {
+	return e.req(http.MethodPost, "/api/v1/me/cli-sign-ins/"+id.String()+"/approve", "", cookie, "", "", body)
 }
 
 // signIn runs a whole sign-in for cookie's person and returns the client and its grant.
@@ -883,4 +888,94 @@ func TestPG_CLISession_ProviderLogoutRowCarriesTheCount(t *testing.T) {
 	if got := logout(); !strings.Contains(string(got), `"cli_sessions_ended":0`) {
 		t.Fatalf("a repeated provider logout row = %s, want cli_sessions_ended 0", got)
 	}
+}
+
+// pageData is GET /me/cli-sign-ins/{id} as the person's browser reads it, raw and decoded.
+func (e *cliEnv) pageData(id uuid.UUID) (string, types.CLISignInView) {
+	e.t.Helper()
+	w := e.req(http.MethodGet, "/api/v1/me/cli-sign-ins/"+id.String(), "", e.user, "", "", "")
+	if w.Code != http.StatusOK {
+		e.t.Fatalf("approve page = %d %s", w.Code, w.Body)
+	}
+	return w.Body.String(), decodeJSON[types.CLISignInView](e.t, w)
+}
+
+// With the switch off (the default) the approve does not read its body, and neither the create answer nor
+// the page data carry a new key.
+func TestPG_CLISignIn_CodeEntryOffApprovesAsBefore(t *testing.T) {
+	e := newCLIEnv(t)
+	for _, body := range []string{"", `{"user_code":"WRONG-CODE"}`} {
+		c := e.client()
+		w := e.req(http.MethodPost, "/api/v1/cli/sign-ins", "", nil, "", "", c.createBody(nil))
+		if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), "code_entry") {
+			t.Fatalf("create = %d %s, want 201 and no code_entry", w.Code, w.Body)
+		}
+		si := decodeJSON[types.CLISignInCreateResponse](t, w)
+		raw, view := e.pageData(si.ID)
+		if strings.Contains(raw, "code_entry") || view.UserCode != si.UserCode {
+			t.Fatalf("page data = %s, want the code shown and no code_entry", raw)
+		}
+		w = e.approveWith(e.user, si.ID, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("approve with body %q = %d %s, want 200", body, w.Code, w.Body)
+		}
+		ap := decodeJSON[types.CLISignInApproveResponse](t, w)
+		if w := c.token(si.ID, ap.Code); w.Code != http.StatusCreated {
+			t.Fatalf("token = %d %s, want 201", w.Code, w.Body)
+		}
+	}
+}
+
+// With the switch on, an approval needs the code the terminal printed, in either mode.
+func TestPG_CLISignIn_CodeEntryOnNeedsTheTypedCode(t *testing.T) {
+	e := newCLIEnv(t, func(c *Config) { c.CLISignIn.CodeEntry, c.CLISignIn.Paste = true, true })
+	c := e.client()
+	si := c.create(nil)
+	if !si.CodeEntry {
+		t.Fatalf("create = %+v, want code_entry true", si)
+	}
+	raw, view := e.pageData(si.ID)
+	if view.UserCode != "" || !view.CodeEntry || strings.Contains(raw, si.UserCode) {
+		t.Fatalf("page data = %s, want no code and code_entry true", raw)
+	}
+	typed := func(code string) string {
+		b, _ := json.Marshal(types.CLISignInApproveRequest{UserCode: code})
+		return string(b)
+	}
+	for _, body := range []string{"", typed("WRONG-CODE"), typed(""), `{`, `{"user_code":"` + si.UserCode + `","x":1}`} {
+		wantCLIReason(t, e.approveWith(e.user, si.ID, body), http.StatusForbidden, reasonCLISignInCodeMismatch)
+		if _, view := e.pageData(si.ID); !view.CodeEntry {
+			t.Fatalf("page data after a refused approval = %+v, want it still pending", view)
+		}
+		ev := lastAuditEvent(t, e.h.audit.snapshot(), "cli.sign_in.approve")
+		if ev.Outcome != "denied" || !strings.Contains(string(ev.Data), `"reason":"code_mismatch"`) || strings.Contains(string(ev.Data), si.UserCode) {
+			t.Fatalf("audit row for body %q = %s %s, want denied with reason code_mismatch and never the code", body, ev.Outcome, ev.Data)
+		}
+	}
+	lower := strings.ToLower(strings.ReplaceAll(si.UserCode, "-", ""))
+	w := e.approveWith(e.user, si.ID, typed(lower))
+	if w.Code != http.StatusOK {
+		t.Fatalf("approve with the code lower-cased and without its hyphen = %d %s, want 200", w.Code, w.Body)
+	}
+	ap := decodeJSON[types.CLISignInApproveResponse](t, w)
+	if w := c.token(si.ID, ap.Code); w.Code != http.StatusCreated {
+		t.Fatalf("token = %d %s, want 201", w.Code, w.Body)
+	}
+
+	paste := e.client()
+	ps := paste.create(func(r *types.CLISignInCreateRequest) { r.Mode, r.Port = types.CLISignInModePaste, 0 })
+	wantCLIReason(t, e.approveWith(e.user, ps.ID, typed("WRONG-CODE")), http.StatusForbidden, reasonCLISignInCodeMismatch)
+	if w := e.approveWith(e.user, ps.ID, typed(ps.UserCode)); w.Code != http.StatusOK {
+		t.Fatalf("paste approve with its code = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// The code check runs before the admin step-up's, and a right code is necessary, not sufficient.
+func TestPG_CLISignIn_CodeEntryOnCoversTheAdminStepUp(t *testing.T) {
+	e := newCLIEnv(t, func(c *Config) { c.CLISignIn.CodeEntry = true })
+	session := uuid.New()
+	si := e.client().create(func(r *types.CLISignInCreateRequest) { r.Admin, r.SessionID = true, &session })
+	wantCLIReason(t, e.approveWith(e.super, si.ID, ""), http.StatusForbidden, reasonCLISignInCodeMismatch)
+	body, _ := json.Marshal(types.CLISignInApproveRequest{UserCode: si.UserCode})
+	wantCLIReason(t, e.approveWith(e.super, si.ID, string(body)), http.StatusConflict, reasonCLIAdminNeedsSession)
 }
