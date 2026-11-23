@@ -346,7 +346,7 @@ var governSiteElsewhere = map[string]string{
 	"memberResources":           "row: runs_dispatch_ceiling.go boundResources",
 	"uiAppsDenied":              "row: governance_run_doors.go boundUIApps",
 	"inboundAppsDenied":         "row: governance_run_doors.go boundInboundApps",
-	"desktopAppsDeniedWarnings": "test: governance_run_doors_test.go",
+	"desktopAppsDeniedWarnings": "none: a desktop warning that drops nothing; TestBoundUIAppsWarnsADesktopUnderDenyInteractive pins it but does not turn GovernAdminRuns on",
 	"recordLaneVeto":            "row: workspace_admission.go laneVetoedBy",
 	"deniedPlacements":          "test: run_placement_capabilities_test.go",
 	"gitHubOwnTokenDecider":     "test: gh_own_pat_test.go",
