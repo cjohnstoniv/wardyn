@@ -133,6 +133,8 @@ var namespaceCensusColumns = []censusColumn{
 // rows are exempt as a table, except the two policy actions of a running run, which the census reads with its
 // own query (the UI gateway reads a run's UI-app callers from them).
 var namespaceCensusExempt = map[string]string{
+	"inbound_trusts.created_by":                 "the admin who added the trust; it confers nothing, the trust's identity does",
+	"inbound_trusts.subject":                    "an outside provider's sub claim, matched as bytes; never a Wardyn principal",
 	"portal_issuers.created_by":                 "the admin who bound the issuer; this table is the registry the census consults",
 	"run_support_grants.owner_email":            "an email address; a principal is never stored in it",
 	"runner_pending_actions.subject":            "the action's subject kind (run or asserted), not a person",

@@ -74,6 +74,8 @@ type ServiceIdentityChange struct {
 type ServiceIdentityChanged struct {
 	Before, After types.ServiceIdentity
 	TokensRevoked int
+	// TrustsRemoved counts the inbound trusts a sponsor change or a retire deleted with the tokens.
+	TrustsRemoved int
 }
 
 const serviceIdentityCols = `name, description, sponsor, sponsor_since, user_type, created_by, created_at,
@@ -284,6 +286,11 @@ func UpdateServiceIdentityQ(ctx context.Context, tx Querier, name string, ch Ser
 		if _, err = tx.Exec(ctx, `UPDATE service_identities SET sponsor = $2, sponsor_since = clock_timestamp() WHERE name = $1`, name, *ch.Sponsor); err != nil {
 			return ServiceIdentityChanged{}, fmt.Errorf("store: update service identity: %w", err)
 		}
+		// A trust names the identity, not its sponsor: a new sponsor starts with none, as with tokens. Trusts go
+		// before tokens, the lock order of InboundTrustStore, so an admin's trust delete cannot deadlock this.
+		if out.TrustsRemoved, err = removeInboundTrustsOf(ctx, tx, name); err != nil {
+			return ServiceIdentityChanged{}, err
+		}
 		if out.TokensRevoked, err = revokeServiceTokens(ctx, tx, name); err != nil {
 			return ServiceIdentityChanged{}, err
 		}
@@ -318,6 +325,10 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string) (Service
 	if err != nil {
 		return ServiceIdentityChanged{}, err
 	}
+	trusts, err := removeInboundTrustsOf(ctx, tx, name) // before the tokens: InboundTrustStore's lock order
+	if err != nil {
+		return ServiceIdentityChanged{}, err
+	}
 	revoked, err := revokeServiceTokens(ctx, tx, name)
 	if err != nil {
 		return ServiceIdentityChanged{}, err
@@ -329,7 +340,7 @@ func (s PG) RetireServiceIdentity(ctx context.Context, name, by string) (Service
 	if err = tx.Commit(ctx); err != nil {
 		return ServiceIdentityChanged{}, fmt.Errorf("store: commit service identity retire: %w", err)
 	}
-	return ServiceIdentityChanged{Before: before, After: after, TokensRevoked: revoked}, nil
+	return ServiceIdentityChanged{Before: before, After: after, TokensRevoked: revoked, TrustsRemoved: trusts}, nil
 }
 
 func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLive int, t types.APIToken, raw string) (types.APIToken, error) {
@@ -349,7 +360,10 @@ func (s PG) CreateServiceToken(ctx context.Context, name, sponsor string, maxLiv
 		return types.APIToken{}, ErrServiceIdentityInactive
 	}
 	var live int
-	if err = tx.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE principal = $1 AND `+apiTokenLive, types.ServicePrincipalPrefix+name).Scan(&live); err != nil {
+	// Exchanged tokens are capped per trust (CreateExchangedToken), never against the sponsor's own mints.
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM api_tokens WHERE principal = $1 AND `+apiTokenLive+
+		` AND NOT EXISTS (SELECT 1 FROM inbound_trust_tokens l WHERE l.token_id = api_tokens.id)`,
+		types.ServicePrincipalPrefix+name).Scan(&live); err != nil {
 		return types.APIToken{}, fmt.Errorf("store: count service tokens: %w", err)
 	}
 	if live >= maxLive {
@@ -383,7 +397,8 @@ func (s PG) ServiceStillSponsored(ctx context.Context, name, sponsor string, ope
 }
 
 // EraseServiceIdentityAttributionOf clears person as the creator, suspender and retirer of every service
-// identity and as the linker of every token move, and returns how many service identity rows that changed
+// identity, as the linker of every token move, and as the person who set inbound federation, added a trust or last
+// confirmed one, and returns how many service identity rows that changed
 // and, by name, the identities that are not retired and that person still sponsors. A sponsor is never cleared: tokens and runs are checked against it, so such an
 // identity is handed to another sponsor or retired first. A retired identity keeps its last sponsor.
 func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string) (cleared int, sponsored []string, err error) {
@@ -391,6 +406,11 @@ func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string
 		return 0, nil, errors.New("store: erase service identity attribution: a person is required")
 	}
 	err = s.inTx(ctx, func(q Querier) error {
+		// The switch names who last set it. It is cleared first: the switch row comes before identity rows in
+		// InboundTrustStore's lock order.
+		if _, err := q.Exec(ctx, `UPDATE inbound_federation SET updated_by = '' WHERE id AND updated_by = $1`, person); err != nil {
+			return err
+		}
 		tag, err := q.Exec(ctx, `UPDATE service_identities
 			SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
 			    suspended_by = CASE WHEN suspended_by = $1 THEN '' ELSE suspended_by END,
@@ -402,6 +422,17 @@ func (s PG) EraseServiceIdentityAttributionOf(ctx context.Context, person string
 		cleared = int(tag.RowsAffected())
 		// A token move names the person who linked it; clear that too. It is not counted in cleared.
 		if _, err = q.Exec(ctx, `UPDATE api_token_moves SET linked_by = '' WHERE linked_by = $1`, person); err != nil {
+			return err
+		}
+		// A trust names who added it and who last confirmed it. Its rows are locked in id order first, as every
+		// trust writer takes them; neither column confers anything.
+		if _, err := q.Exec(ctx, `SELECT id FROM inbound_trusts WHERE created_by = $1 OR confirmed_by = $1 ORDER BY id FOR UPDATE`, person); err != nil {
+			return err
+		}
+		if _, err := q.Exec(ctx, `UPDATE inbound_trusts
+			SET created_by = CASE WHEN created_by = $1 THEN '' ELSE created_by END,
+			    confirmed_by = CASE WHEN confirmed_by = $1 THEN '' ELSE confirmed_by END
+			WHERE created_by = $1 OR confirmed_by = $1`, person); err != nil {
 			return err
 		}
 		sponsored, err = collect(ctx, q, "list", "sponsored service identities",
