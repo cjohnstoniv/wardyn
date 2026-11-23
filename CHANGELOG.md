@@ -22,6 +22,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   the desktop door to open it. A ceiling whose entry for an app says `desktop` keeps the kind on every policy under it.
   Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
   than its ceiling; its runs still start, with the kind added.
+- The high-availability page says what Wardyn needs from its Postgres: a session-mode connection and a synchronous standby, and what a failover to a standby that lost commits does to sandboxes.
+- The platform tenancy page describes one deployment per business unit as the hard isolation between units, and what it costs.
 
 ### Changed
 
@@ -84,6 +86,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `scripts/verify-release.sh` checks an older release only for the images and files that release shipped, and fails when the Latest release, or `:latest` on the agent images, names anything but the newest final release.
 - A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
 - With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
+- The high-availability page no longer lists the completion-watcher blocker as open: since 0.10.1 only the replica holding a runner's session claims its runs. It also says when a hung database restarts the pod, and what readiness does with several replicas.
 
 ### Security
 
