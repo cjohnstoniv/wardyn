@@ -143,6 +143,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, gtWrite gtTokenWriter) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
+		startSweeperWatchdog(rootCtx, leader, ticks)
 	}
 	// Every replica registers every sweep this install runs, whether or not it
 	// ever holds the sweeper lock, so a follower can see a stopped leader.
