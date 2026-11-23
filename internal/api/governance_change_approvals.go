@@ -89,6 +89,9 @@ func (s *Server) requiredApprovals(ctx context.Context, kind, targetKey string) 
 	if singleDecider(kind) || minimum <= 0 {
 		return 1, false, nil
 	}
+	if kind == govKindApprovalCounts {
+		return s.approvalCountsEditRequired(ctx)
+	}
 	required = minimum
 	if st, ok := s.cfg.Store.(store.GovernanceApprovalStore); ok {
 		n, sec, found, rerr := st.GovernanceApprovalCountFor(ctx, kind)

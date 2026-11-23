@@ -221,6 +221,11 @@ wardyn governance set ci-governance.json          # held writes print as pending
 wardyn governance changes list                    # pending by default; --state applied|rejected|expired|stale
 wardyn governance changes approve <change-id>     # a different human, at the right tier
 wardyn governance changes reject <change-id> --reason "widens egress past the review"
+wardyn governance changes show <change-id> --impact          # who and what approving it would reach
+wardyn governance changes approve <change-id> --reason "..."  # an approval with the approver's reason
+wardyn governance changes take-back <change-id>               # withdraw your own approval while it waits
+wardyn governance approvals-needed get                        # how many approvals each kind needs
+wardyn governance approvals-needed set --file counts.json     # held for the highest count in force
 ```
 
 - `governance set` exits 0 on a pending result and skips `--prune` until every write is decided: run it again then.
@@ -272,6 +277,40 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 - `GET /governance/credential-delivery` lists these rows as `unbuildable`.
 - Setup status shows a `credential_delivery` warning, for operators only. It changes nothing and never blocks.
 - The Runner credentials page does not list the rows. Read `unbuildable` from the `GET`, then set each row to a buildable mode or to refuse.
+
+## Several approvers: `WARDYN_GOVERNANCE_MIN_APPROVALS`
+
+- `WARDYN_GOVERNANCE_MIN_APPROVALS` (1 to 9) is how many distinct people must approve a held change. It is independent of `WARDYN_GOVERNANCE_SECOND_HUMAN`: the switch decides what is held, and the minimum how many approve whatever is held.
+- Unset, approvals work exactly as before. Unsetting it never lowers a change already proposed.
+- A change keeps the count it was proposed with, and a decision needs that count or the minimum, whichever is higher.
+- Distinct people never include the proposer or the admin token. Two accounts that share one email address count as one person.
+- Elevation and image requests and run node records keep one decider.
+- When a kind needs a security admin, one of the approvers must be a super admin or security admin, judged on each approver's role at the last approval.
+- Every approval checks that the target has not changed since the proposal.
+
+**The last approval re-checks everyone.**
+
+- Each approver, the last one included, is judged on their latest sign-in, never on an older browser session that still carries a role the newest sign-in removed.
+- An earlier approval stops counting when its person was deactivated, the personal API token it was given with was revoked, their sessions were revoked, or they lost the role or the unit-admin grant. A role that can't be confirmed drops it too.
+- A CLI refresh or a CLI sign-out never drops an approval.
+- Sign-in records the roles claim on its own from this version. Earlier sign-ins already hold it inside the recorded groups, so they confirm the same role unless that group list was too long to keep in full.
+- Approving again after a drop counts again. A person can take their own approval back while the change waits (`DELETE /governance/changes/{id}/approval`), whatever the minimum is now.
+- A reject by anyone but the proposer needs a reason, and the last approval is refused while the proposer is deactivated.
+
+**Who can approve, and whether the count can be reached.**
+
+- Only people who have signed in can approve. People who never signed in are not counted until they do.
+- "Can't reach" means too few people can still approve, or none of them is a security admin when one is needed.
+- "Can't confirm" means some people cannot be counted: a group list too long to keep in full, or more than 2000 people.
+
+**How many approvals each kind needs.** `GET` and `PUT /governance/approval-counts` (security admins) read and set each kind's count and whether one approver must be a security admin.
+
+- A count is from the minimum to 9. A kind with no count of its own follows the default.
+- A count above the people who can approve its kind is refused (`422` `governance_approval_counts_unreachable`), for every caller.
+- Changes that name a runner, and unit changes that set a mount's host path, are approved by super admins only, so the page counts whichever pool is smaller.
+- A save is refused when the security admins other than its proposer could not approve the next edit at the highest count, so the counts can never lock themselves.
+- A person's edit is always held for the highest count in force, whatever the switch says. The admin token writes directly, recorded as a bypass.
+- With the minimum unset the `PUT` is refused (`409`), and in local mode too (`503`).
 
 ## Export and restore
 

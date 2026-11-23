@@ -1122,6 +1122,10 @@ start.
 | `governance_change_proposer_inactive` | `POST /governance/changes/{id}/approve` (409): the last approval, while the person who proposed the change is deactivated. |
 | `governance_change_reason_required` | `POST /governance/changes/{id}/reject` (400): a change needing more approvals is rejected by someone other than its proposer, with no reason. |
 | `governance_change_approval_not_found` | `DELETE /governance/changes/{id}/approval` (404): the caller holds no approval of the change that counts. |
+| `governance_approval_counts_minimum_unset` | `PUT /governance/approval-counts` (409): `WARDYN_GOVERNANCE_MIN_APPROVALS` is unset, so every held change has one approver. |
+| `governance_approval_counts_local_mode` | `PUT /governance/approval-counts` (503): local mode authenticates nobody, so no edit can be held for distinct people. |
+| `governance_approval_counts_invalid` | `PUT /governance/approval-counts` (400): a count below the minimum (or 1) or above 9, a kind the counts do not list, a kind with one decider, the counts' own kind, or a kind listed twice. |
+| `governance_approval_counts_unreachable` | `PUT /governance/approval-counts` (422), the admin token included: a count above the people who can approve its kind, or a highest count that the security admins other than the proposer could not reach on an edit to the counts. |
 | `governance_request_needs_person` | `POST /governance/requests` (403): the caller is not a signed-in person (the admin token, a service, a device, local mode). Only a person can ask. |
 | `governance_request_kind_invalid` | `POST /governance/requests` (400): `kind` is not one this server takes; the message lists them. |
 | `elevation_not_offered` | `POST /governance/requests` (400): the unit offers the caller no elevation: no `elevation` rule on it or above it, the caller is in none of its `eligible_requesters` groups (or their group list is out of date), or the unit is Default or unknown. One answer for all of them. |
@@ -1556,6 +1560,12 @@ applied only once another approver approves it. The SDK never reads it as a save
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
+- `GetGovernanceChangeImpact`, `ApproveGovernanceChangeWithReason(ctx, id, reason)` and `TakeBackGovernanceApproval`
+  read who and what a pending change would reach, approve it with a reason, and take your approval back.
+  `GovernanceChange.Approvals` says where a change that needs several approvals stands, and
+  `GovernanceChangeDiff.Review` what the check that held it found.
+- `GetApprovalCounts` and `PutApprovalCounts` read and replace how many approvals each kind of change needs
+  (`/api/v1/governance/approval-counts`). A person's `PutApprovalCounts` is held and comes back as `*PendingApprovalError`.
 - `ListGovernanceRequests` (`GET /api/v1/governance/requests`), `RequestElevation(ctx, unit, duration, reason, ticket)`
   (`POST /api/v1/governance/requests`, kind `elevation`), `RequestImage(ctx, image, reason, ticket)` (kind `image`, one
   image by digest; `ImageOffered` on the list says whether the caller may ask), `ApproveGovernanceRequest` and
@@ -1579,6 +1589,8 @@ for _, ch := range res.Pending {
 The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists (profiles and assignments) on stderr and
 exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
 `changes reject <id> [--reason ...]` act on them.
+`changes show <id> [--impact] [--json]`, `changes approve <id> [--reason TEXT]`, `changes take-back <id>`,
+`wardyn governance approvals-needed get [--json]` and `approvals-needed set --file counts.json` cover approvals by several people.
 
 **Old clients.** A client built before 0.8.6 that writes governance against a deployment with this
 switch on decodes the `202` as an empty profile, and its next assignment write is refused with

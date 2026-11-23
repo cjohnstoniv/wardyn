@@ -56,6 +56,7 @@ var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/governance/requests/{id}/reject":        true,
 	"PUT /api/v1/governance/egress-baseline":              true,
 	"PUT /api/v1/governance/boundary":                     true,
+	"PUT /api/v1/governance/approval-counts":              true,
 	"PUT /api/v1/governance/recording":                    true,
 	"POST /api/v1/governance/restrictions":                true,
 	"PUT /api/v1/governance/restrictions/{id}":            true,
