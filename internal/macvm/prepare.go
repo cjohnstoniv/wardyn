@@ -179,8 +179,8 @@ type PrepareOptions struct {
 	// HelperVersion goes into the manifest.
 	HelperVersion string
 	Progress      func(PrepareEvent)
-	// Leaked, if set, runs when the provisioning boot is refused with ErrVMLimit: the helper records the
-	// framework's slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
+	// Leaked, if set, runs when the install's VM or the provisioning boot is refused with ErrVMLimit: the
+	// helper records the framework's slot the ledger cannot account for (RunOptions.Leaked). Its failure is logged.
 	Leaked func() error
 	Log    *slog.Logger
 	// InstallProcess, when set, is the argv of the process that runs the
@@ -684,6 +684,7 @@ func (p *prep) install(ctx context.Context, spec MachineSpec, ipsw string) error
 		err = installVM(ctx, p.Engine, spec, ipsw, progress)
 	}
 	if err != nil {
+		reportVMLimit(err, p.Leaked, p.Log)
 		return fmt.Errorf(InstallFailurePrefix+"%w", err)
 	}
 	return nil

@@ -37,6 +37,10 @@ func TestInstallProcessHelper(t *testing.T) {
 		eng.InstallFunc = func(context.Context, *macvmtest.Machine, string, func(float64)) error {
 			return errors.New("installer failed")
 		}
+	case "vmlimit":
+		eng.InstallFunc = func(context.Context, *macvmtest.Machine, string, func(float64)) error {
+			return fmt.Errorf("%w: code 6", macvm.ErrVMLimit)
+		}
 	case "noprogress":
 		// Lines that are not progress: none may move the install's fraction.
 		fmt.Println(`{}`)
@@ -51,7 +55,7 @@ func TestInstallProcessHelper(t *testing.T) {
 	}
 	if err := macvm.RunInstall(ctx, eng, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(macvm.InstallExit(err))
 	}
 	os.Exit(0)
 }
@@ -102,6 +106,33 @@ func TestPrepareInstallProcessFailures(t *testing.T) {
 	}
 	if _, err := macvm.Prepare(ctx, g.opts); err == nil || g.fb.Boots() != 0 {
 		t.Fatalf("a cancelled install process: %v, %d first boots", err, g.fb.Boots())
+	}
+}
+
+// The install VM's refusal for the VM limit crosses the install process as its exit status: prepare
+// calls the Leaked hook once, and any other failure does not.
+func TestPrepareInstallProcessVMLimitCallsLeaked(t *testing.T) {
+	for _, tc := range []struct {
+		mode      string
+		wantLimit bool
+		wantCalls int
+	}{{"vmlimit", true, 1}, {"fail", false, 0}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			f := newPrep(t)
+			installInProcess(t, f, tc.mode)
+			calls := 0
+			f.opts.Leaked = func() error { calls++; return nil }
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if err == nil || !strings.Contains(err.Error(), macvm.InstallFailurePrefix) {
+				t.Fatalf("a failed install process: %v", err)
+			}
+			if got := errors.Is(err, macvm.ErrVMLimit); got != tc.wantLimit {
+				t.Fatalf("errors.Is(err, ErrVMLimit) = %v, want %v: %v", got, tc.wantLimit, err)
+			}
+			if calls != tc.wantCalls || f.fb.Boots() != 0 {
+				t.Fatalf("Leaked calls %d (want %d), first boots %d (want 0)", calls, tc.wantCalls, f.fb.Boots())
+			}
+		})
 	}
 }
 

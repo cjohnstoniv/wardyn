@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -56,5 +57,39 @@ func TestInstallBaseRunsOneInstall(t *testing.T) {
 	d.stdin = strings.NewReader("not a request")
 	if code := run(context.Background(), []string{macvm.InstallCommand}, d); code != 1 || !strings.Contains(errb.String(), "install request") {
 		t.Fatalf("a bad request: exit %d, stderr %q", code, errb.String())
+	}
+}
+
+// The install process's exit status carries the framework's VM limit refusal to prepare (#3696).
+func TestInstallBaseExitsWithTheVMLimitStatus(t *testing.T) {
+	dir := t.TempDir()
+	disk, aux := filepath.Join(dir, "disk.img"), filepath.Join(dir, "aux.img")
+	for _, p := range []string{disk, aux} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req, _ := json.Marshal(map[string]any{
+		"Spec": macvm.MachineSpec{CPUs: 4, MemoryBytes: 8 << 30, MinCPUs: 4, MinMemoryBytes: 4 << 30,
+			HardwareModel: []byte("hw"), MachineIdentifier: []byte("id"), DiskPath: disk, AuxPath: aux},
+		"IPSW": filepath.Join(dir, "restore.ipsw"),
+	})
+	for _, tc := range []struct {
+		name     string
+		err      error
+		wantCode int
+		wantErr  string
+	}{
+		{"vm limit", fmt.Errorf("%w: code 6", macvm.ErrVMLimit), macvm.InstallVMLimitExit, "refused to start another macOS VM"},
+		{"other error", errors.New("boom"), 1, "boom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := &macvmtest.Engine{InstallFunc: func(context.Context, *macvmtest.Machine, string, func(float64)) error { return tc.err }}
+			d, _, errb := testDeps(eng)
+			d.stdin = strings.NewReader(string(req))
+			if code := run(context.Background(), []string{macvm.InstallCommand}, d); code != tc.wantCode || !strings.Contains(errb.String(), tc.wantErr) {
+				t.Fatalf("exit %d, stderr %q, want exit %d naming %q", code, errb.String(), tc.wantCode, tc.wantErr)
+			}
+		})
 	}
 }
