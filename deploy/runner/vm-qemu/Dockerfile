@@ -9,7 +9,7 @@
 # so the image holds no setuid helper the runner relies on, and no network tool.
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 RUN set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update; \
-    apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils virtiofsd e2fsprogs libarchive13t64 tar ovmf swtpm swtpm-tools; \
+    apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils virtiofsd e2fsprogs libarchive13t64 tar ovmf swtpm; \
     apt-get clean; rm -rf /var/lib/apt/lists/*
 COPY deploy/runner/vm-qemu/wardyn-vm-image /usr/local/bin/wardyn-vm-image
 COPY deploy/runner/vm-qemu/wardyn-winvm-disk /usr/local/bin/wardyn-winvm-disk
