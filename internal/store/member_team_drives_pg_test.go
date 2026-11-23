@@ -183,8 +183,8 @@ func TestMemberTeamDrive_UnitDeleteSetsNull_PG(t *testing.T) {
 	}
 }
 
-// TestMemberTeamDrive_ShapeRefusesK8sPVC_PG: a person's own team drive is a Docker volume only, and the team
-// columns stay off an admin row and a plain member drive.
+// TestMemberTeamDrive_ShapeRefusesK8sPVC_PG: a person's own team drive is a Docker volume only, and a plain member
+// drive cannot take the team unit or the team write bit.
 func TestMemberTeamDrive_ShapeRefusesK8sPVC_PG(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	st := store.NewPG(pool)

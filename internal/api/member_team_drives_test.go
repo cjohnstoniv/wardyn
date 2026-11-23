@@ -382,46 +382,62 @@ func TestMemberTeamDriveReach_PlainMemberDriveStaysOwnerOnly(t *testing.T) {
 	}
 }
 
-// TestMemberTeamDriveDispatch_RereadUnderFrozenUnit: dispatch re-reads another person's team drive under the run's
-// frozen unit: present while the run's unit is the drive's or below it; a run whose unit no longer has it, a deleting
-// drive, a lost row, team drives off, or a plain member drive fails the re-read.
+// TestMemberTeamDriveDispatch_RereadUnderFrozenUnit: dispatch's re-read (memberDrivesStillThere) of another person's
+// team drive under the run's frozen unit: present while the run's unit is the drive's or below it; a run whose unit
+// no longer has it, a plain member drive, team drives off, a legacy-held drive, a drive whose unit was deleted, a
+// deleting drive and a lost row each fail the re-read. A legacy-held team drive is refused at attach too.
 func TestMemberTeamDriveDispatch_RereadUnderFrozenUnit(t *testing.T) {
 	st, tr := newTeamDriveStore()
 	srv, _, _ := teamDriveServer(st, "docker")
 	d := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
 	plain := seedMemberDrive(st.memberDriveStore, aliceSub, "Notes")
-	run := func(unit *uuid.UUID) types.AgentRun {
-		return types.AgentRun{ID: uuid.New(), CreatedBy: carolSub, UnitID: unit}
-	}
 	ctx := context.Background()
-	if !srv.memberDrivesStillThere(ctx, run(&tr.child.ID), map[uuid.UUID]string{d.ID: aliceSub}) {
-		t.Fatal("a run in the child unit failed the re-read of its unit's team drive")
+	reread := func(unit *uuid.UUID, id uuid.UUID) bool {
+		return srv.memberDrivesStillThere(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: carolSub, UnitID: unit}, map[uuid.UUID]string{id: aliceSub})
 	}
-	if !srv.memberTeamDriveStillThere(ctx, run(&tr.unit.ID), d.ID) {
-		t.Error("a run in the drive's own unit failed the re-read")
+	for name, unit := range map[string]*uuid.UUID{"child": &tr.child.ID, "own unit": &tr.unit.ID} {
+		if !reread(unit, d.ID) {
+			t.Errorf("%s: a run whose unit has the drive failed the re-read", name)
+		}
 	}
-	for name, r := range map[string]types.AgentRun{"sibling": run(&tr.sibling.ID), "parent": run(&tr.parent.ID), "no unit": run(nil)} {
-		if srv.memberTeamDriveStillThere(ctx, r, d.ID) {
+	for name, unit := range map[string]*uuid.UUID{"sibling": &tr.sibling.ID, "parent": &tr.parent.ID, "no unit": nil} {
+		if reread(unit, d.ID) {
 			t.Errorf("%s: a run whose unit does not have the drive passed the re-read", name)
 		}
 	}
-	if srv.memberTeamDriveStillThere(ctx, run(&tr.child.ID), plain.ID) {
-		t.Error("a plain member drive passed another person's team re-read")
+	if reread(&tr.child.ID, plain.ID) {
+		t.Error("a plain member drive passed another person's re-read")
 	}
 	st.site = teamDriveSite(false, true)
-	if srv.memberTeamDriveStillThere(ctx, run(&tr.child.ID), d.ID) {
+	if reread(&tr.child.ID, d.ID) {
 		t.Error("the re-read passed with team drives off")
 	}
 	st.site = teamDriveSite(true, true)
+	held := st.drives[d.ID]
+	held.LegacyUnsettled = true
+	st.drives[d.ID] = held
+	if reread(&tr.child.ID, d.ID) {
+		t.Error("a legacy-held drive passed the re-read")
+	}
+	if _, f := authorizeDrives(srv, personCtx(carolSub), drivesRequest(d.ID.String())); f == nil || f.body.Reason != string(authz.ReasonDriveNotFound) {
+		t.Errorf("carol attaching a legacy-held team drive = %+v, want drive_not_found", f)
+	}
+	held.LegacyUnsettled = false
+	st.drives[d.ID] = held
+	st.team[d.ID].unit = nil
+	if reread(&tr.child.ID, d.ID) {
+		t.Error("a drive whose unit was deleted passed the re-read")
+	}
+	st.team[d.ID].unit = &tr.unit.ID
 	at := time.Now()
 	tomb := st.drives[d.ID]
 	tomb.DeleteStartedAt = &at
 	st.drives[d.ID] = tomb
-	if srv.memberTeamDriveStillThere(ctx, run(&tr.child.ID), d.ID) {
+	if reread(&tr.child.ID, d.ID) {
 		t.Error("a drive being deleted passed the re-read")
 	}
 	delete(st.drives, d.ID)
-	if srv.memberTeamDriveStillThere(ctx, run(&tr.child.ID), d.ID) {
+	if reread(&tr.child.ID, d.ID) {
 		t.Error("a lost row passed the re-read")
 	}
 }
