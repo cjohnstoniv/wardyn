@@ -96,10 +96,15 @@ func (s *Server) handleGetModelProviders(w http.ResponseWriter, r *http.Request)
 // refused while the agent roster names it — the admin chooses another default
 // first. Turning one off is not: that is the incident switch. Adding a Claude
 // subscription is refused until its sign-in image resolves (E4); keeping or
-// turning off one already stored never is.
+// turning off one already stored never is. With ?restricted=true every provider the save adds is restricted before the
+// block is written (restrictBeforeCreate); a save that adds none is refused.
 //
 //	PUT /api/v1/model-providers
 func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request) {
+	restricted, ok := createRestricted(w, r, reasonSiteConfigInvalid)
+	if !ok {
+		return
+	}
 	var body types.ModelProviders
 	if !decodeStrict(w, r, &body) {
 		return
@@ -154,8 +159,30 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	// ?restricted=true restricts every provider this save adds before the document that holds it is written
+	// (restrictBeforeCreate). A save that adds none has nothing to restrict and is refused.
+	var added []string
+	if block != nil {
+		for _, p := range block.Providers {
+			if _, held := modelProviderByID(existing.ModelProviders, p.ID); !held {
+				added = append(added, p.ID)
+			}
+		}
+	}
+	undo := func() {}
+	if restricted {
+		if len(added) == 0 {
+			writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigInvalid, "invalid model providers: restricted=true needs a provider this save adds")
+			return
+		}
+		if undo, err = s.restrictBeforeCreate(r, capModelProvider, added); err != nil {
+			writeServerError(w, r, "restrict the new model provider", err)
+			return
+		}
+	}
 	invalidated, err := s.purgeProviderCredentials(ctx, existing.ModelProviders, block)
 	if err != nil {
+		undo()
 		writeServerError(w, r, modelProviderPurgeFailedMsg, err)
 		return
 	}
@@ -164,6 +191,9 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	candidate.EffectiveScmHosts = nil
 	candidate.WithheldScmHosts = nil
 	saved, err := s.putSiteConfigGrants(ctx, candidate, plan.change)
+	if err != nil {
+		undo()
+	}
 	if writeSiteConfigSaveError(w, r, err) {
 		return
 	}
@@ -175,6 +205,9 @@ func (s *Server) handlePutModelProviders(w http.ResponseWriter, r *http.Request)
 	auditServiceGrantCleanup(datum, cleanup)
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"model_provider.write", "model_providers", "success", mustJSON(datum)))
+	if restricted {
+		s.auditCreatedRestricted(r, capModelProvider, added)
+	}
 	w.Header().Set("ETag", computeETag(savedBlock))
 	writeJSON(w, http.StatusOK, modelProvidersWritten{ModelProviders: savedBlock, ModelProviderWarnings: warnings})
 }

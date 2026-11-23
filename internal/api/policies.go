@@ -427,8 +427,14 @@ func redactScopeSecretRefs(scope json.RawMessage) json.RawMessage {
 }
 
 // handleCreatePolicy validates the spec and persists a new policy. Returns 201
-// with the created policy, or 400 on an invalid body/spec.
+// with the created policy, or 400 on an invalid body/spec. With ?restricted=true the new policy is restricted
+// ("Available to: Only these") before it is written (restrictBeforeCreate), so only admins may use it until its list
+// is written.
 func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
+	restricted, ok := createRestricted(w, r, reasonPolicyRequestInvalid)
+	if !ok {
+		return
+	}
 	req, reason, msg := decodePolicyRequest(w, r, s.adoHostsLoader(r.Context()), nil)
 	if msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reason, msg)
@@ -467,7 +473,17 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: now,
 		Spec:      req.Spec,
 	}
+	undo := func() {}
+	if restricted {
+		if undo, err = s.restrictBeforeCreate(r, capPolicy, []string{id.String()}); err != nil {
+			writeServerError(w, r, "restrict the new policy", err)
+			return
+		}
+	}
 	created, err := s.cfg.Store.CreatePolicy(r.Context(), p)
+	if err != nil {
+		undo()
+	}
 	if errors.Is(err, store.ErrConflict) {
 		// run_policies.name is UNIQUE — a duplicate name is a
 		// caller-fixable 409, not a raw Postgres 500 (contrast CreateApproval's
@@ -483,6 +499,9 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		"policy.create", id.String(), "success", mustJSON(map[string]any{
 			"name": created.Name, "min_confinement_class": created.Spec.MinConfinementClass, "after": created.Spec,
 		})))
+	if restricted {
+		s.auditCreatedRestricted(r, capPolicy, []string{id.String()})
+	}
 	writeJSON(w, http.StatusCreated, client.PolicySaved{RunPolicy: created, Requirements: s.policyRequirements(r, req.Spec, needed)})
 }
 
