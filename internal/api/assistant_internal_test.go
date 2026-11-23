@@ -16,7 +16,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -128,4 +130,111 @@ func TestAssistantTurnDigestsPastFiveThousandEvents(t *testing.T) {
 		t.Errorf("prompt digest = %s, want %s: the records and the last person turn", prompt, want)
 	}
 	assistantFindsBounded(t, f)
+}
+
+// A fresh session's first turn carries the records the create stored, which are the preview's, byte for byte,
+// with the system prompt, the session's model and the purpose's tools; a later turn carries none of them.
+func TestAssistantFreshFirstTurnCarriesThePreviewsRecords(t *testing.T) {
+	site, bind := assistantTwoProviders()
+	f := newAssistantFake(site)
+	f.templates = []types.RunTemplate{{ID: uuid.New(), Name: "deploy", Description: "ships the app"}}
+	srv, _ := assistantSessionServer(t, f)
+	person := "sub-fresh-" + uuid.NewString()
+	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/assistant/preview", cookie, `{"purpose":"compose","target":{"kind":"template"}}`)
+	var preview types.AssistantPreview
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &preview) != nil || len(preview.Sections) == 0 {
+		t.Fatalf("preview = %d %s", w.Code, w.Body)
+	}
+	run := f.seedRun(t, person)
+	s := assistantLiveSession(person, &run, bind)
+	stored, _ := json.Marshal(assistantRecordsEvent(&assistantPrep{digest: preview.Digest, payload: assistant.Payload{Sections: preview.Sections}}, "", s.ID))
+	f.seed(s, types.AssistantEvent{Seq: 1, Kind: types.AssistantEventState, Payload: stored},
+		types.AssistantEvent{Seq: 2, Kind: types.AssistantEventUserMessage, Payload: json.RawMessage(`{"turn":"hi"}`)},
+		types.AssistantEvent{Seq: 3, Kind: types.AssistantEventUserMessage, Payload: json.RawMessage(`{"turn":"again"}`)})
+	turnAfter := func(after int64) types.AssistantTurn {
+		rec := httptest.NewRecorder()
+		srv.handleAssistantTurns(rec, assistantRunRequest(http.MethodGet, fmt.Sprintf("/api/v1/internal/assistant/turns?after=%d", after), "", run))
+		var turn types.AssistantTurn
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &turn) != nil {
+			t.Fatalf("turns after %d = %d %s", after, rec.Code, rec.Body)
+		}
+		return turn
+	}
+	first := turnAfter(0)
+	got, _ := json.Marshal(first.Records)
+	want, _ := json.Marshal(preview.Sections)
+	if first.Kind != types.AssistantTurnUser || first.Text != "hi" || string(got) != string(want) {
+		t.Fatalf("first turn = %s %q records %s, want the person's turn with the preview's %s", first.Kind, first.Text, got, want)
+	}
+	if first.System == "" || first.Model != bind.Model || !slices.Equal(first.Tools, assistantToolNames(types.AssistantCompose)) {
+		t.Errorf("first turn system %d bytes, model %q, tools %v", len(first.System), first.Model, first.Tools)
+	}
+	if later := turnAfter(2); later.Text != "again" || later.Records != nil || later.System != "" || later.Tools != nil {
+		t.Errorf("a later turn = %+v, want the text alone", later)
+	}
+}
+
+// A turn_end writes one assistant.suggestion row: the person as actor, the session as target, the purpose,
+// binding, target and digests, the server's tool names, and no prompt or output text.
+func TestAssistantSuggestionRowFields(t *testing.T) {
+	site, bind := assistantTwoProviders()
+	f := newAssistantFake(site)
+	srv, h := assistantSessionServer(t, f)
+	person := "sub-suggest-" + uuid.NewString()
+	run := f.seedRun(t, person)
+	s := assistantLiveSession(person, &run, bind)
+	f.seed(s, types.AssistantEvent{Seq: 1, Kind: types.AssistantEventState, Payload: json.RawMessage(`{"state":"records","records":[]}`)},
+		types.AssistantEvent{Seq: 2, Kind: types.AssistantEventUserMessage, Payload: json.RawMessage(`{"turn":"secret prompt words"}`)},
+		types.AssistantEvent{Seq: 3, Kind: types.AssistantEventToolRecord, Payload: json.RawMessage(`{"name":"validate"}`)},
+		types.AssistantEvent{Seq: 4, Kind: types.AssistantEventText, Payload: json.RawMessage(`{"text":"secret output words"}`)})
+	rec := httptest.NewRecorder()
+	srv.handleAssistantPostEvent(rec, assistantRunRequest(http.MethodPost, "/api/v1/internal/assistant/events",
+		`{"session_id":"`+s.ID.String()+`","kind":"turn_end","payload":{}}`, run))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("turn_end = %d %s", rec.Code, rec.Body)
+	}
+	rows := auditActions(h, assistantSuggestionAction)
+	if len(rows) != 1 {
+		t.Fatalf("%d suggestion rows, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.ActorType != types.ActorHuman || row.Actor != person || row.Target != s.ID.String() || row.RunID == nil || *row.RunID != run {
+		t.Errorf("row actor %s/%s target %s run %v", row.ActorType, row.Actor, row.Target, row.RunID)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(row.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"purpose", "provider_id", "model", "prompt_digest", "output_digest", "tools", "target_kind", "target_key"} {
+		if _, ok := data[k]; !ok {
+			t.Errorf("row data has no %s: %s", k, row.Data)
+		}
+	}
+	if data["provider_id"] != bind.ProviderID || data["model"] != bind.Model || fmt.Sprint(data["tools"]) != "[validate]" {
+		t.Errorf("row data = %s", row.Data)
+	}
+	if strings.Contains(string(row.Data), "secret") {
+		t.Errorf("the row carries text: %s", row.Data)
+	}
+}
+
+// Past store.AssistantSessionEventsMax events the run's post is 429 and writes nothing.
+func TestAssistantRunEventsAreCapped(t *testing.T) {
+	f := newAssistantFake(types.SiteConfig{})
+	srv, _ := assistantSessionServer(t, f)
+	run := f.seedRun(t, "sub-full")
+	s := assistantLiveSession("sub-full", &run, types.AssistantBinding{})
+	evs := make([]types.AssistantEvent, store.AssistantSessionEventsMax)
+	for i := range evs {
+		evs[i] = types.AssistantEvent{Seq: int64(i + 1), Kind: types.AssistantEventText, Payload: json.RawMessage(`{}`)}
+	}
+	f.seed(s, evs...)
+	rec := httptest.NewRecorder()
+	srv.handleAssistantPostEvent(rec, assistantRunRequest(http.MethodPost, "/api/v1/internal/assistant/events",
+		`{"session_id":"`+s.ID.String()+`","kind":"text","payload":{"text":"one more"}}`, run))
+	wantReason(t, rec, http.StatusTooManyRequests, reasonAssistantSessionEventsFull)
+	if n := len(f.eventsOf(s.ID)); n != store.AssistantSessionEventsMax {
+		t.Errorf("%d events after a refused post, want %d", n, store.AssistantSessionEventsMax)
+	}
 }

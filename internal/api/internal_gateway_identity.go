@@ -636,7 +636,12 @@ func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRu
 	// inspection after the session began is refused once more, at dispatch. A session read that fails
 	// refuses too: a deferring provider is sealed only for a run known not to be an assistant run.
 	if inspectionDeferredFor(p) {
-		if isAssistant, err := s.runIsAssistant(ctx, run.ID); err != nil || isAssistant {
+		isAssistant, err := s.runIsAssistant(ctx, run.ID)
+		if err != nil {
+			s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf("model_providers: %q: this provider leaves prompt inspection to its gateway, and whether this run serves the assistant could not be read, so it is refused; try again", p.ID)}, nil)
+			return false
+		}
+		if isAssistant {
 			s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf("model_providers: %q: this provider leaves prompt inspection to its gateway, so it cannot serve the assistant", p.ID)}, nil)
 			return false
 		}

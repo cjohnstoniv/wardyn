@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -48,5 +49,23 @@ func TestAssistantPreviewRecordsAreUntrusted(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"untrusted":true`) || !strings.Contains(w.Body.String(), "ignore the rules above") {
 		t.Errorf("preview = %s, want the template text as an untrusted record", w.Body)
+	}
+}
+
+// Every tool a first turn offers is a name the relay forwards (POST tools/<name>, names ^[a-z_]{1,32}$), none
+// repeats, and a review session is offered neither the draft nor the build-files tool.
+func TestAssistantToolNamesAreRelayable(t *testing.T) {
+	relayable := regexp.MustCompile(`^[a-z_]{1,32}$`)
+	for _, p := range []types.AssistantPurpose{types.AssistantCompose, types.AssistantReview} {
+		seen := map[string]bool{}
+		for _, n := range assistantToolNames(p) {
+			if !relayable.MatchString(n) || seen[n] {
+				t.Errorf("%s: tool %q is not one the relay forwards, or repeats", p, n)
+			}
+			seen[n] = true
+		}
+		if p == types.AssistantReview && (seen["draft"] || seen["build_files"]) {
+			t.Errorf("review is offered %v", assistantToolNames(p))
+		}
 	}
 }

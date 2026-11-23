@@ -248,6 +248,16 @@ func (f *assistantFake) AppendAssistantEvent(_ context.Context, session uuid.UUI
 	return e, nil
 }
 
+func (f *assistantFake) AppendAssistantRunEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error) {
+	f.amu.Lock()
+	full := len(f.events[session]) >= store.AssistantSessionEventsMax
+	f.amu.Unlock()
+	if full {
+		return types.AssistantEvent{}, store.ErrAssistantSessionFull
+	}
+	return f.AppendAssistantEvent(ctx, session, kind, payload)
+}
+
 func (f *assistantFake) ListAssistantEvents(ctx context.Context, session uuid.UUID, after int64, limit int) ([]types.AssistantEvent, error) {
 	return f.FindAssistantEvents(ctx, session, store.AssistantEventFilter{After: after, Limit: limit})
 }
@@ -658,7 +668,7 @@ func TestAssistantWarmReuseAnswersTheOpenPollWithReset(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &p.turn)
 		done <- p
 	}()
-	time.Sleep(2 * assistantPollInterval) // the poll is open and waiting
+	time.Sleep(time.Second) // the poll is open and waiting
 
 	w = doSSO(t, srv, http.MethodPost, "/api/v1/assistant/sessions", cookie,
 		`{"purpose":"compose","target":{"kind":"template"},"preview_digest":"`+preview.Digest+`"}`)
@@ -740,5 +750,73 @@ func TestAssistantLaunchRefusal(t *testing.T) {
 	other := srv.assistantLaunchRefusal(fmt.Errorf("boom"))
 	if other.reason == reasonAssistantAtRunLimit || other.custom == nil {
 		t.Errorf("another launch error = %+v, want the scan launch's answer, never at_run_limit", other)
+	}
+}
+
+// Another person's session answers 404 on every {id} route, exactly as a missing one does, and is left as it was:
+// no event, no draft, still live.
+func TestAssistantAnotherPersonsSessionIsNotFound(t *testing.T) {
+	site, bind := assistantTwoProviders()
+	f := newAssistantFake(site)
+	srv, _ := assistantSessionServer(t, f)
+	owner, other := "sub-owner-"+uuid.NewString(), "sub-other-"+uuid.NewString()
+	s := assistantLiveSession(owner, nil, bind)
+	f.seed(s)
+	cookie := ssoSession(t, other, other+"@corp.example", oidc.RoleUser)
+	for _, c := range []struct{ method, tail, body string }{
+		{http.MethodPost, "/messages", `{"text":"hello"}`},
+		{http.MethodPost, "/edits", `{"draft":{"x":1},"changed":[]}`},
+		{http.MethodGet, "/events", ""},
+		{http.MethodDelete, "", ""},
+	} {
+		wantReason(t, doSSO(t, srv, c.method, assistantPath(s.ID, c.tail), cookie, c.body), http.StatusNotFound, reasonAssistantSessionNotFound)
+		wantReason(t, doSSO(t, srv, c.method, assistantPath(uuid.New(), c.tail), cookie, c.body), http.StatusNotFound, reasonAssistantSessionNotFound)
+	}
+	got := f.session(s.ID)
+	if !got.Live() || len(got.Draft) != 0 || len(f.eventsOf(s.ID)) != 0 {
+		t.Errorf("another person's calls changed the session: %s, draft %q, %d events", got.State, got.Draft, len(f.eventsOf(s.ID)))
+	}
+}
+
+// A provider that leaves prompt inspection to its gateway never serves a create: with every marked provider
+// deferring, the create is refused before any session or run exists.
+func TestAssistantCreateRefusesADeferringProvider(t *testing.T) {
+	site, _ := assistantTwoProviders()
+	for i := range site.ModelProviders.Providers {
+		site.ModelProviders.Providers[i].GatewayIdentity = &types.ModelProviderGatewayIdentity{Inspection: types.GatewayInspectionGateway}
+	}
+	f := newAssistantFake(site)
+	f.templates = []types.RunTemplate{{ID: uuid.New(), Name: "deploy"}}
+	srv, _ := assistantSessionServer(t, f)
+	person := "sub-defer-" + uuid.NewString()
+	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/assistant/sessions", cookie, `{"purpose":"compose","target":{"kind":"template"},"preview_digest":"x"}`)
+	wantReason(t, w, http.StatusConflict, reasonAssistantNoProvider)
+	if len(f.sessions) != 0 {
+		t.Errorf("a refused create made %d sessions", len(f.sessions))
+	}
+	if ref := refuseAssistantDeferral(site.ModelProviders.Providers[0]); ref == nil || ref.reason != reasonAssistantDefersInspection {
+		t.Errorf("the create's own deferral check = %+v, want %s", ref, reasonAssistantDefersInspection)
+	}
+}
+
+// A run that ended early is run_ended however late its session is read; one that lived out its lifetime is
+// max_lifetime, and so is a live-looking run read past it.
+func TestAssistantRunEndReasonMeasuresTheRunsOwnEnd(t *testing.T) {
+	created := time.Now().Add(-6 * time.Hour)
+	early, full := created.Add(10*time.Minute), created.Add(assistantRunLifetimeSec*time.Second)
+	late := time.Now()
+	for _, c := range []struct {
+		name  string
+		ended *time.Time
+		want  string
+	}{
+		{"ended at minute ten, read hours later", &early, types.AssistantEndRunEnded},
+		{"ended at its lifetime", &full, types.AssistantEndMaxLifetime},
+		{"no end time, read past its lifetime", nil, types.AssistantEndMaxLifetime},
+	} {
+		if got := assistantRunEndReason(types.AgentRun{CreatedAt: created, EndedAt: c.ended}, late); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
+		}
 	}
 }

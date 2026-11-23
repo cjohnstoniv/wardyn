@@ -67,6 +67,14 @@ describe("AllowedModelsCard", () => {
     }
   });
 
+  it("an assistant run's pin names no unit and links to no profile, only who set it", () => {
+    renderCard(run({ allowed_models: { models: ["model-a"], unit: { id: "00000000-0000-0000-0000-000000000000", name: "" } } }));
+    expect(screen.getByText("Set by the assistant")).toBeInTheDocument();
+    expect(screen.queryByText(/^Governance ·/)).toBeNull();
+    expect(screen.queryByRole("link", { name: T.OPEN_PROFILE })).toBeNull();
+    expect(screen.getAllByRole("listitem").map((li) => li.textContent)).toEqual(["model-a"]);
+  });
+
   it("scrolls a long list inside the card, keeping the sentences below it in view", () => {
     const models = Array.from({ length: 14 }, (_, i) => `model-${i + 1}`);
     renderCard(run({ allowed_models: { models, unit: { id: "p1", name: "Contractors" } } }));

@@ -27,6 +27,14 @@ var ErrAssistantSessionLive = errors.New("store: a live assistant session alread
 // live check just before a replace or an erasure writes nothing.
 var ErrAssistantSessionEnded = errors.New("store: the assistant session has ended")
 
+// ErrAssistantSessionFull reports a run's event refused because its session already holds
+// AssistantSessionEventsMax events.
+var ErrAssistantSessionFull = errors.New("store: the assistant session holds as many events as it may")
+
+// AssistantSessionEventsMax is the most events a session holds before the run's appends are refused, so a run
+// token cannot fill the disk over the session's lifetime.
+const AssistantSessionEventsMax = 2000
+
 // AssistantEventsReadMax is the most events one read of a transcript returns, whatever limit it asks for, so
 // no request holds a whole transcript.
 const AssistantEventsReadMax = 200
@@ -76,6 +84,9 @@ type AssistantSessionStore interface {
 	// AppendAssistantEvent writes an event with the next seq of its session, taken under the session row's
 	// lock. ErrNotFound when the session does not exist, ErrAssistantSessionEnded when it has ended.
 	AppendAssistantEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error)
+	// AppendAssistantRunEvent is AppendAssistantEvent for an event the run posts: ErrAssistantSessionFull once
+	// the session holds AssistantSessionEventsMax events, and nothing is written.
+	AppendAssistantRunEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error)
 	// ListAssistantEvents is up to limit events with seq above after, oldest first, at most
 	// AssistantEventsReadMax.
 	ListAssistantEvents(ctx context.Context, session uuid.UUID, after int64, limit int) ([]types.AssistantEvent, error)
@@ -192,13 +203,15 @@ func (s PG) CreateAssistantSession(ctx context.Context, sess types.AssistantSess
 func (s PG) ReplaceAssistantSession(ctx context.Context, old uuid.UUID, sess types.AssistantSession, reset []byte) (types.AssistantSession, error) {
 	var out types.AssistantSession
 	err := s.inTx(ctx, func(q Querier) error {
+		// The lock comes first and the last seq is read after it, in a statement of its own: under read
+		// committed a statement sees what was committed when it began, so an append that held the lock while
+		// this waited is counted, and the reset is numbered after it.
+		if _, err := lockAssistantSession(ctx, q, old); err != nil {
+			return err
+		}
 		var lastSeq int64
-		if err := q.QueryRow(ctx, `SELECT coalesce((SELECT max(seq) FROM assistant_session_events WHERE session_id = $1), 0)
-			FROM assistant_sessions WHERE id = $1 FOR UPDATE`, old).Scan(&lastSeq); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("store: lock assistant session: %w", err)
+		if err := q.QueryRow(ctx, `SELECT coalesce(max(seq), 0) FROM assistant_session_events WHERE session_id = $1`, old).Scan(&lastSeq); err != nil {
+			return fmt.Errorf("store: read assistant session's last event: %w", err)
 		}
 		tag, err := q.Exec(ctx, `UPDATE assistant_sessions SET state = 'ended', ended_at = now(), end_reason = $2
 			WHERE id = $1 AND state <> 'ended'`, old, types.AssistantEndReplaced)
@@ -292,21 +305,49 @@ func scanAssistantEvent(r pgx.Row) (types.AssistantEvent, error) {
 	return e, err
 }
 
+// lockAssistantSession takes the session row's lock and returns its state; ErrNotFound when there is no row.
+func lockAssistantSession(ctx context.Context, q Querier, session uuid.UUID) (string, error) {
+	var state string
+	if err := q.QueryRow(ctx, `SELECT state FROM assistant_sessions WHERE id = $1 FOR UPDATE`, session).Scan(&state); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("store: lock assistant session: %w", err)
+	}
+	return state, nil
+}
+
 func (s PG) AppendAssistantEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error) {
+	return s.appendAssistantEvent(ctx, session, kind, payload, 0)
+}
+
+func (s PG) AppendAssistantRunEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error) {
+	return s.appendAssistantEvent(ctx, session, kind, payload, AssistantSessionEventsMax)
+}
+
+// appendAssistantEvent appends under the session row's lock; with limit above zero it refuses once the session
+// holds limit events. The count is read under the same lock, so concurrent appends cannot pass it together.
+func (s PG) appendAssistantEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte, limit int) (types.AssistantEvent, error) {
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
 	var ev types.AssistantEvent
 	err := s.inTx(ctx, func(q Querier) error {
-		var state string
-		if err := q.QueryRow(ctx, `SELECT state FROM assistant_sessions WHERE id = $1 FOR UPDATE`, session).Scan(&state); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("store: lock assistant session: %w", err)
+		state, err := lockAssistantSession(ctx, q, session)
+		if err != nil {
+			return err
 		}
 		if state == types.AssistantSessionEnded {
 			return ErrAssistantSessionEnded
+		}
+		if limit > 0 {
+			var n int
+			if err := q.QueryRow(ctx, `SELECT count(*) FROM assistant_session_events WHERE session_id = $1`, session).Scan(&n); err != nil {
+				return fmt.Errorf("store: count assistant events: %w", err)
+			}
+			if n >= limit {
+				return ErrAssistantSessionFull
+			}
 		}
 		e, err := scanAssistantEvent(q.QueryRow(ctx, `INSERT INTO assistant_session_events (session_id, seq, kind, payload)
 			SELECT $1, coalesce(max(seq), 0) + 1, $2, $3 FROM assistant_session_events WHERE session_id = $1

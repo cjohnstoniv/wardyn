@@ -52,6 +52,7 @@ func (s *Server) registerLiveBus() {
 	b.Handle(livebus.KindRecordingGap, s.onRecordingGapNotice)
 	b.Handle(livebus.KindRunnerGoaway, s.onRunnerGoawayNotice)
 	b.Handle(livebus.KindSupportGrant, s.onSupportGrantNotice)
+	b.Handle(livebus.KindAssistantEvent, s.onAssistantEventNotice)
 }
 
 // publishNotice sends one notice on its own goroutine, so the caller (a state CAS, a kill) never

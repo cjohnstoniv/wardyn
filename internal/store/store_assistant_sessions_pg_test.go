@@ -297,3 +297,31 @@ func TestAssistantEraseSessionsPG(t *testing.T) {
 		t.Errorf("events after erasure = %+v, want only the tool record", evs)
 	}
 }
+
+// A run's append past AssistantSessionEventsMax events is refused and writes nothing; the server's own append is
+// not capped, so the person's message and the session's end still land.
+func TestAssistantRunEventsCappedPG(t *testing.T) {
+	ctx, st, newRunID, pool := assistantStore(t)
+	run := newRunID(t)
+	s, err := st.CreateAssistantSession(ctx, newAssistantSession("cap-"+uuid.NewString(), &run, types.AssistantCompose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO assistant_session_events (session_id, seq, kind, payload)
+		SELECT $1, g, 'text', '{}'::jsonb FROM generate_series(1, $2::int) g`, s.ID, store.AssistantSessionEventsMax-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendAssistantRunEvent(ctx, s.ID, types.AssistantEventText, nil); err != nil {
+		t.Fatalf("the last event under the cap: %v", err)
+	}
+	if _, err := st.AppendAssistantRunEvent(ctx, s.ID, types.AssistantEventText, nil); !errors.Is(err, store.ErrAssistantSessionFull) {
+		t.Fatalf("an event past the cap: %v, want ErrAssistantSessionFull", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM assistant_session_events WHERE session_id = $1`, s.ID).Scan(&n); err != nil || n != store.AssistantSessionEventsMax {
+		t.Errorf("%d events after the refusal (%v), want %d", n, err, store.AssistantSessionEventsMax)
+	}
+	if _, err := st.AppendAssistantEvent(ctx, s.ID, types.AssistantEventUserMessage, nil); err != nil {
+		t.Errorf("the server's own append past the cap: %v", err)
+	}
+}

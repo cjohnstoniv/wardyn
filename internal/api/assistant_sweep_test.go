@@ -56,7 +56,7 @@ func TestAssistantErasureEndsTheSessionAndNamesNoOne(t *testing.T) {
 func TestAssistantSweepWindow(t *testing.T) {
 	f := newAssistantFake(types.SiteConfig{})
 	srv, _ := assistantSessionServer(t, f)
-	now := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	srv.cfg.Now = func() time.Time { return now }
 	if err := srv.sweepAssistantSessions(context.Background()); err != nil || f.sweptBefore != nil {
 		t.Fatalf("a zero window swept before %v (%v)", f.sweptBefore, err)

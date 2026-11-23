@@ -879,4 +879,6 @@ const (
 	reasonAssistantSessionProviderChanged = "assistant_session_provider_changed" // the session's provider or model no longer holds
 	reasonAssistantTargetNotFound         = "assistant_target_not_found"         // no such target, or one the person cannot read
 	reasonAssistantSessionsUnavailable    = "assistant_sessions_unavailable"     // this server's store keeps no assistant sessions
+	reasonAssistantSessionEventsFull      = "assistant_session_events_full"      // the run's session holds as many events as it may
+	reasonAssistantStreamUnavailable      = "assistant_stream_unavailable"       // this server cannot stream the session's events; read them by long-poll
 )

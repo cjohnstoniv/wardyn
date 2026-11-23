@@ -27,6 +27,7 @@ func (s *Server) eraseAssistantSessions(ctx context.Context, e assistantSessionE
 	ss, _ := e.(store.AssistantSessionStore)
 	var runs []uuid.UUID
 	for _, es := range ended {
+		s.assistantChanged(es.ID, es.RunID)
 		if ss != nil {
 			s.assistantEndAudit(ctx, ss, types.AssistantSession{ID: es.ID, RunID: es.RunID, Principal: types.AssistantErasedPrincipal}, types.AssistantEndErased)
 		}

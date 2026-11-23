@@ -175,9 +175,13 @@ func (s *Server) assistantReuseRun(ctx context.Context, ss store.AssistantSessio
 	row := assistantSessionRow(prep, purpose, old.RunID)
 	reset, _ := json.Marshal(assistantRecordsEvent(prep, "reset", row.ID))
 	sess, err := ss.ReplaceAssistantSession(ctx, old.ID, row, reset)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrAssistantSessionLive):
 		return types.AssistantSession{}, assistantRefusalFor(http.StatusConflict, reasonAssistantSessionNotFound, "Another session started first. Try again.") // PROPOSED
+	case err != nil:
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.") // PROPOSED
 	}
+	s.assistantChanged(old.ID, old.RunID)
 	s.assistantEndAudit(context.WithoutCancel(ctx), ss, old, types.AssistantEndReplaced)
 	return sess, nil
 }
@@ -258,9 +262,14 @@ func (s *Server) assistantOwned(w http.ResponseWriter, r *http.Request) (store.A
 }
 
 // assistantRunEndReason is why a session whose run is terminal ended: max_lifetime when the run lived out its
-// two hours, else run_ended.
+// two hours, else run_ended. The run's own end time is measured when it has one, so a run that ended early and is
+// read later is not taken for one that lived out its lifetime.
 func assistantRunEndReason(run types.AgentRun, now time.Time) string {
-	if !run.CreatedAt.IsZero() && now.Sub(run.CreatedAt) >= assistantRunLifetimeSec*time.Second {
+	end := now
+	if run.EndedAt != nil {
+		end = *run.EndedAt
+	}
+	if !run.CreatedAt.IsZero() && end.Sub(run.CreatedAt) >= assistantRunLifetimeSec*time.Second {
 		return types.AssistantEndMaxLifetime
 	}
 	return types.AssistantEndRunEnded
@@ -284,11 +293,12 @@ func (s *Server) assistantRoleRefused(w http.ResponseWriter, r *http.Request, ss
 // assistantStillAvailable re-checks the session's own binding, never generic availability: a ready answer on
 // another provider or model authorises nothing. In order: the purpose is on; the binding holds; the target's kind
 // is not never-sent; the provider does not defer inspection. The run-limit count is not re-checked, since the
-// session's own run already holds its slot. On a failure it ends the session as turned_off and returns the refusal.
+// session's own run already holds its slot. On a refusal with a reason it ends the session as turned_off and returns
+// the refusal; a read that failed answers its 500 and leaves the session as it is.
 // ctx is the context whose ceiling and credentials are asked: the person's own request, or a tool context.
 func (s *Server) assistantStillAvailable(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession) *assistantRefusal {
 	ref := s.assistantAvailableNow(ctx, sess)
-	if ref != nil {
+	if ref != nil && ref.reason != "" {
 		s.endAssistantSession(ctx, ss, sess, types.AssistantEndTurnedOff, true)
 	}
 	return ref
@@ -415,6 +425,7 @@ func (s *Server) handleAssistantMessage(w http.ResponseWriter, r *http.Request) 
 		writeAssistantAppendError(w, r, "append assistant message", err)
 		return
 	}
+	s.assistantChanged(sess.ID, sess.RunID)
 	_ = ss.TouchAssistantSession(r.Context(), sess.ID, false)
 	writeJSON(w, http.StatusAccepted, map[string]any{"seq": ev.Seq})
 }
@@ -458,7 +469,10 @@ func (s *Server) handleAssistantEdits(w http.ResponseWriter, r *http.Request) {
 	if s.assistantRateRefused(w, sess.Principal) {
 		return
 	}
-	if err := ss.SetAssistantDraft(r.Context(), sess.ID, req.Draft); err != nil {
+	if err := ss.SetAssistantDraft(r.Context(), sess.ID, req.Draft); errors.Is(err, store.ErrNotFound) {
+		writeAssistantEnded(w)
+		return
+	} else if err != nil {
 		writeServerError(w, r, "store assistant draft", err)
 		return
 	}
@@ -468,6 +482,7 @@ func (s *Server) handleAssistantEdits(w http.ResponseWriter, r *http.Request) {
 		writeAssistantAppendError(w, r, "append assistant edit", err)
 		return
 	}
+	s.assistantChanged(sess.ID, sess.RunID)
 	writeJSON(w, http.StatusAccepted, map[string]any{"seq": ev.Seq})
 }
 
@@ -537,6 +552,3 @@ func assistantAfter(r *http.Request) (int64, bool) {
 	n, err := strconv.ParseInt(raw, 10, 64)
 	return n, err == nil && n >= 0
 }
-
-// assistantPollInterval is how often a long-poll or stream rereads the store.
-const assistantPollInterval = 500 * time.Millisecond

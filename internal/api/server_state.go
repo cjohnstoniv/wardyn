@@ -128,6 +128,7 @@ type Server struct {
 	replicaOnce     sync.Once
 	leaseKeeperOnce sync.Once       // starts attachLeaseKeeper (attach_lease.go)
 	runEvents       runEventHub     // each run's lifecycle event ring (run_events.go)
+	assistantLive   assistantLive   // the assistant's wake-ups and each person's open reads (assistant_session_events.go)
 	leaseDeferred   sync.Map        // see deferRenewedLease
 	execOutputs     execOutputTails // each non-interactive run's output tail (run_output.go)
 	uiGatewayState                  // the UI gateway's process state (server_uigateway.go)

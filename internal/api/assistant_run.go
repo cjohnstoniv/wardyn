@@ -202,6 +202,7 @@ func (s *Server) endAssistantSession(ctx context.Context, ss store.AssistantSess
 	if !ended {
 		return false
 	}
+	s.assistantChanged(sess.ID, sess.RunID)
 	s.assistantEndAudit(ctx, ss, sess, reason)
 	if !stopRun || sess.RunID == nil {
 		return true
@@ -303,6 +304,7 @@ func (s *Server) assistantSuggestion(r *http.Request, ss store.AssistantSessionS
 	if _, err := ss.AppendAssistantEvent(ctx, sess.ID, types.AssistantEventSuggestion, body); err != nil {
 		return
 	}
+	s.assistantChanged(sess.ID, sess.RunID)
 	at, actor := assistantAuditActor(sess, "")
 	s.recordAudit(ctx, s.auditEvent(sess.RunID, at, actor, assistantSuggestionAction, sess.ID.String(), "success",
 		mustJSON(map[string]any{"purpose": sess.Purpose, "provider_id": sess.Binding.ProviderID, "model": sess.Binding.Model,

@@ -57,9 +57,10 @@ func (s *Server) assistantRunSession(w http.ResponseWriter, r *http.Request) (st
 
 // handleAssistantTurns is GET /internal/assistant/turns?after=N: the relay's long-poll, at most 25 seconds. It
 // answers the next person turn or reset after N, each with its session id and, on the first turn and on a reset,
-// the records and the system prompt; an end turn once the run has no live session. A warm reuse that replaces the
-// polled session on this run is followed to the new one, whose reset is numbered after the old session's last
-// event, so the relay reads the reset and carries on.
+// the records and the system prompt; an end turn once the run has no live session. It waits for a wake of the
+// run (assistantLive), never on a timer. A warm reuse that replaces the polled session on this run is followed
+// to the new one, whose reset is numbered after every event the old session stored before the replace took its
+// lock, so the relay reads the reset and carries on.
 func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	ss, sess, ok := s.assistantRunSession(w, r)
 	if !ok {
@@ -72,45 +73,55 @@ func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.NewTimer(assistantLongPoll)
 	defer deadline.Stop()
-	tick := time.NewTicker(assistantPollInterval)
-	defer tick.Stop()
-	for {
-		cur, err := ss.GetAssistantSession(r.Context(), sess.ID, sess.Principal)
-		if err == nil && !cur.Live() {
-			next, nerr := ss.LiveAssistantSessionForRun(r.Context(), *sess.RunID)
-			if nerr == nil && next.ID != sess.ID {
-				sess = next
-				continue
-			}
-			if nerr != nil && !errors.Is(nerr, store.ErrNotFound) {
-				writeServerError(w, r, "read assistant session", nerr)
-				return
-			}
-			writeJSON(w, http.StatusOK, types.AssistantTurn{Kind: types.AssistantTurnEnd, SessionID: cur.ID})
-			return
+	for !s.assistantTurnsStep(w, r, ss, &sess, after, deadline.C) {
+	}
+}
+
+// assistantTurnsStep is one read of the relay's long-poll, then its wait. It reports whether the poll has
+// answered; a follow to the run's new session reads again at once.
+func (s *Server) assistantTurnsStep(w http.ResponseWriter, r *http.Request, ss store.AssistantSessionStore, sess *types.AssistantSession, after int64, deadline <-chan time.Time) bool {
+	run := uuid.Nil
+	if sess.RunID != nil {
+		run = *sess.RunID
+	}
+	wake, unwatch := s.assistantLive.watch(run)
+	defer unwatch()
+	cur, err := ss.GetAssistantSession(r.Context(), sess.ID, sess.Principal)
+	if err == nil && !cur.Live() {
+		next, nerr := ss.LiveAssistantSessionForRun(r.Context(), run)
+		if nerr == nil && next.ID != sess.ID {
+			*sess = next
+			return false
 		}
-		ev, first, err := ss.NextAssistantTurn(r.Context(), sess.ID, after)
-		if err == nil {
-			turn, terr := s.assistantTurnOf(r, ss, sess, ev, first)
-			if terr != nil {
-				writeServerError(w, r, "build assistant turn", terr)
-				return
-			}
-			writeJSON(w, http.StatusOK, turn)
-			return
+		if nerr != nil && !errors.Is(nerr, store.ErrNotFound) {
+			writeServerError(w, r, "read assistant session", nerr)
+			return true
 		}
-		if !errors.Is(err, store.ErrNotFound) {
-			writeServerError(w, r, "read assistant turn", err)
-			return
+		writeJSON(w, http.StatusOK, types.AssistantTurn{Kind: types.AssistantTurnEnd, SessionID: cur.ID})
+		return true
+	}
+	ev, first, err := ss.NextAssistantTurn(r.Context(), sess.ID, after)
+	if err == nil {
+		turn, terr := s.assistantTurnOf(r, ss, *sess, ev, first)
+		if terr != nil {
+			writeServerError(w, r, "build assistant turn", terr)
+			return true
 		}
-		select {
-		case <-r.Context().Done():
-			return
-		case <-deadline.C:
-			w.WriteHeader(http.StatusNoContent)
-			return
-		case <-tick.C:
-		}
+		writeJSON(w, http.StatusOK, turn)
+		return true
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		writeServerError(w, r, "read assistant turn", err)
+		return true
+	}
+	select {
+	case <-r.Context().Done():
+		return true
+	case <-deadline:
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	case <-wake:
+		return false
 	}
 }
 
@@ -168,7 +179,7 @@ type assistantRunEvent struct {
 
 // handleAssistantPostEvent is POST /internal/assistant/events: the run's own kinds only, each with the live
 // session's id. A server-only kind is 400; an id that is not the live session's, such as a delayed call of a
-// replaced session, is 409 and writes nothing.
+// replaced session, is 409 and writes nothing; past store.AssistantSessionEventsMax events it is 429.
 func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request) {
 	ss, sess, ok := s.assistantRunSession(w, r)
 	if !ok {
@@ -191,15 +202,20 @@ func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request
 	if len(payload) == 0 {
 		payload = []byte("{}")
 	}
-	stored, err := ss.AppendAssistantEvent(r.Context(), sess.ID, ev.Kind, payload)
+	stored, err := ss.AppendAssistantRunEvent(r.Context(), sess.ID, ev.Kind, payload)
 	if errors.Is(err, store.ErrAssistantSessionEnded) {
 		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.") // PROPOSED
+		return
+	}
+	if errors.Is(err, store.ErrAssistantSessionFull) {
+		writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantSessionEventsFull, "This session holds as many events as it may. Start a new session.") // PROPOSED
 		return
 	}
 	if err != nil {
 		writeServerError(w, r, "append assistant event", err)
 		return
 	}
+	s.assistantChanged(sess.ID, sess.RunID)
 	s.assistantAfterRunEvent(r, ss, sess, stored)
 	writeJSON(w, http.StatusAccepted, map[string]any{"seq": stored.Seq})
 }
