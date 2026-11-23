@@ -307,6 +307,9 @@ jobs:
       # leaves a near-empty newest entry. The unhashed restore-key keeps a
       # go.mod/go.sum change warm (the build caches are content-addressed, so
       # an older entry is safe to restore).
+      # Marks the job's start: the save step below keeps only the build-cache entries this job used.
+      - name: Mark the cache start
+        run: touch "$RUNNER_TEMP/go-cache-start"
       # The module cache is one entry shared by every job (go-modules saves it).
       - name: Restore the Go module cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -404,6 +407,15 @@ jobs:
           path: test/reports/go/${{ matrix.suite }}/**
           overwrite: true
           if-no-files-found: error
+      # Go refreshes a cache entry's mtime when it uses one more than an hour old, so a file older than the start
+      # marker is a restored entry this job never read. Only those go; an entry used within its first hour can go too,
+      # which costs a recompile, never a wrong build.
+      - name: Drop the build-cache entries this job did not use
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          du -sh ~/.cache/go-build
+          find ~/.cache/go-build -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+          du -sh ~/.cache/go-build
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -3797,7 +3809,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: write
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Delete the Go cache entries this run superseded
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3807,11 +3823,7 @@ jobs:
         run: |
           set -euo pipefail
           caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs/heads/main&key=go&per_page=100" --jq '.actions_caches[]')"
-          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" '
-            def fam: .key | sub("-[0-9]+$"; "") | sub("-[0-9a-f]{64}$"; "") | sub("-(Linux|Windows|macOS)$"; "");
-            (map(select((.key | endswith($r)) or ($mod != "" and .key == $mod))) | map({key: fam, value: .created_at}) | from_entries) as $fresh
-            | .[] | select(fam as $f | $fresh[$f] != null and .created_at < $fresh[$f])
-            | "\(.id)\t\(.key)"')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" -f scripts/ci-go-cache-prune.jq)"
           [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
           while IFS=$'\t' read -r id key; do
             echo "deleting $key"

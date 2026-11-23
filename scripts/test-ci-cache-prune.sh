@@ -8,21 +8,21 @@
 # run's entry, never a newer run's, never a family this run did not save. The
 # shared module cache (gomod-) counts as saved only when go-modules saved it.
 #
-# Daemon-free, network-free: it runs the jq program ci.yml carries against a
-# fixed listing. CI_YML overrides the workflow read, for a mutation check.
+# Daemon-free, network-free: it runs the jq program scripts/ci-go-cache-prune.jq against a
+# fixed listing. CI_JQ overrides the program read, for a mutation check.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CI_YML="${CI_YML:-$ROOT/.github/workflows/ci.yml}"
+prog_file="${CI_JQ:-$ROOT/scripts/ci-go-cache-prune.jq}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
-# The program is the single-quoted jq argument after `--arg mod "$MOD_KEY" '`.
-prog="$(awk '
-  /jq -rs --arg r "-\$RUN_ID" --arg mod "\$MOD_KEY" '\''$/ { on = 1; next }
-  on && /^ *\| "\\\(\.id\)\\t\\\(\.key\)"'\''\)"$/ { print "| \"\\(.id)\\t\\(.key)\""; exit }
-  on { print }
-' "$CI_YML")"
-[ -n "$prog" ] || fail "no go-cache-prune jq program found in $CI_YML"
+[ -s "$prog_file" ] || fail "no go-cache-prune jq program at $prog_file"
+
+# Both prunes (ci.yml's on a push to main, release-branch-checks.yml's on a release branch) must read the tested program.
+for wf in ci.yml release-branch-checks.yml; do
+  n="$(git -C "$ROOT" grep -c 'ci-go-cache-prune.jq' -- ".github/workflows/$wf" | cut -d: -f2 || true)"
+  [ "${n:-0}" = 1 ] || fail "$wf must read scripts/ci-go-cache-prune.jq exactly once, found ${n:-0}"
+done
 
 h="$(printf 'e%.0s' $(seq 64))"
 o="$(printf '0%.0s' $(seq 64))"
@@ -46,18 +46,18 @@ EOF
 # entries (the per-day key, run 111, and run 1222, whose id only ends in 222)
 # and the older api-2 entry; it keeps its own, run 333's newer go-unit, and the
 # api-1 and docker families, which it did not save.
-got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "" "$prog" | cut -f1 | sort -n | paste -sd' ')"
+got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "" -f "$prog_file" | cut -f1 | sort -n | paste -sd' ')"
 [ "$got" = "1 2 6 9" ] || fail "run 222 would delete ids [$got], want [1 2 6 9]"
 
 # Run 222 also saved the module cache: the older gomod entry goes too.
-got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "gomod-Linux-$h" "$prog" | cut -f1 | sort -n | paste -sd' ')"
+got="$(printf '%s\n' "$listing" | jq -rs --arg r "-222" --arg mod "gomod-Linux-$h" -f "$prog_file" | cut -f1 | sort -n | paste -sd' ')"
 [ "$got" = "1 2 6 9 10" ] || fail "run 222 saving gomod would delete ids [$got], want [1 2 6 9 10]"
 
 # The gate tools' entries (gotools-, saved by go-gate-tools) are never marked as
 # superseded: ids 12 and 13 are in the listing and in neither result above.
 
 # A run that saved nothing deletes nothing.
-got="$(printf '%s\n' "$listing" | jq -rs --arg r "-999" --arg mod "" "$prog")"
+got="$(printf '%s\n' "$listing" | jq -rs --arg r "-999" --arg mod "" -f "$prog_file")"
 [ -z "$got" ] || fail "a run that saved no cache would delete: $got"
 
 echo "test-ci-cache-prune: ok"

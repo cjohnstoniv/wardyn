@@ -183,6 +183,9 @@ jobs:
       # leaves a near-empty newest entry. The unhashed restore-key keeps a
       # go.mod/go.sum change warm (the build caches are content-addressed, so
       # an older entry is safe to restore).
+      # Marks the job's start: the save step below keeps only the build-cache entries this job used.
+      - name: Mark the cache start
+        run: touch "$RUNNER_TEMP/go-cache-start"
       # The module cache is one entry shared by every job (go-modules saves it).
       - name: Restore the Go module cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -247,6 +250,15 @@ jobs:
           path: test/reports/go/${{ matrix.suite }}/**
           overwrite: true
           if-no-files-found: error
+      # Go refreshes a cache entry's mtime when it uses one more than an hour old, so a file older than the start
+      # marker is a restored entry this job never read. Only those go; an entry used within its first hour can go too,
+      # which costs a recompile, never a wrong build.
+      - name: Drop the build-cache entries this job did not use
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          du -sh ~/.cache/go-build
+          find ~/.cache/go-build -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+          du -sh ~/.cache/go-build
 
   pg:
     name: test-pg-shard (${{ matrix.shard }})
