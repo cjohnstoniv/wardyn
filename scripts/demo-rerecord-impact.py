@@ -43,6 +43,7 @@ import argparse, glob, os, pathlib, re, subprocess, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 UI = ROOT / "ui/src"
 APP = UI / "app/App.tsx"
+LAZY = UI / "app/lazy-routes.ts"  # App.tsx's React.lazy route declarations
 E2E = ROOT / "ui/e2e/demo"
 BEATS = ROOT / "scripts/demo-beats"
 TYPIST = "scripts/demo-typist.sh"   # sourced by every beats lane
@@ -124,8 +125,8 @@ def route_modules():
     """route path -> screen module file, via App.tsx's lazy/static imports + <Route> table."""
     app = APP.read_text()
     mods = {}
-    for name, mod in re.findall(r'const (\w+) = React\.lazy\(\(\) =>\s*import\("(\./[^"]+)"\)', app, re.S):
-        mods[name] = resolve(APP, mod)
+    for name, mod in re.findall(r'const (\w+) = React\.lazy\(\(\) =>\s*import\("(\./[^"]+)"\)', LAZY.read_text(), re.S):
+        mods[name] = resolve(LAZY, mod)
     for names, mod in re.findall(r'import\s*\{([^}]+)\}\s*from\s*"(\./[^"]+)"', app):
         for n in names.split(","):
             mods.setdefault(n.strip().split(" as ")[-1], resolve(APP, mod))
