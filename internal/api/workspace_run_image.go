@@ -154,7 +154,9 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 	}
 }
 
-// runImageReclaimBound bounds reclaimRunImageAfterTeardown's read and removal, well inside backgroundShutdownBudget.
+// runImageReclaimBound bounds reclaimRunImageAfterTeardown's reads, well inside backgroundShutdownBudget. The removal is
+// not under it: runner.RemoveUnlessHeld bounds itself once it holds the image lock, so a reclaim queued behind others is
+// not spent while it waits.
 const runImageReclaimBound = 30 * time.Second
 
 // perRunImageTag reports whether ref has the form of a tag Wardyn built in run runID's launch: a custom image wrapped
@@ -190,7 +192,7 @@ func (s *Server) reclaimRunImageAfterTeardown(ctx context.Context, runID uuid.UU
 		if err != nil || slices.ContainsFunc(wss, func(ws types.Workspace) bool { return ws.ImageRef == run.Image }) {
 			return
 		}
-		held, err := runner.RemoveUnlessHeld(ctx, run.Image, ir.ImageRemove)
+		held, err := runner.RemoveUnlessHeld(base, run.Image, ir.ImageRemove)
 		switch {
 		case held:
 			slog.InfoContext(ctx, "wardynd: kept an ended run's own image a run launch is using",

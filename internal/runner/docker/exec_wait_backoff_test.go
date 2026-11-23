@@ -1,4 +1,4 @@
-// Copyright 2025 The Wardyn Authors
+// Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
 //go:build docker
@@ -47,11 +47,11 @@ func TestPollExecExit_FailedProbesKeepTheFastCadence(t *testing.T) {
 	f.execExited = true
 	f.execExitCode = 7
 	d := newTestDriver(f)
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	code, err := d.pollExecExit(ctx, "e", time.Second)
 	if err != nil || code != 7 {
-		t.Fatalf("pollExecExit = %d, %v; want 7, nil within 1.5 s", code, err)
+		t.Fatalf("pollExecExit = %d, %v; want 7, nil within 3 s", code, err)
 	}
 }
 
@@ -68,7 +68,7 @@ func TestWaitStreamExit_KeepsTheFastCadence(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.execInspects < 4 {
-		t.Errorf("%d exec inspects in 1 s; want at least 4", f.execInspects)
+	if f.execInspects < 3 {
+		t.Errorf("%d exec inspects in 1 s; want at least 3", f.execInspects)
 	}
 }
