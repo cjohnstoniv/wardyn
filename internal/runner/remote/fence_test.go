@@ -18,7 +18,7 @@ func TestRemote_GenerationSentOnlyWithProxyFence(t *testing.T) {
 	rig := runnertest.NewRig(t, rid)
 	sb, _ := create(t, rig, nil)
 	ctx := ctxT(t)
-	cfg := []byte(`{"run_id":"r"}`)
+	cfg := []byte(`{"stripped":true}`)
 
 	if err := rig.Sub.StopProxyAt(ctx, sb.Ref, 4); err != nil {
 		t.Fatalf("StopProxyAt: %v", err)

@@ -545,7 +545,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	if rerr := s.reviveMCPBindings(ctx, run, cfg); rerr != nil {
 		return nil, nil, rerr
 	}
-	return cfg, old, s.reviveModelListRunnerRefusal(run, cfg)
+	return cfg, old, s.reviveProxySettingRunnerRefusal(run, cfg)
 }
 
 // rescopeRevivedPATGrants is scopePATGrants over the allowlist entries whose grant row still exists.
