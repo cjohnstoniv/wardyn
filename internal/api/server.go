@@ -134,7 +134,7 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
-	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// AttachLocal (WARDYN_ATTACH_LOCAL, on by default) allows a person's CLI on their own runner's
 	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
 	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
 	AttachLocal bool

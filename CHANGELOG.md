@@ -11,9 +11,23 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- `WARDYN_ATTACH_LOCAL` is now `on` by default. A person's `wardyn attach` on their own runner's computer keeps the
+  terminal on that computer. The organisation still admits it exactly as an attach through the relay, holds the
+  writer lease and keeps the audit rows; the recording is made from the runner's copy of the output.
+
 ### Fixed
 
 - A connection the run's proxy terminates TLS for (an inspected model host, a token-injection host, or a host a request rule names) now counts toward the run's limit of 1,024 open tunnels, as an uninspected tunnel already did. It is also closed if the sandbox has not finished its TLS handshake within 30 seconds. Once the handshake is done, nothing changes for the connection: a long streamed answer is unaffected.
+
+### Before you upgrade
+
+- If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before
+  upgrading. An unset or empty value now takes the `on` default; an install that sets any other value keeps it.
+  On Compose, a value in `.env` reaches `wardynd` only through this release's `docker-compose.yaml`, which re-running the
+  installer fetches; a compose file kept from an earlier release needs `WARDYN_ATTACH_LOCAL` added to `wardynd`'s
+  `environment`.
 
 ## [0.10.3] — 2026-11-23
 
