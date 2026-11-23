@@ -24,11 +24,12 @@ import (
 const maxAuditBatch = 512
 
 // auditBatchReadBackSQL reads the stored rows of a replayed batch: an event is held when a row with its id and
-// time is stored for the same run. The time index finds each; under the chain lock, every earlier writer has
+// time is stored for the same run. The run comes back too, so the match in Go is by id, time and run, as the join
+// is. The time index finds each; under the chain lock, every earlier writer has
 // committed. seq order makes the first stored row the one whose hashes a duplicate takes, as
 // auditReadBackSQL does.
 const auditBatchReadBackSQL = `
-	SELECT e.id, e.time, COALESCE(e.prev_hash,''), COALESCE(e.row_hash,'')
+	SELECT e.id, e.time, e.run_id, COALESCE(e.prev_hash,''), COALESCE(e.row_hash,'')
 	FROM audit_events e
 	JOIN unnest($1::uuid[], $2::timestamptz[], $3::uuid[]) AS k(id, t, run_id)
 	  ON e.time = k.t AND e.id = k.id AND e.run_id IS NOT DISTINCT FROM k.run_id
@@ -75,10 +76,12 @@ func (rec Recorder) RecordBatch(ctx context.Context, evs []types.AuditEvent) err
 	return nil
 }
 
-// auditBatchKey matches a read-back row to its event: the id and the time at the database's precision.
+// auditBatchKey matches a read-back row to its event: the id, the time at the database's precision and the run
+// (Valid false for a row with no run).
 type auditBatchKey struct {
-	id uuid.UUID
-	us int64
+	id  uuid.UUID
+	us  int64
+	run pgtype.UUID
 }
 
 // InsertAuditEvents appends evs in order under one take of the chain lock and one append slot, in one
@@ -159,10 +162,10 @@ func lockAuditBatch(ctx context.Context, tx pgx.Tx, evs []*types.AuditEvent, lef
 	wait, waitArg := db.AuditChainLockWaitSQL(left)
 	b.Queue(wait, waitArg)
 	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
+	runs := make([]pgtype.UUID, len(evs)) // each event's run as the read-back returns it; zero for none
 	if replay {
 		ids := make([]uuid.UUID, len(evs))
 		ats := make([]time.Time, len(evs))
-		runs := make([]pgtype.UUID, len(evs))
 		for i, ev := range evs {
 			ids[i], ats[i] = ev.ID, ev.Time
 			if ev.RunID != nil {
@@ -191,7 +194,7 @@ func lockAuditBatch(ctx context.Context, tx pgx.Tx, evs []*types.AuditEvent, lef
 			var k auditBatchKey
 			var at pgtype.Timestamptz
 			var s stored
-			if err := rows.Scan(&k.id, &at, &s.prev, &s.row); err != nil {
+			if err := rows.Scan(&k.id, &at, &k.run, &s.prev, &s.row); err != nil {
 				rows.Close()
 				return fmt.Errorf("store: look up replayed audit events: %w", err)
 			}
@@ -205,7 +208,7 @@ func lockAuditBatch(ctx context.Context, tx pgx.Tx, evs []*types.AuditEvent, lef
 			return fmt.Errorf("store: look up replayed audit events: %w", err)
 		}
 		for i, ev := range evs {
-			if s, ok := found[auditBatchKey{ev.ID, ev.Time.UnixMicro()}]; ok {
+			if s, ok := found[auditBatchKey{ev.ID, ev.Time.UnixMicro(), runs[i]}]; ok {
 				ev.PrevHash, ev.RowHash, held[i] = s.prev, s.row, true
 			}
 		}
