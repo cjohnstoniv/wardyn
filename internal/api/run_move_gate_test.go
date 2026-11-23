@@ -137,6 +137,26 @@ func TestMoveUnreachableInEveryConfiguration(t *testing.T) {
 	}
 }
 
+// TestRunPlacementsRefusedUntilReachable: GET /runs/{id}/placements answers 409 move_unavailable to the run's owner
+// and a super admin while moving a run cannot be turned on, and the 404 a missing run gets to anyone else.
+func TestRunPlacementsRefusedUntilReachable(t *testing.T) {
+	f, _ := newMoveGateFixture(t)
+	path := "/api/v1/runs/" + f.run.ID.String() + "/placements"
+	for actor, cookie := range map[string]*http.Cookie{
+		"owner":       ssoSession(t, pauseOwner, "owner@corp.example", oidc.RoleUser),
+		"super admin": ssoSession(t, "sub-super", "super@corp.example", oidc.RoleAdmin),
+	} {
+		w := doSSO(t, f.srv, http.MethodGet, path, cookie, "")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `"reason":"`+reasonMoveUnavailable+`"`) {
+			t.Errorf("%s: %d %s, want 409 %s", actor, w.Code, w.Body.String(), reasonMoveUnavailable)
+		}
+	}
+	stranger := ssoSession(t, "sub-stranger", "stranger@corp.example", oidc.RoleUser)
+	if w := doSSO(t, f.srv, http.MethodGet, path, stranger, ""); w.Code != http.StatusNotFound {
+		t.Errorf("a member who does not own the run: %d %s, want 404", w.Code, w.Body.String())
+	}
+}
+
 // newMoveGateFixture is the pause fixture's running run, with run_move stored on.
 func newMoveGateFixture(t *testing.T) (*pauseFixture, *moveGateStore) {
 	t.Helper()
@@ -174,7 +194,6 @@ func moveAsEveryActor(t *testing.T, f *pauseFixture, body string) map[string]*ht
 
 // TestMoveGateCallers: startMove is called only by handleMoveRun and the move sweep, and never read as a value.
 func TestMoveGateCallers(t *testing.T) {
-	allowed := map[string]bool{"handleMoveRun": true, "sweepRunMoves": true}
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -189,32 +208,61 @@ func TestMoveGateCallers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, d := range f.Decls {
-			fd, ok := d.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			called := map[*ast.SelectorExpr]bool{}
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				if c, ok := n.(*ast.CallExpr); ok {
-					if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "startMove" {
-						called[sel] = true
-						callers[fd.Name.Name]++
-						if !allowed[fd.Name.Name] {
-							t.Errorf("%s: %s calls startMove; only handleMoveRun and the move sweep may", name, fd.Name.Name)
-						}
-					}
-				}
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "startMove" && !called[sel] {
-					t.Errorf("%s: %s reads startMove without calling it", name, fd.Name.Name)
-				}
-				return true
-			})
+		for _, msg := range moveCallerFindings(name, f, callers) {
+			t.Error(msg)
 		}
 	}
 	if callers["handleMoveRun"] == 0 {
 		t.Fatal("handleMoveRun does not call startMove: the guard reads nothing")
 	}
+	for src, want := range map[string]int{
+		`func (s *Server) handleMoveRun() { _ = s.startMove(ctx, run) }`:                 0,
+		`func (s *Server) handleMoveRun() { go func() { _ = s.startMove(ctx, run) }() }`: 0,
+		`func (s *Server) other() { _ = s.startMove(ctx, run) }`:                         1,
+		`func (s *Server) other() { f := func() { _ = s.startMove(ctx, run) }; f() }`:    1,
+		`func (s *Server) handleMoveRun() { f := s.startMove; _ = f }`:                   1,
+		`var f = func(s *Server) error { return s.startMove(ctx, run) }`:                 1,
+		`var g = (*Server).startMove`:                                                    1,
+	} {
+		f, err := parser.ParseFile(token.NewFileSet(), "planted.go", "package api\n"+src+"\n", parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if got := moveCallerFindings("planted.go", f, map[string]int{}); len(got) != want {
+			t.Errorf("%s: %d findings %v, want %d", src, len(got), got, want)
+		}
+	}
+}
+
+// moveCallerFindings is TestMoveGateCallers' check of one parsed file: every declaration, a function's body with
+// its func literals and a package-level initialiser alike, may call startMove only from handleMoveRun or the move
+// sweep, and never read it without calling it. callers counts each caller's calls.
+func moveCallerFindings(name string, f *ast.File, callers map[string]int) []string {
+	allowed := map[string]bool{"handleMoveRun": true, "sweepRunMoves": true}
+	var out []string
+	for _, d := range f.Decls {
+		owner := "a package-level declaration"
+		if fd, ok := d.(*ast.FuncDecl); ok {
+			owner = fd.Name.Name
+		}
+		called := map[*ast.SelectorExpr]bool{}
+		ast.Inspect(d, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "startMove" {
+					called[sel] = true
+					callers[owner]++
+					if !allowed[owner] {
+						out = append(out, name+": "+owner+" calls startMove; only handleMoveRun and the move sweep may")
+					}
+				}
+			}
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "startMove" && !called[sel] {
+				out = append(out, name+": "+owner+" reads startMove without calling it")
+			}
+			return true
+		})
+	}
+	return out
 }
 
 // TestMoveGate_NotDelegable: a delegated token reaches neither move route.
@@ -241,14 +289,22 @@ const (
 
 func isMoveSeam(name string) bool { return name == "moveGateOpen" || moveSeamPort.MatchString(name) }
 
-// moveSeamFindings is the seam guard's check of one file at rel, a slash path from the module root: src is its text,
-// nil for an assembly file.
-func moveSeamFindings(rel string, src []byte) []string {
-	if strings.HasSuffix(rel, ".s") {
-		if strings.HasPrefix(rel, "internal/api/") {
-			return []string{rel + ": an assembly file in internal/api, which this guard cannot read"}
+// moveSeamOpaque reports a file go/parser cannot read that a package can still link: assembly, a system object or
+// cgo C source. The module has none.
+func moveSeamOpaque(rel string) bool {
+	for _, ext := range []string{".s", ".S", ".syso", ".c", ".h"} {
+		if strings.HasSuffix(rel, ext) {
+			return true
 		}
-		return nil
+	}
+	return false
+}
+
+// moveSeamFindings is the seam guard's check of one file at rel, a slash path from the module root: src is its text,
+// nil for a file moveSeamOpaque names.
+func moveSeamFindings(rel string, src []byte) []string {
+	if moveSeamOpaque(rel) {
+		return []string{rel + ": an assembly, system object or C file, which this guard cannot read"}
 	}
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, rel, src, parser.ParseComments|parser.SkipObjectResolution)
@@ -266,7 +322,7 @@ func moveSeamFindings(rel string, src []byte) []string {
 					}
 				}
 			}
-			if (rel == moveGateFile || rel == movePortsFile) && (strings.HasPrefix(c.Text, "//go:build") || strings.HasPrefix(c.Text, "// +build")) {
+			if (rel == moveGateFile || rel == movePortsFile) && (strings.HasPrefix(c.Text, "//go:build") || strings.HasPrefix(c.Text, "// +build") || strings.HasPrefix(c.Text, "//+build")) {
 				at(c.Pos(), "a build constraint on the move gate's own file")
 			}
 		}
@@ -366,8 +422,8 @@ func moduleRoot(t *testing.T) string {
 	return root
 }
 
-// TestMoveGateSeamsSetOnlyInTests reads every non-test Go file in the module, behind any build constraint, and every
-// assembly file in internal/api, and fails on any use of the move gate or a port but a call.
+// TestMoveGateSeamsSetOnlyInTests reads every non-test Go file in the module, behind any build constraint, fails on
+// any assembly, system object or C file anywhere in it, and fails on any use of the move gate or a port but a call.
 func TestMoveGateSeamsSetOnlyInTests(t *testing.T) {
 	root := moduleRoot(t)
 	files, gateFiles := 0, 0
@@ -385,7 +441,7 @@ func TestMoveGateSeamsSetOnlyInTests(t *testing.T) {
 		rel = filepath.ToSlash(rel)
 		var src []byte
 		switch {
-		case strings.HasSuffix(rel, ".s"):
+		case moveSeamOpaque(rel):
 		case strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, "_test.go"):
 			if src, err = os.ReadFile(path); err != nil {
 				return err
@@ -432,6 +488,12 @@ func TestMoveGateSeamsSetOnlyInTests_Planted(t *testing.T) {
 		{api, `const moveReachable bool = false`, 1},
 		{api, `var moveReachable = false`, 1},
 		{"internal/api/planted.s", "", 1},
+		{"internal/runner/planted.S", "", 1},
+		{"cmd/wardynd/planted_amd64.syso", "", 1},
+		{"pkg/planted.c", "", 1},
+		{"test/planted.h", "", 1},
+		{moveGateFile, "// +build never\n\npackage api\n", 1},
+		{movePortsFile, "//+build never\n\npackage api\n", 1},
 		{api, "//go:build ignore\n\npackage api\nfunc f() { moveGateOpen = nil }", 1},
 		{"test/planted/planted.go", "package planted\nfunc f() { movePortPauseStop = nil }", 1},
 		{api, `func f() { if moveGateOpen() {} }`, 0},
@@ -440,7 +502,7 @@ func TestMoveGateSeamsSetOnlyInTests_Planted(t *testing.T) {
 		{api, `const moveReachable = false`, 0},
 	} {
 		src := tc.src
-		if !strings.Contains(src, "package ") && !strings.HasSuffix(tc.rel, ".s") {
+		if !strings.Contains(src, "package ") && !moveSeamOpaque(tc.rel) {
 			src = "package api\n" + src + "\n"
 		}
 		if got := moveSeamFindings(tc.rel, []byte(src)); len(got) != tc.want {
