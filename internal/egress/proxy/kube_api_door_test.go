@@ -111,7 +111,7 @@ func newKubeHarness(t *testing.T, o kubeOpts) *kubeHarness {
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: o.allowed}),
 		Injector:        inj,
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),
 		RunToken:        newTokenSource("RUNTOK"),

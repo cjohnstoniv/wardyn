@@ -281,7 +281,7 @@ func newSigV4HarnessWith(t *testing.T, mut func(*Options), allowed ...string) *s
 	opts := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(sigv4HostPorts(), allowed...)}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Injector:        &injector{byHost: map[string]*injEntry{}, base: cp.URL, token: newTokenSource("RUNTOK"), client: cp.Client()},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),

@@ -55,7 +55,7 @@ func llmChecksProxy(t *testing.T, spec types.RunPolicySpec, gatewayBase string, 
 	opts := Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(spec),
-		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: fakeResolver{m: map[string][]net.IP{
 			anthropicHost: ips("93.184.216.34"), openaiHost: ips("93.184.216.35"), llmTestGatewayHost: ips("10.40.1.5"),
 		}},

@@ -40,7 +40,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -116,7 +115,7 @@ func TestMITMUpstreamDialsRealHostnameThroughCorpProxy(t *testing.T) {
 	}
 	res := fakeResolver{m: map[string][]net.IP{mitmUpstreamHost: ips(mitmUpstreamCGNAT)}}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 32)}
 
 	p := newProxy(Options{
 		RunID:         uuid.New(),
@@ -190,7 +189,7 @@ func TestMITMUpstreamBypassGoesDirect(t *testing.T) {
 	}
 	res := fakeResolver{m: map[string][]net.IP{mitmUpstreamHost: ips(mitmUpstreamCGNAT)}}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 32)}
 
 	// dialStub records the address the DIRECT dial (the bypass branch) was
 	// asked to reach and refuses it — no real destination is needed: the

@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -103,7 +102,7 @@ func TestMITMConnect_BytesCountAsActivity(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Scanner:         forwardScanEngine(t, "block"),
 		CA:              ca,
 		MITMHosts:       []string{host},

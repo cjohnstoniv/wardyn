@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -100,7 +99,7 @@ func newGitBrokerUpstream(t *testing.T, token string) *gitBrokerUpstream {
 func newGitBrokerProxyWithSpec(t *testing.T, grants map[string]uuid.UUID, upstreamAddr string, spec types.RunPolicySpec) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(spec),
@@ -212,7 +211,7 @@ func TestGitBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 	forgeAddr := startH2MismatchPeer(t)
 	grantID := uuid.New()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),

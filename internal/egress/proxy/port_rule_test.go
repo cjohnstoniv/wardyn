@@ -29,7 +29,7 @@ func newRuleTestProxy(t *testing.T, spec types.RunPolicySpec, upstreamAddr strin
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(spec),
 		Approval: ap,
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial:     redirectDial(upstreamAddr),
 	})

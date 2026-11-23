@@ -119,7 +119,8 @@ func sinkLogs(p *Proxy) []egress.DecisionLog {
 	var out []egress.DecisionLog
 	for {
 		select {
-		case d := <-p.sink.ch:
+		case q := <-p.sink.ch:
+			d := q.log
 			out = append(out, d)
 		default:
 			return out
@@ -355,7 +356,7 @@ func TestVMFlowRelayAskToProxyOwnPortsRefused(t *testing.T) {
 		Policy: CompilePolicy(types.RunPolicySpec{
 			AllowedDomains: []string{"wardyn-proxy", "wardyn-proxy:3129", "wardyn-proxy:3130"},
 		}),
-		Sink:          &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:          &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:      fakeResolver{m: map[string][]net.IP{"wardyn-proxy": ips("10.40.0.5")}},
 		Dial:          redirectDial(upstream),
 		InternalHosts: []types.InternalHost{{HostSuffix: "wardyn-proxy", CIDRs: []string{"10.40.0.0/16"}}},

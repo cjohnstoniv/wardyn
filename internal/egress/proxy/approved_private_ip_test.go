@@ -28,7 +28,7 @@ func TestApprovedHostResolvingPrivateIsDenied(t *testing.T) {
 	ap := newApprovalClient(cp.URL, newTokenSource("tok"), uuid.New(), cp.Client())
 	ap.hosts[approvalHostKey(host)] = &hostApproval{state: apApproved, approvalID: uuid.New(), scope: types.ScopeRun}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"unrelated.test"}, FirstUseApproval: types.FirstUseWaitForReview}),
@@ -42,7 +42,7 @@ func TestApprovedHostResolvingPrivateIsDenied(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("approved host resolving to 10.9.8.7: status = %d, want 403", rec.Code)
 	}
-	if d := <-sink.ch; d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
+	if d := (<-sink.ch).log; d.Decision != egress.Deny || d.RuleSource != "builtin:private-ip" {
 		t.Fatalf("decision = %s %s, want deny builtin:private-ip", d.Decision, d.RuleSource)
 	}
 }

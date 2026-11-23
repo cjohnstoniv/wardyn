@@ -59,7 +59,7 @@ func newPATBrokerProxy(t *testing.T, grants map[string]PATGrant, upstreamAddr st
 func newPATBrokerProxySpec(t *testing.T, spec types.RunPolicySpec, grants map[string]PATGrant, upstreamAddr string) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(spec),
@@ -239,7 +239,7 @@ func TestPATBrokerReportsH2MismatchNotDialFailed(t *testing.T) {
 	forgeAddr := startH2MismatchPeer(t)
 	grantID := uuid.New()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),

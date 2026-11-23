@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -28,7 +27,7 @@ func mitmProxyMethods(t *testing.T, methods []string, upstream *httptest.Server)
 		t.Fatalf("newCertAuthority: %v", err)
 	}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 32)}
 	p := newProxy(Options{
 		RunID: uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{

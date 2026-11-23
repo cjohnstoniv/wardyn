@@ -56,7 +56,7 @@ func newNoProxyProxy(t *testing.T, spec types.RunPolicySpec, res resolver, noPro
 	hosts []types.InternalHost, up *upstreamProxy, d *routingDialer) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(spec),
@@ -290,7 +290,7 @@ func TestBypassUpstreamMatching(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		UpstreamNoProxy: []string{".corp.internal", "vpce.amazonaws.com", "100.64.0.0/10", "*", "not a host"},
 	})
 	cases := []struct {
@@ -346,7 +346,7 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 		return newProxy(Options{
 			RunID:    uuid.New(),
 			Policy:   CompilePolicy(spec),
-			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 			Resolver: publicResolver{},
 		})
 	}
@@ -408,7 +408,7 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 			return newProxy(Options{
 				RunID:    uuid.New(),
 				Policy:   CompilePolicy(spec),
-				Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				Resolver: publicResolver{},
 				Upstream: up,
 			})
@@ -457,7 +457,7 @@ func TestRedirectLiteralIP_AuditedAsItsOwnGrant(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7"}}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: publicResolver{},
 		Dial:     redirectDial(upstreamAddr(direct)),
 	})

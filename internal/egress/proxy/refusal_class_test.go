@@ -50,7 +50,7 @@ func attributedTestProxy(t *testing.T, spec types.RunPolicySpec, upstreamAddr st
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(spec), Attribution: ref,
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr),
 	})
 	return p, buf
@@ -103,7 +103,7 @@ func TestRefusal_GuardRefusalNamesNoLayer(t *testing.T) {
 	})
 	t.Run("desktop VM relay", func(t *testing.T) {
 		buf := &bytes.Buffer{}
-		s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "unit", layerName: "Team A"}
+		s := &decisionSink{out: buf, ch: make(chan queuedDecision, 8), layer: "unit", layerName: "Team A"}
 		s.emit(decisionLog(egress.Request{Host: "h.test"}, egress.Deny, "vmnet:udp"))
 		r := refusalOf(t, buf, "vmnet:udp")
 		wantRefusal(t, r, egress.RefusedByWardyn, "vmnet")
@@ -180,7 +180,7 @@ func TestRefusal_AllowedHostRefusedOutside(t *testing.T) {
 		buf := &bytes.Buffer{}
 		p := newProxy(Options{
 			RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
-			Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+			Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 			Resolver: publicResolver{}, Upstream: up,
 			// The corporate proxy is on loopback; the guard exception for it is the same one production uses.
 		})
@@ -219,7 +219,7 @@ func TestRefusal_AmbiguousFailureIsUnknown(t *testing.T) {
 		buf := &bytes.Buffer{}
 		p := newProxy(Options{
 			RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"gone.test"}}),
-			Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+			Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 			Resolver: resolverFailingFor{host: "gone.test"},
 		})
 		p.ServeHTTP(httptest.NewRecorder(), mustProxyReq(t, http.MethodGet, "http://gone.test/x"))
@@ -293,7 +293,7 @@ func TestRefusal_TunnelEnded(t *testing.T) {
 // Rows the proxy does not classify carry no refusal at all; "absent" is not "unknown".
 func TestRefusal_UnclassifiedDenyCarriesNone(t *testing.T) {
 	buf := &bytes.Buffer{}
-	s := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8), layer: "unit", layerName: "Team A"}
+	s := &decisionSink{out: buf, ch: make(chan queuedDecision, 8), layer: "unit", layerName: "Team A"}
 	for _, rule := range []string{"policy:evaluator-error", "builtin:gateway-vet-failed", "brokered:ado:upstream-refused", "scan:blocked"} {
 		s.emit(decisionLog(egress.Request{Host: "h.test"}, egress.Deny, rule))
 	}

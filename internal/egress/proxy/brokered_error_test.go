@@ -300,7 +300,7 @@ func TestAWSLanePortalInAPrivateRangeIsEgressDenied(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: fakeResolver{m: map[string][]net.IP{awsHost: ips("100.64.1.5")}},
 	})
 	rec := httptest.NewRecorder()
@@ -349,7 +349,7 @@ func TestBrokeredRefreshFailureBehindAnEgressRefusalIsEgressDenied(t *testing.T)
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: fakeResolver{m: map[string][]net.IP{anthropicHost: ips("100.64.1.5")}},
 		Injector: &injector{
 			byHost: map[string]*injEntry{anthropicHost: {grantID: uuid.New(), expiresAt: time.Now().Add(-time.Hour).UnixMilli()}},

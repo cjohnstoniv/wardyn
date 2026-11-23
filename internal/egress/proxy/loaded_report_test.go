@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -26,7 +25,7 @@ func reportProxy(t *testing.T, cp *httptest.Server) *Proxy {
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(cp)),
 		ControlPlaneURL: "https://wardynd.test:8080",

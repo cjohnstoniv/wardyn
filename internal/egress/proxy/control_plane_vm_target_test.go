@@ -33,7 +33,7 @@ func vmEngineProxy(t *testing.T, cp string, unknown bool) *Proxy {
 		Policy: CompilePolicy(types.RunPolicySpec{
 			AllowedDomains: []string{cp, vmControlOK, vmControlHost, vmControlOKHost},
 		}),
-		Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 16)},
+		Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 16)},
 		Resolver: fakeResolver{m: map[string][]net.IP{
 			vmControlHost:   ips(cp),
 			vmControlOKHost: ips(vmControlOK),

@@ -119,7 +119,7 @@ func TestTerminatesTLSMatchesHandleConnect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{MITMHosts: tc.hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, PATGrants: patGrants}
 			opts := Options{
-				RunID: uuid.New(), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				RunID: uuid.New(), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				MITMHosts: tc.hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, PATGrants: patGrants,
 			}
 			if tc.mod != nil {
@@ -356,7 +356,7 @@ func TestTerminatedOutsideMatchesConnect(t *testing.T) {
 			cfg := &Config{MITMHosts: hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, ViaOrgRoutes: viaOrg, PortRule: tc.portRul, Policy: tc.policy,
 				MITMCACertPEM: string(certPEM), MITMCAKeyPEM: string(keyPEM)}
 			p := newProxy(Options{
-				RunID: uuid.New(), Policy: CompilePolicy(tc.policy), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				RunID: uuid.New(), Policy: CompilePolicy(tc.policy), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				Approval: newApprovalClient("http://127.0.0.1:1", newTokenSource("tok"), uuid.New(), http.DefaultClient), Resolver: publicResolver{}, CA: ca,
 				MITMHosts: hosts, MITMLLM: tc.llm, GitHubAPI: ghGrant, ViaOrgRoutes: viaOrg,
 			})

@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -420,7 +419,7 @@ func TestGitBrokerFindsTheAzureDevOpsGrantByItsHostKey(t *testing.T) {
 	p := newProxy(Options{
 		RunID:     uuid.New(),
 		Policy:    CompilePolicy(types.RunPolicySpec{}),
-		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 16)},
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 16)},
 		Resolver:  publicResolver{},
 		RunToken:  newTokenSource("RUNTOK"),
 		ADOGrants: newADOGrantsByHost(&ADOGrantConfig{Organization: "acme", Hosts: []string{"1.2.3.11"}}),

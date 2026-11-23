@@ -279,7 +279,7 @@ func TestUpstreamProtocolMismatch_MITM_AWSLane(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver:        publicResolver{},
 		Upstream:        up,
 		TLSClientConfig: testInsecureTLSConfig,
@@ -340,7 +340,7 @@ func TestUpstreamProtocolMismatch_PlainForward(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"h2.test"}}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver:        publicResolver{},
 		Upstream:        up,
 		TLSClientConfig: testInsecureTLSConfig,
@@ -510,7 +510,7 @@ func newH2TestProxy(t *testing.T, peer *h2Peer, host string) (*Proxy, *bytes.Buf
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver:        publicResolver{},
 		Upstream:        mustUpstream(t, peer.addr()),
 		TLSClientConfig: testInsecureTLSConfig,
@@ -822,7 +822,7 @@ func TestH2Fallback_PATBrokerLane(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 16)},
 		Resolver:        publicResolver{},
 		ControlPlaneURL: "https://wardynd.test:8080",
 		RunToken:        newTokenSource("RUNTOK"),
@@ -861,7 +861,7 @@ func newGitBrokerH2Proxy(t *testing.T, forgeAddr string, forgeDials *atomic.Int3
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 16)},
 		Resolver: publicResolver{},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if _, port, _ := net.SplitHostPort(addr); port == "443" {
@@ -972,7 +972,7 @@ func TestH2Fallback_NoProxyBypass(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp.internal"}}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver:        fakeResolver{m: map[string][]net.IP{"mirror.corp.internal": ips("93.184.216.34")}},
 		Dial:            d.dial,
 		Upstream:        mustUpstream(t, f.addr()),

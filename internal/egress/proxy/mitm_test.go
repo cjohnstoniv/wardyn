@@ -71,7 +71,7 @@ func mitmProxy(t *testing.T, mode string, upstream *httptest.Server) (*Proxy, *b
 		t.Fatalf("newCertAuthority: %v", err)
 	}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 32)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),
@@ -271,7 +271,7 @@ func TestMITMCorpHost_DialsConfiguredPort(t *testing.T) {
 	p := newProxy(Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
-		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		CA:     ca,
 		// Bare host: the historical, still-supported format (mitmPorts defaults
 		// to "any port" for it), so the MITM-ELIGIBILITY gate alone can't be
@@ -362,7 +362,7 @@ func TestMITMCorpHost_PortMismatchFallsThroughOpaque(t *testing.T) {
 	p := newProxy(Options{
 		RunID:     uuid.New(),
 		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
-		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		CA:        ca,
 		MITMHosts: []string{"mirror.corp:5000"}, // scoped to :5000 only
 		Resolver:  publicResolver{},
@@ -408,7 +408,7 @@ func TestMITMCorpHost_ForwardEgressScanCoversBody(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Scanner:         forwardScanEngine(t, "block"),
 		CA:              ca,
 		MITMHosts:       []string{"mirror.corp"},
@@ -511,7 +511,7 @@ func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
 	p := newProxy(Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"mirror.corp"}}),
-		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 16)},
+		Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 16)},
 		CA:     ca,
 		// Port-SCOPED entry (what planArtifactRedirect authors): mitmPorts["mirror.corp"]
 		// is 5000, so only a CONNECT to :5000 is MITM-eligible at all.
@@ -800,7 +800,7 @@ func TestMITMVetFailureRowCarriesCauseAndVia(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: fakeResolver{err: errors.New("dns down")},
 	})
 	rec := httptest.NewRecorder()

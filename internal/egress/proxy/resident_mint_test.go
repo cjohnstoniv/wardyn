@@ -33,7 +33,7 @@ func residentMintProxy(t *testing.T, now *atomic.Int64, mints []ResidentMint, br
 	p := newProxy(Options{
 		RunID:               uuid.New(),
 		Policy:              CompilePolicy(types.RunPolicySpec{}),
-		Sink:                &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:                &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:            publicResolver{},
 		Dial:                redirectDial(upstreamAddr(cp)),
 		ControlPlaneURL:     "http://wardynd.test:8080",

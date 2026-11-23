@@ -61,7 +61,7 @@ func TestDenyDialFailed_ConnectTunnel_UpstreamProxyHop(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver: resolverFailingFor{host: corp},
 		Upstream: up,
 	})
@@ -173,7 +173,7 @@ func TestDenyDialFailed_SecretNeverReachesCause(t *testing.T) {
 	procMask([]byte(secret))
 
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),

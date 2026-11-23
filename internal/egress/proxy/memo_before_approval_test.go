@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -54,7 +53,7 @@ func TestMemoedPrivateHostSpendsNoApproval(t *testing.T) {
 				state: apApproved, approvalID: uuid.New(), scope: types.ScopeOnce,
 			}
 			buf := &bytes.Buffer{}
-			sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+			sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 			p := newProxy(Options{
 				RunID: uuid.New(),
 				Policy: CompilePolicy(types.RunPolicySpec{

@@ -35,7 +35,7 @@ func TestEvaluatorErrorFailsClosed(t *testing.T) {
 		p := newProxy(Options{
 			RunID:     uuid.New(),
 			Policy:    CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 			Resolver:  publicResolver{},
 			Evaluator: ev,
 		})
@@ -54,7 +54,7 @@ func TestEvaluatorErrorControl(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver: publicResolver{},
 	})
 	if d, _, log := p.evaluate(context.Background(), "example.com", 443, http.MethodConnect, ""); d != egress.Allow {
@@ -78,7 +78,7 @@ func TestUnrecognisedVerdictFailsClosed(t *testing.T) {
 	p := newProxy(Options{
 		RunID:     uuid.New(),
 		Policy:    CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:  publicResolver{},
 		Evaluator: unknownVerdictEvaluator{},
 	})

@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -48,7 +47,7 @@ func TestGatewayPortkeyStrip_ViaOrgForward(t *testing.T) {
 				cpAddr := upstreamAddr(cp)
 				o := Options{
 					RunID:           uuid.New(),
-					Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+					Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 					Resolver:        publicResolver{},
 					Policy:          CompilePolicy(types.RunPolicySpec{}),
 					ControlPlaneURL: "http://" + cpAddr,

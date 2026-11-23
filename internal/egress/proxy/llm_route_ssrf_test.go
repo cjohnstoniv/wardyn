@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -34,7 +33,7 @@ func TestBrokeredLLMRouteKeepsSSRFGuardOnPublicVendorHost(t *testing.T) {
 	p := newProxy(Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),
-		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)},
+		Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 32)},
 		// No LLMUpstreams: there IS no configured gateway on this run.
 		Resolver: fakeResolver{m: map[string][]net.IP{anthropicHost: ips("10.40.1.5")}},
 		Injector: staticInj(map[string]injectedHeader{
@@ -69,7 +68,7 @@ func TestBrokeredLLMRouteStillUsesTheRelaxedVetForAConfiguredGateway(t *testing.
 	p := newProxy(Options{
 		RunID:        uuid.New(),
 		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost, "gw.corp.internal"}}),
-		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 32)},
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 32)},
 		LLMUpstreams: map[string]string{anthropicHost: "http://gw.corp.internal:8443"},
 		Resolver:     fakeResolver{m: map[string][]net.IP{"gw.corp.internal": ips("10.40.1.5")}},
 		Injector: staticInj(map[string]injectedHeader{

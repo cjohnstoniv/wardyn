@@ -33,7 +33,7 @@ import (
 func newLocalRouteProxy(t *testing.T, controlPlaneURL, runToken, upstreamAddr string, inj *injector, tlsCfg *tls.Config) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),

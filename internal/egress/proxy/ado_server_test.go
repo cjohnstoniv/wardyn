@@ -35,7 +35,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
@@ -378,7 +377,7 @@ func newADOServerRESTProxy(t *testing.T, upstream, pat string, allowed ...string
 		RunID:     uuid.New(),
 		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: allowed}),
 		Injector:  inj,
-		Sink:      &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:      &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:  publicResolver{},
 		Dial:      redirectDial(upstream),
 		RunToken:  newTokenSource("RUNTOK"),

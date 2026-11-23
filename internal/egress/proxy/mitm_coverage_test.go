@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -54,7 +53,7 @@ func TestMITMGenericChannelBodyIsScannedWhateverTheHostClassification(t *testing
 			p := newProxy(Options{
 				RunID:           uuid.New(),
 				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				Scanner:         forwardScanEngine(t, "block"),
 				CA:              ca,
 				MITMHosts:       []string{host},
@@ -114,7 +113,7 @@ func TestMITM_SubscriptionRouteThroughHostIsScannedAsAnthropic(t *testing.T) {
 			p := newProxy(Options{
 				RunID:           uuid.New(),
 				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{gateway}}),
-				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				Scanner:         scanEngine(t, "block", scanTestSecret),
 				CA:              ca,
 				MITMHosts:       []string{net.JoinHostPort(gateway, "443")},
@@ -191,7 +190,7 @@ func TestMITMPortClampHoldsOnTheLLMBranchToo(t *testing.T) {
 	p := newProxy(Options{
 		RunID:     uuid.New(),
 		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{bedrockVPCEHost}}),
-		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		CA:        ca,
 		MITMHosts: []string{bedrockVPCEHost + ":8443"}, // scoped to :8443 only
 		MITMLLM:   true,                                // the LLM branch is live on this run

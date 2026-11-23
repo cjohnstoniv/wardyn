@@ -177,7 +177,7 @@ func TestBedrockDataPlaneFault_PlainLaneReportsTheClass(t *testing.T) {
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{plainMITMHost}}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial:     redirectDial(upstreamAddr(origin)),
 	})

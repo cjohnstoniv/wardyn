@@ -23,7 +23,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -84,7 +83,7 @@ func TestStressInspectionUnderProxyCgroup(t *testing.T) {
 	}))
 	t.Cleanup(up.Close)
 
-	sink := &decisionSink{out: io.Discard, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: io.Discard, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID: stressRunID,
 		Policy: CompilePolicy(types.RunPolicySpec{PushRules: &types.PushRulesSpec{
@@ -132,7 +131,7 @@ func TestStressInspectionUnderProxyCgroup(t *testing.T) {
 	// the detectors themselves stop at contentscan's per-request scan budget.
 	scanned := 0
 	for len(sink.ch) > 0 {
-		if d := <-sink.ch; d.Scan != nil && d.Scan.Scanned {
+		if d := (<-sink.ch).log; d.Scan != nil && d.Scan.Scanned {
 			scanned++
 		}
 	}

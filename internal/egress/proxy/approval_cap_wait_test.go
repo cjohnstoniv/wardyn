@@ -78,7 +78,7 @@ func TestCappedHostIsAuditedAsTheHostCap(t *testing.T) {
 			FirstUseApproval: types.FirstUseDenyWithReview,
 		}),
 		Approval: ap,
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: publicResolver{},
 	})
 

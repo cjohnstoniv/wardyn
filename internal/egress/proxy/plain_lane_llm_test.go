@@ -31,7 +31,7 @@ import (
 func newPlainLaneProxy(t *testing.T, upstream string, inj *injector) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),
@@ -197,7 +197,7 @@ func TestPlainLaneNoCleartextInjectionToTheTLSPort(t *testing.T) {
 			RunID:           uuid.New(),
 			Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: domains}),
 			Injector:        inj(),
-			Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+			Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 			Resolver:        publicResolver{},
 			Dial:            redirectDial(upstreamAddr(cu.srv)),
 			TLSClientConfig: testInsecureTLSConfig,

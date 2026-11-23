@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -46,7 +45,7 @@ func TestLocalLLM404RendersTheCompiledDetail(t *testing.T) {
 	p := newProxy(Options{
 		RunID:                uuid.New(),
 		Policy:               CompilePolicy(types.RunPolicySpec{}),
-		Sink:                 &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:                 &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:             publicResolver{},
 		Dial:                 redirectDial("127.0.0.1:1"),
 		LLMUnavailableDetail: "Bedrock is configured but its credential expired at 2026-09-12T00:00:00Z; reconnect it",

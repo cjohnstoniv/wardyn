@@ -19,7 +19,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -106,7 +105,7 @@ func TestGatewayIdentityOff_WireBytesUnchanged(t *testing.T) {
 	p := newProxy(Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{gwHost, plainHost}}),
-		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver: fakeResolver{m: map[string][]net.IP{
 			gwHost:    ips("93.184.216.10"),
 			plainHost: ips("93.184.216.20"),

@@ -124,7 +124,7 @@ func TestTrustedCADialsPassingCorpCA(t *testing.T) {
 
 	newTestProxyWithTLS := func(tlsCfg *tls.Config) (*Proxy, *bytes.Buffer) {
 		buf := &bytes.Buffer{}
-		sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 32)}
+		sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 32)}
 		p := newProxy(Options{
 			RunID:           uuid.New(),
 			Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),

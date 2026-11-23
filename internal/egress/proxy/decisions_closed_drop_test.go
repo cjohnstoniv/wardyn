@@ -31,7 +31,7 @@ func TestDecisionSinkCountsTheClosedArmDrop(t *testing.T) {
 	log := decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed")
 
 	t.Run("an emit after close is counted", func(t *testing.T) {
-		s := &decisionSink{ch: make(chan egress.DecisionLog, 4)} // out=nil: mirror is a no-op
+		s := &decisionSink{ch: make(chan queuedDecision, 4)} // out=nil: mirror is a no-op
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()

@@ -30,7 +30,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -180,7 +179,7 @@ func newGwidRig(t *testing.T, routes []GatewayIdentityRoute, h2 bool) *gwidRig {
 	g.p = newProxy(Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{gwidHost, gwidOther}}),
-		Sink:   &decisionSink{out: g.buf, ch: make(chan egress.DecisionLog, 256)},
+		Sink:   &decisionSink{out: g.buf, ch: make(chan queuedDecision, 256)},
 		Resolver: fakeResolver{m: map[string][]net.IP{
 			gwidHost: ips("93.184.216.10"), gwidOther: ips("93.184.216.20"), "wardynd.test": ips("10.9.9.9"),
 		}},

@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
 )
@@ -110,7 +109,7 @@ func newADOGitHarnessFront(t *testing.T, setup func(p *Proxy, token string), fro
 		RunID:           runID,
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
 		Injector:        inj,
-		Sink:            &decisionSink{out: sink, ch: make(chan egress.DecisionLog, 256)},
+		Sink:            &decisionSink{out: sink, ch: make(chan queuedDecision, 256)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(tlsFront)),
 		RunToken:        newTokenSource("RUNTOK"),

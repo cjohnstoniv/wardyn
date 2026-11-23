@@ -46,7 +46,7 @@ func TestCodexBrokeredRoute_FinalUpstreamPath(t *testing.T) {
 			}
 			buf := &bytes.Buffer{}
 			opts.RunID, opts.Policy = uuid.New(), CompilePolicy(types.RunPolicySpec{})
-			opts.Sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+			opts.Sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 			opts.Resolver = fakeResolver{m: map[string][]net.IP{gw: ips("10.40.1.5")}}
 			if tc.upstream == "" {
 				opts.Resolver = publicResolver{}

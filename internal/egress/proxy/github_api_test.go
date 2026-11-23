@@ -84,7 +84,7 @@ func newGHProxySpec(t *testing.T, up *ghUpstream, spec types.RunPolicySpec) (*Pr
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(spec),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(up.srv)),
 		ControlPlaneURL: "https://wardynd.test:8080",

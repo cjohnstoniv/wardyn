@@ -28,7 +28,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -67,7 +66,7 @@ func TestAWSLaneErrorGolden_VetFailed(t *testing.T) {
 			p := newProxy(Options{
 				RunID:    uuid.New(),
 				Policy:   CompilePolicy(types.RunPolicySpec{}),
-				Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+				Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 				Resolver: fakeResolver{err: errors.New("dns down")},
 			})
 			rec := httptest.NewRecorder()
@@ -122,7 +121,7 @@ func TestAWSLaneErrorGolden_UpstreamError(t *testing.T) {
 			p := newProxy(Options{
 				RunID:    uuid.New(),
 				Policy:   CompilePolicy(types.RunPolicySpec{}),
-				Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+				Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 				Resolver: publicResolver{}, // vet succeeds; the actual round trip fails
 				Dial:     redirectDial("127.0.0.1:1"),
 			})

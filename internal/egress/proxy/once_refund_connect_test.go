@@ -38,7 +38,7 @@ func onceProxy(t *testing.T, id uuid.UUID, dial func(context.Context, string, st
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"unrelated.test"}, FirstUseApproval: types.FirstUseDenyWithReview}),
 		Approval: ap,
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial:     dial,
 	})
@@ -170,7 +170,7 @@ func TestOnceRefund_TheRetryRowNamesTheApprovalItWentOn(t *testing.T) {
 		p := newProxy(Options{
 			RunID:    uuid.New(),
 			Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{onceHost}}),
-			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 			Resolver: publicResolver{},
 			Dial:     dialFailingFirst(1, quietUpstream(t)),
 		})

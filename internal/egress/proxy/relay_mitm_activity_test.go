@@ -85,7 +85,7 @@ func TestRelayedMITMInnerRequest_IsNotActivity(t *testing.T) {
 	for _, relayed := range []bool{true, false} {
 		t.Run(laneName(relayed)+"/decision", func(t *testing.T) {
 			cu := captureUpstream(t, true, "llm-ok")
-			p, caPEM := relayMITMProxy(t, uuid.New(), &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 32)}, cu.srv)
+			p, caPEM := relayMITMProxy(t, uuid.New(), &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 32)}, cu.srv)
 			sendMITMMessage(t, p, relayed, caPEM)
 			var inner *egress.DecisionLog
 			for _, d := range sinkLogs(p) {

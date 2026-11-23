@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -61,7 +60,7 @@ func portkeyProxy(up *capturedUpstream, host string, gateway bool, inj *injector
 	o := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver:        fakeResolver{m: map[string][]net.IP{host: ips("93.184.216.10")}},
 		Dial:            redirectDial(upstreamAddr(up.srv)),
 		Injector:        inj,

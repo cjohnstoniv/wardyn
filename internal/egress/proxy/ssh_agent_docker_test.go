@@ -121,7 +121,7 @@ func sshAgentCloneInContainer(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: io.Discard, ch: make(chan egress.DecisionLog, 256)},
+		Sink:            &decisionSink{out: io.Discard, ch: make(chan queuedDecision, 256)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(cp)),
 		ControlPlaneURL: "http://wardynd.test:8080",
@@ -161,7 +161,7 @@ func sshAgentCloneInContainer(t *testing.T) {
 	}
 	hostRefused := false
 	for len(p.sink.ch) > 0 {
-		d := <-p.sink.ch
+		d := (<-p.sink.ch).log
 		hostRefused = hostRefused || (d.Decision == egress.Deny && d.Cause == errSSHAgentHost.Error())
 	}
 	if !hostRefused {

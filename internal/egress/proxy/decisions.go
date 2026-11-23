@@ -41,8 +41,15 @@ type decisionSink struct {
 	client       *http.Client
 	out          io.Writer
 
-	ch      chan egress.DecisionLog
+	ch      chan queuedDecision
 	dropped atomic.Uint64
+	// batchMax is how many records one post may carry: 0 (single posts) until an answer of the control plane
+	// says it takes batches (DecisionBatchHeader), and again 0 after an answer that does not. Never persisted.
+	batchMax atomic.Int64
+	// lastOK is when a post last landed (unix nanoseconds; the sink's start before any), and failing says a
+	// post has failed since: emit labels a decision made while the control plane could not be reached.
+	lastOK  atomic.Int64
+	failing atomic.Bool
 	// reported is the drop count already summarized. The worker owns it; close reads and advances it only
 	// once the worker has exited (wg), for the drops counted after the worker's last summary.
 	reported uint64
@@ -72,8 +79,9 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 		token:    token,
 		client:   client,
 		out:      out,
-		ch:       make(chan egress.DecisionLog, bufferSize),
+		ch:       make(chan queuedDecision, bufferSize),
 	}
+	s.lastOK.Store(time.Now().UnixNano())
 	s.wg.Add(1)
 	go s.run()
 	return s
@@ -108,7 +116,7 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 		return
 	}
 	select {
-	case s.ch <- log:
+	case s.ch <- s.queued(log):
 	default:
 		s.dropped.Add(1)
 	}
@@ -144,15 +152,19 @@ func (s *decisionSink) run() {
 	defer ticker.Stop()
 	for {
 		select {
-		case log, ok := <-s.ch:
+		case q, ok := <-s.ch:
 			if !ok {
 				s.reportDropped(&s.reported) // drained + closed: final tail summary
 				return
 			}
+			if s.batchMax.Load() > 1 {
+				s.postBatches(q) // the control plane said it takes batches (decisions_batch.go)
+				continue
+			}
 			s.reportDropped(&s.reported) // piggyback on the next successful flush
 			// A decision the control plane REFUSED (e.g. 413 over maxJSONBody)
 			// counts as dropped too, so it isn't silently lost from the audit trail.
-			if err := s.post(log); err != nil {
+			if err := s.post(q.log); err != nil {
 				s.dropped.Add(1)
 			}
 		case <-ticker.C:
@@ -215,10 +227,12 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
+		s.failing.Store(true)
 		return err
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	s.noteAnswer(resp)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("decision post: status %d", resp.StatusCode)
 	}

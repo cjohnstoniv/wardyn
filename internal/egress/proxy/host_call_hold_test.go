@@ -151,7 +151,7 @@ func hcProxy(t *testing.T, spec types.RunPolicySpec) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
 	spec.AllowedDomains = append(spec.AllowedDomains, hrHost)
-	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(spec), Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(spec), Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{}})
 	return p, buf
 }
@@ -537,7 +537,7 @@ func TestHostCallPlainHoldAfterThePolicy(t *testing.T) {
 	cu := captureUpstream(t, false, "ok")
 	plainProxy := func(allowed string) *Proxy {
 		return newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
-			Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{allowed}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
 	}
 	p := plainProxy("other.example.com")
@@ -604,7 +604,7 @@ func TestHostCallApprovedHoldIsForwarded(t *testing.T) {
 	cu := captureUpstream(t, false, "ok")
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
-		Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
 	cp := newHCCP(t, p)
 	cp.newState = types.ApprovalApproved
@@ -639,7 +639,7 @@ func TestHostCallApprovedHoldIsForwarded(t *testing.T) {
 func TestHostCallRetryForwardedUnderTheRunApproval(t *testing.T) {
 	cu := captureUpstream(t, false, "ok")
 	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
-		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:   &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{hcHoldSet()}})})
 	cp := newHCCP(t, p)
 	cp.newState = types.ApprovalApproved

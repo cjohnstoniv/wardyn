@@ -345,7 +345,7 @@ func TestRequireTLSAllowsTLSTransport(t *testing.T) {
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}),
 		Injector:        requireTLSInj("allowed.test", injectedHeader{name: "X-Api-Key", value: "SECRET-KEY"}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),
 		TLSClientConfig: testInsecureTLSConfig,
