@@ -35,14 +35,16 @@ describe("terminal palette", () => {
 
   it("keeps the terminal colours in terminal-theme.ts and theme.css, nowhere else", () => {
     const banned = ["#0d1117", "#e6edf3", "#ff5f56", "#ffbd2e", "#28c840"];
+    const themeModule = "src/app/components/terminal-theme.ts";
+    const allowedThere = ["#0d1117", "#e6edf3"];
     const found: string[] = [];
     const walk = (dir: string) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name) && !p.endsWith("components/terminal-theme.ts")) {
+        else if (/\.tsx?$/.test(e.name) && !/\.test\./.test(e.name)) {
           const text = readFileSync(p, "utf8").toLowerCase();
-          for (const b of banned) if (text.includes(b)) found.push(`${p} ${b}`);
+          for (const b of banned) if (text.includes(b) && !(p === themeModule && allowedThere.includes(b))) found.push(`${p} ${b}`);
         }
       }
     };

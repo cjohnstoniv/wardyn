@@ -916,6 +916,7 @@ describe("AttachTerminal — a support helper", () => {
 describe("AttachTerminal — the shared title bar (#3078)", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
+    termOptions.length = 0;
     writeln.mockClear();
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
     if (!("fonts" in document)) {
@@ -943,6 +944,7 @@ describe("AttachTerminal — the shared title bar (#3078)", () => {
     render(<AttachTerminal runId="run_1" />);
     const bar = screen.getByTestId("terminal-title-bar");
     expect(bar).toBeInTheDocument();
+    expect(termOptions).toHaveLength(1);
     expect((termOptions.at(-1) as { theme?: unknown }).theme).toEqual(TERMINAL_THEME);
     expect(bar.parentElement).toHaveClass("bg-terminal");
   });

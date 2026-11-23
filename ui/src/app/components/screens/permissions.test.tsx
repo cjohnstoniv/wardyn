@@ -306,6 +306,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
     expect(within(dialog).getByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeInTheDocument();
     // One lockout sentence in the dialog, not the ruled one plus a paraphrase of it.
     expect(within(dialog).queryByText(PERM.ENFORCE_ON_ZERO)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM })).toHaveClass("bg-destructive");
   });
 
   it("#2512: turning a widening kind on with nothing granted states no lockout — members were already refused", async () => {
@@ -318,7 +319,10 @@ describe("PermissionsScreen — enforcement confirms", () => {
 
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).queryByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeNull();
-    expect(within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM })).not.toHaveClass("bg-danger", "bg-destructive");
+    const confirm = within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM });
+    expect(confirm).toHaveClass("bg-warning");
+    expect(confirm).not.toHaveClass("bg-danger");
+    expect(confirm).not.toHaveClass("bg-destructive");
   });
 
   it("#2512: an enforced widening kind with nothing granted carries no 'refuses every request' note", async () => {
