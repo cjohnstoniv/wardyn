@@ -1495,3 +1495,140 @@ func TestPG_Approvals_EntriesNameAPrincipalNotAnEmail(t *testing.T) {
 		}
 	}
 }
+
+// TestPG_Approvals_TakeBackPrefersTheCallersOwnRow: where sign-in vouches for every caller's email, a take-back
+// still deletes the caller's own principal's approval first. An earlier approval at the same email stays.
+func TestPG_Approvals_TakeBackPrefersTheCallersOwnRow(t *testing.T) {
+	e := newApEnv(t, 3, func(c *Config) { c.AllowEmailMappings = true })
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	const mine = "sub-ap-mine"
+	adminEmail := uaSubAdminA + "@corp.example"
+	e.grant(e.a, types.CapabilitySubjectUser, mine)
+	e.record(mine, adminEmail, []string{apGroupUsers}, nil, false)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO governance_change_approvals (change_id, approver, approver_email, tier)
+		VALUES ($1, $2, $3, 'unit_admin')`, ch.ID, mine, adminEmail); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.call(e.sessionOf(mine, adminEmail), http.MethodDelete, approvalPath(ch.ID), ""); w.Code != http.StatusOK {
+		t.Fatalf("take-back = %d %s, want 200", w.Code, w.Body)
+	}
+	var who []string
+	rows, err := e.pool.Query(context.Background(), `SELECT approver FROM governance_change_approvals WHERE change_id = $1 ORDER BY approver`, ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a string
+		if err := rows.Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		who = append(who, a)
+	}
+	if !slices.Equal(who, []string{uaSubAdminA}) {
+		t.Errorf("approvals left = %v, want only the earlier approver's", who)
+	}
+}
+
+// TestPG_Approvals_AnAliasByAnUnvouchedEmailSeesNoApproval: with emails sign-in does not vouch for, a person who
+// shares an approver's email is the same human for the duplicate rule, so their approval is a 409, but the
+// approval is not theirs: the page reads not_eligible, in the list too, and the 409 does not offer a take-back.
+// The approver themselves still reads approved and is told they can take it back.
+func TestPG_Approvals_AnAliasByAnUnvouchedEmailSeesNoApproval(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	const alias = "sub-ap-alias"
+	adminEmail := uaSubAdminA + "@corp.example"
+	e.grant(e.a, types.CapabilitySubjectUser, alias)
+	e.record(alias, adminEmail, []string{apGroupUsers}, nil, false)
+	twin := e.sessionOf(alias, adminEmail)
+
+	stateIn := func(c *http.Cookie) (detail, list string) {
+		t.Helper()
+		var m map[string]any
+		w := e.call(c, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), "")
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &m) != nil {
+			t.Fatalf("GET = %d %s", w.Code, w.Body)
+		}
+		v, _ := approvalsOf(m)["viewer"].(map[string]any)
+		detail, _ = v["state"].(string)
+		var rows []map[string]any
+		if w := e.call(c, http.MethodGet, "/api/v1/governance/changes", ""); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rows) != nil {
+			t.Fatalf("list = %d %s", w.Code, w.Body)
+		}
+		for _, row := range rows {
+			if row["id"] == ch.ID.String() {
+				lv, _ := approvalsOf(row)["viewer"].(map[string]any)
+				list, _ = lv["state"].(string)
+			}
+		}
+		return detail, list
+	}
+	if d, l := stateIn(twin); d != viewerNotEligible || l != viewerNotEligible {
+		t.Errorf("the alias reads detail %q list %q, want %s in both", d, l, viewerNotEligible)
+	}
+	if d, l := stateIn(e.adminA); d != viewerApproved || l != viewerApproved {
+		t.Errorf("the approver reads detail %q list %q, want %s in both", d, l, viewerApproved)
+	}
+	w := e.call(twin, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeAlreadyApproved || strings.Contains(w.Body.String(), "take your approval back") {
+		t.Errorf("the alias's approval = %d %s, want 409 %s with no offer to take it back", w.Code, w.Body, reasonGovernanceChangeAlreadyApproved)
+	}
+	w = e.call(e.adminA, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "take your approval back") {
+		t.Errorf("the approver's second approval = %d %s, want 409 offering the take-back", w.Code, w.Body)
+	}
+}
+
+// TestPG_Approvals_ARecordedApprovalNamesWhatItDropped: an approval that is recorded but does not apply, and
+// found an earlier approval no longer counting, carries it in the audit row's dropped list, with its principal
+// and why; a recorded approval that dropped nothing carries no such key.
+func TestPG_Approvals_ARecordedApprovalNamesWhatItDropped(t *testing.T) {
+	e := newApEnv(t, 3)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	e.approve(e.peerA, ch.ID, http.StatusOK)
+	e.deactivate(uaSubAdminA)
+	e.approve(e.alice, ch.ID, http.StatusOK)
+	rows := e.audits("governance.change.approval")
+	if len(rows) != 3 {
+		t.Fatalf("%d approval rows, want 3", len(rows))
+	}
+	for _, row := range rows[:2] {
+		if d := auditData(t, row); d["dropped"] != nil {
+			t.Errorf("an approval that dropped nothing carries dropped = %v", d["dropped"])
+		}
+	}
+	dropped, _ := auditData(t, rows[2])["dropped"].([]any)
+	if len(dropped) != 1 {
+		t.Fatalf("dropped = %v, want the deactivated approver", dropped)
+	}
+	if one, _ := dropped[0].(map[string]any); one["principal"] != uaSubAdminA || one["reason"] != droppedDeactivated {
+		t.Errorf("dropped = %v, want %s for %s", dropped[0], droppedDeactivated, uaSubAdminA)
+	}
+}
+
+// TestPG_Approvals_EligibleCarriesNoUnitName: an eligible person is the principal, the directory email when there
+// is one, and the tier; no unit name is on the wire.
+func TestPG_Approvals_EligibleCarriesNoUnitName(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	list, _ := approvalsOf(e.read(ch.ID))["eligible"].([]any)
+	if len(list) == 0 {
+		t.Fatal("no eligible people")
+	}
+	for _, raw := range list {
+		person, _ := raw.(map[string]any)
+		for key := range person {
+			if key != "principal" && key != "email" && key != "tier" {
+				t.Errorf("eligible entry %v carries %q", person, key)
+			}
+		}
+	}
+}

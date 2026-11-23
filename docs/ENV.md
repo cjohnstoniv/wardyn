@@ -1705,6 +1705,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A change keeps the count it was proposed with: unsetting or lowering this later never lowers a held change's count, and raising it raises the count of the changes already held.
 - An approval counts only while its person is still eligible on their latest sign-in record; the last approval re-checks every earlier one, and a person can take their own back (`DELETE /governance/changes/{id}/approval`).
 - Independent of `WARDYN_GOVERNANCE_SECOND_HUMAN`: the minimum is read for every held change of a kind with more than one decider, including one held with that switch off.
+- With the minimum set and no SSO sign-in records (local mode, or no OIDC), every approval is refused, because an approver is judged on their latest sign-in record; only the admin token can decide.
 
 ### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 

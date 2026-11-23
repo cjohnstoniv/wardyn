@@ -108,7 +108,6 @@ type poolPerson struct {
 	Principal string `json:"principal"`
 	Email     string `json:"email,omitempty"`
 	Tier      string `json:"tier"`
-	UnitName  string `json:"unit_name,omitempty"`
 }
 
 // poolSource is a reason some people cannot be counted: unconfirmed_people with how many, or too_many_people.

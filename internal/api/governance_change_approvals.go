@@ -127,6 +127,8 @@ type approvalRun struct {
 	caller         approvalCaller
 	have, required int
 	tier           string
+	// drops are the earlier approvals this decision found no longer counting, for the audit row.
+	drops []approvalDrop
 }
 
 // approvalDrop is an earlier approval that stopped counting, to be marked when the decision commits.
@@ -301,7 +303,7 @@ func (s *Server) decideMulti(ctx context.Context, r *http.Request, q store.Queri
 	} else {
 		kept = storedApprovals(counting)
 	}
-	ar.have, ar.required = len(kept)+1, need
+	ar.have, ar.required, ar.drops = len(kept)+1, need, drops
 	if len(kept)+1 < need {
 		return s.recordApproval(ctx, r, q, kind, ch, ar, drops)
 	}
@@ -343,7 +345,7 @@ func (s *Server) settleOwnApproval(ctx context.Context, q store.Querier, in *rec
 			return nil, nil, err
 		}
 		if v.counts {
-			return nil, nil, s.alreadyApproved()
+			return nil, nil, s.alreadyApproved(s.holdsApproval(c.principal, c.email, row))
 		}
 		drops = append(drops, approvalDrop{row: row, why: v.why, at: v.at, replace: true})
 	}
@@ -368,12 +370,27 @@ func (s *Server) recheckEarlier(ctx context.Context, q store.Querier, in *record
 	return kept, drops, nil
 }
 
-// alreadyApproved is the refusal of an approval from a person whose earlier one still counts.
-func (s *Server) alreadyApproved() *govRefusal {
+// alreadyApproved is the refusal of an approval from a person whose earlier one still counts. own says the
+// approval is the caller's own; one held only by the same email, which sign-in does not vouch for, is
+// someone else's to take back, so the caller is not offered that.
+func (s *Server) alreadyApproved(own bool) *govRefusal {
+	msg := "Someone with your email address has already approved this change; it needs approval from someone else"
+	if own {
+		msg = "You have already approved this change; it needs approval from someone else, or you can take your approval back"
+	}
 	return &govRefusal{why: "approver already approved", write: func(w http.ResponseWriter, r *http.Request) {
-		writeErrorReason(w, http.StatusConflict, reasonGovernanceChangeAlreadyApproved,
-			"You have already approved this change; it needs approval from someone else, or you can take your approval back")
+		writeErrorReason(w, http.StatusConflict, reasonGovernanceChangeAlreadyApproved, msg)
 	}}
+}
+
+// holdsApproval reports whether row is the caller's own approval: the same principal, or the same email only
+// where sign-in vouches for every caller's email. Whoever else shares the email is the same human for the
+// distinct-human rule, but the approval is not theirs to see as their own or to take back.
+func (s *Server) holdsApproval(principal, email string, row store.GovernanceChangeApproval) bool {
+	if principal != "" && row.Approver == principal {
+		return true
+	}
+	return s.emailTrusted() && sameHuman(principal, email, row.Approver, row.ApproverEmail)
 }
 
 // applyHeld is today's check and apply of a held change: the deployment default must be what the proposal
@@ -452,11 +469,7 @@ func (s *Server) finishApproval(ctx context.Context, r *http.Request, q store.Qu
 func (s *Server) finalApprovalData(ar *approvalRun, counted []string, drops []approvalDrop) map[string]any {
 	data := map[string]any{"have": ar.have, "required": ar.required, "approvals": counted}
 	if len(drops) > 0 {
-		dropped := make([]map[string]string, 0, len(drops))
-		for _, d := range drops {
-			dropped = append(dropped, map[string]string{"principal": d.row.Approver, "reason": d.why})
-		}
-		data["dropped"] = dropped
+		data["dropped"] = droppedData(drops)
 	}
 	if ar.caller.reason != "" {
 		data["reason"] = ar.caller.reason
@@ -515,10 +528,22 @@ func approvalRecordedData(out types.GovernanceChange, ar *approvalRun) map[strin
 	if ar.caller.scope != "" {
 		data["unit_scope"] = ar.caller.scope
 	}
+	if len(ar.drops) > 0 {
+		data["dropped"] = droppedData(ar.drops)
+	}
 	if ar.caller.reason != "" {
 		data["reason"] = ar.caller.reason
 	}
 	return data
+}
+
+// droppedData is the earlier approvals a decision found no longer counting, each with the principal and why.
+func droppedData(drops []approvalDrop) []map[string]string {
+	dropped := make([]map[string]string, 0, len(drops))
+	for _, d := range drops {
+		dropped = append(dropped, map[string]string{"principal": d.row.Approver, "reason": d.why})
+	}
+	return dropped
 }
 
 // approvalRunFor starts a decision under the approval rules: nil (today's path) for the admin token, a reject
@@ -555,113 +580,6 @@ func (s *Server) answerRecordedApproval(w http.ResponseWriter, r *http.Request, 
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, ar.caller.principal, "governance.change.approval", out.ID.String(), "success",
 		mustJSON(approvalRecordedData(out, ar))))
 	s.writeChangeView(w, r, out)
-}
-
-// ── take back ─────────────────────────────────────────────────────────────────
-
-// handleTakeBackGovernanceApproval is DELETE /governance/changes/{id}/approval: the caller takes back their
-// approval of a pending change. It works whatever the minimum is now, on any pending change where the caller
-// holds an approval that counts, and answers 404 when they hold none.
-func (s *Server) handleTakeBackGovernanceApproval(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "governance change")
-	if !ok {
-		return
-	}
-	ctx := r.Context()
-	head, err := s.cfg.Store.GetGovernanceChange(ctx, id)
-	if err == nil && !s.canSeeGovernanceChange(r, head) {
-		err = store.ErrNotFound
-	}
-	if notFoundIf(w, err, "governance change", reasonGovernanceChangeNotFound) {
-		return
-	}
-	if err != nil {
-		writeServerError(w, r, "read governance change", err)
-		return
-	}
-	actorType, principal := actorFromRequest(r)
-	email := oidcEmailFromContext(ctx)
-	var taken takenBack
-	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, store.GovernanceDecision{}, s.takeBack(ctx, principal, email, &taken))
-	switch {
-	case errors.Is(err, store.ErrGovernanceApprovalRecorded):
-	case err != nil:
-		s.answerFailedTakeBack(w, r, head, actorType, principal, err)
-		return
-	}
-	s.recordAudit(ctx, s.auditEvent(nil, actorType, principal, "governance.change.retract", out.ID.String(), "success", mustJSON(map[string]any{
-		"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy,
-		"approver": taken.approver, "have": taken.have, "required": s.effective(out),
-	})))
-	s.writeChangeView(w, r, out)
-}
-
-// takenBack is what a take-back leaves for its audit row: whose approval it deleted and how many still count.
-type takenBack struct {
-	approver string
-	have     int
-}
-
-// takeBack is the take-back's body in the transaction that locked the change: the caller's token is read
-// again, their approval that counts is deleted, and what is left is put in *taken. The approval is the
-// caller's own principal's; the same email counts only when sign-in vouches for every caller's email, so an
-// email it does not vouch for never takes back another person's approval. The sentinel commits the delete
-// and leaves the change as it is.
-func (s *Server) takeBack(ctx context.Context, principal, email string, taken *takenBack) store.GovernanceDecideFunc {
-	return func(q store.Querier, ch types.GovernanceChange) error {
-		if _, err := s.recheckLiveToken(ctx, q); err != nil {
-			return err
-		}
-		rows, err := store.ListGovernanceChangeApprovalsQ(ctx, q, ch.ID)
-		if err != nil {
-			return err
-		}
-		own := slices.IndexFunc(rows, func(row store.GovernanceChangeApproval) bool {
-			return row.Counts() && (row.Approver == principal || (s.emailTrusted() && sameHuman(principal, email, row.Approver, row.ApproverEmail)))
-		})
-		if principal == "" || own < 0 {
-			return &govRefusal{why: "no approval to take back", write: func(w http.ResponseWriter, r *http.Request) {
-				writeErrorReason(w, http.StatusNotFound, reasonGovernanceChangeApprovalNotFound, "you have no approval of this change to take back")
-			}}
-		}
-		if _, err := store.DeleteGovernanceChangeApprovalQ(ctx, q, ch.ID, rows[own].Approver); err != nil {
-			return err
-		}
-		taken.approver, taken.have = rows[own].Approver, len(rows)-countDropped(rows)-1
-		return store.ErrGovernanceApprovalRecorded
-	}
-}
-
-func countDropped(rows []store.GovernanceChangeApproval) int {
-	n := 0
-	for _, row := range rows {
-		if !row.Counts() {
-			n++
-		}
-	}
-	return n
-}
-
-// answerFailedTakeBack writes the response for a take-back that did not commit: a refusal the decision
-// carried, a change no longer pending (a lapsed one is moved to expired and audited as a decision would),
-// a change that is gone, or an error.
-func (s *Server) answerFailedTakeBack(w http.ResponseWriter, r *http.Request, head types.GovernanceChange, actorType types.ActorType, principal string, err error) {
-	var refusal *govRefusal
-	var notPending *store.ErrGovernanceChangeNotPending
-	switch {
-	case errors.As(err, &refusal):
-		refusal.write(w, r)
-	case errors.As(err, &notPending):
-		if notPending.Lapsed {
-			s.recordAudit(r.Context(), s.auditEvent(nil, actorType, principal, "governance.change.expire", head.ID.String(), "success",
-				mustJSON(map[string]any{"target_kind": head.TargetKind, "target_key": head.TargetKey})))
-		}
-		writeErrorReason(w, http.StatusConflict, reasonGovernanceChangeNotPending, "this change is no longer pending ("+notPending.State+")")
-	case errors.Is(err, store.ErrNotFound):
-		writeErrorReason(w, http.StatusNotFound, reasonGovernanceChangeNotFound, "governance change not found")
-	default:
-		writeServerError(w, r, "take back a governance approval", err)
-	}
 }
 
 // ── the read model ────────────────────────────────────────────────────────────
@@ -894,11 +812,12 @@ func (s *Server) viewerOf(r *http.Request, q store.Querier, in *poolInputs, kind
 	if sameGovernanceHuman(ch, principal, email) {
 		return &approvalViewer{State: viewerProposer}, nil
 	}
-	if i := slices.IndexFunc(kept, func(k keptApproval) bool {
-		return sameHuman(principal, email, k.row.Approver, k.row.ApproverEmail)
-	}); i >= 0 {
+	if i := slices.IndexFunc(kept, func(k keptApproval) bool { return s.holdsApproval(principal, email, k.row) }); i >= 0 {
 		at := kept[i].row.ApprovedAt
 		return &approvalViewer{State: viewerApproved, ApprovedAt: &at}, nil
+	}
+	if slices.ContainsFunc(kept, func(k keptApproval) bool { return sameHuman(principal, email, k.row.Approver, k.row.ApproverEmail) }) {
+		return &approvalViewer{State: viewerNotEligible}, nil // the same human as an approver, by an email nothing vouches for
 	}
 	last := blk.Have+1 >= blk.Required
 	if !kind.approver.allowed(s, r) {
@@ -968,13 +887,16 @@ func (s *Server) listWithApprovals(r *http.Request, list []types.GovernanceChang
 func (s *Server) listRead(r *http.Request, ch types.GovernanceChange, rows []store.GovernanceChangeApproval, principal, email string) *approvalsListRead {
 	blk := &approvalsListRead{Required: s.effective(ch), RequireSecurity: ch.RequireSecurity}
 	var own *store.GovernanceChangeApproval
+	alias := false
 	for i, row := range rows {
 		if row.ChangeID != ch.ID {
 			continue
 		}
 		blk.Have++
-		if own == nil && sameHuman(principal, email, row.Approver, row.ApproverEmail) {
+		if own == nil && s.holdsApproval(principal, email, row) {
 			own = &rows[i]
+		} else if sameHuman(principal, email, row.Approver, row.ApproverEmail) {
+			alias = true
 		}
 	}
 	if isAdminTokenCaller(r) {
@@ -986,6 +908,8 @@ func (s *Server) listRead(r *http.Request, ch types.GovernanceChange, rows []sto
 	case own != nil:
 		at := own.ApprovedAt
 		blk.Viewer = &approvalViewer{State: viewerApproved, ApprovedAt: &at}
+	case alias:
+		blk.Viewer = &approvalViewer{State: viewerNotEligible}
 	case !governanceChangeKinds[ch.TargetKind].forChange(ch).approver.allowed(s, r):
 		blk.Viewer = &approvalViewer{State: viewerNotEligible}
 	default:
