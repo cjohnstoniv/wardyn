@@ -7,8 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -168,5 +173,118 @@ func TestAssistantRunTaskIsReserved(t *testing.T) {
 	}
 	if w.Code != http.StatusBadRequest || errorReason(w) != reasonRunTaskReserved {
 		t.Errorf("refusal = %d %s, want 400 %s", w.Code, w.Body, reasonRunTaskReserved)
+	}
+}
+
+// The assistant's run clones nothing. Its row carries what newStepRun writes for every Wardyn-launched step plus
+// only the binding's provider and the session lifetime, so no repository, workspace or source; its dispatch carries
+// only the run token, the configured image and the policy Wardyn wrote; and the sandbox env holds no clone or Git
+// grant variable. The createRun and launcher censuses list assistant_run.go as cloning nothing on this ground.
+func TestAssistantRunClonesNothing(t *testing.T) {
+	// The closure assistantNewRun hands newStepRun sets exactly these fields of the row.
+	f, err := parser.ParseFile(token.NewFileSet(), "assistant_run.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set []string
+	found := false
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "assistantNewRun" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || assistantCallee(call) != "newStepRun" {
+				return true
+			}
+			found = true
+			lit, ok := call.Args[len(call.Args)-1].(*ast.FuncLit)
+			if !ok {
+				t.Errorf("newStepRun's last argument is %T, want the closure that sets the row", call.Args[len(call.Args)-1])
+				return false
+			}
+			for _, st := range lit.Body.List {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok {
+					t.Errorf("the row closure holds a %T, want assignments only", st)
+					continue
+				}
+				for _, lhs := range as.Lhs {
+					if sel, ok := lhs.(*ast.SelectorExpr); ok {
+						set = append(set, sel.Sel.Name)
+					}
+				}
+			}
+			return false
+		})
+	}
+	slices.Sort(set)
+	if !found || !slices.Equal(set, []string{"AutoStopAfterSec", "ModelProviderID"}) {
+		t.Errorf("assistantNewRun's newStepRun call found = %v, setting %v, want only AutoStopAfterSec and ModelProviderID", found, set)
+	}
+
+	// The run it creates for a signed-in member, as the scan lane's tests drive theirs.
+	srv, _, _ := govEscapeFixture(t, &capStore{})
+	srv.cfg.Runner = &fakeRunner{}
+	bind := types.AssistantBinding{ProviderID: "a", ProviderUID: "uid-a", Model: "m1"}
+	l, err := srv.assistantNewRun(govMemberCtx([]string{"eng"}, false), "bob@corp.example", bind)
+	if err != nil {
+		t.Fatalf("assistantNewRun: %v", err)
+	}
+	run := l.run
+	if run.Repo != "" || run.WorkspaceID != nil || len(run.WorkspaceIDs) != 0 || run.SourceID != nil || run.WorkspacePath != "" {
+		t.Errorf("the run row names a repository, workspace or source: repo %q, workspace %v %v, source %v, path %q",
+			run.Repo, run.WorkspaceID, run.WorkspaceIDs, run.SourceID, run.WorkspacePath)
+	}
+	if run.ModelProviderID != bind.ProviderID || run.AutoStopAfterSec != assistantRunLifetimeSec || run.Task != assistantRunTask {
+		t.Errorf("the run row = provider %q, auto stop %d, task %q; want %q, %d, %q",
+			run.ModelProviderID, run.AutoStopAfterSec, run.Task, bind.ProviderID, assistantRunLifetimeSec, assistantRunTask)
+	}
+
+	_, params := srv.assistantDispatchArgs(l)
+	want := dispatchParams{RunToken: l.token, Image: agentImage("claude-code", srv.cfg.AgentImages), Policy: assistantRunPolicy(l.cc)}
+	if !reflect.DeepEqual(params, want) {
+		t.Errorf("dispatch params = %+v, want only the run token, the configured image and the policy Wardyn wrote", params)
+	}
+	env := map[string]string{}
+	applyRepoCloneEnv(env, run, params.Policy)
+	applyDispatchModeEnv(env, run, params)
+	if env["WARDYN_ASSISTANT"] != "1" {
+		t.Errorf("sandbox env = %v, want WARDYN_ASSISTANT=1", env)
+	}
+	for k := range env {
+		if strings.Contains(k, "REPO") || strings.Contains(k, "GIT") || strings.Contains(k, "GRANT") || k == "WARDYN_SCAN_ONLY" {
+			t.Errorf("sandbox env carries %s=%s, a clone, Git or grant variable", k, env[k])
+		}
+	}
+}
+
+// assistantCallee is the method or function name call invokes, "" for any other callee.
+func assistantCallee(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fn.Sel.Name
+	case *ast.Ident:
+		return fn.Name
+	}
+	return ""
+}
+
+// A create naming a workspace or a repository answers 400 before anything is read or made: the assistant run has no
+// repository to clone.
+func TestAssistantCreateRefusesRepositoryFields(t *testing.T) {
+	site, _ := assistantTwoProviders()
+	f := newAssistantFake(site)
+	srv, _ := assistantSessionServer(t, f)
+	person := "sub-repo-" + uuid.NewString()
+	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
+	const target = `"purpose":"compose","target":{"kind":"template"},"preview_digest":"x"`
+	for _, field := range []string{`"workspace_id":"` + uuid.NewString() + `"`, `"repo":"acme/widgets"`} {
+		wantReason(t, doSSO(t, srv, http.MethodPost, "/api/v1/assistant/sessions", cookie, `{`+target+`,`+field+`}`),
+			http.StatusBadRequest, reasonInvalidRequestBody)
+	}
+	if f.reads() != 0 || len(f.sessions) != 0 {
+		t.Errorf("a refused create read %d sign-in records and made %d sessions", f.reads(), len(f.sessions))
 	}
 }
