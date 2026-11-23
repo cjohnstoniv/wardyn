@@ -22,6 +22,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
 - On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, run starts no longer race each other for one subnet, and the orphan sweep now removes a run network whose run has ended or is gone. Before, only a host with the pool set swept them.
 - When a run's sandbox is removed, Wardyn removes the image tag it built for that run alone (a custom image or a dev container image). After an idle stop that happens at the next server start. Tags left by earlier releases stay. A wrapped image a workspace keeps for its later runs stays.
+- `wardyn run --wait` reads the run again as soon as the server reports a state change on the run's event stream, and still polls every 2 seconds.
 
 ### Before you upgrade
 
