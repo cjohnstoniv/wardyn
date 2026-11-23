@@ -15,11 +15,14 @@ import (
 	"time"
 )
 
-// fakeFence answers every try true unless busy names the key (a key another session holds), each after delay.
+// fakeFence answers every try true unless busy names the key (a key another session holds), each after delay, and
+// every check of the session's keys with verifyErr after verifyDelay.
 type fakeFence struct {
-	busy  func(LockKey) bool
-	delay time.Duration
-	tries atomic.Int64
+	busy        func(LockKey) bool
+	delay       time.Duration
+	tries       atomic.Int64
+	verifyDelay time.Duration
+	verifyErr   error
 }
 
 func (f *fakeFence) try(_ context.Context, k LockKey) (bool, error) {
@@ -29,6 +32,11 @@ func (f *fakeFence) try(_ context.Context, k LockKey) (bool, error) {
 }
 
 func (f *fakeFence) unlock(context.Context, LockKey) (bool, error) { return true, nil }
+
+func (f *fakeFence) verify(context.Context, []LockKey) error {
+	time.Sleep(f.verifyDelay)
+	return f.verifyErr
+}
 
 // fakeLocker is a PGLocker whose fence connections are one fake connection over stmts, so every take shares it.
 func fakeLocker(stmts fenceStmts) *PGLocker {
@@ -148,7 +156,8 @@ func TestFenceGateDropsIdleKeys(t *testing.T) {
 }
 
 // TestFenceBackoffReleasesConnMutex: a take of a key held elsewhere polls for its whole wait, yet 20 takes of other
-// keys on the same connection each finish within 50 ms, because the connection's mutex is held for one statement.
+// keys on the same connection finish within a second together, because the connection's mutex is held for one
+// statement. Were it held across the poll's sleeps (up to fenceBackoffMax each), they would take about twice that.
 func TestFenceBackoffReleasesConnMutex(t *testing.T) {
 	contended := startKey(1)
 	stmts := &fakeFence{busy: func(k LockKey) bool { return k == contended }, delay: time.Millisecond}
@@ -160,18 +169,82 @@ func TestFenceBackoffReleasesConnMutex(t *testing.T) {
 		done <- err
 	}()
 	waitFor(t, "the contended take to poll", time.Second, func() bool { return stmts.tries.Load() >= 2 })
+	start := time.Now()
 	for i := range 20 {
-		start := time.Now()
 		_, release, err := l.Lock(ctx, startKey(int32(100+i)), time.Second)
 		if err != nil {
 			t.Fatalf("Lock %d: %v", i, err)
 		}
 		release()
-		if d := time.Since(start); d > 50*time.Millisecond {
-			t.Fatalf("take %d took %s beside a polling take; want under 50ms", i, d)
-		}
+	}
+	if d := time.Since(start); d > 5*fenceBackoffMax {
+		t.Fatalf("20 takes took %s beside a polling take; want under %s", d, 5*fenceBackoffMax)
 	}
 	if err := <-done; !errors.Is(err, ErrLockBusy) {
 		t.Fatalf("the contended take = %v; want ErrLockBusy at its wait", err)
 	}
+}
+
+// TestFenceTakeBoundedWhileDialling: with a dial that hangs, a take with a 200 ms wait returns within it, and so does
+// a later take on the same slot, which waits for that one dial rather than starting another.
+func TestFenceTakeBoundedWhileDialling(t *testing.T) {
+	l := &PGLocker{sem: make(chan struct{}, 1)}
+	var dials atomic.Int32
+	unblock := make(chan struct{})
+	defer close(unblock)
+	l.fence.dial = func(context.Context) (*lockConn, error) {
+		dials.Add(1)
+		<-unblock
+		return nil, errors.New("the database is unreachable")
+	}
+	const wait = 200 * time.Millisecond
+	for i := range LockFenceConns + 1 {
+		start := time.Now()
+		if _, _, err := l.Lock(context.Background(), startKey(int32(i)), wait); !errors.Is(err, ErrLockUnavailable) {
+			t.Fatalf("take %d while the dial hangs = %v; want ErrLockUnavailable", i, err)
+		}
+		if d := time.Since(start); d > wait+300*time.Millisecond {
+			t.Fatalf("take %d with a %s wait returned after %s while the dial hung", i, wait, d)
+		}
+	}
+	if n := dials.Load(); n != LockFenceConns {
+		t.Fatalf("%d dials for %d slots; want one per slot", n, LockFenceConns)
+	}
+}
+
+// TestFenceLockHeldWaitsOutABusyConnection: 50 holds on one fence connection ask LockHeld at once, each check taking
+// 80 ms, so the last waits about 4 s for the connection; every one answers held, none lost. A check whose query
+// fails then ends every hold on the connection with ErrLockLost.
+func TestFenceLockHeldWaitsOutABusyConnection(t *testing.T) {
+	stmts := &fakeFence{verifyDelay: 80 * time.Millisecond}
+	l := fakeLocker(stmts)
+	ctx := context.Background()
+	holds := make([]context.Context, 50)
+	for i := range holds {
+		hctx, release, err := l.Lock(ctx, startKey(int32(i)), time.Second)
+		if err != nil {
+			t.Fatalf("Lock %d: %v", i, err)
+		}
+		defer release()
+		holds[i] = hctx
+	}
+	var wg sync.WaitGroup
+	for i, hctx := range holds {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := LockHeld(hctx); err != nil {
+				t.Errorf("LockHeld of hold %d on a busy fence connection = %v; want nil", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	stmts.verifyErr = errors.New("the connection broke")
+	if err := LockHeld(holds[0]); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("LockHeld whose query failed = %v; want ErrLockLost", err)
+	}
+	waitFor(t, "the other holds on the failed connection to end", time.Second, func() bool {
+		return errors.Is(context.Cause(holds[1]), ErrLockLost)
+	})
 }

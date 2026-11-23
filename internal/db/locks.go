@@ -493,6 +493,9 @@ func (c *lockConn) take(ctx context.Context, k LockKey, try bool, wait time.Dura
 	return true, nil
 }
 
+// errKeyNotHeld is verify's answer when its query ran and a key was not among the session's locks.
+var errKeyNotHeld = errors.New("session no longer holds")
+
 // verify reports whether the session still holds every one of keys.
 func (c *lockConn) verify(ctx context.Context, keys []LockKey) error {
 	rows, err := c.conn.Query(ctx, `SELECT classid::bigint, objid::bigint FROM pg_locks
@@ -510,7 +513,7 @@ func (c *lockConn) verify(ctx context.Context, keys []LockKey) error {
 	}
 	for _, k := range keys {
 		if !slices.Contains(got, pair{int64(uint32(k.Class)), int64(uint32(k.Obj))}) {
-			return fmt.Errorf("session no longer holds %v", k)
+			return fmt.Errorf("%w %v", errKeyNotHeld, k)
 		}
 	}
 	return nil
@@ -534,6 +537,9 @@ func LockHeld(ctx context.Context) error {
 		return nil
 	}
 	c := h.conn
+	if c.fence {
+		return c.fenceHeld(h.keys)
+	}
 	// The wait for the connection shares the verify query's deadline, taken
 	// from a context that ignores cancellation: a nested lock waiting on this
 	// connection holds mu for its whole budget, and a caller must not wait that
@@ -732,7 +738,11 @@ func (c *lockConn) watch(cancel context.CancelCauseFunc, stop <-chan struct{}, e
 			c.mu.Unlock()
 			return
 		}
-		bg, bcancel := context.WithTimeout(context.Background(), 2*every+time.Second)
+		wait := 2*every + time.Second
+		if c.fence { // the bound of every statement on a shared fence connection
+			wait = fenceStmtWait
+		}
+		bg, bcancel := context.WithTimeout(context.Background(), wait)
 		err := c.verify(bg, c.keys)
 		bcancel()
 		c.mu.Unlock()

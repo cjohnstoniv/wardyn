@@ -21,6 +21,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -45,10 +46,11 @@ const (
 	fenceDefaultWait = 10 * time.Second
 )
 
-// fenceStmts is the statements the fence path runs on a connection. Neither waits for a lock.
+// fenceStmts is the statements the fence path runs on a connection. None waits for a lock.
 type fenceStmts interface {
 	try(sctx context.Context, k LockKey) (bool, error)
 	unlock(sctx context.Context, k LockKey) (bool, error)
+	verify(sctx context.Context, keys []LockKey) error
 }
 
 func (c *lockConn) try(sctx context.Context, k LockKey) (bool, error) {
@@ -69,8 +71,10 @@ type fenceSet struct {
 	// dial makes a fence connection; nil dials cfg. Tests set a fake.
 	dial func(ctx context.Context) (*lockConn, error)
 
-	mu    sync.Mutex // guards conns; never held while waiting for a key
+	mu    sync.Mutex // guards conns, dials and errs; never held while waiting for a key or a dial
 	conns [LockFenceConns]*lockConn
+	dials [LockFenceConns]chan struct{} // closed when the slot's running dial ends; nil when none runs
+	errs  [LockFenceConns]error         // the slot's last dial's error
 	next  atomic.Uint32
 
 	gateMu sync.Mutex
@@ -92,7 +96,7 @@ func newFenceConn(conn *pgx.Conn, stmts fenceStmts) *lockConn {
 	return c
 }
 
-// dialFence dials one fence connection with the lock connections' keepalives.
+// dialFence dials one fence connection with the lock connections' keepalives, all within dctx's deadline.
 func (f *fenceSet) dialFence(dctx context.Context) (*lockConn, error) {
 	if f.dial != nil {
 		return f.dial(dctx)
@@ -101,9 +105,16 @@ func (f *fenceSet) dialFence(dctx context.Context) (*lockConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	sctx, cancel := context.WithTimeout(context.Background(), fenceStmtWait)
+	end := time.Now().Add(fenceStmtWait)
+	if d, ok := dctx.Deadline(); ok && d.Before(end) {
+		end = d
+	}
+	sctx, cancel := context.WithDeadline(context.Background(), end)
 	defer cancel()
 	setLockKeepalives(sctx, func(sctx context.Context, sql string) error { _, err := conn.Exec(sctx, sql); return err })
+	if conn.IsClosed() {
+		return nil, fmt.Errorf("the connection broke while its keepalives were set")
+	}
 	c := newFenceConn(conn, nil)
 	c.stmts = c
 	return c, nil
@@ -120,7 +131,7 @@ func (f *fenceSet) take(ctx context.Context, k LockKey, wait time.Duration, try 
 	if err != nil || !ok {
 		return ctx, nil, false, err
 	}
-	c, err := f.pick(ctx)
+	c, err := f.pick(ctx, deadline, try)
 	if err != nil {
 		f.leave(k, e, true)
 		return ctx, nil, false, err
@@ -223,25 +234,72 @@ func (f *fenceSet) leave(k LockKey, e *gateEntry, held bool) {
 	}
 }
 
-// pick returns the next fence connection round robin, dialling it when it is missing, closed or lost.
-func (f *fenceSet) pick(ctx context.Context) (*lockConn, error) {
+// pick returns the next fence connection round robin. A missing, closed or lost one is dialled by dialSlot, one
+// dial per slot at a time with f.mu free, and the take waits for that dial until its own deadline (a try, which has
+// none, for fenceDialWait) or until ctx ends, so a start never waits past its wait for a connection. A dial outlives
+// the take that started it, and its connection serves the next take.
+func (f *fenceSet) pick(ctx context.Context, deadline time.Time, try bool) (*lockConn, error) {
 	i := (f.next.Add(1) - 1) % LockFenceConns
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if c := f.conns[i]; c != nil {
-		if c.lost.Err() == nil && !c.isClosed() {
-			return c, nil
-		}
-		c.close()
+	end := time.Now().Add(fenceDialWait)
+	if !try && deadline.Before(end) {
+		end = deadline
 	}
-	dctx, cancel := context.WithTimeout(ctx, fenceDialWait)
-	defer cancel()
-	c, err := f.dialFence(dctx)
-	if err != nil {
+	c, done, dead := f.slot(i)
+	if dead != nil {
+		dead.close()
+	}
+	if c != nil {
+		return c, nil
+	}
+	timer := time.NewTimer(time.Until(end))
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		return nil, fmt.Errorf("%w: connect: no fence connection within the wait", ErrLockUnavailable)
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: connect: %w", ErrLockUnavailable, ctx.Err())
+	}
+	f.mu.Lock()
+	c, err := f.conns[i], f.errs[i]
+	f.mu.Unlock()
+	if c == nil || c.lost.Err() != nil || c.isClosed() {
+		if err == nil {
+			err = fmt.Errorf("the connection was lost as it was dialled")
+		}
 		return nil, fmt.Errorf("%w: connect: %w", ErrLockUnavailable, err)
 	}
-	f.conns[i] = c
 	return c, nil
+}
+
+// slot returns slot i's live connection, or else the channel its dial closes, starting that dial when none runs.
+// dead is a closed or lost connection taken out of the slot, for the caller to close with f.mu free.
+func (f *fenceSet) slot(i uint32) (c *lockConn, done <-chan struct{}, dead *lockConn) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if cur := f.conns[i]; cur != nil {
+		if cur.lost.Err() == nil && !cur.isClosed() {
+			return cur, nil, nil
+		}
+		f.conns[i], dead = nil, cur
+	}
+	if f.dials[i] == nil {
+		ch := make(chan struct{})
+		f.dials[i] = ch
+		go f.dialSlot(i, ch)
+	}
+	return nil, f.dials[i], dead
+}
+
+// dialSlot dials slot i's connection within fenceDialWait, fills the slot and closes done.
+func (f *fenceSet) dialSlot(i uint32, done chan struct{}) {
+	dctx, cancel := context.WithTimeout(context.Background(), fenceDialWait)
+	c, err := f.dialFence(dctx)
+	cancel()
+	f.mu.Lock()
+	f.conns[i], f.errs[i], f.dials[i] = c, err, nil
+	f.mu.Unlock()
+	close(done)
 }
 
 // poll tries k on c until it is taken or deadline passes, sleeping the backoff between tries with c's mutex free,
@@ -314,6 +372,33 @@ func (f *fenceSet) unlockKey(c *lockConn, k LockKey) {
 	if err != nil {
 		c.fail(err)
 	}
+}
+
+// fenceHeld is LockHeld for a hold of keys on fence connection c, which other holds share. A busy connection is
+// waited for, not read as lost: every statement on it holds its mutex for fenceStmtWait at most, and a connection
+// that has died is lost (c.lost) by the statement that found it so. The query then runs under a fenceStmtWait
+// deadline of its own. A query that fails has broken the shared connection, so it fails c and every hold on it; a
+// key the session no longer holds (a released hold) ends this answer only.
+func (c *lockConn) fenceHeld(keys []LockKey) error {
+	if !c.lockUntil(c.lost) {
+		return fmt.Errorf("%w: %w", ErrLockLost, context.Cause(c.lost))
+	}
+	if c.closed || c.lost.Err() != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: the start lock connection was lost", ErrLockLost)
+	}
+	sctx, cancel := context.WithTimeout(context.Background(), fenceStmtWait)
+	err := c.stmts.verify(sctx, keys)
+	cancel()
+	c.mu.Unlock()
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errKeyNotHeld):
+		return fmt.Errorf("%w: %w", ErrLockLost, err)
+	}
+	c.fail(err)
+	return fmt.Errorf("%w: %w", ErrLockLost, err)
 }
 
 // fail ends every hold on c with ErrLockLost and closes it.
