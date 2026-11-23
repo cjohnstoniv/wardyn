@@ -4,6 +4,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -102,15 +103,15 @@ func printDeviceIdentity(args []string, d deps) error {
 	if err != nil {
 		return fmt.Errorf("device-identity: %w", err)
 	}
-	if len(ids) > devicecert.MaxProofs {
-		ids = ids[:devicecert.MaxProofs]
-	}
 	report := identityReport{Proofs: []identityProof{}}
+	refused := 0
+	// The cap counts proofs, so an identity that cannot be reported (a chain out of bounds, a key of another
+	// type, a key that refuses) never uses one of the places.
 	for _, id := range ids {
-		if len(id.Chain) == 0 || len(id.Chain) > devicecert.MaxChainLen {
-			continue
+		if len(report.Proofs) == devicecert.MaxProofs {
+			break
 		}
-		if !derWithinBound(id.Chain) {
+		if len(id.Chain) == 0 || len(id.Chain) > devicecert.MaxChainLen || !derWithinBound(id.Chain) {
 			continue
 		}
 		sig, err := id.Sign(msg)
@@ -118,9 +119,16 @@ func printDeviceIdentity(args []string, d deps) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("device-identity: sign: %w", err)
+			// One key that will not sign must not cost the others their proof: say which, and go on.
+			leaf := sha256.Sum256(id.Chain[0])
+			fmt.Fprintf(d.stderr, "%sskipped the identity whose certificate has SHA-256 %x: %v\n", helperErrorPrefix, leaf, err)
+			refused++
+			continue
 		}
 		report.Proofs = append(report.Proofs, identityProof{Chain: id.Chain, SignedAt: signedAt, Signature: sig})
+	}
+	if refused > 0 && len(report.Proofs) == 0 {
+		return fmt.Errorf("device-identity: no identity could be signed (%d refused)", refused)
 	}
 	return json.NewEncoder(d.stdout).Encode(report)
 }

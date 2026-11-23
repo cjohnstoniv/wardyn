@@ -134,7 +134,7 @@ func (keychainIdentities) Identities() ([]deviceIdentity, error) {
 	defer C.wdc_release(arr)
 	var out []deviceIdentity
 	n := int(C.wdc_count(arr))
-	for i := 0; i < n && len(out) < devicecert.MaxProofs; i++ {
+	for i := 0; i < n; i++ {
 		id := C.wdc_identity_at(arr, C.long(i))
 		if id == nil {
 			continue

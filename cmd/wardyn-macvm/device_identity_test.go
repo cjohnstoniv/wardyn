@@ -160,15 +160,26 @@ func TestDeviceIdentity_KeepsToTheBounds(t *testing.T) {
 	}
 }
 
-func TestDeviceIdentity_AKeyOfAnotherTypeIsSkippedAndAFailureStops(t *testing.T) {
+func TestDeviceIdentity_AKeyOfAnotherTypeIsSkippedAndARefusalIsSkippedOrFailsWhenAlone(t *testing.T) {
 	dir, _ := identityFixture(t)
 	args := []string{"device-identity", "--state-dir", dir, "--org-sha256", orgHash(), "--signed-at", identityNow.Format(time.RFC3339)}
 	d, out, _ := deviceDeps(fakeSource{ids: []deviceIdentity{{Chain: [][]byte{{1}}, sign: func([]byte) ([]byte, error) { return nil, errKeyType }}}})
 	if code := run(context.Background(), args, d); code != 0 || strings.TrimSpace(out.String()) != `{"proofs":[]}` {
 		t.Fatalf("exit %d, stdout %q", code, out)
 	}
-	d, out, errb := deviceDeps(fakeSource{ids: []deviceIdentity{{Chain: [][]byte{{1}}, sign: func([]byte) ([]byte, error) { return nil, errors.New("denied") }}}})
+	// Every identity refuses: nothing could be signed, exit 2.
+	denied := func([]byte) ([]byte, error) { return nil, errors.New("denied") }
+	d, out, errb := deviceDeps(fakeSource{ids: []deviceIdentity{{Chain: [][]byte{{1}}, sign: denied}}})
 	if code := run(context.Background(), args, d); code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "denied") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	// One refuses and one signs: the signing one is reported, and the refusal is named by its certificate's hash.
+	sum := sha256.Sum256([]byte{1})
+	ok := func([]byte) ([]byte, error) { return []byte{7}, nil }
+	d, out, errb = deviceDeps(fakeSource{ids: []deviceIdentity{{Chain: [][]byte{{1}}, sign: denied}, {Chain: [][]byte{{2}}, sign: ok}}})
+	var rep runnerwire.DeviceCertReport
+	if code := run(context.Background(), args, d); code != 0 || json.Unmarshal(out.Bytes(), &rep) != nil || len(rep.Proofs) != 1 || rep.Proofs[0].Chain[0][0] != 2 ||
+		strings.Count(errb.String(), "\n") != 1 || !strings.Contains(errb.String(), hex.EncodeToString(sum[:])) || !strings.Contains(errb.String(), "denied") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
 	}
 	d, out, errb = deviceDeps(fakeSource{err: errors.New("no keychain")})
@@ -208,5 +219,29 @@ func TestDeviceIdentity_FingerprintFromLocalKey(t *testing.T) {
 	}
 	if msgs[0] == msgs[1] {
 		t.Fatal("two runners signed the same message")
+	}
+}
+
+// The cap of MaxProofs counts proofs: identities that cannot be reported come first in the keychain and must not
+// use the places.
+func TestDeviceIdentity_TheCapCountsProofsNotIdentities(t *testing.T) {
+	dir, _ := identityFixture(t)
+	args := []string{"device-identity", "--state-dir", dir, "--org-sha256", orgHash(), "--signed-at", identityNow.Format(time.RFC3339)}
+	var ids []deviceIdentity
+	for i := 0; i < devicecert.MaxProofs; i++ {
+		switch i % 3 {
+		case 0:
+			ids = append(ids, deviceIdentity{Chain: nil})
+		case 1:
+			ids = append(ids, deviceIdentity{Chain: [][]byte{{1}}, sign: func([]byte) ([]byte, error) { return nil, errKeyType }})
+		default:
+			ids = append(ids, deviceIdentity{Chain: [][]byte{{1}}, sign: func([]byte) ([]byte, error) { return nil, errors.New("denied") }})
+		}
+	}
+	ids = append(ids, deviceIdentity{Chain: [][]byte{{9}}, sign: func([]byte) ([]byte, error) { return []byte{7}, nil }})
+	d, out, errb := deviceDeps(fakeSource{ids: ids})
+	var rep runnerwire.DeviceCertReport
+	if code := run(context.Background(), args, d); code != 0 || json.Unmarshal(out.Bytes(), &rep) != nil || len(rep.Proofs) != 1 || rep.Proofs[0].Chain[0][0] != 9 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
 	}
 }
