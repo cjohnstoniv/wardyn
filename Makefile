@@ -789,6 +789,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-up-seed-host-proxy.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
+	./scripts/test-workspace-probes.sh
 	./scripts/test-ui-licenses-tsv.sh
 	./scripts/test-verify-release.sh
 	./scripts/test-workflow-artifacts.sh

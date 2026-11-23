@@ -170,9 +170,10 @@ probe_metadata_deny() {
 # ── probe: git_credential ──────────────────────────────────────────────────────
 #
 # Invokes wardyn-git-helper directly (as git would during a push) to trigger
-# the brokered credential chain.  Three outcomes are a pass: the helper refuses
+# the brokered credential chain.  Four outcomes are a pass: the helper refuses
 # because the run's GitHub access is brokered through wardyn-proxy (it mints no
-# token into the sandbox, and prints nothing for git); a credential approval is
+# token into the sandbox, and prints nothing for git); the helper finds no GitHub
+# grant for the run (the stock demo, with no GitHub App) and emits nothing; a credential approval is
 # raised in the control plane; or a credential is emitted.
 probe_git_credential() {
     section "git_credential -- brokered credential chain via wardyn-git-helper"
@@ -200,8 +201,8 @@ probe_git_credential() {
         pass "Helper refused to mint into the sandbox -- GitHub access is brokered through wardyn-proxy"
     elif echo "$cred_output" | grep "credential approval pending" >/dev/null; then
         pass "Credential approval request raised -- check UI Approvals tab for kind=credential"
-    elif echo "$cred_output" | grep -iE "error|fail|unauthorized|no app" >/dev/null; then
-        pass "Broker fail-closed path triggered (no GitHub App configured) -- expected for stock demo"
+    elif echo "$cred_output" | grep -F "WARDYN_GITHUB_GRANT_ID not set and no git_pat grant for this host; skipping broker mint" >/dev/null; then
+        pass "No GitHub grant on this run -- the helper minted nothing and git falls back to its own prompt (expected for the stock demo)"
     elif echo "$cred_output" | grep "password=" >/dev/null; then
         pass "Credential minted (GitHub App is configured) -- token in helper output, NOT in env"
     else
