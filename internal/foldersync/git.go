@@ -388,7 +388,7 @@ const sendGitIncomplete = ".git/wardyn-setup-incomplete"
 const (
 	gitDanglingLink = ".git in the synced directory is a link to something that does not exist; it is left as it is: remove it or point it at a repository"
 	gitUnfinished   = "this send did not finish setting up the repository in the synced directory; it is kept, and the next --git carries on with it if no other send has finished it"
-	gitTooOld       = "The sandbox's git is older than 2.29 and cannot hold SHA-256 history. Update git in the sandbox image, or send from a SHA-1 repository."
+	gitTooOld       = "the sandbox's git is older than 2.29 and cannot hold SHA-256 history; update git in the sandbox image, or send from a SHA-1 repository"
 	gitPullNothing  = "the repository in the synced directory is not finished and has no commits to bring back; send with --git to finish it"
 )
 
@@ -433,12 +433,12 @@ func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
 	}
 	// oh is the object format of a repository git can already open. A git older than 2.29 echoes the unknown flag
-	// and knows only SHA-1 (old is then set, so a SHA-256 send says that, not to remove .git). A repository of the other hash ends the send with a reason and nothing changed; the
-	// fetch never sees it.
+	// and knows only SHA-1 (old is then set, so a SHA-256 send says that, not to remove .git). A repository of
+	// the other hash ends the send with a reason and nothing changed; the fetch never sees it.
 	read := "old=; oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1; old=1;; esac; }"
 	refuse := "{ [ \"$oh\" = " + hash + " ] || { [ -z \"$old\" ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
 		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
-	// git 2.25 and older answer an unknown option with rc 129: a SHA-256 init that gets it is a git too old for SHA-256.
+	// A git older than 2.29 answers an unknown option with rc 129: a SHA-256 init that gets it is a git too old for SHA-256.
 	if sha256 {
 		mk += " || { r=$?; [ \"$r\" != 129 ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; false; }"
 	}
@@ -523,7 +523,7 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 }
 
 // bundleHash is the object format a bundle's header names: sha256 when it has the object-format capability, SHA-1
-// otherwise. ok is false when the file does not start like a bundle.
+// otherwise. ok is false when the file does not start like a bundle or names another object format.
 func bundleHash(file string) (hash string, ok bool) {
 	f, err := os.Open(file)
 	if err != nil {
@@ -537,6 +537,10 @@ func bundleHash(file string) (hash string, ok bool) {
 	hash = "sha1"
 	for sc.Scan() && strings.HasPrefix(sc.Text(), "@") {
 		if v, found := strings.CutPrefix(sc.Text(), "@object-format="); found {
+			// Only the two names git has. Anything else came from the sandbox and is left to git's own steps.
+			if v != "sha1" && v != "sha256" {
+				return "", false
+			}
 			hash = v
 		}
 	}
@@ -559,7 +563,7 @@ func checkPullHash(ctx context.Context, root, bundle string) error {
 		ours = "sha1" // a git older than 2.29 echoes the flag and knows only SHA-1
 	}
 	if ours != theirs {
-		return fmt.Errorf("the sandbox's repository uses %s object names and the repository on this computer uses %s, so its commits cannot be brought back", theirs, ours)
+		return fmt.Errorf("the sandbox's repository uses %s object names and the repository on this computer uses %s, so its commits cannot be brought back", Shown(theirs), Shown(ours))
 	}
 	return nil
 }

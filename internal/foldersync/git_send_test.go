@@ -356,6 +356,37 @@ func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
 	}
 }
 
+// A bundle comes from the sandbox: an object-format name that is not one of git's two is not read, so it never
+// reaches a refusal, and a pull of it is left to git's own steps.
+func TestBundleHash_OnlyGitsOwnNames(t *testing.T) {
+	for _, c := range []struct {
+		name, header, want string
+		ok                 bool
+	}{
+		{"sha256", "# v3 git bundle\n@object-format=sha256\n\n", "sha256", true},
+		{"sha1 named", "# v3 git bundle\n@object-format=sha1\n\n", "sha1", true},
+		{"no capability", "# v2 git bundle\n\n", "sha1", true},
+		{"another name", "# v3 git bundle\n@object-format=sha3\n\n", "", false},
+		{"a control character", "# v3 git bundle\n@object-format=\x1b[31m\n\n", "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "x.bundle")
+			if err := os.WriteFile(file, []byte(c.header), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, ok := bundleHash(file)
+			if got != c.want || ok != c.ok {
+				t.Fatalf("bundleHash = %q, %v; want %q, %v", got, ok, c.want, c.ok)
+			}
+			if !c.ok {
+				if err := checkPullHash(t.Context(), t.TempDir(), file); err != nil {
+					t.Errorf("a bundle with an unknown format is left to git: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // --pull-commits across hashes is refused before git verifies or fetches the bundle, naming both hashes, and no
 // pack file is left in the laptop's repository.
 func TestCheckPullHash_RefusesABundleOfTheOtherHash(t *testing.T) {
