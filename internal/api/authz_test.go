@@ -649,12 +649,13 @@ var routeMatrix = map[string]classifiedRoute{
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. On the unit-admin
 	// tier at the door; which changes a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
-	"GET /api/v1/governance/changes":               {class: classUnit},
-	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
-	"GET /api/v1/governance/changes/{id}/impact":   {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
-	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
+	"GET /api/v1/governance/changes":                  {class: classUnit},
+	"GET /api/v1/governance/changes/{id}":             {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":      {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/approve":    {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/reject":     {class: classUnit},
+	"PUT /api/v1/governance/changes/{id}/note":        {class: classUnit},
+	"DELETE /api/v1/governance/changes/{id}/approval": {class: classUnit},
 	// Requests (elevation, image): the member router, so a group decider reaches them; who may see or decide a request is the approver table's, inside the handler.
 	"GET /api/v1/governance/requests":               {class: classMember},
 	"POST /api/v1/governance/requests":              {class: classMember},
@@ -1969,8 +1970,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 19 {
-		t.Errorf("probed %d classUnit routes, want 19", unit)
+	if unit != 20 {
+		t.Errorf("probed %d classUnit routes, want 20", unit)
 	}
 
 	var sec, super int

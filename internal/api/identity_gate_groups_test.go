@@ -78,3 +78,41 @@ func TestIdentityGateRefusedSignInWritesNoRecord(t *testing.T) {
 		}
 	}
 }
+
+// gateRolesStore is a store that keeps the roles claim of a sign-in on its own as well (PutPrincipalSignIn).
+type gateRolesStore struct {
+	gateGroupsStore
+	signIns   int
+	gotRoles  []string
+	signInErr error
+}
+
+func (g *gateRolesStore) PutPrincipalSignIn(_ context.Context, principal, email string, groups, roles []string, truncated bool) error {
+	g.signIns++
+	g.gotPrinc, g.gotEmail, g.gotGroups, g.gotRoles, g.gotPartial = principal, email, groups, roles, truncated
+	return g.signInErr
+}
+
+// A store that keeps the roles claim records the sign-in through it, roles included, and not a second time
+// through the plain group record.
+func TestIdentityGateIssueRecordsTheRolesClaim(t *testing.T) {
+	st := &gateRolesStore{gateGroupsStore: gateGroupsStore{gapCovGateStore: gapCovGateStore{epoch: 7}}}
+	facts := gateGroupsFacts()
+	facts.Roles = []string{"wardyn-admins"}
+	if _, err := NewIdentityGate(st).Issue(t.Context(), facts); err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if st.signIns != 1 || st.puts != 0 || st.gotPrinc != "alice" || !slices.Equal(st.gotRoles, []string{"wardyn-admins"}) ||
+		!slices.Equal(st.gotGroups, []string{"eng", "wardyn-admins"}) || !st.gotPartial {
+		t.Fatalf("sign-in writes %d, group writes %d, roles %v, groups %v; want one sign-in write carrying the roles", st.signIns, st.puts, st.gotRoles, st.gotGroups)
+	}
+}
+
+// A sign-in record that cannot be written through the roles-keeping store refuses the sign-in too.
+func TestIdentityGateIssueRefusedWhenTheSignInRecordFails(t *testing.T) {
+	boom := errors.New("sign-in record down")
+	st := &gateRolesStore{gateGroupsStore: gateGroupsStore{gapCovGateStore: gapCovGateStore{epoch: 7}}, signInErr: boom}
+	if epoch, err := NewIdentityGate(st).Issue(t.Context(), gateGroupsFacts()); epoch != 0 || !errors.Is(err, boom) {
+		t.Fatalf("Issue = %d, %v; want 0 and the record's error", epoch, err)
+	}
+}

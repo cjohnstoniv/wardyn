@@ -33,6 +33,7 @@
 | `POST /governance/check`, `POST /governance/dry-run` | a target in their units; the boundary target stays the security tier's |
 | `GET /governance/changes` and the decisions | a change touching only their units; nobody decides their own |
 | `PUT /governance/changes/{id}/note` | the note on a change they proposed, while it is pending |
+| `DELETE /governance/changes/{id}/approval` | their own approval of a pending change, taken back |
 | `GET /audit` | rows of runs in their subtrees, in the [unit view](#the-unit-view-of-audit-rows); it also serves the governance rows about their units |
 | `GET /governance/units/{id}/model-usage` | a unit in their units: the token usage of its runs and the runs of the units below it, up to 92 days (30 by default) |
 | `PUT /governance/units/{id}/deciders` | a unit strictly below one of theirs; always held ([deciders](deciders.md)) |

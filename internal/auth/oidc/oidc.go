@@ -161,6 +161,10 @@ type LoginFacts struct {
 	Groups   []string
 	// GroupsTruncated reports Groups is a partial snapshot.
 	GroupsTruncated bool
+	// Roles is the token's roles claim on its own, normalized and capped as Groups is (trimmed,
+	// lowercased, deduplicated, sorted). Groups carries the same values folded in with the groups claim,
+	// within one cap shared by every group; Roles keeps the claim from being cut out by a long group list.
+	Roles []string
 	// Issuer is the verified token's issuer.
 	Issuer string
 	// TenantID and ObjectID are Entra ID's tenant and object id, set together and only on an Entra

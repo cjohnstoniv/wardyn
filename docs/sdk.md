@@ -1105,6 +1105,11 @@ start.
 | `governance_change_note_proposer_only` | `PUT /governance/changes/{id}/note` (403): the caller did not propose the change. Only its proposer writes the note. |
 | `governance_change_note_invalid` | `PUT /governance/changes/{id}/note` (400): the reason is over 500 characters or holds a control character, or the ticket is over 128 characters or is not one line. |
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
+| `governance_change_already_approved` | `POST /governance/changes/{id}/approve` (409): the same person already holds an approval of the change that counts; someone else approves it, or they take theirs back. |
+| `governance_change_security_approver_required` | `POST /governance/changes/{id}/approve` (409): the last approval would leave no security admin among those counted. |
+| `governance_change_proposer_inactive` | `POST /governance/changes/{id}/approve` (409): the last approval, while the person who proposed the change is deactivated. |
+| `governance_change_reason_required` | `POST /governance/changes/{id}/reject` (400): a change needing more approvals is rejected by someone other than its proposer, with no reason. |
+| `governance_change_approval_not_found` | `DELETE /governance/changes/{id}/approval` (404): the caller holds no approval of the change that counts. |
 | `governance_request_needs_person` | `POST /governance/requests` (403): the caller is not a signed-in person (the admin token, a service, a device, local mode). Only a person can ask. |
 | `governance_request_kind_invalid` | `POST /governance/requests` (400): `kind` is not one this server takes; the message lists them. |
 | `elevation_not_offered` | `POST /governance/requests` (400): the unit offers the caller no elevation: no `elevation` rule on it or above it, the caller is in none of its `eligible_requesters` groups (or their group list is out of date), or the unit is Default or unknown. One answer for all of them. |

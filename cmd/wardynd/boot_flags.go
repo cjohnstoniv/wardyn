@@ -460,6 +460,9 @@ type bootFlags struct {
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
 	// api.Config.GovernanceChangeTTL.
 	governanceChangeTTL *time.Duration
+	// governanceMinApprovals is the fewest people who must approve a held governance change — see
+	// api.Config.GovernanceMinApprovals.
+	governanceMinApprovals *int
 
 	// UI-sandbox gateway (pillar 4): uiListen empty = off = no listener, no new
 	// surface, exactly like sshListen. uiAdvertise/uiOriginTemplate are the
@@ -759,6 +762,7 @@ func parseBootFlags() *bootFlags {
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
+		governanceMinApprovals: flagIntEnv("governance-min-approvals", "WARDYN_GOVERNANCE_MIN_APPROVALS", 0, "the fewest distinct people who must approve a held governance change, integer 1 to 9; unset or 0 (default) keeps one approval. Independent of WARDYN_GOVERNANCE_SECOND_HUMAN; a change already proposed keeps the count it was held with"),
 		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
 		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshChannels:            flagEnv("ssh-channels", "WARDYN_SSH_CHANNELS", "", "comma list of the SSH channel kinds the gateway serves: shell, exec, sftp, forward; sftp also covers wardyn sync and exec also covers POST /runs/{id}/exec. Empty (default) serves all four"),

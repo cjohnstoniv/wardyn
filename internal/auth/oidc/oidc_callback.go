@@ -366,9 +366,10 @@ func idpRefusalCode(idpErr string) string {
 // loginFacts is what an admitted sign-in hands OnLogin. Only an Entra token carrying a well-formed
 // object id and a tenant is keyed by them; any other sign-in leaves both empty.
 func (a *Authenticator) loginFacts(sess Session, cc callbackClaims) LoginFacts {
+	roles, _ := sessionGroups(cc.roles, nil, nil)
 	f := LoginFacts{
 		Sub: sess.Sub, Role: sess.Role, UserType: sess.UserType,
-		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated,
+		Groups: sess.Groups, GroupsTruncated: sess.GroupsTruncated, Roles: roles,
 		Issuer: cc.issuer, Email: cc.email,
 	}
 	if f.Issuer == "" {

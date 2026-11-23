@@ -339,6 +339,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CAPABILITY_SECOND_HUMAN` | bool | (unset) | four-eyes on capability escalations and on one MCP call, held kubectl write or held host call: the human who DECIDES must not be the run's creator. **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_capability_second_human) |
 | `WARDYN_GOVERNANCE_SECOND_HUMAN` | bool | (unset) | four-eyes on governance writes: a human's write to a governance profile, a capability grant, a key-domain assignment or `local_credential_delivery` is stored as a pending change. A second, distinct human must approve it. [Details](#wardyn_governance_second_human) |
 | `WARDYN_GOVERNANCE_CHANGE_TTL` | duration | `72h` | how long a governance change held for a second human waits for approval (flag `-governance-change-ttl`); past it the change reads as `expired` and cannot be approved. [Details](#wardyn_governance_change_ttl) |
+| `WARDYN_GOVERNANCE_MIN_APPROVALS` | int | `0` | the fewest approvals a held change of a kind with more than one decider needs (flag `-governance-min-approvals`); `0` leaves every change to one approver. [Details](#wardyn_governance_min_approvals) |
 | `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY` | bool | `true` | `PUT /governance/units/{id}` updates an existing profile only; an id no profile holds answers `404` (flag `-governance-unit-put-existing-only`). [Details](#wardyn_governance_unit_put_existing_only) |
 | `WARDYN_EGRESS_HOST_PORT_GRANTS_INERT` | bool | `true` | a stored `egress_host` allow grant whose value carries a port is inert: marked so and never matched (flag `-egress-host-port-grants-inert`). [Details](#wardyn_egress_host_port_grants_inert) |
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
@@ -1696,6 +1697,14 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Past it the change reads as `expired` and cannot be approved; the next proposal at the same target records the expiry (`governance.change.expire`).
 - A value that does not parse, or is not positive, exits 2 at boot.
 - Read only while `WARDYN_GOVERNANCE_SECOND_HUMAN` is on.
+
+### `WARDYN_GOVERNANCE_MIN_APPROVALS`
+
+- The fewest people who must approve a held governance change before it applies (flag `-governance-min-approvals`). A value outside 0 to 9 exits 2 at boot.
+- `0` (the default) leaves every change to one approver and changes nothing else. Elevation requests, image requests and run node records always have one decider, whatever this is set to.
+- A change keeps the count it was proposed with: unsetting or lowering this later never lowers a held change's count, and raising it raises the count of the changes already held.
+- An approval counts only while its person is still eligible on their latest sign-in record; the last approval re-checks every earlier one, and a person can take their own back (`DELETE /governance/changes/{id}/approval`).
+- Read only while `WARDYN_GOVERNANCE_SECOND_HUMAN` is on, or for a change that needs a security admin among its approvers.
 
 ### `WARDYN_GOVERNANCE_UNIT_PUT_EXISTING_ONLY`
 
