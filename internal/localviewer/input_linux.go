@@ -24,6 +24,7 @@ type input struct {
 	keysyms []xproto.Keysym
 	down    map[xproto.Keycode]uint32 // keys pressed, with the keysym their press sent
 	mask    byte
+	numLock uint16 // the modifier bit Num_Lock sets in a key event's state; 0 when no modifier holds it
 }
 
 func newInput(x *xgb.Conn) *input {
@@ -33,24 +34,66 @@ func newInput(x *xgb.Conn) *input {
 	if err == nil {
 		in.per, in.keysyms = int(r.KeysymsPerKeycode), r.Keysyms
 	}
+	if m, err := xproto.GetModifierMapping(x).Reply(); err == nil {
+		in.numLock = in.numLockMask(m.Keycodes, int(m.KeycodesPerModifier))
+	}
 	return in
 }
 
-// keysym is the keysym kc types with the modifiers in state: the shifted column under Shift, Caps Lock
-// shifting letters only.
-func (in *input) keysym(kc xproto.Keycode, state uint16) uint32 {
+// The keysyms the keypad rule reads.
+const (
+	keysymNumLock = 0xff7f
+	keysymKPFirst = 0xff80 // KP_Space
+	keysymKPLast  = 0xffbd // KP_9
+	modifierSlots = 8      // Shift, Lock, Control, Mod1 to Mod5
+)
+
+// numLockMask is the state bit of the modifier whose keycodes (the modifier mapping's, perMod a slot)
+// include one that types Num_Lock.
+func (in *input) numLockMask(mods []xproto.Keycode, perMod int) uint16 {
+	for slot := range modifierSlots {
+		for j := range perMod {
+			k := slot*perMod + j
+			if k >= len(mods) || mods[k] == 0 {
+				continue
+			}
+			if in.column(mods[k], 0) == keysymNumLock || in.column(mods[k], 1) == keysymNumLock {
+				return 1 << slot
+			}
+		}
+	}
+	return 0
+}
+
+// column is keycode kc's keysym in column c of the keyboard mapping, 0 outside the table.
+func (in *input) column(kc xproto.Keycode, c int) uint32 {
 	i := (int(kc) - int(in.min)) * in.per
-	if in.per == 0 || i < 0 || i+in.per > len(in.keysyms) {
+	if in.per <= c || i < 0 || i+in.per > len(in.keysyms) {
 		return 0
 	}
-	plain, shifted := uint32(in.keysyms[i]), uint32(0)
-	if in.per > 1 {
-		shifted = uint32(in.keysyms[i+1])
+	return uint32(in.keysyms[i+c])
+}
+
+func isKeypad(ks uint32) bool { return ks >= keysymKPFirst && ks <= keysymKPLast }
+
+// keysym is the keysym kc types with the modifiers in state: the shifted column under Shift, Caps Lock
+// shifting letters only. With Num Lock on, a key whose shifted column is a keypad keysym types it (KP_7
+// rather than KP_Home), and Shift then gives the plain column, as X itself decides.
+func (in *input) keysym(kc xproto.Keycode, state uint16) uint32 {
+	plain, shifted := in.column(kc, 0), in.column(kc, 1)
+	if plain == 0 {
+		return 0
 	}
 	if shifted == 0 {
 		shifted = plain
 	}
 	shift := state&shiftMask != 0
+	if in.numLock != 0 && state&in.numLock != 0 && isKeypad(shifted) {
+		if shift {
+			return plain
+		}
+		return shifted
+	}
 	if state&lockMask != 0 && isLetter(plain) {
 		shift = !shift
 	}
