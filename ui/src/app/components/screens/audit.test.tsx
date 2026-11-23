@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, AuditEvent } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
+import { queryClient } from "../../lib/query-client";
 
 // MEDIUM fixes pinned here:
 //  - run_id filter must query the SERVER with run_id (api.listAudit(runId)),
@@ -828,6 +829,7 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(chip).toHaveAttribute("title", "heartbeat stale");
 
     healthMock.mockResolvedValue({});
+    queryClient.clear();
     renderScreen();
     await waitFor(() => expect(screen.getAllByText(/ground truth/i)).toHaveLength(1));
   });
