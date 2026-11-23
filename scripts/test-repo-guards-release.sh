@@ -8,6 +8,7 @@
 # sources it after guard 25, so these guards share its fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
 #  36. ci.yml's go legs build with the Makefile recipes' flags; one split binary.
 #  34. nightly.yml's concurrency group: a dispatch shares its ref and scope's group; a called run gets its own.
+#  35. lane-check.yml's steps equal the ci.yml jobs they copy (ordered, with the named omissions).
 
 # ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
 # The binaries job builds every TARGETS entry in one step, but each target has its
@@ -303,4 +304,60 @@ elif [ -z "$group_planted" ]; then
     bad "guard 34's plant (the old always-falsy group line) was not caught, so the guard checks nothing"
 else
     ok "nightly.yml's concurrency group gives a dispatch its ref and scope's group and a called run its own"
+fi
+
+# ── 35. lane-check.yml's steps are copies of the ci.yml jobs they stand in for ──
+# lane-check.yml runs go (lint), go (unit) and the store and race Postgres shards on a dispatched lane branch. A copy that
+# drifts from ci.yml proves nothing about the train, so each lane-check job's whole ordered step list (unnamed steps
+# included) must equal its ci.yml job's, after the named omissions: the go job's docs-only step and every job's cache save.
+# `if` is not compared, since lane-check drops the `needs.changes` conditions.
+LC=.github/workflows/lane-check.yml
+if [ -f "$LC" ]; then
+    if ! command -v yq >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        bad "guard 35 needs yq and jq (lane-check.yml parity); install them"
+    else
+        lc_steps() {  # FILE JOB OMIT_JSON: the job's steps, without the omitted names, as one JSON array
+            yq -o=json ".jobs[\"$2\"].steps" "$1" |
+                jq -c --argjson omit "$3" '[.[] | select(((.name // "") as $n | $omit | index($n)) == null) | {name, id, uses, with, run, env, shell, "working-directory", "timeout-minutes", "continue-on-error"}]'
+        }
+        lc_save='"Save Go build cache (push to main only)"'
+        lc_docs='"Docs- or console-only change — the guard packages only (no race, no coverage)"'
+        lc_pair() {  # CI_FILE LANE_FILE LANE_JOB CI_JOB OMIT_JSON
+            local a b
+            a="$(lc_steps "$1" "$4" "$5")"
+            b="$(lc_steps "$2" "$3" '[]')"
+            [ -n "$a" ] && [ "$a" != null ] && [ "$a" = "$b" ] \
+                || echo "lane-check job '$3' differs from ci.yml's '$4' (ordered steps, minus the named omissions)"
+        }
+        lc_problems() {  # CI_FILE LANE_FILE: one line per difference
+            local ci="$1" lane="$2"
+            lc_pair "$ci" "$lane" lint go-lint "[$lc_save]"
+            lc_pair "$ci" "$lane" unit go "[$lc_docs,$lc_save]"
+            lc_pair "$ci" "$lane" pg test-pg-shard "[$lc_save]"
+            [ "$(yq -r '.jobs[].if' "$lane" | sort -u)" = "startsWith(github.ref, 'refs/heads/lane/')" ] \
+                || echo "every lane-check job's if must be exactly startsWith(github.ref, 'refs/heads/lane/')"
+            [ "$(yq -o=json -I0 '.on | keys' "$lane")" = '["workflow_dispatch"]' ] \
+                || echo "lane-check's on: must hold workflow_dispatch only"
+            ! yq -r '.jobs[].steps[].uses // ""' "$lane" | grep -q '^actions/cache/save@' \
+                || echo "a lane-check step saves a cache; a lane ref's entries would be readable by no train"
+        }
+        lc_plant="$(mktemp -d)"
+        lc_real="$(lc_problems .github/workflows/ci.yml "$LC")"
+        # Three plants, each of which must fail: one run line changed, one unnamed step's fetch-depth deleted, one named step deleted.
+        sed '0,/run: make ${{ matrix.target }}/s//run: make ${{ matrix.target }} -x/' "$LC" > "$lc_plant/run.yml"
+        yq 'del(.jobs.lint.steps[0].with.fetch-depth)' "$LC" > "$lc_plant/depth.yml"
+        yq 'del(.jobs.lint.steps[] | select(.name == "Whole-tree guard tests (every Go test that reads the repository)"))' "$LC" > "$lc_plant/gone.yml"
+        lc_missed=""
+        for p in run depth gone; do
+            [ -n "$(lc_problems .github/workflows/ci.yml "$lc_plant/$p.yml")" ] || lc_missed="$lc_missed $p"
+        done
+        rm -rf "$lc_plant"
+        if [ -n "$lc_real" ]; then
+            bad "$LC: $lc_real"
+        elif [ -n "$lc_missed" ]; then
+            bad "guard 35's plants were not caught ($lc_missed ), so the guard checks nothing"
+        else
+            ok "lane-check.yml's steps equal the ci.yml jobs they copy (self-test catches a changed run line, a dropped fetch-depth and a deleted step)"
+        fi
+    fi
 fi

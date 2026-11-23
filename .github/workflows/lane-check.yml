@@ -1,0 +1,383 @@
+name: Lane check
+
+# A lane head's own hosted run, before it joins a train: go (lint), go (unit) and the store and race Postgres shards,
+# each step copied from ci.yml (scripts/test-repo-guards-release.sh guard 35 holds the copies equal).
+# Dispatch only, on a lane/* branch: `gh workflow run lane-check.yml --ref lane/<name>`. GitHub dispatches a workflow
+# only once its file is on the default branch, and runs the copy on the dispatched ref. Caches are restored, never saved.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lane-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SEGMENT_DOWNLOAD_TIMEOUT_MINS: "3"
+
+jobs:
+  lint:
+    name: go (lint)
+    if: startsWith(github.ref, 'refs/heads/lane/')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history with tags: the CHANGELOG freeze guard
+          # (cmd/wardynd/changelog_frozen_test.go) compares each released
+          # section against its tag or correcting commit, and skips any it
+          # cannot resolve.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # The tools' own module downloads (go-gate-tools saves them), restored by prefix.
+      - name: Restore the gate tools' module downloads
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod/cache/download
+          key: gotools-${{ runner.os }}-restore-only
+          restore-keys: gotools-${{ runner.os }}-
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-lint-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-lint-${{ runner.os }}-
+      # The internal/api test compile and staticcheck's whole-tree pass take about all
+      # of the hosted runner's memory; without extra swap the runner is shut down mid-step
+      # (exit 143, or no log and a timeout 5 min past the limit). Same step as the go legs.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 2
+      # The whole-tree guard list is built by scripts/lib/candidate-tests.py, the
+      # same discovery scripts/lane-preflight.sh --candidate runs, so a guard
+      # added anywhere is picked up with no list to edit. Unraced and uncached,
+      # WARDYN_TEST_PG unset, like the guard-package step of the `go` job. Every
+      # package runs even after one fails, so a push shows all the red guards.
+      # Four green runs on 2026-11-13 took 9-10 min for the whole list. A package
+      # gets 8 min, so a stuck one fails by name with a goroutine dump, and the
+      # step 20, so an overrun fails here with its log instead of the job being
+      # cancelled at its limit with none.
+      - name: Whole-tree guard tests (every Go test that reads the repository)
+        timeout-minutes: 20
+        env:
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: |
+          set -euo pipefail
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          out="$(python3 -I scripts/lib/candidate-tests.py guards)"
+          [ -n "$out" ] || { echo "::error::no whole-tree guard test found; the discovery pattern regressed"; exit 1; }
+          rc=0
+          while IFS=$'\t' read -r dir names; do
+            echo "::group::./$dir"
+            WARDYN_TEST_PG='' go test -count=1 -timeout 8m -run "^(${names})\$" "./$dir" || rc=1
+            echo "::endgroup::"
+          done <<<"$out"
+          exit "$rc"
+      # `make lint` also runs the console's ESLint (ui/eslint.config.js), so this
+      # job sets up pnpm and node.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 9
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      # golangci-lint and actionlint are `go run tool@version` in `make lint`. Fetched here so a
+      # stall fails fast under this name; the measured cold fetch is at most 9.3 s, so 3 min.
+      - name: Fetch lint tools
+        timeout-minutes: 3
+        run: scripts/fetch-gate-tools.sh golangci-lint actionlint
+      # `make lint` = go vet (all three tag sets) + the golangci-lint
+      # function-size/complexity gate (.golangci.yml) + the file-size gate
+      # and the other static gates + the console's ESLint — single-sourced
+      # in the Makefile.
+      # tidy-check: go.mod/go.sum must stay tidy (go mod tidy -diff).
+      # ESLint needs no browser; PUPPETEER_SKIP_DOWNLOAD skips the mermaid-cli
+      # chromium download.
+      - name: make build tidy-check lint
+        run: make build tidy-check lint
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+
+  unit:
+    name: go (unit)
+    if: startsWith(github.ref, 'refs/heads/lane/')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: unit
+            target: test-report
+            tags: ''
+            build: -race -covermode=atomic -coverpkg=./...
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history with tags: the CHANGELOG freeze guard
+          # (cmd/wardynd/changelog_frozen_test.go) compares each released
+          # section against its tag or correcting commit, and skips any it
+          # cannot resolve.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # setup-go's own cache uses one key with no job component, so only the
+      # first job to finish ever saves it and every other job restores a
+      # near-empty cache (issue #470). Keying per job here fixes that. Each
+      # green push to main saves one entry under its run id, and a run restores
+      # the newest entry for the same OS and go.mod/go.sum (the toolchain and
+      # the module graph), so a pull request warms from the latest main tip, not
+      # the day's first. The save needs a green run, so an early failure never
+      # leaves a near-empty newest entry. The unhashed restore-key keeps a
+      # go.mod/go.sum change warm (the build caches are content-addressed, so
+      # an older entry is safe to restore).
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-
+      # The coverage compile of internal/api is the job's memory peak, near all of the hosted runner's memory;
+      # extra swap lets that peak page out instead of the runner being shut down. No `if:`: the docs- or
+      # console-only step below compiles internal/api's tests too.
+      - name: Add swap for the coverage compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # internal/api's test compile is the job's memory peak (scripts/ci-api-prebuild.sh has the figures). It is
+      # compiled here first with two workers, and measured, so the step below finds it in the build cache.
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # Kept for the next step, which runs internal/api's tests as three slices of it (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+        run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
+      - name: make ${{ matrix.target }}
+        run: make ${{ matrix.target }}
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: '1'
+          # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # internal/api runs as three slices of the prebuilt binary beside the other packages (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+          WARDYN_TEST_REPORT_SPLIT_PKG: github.com/cjohnstoniv/wardyn/internal/api
+      # No continue-on-error, unlike the other report uploads: `build` unions
+      # these profiles, so a leg whose profile did not upload has not done its job.
+      # overwrite: a "Re-run failed jobs" attempt re-uploads under the same name.
+      # if-no-files-found: error, so a leg that wrote no reports goes red itself
+      # rather than leaving `build` to fail later on a missing directory.
+      - name: Upload the suite's reports and coverage profile
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-reports-${{ matrix.suite }}
+          path: test/reports/go/${{ matrix.suite }}/**
+          overwrite: true
+          if-no-files-found: error
+
+  pg:
+    name: test-pg-shard (${{ matrix.shard }})
+    if: startsWith(github.ref, 'refs/heads/lane/')
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      packages: read
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: store
+            suite: pg-store
+            run: make test-report-pg-store PG_REPORT=pg-store
+            superuser: "1"
+          # The `race` job above strips the DSN (Makefile: `WARDYN_TEST_PG= go test
+          # -race ./...`), so the WARDYN_TEST_PG-gated tests are SKIPPED there — and
+          # the two shards above, the only ones that set the DSN for a report, run
+          # without -race. The broker's exactly-once concurrency proofs are
+          # therefore the tests most in need of the detector and the ones no gate
+          # was pointing it at. This shard is that gate (F137). It writes no report
+          # directory, so it uploads none.
+          - shard: race
+            suite: ''
+            run: make test-race-pg
+            superuser: ''
+            prebuild: race
+    services:
+      postgres:
+        image: ghcr.io/cjohnstoniv/base-images:library-postgres-17-a426e44bac0b@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_PASSWORD: wardyn
+          POSTGRES_DB: wardyn
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-test-pg-${{ matrix.shard }}-${{ runner.os }}-
+      # This job's tests read live state (a daemon, a cluster, Postgres, tmux)
+      # that Go's test cache does not key on, so a restored result would replay
+      # a pass without running the test. Keep the build cache, drop the results.
+      - name: Drop cached test results
+        run: go clean -testcache
+      # See go-lint: the internal/api test compile.
+      - name: Add swap for the memory peak
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      # WARDYN_TEST_PG_SUPERUSER asserts what this lane already is: `postgres`,
+      # over a URL-form DSN, which can satisfy every precondition the append-only
+      # probes guard on. With it set, a probe that would have SKIPPED (and so
+      # reported `ok` and exit 0 while proving nothing) FAILS instead — and
+      # test-report.sh's skip floor catches the same class from the other side,
+      # over the JSON event stream, in case a guard is ever added that does not
+      # consult the marker. The race shard does not set it, as before.
+      # See the go job: internal/api's test compile, prebuilt with two workers and measured.
+      - name: Prebuild internal/api's tests with two workers
+        if: matrix.prebuild != ''
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: scripts/ci-api-prebuild.sh 2 ${{ matrix.prebuild == 'race' && '-race' || '' }}
+      - name: Postgres-gated suite (${{ matrix.shard }})
+        env:
+          WARDYN_TEST_PG: postgres://postgres:wardyn@localhost:5432/wardyn?sslmode=disable
+          WARDYN_TEST_PG_SUPERUSER: ${{ matrix.superuser }}
+          WARDYN_TEST_POOL_GUARD: '1'
+          # No gate reads a PG shard's coverage (the floor and cover-union take unit,
+          # docker and k8s); atomic -coverpkg=./... instrumentation is pure cost here.
+          WARDYN_TEST_REPORT_COVER: '0'
+          # The same GOFLAGS as the prebuild above, so the api and race shards reuse its internal/api build.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: |
+          vmstat -t 15 &
+          vm=$!
+          trap 'kill "$vm" 2>/dev/null || true' EXIT
+          ${{ matrix.run }}
+      - name: Upload PG test reports
+        id: upload_pg_test_reports
+        if: always() && matrix.suite != ''
+        # A storage-side error must not fail a job whose tests passed: a 403 from
+        # the artifact service reddened a REQUIRED check with all 175 UI test files
+        # green, and only a manual re-run cleared it (#372). The step below says so
+        # loudly, because a run that is green with no reports attached is the one
+        # case where you need them.
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pg-test-reports-${{ matrix.shard }}
+          path: test/reports/go/${{ matrix.suite }}/**
+      - name: Say so if the PG test reports did not upload
+        if: always() && steps.upload_pg_test_reports.outcome == 'failure'
+        run: echo "::warning title=Reports missing::pg-test-reports-${{ matrix.shard }} did not upload; this job's result stands on its tests, but the reports are not attached to this run."
