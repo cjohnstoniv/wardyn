@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/armscope"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -113,11 +114,71 @@ func TestGrantResidencyGitHubToken(t *testing.T) {
 
 func TestGrantResidencyCloudSTS(t *testing.T) {
 	g := types.GrantSpec{Kind: types.GrantCloudSTS}
-	if inside, known := grantResidency(g, false, nil, true); inside || !known {
-		t.Fatalf("signed at the proxy: got (%v, %v), want (false, true)", inside, known)
+	if inside, known := grantResidency(g, false, nil, true); inside || known {
+		t.Fatalf("server can sign at the proxy: got (%v, %v), want (false, false)", inside, known)
 	}
 	if inside, known := grantResidency(g, true, nil, false); !inside || !known {
 		t.Fatalf("not signed at the proxy: got (%v, %v), want (true, true)", inside, known)
+	}
+}
+
+// grantResidencyAPIKeyGrant is an api_key grant whose scope is fields, as dispatch authors it.
+func grantResidencyAPIKeyGrant(fields map[string]any) types.GrantSpec {
+	b, _ := json.Marshal(fields)
+	return types.GrantSpec{Kind: types.GrantAPIKey, Scope: b}
+}
+
+func TestGrantResidencyAPIKeyPaths(t *testing.T) {
+	awsSession := grantResidencyAPIKeyGrant(map[string]any{
+		"host": "portal.sso.us-east-1.amazonaws.com", "header": awsSSOInjectHeader, "format": "%s",
+		"secret_name": types.AWSSSOAccessTokenSecret, "pin_path": awsSSORoleCredentialsPath,
+	})
+	azureCLI := func(access string) types.GrantSpec {
+		return grantResidencyAPIKeyGrant(map[string]any{
+			"host": armscope.Host, "header": "Authorization", "format": "Bearer %s",
+			"secret_name": cliSecretName("az-1", providerEntraPart),
+			"snapshot":    azureARMGrantSnapshot{Mechanism: azureCLIMechanism, ComponentID: "az-1", Access: access},
+		})
+	}
+	kubectl := grantResidencyAPIKeyGrant(map[string]any{
+		"host": "kube.example.test", "header": "Authorization", "format": "Bearer %s",
+		"secret_name": kubectlTokenSecretName("kc-1"),
+		"snapshot":    kubectlGrantSnapshot{Mechanism: kubectlCLIMechanism, ComponentID: "kc-1", Access: types.ComponentAccessWrite},
+	})
+	adoSignIn := grantResidencyAPIKeyGrant(map[string]any{
+		"host": "dev.azure.com", "header": adoEntraInjectHeader, "format": "Bearer %s",
+		"secret_name": types.ADOEntraAccessTokenSecret,
+	})
+	plain := grantResidencyAPIKeyGrant(map[string]any{
+		"host": "api.example.test", "header": "X-Api-Key", "format": "%s", "secret_name": "team-key",
+	})
+	cases := []struct {
+		name          string
+		grant         types.GrantSpec
+		sigv4AtProxy  bool
+		inside, known bool
+	}{
+		{"aws session, re-signing off", awsSession, false, true, true},
+		{"aws session, re-signing on", awsSession, true, false, false},
+		{"azure cli write, re-signing off", azureCLI(types.ComponentAccessWrite), false, false, false},
+		{"azure cli write, re-signing on", azureCLI(types.ComponentAccessWrite), true, false, false},
+		{"azure cli read, re-signing off", azureCLI(types.ComponentAccessRead), false, false, true},
+		{"azure cli read, re-signing on", azureCLI(types.ComponentAccessRead), true, false, true},
+		{"kubectl, re-signing off", kubectl, false, false, true},
+		{"kubectl, re-signing on", kubectl, true, false, true},
+		{"azure devops sign-in, re-signing off", adoSignIn, false, false, true},
+		{"azure devops sign-in, re-signing on", adoSignIn, true, false, true},
+		{"proxy-side key, re-signing off", plain, false, false, true},
+		{"proxy-side key, re-signing on", plain, true, false, true},
+		{"unreadable scope", types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`not json`)}, true, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			inside, known := grantResidency(c.grant, false, nil, c.sigv4AtProxy)
+			if inside != c.inside || known != c.known {
+				t.Fatalf("got (%v, %v), want (%v, %v)", inside, known, c.inside, c.known)
+			}
+		})
 	}
 }
 

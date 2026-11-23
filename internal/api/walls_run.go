@@ -7,7 +7,6 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -123,7 +122,7 @@ func (s *Server) handleRunWalls(w http.ResponseWriter, r *http.Request) {
 		body.NextCursor = strconv.Itoa(end)
 	}
 
-	if body.Grants, err = s.runWallsGrants(ctx, run.ID, ev); err != nil {
+	if body.Grants, err = s.runWallsGrants(ctx, run.ID); err != nil {
 		writeServerError(w, r, "read run grants", err)
 		return
 	}
@@ -328,14 +327,15 @@ func (s *Server) runWallsStruck(ctx context.Context, run types.AgentRun, prov kn
 }
 
 // runWallsGrants is each of the run's grants with whether its value is inside the sandbox (grantResidency). The
-// broker's repos are not recorded on the run, so a github_token reads as the broker being off; a cloud_sts grant stays
-// out when awsSigV4Hosts would re-sign, at the proxy, the hosts the run's Bedrock row records.
-func (s *Server) runWallsGrants(ctx context.Context, runID uuid.UUID, ev auditEvidence) ([]RunWallsGrant, error) {
+// broker's repos are not recorded on the run, so a github_token reads as the broker being off. Re-signing at the proxy
+// is passed as the server-wide switch (gatewayBedrockSSOAvailable), since the grant row does not say whether this run's
+// AWS sign-in was re-signed: off, the AWS session reads as inside; on, its residency is unknown and omitted.
+func (s *Server) runWallsGrants(ctx context.Context, runID uuid.UUID) ([]RunWallsGrant, error) {
 	rows, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	_, sigv4AtProxy := s.awsSigV4Hosts(slices.Sorted(maps.Keys(ev.model)))
+	sigv4AtProxy := s.gatewayBedrockSSOAvailable()
 	out := make([]RunWallsGrant, 0, len(rows))
 	for _, g := range rows {
 		item := RunWallsGrant{ID: g.ID, Kind: g.Spec.Kind}
