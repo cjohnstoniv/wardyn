@@ -9,4 +9,5 @@ docs/design/README.md=221 share=1
 # docs/operations/high-availability.md 1095 adds 24 over 1071, measured: finish a rollout before reviving a run (B7).
 # docs/operations/high-availability.md 1238 adds 143 over 1095, measured: before turning on AI gateway identity.
 # docs/operations/high-availability.md 1263 adds 25 over 1238, measured: a refusal is held 30 seconds, so up to about a minute; an older replica answers as an unregistered path.
-docs/operations/high-availability.md=1320 share=6 # 1320 measured (+57: readiness reads /healthz by default)
+# docs/operations/high-availability.md 1320 adds 57 over 1263, measured: readiness reads /healthz by default
+docs/operations/high-availability.md=1636 share=6 # 1636 measured (+316: the database section, the hung database, readiness with several replicas and the closed watcher row)

@@ -11,11 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The high-availability page says what Wardyn needs from its Postgres: a session-mode connection and a synchronous standby, and what a failover to a standby that lost commits does to sandboxes.
+
 ### Changed
 
 - Helm chart: the readiness probe now reads `/healthz` by default instead of `/readyz`. A Postgres outage that
   refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
   its database banner. `/readyz` still pings Postgres.
+
+### Fixed
+
+- The high-availability page no longer lists the completion-watcher blocker as open: since 0.10.1 only the replica holding a runner's session claims its runs. It also says when a hung database restarts the pod, and what readiness does with several replicas.
 
 ### Before you upgrade
 

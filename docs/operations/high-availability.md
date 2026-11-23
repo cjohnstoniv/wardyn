@@ -13,7 +13,7 @@
 | B1 | A registered runner holds its session with one replica. A launch on another replica is refused `runner_offline`, or `runner_pool_no_eligible_member` in an organisation pool. Attach, exec, SSH, app gateway, desktop, folders and revive need the holding replica. | Open. Setup status warns with the row "Runners with several replicas" (`registered_runners_ha`) while `WARDYN_HA` is set and runners are on. | Keep one replica while you use runners. Runs on the control plane's own Kubernetes runner are not affected. |
 | B2 | A kill, end or stop_proxy served by a replica that does not hold the runner's session is queued for the runner. | Shortened in rc.8. The replica that holds the session now ends it when another queues an action, so the runner reconnects and reads the action at once. A lost notice costs the old wait, until the runner next reconnects. | The kill still revokes the run's credentials at once. Until the runner reads the action, the agent keeps the egress it has cached. |
 | B3 | High availability needs the control plane's own runner to be Kubernetes, even when every run goes to organisation runners. | By design. The Docker driver keeps per-process maps, and boot refuses `WARDYN_HA` with any other runner. | Use `k8s.enabled`. |
-| B4 | A registered runner's completion watcher is claimed by whichever replica sweeps first, and only the replica that holds the session can probe. | Open, tracked in #3671. | Keep one replica, as for B1. |
+| B4 | A registered runner's completion watcher is claimed only by the replica holding the runner's session. Any replica may still end a task run whose agent never started, or an interrupted macOS VM preparation. | Closed in 0.10.1 ([`store_watcher.go`](../../internal/store/store_watcher.go) `ClaimStaleRunWatchers`). | Nothing to do. B1 still applies. |
 | B5 | Per-replica caps multiply by the replica count: SSH and UI connections, rate limits, the attach-session cap, `via_org` bytes and runner-stream handshakes. | By design, documented. | Size each cap times the replicas: [What stays per replica](../OPERATIONS.md#what-stays-per-replica). |
 | B6 | The audit spool is on the pod's `emptyDir`. A node failure loses what that pod had spooled and not yet drained. | Residual, documented. | Keep audit in Postgres. The spool is only the fallback for a failed write. |
 | B7 | Upgrades use `Recreate`. Every replica stops before the new ones start. | By design: an upgrade is not zero-downtime. A mixed-version window is tracked in #3467. | Plan an upgrade as downtime. If replicas of two versions do run together, finish the rollout before reviving a run: a 0.9.8 replica can undo the revive's token cut. |
@@ -21,6 +21,20 @@
 | B9 | On a Postgres failover, advisory locks can overlap briefly, and a credential refresh in flight can be lost. | Residual, documented. | The person signs in again: [Residual risks](../OPERATIONS.md#residual-risks). |
 | B10 | Two small states are per replica: the live-revive rate bound and the Azure DevOps Entra access cache. | Minor, tracked in #3661 and #3663. | Nothing to do: each is a per-replica bound or cache. |
 | B11 | `wardyn-runnerd` is one replica, held by its state lock. | By design. Runner redundancy is a second runner in the pool. | [Organisation runners in a Kubernetes cluster](k8s-runners.md). |
+
+## The database
+
+- Every replica uses the one Postgres primary that [`WARDYN_PG_DSN`](../ENV.md#wardyn_pg_dsn) names. The chart deploys none: you run the database and its standby ([state stores](../OPERATIONS.md#state-stores)).
+
+| Wardyn needs | Why |
+|---|---|
+| A direct connection, or a pooler in session mode, never in transaction or statement mode | `wardynd` holds advisory locks for the life of a connection ([`locks.go`](../../internal/db/locks.go)) and listens for notifications on one ([`livebus.go`](../../internal/livebus/livebus.go)). A pooler that hands that connection to another client breaks both |
+| A standby that has every committed write: synchronous replication | A failover to a standby that lost its last commits is a restore to an earlier point. Runs started since then have no row, and the orphan sweep removes their sandboxes |
+
+- The orphan sweep runs on the server's own Docker and Kubernetes and on every connected runner ([`reconcile.go`](../../internal/api/reconcile.go) `sweepOrphanedSandboxes`).
+- On a failover the advisory locks can overlap briefly (B9).
+- Setups that meet these needs: a managed Postgres with a synchronous standby and automatic failover, or CloudNativePG or Patroni with at least one synchronous replica.
+- The project's own tests do not yet fail a database over to a standby. One Postgres with no standby suits an evaluation: its outage is an outage of Wardyn.
 
 ## Before turning on AI gateway identity
 
@@ -56,12 +70,15 @@
 
 | Endpoint | Probe | Reports | Fails when |
 |---|---|---|---|
-| `/healthz` | Liveness, startup and, by default, readiness. Liveness checks every 10 seconds and restarts the container after 3 failures; readiness marks the pod not ready after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable Postgres only leaves out the sign-in help text | The process does not answer: it is down, or still starting ([`healthz.go`](../../internal/api/healthz.go)) |
+| `/healthz` | Liveness, startup and, by default, readiness. Liveness checks every 10 seconds and restarts the container after 3 failures; readiness marks the pod not ready after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable Postgres only leaves out the sign-in help text | The process does not answer within the probe's limit, 3 seconds or 1 for the startup probe: it is down, still starting, or held by a Postgres that stops answering ([`healthz.go`](../../internal/api/healthz.go)) |
 | `/readyz` | Readiness where `readinessProbe.path` is `/readyz`, every 10 seconds, not ready after 3 failures. The console polls it for its database banner | A Postgres ping with a 3-second limit. `200` with `{"status":"ok"}`, or `503` with `{"status":"error","postgres":"unreachable"}` | Postgres does not answer. Where readiness reads it, the pod leaves the Service, so with one replica the Service has no ready pod ([`security_headers.go`](../../internal/api/security_headers.go) `handleReadyz`) |
 
 - `/readyz` does not cover the sandbox runner. A runner fault shows on `wardyn_runner_up` and the `substrate_health` row of `/setup/status` instead ([Monitoring](monitoring.md#substrate-and-sweep-health)).
-- A Postgres outage does not restart the pod, because liveness reads `/healthz`.
+- A Postgres that refuses connections does not restart the pod, because `/healthz` still answers.
+- A Postgres that stops answering can hold `/healthz` past the probe's 3-second limit, since its site settings read, which every probe makes, has no time limit of its own. After 3 such probes, liveness restarts the container.
 - With the chart's default readiness, a Postgres that refuses connections leaves the pod Ready, so the console stays reachable and shows its database banner.
+- With two or more replicas and the default readiness, a replica that alone loses Postgres stays in the Service, and its requests that need the database fail.
+- `readinessProbe.path: /readyz` takes only that replica out instead. When every replica loses Postgres, the Service then has no ready pod, and the console is unreachable.
 
 ### What to watch
 
