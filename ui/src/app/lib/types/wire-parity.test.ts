@@ -248,6 +248,25 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // The features block of the site config: one interface per key, each with its switch.
+  it.each([
+    ["SiteFeatureSwitches", ["org_sites", "windows_vm", "run_move", "machine_snapshots", "local_window", "preview_urls", "component_request_rules", "org_runner_drives"]],
+    ["OrgSitesFeature", ["enabled"]],
+    ["WindowsVMFeature", ["enabled"]],
+    ["RunMoveFeature", ["enabled", "to_personal_runners", "max_carried_gib"]],
+    ["MachineSnapshotsFeature", ["enabled", "warm_pool", "sleep_after_disconnect_sec", "max_per_person", "idle_days"]],
+    ["WarmPoolTarget", ["image", "count"]],
+    ["LocalWindowFeature", ["enabled"]],
+    ["PreviewURLsFeature", ["enabled", "max_visibility"]],
+    ["ComponentRequestRulesFeature", ["enabled"]],
+    ["OrgRunnerDrivesFeature", ["enabled"]],
+  ])("%s (`features` in site config): full parity with the TS mirror", (name, tags) => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_features.go"), "utf8"), name);
+    expect(goTags).toEqual(tags);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), name);
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
   it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {

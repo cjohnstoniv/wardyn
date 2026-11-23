@@ -141,6 +141,9 @@ export interface SiteConfig {
   macos_vm?: SiteMacOSVM;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
+  // types.SiteConfig.FeatureSwitches: the features new in 0.11, each off until an admin turns it on. Absent reads
+  // every one off.
+  features?: SiteFeatureSwitches;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -694,4 +697,84 @@ export interface SiteMacOSVM {
   kept_machine_idle_days?: number;
   /** Kept machines one person may have. 1 to 4; absent reads 1. */
   max_kept_machines_per_person?: number;
+}
+
+/** Go: types.SiteFeatureSwitches (SiteConfig.features): one key per feature new in 0.11. Absent reads every one off. */
+export interface SiteFeatureSwitches {
+  org_sites?: OrgSitesFeature;
+  windows_vm?: WindowsVMFeature;
+  run_move?: RunMoveFeature;
+  machine_snapshots?: MachineSnapshotsFeature;
+  local_window?: LocalWindowFeature;
+  preview_urls?: PreviewURLsFeature;
+  component_request_rules?: ComponentRequestRulesFeature;
+  org_runner_drives?: OrgRunnerDrivesFeature;
+}
+
+/** Go: types.OrgSitesFeature (features.org_sites). Sites that group runner pools and drives. */
+export interface OrgSitesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.WindowsVMFeature (features.windows_vm). Windows VM sandboxes from the organisation's own images. */
+export interface WindowsVMFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.RunMoveFeature (features.run_move). Moving a paused run to another machine. */
+export interface RunMoveFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** A run may also move onto a person's own runner. Absent reads off. */
+  to_personal_runners?: boolean;
+  /** The most one move carries, in GiB. Absent or 0 reads the move's default. */
+  max_carried_gib?: number;
+}
+
+/** Go: types.MachineSnapshotsFeature (features.machine_snapshots). Snapshots, forks and warm pools of Linux VM sandboxes. */
+export interface MachineSnapshotsFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** How many booted, unused VMs each runner keeps ready, per image. */
+  warm_pool?: WarmPoolTarget[];
+  /** A VM sleeps this many seconds after its last viewer leaves. Absent or 0: never. */
+  sleep_after_disconnect_sec?: number;
+  /** The snapshots one person may keep. Absent or 0 reads the default. */
+  max_per_person?: number;
+  /** A snapshot nobody used for this many days is deleted. Absent or 0 reads the default. */
+  idle_days?: number;
+}
+
+/** Go: types.WarmPoolTarget (features.machine_snapshots.warm_pool). One image and its count. */
+export interface WarmPoolTarget {
+  image: string;
+  count: number;
+}
+
+/** Go: types.LocalWindowFeature (features.local_window). A window on the person's own computer onto a Linux VM run. */
+export interface LocalWindowFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.PreviewURLsFeature (features.preview_urls). Preview URLs for a run's ports. */
+export interface PreviewURLsFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+  /** The widest a preview may be. Absent reads private. */
+  max_visibility?: "private" | "org" | "public";
+}
+
+/** Go: types.ComponentRequestRulesFeature (features.component_request_rules). Request rules on custom components. */
+export interface ComponentRequestRulesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
+}
+
+/** Go: types.OrgRunnerDrivesFeature (features.org_runner_drives). Drives kept on an organisation Kubernetes runner. */
+export interface OrgRunnerDrivesFeature {
+  /** Absent reads off; only true turns it on. */
+  enabled?: boolean;
 }
