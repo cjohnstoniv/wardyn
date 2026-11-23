@@ -186,7 +186,7 @@ func windowsImageNamed(ctx context.Context, ws store.WindowsLicenceStore, name s
 		return types.WindowsImage{}, runServerError("list Windows images", err)
 	}
 	for _, img := range imgs {
-		if img.State == types.WindowsImageActive && img.Name == name {
+		if img.State == types.WindowsImageActive && strings.EqualFold(img.Name, name) { // as the lower(name) unique index
 			return img, nil
 		}
 	}

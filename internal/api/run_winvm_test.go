@@ -753,3 +753,16 @@ func TestWindowsHolderRemoveDecodesSubject(t *testing.T) {
 		t.Errorf("subjects removed = %v, want %v", ws.removed, want)
 	}
 }
+
+// An image name matches whatever its case, as the lower(name) unique index does, and the registered ref is
+// what the seat check is asked about.
+func TestWindowsVMImageNameAnyCase(t *testing.T) {
+	srv, ws, _ := winvmServer(t, true)
+	launch, rf := srv.windowsImageDecision(winvmHTTP(memberContext()), winvmReq(func(q *createRunRequest) { q.WindowsImage = "SERVER" }), types.RunPolicySpec{})
+	if rf != nil || launch.Image.Ref != winvmRef {
+		t.Fatalf("SERVER = %+v, %v; want the image registered as Server", launch.Image, rf)
+	}
+	if !slices.Equal(ws.checks, []string{winvmRef + "|sub-admit-member"}) {
+		t.Errorf("seat checks = %v, want the registered ref for the member", ws.checks)
+	}
+}
