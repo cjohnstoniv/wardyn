@@ -29,6 +29,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - Each replica holds 2 more database connections for locks; budget max_connections for them.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, UPDATE` on
+  `sweeper_families` to every role that was granted `UPDATE` on `sweeper_leader`, other than that table's owner. If the
+  app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no
+  replica leads the sweeps that run once.
 
 ## [0.10.2] — 2026-11-22
 
