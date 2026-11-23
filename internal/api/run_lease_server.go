@@ -25,6 +25,9 @@ type RunLeaseConfig struct {
 	LapseMassSharePct int
 	// LapseMassMin is the fewest lapsed runs that can mark an outage (WARDYN_LAPSE_MASS_MIN). 0 is read as 5.
 	LapseMassMin int
+	// OrphanSweepHold mirrors WARDYN_ORPHAN_SWEEP_HOLD: how long the orphan sweep keeps a server Docker sandbox that
+	// has no run row, stopped with no network, before it removes it. 0 is off.
+	OrphanSweepHold time.Duration
 }
 
 // runLeaseState is the run lease's part of Server, embedded so its fields read
@@ -60,4 +63,7 @@ type runLeaseState struct {
 	// lapseHoldOpen is whether this replica has an open outage episode: the lapse sweep has written its
 	// run.lapse_sweep.hold row and no later pass has closed the episode (run_lapse_class.go).
 	lapseHoldOpen atomic.Bool
+	// orphanFirstSeen holds, per run id with no run row, when this process's orphan sweep first saw its sandbox
+	// (reconcile.go): the hold counts from it. Pruned by each sweep that read every row.
+	orphanFirstSeen sync.Map
 }

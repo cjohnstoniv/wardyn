@@ -939,6 +939,37 @@ func (o *Orchestrator) SweepOrphanedSandboxes(ctx context.Context, minAge time.D
 	return total, errors.Join(errs...)
 }
 
+// SweepOrphanedSandboxesHolding is SweepOrphanedSandboxes with a hold (api.SandboxOrphanHolder): a substrate that
+// implements the holding sweep gets held and its held count is summed; any other substrate gets the plain sweep, so
+// server Kubernetes and every runner keep today's behaviour.
+func (o *Orchestrator) SweepOrphanedSandboxesHolding(ctx context.Context, minAge time.Duration, isOrphan, held func(uuid.UUID) bool) (int, int, error) {
+	type holder interface {
+		SweepOrphanedSandboxesHolding(context.Context, time.Duration, func(uuid.UUID) bool, func(uuid.UUID) bool) (int, int, error)
+	}
+	type plain interface {
+		SweepOrphanedSandboxes(context.Context, time.Duration, func(uuid.UUID) bool) (int, error)
+	}
+	var total, heldN int
+	var errs []error
+	for _, s := range o.snapshot() {
+		var n, h int
+		var err error
+		switch sw := s.(type) {
+		case holder:
+			n, h, err = sw.SweepOrphanedSandboxesHolding(ctx, minAge, isOrphan, held)
+		case plain:
+			n, err = sw.SweepOrphanedSandboxes(ctx, minAge, isOrphan)
+		default:
+			continue
+		}
+		total, heldN = total+n, heldN+h
+		if err != nil && !errors.Is(err, runner.ErrRunnerOffline) {
+			errs = append(errs, err)
+		}
+	}
+	return total, heldN, errors.Join(errs...)
+}
+
 // forget drops the in-memory route and, when the sandbox was actually torn
 // down, best-effort deletes the durable row so the table doesn't grow without
 // bound. A delete error never fails a stop/kill: a stale row is garbage, not a

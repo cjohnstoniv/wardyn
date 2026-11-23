@@ -109,6 +109,9 @@ When the database or the server is unreachable, a run's proxy cannot renew its t
 - A kept Background task is still ended at its own end.
 - [Revive](#revive) brings a kept run back.
 - The first pass that keeps an unattended run writes one `run.lapse_sweep.hold` audit row per outage, per server process.
+- [`WARDYN_ORPHAN_SWEEP_HOLD`](../ENV.md#wardyn_orphan_sweep_hold) (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it.
+- A held sandbox has its proxy and agent stopped, and only its files are kept. It costs disk until the hold ends.
+- It has no record, so it cannot be ended or opened from the console, and is copied out only with host access.
 
 See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 

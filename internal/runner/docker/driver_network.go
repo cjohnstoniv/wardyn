@@ -774,20 +774,30 @@ var _ containerListerAPI = (*client.Client)(nil)
 // key on; with Config.RunSubnetPool set, sweepRunNetworks removes it, otherwise that edge is left
 // to `docker network prune`.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	n, _, err := d.sweepOrphans(ctx, minAge, isOrphan, nil)
+	return n, err
+}
+
+// sweepOrphans is SweepOrphanedSandboxes with an optional hold: an orphan held(runID) names is stopped and kept
+// (holdOrphan) instead of torn down, and counted in heldN. A nil held is the plain sweep. A held run's VM residue
+// and per-run network are left alone; a hold that cannot be confirmed falls through to the teardown.
+func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrphan, held func(runID uuid.UUID) bool) (swept, heldN int, err error) {
 	lister, ok := d.cli.(containerListerAPI)
 	if !ok {
-		return 0, nil
+		return 0, 0, nil
 	}
+	keep := func(id uuid.UUID) bool { return held != nil && held(id) }
+	sweepable := func(id uuid.UUID) bool { return isOrphan(id) && !keep(id) }
 	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
 	cutoff := time.Now().Add(-minAge)
-	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, isOrphan)
+	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, sweepable)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All: true, // a crashed sandbox's agent may be exited, not running
 		// Values of one label key are ANDed, so the component is matched below.
 		Filters: client.Filters{}.Add("label", labelComponent),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
+		return 0, 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
 	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	seen := map[uuid.UUID]bool{}
@@ -809,6 +819,10 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 			continue // a live run legitimately owns it
 		}
 		seen[runID] = true
+		if keep(runID) && d.holdOrphan(ctx, runID) {
+			heldN++
+			continue
+		}
 		if terr := d.teardown(ctx, agentContainerName(runID)); terr != nil {
 			errs = append(errs, fmt.Errorf("docker: teardown orphaned run %s: %w", runID, terr))
 			continue
@@ -816,11 +830,11 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 		swept++
 	}
 	if d.cfg.RunSubnetPool.IsValid() {
-		nets, nerr := d.sweepRunNetworks(ctx, cutoff, isOrphan)
+		nets, nerr := d.sweepRunNetworks(ctx, cutoff, sweepable)
 		swept += nets
 		errs = append(errs, nerr)
 	}
-	return swept, errors.Join(errs...)
+	return swept, heldN, errors.Join(errs...)
 }
 
 // withRunnerTrustedCA adds this runner's own roots to a sandbox's CA trust after whatever the

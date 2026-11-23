@@ -294,6 +294,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LAPSE_RECOVERY_GRACE` | duration | `25m` | How long the server counts as recovering after the database is reachable again and after every start. `0` turns it off; boot refuses a negative value or one above `2h` (flag `-lapse-recovery-grace`). [Details](#wardyn_lapse_recovery_grace) |
 | `WARDYN_LAPSE_MASS_SHARE` | int | `25` | Percent of the server's own runs whose lapse inside 30 minutes marks an outage; 1 to 100 (flag `-lapse-mass-share`). [Details](#wardyn_lapse_mass_share) |
 | `WARDYN_LAPSE_MASS_MIN` | int | `5` | Fewest lapsed server runs that can mark an outage; at least 1 (flag `-lapse-mass-min`). [Details](#wardyn_lapse_mass_min) |
+| `WARDYN_ORPHAN_SWEEP_HOLD` | duration | (unset: off) | After a database restore, keeps a server Docker sandbox that has no run row, stopped with no network, for this long before the orphan sweep removes it; at most `24h` (flag `-orphan-sweep-hold`). [Details](#wardyn_orphan_sweep_hold) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
@@ -1455,6 +1456,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The fewest lapsed server runs, at least 1 (default 5), that can mark an outage by their share (flag `-lapse-mass-min`).
 - A small server whose few runs lapse together is not read as an outage by this condition alone; the recovery grace and the 20-minute silence still apply.
 - Boot refuses a value below 1.
+
+### `WARDYN_ORPHAN_SWEEP_HOLD`
+
+- How long the orphan sweep keeps a server Docker sandbox that has no run row, for example after a database restore, before it removes it (flag `-orphan-sweep-hold`; unset or `0` is off; at most `24h`).
+- A held sandbox has its proxy and agent stopped, so it has no network and runs nothing. Only its files are kept.
+- The cost is disk, not network or compute, for as long as the hold lasts.
+- Such a sandbox has no record: it cannot be ended or opened from the console, and its files are copied out only with host access.
+- The hold counts from the first sweep in this process that sees the sandbox with no row. A restart of wardynd starts the count again, so across restarts a held sandbox can outlive the hold.
+- After a restart, a held sandbox with a staged AWS profile is removed, because the server can no longer show its credential cache was wiped.
+- A sandbox with a run row, terminal or live, is never held. Server Kubernetes and registered runners keep the sweep they have.
 
 ### `WARDYN_APPROVAL_EXPIRY_INTERVAL`
 
