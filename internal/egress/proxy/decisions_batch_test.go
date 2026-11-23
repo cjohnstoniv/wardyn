@@ -274,7 +274,7 @@ func TestDecisionSinkBatch_RetrySameIDsFinalMarkOnLast(t *testing.T) {
 				s.emit(hostLog(i))
 			}
 			start()
-			waitPosts(t, c, 1+tc.attempts)
+			closeSink(t, s) // waits for the worker, so its last answer is counted before the checks below
 			var tries []cpPost
 			for _, p := range c.got() {
 				if p.batch {
@@ -298,7 +298,6 @@ func TestDecisionSinkBatch_RetrySameIDsFinalMarkOnLast(t *testing.T) {
 			if d := s.droppedCount(); d != tc.dropped {
 				t.Fatalf("dropped %d, want %d", d, tc.dropped)
 			}
-			closeSink(t, s)
 		})
 	}
 }
@@ -342,14 +341,16 @@ func TestDecisionSinkBatch_StatusTable(t *testing.T) {
 				s.emit(hostLog(i))
 			}
 			start()
-			waitPosts(t, c, 1+tc.attempts+tc.singles)
-			time.Sleep(20 * time.Millisecond) // nothing more may come before close
+			closeSink(t, s) // waits for the worker: every post and count below is final
 			posts := c.got()
 			batches, singles := 0, 0
 			for _, p := range posts[1:] {
-				if p.batch {
+				switch {
+				case p.batch:
 					batches++
-				} else {
+				case strings.HasPrefix(p.single.RuleSource, "egress:dropped-decisions-"):
+					// close's own summary of the drops; not a record of the batch
+				default:
 					singles++
 				}
 			}
@@ -369,7 +370,6 @@ func TestDecisionSinkBatch_StatusTable(t *testing.T) {
 			if n := strings.Count(logs.String(), "refused a decision batch"); n != tc.warns {
 				t.Fatalf("warn lines %d, want %d: %s", n, tc.warns, logs)
 			}
-			closeSink(t, s)
 		})
 	}
 }
