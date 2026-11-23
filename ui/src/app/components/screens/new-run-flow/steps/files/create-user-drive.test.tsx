@@ -584,6 +584,18 @@ describe("a team drive of the person's own (#3459)", () => {
     expect(teamBox().getAttribute("aria-describedby")?.split(" ")).not.toContain(alert.id);
   });
 
+  it("deleting your own team drive says the unit loses it too", async () => {
+    const TEAM_OWN: MeDrive = { ...DRIVE_OWNED, id: "d-team-own", name: "Design assets", team: true, shared_with_unit: true };
+    drives = [DRIVE_LEGACY, TEAM_OWN, DRIVE_OWNED, DRIVE_LOCKED];
+    await openChoose();
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === TEAM_OWN.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM_TEAM(TEAM_OWN.name))).toBeInTheDocument();
+    await userEvent.click(within(top()).getByRole("button", { name: NR_SHARED.CANCEL }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === DRIVE_OWNED.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(DRIVE_OWNED.name))).toBeInTheDocument();
+  });
+
   it("the create card has no one-host line", async () => {
     create = TEAM_ON;
     await openChoose();
