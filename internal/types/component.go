@@ -89,6 +89,11 @@ type ComponentDefinition struct {
 	// harnesses reach only through the proxy's broker route, or one its
 	// harness starts inside the sandbox (ComponentMCP).
 	MCP *ComponentMCP `json:"mcp,omitempty"`
+	// Image is the image a run must use to attach this component (#1972). A
+	// reference with a tag or a digest asks for that image; one with neither
+	// asks for any tag or digest of its repository; "" asks for none. It only
+	// refuses a run: it never picks or pulls the run's image.
+	Image string `json:"image,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -251,6 +256,9 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := d.validateMCP(personDefined); err != nil {
+		return err
+	}
+	if err := d.validateImage(); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {

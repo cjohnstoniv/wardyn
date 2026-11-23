@@ -59,6 +59,8 @@ export interface ComponentDefinition {
   cli?: ComponentCLI;
   // Makes the component an MCP server: a remote one, reached only through the proxy's broker route, or one its harness starts in the sandbox.
   mcp?: ComponentMCP;
+  // The image a run must use to attach this component (#1972): with a tag or digest that image, without one any tag of the repository.
+  image?: string;
 }
 
 /**
