@@ -393,14 +393,17 @@ const (
 
 // sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
 // dir's repository, or sets one up in the bundle's hash (sha256 for a 64-character
-// tip, SHA-1 otherwise). A repository git can already open is not initialised again: a mismatch of hash ends the send, naming both. Setting up runs in an if condition, so a
+// tip, SHA-1 otherwise). A repository git can open is never initialised again,
+// and one of the other hash ends the send with a reason before any fetch.
+// Setting up runs in an if condition, so a
 // failed step fails the send (set -e ignores a failure inside an AND-list).
 //
 // No send removes a .git or anything in one but the marker: another send, or
 // the sandbox's own git, may still be writing it. A send claims a .git it made
 // or found empty with the marker, and every send that finds the marker
 // repeats the steps, each safe to run again or beside another send: init
-// again, the bundle's objects, HEAD to the branch, the branch, the index.
+// (only for a .git git cannot open yet), the bundle's objects, HEAD to the
+// branch, the branch, the index.
 // The branch is written only by update-ref, forward and from the value just
 // read; the index step (idx) is git reset with a path, which moves no ref
 // (with no path, reset writes HEAD's branch back to the commit it read when
@@ -428,11 +431,14 @@ func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
 		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
 	}
-	// A repository git can already open is never initialised again: one of the bundle's hash is kept, and one of the
-	// other hash ends the send with nothing changed.
-	init := "{ if oh=$(git rev-parse --show-object-format 2>/dev/null); then [ \"$oh\" = " + hash + " ] || " +
-		"{ echo \"the repository in the synced directory uses $oh object names and this send uses " + hash + "; it is left as it is\" >&2; exit 1; }; " +
-		"else " + mk + "; fi; }"
+	// oh is the object format of a repository git can already open. A git older than 2.29 echoes the unknown flag
+	// and knows only SHA-1. A repository of the other hash ends the send with a reason and nothing changed; the
+	// fetch never sees it.
+	read := "oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1;; esac; }"
+	refuse := "{ [ \"$oh\" = " + hash + " ] || { echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
+		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
+	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
+	check := "if " + read + "; then " + refuse + "; fi; "
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
 	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
@@ -452,7 +458,7 @@ func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 		"{ [ \"$o\" = \"$t\" ] || mkdir " + m + " 2>/dev/null || :; } && idx && [ \"$(git symbolic-ref -q HEAD)\" = " + ref + " ] && out=fresh; fi && " +
 		"{ rmdir " + m + " 2>/dev/null || [ ! -d " + m + " ]; }; then echo \"$out\"; " +
 		"else echo " + shellQuote(gitUnfinished) + " >&2; exit 1; fi; " +
-		"else git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
+		"else " + check + "git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
 }
 
 // pullGitScript is the sandbox side of PullCommits: it bundles the commits on

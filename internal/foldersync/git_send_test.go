@@ -251,8 +251,11 @@ func TestSendGitScript_HashMismatchWritesNoRef(t *testing.T) {
 			if rc == 0 || out != "" {
 				t.Fatalf("a send into a repository of the other hash: out %q rc %d stderr %q; want it refused", out, rc, errs)
 			}
-			if c.mark && !(strings.Contains(errs, "sha1") && strings.Contains(errs, "sha256")) {
-				t.Errorf("stderr %q does not name both hashes", errs)
+			if !(strings.Contains(errs, "sha1") && strings.Contains(errs, "sha256") && strings.Contains(errs, "remove .git")) {
+				t.Errorf("stderr %q does not name both hashes and the way to start again", errs)
+			}
+			if strings.Contains(errs, "corrupt") {
+				t.Errorf("stderr %q blames the pack, not the hash", errs)
 			}
 			// The repository is exactly as it was and git still opens it.
 			if got := cfg(); got != wantCfg {
@@ -296,6 +299,25 @@ func TestSendGitScript_SameHashHalfMadeRepoIsFinished(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A git older than 2.29 prints an unknown rev-parse flag back and succeeds. It only knows SHA-1, so a half-made
+// SHA-1 repository is finished as before.
+func TestSendGitScript_OldGitHalfMadeSha1RepoIsFinished(t *testing.T) {
+	g := newGitRig(t)
+	dir := g.box(t.TempDir())
+	g.run(dir, "init", "-q")
+	if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := t.TempDir()
+	g.write(old, "git", "#!/bin/sh\n[ \"$1 ${2:-}\" = 'rev-parse --show-object-format' ] && [ -e .git/HEAD ] && { echo --show-object-format; exit 0; }\nexec "+
+		shellQuote(filepath.Join(g.bin, "git"))+" \"$@\"\n")
+	if err := os.Chmod(filepath.Join(old, "git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, errs, rc := g.send(dir, "PATH="+old+string(os.PathListSeparator)+g.bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	g.wantSetUp(dir, out, errs, rc)
 }
 
 // A pull before the next send says the repository is not finished while its
