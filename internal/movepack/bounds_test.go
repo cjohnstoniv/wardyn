@@ -4,11 +4,14 @@
 package movepack_test
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/movepack"
 )
@@ -113,4 +116,38 @@ func liveHeap() uint64 {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	return m.HeapAlloc
+}
+
+// TestMoveReader_RefusedStreamLeaksNoGoroutine: 50 streams cut inside a loose git object whose bytes the
+// caller skipped, each refused and closed, leave no git decoder running.
+func TestMoveReader_RefusedStreamLeaksNoGoroutine(t *testing.T) {
+	const o = "home/agent/work/.git/objects"
+	// Incompressible, so the object's stored bytes fill most of the stream and the cut lands inside them.
+	big := make([]byte, 64<<10)
+	_, _ = rand.NewChaCha8([32]byte{1}).Read(big)
+	stream := gitTree(t, dir(o+"/ab"), reg(o+"/ab/"+strings.Repeat("ab", 19), looseObject(t, len(big), big)))
+	// Inside the object's bytes: past the headers, well before the archive's end.
+	cut := stream[:len(stream)/2]
+	before := runtime.NumGoroutine()
+	for range 50 {
+		// Next alone, so the cut is met as Next finishes the object for a caller that skipped its bytes.
+		r, err := movepack.NewReader(bytes.NewReader(cut), scanning(movepack.Limits{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for err == nil {
+			_, _, err = r.Next()
+		}
+		r.Close()
+		if err == io.EOF {
+			t.Fatal("a cut stream read clean")
+		}
+	}
+	after := runtime.NumGoroutine()
+	for deadline := time.Now().Add(2 * time.Second); after > before+2 && time.Now().Before(deadline); after = runtime.NumGoroutine() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after > before+2 {
+		t.Errorf("goroutines %d before 50 refused streams, %d after; want no decoder left running", before, after)
+	}
 }

@@ -282,8 +282,16 @@ func (r *Reader) readManifest() error {
 	return nil
 }
 
-// finish reads the rest of an entry through the digest and the scan, and records it.
-func (r *Reader) finish(e *entry) error {
+// finish reads the rest of an entry through the digest and the scan, and records it. A refusal before its
+// git decoder has ended ends it, so no decoder outlives the entry.
+func (r *Reader) finish(e *entry) (err error) {
+	if e.git != nil {
+		defer func() {
+			if err != nil {
+				_ = e.git.pw.CloseWithError(err)
+			}
+		}()
+	}
 	if _, err := io.Copy(io.Discard, e); err != nil {
 		return err
 	}
