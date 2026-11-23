@@ -15,9 +15,6 @@ export const CLONE_NOTE = {
   notReported: "Not reported",
   footer: "Skipped and failed rows are the sandbox's own report.",
   notReportedRow: "Wardyn got no outcome for this repository, so it may or may not have been cloned.",
-  // The first words of the two sentences below, for a cause this console does not know.
-  skippedBare: "Skipped.",
-  failedBare: "Not cloned.",
 } as const;
 
 // The launcher's cause token, in the person's words.

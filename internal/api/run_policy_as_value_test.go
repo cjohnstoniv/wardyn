@@ -153,6 +153,33 @@ func TestRunSecretsAsValue_OldestFirstFallbackKeepsNewest(t *testing.T) {
 	}
 }
 
+// The cap falls on the real names: a member gets the same 50 rows an admin does, only without the names.
+func TestRunSecretsAsValue_MemberAndAdminGetTheSameFifty(t *testing.T) {
+	var rows []types.AuditEvent
+	for i := 0; i < 51; i++ {
+		cause := placeholderCauseNotAllowed
+		if i == 50 { // the newest row, and the last by name: the admin's cut drops it
+			cause = placeholderCauseHostTaken
+		}
+		rows = append(rows, asValueFailure(i+1, fmt.Sprintf("s%02d", i), "a.test", cause))
+	}
+	causes := func(tier specReadTier) []string {
+		got, truncated, err := asValueServer(&asValueStore{rows: rows}).runSecretsAsValue(t.Context(), uuid.New(), tier)
+		if err != nil || len(got) != 50 || !truncated {
+			t.Fatalf("tier %v: %d entries, truncated %v, err %v", tier, len(got), truncated, err)
+		}
+		var out []string
+		for _, r := range got {
+			out = append(out, r.Cause)
+		}
+		return out
+	}
+	member, admin := causes(specReadMember), causes(specReadFull)
+	if !slices.Equal(member, admin) || slices.Contains(member, placeholderCauseHostTaken) {
+		t.Errorf("member %v, admin %v: want the same 50, without the row cut by name", member, admin)
+	}
+}
+
 func TestRunSecretsAsValue_CapsAtFiftyAndSaysSo(t *testing.T) {
 	for _, tc := range []struct {
 		n         int

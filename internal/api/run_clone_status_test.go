@@ -199,22 +199,27 @@ func repoOutcomes(t *testing.T, row store.RunCloneStatus) []string {
 func TestDecodeCloneState_Strict(t *testing.T) {
 	ok := cloneEntry("/home/agent/work/a", "ok", "")
 	for name, in := range map[string]string{
-		"unknown key":       `{"v":1,"done":true,"repos":[],"extra":1}`,
-		"unknown entry key": `{"v":1,"done":true,"repos":[{"dest":"/a","outcome":"ok","cause":"","x":1}]}`,
-		"version 2":         `{"v":2,"done":true,"repos":[]}`,
-		"no done":           `{"v":1,"repos":[]}`,
-		"marker with entry": cloneFile(false, ok),
-		"bad outcome":       cloneFile(true, cloneEntry("/a", "great", "")),
-		"not_reported":      cloneFile(true, cloneEntry("/a", "not_reported", "")),
-		"bad cause":         cloneFile(true, cloneEntry("/a", "failed", "because")),
-		"two objects":       cloneFile(true) + cloneFile(true),
-		"trailing junk":     cloneFile(true) + "x",
-		"garbage":           `not json`,
-		"control in dest":   cloneFile(true, cloneEntry("/a\tb", "ok", "")),
-		"dest too long":     cloneFile(true, cloneEntry("/"+strings.Repeat("d", 512), "ok", "")),
-		"same dest twice":   cloneFile(true, cloneEntry("/a", "ok", ""), cloneEntry("/a", "failed", "clone_failed")),
-		"65 repositories":   cloneFile(true, manyCloneEntries(65, 10)...),
-		"done is text":      `{"v":1,"done":"yes","repos":[]}`,
+		"unknown key":             `{"v":1,"done":true,"repos":[],"extra":1}`,
+		"unknown entry key":       `{"v":1,"done":true,"repos":[{"dest":"/a","outcome":"ok","cause":"","x":1}]}`,
+		"version 2":               `{"v":2,"done":true,"repos":[]}`,
+		"no done":                 `{"v":1,"repos":[]}`,
+		"marker with entry":       cloneFile(false, ok),
+		"bad outcome":             cloneFile(true, cloneEntry("/a", "great", "")),
+		"not_reported":            cloneFile(true, cloneEntry("/a", "not_reported", "")),
+		"bad cause":               cloneFile(true, cloneEntry("/a", "failed", "because")),
+		"failed no cause":         cloneFile(true, cloneEntry("/a", "failed", "")),
+		"skipped no cause":        cloneFile(true, cloneEntry("/a", "skipped", "")),
+		"skipped, a failed cause": cloneFile(true, cloneEntry("/a", "skipped", "clone_failed")),
+		"failed, a skipped cause": cloneFile(true, cloneEntry("/a", "failed", "cannot_create")),
+		"ok with a cause":         cloneFile(true, cloneEntry("/a", "ok", "ref_failed")),
+		"two objects":             cloneFile(true) + cloneFile(true),
+		"trailing junk":           cloneFile(true) + "x",
+		"garbage":                 `not json`,
+		"control in dest":         cloneFile(true, cloneEntry("/a\tb", "ok", "")),
+		"dest too long":           cloneFile(true, cloneEntry("/"+strings.Repeat("d", 512), "ok", "")),
+		"same dest twice":         cloneFile(true, cloneEntry("/a", "ok", ""), cloneEntry("/a", "failed", "clone_failed")),
+		"65 repositories":         cloneFile(true, manyCloneEntries(65, 10)...),
+		"done is text":            `{"v":1,"done":"yes","repos":[]}`,
 	} {
 		if got, err := decodeCloneState([]byte(in)); err == nil {
 			t.Errorf("%s: decoded %+v, want an error", name, got)
@@ -354,6 +359,25 @@ func TestSweepCloneStatus_FirstMarkerWritesCloning(t *testing.T) {
 	}
 	if runs, _ := f.st.ListCloneStatusRuns(context.Background()); len(runs) != 1 {
 		t.Errorf("%d runs listed, want the cloning run to stay listed", len(runs))
+	}
+}
+
+// A revive that starts the agent again clears the row and this replica's memory of the run, so the new start's
+// marker writes a fresh cloning row instead of being taken for the old one.
+func TestClearRunCloneStatus_SweepReadsTheNextMarkerAfresh(t *testing.T) {
+	f := newCloneFixture(t, answerWith(cloneMarker, 0))
+	run := f.addRun("ref", time.Minute, cloneAskedRepos)
+	f.sweep(t)
+	if row, ok := f.st.row(run.ID); !ok || row.State != store.CloneStateCloning {
+		t.Fatalf("row %+v (%v), want cloning", row, ok)
+	}
+	f.srv.clearRunCloneStatus(context.Background(), run.ID)
+	if _, ok := f.st.row(run.ID); ok {
+		t.Fatal("the row survived the clear")
+	}
+	f.sweeps(t, 1)
+	if row, ok := f.st.row(run.ID); !ok || row.State != store.CloneStateCloning {
+		t.Errorf("after the clear: row %+v (%v), want a fresh cloning row", row, ok)
 	}
 }
 

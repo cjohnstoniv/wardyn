@@ -82,8 +82,16 @@ type cloneStateEntry struct {
 	Cause   string `json:"cause"`
 }
 
+// cloneCausesOf is the causes an outcome may carry: a skipped or failed clone names why, and the others name none.
+var cloneCausesOf = map[string][]string{
+	"ok":      {""},
+	"present": {""},
+	"skipped": {"not_a_checkout", "cannot_create"},
+	"failed":  {"clone_failed", "ref_failed"},
+}
+
 // decodeCloneState reads the file strictly: one JSON object of exactly the known keys, version 1, a done boolean, at
-// most cloneStateMaxRepos entries each with a known outcome and cause and a printable dest, none repeated, and none
+// most cloneStateMaxRepos entries each with a known outcome, a cause that fits it and a printable dest, none repeated, and none
 // at all in the marker. Anything else is an error, and the caller counts the file unreadable.
 func decodeCloneState(raw []byte) (cloneStateFile, error) {
 	var f cloneStateFile
@@ -110,8 +118,8 @@ func decodeCloneState(raw []byte) (cloneStateFile, error) {
 		if !slices.Contains([]string{"ok", "present", "skipped", "failed"}, e.Outcome) {
 			return cloneStateFile{}, errors.New("clone state: unknown outcome")
 		}
-		if !slices.Contains([]string{"", "not_a_checkout", "cannot_create", "clone_failed", "ref_failed"}, e.Cause) {
-			return cloneStateFile{}, errors.New("clone state: unknown cause")
+		if !slices.Contains(cloneCausesOf[e.Outcome], e.Cause) {
+			return cloneStateFile{}, errors.New("clone state: a cause that does not fit the outcome")
 		}
 		if len(e.Dest) > cloneStateMaxDest || strings.ContainsFunc(e.Dest, func(r rune) bool { return !unicode.IsPrint(r) }) {
 			return cloneStateFile{}, errors.New("clone state: bad dest")
@@ -485,6 +493,7 @@ func (s *Server) readCloneRun(ctx context.Context, st store.RunCloneStatusStore,
 // clearRunCloneStatus forgets the stored outcome of a run whose agent started again: its launcher clones again, so
 // the sweep reads this start's. A failure only warns: the view is a hint, and the revive has already succeeded.
 func (s *Server) clearRunCloneStatus(ctx context.Context, runID uuid.UUID) {
+	s.cloneSweepMemory().drop(runID) // this replica's sweep must read the new start's marker afresh
 	cs, ok := s.cfg.Store.(store.RunCloneStatusStore)
 	if !ok {
 		return

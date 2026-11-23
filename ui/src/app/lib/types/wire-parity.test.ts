@@ -336,10 +336,8 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     ["RunPolicySecretAsValue", "runPolicySecretAsValue", "RunPolicySecretAsValue"],
   ])("%s: full parity between pkg/client, the server struct and the TS mirror", (sdkName, serverName, tsName) => {
     const sdkGo = readFileSync(join(root, "pkg/client/run_policy.go"), "utf8");
-    const serverGo =
-      readFileSync(join(root, "internal/api/run_policy_view.go"), "utf8") +
-      readFileSync(join(root, "internal/api/run_host_marks.go"), "utf8") +
-      readFileSync(join(root, "internal/api/run_policy_as_value.go"), "utf8");
+    const serverGo = ["run_policy_view", "run_host_marks", "run_policy_as_value"]
+      .map((f) => readFileSync(join(root, `internal/api/${f}.go`), "utf8")).join("");
     const sdkTags = goJSONTags(sdkGo, sdkName);
     expect(sdkTags.length).toBeGreaterThanOrEqual(3);
     expect(new Set(goJSONTags(serverGo, serverName))).toEqual(new Set(sdkTags));

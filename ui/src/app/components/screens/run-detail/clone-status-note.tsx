@@ -18,11 +18,9 @@ export const CLONE_POLL_MS = 10_000;
 
 const SHOWN = ["skipped", "failed", "not_reported"];
 
+// The server refuses a state file whose skipped or failed entry has no known cause, so every shown row has a sentence.
 function sentence(r: RunRepoClone): string {
-  if (r.outcome === "not_reported") return CLONE_NOTE.notReportedRow;
-  const known = r.cause ? CLONE_CAUSE_SENTENCE[r.cause] : undefined;
-  if (known) return known;
-  return r.outcome === "skipped" ? CLONE_NOTE.skippedBare : CLONE_NOTE.failedBare;
+  return r.outcome === "not_reported" ? CLONE_NOTE.notReportedRow : (CLONE_CAUSE_SENTENCE[r.cause ?? ""] ?? "");
 }
 
 function RowChip({ outcome }: { outcome: string }) {

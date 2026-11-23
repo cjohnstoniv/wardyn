@@ -92,17 +92,19 @@ func (s *Server) runSecretsAsValue(ctx context.Context, runID uuid.UUID, tier sp
 				}
 			}
 		}
-		row := runPolicySecretAsValue{Kind: d.Kind, Host: d.Host, Cause: cause, Reason: d.Reason, Delivery: d.Delivery}
-		if tier != specReadMember {
-			row.SecretName = d.SecretName
-		}
-		rows = append(rows, row)
+		rows = append(rows, runPolicySecretAsValue{Kind: d.Kind, SecretName: d.SecretName, Host: d.Host, Cause: cause, Reason: d.Reason, Delivery: d.Delivery})
 	}
 	slices.SortFunc(rows, func(a, b runPolicySecretAsValue) int {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Host, b.Host), cmp.Compare(a.SecretName, b.SecretName))
 	})
 	if len(rows) > secretsAsValueMax {
 		rows, truncated = rows[:secretsAsValueMax], true
+	}
+	// The name is withheld only after the sort and the cap, so a member and an admin get the same rows.
+	if tier == specReadMember {
+		for i := range rows {
+			rows[i].SecretName = ""
+		}
 	}
 	return rows, truncated, nil
 }
