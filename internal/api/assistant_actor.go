@@ -95,10 +95,10 @@ func assistantGroups(snap, fresh []string, snapTruncated, freshTruncated bool) (
 }
 
 // assistantFreshRole re-derives the person's role and groups from their last sign-in record, as
-// GET /people derives them, through personDerivationResolver. A person with no record is unknown. It returns the
+// GET /people derives them, through personRoleResolver. A person with no record is unknown. It returns the
 // role, the fresh groups and whether they are truncated.
 func (s *Server) assistantFreshRole(r *http.Request, snap assistantSnapshot) (role string, groups []string, truncated bool, err error) {
-	resolve, err := s.personDerivationResolver(r)
+	resolve, err := s.personRoleResolver(r)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -115,7 +115,7 @@ func (s *Server) assistantFreshRole(r *http.Request, snap assistantSnapshot) (ro
 	}
 	listing := store.PersonListing{Principal: snap.Principal, Email: rec.Email, Groups: rec.Groups,
 		GroupsTruncated: rec.Truncated, GroupsVerified: true}
-	return resolve(listing).Role, rec.Groups, rec.Truncated, nil
+	return resolve(listing), rec.Groups, rec.Truncated, nil
 }
 
 // assistantToolCtx is the context every tool call, preview and context read runs under: the person at the

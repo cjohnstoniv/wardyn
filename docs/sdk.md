@@ -904,7 +904,7 @@ start.
 | `assistant_session_provider_changed` | A message or edit (`409`): the session's provider or model no longer serves the purpose. The session ends; start a new one. |
 | `assistant_target_not_found` | `POST /assistant/preview` and `POST /assistant/sessions` (`404`): no such target, or one you cannot read. |
 | `assistant_sessions_unavailable` | `501`: this server's store keeps no assistant sessions. |
-| `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. The run starts a new session. |
+| `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. Start a new session. |
 | `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
