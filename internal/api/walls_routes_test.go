@@ -24,7 +24,7 @@ import (
 // wallsRoutesWireTypes are the Walls view's wire types. TestWallsPayloadsCarryNoMountsKey walks each one and every
 // type it reaches; the counters behind an any field are listed because a walk cannot see through any.
 var wallsRoutesWireTypes = []reflect.Type{
-	reflect.TypeFor[WallsTopology](), reflect.TypeFor[WallsRuns](), reflect.TypeFor[WallsEdges](),
+	reflect.TypeFor[WallsTopology](), reflect.TypeFor[WallsTopologyPage](), reflect.TypeFor[WallsRuns](), reflect.TypeFor[WallsEdges](),
 	reflect.TypeFor[WallsEdge](), reflect.TypeFor[WallsHost](), reflect.TypeFor[WallsUnit](),
 	reflect.TypeFor[WallsSubject](), reflect.TypeFor[WallsUnitRuns](), reflect.TypeFor[WallsRunItem](),
 	reflect.TypeFor[WallsCounters](), reflect.TypeFor[WallsUnitCounters](), reflect.TypeFor[WallsElsewhere](),

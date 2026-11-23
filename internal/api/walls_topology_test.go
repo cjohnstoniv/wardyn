@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -636,5 +637,112 @@ func TestWallsRunnerStarts(t *testing.T) {
 	if starts := wallsTopoServer(failed, clk).wallsRunnerStarts(context.Background(), runs); len(failed.firstCalls) != 2 ||
 		slices.ContainsFunc(starts, func(r store.DecisionRow) bool { return r.RunID != oneNew.ID }) {
 		t.Errorf("a failed second pass: %d passes, starts %+v; want the read stopped there with no row of it", len(failed.firstCalls), starts)
+	}
+}
+
+// TestWallsTopologyEmptyListsArePresent: a first page with no units and no hosts sends both keys as [], never
+// absent and never null.
+func TestWallsTopologyEmptyListsArePresent(t *testing.T) {
+	clk := wallsTopoNewClock()
+	keys := wallsTopoKeys(t, wallsTopoGet(wallsTopoServer(&wallsTopoStore{}, clk), "sub-walls-unit", oidc.RoleUser, ""))
+	for _, k := range []string{"units", "hosts"} {
+		if list, ok := keys[k].([]any); !ok || len(list) != 0 {
+			t.Errorf("an empty first page's %s is %#v, want []", k, keys[k])
+		}
+	}
+}
+
+// TestWallsTopologySnapshotKeepsNoRunRows: a snapshot keeps no whole run row, so no task text, and a continuation
+// still reads each run's door from what it keeps (a No network run is sealed).
+func TestWallsTopologySnapshotKeepsNoRunRows(t *testing.T) {
+	clk := wallsTopoNewClock()
+	st := wallsTopoRunsStore(clk, 2)
+	for i := range st.runs {
+		st.runs[i].Task = "planted-task-text"
+	}
+	st.runs[1].WallPreset = &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Scope: types.WallPresetScopeBuiltin, Name: "planted-preset-name"}
+	s := wallsTopoServer(st, clk)
+	cursor := wallsTopoOpen(t, s, "sub-walls-a", 1)
+	snap := s.wallsSnapshots.get(wallsTopoMustDecode(t, cursor).id, clk.now)
+	if snap == nil {
+		t.Fatal("the first page stored no snapshot")
+	}
+	for _, planted := range []string{"planted-task-text", "planted-preset-name"} {
+		if strings.Contains(fmt.Sprintf("%+v", *snap), planted) {
+			t.Errorf("the snapshot keeps %q", planted)
+		}
+	}
+	seen := map[reflect.Type]bool{}
+	var walk func(reflect.Type)
+	walk = func(typ reflect.Type) {
+		if seen[typ] {
+			return
+		}
+		seen[typ] = true
+		if typ == reflect.TypeFor[types.AgentRun]() || typ == reflect.TypeFor[types.WallPresetOnRun]() {
+			t.Errorf("the snapshot reaches %s", typ)
+		}
+		switch typ.Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(typ.Elem())
+		case reflect.Map:
+			walk(typ.Key())
+			walk(typ.Elem())
+		case reflect.Struct:
+			for i := range typ.NumField() {
+				walk(typ.Field(i).Type)
+			}
+		}
+	}
+	walk(reflect.TypeFor[wallsTopoSnapshot]())
+	next := wallsTopoBody(t, wallsTopoGet(s, "sub-walls-a", oidc.RoleSecurityAdmin, "limit=1&cursor="+cursor))
+	if len(next.Runs.Items) != 1 || next.Runs.Items[0].ID != st.runs[1].ID || next.Runs.Items[0].Egress != wallsEgressSealed {
+		t.Errorf("the continuation serves %+v, want the No network run, sealed", next.Runs.Items)
+	}
+}
+
+// TestWallsTopologyPartialOnlyWhenRowsRemain: reads that end exactly at the read cap leave partial unset, one row
+// more sets it, and a probe of one row is the only read past the cap.
+func TestWallsTopologyPartialOnlyWhenRowsRemain(t *testing.T) {
+	for _, c := range []struct {
+		rows    int
+		partial bool
+	}{{10, false}, {11, true}} {
+		clk := wallsTopoNewClock()
+		st := wallsTopoRunsStore(clk, 1)
+		for range c.rows {
+			st.add(wallsTopoRow(st.runs[0].ID, "egress.allow", "policy:allowlist", "pypi.org", 1, clk.now))
+		}
+		s := wallsTopoServer(st, clk)
+		s.wallsCaps = wallsCaps{readLimit: 5, reads: 2}
+		body := wallsTopoBody(t, wallsTopoGet(s, "sub-walls-a", oidc.RoleSecurityAdmin, ""))
+		if body.Partial != c.partial || st.reads != 3 {
+			t.Errorf("%d rows under 2 reads of 5: partial %v after %d reads, want %v after 3", c.rows, body.Partial, st.reads, c.partial)
+		}
+	}
+}
+
+// TestWallsTopologyRunListPartialOnlyWhenRunsRemain: a unit admin's run list that fills every page of the page
+// bound, its runs with no unit dropped, is partial only when a probe finds one more run past the bound.
+func TestWallsTopologyRunListPartialOnlyWhenRunsRemain(t *testing.T) {
+	clk := wallsTopoNewClock()
+	def := store.DefaultUnitID
+	sc := wallsTopoScope{units: []uuid.UUID{def}, in: map[uuid.UUID]bool{def: true}}
+	const keep = 1 // pages of keep+1 runs, so the page bound covers exactly this many runs
+	bound := (keep + 1) * wallsTopoRunPages
+	for _, c := range []struct {
+		runs    int
+		partial bool
+	}{{bound, false}, {bound + 1, true}} {
+		st := &wallsTopoStore{runs: []types.AgentRun{wallsTopoRun(&def, types.RunRunning, clk.now)}}
+		for len(st.runs) < c.runs {
+			st.runs = append(st.runs, wallsTopoRun(nil, types.RunRunning, clk.now))
+		}
+		s := wallsTopoServer(st, clk)
+		runs, partial, err := s.wallsTopoRuns(context.Background(), st, sc, wallsTopoDefaultWindow, keep)
+		if err != nil || len(runs) != 1 || partial != c.partial || st.runReads != wallsTopoRunPages+1 {
+			t.Errorf("%d listed runs: %d kept, partial %v, %d reads, %v; want 1 kept, partial %v, %d reads",
+				c.runs, len(runs), partial, st.runReads, err, c.partial, wallsTopoRunPages+1)
+		}
 	}
 }

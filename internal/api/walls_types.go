@@ -17,17 +17,18 @@ import (
 // payload never carries it. No type here holds a policy spec, a unit row, an overlay, a restriction or the
 // boundary, and no key is named mounts (TestWallsPayloadsCarryNoMountsKey).
 
-// WallsTopology is one snapshot of the organisation's units, runs and egress at AsOf. A continuation page
-// carries Runs and Edges; Units, Hosts, Elsewhere and the security-only lists are on the first page only.
+// WallsTopology is the first page of one snapshot of the organisation's units, runs and egress at AsOf. Units and
+// Hosts are always present, [] when empty. A continuation is a WallsTopologyPage: Units, Hosts, Elsewhere and the
+// security-only lists are on the first page only.
 type WallsTopology struct {
 	AsOf      time.Time `json:"as_of"`
 	Scope     string    `json:"scope"`      // "org" for the security tier, "unit_subtree" for a unit admin
 	WindowSec int       `json:"window_sec"` // the window the counters cover, in seconds
 	// Partial is set when a bound cut the runs or the rows read. Volume outside a unit admin's units never sets it.
 	Partial bool        `json:"partial,omitempty"`
-	Units   []WallsUnit `json:"units,omitempty"`
+	Units   []WallsUnit `json:"units"`
 	Runs    WallsRuns   `json:"runs"`
-	Hosts   []WallsHost `json:"hosts,omitempty"` // at most 500, the busiest first
+	Hosts   []WallsHost `json:"hosts"` // at most 500, the busiest first
 	Edges   WallsEdges  `json:"edges"`
 	// Elsewhere is a unit admin's totals outside their units; never set for the security tier.
 	Elsewhere *WallsElsewhere `json:"elsewhere,omitempty"`
@@ -43,6 +44,17 @@ type WallsTopology struct {
 	// Sites is declared and not filled yet, as WallsPool.SiteID is, so both are absent.
 	Sites []WallsSite `json:"sites,omitempty"`
 	Gates []WallsGate `json:"gates,omitempty"`
+}
+
+// WallsTopologyPage is a continuation page of a WallsTopology: the snapshot's next runs and, with edges=full,
+// their run_host edges. It carries none of the first page's keys, units and hosts included.
+type WallsTopologyPage struct {
+	AsOf      time.Time  `json:"as_of"`
+	Scope     string     `json:"scope"`
+	WindowSec int        `json:"window_sec"`
+	Partial   bool       `json:"partial,omitempty"`
+	Runs      WallsRuns  `json:"runs"`
+	Edges     WallsEdges `json:"edges"`
 }
 
 // WallsRuns is one page of the snapshot's runs. NextCursor names the next page and is absent on the last one.

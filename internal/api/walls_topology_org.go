@@ -108,8 +108,8 @@ func (s *Server) wallsTopoRunners(w http.ResponseWriter, r *http.Request) (org [
 }
 
 // wallsTopoClaimedRunners pages the active runners (unclaimed and claimed) and keeps the claimed ones, each once,
-// sorted by id. Past wallsTopoMaxRunners, or when the page bound stops the read first, partial is set and the
-// first ones by id are kept.
+// sorted by id. Past wallsTopoMaxRunners partial is set and the first ones by id are kept. When the page bound
+// stops the read, a probe of one more row decides it: set when the list goes on or the probe fails.
 func wallsTopoClaimedRunners(ctx context.Context, rs store.RunnerInventoryStore, now time.Time) ([]types.Runner, bool, error) {
 	seen := map[uuid.UUID]bool{}
 	var claimed []types.Runner
@@ -131,6 +131,10 @@ func wallsTopoClaimedRunners(ctx context.Context, rs store.RunnerInventoryStore,
 			break
 		}
 		page.Offset += page.Limit
+	}
+	if partial {
+		more, err := rs.ListRunnersPage(ctx, types.RunnerFilterActive, now, store.Page{Limit: 1, Offset: page.Offset})
+		partial = err != nil || len(more) > 0
 	}
 	slices.SortFunc(claimed, func(a, b types.Runner) int { return strings.Compare(a.ID.String(), b.ID.String()) })
 	if len(claimed) > wallsTopoMaxRunners {

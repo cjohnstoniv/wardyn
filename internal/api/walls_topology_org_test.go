@@ -318,7 +318,7 @@ func TestWallsTopologyPagesKeepTheirKeys(t *testing.T) {
 		t.Fatal("the first page has no next cursor")
 	}
 	next := wallsTopoKeys(t, wallsTopoGet(o.s, "sub-walls-keys", oidc.RoleSecurityAdmin, "limit=1&cursor="+cursor))
-	for _, k := range []string{"units", "runners", "gates"} {
+	for _, k := range []string{"units", "hosts", "runners", "gates"} {
 		if _, ok := next[k]; ok {
 			t.Errorf("the continuation page has a %s key", k)
 		}
@@ -330,6 +330,26 @@ func TestWallsTopologyPagesKeepTheirKeys(t *testing.T) {
 		}
 		if item, _ := list[0].(map[string]any); item["egress"] != wallsEgressAllowlist {
 			t.Errorf("the %s page's item egress %v, want %s", name, item["egress"], wallsEgressAllowlist)
+		}
+	}
+}
+
+// TestWallsTopologyRunnerListPartialOnlyWhenRunnersRemain: an active runner list that fills every page of the page
+// bound is partial only when a probe finds one more runner past it.
+func TestWallsTopologyRunnerListPartialOnlyWhenRunnersRemain(t *testing.T) {
+	bound := wallsTopoRunnerPage * wallsTopoRunnerPages
+	for _, c := range []struct {
+		runners int
+		partial bool
+	}{{bound, false}, {bound + 1, true}} {
+		st := &wallsTopoOrgStore{runners: make([]types.Runner, c.runners)}
+		for i := range st.runners {
+			st.runners[i] = types.Runner{ID: uuid.New(), State: types.RunnerUnclaimed}
+		}
+		st.runners[0].State = types.RunnerClaimed
+		claimed, partial, err := wallsTopoClaimedRunners(context.Background(), st, time.Unix(0, 0))
+		if err != nil || len(claimed) != 1 || partial != c.partial {
+			t.Errorf("%d active runners: %d claimed, partial %v, %v; want 1 claimed and partial %v", c.runners, len(claimed), partial, err, c.partial)
 		}
 	}
 }

@@ -386,7 +386,9 @@ func (s *Server) runWallsCaps() wallsCaps {
 }
 
 // runWallsReadRows reads the run's decision rows recorded since since, caps.readLimit a read, until a read returns
-// the cursor it was sent (nothing left to scan) or after caps.runReads reads, when partial is set.
+// the cursor it was sent (nothing left to scan) or after caps.runReads reads. Only then does a probe of one row from
+// the last cursor decide partial: set when it scans a row, or when it fails; unset when the rows ended exactly at the
+// cap.
 func runWallsReadRows(ctx context.Context, reader store.WallsAuditReader, runID uuid.UUID, since time.Time, caps wallsCaps) ([]store.DecisionRow, bool, error) {
 	q := store.DecisionQuery{Actions: runWallsActions, Since: since, RunIDs: []uuid.UUID{runID}, Limit: caps.readLimit}
 	var rows []store.DecisionRow
@@ -401,7 +403,9 @@ func runWallsReadRows(ctx context.Context, reader store.WallsAuditReader, runID 
 		}
 		q.After = next
 	}
-	return rows, true, nil
+	q.Limit = 1
+	_, next, err := reader.AuditWallsRows(ctx, q)
+	return rows, err != nil || next != q.After, nil
 }
 
 // runWallsCount is rows' counters, each row by its weight under its wallsClassify class. A late row counts in late

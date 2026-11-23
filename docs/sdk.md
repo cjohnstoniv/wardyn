@@ -1489,7 +1489,7 @@ The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) ans
 
 ### The Walls view
 
-`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins; a unit admin reads only their own units' runs. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. The two stream routes answer 501 `walls_view_unavailable` until the live stream ships. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
+`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. The two stream routes answer 501 `walls_view_unavailable` until the live stream ships. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
 
 | Reason | Meaning |
 |---|---|

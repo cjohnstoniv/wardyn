@@ -330,3 +330,33 @@ func TestRunWallsCounterCap(t *testing.T) {
 		}
 	}
 }
+
+// TestRunWallsCounterCapExactEnd: rows that end exactly at the read cap are a complete read, though they fill more
+// than one page; one row past the cap is partial.
+func TestRunWallsCounterCapExactEnd(t *testing.T) {
+	srv, st := runWallsFixture(t)
+	srv.wallsCaps.readLimit, srv.wallsCaps.runReads = 5, 2
+	now := time.Now().UTC()
+	exact, over := runWallsSeed(st, pvOwner, nil), runWallsSeed(st, pvOwner, nil)
+	add := func(runID uuid.UUID, n int) {
+		for range n {
+			st.decisions = append(st.decisions, store.DecisionRow{ID: uuid.New(), RunID: runID, Seq: int64(len(st.decisions) + 1),
+				RecordedAt: now, Time: now, DecidedAt: now, Action: "egress.allow", Host: "pypi.org", Port: 443,
+				RuleSource: "policy:allowlist", Weight: 1})
+		}
+	}
+	add(exact.ID, 10)
+	add(over.ID, 11)
+	for _, tc := range []struct {
+		run     types.AgentRun
+		partial bool
+	}{{exact, false}, {over, true}} {
+		w, body := runWallsGet(t, srv, pvMember(t, pvOwner).cookie, tc.run.ID, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+		if body.Partial != tc.partial || body.Counters.Allowed != 10 {
+			t.Errorf("partial %v allowed %d, want %v 10", body.Partial, body.Counters.Allowed, tc.partial)
+		}
+	}
+}

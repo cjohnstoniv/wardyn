@@ -145,8 +145,47 @@ type wallsTopoSnapshot struct {
 	security  bool
 	full      bool
 	items     []WallsRunItem
-	runs      []types.AgentRun // aligned with items
+	runs      []wallsTopoSnapRun // aligned with items
 	runHost   map[uuid.UUID][]WallsEdge
+}
+
+// wallsTopoSnapRun is what a page reads of one snapshot run, so a snapshot keeps no whole run row and no task text.
+// wallsEgressOf reads ID and whether WallPreset is No network; projectAttention (attention, mayDecide,
+// governingRule, runAuthoredBy) reads ID, State, LostReason, LostAt, CreatedBy, HumanAuthor and UnitID.
+type wallsTopoSnapRun struct {
+	id, unitID             uuid.UUID
+	hasUnit, noNetwork     bool
+	state                  types.RunState
+	lostReason             types.LostReason
+	lostAt                 *time.Time
+	createdBy, humanAuthor string
+}
+
+// wallsTopoSlim keeps of each run only what wallsTopoSnapRun names.
+func wallsTopoSlim(runs []types.AgentRun) []wallsTopoSnapRun {
+	out := make([]wallsTopoSnapRun, len(runs))
+	for i, r := range runs {
+		out[i] = wallsTopoSnapRun{id: r.ID, hasUnit: r.UnitID != nil, noNetwork: noNetworkPreset(r.WallPreset), state: r.State,
+			lostReason: r.LostReason, lostAt: r.LostAt, createdBy: r.CreatedBy, humanAuthor: r.HumanAuthor}
+		if r.UnitID != nil {
+			out[i].unitID = *r.UnitID
+		}
+	}
+	return out
+}
+
+// run is the minimal row a page's egress and attention reads take: the fields above, and a WallPreset naming the
+// built-in No network preset only when the run had it.
+func (sr wallsTopoSnapRun) run() types.AgentRun {
+	r := types.AgentRun{ID: sr.id, State: sr.state, LostReason: sr.lostReason, LostAt: sr.lostAt, CreatedBy: sr.createdBy,
+		HumanAuthor: sr.humanAuthor}
+	if sr.hasUnit {
+		r.UnitID = &sr.unitID
+	}
+	if sr.noNetwork {
+		r.WallPreset = &types.WallPresetOnRun{ID: types.WallPresetNoNetwork, Scope: types.WallPresetScopeBuiltin}
+	}
+	return r
 }
 
 // wallsSnapshotCache holds the open topology snapshots of this replica: at most wallsTopoSnapshotsMax, and at
@@ -318,7 +357,7 @@ func (s *Server) wallsTopoContinue(w http.ResponseWriter, r *http.Request, q wal
 		return
 	}
 	items, runHost, next := s.wallsTopoPage(r, snap, q.cursor.offset, q.limit)
-	body := WallsTopology{AsOf: snap.asOf, Scope: wallsTopoScopeUnit, WindowSec: snap.windowSec, Partial: snap.partial,
+	body := WallsTopologyPage{AsOf: snap.asOf, Scope: wallsTopoScopeUnit, WindowSec: snap.windowSec, Partial: snap.partial,
 		Runs: WallsRuns{Items: items, NextCursor: next}}
 	if snap.security {
 		body.Scope = wallsTopoScopeOrg
@@ -334,7 +373,10 @@ func (s *Server) wallsTopoContinue(w http.ResponseWriter, r *http.Request, q wal
 func (s *Server) wallsTopoPage(r *http.Request, snap *wallsTopoSnapshot, offset, limit int) ([]WallsRunItem, []WallsEdge, string) {
 	end := min(offset+limit, len(snap.items))
 	items := slices.Clone(snap.items[offset:end])
-	runs := slices.Clone(snap.runs[offset:end])
+	runs := make([]types.AgentRun, end-offset)
+	for i, sr := range snap.runs[offset:end] {
+		runs[i] = sr.run()
+	}
 	if snap.security && len(runs) > 0 {
 		doors := s.wallsEgressOf(r.Context(), runs)
 		if err := s.projectAttention(r, runs, true); err != nil {
@@ -378,16 +420,17 @@ func (s *Server) wallsTopoBuild(w http.ResponseWriter, r *http.Request, reader s
 		body.Scope = wallsTopoScopeOrg
 	}
 	empty := !sc.security && len(sc.units) == 0
+	var runs []types.AgentRun
 	if !empty {
-		runs, partial, err := s.wallsTopoRuns(ctx, pager, sc, q.window, caps.runs)
-		if err != nil {
+		var err error
+		if runs, snap.partial, err = s.wallsTopoRuns(ctx, pager, sc, q.window, caps.runs); err != nil {
 			writeServerError(w, r, "list walls topology runs", err)
 			return nil, WallsTopology{}, false
 		}
-		snap.runs, snap.partial = runs, partial
 	}
-	fold := wallsTopoNewFold(sc.security, snap.runs)
-	if len(snap.runs) > 0 {
+	snap.runs = wallsTopoSlim(runs)
+	fold := wallsTopoNewFold(sc.security, runs)
+	if len(runs) > 0 {
 		partial, err := wallsTopoReadRows(ctx, reader, fold, asOf.Add(-q.window), caps)
 		if err != nil {
 			writeServerError(w, r, "read walls topology rows", err)
@@ -413,7 +456,7 @@ func (s *Server) wallsTopoBuild(w http.ResponseWriter, r *http.Request, reader s
 	}
 	var ownerKind map[uuid.UUID]types.RunnerOwnerKind
 	if sc.security {
-		kinds, partial, ok := s.wallsTopoOrgExtras(w, r, &body, snap.runs)
+		kinds, partial, ok := s.wallsTopoOrgExtras(w, r, &body, runs)
 		if !ok {
 			return nil, WallsTopology{}, false
 		}
@@ -427,7 +470,8 @@ func (s *Server) wallsTopoBuild(w http.ResponseWriter, r *http.Request, reader s
 // wallsTopoRuns is the snapshot's runs: live now or ended inside window, in ListRunsFiltered's order (live first by
 // created_at, then ended by end time, newest first). A unit admin's runs are those frozen to one of their units:
 // a run with no unit is dropped even when the Default unit is theirs, since RunUnitScope reads it as Default.
-// At most keep runs are kept, each once; partial is set past it, or when the page bound stops the read first.
+// At most keep runs are kept, each once; partial is set past it, or when the page bound stops the read and a probe
+// of one more row finds the list goes on (a failed probe counts as more).
 func (s *Server) wallsTopoRuns(ctx context.Context, pager store.RunsFilteredPager, sc wallsTopoScope, window time.Duration,
 	keep int) (runs []types.AgentRun, partial bool, err error) {
 	f := store.RunFilter{EndedWithin: window, IncludeKilled: true}
@@ -456,11 +500,13 @@ func (s *Server) wallsTopoRuns(ctx context.Context, pager store.RunsFilteredPage
 		}
 		page.Offset += page.Limit
 	}
-	return runs, true, nil
+	more, err := pager.ListRunsFiltered(ctx, f, store.Page{Limit: 1, Offset: page.Offset})
+	return runs, err != nil || len(more) > 0, nil
 }
 
 // wallsTopoReadRows pages the window's decision rows of the fold's runs into it, until a read returns the cursor
-// it was sent (nothing left to scan) or after caps.reads reads, when partial is set.
+// it was sent (nothing left to scan) or after caps.reads reads. Only then does a probe of one row from the last
+// cursor decide partial: set when it scans a row, or when it fails; unset when the rows ended exactly at the cap.
 func wallsTopoReadRows(ctx context.Context, reader store.WallsAuditReader, fold *wallsTopoFold, since time.Time, caps wallsCaps) (partial bool, err error) {
 	q := store.DecisionQuery{Actions: wallsTopoActions, Since: since, RunIDs: fold.runIDs(), Limit: caps.readLimit}
 	for range caps.reads {
@@ -476,7 +522,9 @@ func wallsTopoReadRows(ctx context.Context, reader store.WallsAuditReader, fold 
 		}
 		q.After = next
 	}
-	return true, nil
+	q.Limit = 1
+	_, next, err := reader.AuditWallsRows(ctx, q)
+	return err != nil || next != q.After, nil
 }
 
 // wallsTopoCount is one tally of classified rows: weighted for a security caller, one per row for a unit admin.
