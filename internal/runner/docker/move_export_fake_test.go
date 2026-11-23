@@ -121,3 +121,34 @@ func TestMoveExport_VanishedContainerFailsTheExport(t *testing.T) {
 		})
 	}
 }
+
+// TestMoveExport_RefusesASandboxNotStopped: only a container the daemon reports stopped is exported; one it
+// reports running, paused or restarting, or with no state at all, is refused before any archive call.
+func TestMoveExport_RefusesASandboxNotStopped(t *testing.T) {
+	for _, row := range []struct {
+		name  string
+		state *container.State
+		ok    bool
+	}{
+		{"no state", nil, false},
+		{"running", &container.State{Running: true}, false},
+		{"paused", &container.State{Running: true, Paused: true}, false},
+		{"restarting", &container.State{Restarting: true}, false},
+		{"exited", &container.State{Status: "exited"}, true},
+		{"created", &container.State{Status: "created"}, true},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			f := &exportDocker{fakeDocker: newFakeDocker(), state: row.state}
+			out, err := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"}).ExportState(context.Background(), "agent-x", runner.CarriedSet{Roots: []string{"/a"}})
+			if err == nil {
+				_ = out.Stream.Close()
+			}
+			if (err == nil) != row.ok {
+				t.Fatalf("export = %v; want ok %v", err, row.ok)
+			}
+			if !row.ok && f.copies != 0 {
+				t.Errorf("a refused export made %d archive calls", f.copies)
+			}
+		})
+	}
+}

@@ -63,7 +63,8 @@ func (d *Driver) exportable(ctx context.Context, ref string) (string, error) {
 	switch {
 	case c.Config != nil && c.Config.Labels[labelMachineKind] != "":
 		return "", fmt.Errorf("docker: export %s: a %s run's files are not carried", ref, c.Config.Labels[labelMachineKind])
-	case c.State != nil && (c.State.Running || c.State.Paused || c.State.Restarting):
+	case c.State == nil || c.State.Running || c.State.Paused || c.State.Restarting:
+		// A container whose state the daemon does not report is not known to be stopped.
 		return "", fmt.Errorf("docker: export %s: the sandbox is not stopped", ref)
 	}
 	return c.ID, nil
