@@ -52,7 +52,7 @@ func runRunOutputSweeper(ctx context.Context, srv runOutputSweeper, interval tim
 }
 
 // startRunOutputSweeper runs the sweep on the elected sweeper leader
-// (db.SweeperLeaderLockKey), each term started and stopped with it; a nil
+// (the leader of its sweep family), each term started and stopped with it; a nil
 // leader (a test, or a deployment that never built one) runs it unconditionally.
 // Its deletes are idempotent, so a second leader for a moment is harmless.
 func startRunOutputSweeper(ctx context.Context, leader *db.SweeperLeader, srv runOutputSweeper, interval time.Duration, ticks *sweephealth.Tracker) {

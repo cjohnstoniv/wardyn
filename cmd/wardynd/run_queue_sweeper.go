@@ -49,7 +49,7 @@ func runRunQueueSweeper(ctx context.Context, srv runQueueSweeper, interval time.
 	}
 }
 
-// startRunQueueSweeper runs the sweep on the elected sweeper leader (db.SweeperLeaderLockKey), each term
+// startRunQueueSweeper runs the sweep on the elected sweeper leader (the leader of its sweep family), each term
 // started and stopped with it; a nil leader (a test, or a deployment that never built one) runs it
 // unconditionally. Every write is a CAS under the pool's row lock, so a second leader for a moment is
 // harmless.
