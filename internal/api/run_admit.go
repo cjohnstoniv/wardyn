@@ -39,7 +39,7 @@ func runStartKey(id uuid.UUID) db.LockKey { return db.NewLockKey(db.RunStartLock
 // release, called right after the write. A writer holding the run's operation lock on ctx nests on that hold's
 // connection. A lock that cannot be taken is logged and the write goes on without it; the release is then a no-op.
 func (s *Server) FenceRunStarts(ctx context.Context, id uuid.UUID) func() {
-	_, release, err := s.locker().Lock(ctx, runStartKey(id), runStartFenceWait)
+	_, release, err := db.LockQueued(ctx, s.locker(), runStartKey(id), runStartFenceWait)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not fence the run's command starts; writing its end without the fence",
 			slog.String("run_id", id.String()), slog.Any("err", err))
@@ -65,7 +65,7 @@ func (s *Server) fenceRunsStarts(ctx context.Context, runs []types.AgentRun) fun
 	slices.SortFunc(keys, func(a, b db.LockKey) int { return cmp.Compare(a.Obj, b.Obj) })
 	var releases []func()
 	for _, k := range slices.Compact(keys) {
-		hctx, release, err := s.locker().Lock(ctx, k, runStartFenceWait)
+		hctx, release, err := db.LockQueued(ctx, s.locker(), k, runStartFenceWait)
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: could not fence a run's command starts; writing its end without the fence",
 				slog.String("lock", k.String()), slog.Any("err", err))
