@@ -43,3 +43,12 @@ func (s *Server) desktopWatermarkRequired(ctx context.Context) bool {
 	sc, ok := s.siteConfigSnapshot(ctx)
 	return !ok || (sc.DesktopWatermark != nil && sc.DesktopWatermark.Required)
 }
+
+// desktopWatermarkFor is the view a desktop is handed: who is the person's verified email, else their principal.
+func (s *Server) desktopWatermarkFor(ctx context.Context, email, principal, run string) desktopWatermarkView {
+	who := email
+	if who == "" {
+		who = principal
+	}
+	return desktopWatermarkView{Who: who, Run: run, Required: s.desktopWatermarkRequired(ctx)}
+}

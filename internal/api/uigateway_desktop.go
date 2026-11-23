@@ -282,6 +282,8 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		if sess.backgroundWatch() {
 			boot["view_only"], boot["background"] = true, true
 		}
+		// Who is looking and at which run, for the viewer's watermark; the organisation's rule says whether it may be off.
+		boot["watermark"] = s.desktopWatermarkFor(r.Context(), sess.Email, sess.Principal, runID.String())
 		// The run's machine kind, so the viewer names a macOS desktop while it starts. A run that
 		// cannot be read is served without it: the viewer then says what it says of any desktop.
 		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil {
