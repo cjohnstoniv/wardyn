@@ -9,8 +9,8 @@ package proxy
 // variable, would hand that credential to the sandbox. A create or replace of a
 // resource that carries a pod spec must set automountServiceAccountToken: false,
 // mount only the plain volume kinds below (a kind the door does not know is
-// refused), read no Secret into its environment and use no host namespace or
-// privileged container. A patch is merged into an object the door never sees,
+// refused), read no Secret into its environment and use no host namespace, nor
+// a privileged or Windows host-process container. A patch is merged into an object the door never sees,
 // so one that touches the pod spec at all is refused, and so is any JSON Patch.
 //
 // The API server reads keys case-sensitively and ignores one spelled otherwise,
@@ -38,7 +38,7 @@ var (
 	errKubePodToken  = errors.New("this run's kubectl cannot create a pod that mounts a service account token: set automountServiceAccountToken: false")
 	errKubePodSecret = errors.New("this run's kubectl cannot create a pod that reads a Secret")
 	errKubePodVolume = errors.New("this run's kubectl may mount only emptyDir, configMap, downwardAPI, persistentVolumeClaim, ephemeral, image and projected volumes in a pod, and project only configMap, downwardAPI and clusterTrustBundle")
-	errKubePodHost   = errors.New("this run's kubectl cannot create a pod that shares the host's process, IPC or network namespace, or runs a privileged container")
+	errKubePodHost   = errors.New("this run's kubectl cannot create a pod that shares the host's process, IPC or network namespace, or runs a privileged or Windows host-process container")
 	errKubePodCase   = errors.New("this run's kubectl sent a pod or workload with a key Wardyn reads spelled in another case")
 	errKubePodShape  = errors.New("this run's kubectl sent a pod or workload Wardyn cannot read")
 )
@@ -268,8 +268,9 @@ func judgeKubePodSpecPatch(obj map[string]any, path []string) error {
 
 // judgeKubePodSpec refuses a pod spec that does not set
 // automountServiceAccountToken: false, that shares a host namespace, that
-// mounts a volume kind outside the plain ones, or whose containers run
-// privileged or read a Secret into their environment.
+// mounts a volume kind outside the plain ones, that runs as a Windows host
+// process, or whose containers run privileged or as a host process, or read a
+// Secret into their environment.
 func judgeKubePodSpec(spec map[string]any) error {
 	if v, err := kubeKey(spec, "automountServiceAccountToken"); err != nil {
 		return err
@@ -284,6 +285,15 @@ func judgeKubePodSpec(spec map[string]any) error {
 		if on {
 			return errKubePodHost
 		}
+	}
+	psc, err := kubeMap(spec, "securityContext")
+	if err != nil {
+		return err
+	}
+	if on, err := kubeHostProcess(psc); err != nil {
+		return err
+	} else if on {
+		return errKubePodHost
 	}
 	vols, err := kubeList(spec, "volumes")
 	if err != nil {
@@ -334,16 +344,33 @@ func judgeKubeVolume(v map[string]any) error {
 	return nil
 }
 
-// judgeKubeContainer refuses a privileged container and one that reads a
-// Secret into its environment.
+// kubeHostProcess reads windowsOptions.hostProcess from a pod's or a
+// container's security context: a Windows host-process container runs on the
+// node itself.
+func kubeHostProcess(sc map[string]any) (bool, error) {
+	wo, err := kubeMap(sc, "windowsOptions")
+	if err != nil {
+		return false, err
+	}
+	return kubeTrue(wo, "hostProcess")
+}
+
+// judgeKubeContainer refuses a privileged or host-process container and one
+// that reads a Secret into its environment.
 func judgeKubeContainer(c map[string]any) error {
 	sc, err := kubeMap(c, "securityContext")
 	if err != nil {
 		return err
 	}
-	if on, err := kubeTrue(sc, "privileged"); err != nil {
+	priv, err := kubeTrue(sc, "privileged")
+	if err != nil {
 		return err
-	} else if on {
+	}
+	hostProc, err := kubeHostProcess(sc)
+	if err != nil {
+		return err
+	}
+	if priv || hostProc {
 		return errKubePodHost
 	}
 	env, err := kubeList(c, "env")

@@ -319,6 +319,19 @@ func TestKubeAPI_PodSpecWrites(t *testing.T) {
 		{"a privileged ephemeral container", http.MethodPost, pods, pod(ok + `,"ephemeralContainers":[{"name":"e","securityContext":{"privileged":true}}]`), true, false, []string{ct}},
 		{"host access set false", http.MethodPost, pods,
 			pod(`"automountServiceAccountToken":false,"hostPID":false,"hostIPC":false,"hostNetwork":false,"containers":[{"name":"a","securityContext":{"privileged":false}}]`), true, true, []string{ct}},
+		// A Windows host-process container runs on the node itself, set for the pod or for one container.
+		{"a pod-level Windows hostProcess", http.MethodPost, pods, pod(ok + `,"securityContext":{"windowsOptions":{"hostProcess":true}}`), true, false, []string{ct}},
+		{"a container-level Windows hostProcess", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"windowsOptions":{"hostProcess":true}}}]`), true, false, []string{ct}},
+		{"a host-process init container", http.MethodPost, pods,
+			pod(ok + `,"initContainers":[{"name":"i","securityContext":{"windowsOptions":{"hostProcess":true}}}]`), true, false, []string{ct}},
+		{"a host-process ephemeral container", http.MethodPost, pods,
+			pod(ok + `,"ephemeralContainers":[{"name":"e","securityContext":{"windowsOptions":{"hostProcess":true}}}]`), true, false, []string{ct}},
+		{"hostProcess as a string", http.MethodPost, pods, pod(ok + `,"securityContext":{"windowsOptions":{"hostProcess":"true"}}`), true, false, []string{ct}},
+		{"windowsOptions as a list", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"windowsOptions":[]}}]`), true, false, []string{ct}},
+		{"hostProcess set false", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"securityContext":{"windowsOptions":{"hostProcess":false}},"containers":[{"name":"a","securityContext":{"windowsOptions":{"hostProcess":false}}}]`), true, true, []string{ct}},
 		{"a YAML body", http.MethodPost, pods, pod(ok), true, false, []string{"Content-Type: application/yaml"}},
 		{"an encoded body", http.MethodPost, pods, pod(ok), true, false, []string{ct, "Content-Encoding: gzip"}},
 		{"a JSON Patch to pods", http.MethodPatch, pods + "/p", `[{"op":"add","path":"/metadata/labels/a","value":"b"}]`, true, false,
@@ -384,6 +397,8 @@ func TestKubeAPI_PodSpecMisCasedKeys(t *testing.T) {
 			`{"kind":"CronJob","spec":{"jobtemplate":{"spec":{"template":{"spec":{` + ok + `}}}}}}`, "application/json"},
 		"HostPID":               {http.MethodPost, pods, pod(ok + `,"HostPID":true`), "application/json"},
 		"Privileged":            {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"Privileged":true}}]`), "application/json"},
+		"HostProcess":           {http.MethodPost, pods, pod(ok + `,"securityContext":{"windowsOptions":{"HostProcess":true}}`), "application/json"},
+		"WindowsOptions":        {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"WindowsOptions":{"hostProcess":true}}}]`), "application/json"},
 		"Spec in a merge patch": {http.MethodPatch, pods + "/p", `{"Spec":{"containers":[]}}`, "application/merge-patch+json"},
 	} {
 		t.Run(name, func(t *testing.T) {
