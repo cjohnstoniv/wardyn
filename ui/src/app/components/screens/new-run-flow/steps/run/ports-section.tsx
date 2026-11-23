@@ -31,10 +31,12 @@ interface Props {
   optional?: boolean;
   /** The server refused a port callable from outside: say so under the checkbox. */
   inboundRefused?: boolean;
+  /** A background run's ports (Keep it running): only one callable from outside can be reached. */
+  background?: boolean;
 }
 
 /** The ports an Application / server opens from the run page, one card each: a name, a port and a landing path, and whether it is callable from outside. */
-export function PortsSection({ labelId, apps, edit, add, remove, optional, inboundRefused }: Props) {
+export function PortsSection({ labelId, apps, edit, add, remove, optional, inboundRefused, background }: Props) {
   const problems = portProblems(apps);
   const full = apps.length >= MAX_APPS;
   const addRef = useRef<HTMLButtonElement>(null);
@@ -49,7 +51,7 @@ export function PortsSection({ labelId, apps, edit, add, remove, optional, inbou
   };
   return (
     <fieldset aria-labelledby={labelId} className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0">
-      <p className="text-xs leading-snug text-muted-foreground">{NR_RUN.PORTS_HELP}</p>
+      <p className="text-xs leading-snug text-muted-foreground">{background ? NR_RUN.PORTS_HELP_BACKGROUND : NR_RUN.PORTS_HELP}</p>
       {apps.map((app, i) => {
         const who = app.name || NR_RUN.APP_ROW(i + 1);
         const attrs = (f: Field) => ({

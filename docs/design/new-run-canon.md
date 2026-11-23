@@ -149,6 +149,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `START_COMMAND_HELP` | mock | Run verbatim in the sandbox when it starts. The run keeps going until you end it or it reaches its lifetime limit. |
 | `PORTS_LABEL` | mock | Ports |
 | `PORTS_HELP` | mock | Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside. |
+| `PORTS_HELP_BACKGROUND` | deviation (a background run opens only ports callable from outside) | This run works in the background, so its ports don't open from the run page. Make a port callable from outside the run to reach it through Wardyn's gateway. |
 | `PORT_COL_NAME` | mock | Name |
 | `PORT_COL_PORT` | mock | Port |
 | `PORT_COL_PATH` | mock | Path |
