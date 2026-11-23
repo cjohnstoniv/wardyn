@@ -27,17 +27,17 @@ import (
 
 // The limits of the per-run Service cases.
 const (
-	runServiceLimit     = 8 * time.Minute  // the RunService case's context, K1 to K4
-	runServiceGoneWait  = 10 * time.Second // K2: the agent's connect failing once the endpoint is the decoy
-	runServiceBackWait  = 30 * time.Second // K2, K3: it succeeding once the endpoint is restored
-	runServiceStopWait  = 2 * time.Minute  // K4: every object of the run gone after StopSandbox
-	firstPacketLimit    = 10 * time.Minute // K7, the control and its 20 attempts
+	runServiceLimit     = 8 * time.Minute  // the RunService case's context
+	runServiceGoneWait  = 10 * time.Second // the agent's connect failing once the endpoint is the decoy
+	runServiceBackWait  = 30 * time.Second // it succeeding once the endpoint is restored
+	runServiceStopWait  = 2 * time.Minute  // every object of the run gone after StopSandbox
+	firstPacketLimit    = 10 * time.Minute // the first-packet check, the control and its 20 attempts
 	firstPacketAttempts = 20
-	firstPacketWatch    = 3 * time.Second // K7: how long a probe is read after its first line
+	firstPacketWatch    = 3 * time.Second // how long a probe is read after its first line
 )
 
-// testRunService pins the server run's own Service: the agent reaches its proxy through it from the first exec (K1),
-// the EndpointSlice is the only route (K2, K3), and teardown leaves nothing of the run (K4). K7 measures whether the
+// testRunService pins the server run's own Service: the agent reaches its proxy through it from the first exec, the
+// EndpointSlice is the only route, and teardown leaves nothing of the run. The last subtest measures whether the
 // cluster's CNI isolates a pod from its first packet, which the agent pod now relies on.
 func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 	cs, ns := conformanceClientset(t)
@@ -247,7 +247,7 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// testFirstPacket (K7) measures whether a NetworkPolicy created just before a pod holds from that pod's first packet:
+// testFirstPacket measures whether a NetworkPolicy created just before a pod holds from that pod's first packet:
 // a property of the cluster's CNI, which the run's agent pod now relies on, since it is created moments after its
 // policy. It runs in a scratch namespace that holds no policy but its own, and only with
 // WARDYN_TEST_K8S_FIRST_PACKET=1.
@@ -273,13 +273,13 @@ func testFirstPacket(t *testing.T, cs kubernetes.Interface, image string) {
 	reached, ms := firstPacketProbe(ctx, t, cs, ns, image, "control", false)
 	t.Logf("K7 control reached=%t create_to_first_ms=%d", reached, ms)
 	if !reached {
-		t.Fatal("K7: the control pod, under no policy, never reached the API server: a silent probe proves nothing")
+		t.Fatal("first packet: the control pod, under no policy, never reached the API server: a silent probe proves nothing")
 	}
 	for i := 1; i <= firstPacketAttempts; i++ {
 		reached, ms := firstPacketProbe(ctx, t, cs, ns, image, "attempt-"+strconv.Itoa(i), true)
 		t.Logf("K7 attempt=%d reached=%t create_to_first_ms=%d", i, reached, ms)
 		if reached {
-			t.Errorf("K7 attempt %d: the pod reached the API server before its deny-all egress NetworkPolicy held", i)
+			t.Errorf("first packet attempt %d: the pod reached the API server before its deny-all egress NetworkPolicy held", i)
 		}
 	}
 }
@@ -301,7 +301,7 @@ func firstPacketProbe(ctx context.Context, t *testing.T, cs kubernetes.Interface
 			},
 		}
 		if _, err := cs.NetworkingV1().NetworkPolicies(ns).Create(ctx, np, metav1.CreateOptions{}); err != nil {
-			t.Fatalf("K7 %s: create the deny-all policy: %v", name, err)
+			t.Fatalf("first packet %s: create the deny-all policy: %v", name, err)
 		}
 		defer func() {
 			_ = cs.NetworkingV1().NetworkPolicies(ns).Delete(context.Background(), podName, metav1.DeleteOptions{})
@@ -323,7 +323,7 @@ func firstPacketProbe(ctx context.Context, t *testing.T, cs kubernetes.Interface
 		},
 	}
 	if _, err := cs.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-		t.Fatalf("K7 %s: create the probe pod: %v", name, err)
+		t.Fatalf("first packet %s: create the probe pod: %v", name, err)
 	}
 	created := time.Now()
 	defer func() {
@@ -342,7 +342,7 @@ func firstPacketProbe(ctx context.Context, t *testing.T, cs kubernetes.Interface
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("K7 %s: the probe pod printed no probe line: %v\n%s", name, ctx.Err(), logs)
+			t.Fatalf("first packet %s: the probe pod printed no probe line: %v\n%s", name, ctx.Err(), logs)
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -364,6 +364,6 @@ func firstPacketPulledLocally(ctx context.Context, t *testing.T, cs kubernetes.I
 		return true
 	})
 	if !strings.Contains(msg, "already present on machine") {
-		t.Fatalf("K7 %s: the image was pulled (%q), so the probe proves nothing", pod, msg)
+		t.Fatalf("first packet %s: the image was pulled (%q), so the probe proves nothing", pod, msg)
 	}
 }
