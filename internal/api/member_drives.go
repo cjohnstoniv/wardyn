@@ -346,7 +346,7 @@ func (s *Server) memberDriveNameRefusal(ctx context.Context, name string) *runRe
 // memberMeDrive is a member drive as the catalogue shows it to its owner.
 func memberMeDrive(d types.UserDrive) client.MeDrive {
 	return client.MeDrive{
-		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: client.MeDriveSourcePersonal,
+		ID: d.ID.String(), Name: d.Name, Section: client.MeDriveSectionUser, Source: memberDriveSource(d), SharedWithUnit: d.Team,
 		Backend: d.Backend, Target: runner.DriveTargetFor(types.ResolvedDrive{Drive: d, Team: d.Team}, false), Writable: true,
 		SizeMiB: d.SizeMiB, Enforcement: types.EnforcementFor(d.Backend), Owned: true, KeptFromRun: keptFromRunOf(d), Team: d.Team,
 	}

@@ -156,6 +156,15 @@ func (s *Server) memberTeamDriveSwitchOn(ctx context.Context, d types.UserDrive)
 	return err == nil && provider.TeamDrives
 }
 
+// memberDriveSource is where a member drive comes from, as POST /me/drives answers it: a team drive is its unit's,
+// as the catalogue lists it; any other is the person's own.
+func memberDriveSource(d types.UserDrive) string {
+	if d.Team {
+		return client.MeDriveSourceTeam
+	}
+	return client.MeDriveSourcePersonal
+}
+
 // memberTeamSharedWithUnit is whether a catalogue row is a person's team drive that its unit reaches: false for one
 // whose unit was deleted, which memberTeamReachableDrives allocates to its owner alone.
 func memberTeamSharedWithUnit(w store.UserDriveWinner) bool {

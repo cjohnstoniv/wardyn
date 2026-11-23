@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -538,6 +539,32 @@ func TestMemberTeamDriveErasure_FinishesAnAskedDelete(t *testing.T) {
 	}
 	if _, kept := st.drives[team.ID]; kept || len(rn.calls) != 1 {
 		t.Errorf("team drive kept %v, calls %d; want it deleted by one call", kept, len(rn.calls))
+	}
+}
+
+// TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists: the 201 body of a team drive's create carries team, source
+// team and shared_with_unit, as the catalogue lists the same drive; a plain member drive's is personal and unshared.
+func TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists(t *testing.T) {
+	st, _ := newTeamDriveStore()
+	srv, _, _ := teamDriveServer(st, "docker")
+	w := createTeamDrive(srv, personCtx(aliceSub), "Design assets", "")
+	var got client.MeDrive
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	if !got.Team || got.Source != client.MeDriveSourceTeam || !got.SharedWithUnit {
+		t.Errorf("201 body = %+v, want a team drive, source team, shared with the unit", got)
+	}
+	row := teamCatalogueRow(t, srv, aliceSub, uuid.MustParse(got.ID))
+	if row == nil || row.Source != got.Source || row.SharedWithUnit != got.SharedWithUnit || row.Team != got.Team {
+		t.Errorf("catalogue row = %+v, want what the 201 body said: %+v", row, got)
+	}
+	w = createMemberDrive(srv, personCtx(aliceSub), "Notes")
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+		t.Fatalf("plain create = %d %s", w.Code, w.Body.String())
+	}
+	if got.Team || got.Source != client.MeDriveSourcePersonal || got.SharedWithUnit {
+		t.Errorf("plain 201 body = %+v, want personal and unshared", got)
 	}
 }
 
