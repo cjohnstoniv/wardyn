@@ -80,10 +80,11 @@ func TestRefuseViaOrgEndedRun_JudgesTheGateRun(t *testing.T) {
 		body    string
 		rows    []string
 	}
-	call := func(ctx context.Context) answer {
+	// call sends one request to path: the audited target is the path, so both answers of a case share one.
+	call := func(ctx context.Context, path string) answer {
 		before := len(rec.snapshot())
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, proxy.ViaOrgPathPrefix+uuid.NewString()+"/v1/x", nil)
+		r := httptest.NewRequest(http.MethodGet, path, nil)
 		ctx = context.WithValue(ctx, claimsCtxKey{}, claims)
 		refused := srv.refuseViaOrgEndedRun(w, r.WithContext(ctx), claims)
 		var rows []string
@@ -96,13 +97,14 @@ func TestRefuseViaOrgEndedRun_JudgesTheGateRun(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.set()
 			gateRun, _ := ls.dispatchTestStore.GetRun(context.Background(), run.ID)
+			path := proxy.ViaOrgPathPrefix + uuid.NewString() + "/v1/x"
 			cs.runs.Store(0)
-			withGate := call(contextWithLiveRun(context.Background(), &gateRun))
+			withGate := call(contextWithLiveRun(context.Background(), &gateRun), path)
 			if got := cs.runs.Load(); got != 0 {
 				t.Fatalf("with the gate's run, %d run reads; want 0", got)
 			}
 			cs.runs.Store(0)
-			without := call(context.Background())
+			without := call(context.Background(), path)
 			if got := cs.runs.Load(); got != 1 {
 				t.Fatalf("without the gate's run, %d run reads; want 1", got)
 			}
@@ -120,7 +122,7 @@ func TestRefuseViaOrgEndedRun_JudgesTheGateRun(t *testing.T) {
 			other := gateRun
 			other.ID = uuid.New()
 			cs.runs.Store(0)
-			if got := call(contextWithLiveRun(context.Background(), &other)); got.refused != tc.refuse || got.status != tc.status {
+			if got := call(contextWithLiveRun(context.Background(), &other), path); got.refused != tc.refuse || got.status != tc.status {
 				t.Fatalf("with another run's row: refused %v, %d; want refused %v, %d", got.refused, got.status, tc.refuse, tc.status)
 			}
 			if got := cs.runs.Load(); got != 1 {
