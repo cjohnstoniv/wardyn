@@ -283,6 +283,7 @@ func TestPushHoldRemovals_RemoteWithNoReader(t *testing.T) {
 	}{
 		{"Azure DevOps Services, the _git _full spelling", "dev.azure.com", "/acme/proj/_git/_full/app.git", true, "standard remote"},
 		{"Azure DevOps Server", "tfs.corp.example", "/tfs/DefaultCollection/proj/_git/app.git", true, "Azure DevOps grant"},
+		{"Azure DevOps Server, a _git segment with a trailing dot", "tfs.corp.example", "/tfs/DefaultCollection/proj/_git./app.git", true, "Azure DevOps grant"},
 		{"a host with no reader and no _git path", "git.corp.example", "/acme/app.git", false, ""},
 	} {
 		for _, on := range []bool{false, true} {
@@ -326,5 +327,8 @@ func TestTipRemedy_ReadCapSaysSplit(t *testing.T) {
 	}
 	if got := tipRemedy(whyTipUnread + "a read failed"); !strings.Contains(got, "try the push again") {
 		t.Errorf("tipRemedy of another unread cause = %q, want the retry remedy kept", got)
+	}
+	if got := tipRemedy(whyUnread + fmt.Sprintf("the comparison needs more than %d reads of the forge", maxForgeReads)); got != "" {
+		t.Errorf("tipRemedy of the first comparison's read cap = %q, want none: splitting does not cut those reads", got)
 	}
 }

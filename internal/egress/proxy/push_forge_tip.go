@@ -78,12 +78,13 @@ func tipRemedy(why string) string {
 	case why == whyBranchDeleted:
 		return "leave the branch in place, or delete it on the forge"
 	case why == whyNoReaderSpelling:
-		return "push to the repository's standard remote, https://github.com/<owner>/<repository> or https://dev.azure.com/<org>/<project>/_git/<repository>, " +
-			"or ask an operator to turn off WARDYN_PUSH_HOLD_REMOVALS; trying the same remote again will not help"
+		return "trying the same remote again will not help: push to the repository's standard remote, " +
+			"https://github.com/<owner>/<repository> or https://dev.azure.com/<org>/<project>/_git/<repository>, " +
+			"or ask an operator to turn off WARDYN_PUSH_HOLD_REMOVALS"
 	case why == whyNoReaderServer:
-		return "ask an operator to give this run an Azure DevOps grant for this server, or to turn off WARDYN_PUSH_HOLD_REMOVALS; trying again will not help"
-	case strings.Contains(why, fmt.Sprintf("needs more than %d reads", maxForgeReads)):
-		return "split the push into smaller ones, or push to a new branch; trying the same push again will not help"
+		return "trying again will not help: ask an operator to give this run an Azure DevOps grant for this server, or to turn off WARDYN_PUSH_HOLD_REMOVALS"
+	case strings.HasPrefix(why, whyTipUnread) && strings.Contains(why, fmt.Sprintf("needs more than %d reads", maxForgeReads)):
+		return "trying the same push again will not help: split the push into smaller ones, or push to a new branch"
 	case strings.HasPrefix(why, whyTipUnread):
 		return "try the push again; if it keeps failing, ask an operator"
 	}
@@ -132,7 +133,7 @@ func noReaderFor(r *http.Request) string {
 		return ""
 	case host == githubHost || adoHostedHost(host):
 		return whyNoReaderSpelling
-	case slices.ContainsFunc(strings.Split(rest, "/"), func(s string) bool { return strings.EqualFold(s, "_git") }):
+	case slices.ContainsFunc(strings.Split(rest, "/"), func(s string) bool { return patSegIs(s, "_git") }):
 		return whyNoReaderServer
 	}
 	return ""
