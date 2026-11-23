@@ -84,6 +84,12 @@ func (s *Server) applyRestrictions(ctx context.Context, q contextQuery, c govern
 
 // withRestrictions is c met with each of list in turn.
 func (s *Server) withRestrictions(ctx context.Context, c governanceCeiling, list []types.Restriction) (governanceCeiling, error) {
+	return s.withRestrictionsObserved(ctx, c, list, nil)
+}
+
+// withRestrictionsObserved is withRestrictions that hands obs one step per restriction it applies. A nil
+// obs is handed nothing, and no step is built for it.
+func (s *Server) withRestrictionsObserved(ctx context.Context, c governanceCeiling, list []types.Restriction, obs wallsObserver) (governanceCeiling, error) {
 	auth := composer.Authority{Ceiling: c.Spec, Limits: c.Limits}
 	knobs := make(map[string]policyref.Provenance, len(c.restrictionKnobs))
 	for k, v := range c.restrictionKnobs {
@@ -99,6 +105,9 @@ func (s *Server) withRestrictions(ctx context.Context, c governanceCeiling, list
 			if !strings.HasPrefix(ch.Knob, "limits.") {
 				knobs[ch.Knob] = restrictionProvenance(r)
 			}
+		}
+		if obs != nil {
+			obs(wallsRefoldRestrictionStep(r, auth.Ceiling, out.Ceiling))
 		}
 		auth = out
 		if !slices.Contains(ids, r.ID) {

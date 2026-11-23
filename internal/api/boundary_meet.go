@@ -150,6 +150,12 @@ func (s *Server) boundaryCeiling(ctx context.Context, c governanceCeiling) (gove
 
 // boundCeiling is boundaryCeiling over a boundary already read.
 func boundCeiling(b types.Boundary, c governanceCeiling) (governanceCeiling, error) {
+	return boundCeilingObserved(b, c, nil)
+}
+
+// boundCeilingObserved is boundCeiling that hands obs the boundary's one step when it is in hard_limits.
+// A nil obs is handed nothing, and no step is built for it.
+func boundCeilingObserved(b types.Boundary, c governanceCeiling, obs wallsObserver) (governanceCeiling, error) {
 	if !b.HardLimits() {
 		return c, nil
 	}
@@ -157,6 +163,9 @@ func boundCeiling(b types.Boundary, c governanceCeiling) (governanceCeiling, err
 	spec, limits, changes, err := boundaryMeet(b, c.Spec, c.Limits)
 	if err != nil {
 		return governanceCeiling{}, err
+	}
+	if obs != nil {
+		obs(wallsRefoldBoundaryStep(b, c.Spec, spec))
 	}
 	c.Spec, c.Limits = spec, limits
 	c.Warnings = append(slices.Clone(c.Warnings), boundaryWarnings(changes)...)
