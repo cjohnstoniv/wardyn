@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -143,8 +144,9 @@ func TestBrowserEnv_Scrubbed(t *testing.T) {
 }
 
 // fakeBrowser answers every CDP message the cdp writes into toBrowser with {"ok":true} on
-// fromBrowser, and records what it read on seen.
-func fakeBrowser(t *testing.T, toBrowser, fromBrowser net.Conn, seen chan<- cdpMessage) {
+// fromBrowser, and records what it read on seen, by its raw JSON keys: a wrong tag on
+// cdpMessage must not decode back into the same field.
+func fakeBrowser(t *testing.T, toBrowser, fromBrowser net.Conn, seen chan<- map[string]json.RawMessage) {
 	t.Helper()
 	go func() {
 		r := bufio.NewReader(toBrowser)
@@ -153,12 +155,13 @@ func fakeBrowser(t *testing.T, toBrowser, fromBrowser net.Conn, seen chan<- cdpM
 			if err != nil {
 				return
 			}
-			var m cdpMessage
-			if json.Unmarshal(line, &m) != nil {
+			var m map[string]json.RawMessage
+			var id int
+			if json.Unmarshal(line, &m) != nil || json.Unmarshal(m["id"], &id) != nil {
 				return
 			}
 			seen <- m
-			rep, _ := json.Marshal(cdpMessage{ID: m.ID, Result: json.RawMessage(`{"ok":true}`)})
+			rep, _ := json.Marshal(map[string]any{"id": id, "result": map[string]bool{"ok": true}})
 			if _, err := fromBrowser.Write(append(rep, 0)); err != nil {
 				return
 			}
@@ -171,7 +174,7 @@ func TestServeCtl_SessionsOnlyWhereAllowed(t *testing.T) {
 		cdpW, browserR := net.Pipe()
 		browserW, cdpR := net.Pipe()
 		t.Cleanup(func() { _ = cdpW.Close(); _ = browserR.Close(); _ = browserW.Close(); _ = cdpR.Close() })
-		seen := make(chan cdpMessage, 4)
+		seen := make(chan map[string]json.RawMessage, 4)
 		fakeBrowser(t, browserR, browserW, seen)
 		sock := filepath.Join(t.TempDir(), "s.sock")
 		ln, err := listenCtl(sock)
@@ -185,8 +188,8 @@ func TestServeCtl_SessionsOnlyWhereAllowed(t *testing.T) {
 		if _, err := ctlCall(sock, "Browser.getVersion", nil); err != nil {
 			t.Fatalf("sessions=%v: browser-level call: %v", sessions, err)
 		}
-		if m := <-seen; m.Method != "Browser.getVersion" || m.SessionID != "" {
-			t.Fatalf("sessions=%v: the browser got %+v", sessions, m)
+		if m := <-seen; string(m["method"]) != `"Browser.getVersion"` || m["sessionId"] != nil {
+			t.Fatalf("sessions=%v: the browser got %s", sessions, rawKeys(m))
 		}
 
 		res, err := ctlCallIn(sock, "S1", "Runtime.evaluate", json.RawMessage(`{"expression":"1+1"}`))
@@ -194,8 +197,8 @@ func TestServeCtl_SessionsOnlyWhereAllowed(t *testing.T) {
 			if err != nil || string(res) != `{"ok":true}` {
 				t.Fatalf("agent socket: session call = %s, %v", res, err)
 			}
-			if m := <-seen; m.Method != "Runtime.evaluate" || m.SessionID != "S1" {
-				t.Fatalf("agent socket: the browser got %+v, want Runtime.evaluate in session S1", m)
+			if m := <-seen; string(m["method"]) != `"Runtime.evaluate"` || string(m["sessionId"]) != `"S1"` {
+				t.Fatalf("agent socket: the browser got %s, want Runtime.evaluate with \"sessionId\": \"S1\"", rawKeys(m))
 			}
 			continue
 		}
@@ -204,8 +207,48 @@ func TestServeCtl_SessionsOnlyWhereAllowed(t *testing.T) {
 		}
 		select {
 		case m := <-seen:
-			t.Fatalf("person socket: a refused session call reached the browser: %+v", m)
+			t.Fatalf("person socket: a refused session call reached the browser: %s", rawKeys(m))
 		case <-time.After(100 * time.Millisecond):
 		}
+	}
+}
+
+// rawKeys prints a message fakeBrowser recorded.
+func rawKeys(m map[string]json.RawMessage) string {
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func TestCDPArgs_Session(t *testing.T) {
+	for _, tc := range []struct {
+		args    []string
+		refusal string
+	}{
+		{[]string{"--session", "S1", "Runtime.evaluate"}, "--session goes with --agent"},
+		{[]string{"--agent", "--session"}, "usage:"},
+		{[]string{"--agent", "--session", "", "Runtime.evaluate"}, "usage:"},
+		{[]string{"--agent", "--session", "S1"}, "usage:"},
+		{[]string{"--agent"}, "usage:"},
+	} {
+		if _, _, _, err := cdpArgs(tc.args); err == nil || !strings.Contains(err.Error(), tc.refusal) {
+			t.Errorf("cdpArgs(%q): err = %v, want %q", tc.args, err, tc.refusal)
+		}
+	}
+	// The person-side refusal comes before any uid or store check.
+	if err := cmdCDP([]string{"--session", "S1", "Runtime.evaluate"}, io.Discard); err == nil || !strings.Contains(err.Error(), "--session goes with --agent") {
+		t.Errorf("cmdCDP --session without --agent: err = %v", err)
+	}
+
+	agent, session, rest, err := cdpArgs([]string{"--agent", "--session", "S1", "Runtime.evaluate", `{"expression":"1+1"}`})
+	if err != nil || !agent || session != "S1" || !slices.Equal(rest, []string{"Runtime.evaluate", `{"expression":"1+1"}`}) {
+		t.Fatalf("cdpArgs with a session = %v, %q, %q, %v", agent, session, rest, err)
+	}
+	agent, session, rest, err = cdpArgs([]string{"--agent", "Browser.getVersion"})
+	if err != nil || !agent || session != "" || !slices.Equal(rest, []string{"Browser.getVersion"}) {
+		t.Fatalf("cdpArgs browser-level = %v, %q, %q, %v", agent, session, rest, err)
+	}
+	agent, session, rest, err = cdpArgs([]string{"Browser.getVersion"})
+	if err != nil || agent || session != "" || !slices.Equal(rest, []string{"Browser.getVersion"}) {
+		t.Fatalf("cdpArgs person = %v, %q, %q, %v", agent, session, rest, err)
 	}
 }

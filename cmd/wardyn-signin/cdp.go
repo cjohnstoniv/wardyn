@@ -180,26 +180,18 @@ func ctlCallIn(sock, session, method string, params json.RawMessage) (json.RawMe
 // person) or, with --agent, to the agent's (as the agent), and prints the result.
 // --session ID, only with --agent, sends it in that page session.
 func cmdCDP(args []string, out io.Writer) error {
-	usage := errors.New("usage: cdp [--agent [--session ID]] METHOD [PARAMS-JSON]")
-	sock, session := ctlSock, ""
-	if len(args) > 0 && args[0] == "--agent" {
+	agent, session, args, err := cdpArgs(args)
+	if err != nil {
+		return err
+	}
+	sock := ctlSock
+	if agent {
 		if err := checkAgentUID(); err != nil {
 			return err
 		}
-		sock, args = agentCtlSock(), args[1:]
-		if len(args) > 0 && args[0] == "--session" {
-			if len(args) < 2 || args[1] == "" {
-				return usage
-			}
-			session, args = args[1], args[2:]
-		}
-	} else if len(args) > 0 && args[0] == "--session" {
-		return errors.New("--session goes with --agent")
+		sock = agentCtlSock()
 	} else if err := checkPerson(); err != nil {
 		return err
-	}
-	if len(args) < 1 || len(args) > 2 {
-		return usage
 	}
 	var params json.RawMessage
 	if len(args) == 2 {
@@ -214,4 +206,25 @@ func cmdCDP(args []string, out io.Writer) error {
 	}
 	_, err = fmt.Fprintf(out, "%s\n", res)
 	return err
+}
+
+// cdpArgs splits cmdCDP's arguments: --agent, then --session ID (only after
+// --agent), then METHOD and an optional PARAMS-JSON.
+func cdpArgs(args []string) (agent bool, session string, rest []string, err error) {
+	usage := errors.New("usage: cdp [--agent [--session ID]] METHOD [PARAMS-JSON]")
+	if len(args) > 0 && args[0] == "--agent" {
+		agent, args = true, args[1:]
+		if len(args) > 0 && args[0] == "--session" {
+			if len(args) < 2 || args[1] == "" {
+				return false, "", nil, usage
+			}
+			session, args = args[1], args[2:]
+		}
+	} else if len(args) > 0 && args[0] == "--session" {
+		return false, "", nil, errors.New("--session goes with --agent")
+	}
+	if len(args) < 1 || len(args) > 2 {
+		return false, "", nil, usage
+	}
+	return agent, session, args, nil
 }
