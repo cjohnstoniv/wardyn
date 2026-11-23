@@ -74,8 +74,21 @@ test.describe("walls: the 3D stack under the console's CSP", () => {
     page.on("worker", () => {
       workers += 1;
     });
-    const result = await page.evaluate(() =>
-      (window as unknown as { __wardynWallsProbe: () => Promise<unknown> }).__wardynWallsProbe(),
+    // Started from a page task: code that page.evaluate runs synchronously is a DevTools evaluation, which Chromium
+    // exempts from the policy's eval block, so a probe started there would not be held to the policy.
+    const result = await page.evaluate(
+      () =>
+        new Promise<unknown>((resolve) => {
+          setTimeout(() => {
+            try {
+              (window as unknown as { __wardynWallsProbe: () => Promise<unknown> })
+                .__wardynWallsProbe()
+                .then(resolve, (err: unknown) => resolve(`error: ${String(err)}`));
+            } catch (err) {
+              resolve(`error: ${String(err)}`);
+            }
+          }, 0);
+        }),
     );
     page.off("request", onRequest);
 
@@ -96,14 +109,35 @@ test.describe("walls: the 3D stack under the console's CSP", () => {
       const page = await context.newPage();
       await installFingerprintSpy(page);
       await page.goto("/");
-      const evaluated = await page.evaluate(() => {
-        try {
-          return String(new Function("return 'allowed'")());
-        } catch (err) {
-          return err instanceof EvalError ? "refused" : String(err);
-        }
+      await page.evaluate(() => {
+        const log: Array<{ effectiveDirective: string; blockedURI: string }> = [];
+        (window as unknown as { __wallsViolations: typeof log }).__wallsViolations = log;
+        document.addEventListener("securitypolicyviolation", (e) => {
+          log.push({ effectiveDirective: e.effectiveDirective, blockedURI: e.blockedURI });
+        });
       });
+      // Run from a page task: code that page.evaluate runs synchronously is a DevTools evaluation, which Chromium
+      // exempts from the policy's eval block.
+      const evaluated = await page.evaluate(
+        () =>
+          new Promise<string>((resolve) => {
+            setTimeout(() => {
+              try {
+                resolve(String(new Function("return 'allowed'")()));
+              } catch (err) {
+                resolve(err instanceof EvalError ? "refused" : String(err));
+              }
+            }, 0);
+          }),
+      );
       expect(evaluated, "the console's CSP allowed eval, so the probe above proves nothing").toBe("refused");
+      const violations = await page.evaluate(
+        () =>
+          (window as unknown as { __wallsViolations: Array<{ effectiveDirective: string; blockedURI: string }> })
+            .__wallsViolations,
+      );
+      expect(violations, "the refusal was not a policy violation").toHaveLength(1);
+      expect(violations[0].blockedURI).toBe("eval");
       const seen = await page.evaluate(() => {
         document.createElement("canvas").getContext("webgl2")?.getExtension("WEBGL_debug_renderer_info");
         return (window as unknown as Spied).__wallsFingerprint;
