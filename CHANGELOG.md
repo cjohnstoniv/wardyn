@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- WARDYN_LOCK_POOL_MAX_CONNS (flag -lock-pool-max-conns, default 8, 1 to 64) sets how many connections each server holds for cross-replica locks at once, and how many guarded credential writes it dials at once. Each replica can use up to twice this number on top of its pool, so budget Postgres max_connections for it.
+
 ### Changed
 
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.

@@ -481,6 +481,9 @@ type bootFlags struct {
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
 	allowUnknownMigrations *bool
+
+	// lockPoolMaxConns is WARDYN_LOCK_POOL_MAX_CONNS (boot_lock_pool.go).
+	lockPoolMaxConns *int
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -543,6 +546,7 @@ func parseBootFlags() *bootFlags {
 		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long a run's output tail is kept after its last output (duration)"),
 		runOutputTailBytes:     flagIntEnv("run-output-tail-bytes", "WARDYN_RUN_OUTPUT_TAIL_BYTES", 65536, "size of each non-interactive run's in-memory output tail and the cap on GET /runs/{id}/output?tail= (bytes, 1024 to 1048576)"),
 		runOutputPersist:       flagBool("run-output-persist", "WARDYN_RUN_OUTPUT_PERSIST", true, `persist each run's final masked output tail in Postgres so it outlives a restart and is readable from any replica; "off" keeps it in memory only`),
+		lockPoolMaxConns:       flagIntEnv("lock-pool-max-conns", "WARDYN_LOCK_POOL_MAX_CONNS", 8, "connections each replica holds for cross-replica locks at once, and guarded credential-write dials (1-64)"),
 		runOutputRetention:     flagIntEnv("run-output-retention-days", "WARDYN_RUN_OUTPUT_RETENTION_DAYS", 30, "delete persisted run output older than this many days (0 keeps it forever)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
