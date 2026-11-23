@@ -564,15 +564,16 @@ func TestServiceIdentity_SponsorRoundTripEndsTheTicketWhateverTheClock(t *testin
 	ageSponsorships(t, e.pool)
 	tok2 := ticketOf(t, e.mintTicket(t, e.sponsor2, run))
 	e.patchSponsor(t, svcSponsor)
+	// Counted before any redemption: redeeming a ticket deletes its row whatever the answer.
+	var left int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM attach_tickets WHERE principal = $1`, svcSponsor2).Scan(&left); err != nil || left != 0 {
+		t.Errorf("tickets still held by the second sponsor after the move back = %d, %v; want 0", left, err)
+	}
 	if got := attach(tok); got != http.StatusForbidden {
 		t.Errorf("a skewed-clock ticket redeemed after A to B to A: %d, want 403", got)
 	}
 	if got := attach(tok2); got != http.StatusForbidden {
 		t.Errorf("the second sponsor's ticket redeemed after the sponsorship moved on: %d, want 403", got)
-	}
-	var left int
-	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM attach_tickets WHERE principal = $1`, svcSponsor2).Scan(&left); err != nil || left != 0 {
-		t.Errorf("tickets still held by the second sponsor = %d, %v; want 0", left, err)
 	}
 }
 
