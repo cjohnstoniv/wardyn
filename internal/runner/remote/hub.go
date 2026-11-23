@@ -58,9 +58,9 @@ type HubConfig struct {
 	// session emits neither; Disconnected waits for the resume window.
 	Connected    func(context.Context, uuid.UUID) error
 	Disconnected func(context.Context, uuid.UUID) error
-	// LinkLost, when set, is called once when the resume window passes with the session not resumed. sessionID is the
-	// session that ended and droppedFor is how long ago it ended, on this replica's monotonic clock. It is not called
-	// by Close (a server shutdown) or when a fresh session replaces a live one.
+	// LinkLost, when set, is called once a session's resume window passes unresumed, with the session that ended and how
+	// long ago it ended on this replica's monotonic clock. Never for a session a fresh one replaced, nor by Close, which
+	// NewHub runs at shutdown: a stopped server is a gap in the control-plane heartbeat, not a runner's link outage.
 	LinkLost func(ctx context.Context, runnerID uuid.UUID, sessionID string, droppedFor time.Duration)
 	// Verified runs once the runner proves possession of its stored key,
 	// before any further lookup or admission. An error refuses the connection.

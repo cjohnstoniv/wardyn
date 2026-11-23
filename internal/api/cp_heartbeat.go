@@ -22,6 +22,8 @@ const (
 	outageWindowKeep       = 30 * 24 * time.Hour
 	outageWindowPruneEach  = time.Hour
 	runnerLinkWriteTimeout = 5 * time.Second
+	// outageWindowUpkeepTimeout bounds one pass's heal and prune.
+	outageWindowUpkeepTimeout = 30 * time.Second
 	// serverOutageGroupMin is how many of the server's own runs a no-renewals or mass-lapse census must count before
 	// it opens a server_outage window: one run's dead proxy is not an outage of the server, and must not cover its own
 	// expiry.
@@ -50,11 +52,14 @@ func (s *Server) runCPHeartbeat(ctx context.Context) {
 				slog.InfoContext(ctx, "wardynd: recorded a control-plane outage window", slog.Time("started_at", w.StartedAt),
 					slog.Time("ended_at", *w.EndedAt), slog.Duration("gap", w.EndedAt.Sub(w.StartedAt)))
 			}
-			if _, err := ow.HealRunnerLinkWindows(ctx); err != nil {
+			// A heal or prune that waits must not hold up the next beat for long: past 30 s that is a gap of its own.
+			upkeepCtx, cancel := context.WithTimeout(ctx, outageWindowUpkeepTimeout)
+			defer cancel()
+			if _, err := ow.HealRunnerLinkWindows(upkeepCtx); err != nil {
 				return err
 			}
 			if time.Since(lastPrune) >= outageWindowPruneEach {
-				if _, err := ow.PruneOutageWindows(ctx, outageWindowKeep); err != nil {
+				if _, err := ow.PruneOutageWindows(upkeepCtx, outageWindowKeep); err != nil {
 					return err
 				}
 				lastPrune = time.Now()
@@ -154,22 +159,25 @@ func (s *Server) closeRunnerLinkWindow(ctx context.Context, st store.RunnerStore
 
 // recordServerOutageWindow opens or closes the server_outage window from this pass's verdict. A recovering store
 // or an unread census changes nothing: the heartbeat's window covers the first, and a failed read neither opens nor
-// closes a window. A no-renewals or mass-lapse condition opens one only for a group of the server's runs.
+// closes a window. A no-renewals or mass-lapse condition opens one only for a group of the server's runs. With rule M
+// off, an open window is closed.
 func (s *Server) recordServerOutageWindow(ctx context.Context, v lapseVerdict) {
 	ow, ok := s.cfg.Store.(store.OutageWindows)
-	if !ok || s.cfg.StoreHealth == nil || s.cfg.StoreHealth.Grace() == 0 {
-		return
-	}
-	if slices.Contains(v.conditions, "recovering") || slices.Contains(v.conditions, "census_unread") {
+	if !ok {
 		return
 	}
 	var since time.Duration
 	group := false
-	if slices.Contains(v.conditions, "no_renewals") && v.census.Running >= serverOutageGroupMin {
-		since, group = v.census.NewestRenewAge, true
-	}
-	if slices.Contains(v.conditions, "mass_lapse") && v.census.Lapsed >= serverOutageGroupMin {
-		since, group = max(since, lapseCensusWindow), true
+	if s.cfg.StoreHealth != nil && s.cfg.StoreHealth.Grace() != 0 {
+		if slices.Contains(v.conditions, "recovering") || slices.Contains(v.conditions, "census_unread") {
+			return
+		}
+		if slices.Contains(v.conditions, "no_renewals") && v.census.Running >= serverOutageGroupMin {
+			since, group = v.census.NewestRenewAge, true
+		}
+		if slices.Contains(v.conditions, "mass_lapse") && v.census.Lapsed >= serverOutageGroupMin {
+			since, group = max(since, lapseCensusWindow), true
+		}
 	}
 	var err error
 	if group {

@@ -107,7 +107,7 @@ func TestOutageWindowCovers_KindsAndScope_PG(t *testing.T) {
 }
 
 // Every window ends: the heal closes a runner_link window whose runner was deleted or that is open past 25 hours,
-// and leaves a younger one for a runner that still exists.
+// and a server_outage window open past 25 hours, and leaves a younger one of each.
 func TestOutageWindows_HealClosesDeletedAndOver25h_PG(t *testing.T) {
 	pool, st := outageDB(t)
 	now := outageDBNow(t, pool)
@@ -116,15 +116,20 @@ func TestOutageWindows_HealClosesDeletedAndOver25h_PG(t *testing.T) {
 	outageInsert(t, pool, store.OutageKindRunnerLink, &gone, now.Add(-time.Hour), nil)
 	outageInsert(t, pool, store.OutageKindRunnerLink, &old.ID, now.Add(-26*time.Hour), nil)
 	outageInsert(t, pool, store.OutageKindRunnerLink, &young.ID, now.Add(-time.Hour), nil)
+	outageInsert(t, pool, store.OutageKindServer, nil, now.Add(-26*time.Hour), nil)
 	n, err := st.HealRunnerLinkWindows(context.Background())
-	if err != nil || n != 2 {
-		t.Fatalf("HealRunnerLinkWindows = %d, %v; want 2 closed", n, err)
+	if err != nil || n != 3 {
+		t.Fatalf("HealRunnerLinkWindows = %d, %v; want 3 closed", n, err)
 	}
 	if open := outageCount(t, pool, `ended_at IS NULL`); open != 1 {
 		t.Fatalf("open windows = %d, want 1", open)
 	}
 	if open := outageCount(t, pool, `ended_at IS NULL AND runner_id = $1`, young.ID); open != 1 {
 		t.Fatal("the heal closed the window of a runner that exists and is under 25 hours")
+	}
+	outageInsert(t, pool, store.OutageKindServer, nil, now.Add(-time.Hour), nil)
+	if n, err := st.HealRunnerLinkWindows(context.Background()); err != nil || n != 0 {
+		t.Fatalf("HealRunnerLinkWindows over a server_outage window an hour old = %d, %v; want 0 closed", n, err)
 	}
 }
 
@@ -220,26 +225,52 @@ func TestOutageWindows_OneOpenPerKind_PG(t *testing.T) {
 }
 
 // Two replicas beating at once write one window per gap: the row lock serializes them, and the second reads the
-// first's fresh beat.
+// first's fresh beat. It fails if the heartbeat read drops its FOR UPDATE, since both beats then read the old beat
+// and each writes a window.
 func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 	pool, st := outageDB(t)
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `UPDATE cp_heartbeat SET beat_at = now() - interval '45 seconds'`); err != nil {
 		t.Fatal(err)
 	}
+	// The barrier: a third transaction holds the heartbeat row until both beats wait on it, so the two beats
+	// overlap rather than happen to run one after the other. It is released well inside the beats' 5 s lock timeout.
+	hold, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback(ctx) //nolint:errcheck // released below
+	var pid int
+	if err := hold.QueryRow(ctx, `SELECT pg_backend_pid() FROM cp_heartbeat WHERE singleton FOR UPDATE`).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
 	var wg sync.WaitGroup
-	start := make(chan struct{})
 	got := make([]*store.OutageWindow, 2)
 	errs := make([]error, 2)
 	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-start
 			got[i], errs[i] = st.BeatControlPlane(ctx, store.ControlPlaneGapOver)
 		}()
 	}
-	close(start)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("beats waiting on the heartbeat row = %d, want 2", waiting)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := hold.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 	wg.Wait()
 	written := 0
 	for i := range 2 {
@@ -280,6 +311,67 @@ func TestOutageWindowCovers_RequiresLead_PG(t *testing.T) {
 	outageInsert(t, pool, store.OutageKindRunnerLink, &runner, now.Add(-20*time.Minute), nil)
 	if w, ok := outageCovers(t, st, &runner, types.PlacementLocal, now); !ok || w.Kind != store.OutageKindRunnerLink {
 		t.Fatalf("an open runner_link window that began 20 min before: covered %v by %+v", ok, w)
+	}
+}
+
+// The cover bounds are inclusive at exactly 15 min before the expiry (the start) and 5 min before it (the end), and
+// exclusive one second past either. It fails if either comparison loses its "or equal", or a bound moves.
+func TestOutageWindowCovers_Boundaries_PG(t *testing.T) {
+	pool, st := outageDB(t)
+	expiry := outageDBNow(t, pool).Add(-2 * time.Hour).Truncate(time.Second)
+	for _, c := range []struct {
+		name        string
+		start, end  time.Duration
+		wantCovered bool
+	}{
+		{"starts exactly 900 s before", -900 * time.Second, time.Minute, true},
+		{"starts 899 s before", -899 * time.Second, time.Minute, false},
+		{"ends exactly 300 s before", -time.Hour, -300 * time.Second, true},
+		{"ends 301 s before", -time.Hour, -301 * time.Second, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := pool.Exec(context.Background(), `DELETE FROM outage_windows`); err != nil {
+				t.Fatal(err)
+			}
+			end := expiry.Add(c.end)
+			outageInsert(t, pool, store.OutageKindControlPlane, nil, expiry.Add(c.start), &end)
+			if _, ok := outageCovers(t, st, nil, types.PlacementRemote, expiry); ok != c.wantCovered {
+				t.Fatalf("covered = %v, want %v", ok, c.wantCovered)
+			}
+		})
+	}
+}
+
+// A beat that cannot take the heartbeat row within 5 s fails, and writes no window: a replica that stalls holding the
+// row cannot make another write one window over the time it held it. It fails if the lock timeout is dropped (the
+// beat waits out the 10 s context, or for the holder) or made longer.
+func TestBeatControlPlane_HeldRowFailsFast_PG(t *testing.T) {
+	pool, st := outageDB(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE cp_heartbeat SET beat_at = now() - interval '45 seconds'`); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback(ctx) //nolint:errcheck // released when the test ends
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM cp_heartbeat WHERE singleton FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	beatCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	began := time.Now()
+	w, err := st.BeatControlPlane(beatCtx, store.ControlPlaneGapOver)
+	took := time.Since(began)
+	if err == nil {
+		t.Fatalf("a beat against a held row succeeded: %+v", w)
+	}
+	if took < 4*time.Second || took > 7*time.Second {
+		t.Fatalf("the beat failed after %v, want about 5 s (the lock timeout): %v", took, err)
+	}
+	if n := outageCount(t, pool, `true`); n != 0 {
+		t.Fatalf("windows = %d, want 0", n)
 	}
 }
 

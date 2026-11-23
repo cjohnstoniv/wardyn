@@ -16,6 +16,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
 - WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
 - The control plane records when it could not be reached, when each runner's link was down and when its own proxies stopped renewing, so that a later release can tell an outage from a failed proxy (#4082).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
 
 ### Changed
 

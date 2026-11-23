@@ -39,8 +39,8 @@ const (
 	// OutageCoverSlack is how far after a window's end a covered expiry may lie: the stamp lands a moment after the
 	// mint, and a replica's clock may differ from the database's by a little (identity.RunTokenLapseAfter's margin).
 	OutageCoverSlack = 5 * time.Minute
-	// RunnerLinkWindowMax closes a runner_link window whose runner never came back: a day past any recoverable
-	// token (part 2's 24 h bound) plus an hour.
+	// RunnerLinkWindowMax closes a runner_link window whose runner never came back, or a server_outage window no sweep
+	// closed: an hour past the 24 hours after its expiry within which a lapsed run token may still be recovered.
 	RunnerLinkWindowMax = 25 * time.Hour
 	// ControlPlaneGapOver is the longest gap between two heartbeats that is not an outage. A longer gap becomes a
 	// cp_outage window when beating resumes.
@@ -83,6 +83,14 @@ func (s PG) BeatControlPlane(ctx context.Context, gapOver time.Duration) (*Outag
 		return nil, fmt.Errorf("store: begin heartbeat tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // a committed transaction is closed
+	// A replica that stalls while it holds the row must not stop every other replica's beat and so write one false
+	// window over the time it held it: a beat waits at most 5 s for the row, and a stalled holder loses it after 30 s.
+	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
+		return nil, fmt.Errorf("store: heartbeat lock timeout: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL idle_in_transaction_session_timeout = '30s'`); err != nil {
+		return nil, fmt.Errorf("store: heartbeat idle timeout: %w", err)
+	}
 	var prev time.Time
 	err = tx.QueryRow(ctx, `SELECT beat_at FROM cp_heartbeat WHERE singleton FOR UPDATE`).Scan(&prev)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -142,11 +150,13 @@ func (s PG) CloseRunnerLinkWindow(ctx context.Context, runnerID uuid.UUID) error
 	return nil
 }
 
-// HealRunnerLinkWindows closes every open runner_link window whose runner was deleted, or that has been open
-// longer than RunnerLinkWindowMax, and returns how many it closed.
+// HealRunnerLinkWindows closes every open runner_link window whose runner was deleted, and every open runner_link or
+// server_outage window that has been open longer than RunnerLinkWindowMax, and returns how many it closed. A
+// server_outage window is otherwise closed only by a sweep pass, which a server with no local runner never runs.
 func (s PG) HealRunnerLinkWindows(ctx context.Context) (int, error) {
-	tag, err := s.Pool.Exec(ctx, `UPDATE outage_windows w SET ended_at = greatest(w.started_at, now()) WHERE w.kind = 'runner_link' AND w.ended_at IS NULL
-   AND (NOT EXISTS (SELECT 1 FROM runners r WHERE r.id = w.runner_id) OR w.started_at < now() - $1::interval)`, RunnerLinkWindowMax.String())
+	tag, err := s.Pool.Exec(ctx, `UPDATE outage_windows w SET ended_at = greatest(w.started_at, now()) WHERE w.ended_at IS NULL
+   AND ((w.kind = 'runner_link' AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id = w.runner_id))
+     OR (w.kind IN ('runner_link', 'server_outage') AND w.started_at < now() - $1::interval))`, RunnerLinkWindowMax.String())
 	if err != nil {
 		return 0, fmt.Errorf("store: heal runner link windows: %w", err)
 	}

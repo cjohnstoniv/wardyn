@@ -124,7 +124,7 @@ The server records outage windows on the database's clock, from its own observat
 - A runner's link outage is recorded only by the server that held its session, two minutes after the link dropped.
 - A link that drops less than two minutes before that server stops (a restart, a deploy or a crash) is not recorded.
 - Nor is a runner that was still connected when the server stopped and cannot reach the new one: a deploy that breaks runner connectivity is not recorded as a runner outage.
-- Only the time during which no server was running is recorded, as a control-plane outage, when it is longer than 30 seconds. Runs on such a runner end as they did before this release.
+- A server that stops ends its runner sessions without recording a runner outage. Only the time during which no server was running is recorded, as a control-plane outage, when it is longer than 30 seconds. Runs on such a runner end as they did before this release.
 
 See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 

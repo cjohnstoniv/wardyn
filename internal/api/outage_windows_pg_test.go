@@ -161,6 +161,76 @@ func TestServerOutageWindow_SingleRunDoesNotCoverItself_PG(t *testing.T) {
 	})
 }
 
+// A mass lapse of at least two of the server's runs opens a window going back the census window (30 min); one
+// lapsed run opens none. A fresh run keeps the no-renewals condition off, so only the mass-lapse arm decides. It
+// fails if the arm's `>= serverOutageGroupMin` becomes `>` (two lapsed open nothing), if the group minimum drops to
+// 1 (one lapsed opens a window), or if the arm stops going back lapseCensusWindow.
+func TestServerOutageWindow_MassLapseOpensForAGroup_PG(t *testing.T) {
+	t.Run("two lapsed runs", func(t *testing.T) {
+		f := newServerOutageFixture(t)
+		f.srv.cfg.LapseMassMin = 1
+		f.serverRun(t, false, time.Minute)
+		f.serverRun(t, false, 70*time.Minute)
+		f.serverRun(t, false, 70*time.Minute)
+		f.sweepTokens(t)
+		wantServerWindowAbout(t, f.st, lapseCensusWindow)
+	})
+	t.Run("one lapsed run", func(t *testing.T) {
+		f := newServerOutageFixture(t)
+		f.srv.cfg.LapseMassMin = 1
+		f.serverRun(t, false, time.Minute)
+		f.serverRun(t, false, 70*time.Minute)
+		f.sweepTokens(t)
+		if n := outageWindowRows(t, f.st, `true`); n != 0 {
+			t.Fatalf("windows = %d, want 0", n)
+		}
+	})
+	// Both arms hold: the window goes back the larger span, the 70 min since the newest renewal. It fails if the
+	// mass-lapse arm overwrites the no-renewals span instead of taking the larger of the two.
+	t.Run("both arms hold", func(t *testing.T) {
+		f := newServerOutageFixture(t)
+		f.srv.cfg.LapseMassMin = 1
+		f.serverRun(t, false, 70*time.Minute)
+		f.serverRun(t, false, 70*time.Minute)
+		f.sweepTokens(t)
+		wantServerWindowAbout(t, f.st, 70*time.Minute)
+	})
+}
+
+// With rule M switched off, the next sweep pass closes an open server window rather than leaving it open to cover
+// later expiries. It fails if the rule-M-off return comes back ahead of the close.
+func TestServerOutageWindow_RuleMOffClosesIt_PG(t *testing.T) {
+	f := newServerOutageFixture(t)
+	f.serverRun(t, false, 21*time.Minute)
+	f.serverRun(t, false, 21*time.Minute)
+	f.sweepTokens(t)
+	wantServerWindowAbout(t, f.st, 21*time.Minute)
+	f.srv.cfg.StoreHealth = nil
+	f.sweepTokens(t)
+	if n := outageWindowRows(t, f.st, `ended_at IS NULL`); n != 0 {
+		t.Fatalf("open windows = %d, want 0", n)
+	}
+	if n := outageWindowRows(t, f.st, `kind = 'server_outage' AND ended_at IS NOT NULL`); n != 1 {
+		t.Fatalf("closed server windows = %d, want 1", n)
+	}
+}
+
+// A recovering store neither opens nor closes a server window: the heartbeat's window covers that time. It fails if
+// the recovering check is dropped, since the recovering verdict reads no census and would close the window.
+func TestServerOutageWindow_RecoveringChangesNothing_PG(t *testing.T) {
+	f := newServerOutageFixture(t)
+	f.serverRun(t, false, 21*time.Minute)
+	f.serverRun(t, false, 21*time.Minute)
+	f.sweepTokens(t)
+	wantServerWindowAbout(t, f.st, 21*time.Minute)
+	f.srv.cfg.StoreHealth = recoveringTracker(lapseTestGrace)
+	f.sweepTokens(t)
+	wantServerWindowAbout(t, f.st, 21*time.Minute)
+	if n := outageWindowRows(t, f.st, `true`); n != 1 {
+		t.Fatalf("windows = %d, want the one still open", n)
+	}
+}
+
 // linkFixture is a server over real Postgres with a claimed person-owned runner whose inventory row holds session.
 type linkFixture struct {
 	srv     *Server
@@ -200,6 +270,13 @@ func (getRunnerFailPG) GetRunner(context.Context, uuid.UUID) (types.Runner, erro
 	return types.Runner{}, errors.New("runner read failed")
 }
 
+// siteConfigFailPG is a server store whose site settings read fails.
+type siteConfigFailPG struct{ store.PG }
+
+func (siteConfigFailPG) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("site settings read failed")
+}
+
 // A session the server ended because the runner may not come back opens no window: a revoked or released runner,
 // a person-owned runner whose owner is suspended, runners switched off, or a runner that cannot be read.
 func TestRunnerLinkWindow_ServerEndedSessionOpensNothing_PG(t *testing.T) {
@@ -237,6 +314,18 @@ func TestRunnerLinkWindow_ServerEndedSessionOpensNothing_PG(t *testing.T) {
 		}},
 		{"runner read fails", func(t *testing.T, f *linkFixture) store.RunnerStore {
 			return getRunnerFailPG{f.st}
+		}},
+		// The owner read fails while the runner and site settings still read: it fails if that error is ignored.
+		{"owner read fails", func(t *testing.T, f *linkFixture) store.RunnerStore {
+			if _, err := f.st.Pool.Exec(context.Background(), `ALTER TABLE principal_identities RENAME TO principal_identities_away`); err != nil {
+				t.Fatal(err)
+			}
+			return f.st
+		}},
+		// The site settings read fails while the runner reads: it fails if that error counts as runners switched on.
+		{"site settings read fails", func(t *testing.T, f *linkFixture) store.RunnerStore {
+			f.srv.cfg.Store = siteConfigFailPG{f.st}
+			return f.st
 		}},
 	}
 	for _, c := range cases {
