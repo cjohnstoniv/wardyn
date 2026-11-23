@@ -30,6 +30,8 @@ export interface CLISignInView {
   session_ttl_seconds: number;
   session_idle_seconds: number;
   access_ttl_seconds: number;
+  /** WARDYN_CLI_SIGN_IN_CODE_ENTRY: type the code the terminal printed; user_code is then "". */
+  code_entry?: boolean;
 }
 
 /** internal/types CLISignInApproveResponse: POST /me/cli-sign-ins/{id}/approve. */

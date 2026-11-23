@@ -22,8 +22,10 @@ export const cliSignIn = {
   },
 
   // POST .../approve runs mintGuards, so it is refused to a token, in the user view, and without the api_token feature.
-  async approve(id: string): Promise<CLISignInApproveResponse> {
-    return asJson<CLISignInApproveResponse>(await wfetch(`${signInPath(id)}/approve`, { method: "POST", asPerson: true }));
+  // userCode is sent only when the page asked for it (code_entry); otherwise the request has no body, as before.
+  async approve(id: string, userCode?: string): Promise<CLISignInApproveResponse> {
+    const body = userCode === undefined ? {} : { body: JSON.stringify({ user_code: userCode }) };
+    return asJson<CLISignInApproveResponse>(await wfetch(`${signInPath(id)}/approve`, { method: "POST", asPerson: true, ...body }));
   },
 
   async deny(id: string): Promise<CLISignInDenyResponse> {
