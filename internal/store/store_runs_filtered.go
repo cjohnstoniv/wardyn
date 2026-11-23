@@ -191,14 +191,6 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	return strings.Join(clauses, " AND ")
 }
 
-// ageWindowSQL is TRUE for a row ended_within keeps: every live row plus an
-// ended row whose end time falls inside the window. secsParam NULL = no
-// window.
-func ageWindowSQL(nonTerminal, secsParam string) string {
-	return fmt.Sprintf("(%s OR %s::int IS NULL OR %s >= now() - make_interval(secs => %s::int))",
-		fmt.Sprintf(runLiveSQL, nonTerminal), secsParam, runEndTimeSQL, secsParam)
-}
-
 // killedVisibleSQL is TRUE for a row killedVisibleFor's default doesn't
 // hide: non-KILLED, or include_killed=1, or KILLED within killedSecsParam.
 // A KILLED row with no ended_at (defensive; shouldn't happen post-migration
@@ -242,26 +234,65 @@ type RunsFilteredPager interface {
 // Compile-time assertion: PG satisfies RunsFilteredPager.
 var _ RunsFilteredPager = PG{}
 
-// ListRunsFiltered is ListRunsPage narrowed and reordered per f. Owner-
-// scoped reads ride agent_runs_created_by_idx (bitmap scan + in-memory
-// sort); an org-wide read is a parallel seq scan with top-N heapsort — both
-// linear in the caller's history, which the spec accepted (no ended_at
-// index backs this CASE-based order/window).
+// ListRunsFiltered is ListRunsPage narrowed and reordered per f, read as two arms: live rows newest created first,
+// and ended rows by end time, which agent_runs_end_time_idx serves together with the ended_within window. Each arm
+// asks for offset+limit rows, all the outer page can need from it. The outer ORDER BY is runOrderSQL, so the page
+// is the one a single ordered query returns. A status filter that can match only one side reads only that arm.
 func (s PG) ListRunsFiltered(ctx context.Context, f RunFilter, p Page) ([]types.AgentRun, error) {
 	var args []any
 	nonTerminal := bindArg(&args, nonTerminalStateList())
 	where := baseWhere(f, nonTerminal, &args)
-	secsParam := bindArg(&args, endedWithinSecs(f.EndedWithin))
-	includeParam := bindArg(&args, f.IncludeKilled)
-	killedSecsParam := bindArg(&args, int(killedVisibleFor.Seconds()))
-	clauses := []string{ageWindowSQL(nonTerminal, secsParam), killedVisibleSQL(includeParam, killedSecsParam)}
-	if where != "" {
-		clauses = append([]string{where}, clauses...)
+	live := fmt.Sprintf(runLiveSQL, nonTerminal)
+	limit := ""
+	if p.Limit > 0 {
+		limit = ` LIMIT ` + bindArg(&args, p.armLimit())
 	}
-	q := `SELECT ` + runCols + ` FROM agent_runs WHERE ` + strings.Join(clauses, " AND ") +
-		` ORDER BY ` + runOrderSQL(nonTerminal)
+	arm := func(order string, clauses ...string) string {
+		if where != "" {
+			clauses = append([]string{where}, clauses...)
+		}
+		return `(SELECT ` + runCols + ` FROM agent_runs WHERE ` + strings.Join(clauses, " AND ") +
+			` ORDER BY ` + order + limit + `)`
+	}
+	wantLive, wantEnded := runArms(f)
+	var arms []string
+	if wantLive {
+		arms = append(arms, arm(`created_at DESC, id DESC`, live))
+	}
+	if wantEnded {
+		ended := []string{"NOT " + live,
+			killedVisibleSQL(bindArg(&args, f.IncludeKilled), bindArg(&args, int(killedVisibleFor.Seconds())))}
+		if secs := endedWithinSecs(f.EndedWithin); secs != nil {
+			ended = append(ended, runEndTimeSQL+` >= now() - make_interval(secs => `+bindArg(&args, *secs)+`::int)`)
+		}
+		arms = append(arms, arm(runEndTimeSQL+` DESC, id DESC`, ended...))
+	}
+	q := `SELECT ` + runCols + ` FROM (` + strings.Join(arms, ` UNION ALL `) + `) u ORDER BY ` + runOrderSQL(nonTerminal)
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "list", "runs filtered", q, args, scanRun)
+}
+
+// runArms says which of ListRunsFiltered's arms f can match. A status filter of "active" alone matches no ended
+// row; one without "active" matches no live row; "no end" keeps only slot-holding runs, which are live. A value
+// statusSQL does not know adds no clause (baseWhere), so it reads both arms.
+func runArms(f RunFilter) (live, ended bool) {
+	if f.NoEnd {
+		return true, false
+	}
+	if len(f.Statuses) == 0 {
+		return true, true
+	}
+	for _, st := range f.Statuses {
+		switch st {
+		case "active":
+			live = true
+		case "ended", "failed", "killed":
+			ended = true
+		default:
+			return true, true
+		}
+	}
+	return live, ended
 }
 
 // CountHiddenRuns — see RunsFilteredPager.
