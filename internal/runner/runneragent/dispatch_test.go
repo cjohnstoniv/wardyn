@@ -368,7 +368,9 @@ func (m *movingFake) ImportSandbox(_ context.Context, spec runner.SandboxSpec, _
 
 // TestDispatch_MoveMethodsRoute: each of the three move methods reaches its handler through Call's move
 // case (the substrate's export and import, and the unbound notice), end to end from the org's client. Without
-// the case they fall to refCall and none does. A substrate without an export or import is refused.
+// the case they fall to refCall and none does. A substrate without an export or import is refused, and so are
+// a call the runner cannot serve (no run id, another runner, a VM, no byte bound, a foreign or unproven ref)
+// and one the org's client must not send (no MoveState in the caps, a foreign ref, a stream of another kind).
 func TestDispatch_MoveMethodsRoute(t *testing.T) {
 	runnerID := uuid.NewString()
 	sub := &movingFake{Fake: runnertest.NewFake()}
@@ -446,6 +448,85 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 	if _, _, err := borg.ImportSandbox(ctx, runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID}, set, 1<<20, strings.NewReader("x")); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
 		t.Errorf("import on a substrate without one = %v; want a refusal", err)
 	}
+
+	// The runner refuses a call it cannot serve before any substrate call or stream.
+	refused := func(t *testing.T, d *Dispatcher, method string, args any) {
+		t.Helper()
+		var refusal *runnerwire.Error
+		if _, err := callRefArgs(t, d, method, args); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+			t.Fatalf("%s = %v; want a refusal", method, err)
+		}
+	}
+	good := runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID, Image: "agent:1"}
+	for _, row := range []struct {
+		name   string
+		method string
+		args   any
+	}{
+		{"an import with no run id", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunnerID: runnerID}, Set: set, MaxBytes: 1 << 20}},
+		{"an import for another runner", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: uuid.NewString()}, Set: set, MaxBytes: 1 << 20}},
+		{"an import of a VM", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID, MachineKind: types.MachineLinuxVM}, Set: set, MaxBytes: 1 << 20}},
+		{"an import with no byte bound", runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: good, Set: set}},
+		{"an export of another runner's ref", runnerwire.MethodMoveExport, runnerwire.MoveExportArgs{Ref: placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref", Set: set}},
+		{"a notice for another runner's ref", runnerwire.MethodMoveUnbound, runner.MoveUnbound{RunID: runID, Ref: placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref"}},
+	} {
+		t.Run(row.name, func(t *testing.T) { refused(t, d, row.method, row.args) })
+	}
+	t.Run("an export of a sandbox this runner cannot prove its own", func(t *testing.T) {
+		unowned, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: &movingFake{Fake: runnertest.NewFake()},
+			HoldsSandbox: func(string) bool { return false },
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused(t, unowned, runnerwire.MethodMoveExport, runnerwire.MoveExportArgs{Ref: ref, Set: set})
+	})
+
+	// The organisation's client refuses before the wire: a runner whose caps lack MoveState, a ref of
+	// another runner, and a runner that answers with a stream of another kind.
+	t.Run("caps without MoveState", func(t *testing.T) {
+		quiet := &movingFake{Fake: runnertest.NewFake()}
+		qd, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: quiet,
+			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		org := movingOrg(t, runnerID, qd)
+		caps, _ := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+		org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+		if _, err := org.ExportState(ctx, ref, set); err == nil {
+			t.Error("export to a runner without MoveState was sent")
+		}
+		if _, _, err := org.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); err == nil {
+			t.Error("import to a runner without MoveState was sent")
+		}
+		if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: ref}); err == nil {
+			t.Error("notice to a runner without MoveState was sent")
+		}
+		if len(quiet.exported)+len(quiet.imported) != 0 {
+			t.Errorf("calls reached the substrate: %v %v", quiet.exported, quiet.imported)
+		}
+	})
+	t.Run("a ref of another runner", func(t *testing.T) {
+		foreign := placement.RunnerRefPrefix(uuid.NewString()) + "fake-ref"
+		if _, err := org.ExportState(ctx, foreign, set); !errors.Is(err, remote.ErrForeignRef) {
+			t.Errorf("export of a foreign ref = %v; want ErrForeignRef", err)
+		}
+		if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: foreign}); !errors.Is(err, remote.ErrForeignRef) {
+			t.Errorf("notice for a foreign ref = %v; want ErrForeignRef", err)
+		}
+	})
+	t.Run("a stream of another kind", func(t *testing.T) {
+		wrong := wrongKindOrg(t, runnerID)
+		if _, err := wrong.ExportState(ctx, ref, set); err == nil || !strings.Contains(err.Error(), "stream") {
+			t.Errorf("export answered with an exec stream = %v; want it refused", err)
+		}
+		if _, _, err := wrong.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); !errors.Is(err, runner.ErrMoveFiles) {
+			t.Errorf("import answered with an exec stream = %v; want it refused", err)
+		}
+	})
 }
 
 // movingOrg is the org's client of d over a loopback link, with caps that say the runner serves moves.
@@ -460,6 +541,31 @@ func movingOrg(t *testing.T, runnerID string, d *Dispatcher) *remote.Substrate {
 	var rp *runnerwire.Peer
 	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, raw json.RawMessage) (any, error) {
 		return d.Call(ctx, rp, call, method, raw)
+	}})
+	go rp.Run(t.Context())
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	return org
+}
+
+// wrongKindOrg is the org's client of a runner that answers both move stream calls with an exec stream.
+func wrongKindOrg(t *testing.T, runnerID string) *remote.Substrate {
+	t.Helper()
+	link := &remote.Link{}
+	org := remote.New(runnerID, link, remote.Options{})
+	caps, _ := json.Marshal(runnerwire.Caps{MoveState: true, Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+	org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	orgEnd, runEnd := runnerwire.Loopback()
+	op := link.Attach(t.Context(), orgEnd)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, _ json.RawMessage) (any, error) {
+		st, err := rp.Open(ctx, runnerwire.Open{Kind: runnerwire.KindExec, Call: call})
+		if err != nil {
+			return nil, err
+		}
+		if method == runnerwire.MethodMoveExport {
+			return runnerwire.MoveExportResult{Stream: st.ID()}, nil
+		}
+		return runnerwire.StreamResult{Stream: st.ID()}, nil
 	}})
 	go rp.Run(t.Context())
 	t.Cleanup(func() { rp.Close(); op.Close() })
