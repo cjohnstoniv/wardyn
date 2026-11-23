@@ -224,7 +224,7 @@ func cmdServe() error {
 		return err
 	}
 	defer ln.Close()
-	go serveCtl(ln, c)
+	go serveCtl(ln, c, false)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
