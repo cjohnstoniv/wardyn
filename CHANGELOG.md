@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- On a Kubernetes runner, a run whose new proxy pod is given a network address still held for an earlier run is no longer failed at once. The runner stops that pod, waits until it can prove it stopped, and starts another, preferring another node, up to two more times. The run fails with `relay_ip_fenced` only when every try is given a held address or a pod cannot be proven stopped. This needs the runner (`wardyn-runnerd`) from this release.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
