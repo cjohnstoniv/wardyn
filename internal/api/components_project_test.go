@@ -40,3 +40,25 @@ func TestOrgComponentView_MCPRowIsAnMCPCard(t *testing.T) {
 		}
 	}
 }
+
+// The person's view carries an organisation component's image requirement, and
+// no "image" key when the admin set none.
+func TestOrgComponentView_CarriesTheImageRequirement(t *testing.T) {
+	const image = "ghcr.io/acme/tools:1.2"
+	with := orgComponentView(types.Component{ID: uuid.New(), Name: "Tools", Definition: types.ComponentDefinition{
+		Hosts: []string{"tools.example"}, Image: image,
+	}})
+	if with.Image != image {
+		t.Errorf("Image = %q, want %q", with.Image, image)
+	}
+	if raw := string(mustJSON(with)); !strings.Contains(raw, `"image":"`+image+`"`) {
+		t.Errorf("the view's JSON has no image: %s", raw)
+	}
+	without := orgComponentView(types.Component{ID: uuid.New(), Name: "Plain", Definition: types.ComponentDefinition{Hosts: []string{"plain.example"}}})
+	if without.Image != "" {
+		t.Errorf("Image = %q, want none", without.Image)
+	}
+	if raw := string(mustJSON(without)); strings.Contains(raw, `"image"`) {
+		t.Errorf("the view's JSON has an image key without a requirement: %s", raw)
+	}
+}

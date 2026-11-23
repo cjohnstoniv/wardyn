@@ -257,6 +257,11 @@ func TestComponentsParity_AdmittedAtThreeDoors(t *testing.T) {
 		}},
 		"an organisation's header with the resident switch on": {setup: parityOrg(types.ComponentDefinition{Hosts: []string{"org-api.example"},
 			Secrets: []types.ComponentSecret{{SecretName: compOwnSecret, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}}}, residentOff)},
+		"an image that meets the component's requirement (#1972)": {setup: func(_ *testing.T, f *componentFixture) map[string]any {
+			body := componentBody(f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}, Image: "ghcr.io/acme/tools:1.2"}))
+			body["image"] = "ghcr.io/acme/tools:1.2"
+			return body
+		}},
 		"a shared secret the operator holds (A28)": {setup: parityOrg(types.ComponentDefinition{Hosts: []string{"org-api.example"},
 			Secrets: []types.ComponentSecret{{SecretName: compOperatorSecret, Shared: true, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}}}, nil)},
 	}

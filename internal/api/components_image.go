@@ -82,8 +82,9 @@ func componentImageMet(want, have string) bool {
 
 // componentImageRefusal is the first attached component, by ordinal, whose
 // image requirement have does not meet. The sentence names the component and
-// both images, an organisation's component too: the requirement is on its
-// card, and choosing the run's image is the person's own fix.
+// both images, an organisation's component too: a person granted it reads the
+// requirement in its view (OrgComponentView.Image), and choosing the run's
+// image is the person's own fix.
 func componentImageRefusal(comps runComponents, have string) *componentRefusal {
 	for i, c := range comps.attached {
 		want := c.snapshot.Definition.Image

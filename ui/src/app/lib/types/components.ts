@@ -212,6 +212,8 @@ export interface OrgComponentView {
   // The unit the component is pinned to, when it is: the console can offer "Run in <unit>".
   owning_unit_id?: string;
   owning_unit_name?: string;
+  // The image a run must use to attach the component (#1972), when the admin set one.
+  image?: string;
 }
 
 /** The non-secret face of a CLI row: which kind and what it pins. */

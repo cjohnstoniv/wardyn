@@ -518,7 +518,7 @@ A run can carry components that add destinations and secrets ([POLICIES.md](POLI
 | `DeleteComponent` | `DELETE /api/v1/components/{id}` | admin |
 
 - `MyComponents` answers `may_define`, `resident_delivery_allowed`, `autonomy_cap`, `mine`, `org` and `clis`.
-  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: the admin's `description` when there is one, hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
+  - `org` holds only the organisation components the caller is granted, as `OrgComponentView`: the admin's `description` when there is one, the `image` a run must use to attach it when the admin set one, hosts, delivery modes, config keys, `category` and an optional `cli` or `mcp` view, never a secret name.
   - An MCP server's row has `category` `mcp`; its `mcp` view gives a remote server's URL as scheme, host and port only.
   - `clis` lists five CLI cards in a fixed order (`azure`, `github`, `aws`, `gcloud`, `kubectl`), each `{kind, state, rows}` with `state` `available`, `not_granted` or `coming_soon`, built only from rows the caller is granted.
 - A save answers `ComponentSaved`: the stored row and `requirements[]`.
