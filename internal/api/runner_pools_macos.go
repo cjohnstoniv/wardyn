@@ -20,6 +20,9 @@ type macOSCandidate struct {
 	caps     runnerwire.Caps
 	haveCaps bool
 	live     int
+	// device is the runner's device-certificate verdict; the zero value refuses, so a candidate built
+	// without one never passes (poolMacOSVMOf sets it).
+	device mdmDeviceVerdict
 }
 
 // poolMacOSVMOf is the pool list's macOS VM offer for a pool whose eligible targets are eligible: each
@@ -41,6 +44,7 @@ func (s *Server) poolMacOSVMOf(ctx context.Context, eligible []poolTarget, fits 
 			c.rn.Limits = f.limits
 		}
 		c.caps, c.haveCaps = s.runnerLastCaps(*t.runnerID)
+		c.device = s.mdmDeviceVerdictFor(ctx, c.rn)
 		cands = append(cands, c)
 	}
 	// A site config that cannot be read sets no maximum here; placement reads it again and refuses on the error.
@@ -74,7 +78,7 @@ func poolMacOSVM(cands []macOSCandidate, operator bool, limit ...macOSBaseLimit)
 	}
 	var offered []*runnerwire.MacVMCaps
 	for _, c := range cands {
-		offer := macOSVMOffer(c.rn, c.caps, c.haveCaps, c.live, operator, limit...)
+		offer := macOSVMOffer(c.rn, c.caps, c.haveCaps, c.live, operator, c.device, limit...)
 		if offer.Offered {
 			offered = append(offered, c.caps.MacOSVM)
 			continue

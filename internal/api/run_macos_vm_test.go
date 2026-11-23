@@ -391,23 +391,23 @@ func TestRequestDemands_MacOSVM(t *testing.T) {
 }
 
 // The managed gate is ordered (trust, then posture), its evidence names what it rested on and says there
-// is no certificate check yet, and the trust sentence names the fixing command only to a security operator.
+// is no certificate check configured, and the trust sentence names the fixing command only to a security operator.
 func TestMacOSHostGate(t *testing.T) {
 	id := uuid.New()
 	managed := types.Runner{ID: id, TrustClass: types.RunnerTrustManagedDevice,
 		Posture: types.RunnerPosture{MDMManaged: true, Evidence: types.PostureEvidenceMDMFile}}
-	evidence, ref := macOSHostGate(managed, false)
+	evidence, ref := macOSHostGate(managed, false, deviceNotRequired)
 	if ref != nil || len(evidence) != 3 || evidence[0] != "managed_device (set by an administrator)" || evidence[1] != "MDM posture file" ||
-		evidence[2] != "no MDM device-certificate check yet" {
+		evidence[2] != "no MDM device-certificate check configured" {
 		t.Fatalf("managed Mac: evidence %v, refusal %+v", evidence, ref)
 	}
 	for _, class := range []types.RunnerTrustClass{types.RunnerTrustPersonal, types.RunnerTrustOrgCluster, ""} {
 		rn := managed
 		rn.TrustClass = class
-		if _, ref := macOSHostGate(rn, true); ref == nil || ref.Reason != placement.ReasonPlacementCapability || !strings.Contains(ref.Detail, "wardyn runner trust "+id.String()+" managed_device") {
+		if _, ref := macOSHostGate(rn, true, deviceNotRequired); ref == nil || ref.Reason != placement.ReasonPlacementCapability || !strings.Contains(ref.Detail, "wardyn runner trust "+id.String()+" managed_device") {
 			t.Errorf("trust %q, operator: refusal = %+v", class, ref)
 		}
-		if _, ref := macOSHostGate(rn, false); ref == nil || strings.Contains(ref.Detail, "wardyn runner trust") || !strings.Contains(ref.Detail, "Ask a security admin") {
+		if _, ref := macOSHostGate(rn, false, deviceNotRequired); ref == nil || strings.Contains(ref.Detail, "wardyn runner trust") || !strings.Contains(ref.Detail, "Ask a security admin") {
 			t.Errorf("trust %q, member: refusal = %+v", class, ref)
 		}
 	}
@@ -415,13 +415,13 @@ func TestMacOSHostGate(t *testing.T) {
 	for _, posture := range []types.RunnerPosture{{}, {MDMManaged: true, Evidence: types.PostureEvidenceOSProbe}} {
 		rn := managed
 		rn.Posture = posture
-		if _, ref := macOSHostGate(rn, false); ref == nil || ref.Reason != placement.ReasonRunnerPostureUnmet || !strings.Contains(ref.Detail, "no MDM posture file") {
+		if _, ref := macOSHostGate(rn, false, deviceNotRequired); ref == nil || ref.Reason != placement.ReasonRunnerPostureUnmet || !strings.Contains(ref.Detail, "no MDM posture file") {
 			t.Errorf("posture %+v: refusal = %+v", posture, ref)
 		}
 	}
 	// Trust is checked first: a personal runner with no posture is told about trust.
 	rn := types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal}
-	if _, ref := macOSHostGate(rn, false); ref == nil || !strings.Contains(ref.Detail, "not marked as company-managed") {
+	if _, ref := macOSHostGate(rn, false, deviceNotRequired); ref == nil || !strings.Contains(ref.Detail, "not marked as company-managed") {
 		t.Errorf("trust and posture both missing: refusal = %+v", ref)
 	}
 }
@@ -432,15 +432,15 @@ func TestMacOSVMOffer(t *testing.T) {
 	rn := types.Runner{ID: uuid.New(), TrustClass: types.RunnerTrustManagedDevice,
 		Posture: types.RunnerPosture{MDMManaged: true, Evidence: types.PostureEvidenceMDMFile}}
 	caps := runnerwire.Caps{MacOSVM: readyMac()}
-	got := macOSVMOffer(rn, caps, true, 1, false)
+	got := macOSVMOffer(rn, caps, true, 1, false, deviceNotRequired)
 	if !got.Offered || got.Refusal != nil || got.Max != 2 || got.Desktop != runnerwire.MacVMDesktopControl || len(got.Evidence) != 3 ||
 		!slices.Equal(got.Harnesses, []string{"none", "claude-code"}) {
 		t.Fatalf("offer = %+v", got)
 	}
 	for name, off := range map[string]macOSOffer{
-		"never reported": macOSVMOffer(rn, runnerwire.Caps{}, false, 0, false),
-		"no macOS caps":  macOSVMOffer(rn, runnerwire.Caps{}, true, 0, false),
-		"at max":         macOSVMOffer(rn, caps, true, 2, false),
+		"never reported": macOSVMOffer(rn, runnerwire.Caps{}, false, 0, false, deviceNotRequired),
+		"no macOS caps":  macOSVMOffer(rn, runnerwire.Caps{}, true, 0, false, deviceNotRequired),
+		"at max":         macOSVMOffer(rn, caps, true, 2, false, deviceNotRequired),
 	} {
 		if off.Offered || off.Refusal == nil || off.Refusal.Reason != placement.ReasonPlacementCapability {
 			t.Errorf("%s: offer = %+v, want a placement_capability refusal", name, off)

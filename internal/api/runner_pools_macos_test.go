@@ -24,7 +24,7 @@ func managedMac(name string) types.Runner {
 }
 
 func macCandidate(rn types.Runner, mc *runnerwire.MacVMCaps, live int) macOSCandidate {
-	return macOSCandidate{rn: rn, caps: runnerwire.Caps{MacOSVM: mc}, haveCaps: true, live: live}
+	return macOSCandidate{rn: rn, caps: runnerwire.Caps{MacOSVM: mc}, haveCaps: true, live: live, device: deviceNotRequired}
 }
 
 // A pool offers a macOS VM only when every eligible runner does, and then asks what the strictest of
@@ -103,7 +103,7 @@ func TestPoolMacOSVMRefusalCodes(t *testing.T) {
 		c    macOSCandidate
 		want client.PoolMacOSVMRefusal
 	}{
-		"never reported": {macOSCandidate{rn: managedMac("m")}, client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
+		"never reported": {macOSCandidate{rn: managedMac("m"), device: deviceNotRequired}, client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
 		"no macOS caps":  {macCandidate(managedMac("m"), nil, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyNotOffered}},
 		"runner refuses": {macCandidate(managedMac("m"), refused, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyRunnerRefused}},
 		"preparing":      {macCandidate(managedMac("m"), preparing, 0), client.PoolMacOSVMRefusal{Why: client.MacOSVMWhyPreparing, Progress: 40}},
@@ -178,7 +178,7 @@ func TestPoolMacOSVMRunnerRefusedReason(t *testing.T) {
 		if strings.Contains(r.Detail, "PLANTED") || strings.Contains(r.Error, "PLANTED") {
 			t.Errorf("%s: the runner's own text reached the refusal: %+v", name, r)
 		}
-		offer := macOSVMOffer(tc.rn, runnerwire.Caps{MacOSVM: tc.mc}, true, 0, false)
+		offer := macOSVMOffer(tc.rn, runnerwire.Caps{MacOSVM: tc.mc}, true, 0, false, deviceNotRequired)
 		if offer.Refusal == nil || strings.Contains(offer.Refusal.Detail, "PLANTED") {
 			t.Errorf("%s: the run's refusal %+v carries the runner's own text", name, offer.Refusal)
 		}
@@ -224,5 +224,27 @@ func TestPoolMacOSVMOfReadsTheListsFits(t *testing.T) {
 	operator := operatorCtx("sam", "sam@corp.example", oidc.RoleSecurityAdmin)
 	if got := s.poolMacOSVMOf(operator, []poolTarget{target(unmarked)}, fits, nil, governanceCeiling{}); len(got.Refusals) != 1 || got.Refusals[0].RunnerID != unmarked.String() {
 		t.Fatalf("operator: %+v, want the runner id to mark", got)
+	}
+}
+
+// With no MDM CA set the pool list refuses no Mac that it offered before the certificate check existed: the
+// ready Mac is offered and the one at its limit refuses with at_limit.
+func TestPoolMacOSVMOf_NoCAOffersAsBefore(t *testing.T) {
+	s := capsServer(&fakeRunner{})
+	atLimit := macRunner(t, s, readyMac(), nil)
+	ready := macRunner(t, s, readyMac(), nil)
+	rows := s.cfg.Store.(ownedRunners).rows
+	fits := map[string]runnerFit{
+		atLimit.String(): {runner: rows[atLimit], used: types.RunnerTally{Runs: 2, MacOSVMRuns: 2}},
+		ready.String():   {runner: rows[ready]},
+	}
+	target := func(id uuid.UUID) poolTarget { return poolTarget{id: id.String(), runnerID: &id} }
+	member := operatorCtx("alice", "alice@corp.example", oidc.RoleUser)
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(ready)}, fits, nil, governanceCeiling{}); !got.Offered {
+		t.Fatalf("a ready Mac with no CA set: %+v, want offered", got)
+	}
+	if got := s.poolMacOSVMOf(member, []poolTarget{target(atLimit)}, fits, nil, governanceCeiling{}); got.Offered ||
+		len(got.Refusals) != 1 || got.Refusals[0].Why != client.MacOSVMWhyAtLimit {
+		t.Fatalf("a Mac running 2 macOS VMs with no CA set: %+v, want at_limit", got)
 	}
 }

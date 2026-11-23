@@ -4,13 +4,25 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -98,4 +110,440 @@ func mdmBundleFingerprints(bundle string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// mdmDeviceVerdict is the device-certificate check's answer for one runner. Its zero value refuses, so a
+// caller that never asked cannot pass the gate.
+type mdmDeviceVerdict struct {
+	notRequired bool   // no CA configured: the v0.10.2 gate
+	ok          bool   // a presented certificate chains to the CA, is current and is not revoked
+	evidence    string // what the pass rested on, for the explain card
+	refusal     string // the sentence the runner's refusal names, when !ok and !notRequired
+}
+
+func mdmRefused(sentence string) mdmDeviceVerdict { return mdmDeviceVerdict{refusal: sentence} }
+
+// mdmNow is the control plane's clock, time.Now when none is set.
+func (s *Server) mdmNow() time.Time {
+	if s.cfg.Now != nil {
+		return s.cfg.Now()
+	}
+	return time.Now()
+}
+
+// mdmDeviceVerdictFor judges rn's presented chains against the runner settings and the CRL as they are now.
+// With no CA configured it answers notRequired. Any other failure to reach a clear pass refuses.
+func (s *Server) mdmDeviceVerdictFor(ctx context.Context, rn types.Runner) mdmDeviceVerdict {
+	name := macRunnerName(rn)
+	cfg, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return mdmRefused(name + " could not be checked for an MDM device certificate; try again.")
+	}
+	st := runnerSettingsOf(cfg)
+	if st.MDMDeviceCAPEM == "" {
+		return mdmDeviceVerdict{notRequired: true}
+	}
+	roots, msg := parseMDMBundle(st.MDMDeviceCAPEM)
+	if msg != "" {
+		return mdmRefused(name + " could not be checked: the configured MDM CA could not be read.")
+	}
+	if rn.DeviceCert == nil || len(rn.DeviceCert.Chains) == 0 {
+		return mdmRefused(name + " has not presented an MDM device certificate.")
+	}
+	pool := x509.NewCertPool()
+	for _, c := range roots {
+		pool.AddCert(c)
+	}
+	j := &mdmJudge{s: s, ctx: ctx, st: st, roots: roots, name: name, now: s.mdmNow()}
+	last := name + " has not presented an MDM device certificate."
+	for _, chain := range rn.DeviceCert.Chains {
+		leaf, inter := parseMDMChain(chain)
+		if leaf == nil || leaf.IsCA {
+			continue
+		}
+		paths, err := leaf.Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter, CurrentTime: j.now,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+		if err != nil {
+			last = name + mdmChainRefusal(err, leaf, j.now)
+			continue
+		}
+		for _, vc := range paths {
+			sentence := j.revocationRefusal(vc)
+			if sentence == "" {
+				return mdmDeviceVerdict{ok: true, evidence: j.evidence(leaf, rn.DeviceCertReportedAt)}
+			}
+			last = sentence
+		}
+	}
+	return mdmRefused(last)
+}
+
+// parseMDMChain parses a presented chain, leaf first. A chain with a certificate that does not parse is
+// no chain.
+func parseMDMChain(chain [][]byte) (leaf *x509.Certificate, inter *x509.CertPool) {
+	inter = x509.NewCertPool()
+	for i, der := range chain {
+		c, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, nil
+		}
+		if i == 0 {
+			leaf = c
+		} else {
+			inter.AddCert(c)
+		}
+	}
+	return leaf, inter
+}
+
+// mdmChainRefusal is the rest of the sentence for a chain that did not verify. Go reports both ends of the
+// validity window as Expired, so the leaf's own dates tell them apart.
+func mdmChainRefusal(err error, leaf *x509.Certificate, now time.Time) string {
+	var inv x509.CertificateInvalidError
+	if errors.As(err, &inv) && inv.Reason == x509.Expired {
+		if now.Before(leaf.NotBefore) {
+			return "'s MDM device certificate is not valid until " + leaf.NotBefore.UTC().Format("2006-01-02") + "."
+		}
+		return "'s MDM device certificate expired on " + leaf.NotAfter.UTC().Format("2006-01-02") + "."
+	}
+	return "'s MDM device certificate is not issued by the configured MDM CA."
+}
+
+// mdmJudge is one verdict's state: the CRL is fetched at most once for it.
+type mdmJudge struct {
+	s       *Server
+	ctx     context.Context
+	st      types.RunnerSettings
+	roots   []*x509.Certificate
+	name    string
+	now     time.Time
+	crl     *mdmCRL
+	crlErr  error
+	fetched bool
+}
+
+func (j *mdmJudge) crlOnce() (*mdmCRL, error) {
+	if !j.fetched {
+		j.crl, j.crlErr = j.s.mdmCRLs().current(j.ctx, j.st, j.roots)
+		j.fetched = true
+	}
+	return j.crl, j.crlErr
+}
+
+// revocationRefusal is "" when the verified path vc (leaf first, then its issuer) is not revoked by a CRL
+// that the leaf's issuer signed, else the refusal sentence.
+func (j *mdmJudge) revocationRefusal(vc []*x509.Certificate) string {
+	crl, err := j.crlOnce()
+	if err != nil {
+		cause := "unavailable"
+		var ce *mdmCRLError
+		if errors.As(err, &ce) {
+			cause = ce.cause
+		}
+		return j.name + ": revocation of its MDM device certificate could not be checked: " + cause + "."
+	}
+	if len(vc) < 2 || !crl.signers[sha256.Sum256(vc[1].Raw)] {
+		return j.name + ": revocation could not be checked for this certificate's issuer."
+	}
+	for _, e := range crl.list.RevokedCertificateEntries {
+		if e.SerialNumber != nil && e.SerialNumber.Cmp(vc[0].SerialNumber) == 0 {
+			return j.name + "'s MDM device certificate was revoked on " + e.RevocationTime.UTC().Format("2006-01-02") + "."
+		}
+	}
+	return ""
+}
+
+// evidence is the sentence the explain card shows for a pass.
+func (j *mdmJudge) evidence(leaf *x509.Certificate, reported *time.Time) string {
+	out := "MDM device certificate (expires " + leaf.NotAfter.UTC().Format("2006-01-02")
+	if reported != nil {
+		out += ", presented " + reported.UTC().Format("2006-01-02 15:04") + " UTC"
+	}
+	return out + "), CRL checked " + j.crl.lastOK.UTC().Format("2006-01-02 15:04") + " UTC"
+}
+
+// The CRL cache's bounds.
+const (
+	mdmCRLRefetch    = time.Hour
+	mdmCRLMaxStale   = 24 * time.Hour
+	mdmCRLMaxBytes   = 8 << 20
+	mdmCRLMaxRedirs  = 3
+	mdmCRLMinBackoff = time.Minute
+	mdmCRLMaxBackoff = 10 * time.Minute
+	mdmCRLFetchLimit = 10 * time.Second
+	mdmCRLWarnEvery  = 10 * time.Minute
+)
+
+// mdmCRL is one verified CRL: the list, the bundle certificates it verified under (SHA-256 of Raw), and the
+// last fetch that returned it, or one no older.
+type mdmCRL struct {
+	list    *x509.RevocationList
+	signers map[[32]byte]bool
+	lastOK  time.Time
+}
+
+// mdmCRLError is why no CRL can be used: a cause class only, never a body or a URL.
+type mdmCRLError struct{ cause string }
+
+func (e *mdmCRLError) Error() string { return "MDM CRL: " + e.cause }
+
+// mdmCRLEntry is the state for one (CRL URL, CA bundle).
+type mdmCRLEntry struct {
+	crl      *mdmCRL
+	failures int
+	nextTry  time.Time
+	lastErr  *mdmCRLError
+	lastWarn time.Time
+}
+
+// mdmCRLCache fetches the configured CRL lazily, once per key at a time, and never takes an older CRL
+// over a newer one. The floor is per process: a restart accepts as its first any CA-signed CRL that has
+// not passed its next-update time.
+type mdmCRLCache struct {
+	mu      sync.Mutex
+	entries map[string]*mdmCRLEntry
+	flight  singleflight.Group
+	now     func() time.Time
+	timeout time.Duration
+}
+
+// mdmCRLs is the server's cache, made on first use.
+func (s *Server) mdmCRLs() *mdmCRLCache {
+	if c := s.mdmCRL.Load(); c != nil {
+		return c
+	}
+	s.mdmCRL.CompareAndSwap(nil, &mdmCRLCache{entries: map[string]*mdmCRLEntry{}, now: s.mdmNow, timeout: mdmCRLFetchLimit})
+	return s.mdmCRL.Load()
+}
+
+func mdmCRLKey(st types.RunnerSettings) string {
+	sum := sha256.Sum256([]byte(st.MDMDeviceCAPEM))
+	return st.MDMDeviceCRLURL + "\x00" + hex.EncodeToString(sum[:])
+}
+
+// entry returns the key's entry. The caller holds c.mu.
+func (c *mdmCRLCache) entry(key string) *mdmCRLEntry {
+	e := c.entries[key]
+	if e == nil {
+		e = &mdmCRLEntry{}
+		c.entries[key] = e
+	}
+	return e
+}
+
+// fresh is whether the cached CRL needs no fetch now.
+func (e *mdmCRLEntry) fresh(now time.Time) bool {
+	return e.crl != nil && now.Sub(e.crl.lastOK) < mdmCRLRefetch && now.Before(e.crl.list.NextUpdate)
+}
+
+// serve is the cached CRL while it is within both its next-update time and the stale bound, else the
+// last error. The caller holds the cache's mu.
+func (e *mdmCRLEntry) serve(now time.Time) (*mdmCRL, error) {
+	if c := e.crl; c != nil && now.Before(c.list.NextUpdate) && now.Before(c.lastOK.Add(mdmCRLMaxStale)) {
+		return c, nil
+	}
+	if e.lastErr != nil {
+		return nil, e.lastErr
+	}
+	return nil, &mdmCRLError{cause: "expired"}
+}
+
+// current is the CRL the verdict may rely on for st, fetching it when the cached one is old and the
+// back-off allows. A caller waits for the shared fetch no longer than its own context and the fetch's
+// timeout; failing that, or finding no usable CRL, it gets an error and the gate refuses.
+func (c *mdmCRLCache) current(ctx context.Context, st types.RunnerSettings, roots []*x509.Certificate) (*mdmCRL, error) {
+	key := mdmCRLKey(st)
+	c.mu.Lock()
+	e := c.entry(key)
+	now := c.now()
+	if e.fresh(now) || now.Before(e.nextTry) {
+		defer c.mu.Unlock()
+		if e.fresh(now) {
+			return e.crl, nil
+		}
+		return e.serve(now)
+	}
+	c.mu.Unlock()
+	done := c.flight.DoChan(key, func() (any, error) {
+		c.fetch(context.WithoutCancel(ctx), key, st, roots)
+		return nil, nil
+	})
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return nil, &mdmCRLError{cause: "timeout"}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return e.serve(c.now())
+}
+
+// fetch downloads and applies the key's CRL, unless a fetch that finished since the caller looked made
+// it fresh or started a back-off.
+func (c *mdmCRLCache) fetch(ctx context.Context, key string, st types.RunnerSettings, roots []*x509.Certificate) {
+	c.mu.Lock()
+	e := c.entry(key)
+	if now := c.now(); e.fresh(now) || now.Before(e.nextTry) {
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	crl, cause := c.download(ctx, st, roots)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	if cause == "" {
+		cause = e.apply(crl, now)
+	}
+	if cause == "" {
+		e.failures, e.nextTry, e.lastErr = 0, time.Time{}, nil
+		return
+	}
+	e.failures++
+	e.nextTry = now.Add(min(mdmCRLMinBackoff<<min(e.failures-1, 8), mdmCRLMaxBackoff))
+	e.lastErr = &mdmCRLError{cause: cause}
+	if now.Sub(e.lastWarn) >= mdmCRLWarnEvery {
+		e.lastWarn = now
+		host := ""
+		if u, err := url.Parse(st.MDMDeviceCRLURL); err == nil {
+			host = u.Host
+		}
+		slog.Warn("api: the MDM CRL could not be used", slog.String("host", host), slog.String("cause", cause))
+	}
+}
+
+// apply takes a fetched CRL into the entry: a newer one replaces the cached one, an equal one only moves
+// lastOK, an older one is a failed fetch ("older"). The caller holds the cache's mu.
+func (e *mdmCRLEntry) apply(crl *mdmCRL, now time.Time) string {
+	cur := e.crl
+	switch {
+	case cur == nil:
+		e.crl = crl
+	case mdmCRLNewer(crl.list, cur.list):
+		e.crl = crl
+	case mdmCRLNewer(cur.list, crl.list):
+		return "older"
+	default:
+		kept := *cur
+		kept.lastOK = now
+		e.crl = &kept
+	}
+	e.crl.lastOK = now
+	return ""
+}
+
+// mdmCRLNewer is whether a is a later CRL than b: a greater Number when both carry one, else a later
+// ThisUpdate.
+func mdmCRLNewer(a, b *x509.RevocationList) bool {
+	if a.Number != nil && b.Number != nil {
+		return a.Number.Cmp(b.Number) > 0
+	}
+	return a.ThisUpdate.After(b.ThisUpdate)
+}
+
+var errMDMRedirect = errors.New("redirect refused")
+
+// mdmCRLRedirect allows at most three redirects, each to an http or https URL.
+func mdmCRLRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) > mdmCRLMaxRedirs || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		return errMDMRedirect
+	}
+	return nil
+}
+
+// mdmFetchCause names a transport failure by class.
+func mdmFetchCause(err error) string {
+	var ne net.Error
+	switch {
+	case errors.Is(err, errMDMRedirect):
+		return "redirect"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return "timeout"
+	}
+	return "network"
+}
+
+// download fetches and checks the CRL: status 200, at most 8 MiB, parsed, signed by a bundle certificate
+// and complete. The cause is a class only.
+func (c *mdmCRLCache) download(ctx context.Context, st types.RunnerSettings, roots []*x509.Certificate) (*mdmCRL, string) {
+	client := &http.Client{Timeout: c.timeout, CheckRedirect: mdmCRLRedirect}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, st.MDMDeviceCRLURL, nil)
+	if err != nil {
+		return nil, "network"
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, mdmFetchCause(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "status"
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, mdmCRLMaxBytes+1))
+	if err != nil {
+		return nil, mdmFetchCause(err)
+	}
+	if len(body) > mdmCRLMaxBytes {
+		return nil, "size"
+	}
+	return parseMDMCRL(body, roots, c.now())
+}
+
+var (
+	oidDeltaCRLIndicator = asn1.ObjectIdentifier{2, 5, 29, 27}
+	oidIssuingDistPoint  = asn1.ObjectIdentifier{2, 5, 29, 28}
+	oidAuthorityKeyID    = asn1.ObjectIdentifier{2, 5, 29, 35}
+	oidCRLNumber         = asn1.ObjectIdentifier{2, 5, 29, 20}
+)
+
+// mdmCRLComplete is whether the CRL lists every revocation of its issuer: no delta, no partition, and no
+// critical extension this code does not process. Go's parser leaves those to the caller.
+func mdmCRLComplete(rl *x509.RevocationList) bool {
+	for _, ex := range rl.Extensions {
+		if ex.Id.Equal(oidDeltaCRLIndicator) || ex.Id.Equal(oidIssuingDistPoint) {
+			return false
+		}
+		if ex.Critical && !ex.Id.Equal(oidAuthorityKeyID) && !ex.Id.Equal(oidCRLNumber) {
+			return false
+		}
+	}
+	for _, ent := range rl.RevokedCertificateEntries {
+		for _, ex := range ent.Extensions {
+			if ex.Critical {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// parseMDMCRL reads a PEM or DER CRL and keeps it only when a bundle certificate signed it, it is complete
+// and its next-update time has not passed.
+func parseMDMCRL(body []byte, roots []*x509.Certificate, now time.Time) (*mdmCRL, string) {
+	der := body
+	if blk, _ := pem.Decode(body); blk != nil {
+		if blk.Type != "X509 CRL" {
+			return nil, "parse"
+		}
+		der = blk.Bytes
+	}
+	rl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		return nil, "parse"
+	}
+	signers := map[[32]byte]bool{}
+	for _, c := range roots {
+		if bytes.Equal(c.RawSubject, rl.RawIssuer) && rl.CheckSignatureFrom(c) == nil {
+			signers[sha256.Sum256(c.Raw)] = true
+		}
+	}
+	switch {
+	case len(signers) == 0:
+		return nil, "signature"
+	case !mdmCRLComplete(rl):
+		return nil, "unsupported"
+	case rl.NextUpdate.IsZero() || !now.Before(rl.NextUpdate):
+		return nil, "expired"
+	}
+	return &mdmCRL{list: rl, signers: signers, lastOK: now}, ""
 }
