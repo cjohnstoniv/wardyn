@@ -326,6 +326,9 @@ type evDoc struct {
 	Fence *struct {
 		ProxyIP string `json:"proxy_ip"`
 	} `json:"fence"`
+	Redrawn []struct {
+		UID string `json:"uid"`
+	} `json:"redrawn"`
 	Reuse        []json.RawMessage `json:"reuse"`
 	Hold         bool              `json:"hold"`
 	ProducerGone bool              `json:"producer_gone"`

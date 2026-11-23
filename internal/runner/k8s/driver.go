@@ -296,6 +296,9 @@ type Driver struct {
 	runNamespaces sync.Map
 	// runLocks serialise each run's evidence read-modify-write (runner mode).
 	runLocks sync.Map
+	// redrawing holds each run replacing a fenced proxy draw (proxy_redraw.go), from its first retire until
+	// the proxy step returns: the 30 s observation leaves such a run out (redrawUnderTick).
+	redrawing sync.Map
 	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).
 	brackets sync.Map
 	// hardDeny is Config.HardDeny with the substrate's own apiserver added (runner mode).

@@ -165,6 +165,9 @@ type runEvidence struct {
 	// Namespace is the namespace the run's objects were created in, saved with the sink key before
 	// any pod exists; boot refuses a live run whose namespace is no longer listed.
 	Namespace string `json:"namespace,omitempty"`
+	// Redrawn holds the records of proxy pods this run retired at create because each drew an IP another
+	// run's fence refused (proxy_redraw.go), each closed on its witness. Never read for evidence again.
+	Redrawn []*podEvidence `json:"redrawn,omitempty"`
 }
 
 func decodeEvidence(b []byte) (*runEvidence, error) {
@@ -187,6 +190,11 @@ func (ev *runEvidence) pod(component, name string) *podEvidence {
 		ev.Pods[component] = pe
 	}
 	return pe
+}
+
+// redrawn reports whether uid is a proxy pod this run retired as a fenced draw.
+func (ev *runEvidence) redrawn(uid string) bool {
+	return uid != "" && slices.ContainsFunc(ev.Redrawn, func(p *podEvidence) bool { return p.UID == uid })
 }
 
 // anchor is the Node a pod's baselines are anchored to: the causal UID on a causal run, the
