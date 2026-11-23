@@ -330,16 +330,17 @@ func TestSendGitScript_OldGitHalfMadeSha1RepoIsFinished(t *testing.T) {
 // A SHA-256 send to a sandbox whose git is older than 2.29 says so and gives no advice to remove .git: removing it
 // cannot help, that git cannot make a SHA-256 repository.
 func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
-	for _, mark := range []bool{false, true} {
-		name := "a finished repository"
-		if mark {
-			name = "a half-made repository"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		repo, mark bool
+	}{{"a finished repository", true, false}, {"a half-made repository", true, true}, {"no repository yet", false, false}} {
+		t.Run(c.name, func(t *testing.T) {
 			g := newGitRigHash(t, true)
 			dir := g.box(t.TempDir())
-			g.run(dir, "init", "-q")
-			if mark {
+			if c.repo {
+				g.run(dir, "init", "-q")
+			}
+			if c.mark {
 				if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
 					t.Fatal(err)
 				}
@@ -348,8 +349,8 @@ func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
 			if rc == 0 || out != "" {
 				t.Fatalf("out %q rc %d stderr %q; want the send refused", out, rc, errs)
 			}
-			if !strings.Contains(errs, gitTooOld) || strings.Contains(errs, "remove .git") {
-				t.Errorf("stderr %q; want %q and no advice to remove .git", errs, gitTooOld)
+			if !strings.Contains(errs, gitTooOld) || strings.Contains(errs, "remove .git") || strings.Contains(errs, gitUnfinished) {
+				t.Errorf("stderr %q; want %q, no advice to remove .git and not %q", errs, gitTooOld, gitUnfinished)
 			}
 		})
 	}

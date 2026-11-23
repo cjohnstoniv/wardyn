@@ -438,6 +438,10 @@ func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	read := "old=; oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1; old=1;; esac; }"
 	refuse := "{ [ \"$oh\" = " + hash + " ] || { [ -z \"$old\" ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
 		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
+	// git 2.25 and older answer an unknown option with rc 129: a SHA-256 init that gets it is a git too old for SHA-256.
+	if sha256 {
+		mk += " || { r=$?; [ \"$r\" != 129 ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; false; }"
+	}
 	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
 	check := "if " + read + "; then " + refuse + "; fi; "
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
