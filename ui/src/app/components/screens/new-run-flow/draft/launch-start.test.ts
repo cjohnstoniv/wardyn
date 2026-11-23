@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { SCHEDULE_REFUSAL } from "../../../../lib/schedule-refusals";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { firstRepeatStart, zoneWeekday } from "../../../../lib/schedule";
 import { launchStart, repeatLine, startHeld, startHeldText } from "./launch-start";
 import type { RunIntent } from "./run-intent";
 
@@ -73,5 +74,36 @@ describe("a repeating start", () => {
   it("is no line for a one-time start, or before a time is typed", () => {
     expect(repeatLine(schedule, NOW)).toBeNull();
     expect(repeatLine({ ...repeat, time: "", repeat: "daily" }, NOW)).toBeNull();
+  });
+});
+
+// The first start and the weekday a weekly schedule repeats on, as the server's firstSlot stores them
+// (internal/api/run_schedule_repeat.go, time.Date over calendar days), around Europe/London's clock changes.
+describe("a repeating start's first slot across a clock change", () => {
+  const london = (time: string, repeat: "daily" | "weekly" = "weekly") => ({ date: "", time, zone: "Europe/London", repeat });
+  const first = (now: number, time: string) => {
+    const at = firstRepeatStart(london(time), now);
+    return at === null ? null : { at: new Date(at).toISOString(), weekday: zoneWeekday(at, "Europe/London") };
+  };
+
+  it("takes the next calendar day in the last hour before spring forward, not the day after", () => {
+    // Sat 27 Mar 2027 23:30 GMT; 09:00 on Sun 28 Mar is 08:00Z (BST).
+    expect(first(Date.UTC(2027, 2, 27, 23, 30), "09:00")).toEqual({ at: "2027-03-28T08:00:00.000Z", weekday: 0 });
+    expect(firstRepeatStart(london("09:00", "daily"), Date.UTC(2027, 2, 27, 23, 30))).toBe(Date.UTC(2027, 2, 28, 8, 0));
+  });
+
+  it("moves a wall time the clocks skip forward by the gap, on that same day", () => {
+    // 01:30 on Sun 28 Mar 2027 does not exist in London; the server starts at 02:30 BST, 01:30Z.
+    expect(first(Date.UTC(2027, 2, 27, 12, 0), "01:30")).toEqual({ at: "2027-03-28T01:30:00.000Z", weekday: 0 });
+  });
+
+  it("books a wall time the clocks repeat on that same day", () => {
+    // 01:30 on Sun 31 Oct 2027 happens twice in London; the server starts at 01:30 GMT, 01:30Z.
+    expect(first(Date.UTC(2027, 9, 30, 12, 0), "01:30")).toEqual({ at: "2027-10-31T01:30:00.000Z", weekday: 0 });
+  });
+
+  it("is the next day when the time has just passed, with no clock change near", () => {
+    // Mon 23 Nov 2026 09:01 GMT; 09:00 is next on Tue 24 Nov.
+    expect(first(Date.UTC(2026, 10, 23, 9, 1), "09:00")).toEqual({ at: "2026-11-24T09:00:00.000Z", weekday: 2 });
   });
 });

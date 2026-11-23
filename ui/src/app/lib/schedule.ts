@@ -182,17 +182,39 @@ const dateWeekday = (date: string): number => {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 };
 
+// The instant time.Date gives for a wall date and time in zone, as the server books a repeating start: the zone's
+// offset at the wall clock read as UTC, then at the instant that offset names. A wall time the clocks skip moves
+// forward by the gap (01:30 on a spring-forward day starts at 02:30); one they repeat starts at the instant this
+// lands on. null for a zone the browser does not know.
+function goDateInstant(date: string, time: string, zone: string): number | null {
+  const wall = wallClock({ date, time, zone });
+  if (wall === null) return null;
+  try {
+    return wall - offsetMs(zone, wall - offsetMs(zone, wall));
+  } catch {
+    return null;
+  }
+}
+
+// The yyyy-mm-dd date `days` calendar days after a yyyy-mm-dd date.
+const addDays = (date: string, days: number): string => {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+};
+
 /**
  * A repeating choice's first start: the next instant after now its time comes round in its zone, on a weekday
- * (Monday to Friday) for a weekdays rule, as internal/api/run_schedule_repeat.go's firstSlot finds it. null until a
- * time is typed. A day whose wall time the clocks skip or repeat is passed over here; the server books it anyway.
+ * (Monday to Friday) for a weekdays rule, as internal/api/run_schedule_repeat.go's firstSlot finds it. It walks
+ * calendar dates in the zone, as the server does, never 24-hour steps, and starts a wall time the clocks skip or
+ * repeat where the server does. null until a time is typed.
  */
 export function firstRepeatStart(choice: StartChoice, now: number): number | null {
   if (repeatProblem(choice)) return null;
+  const today = todayDate(choice.zone, now);
   for (let d = 0; d <= 8; d++) {
-    const date = todayDate(choice.zone, now + d * 86_400_000);
+    const date = addDays(today, d);
     if (choice.repeat === "weekdays" && [0, 6].includes(dateWeekday(date))) continue;
-    const at = startInstant({ date, time: choice.time, zone: choice.zone });
+    const at = goDateInstant(date, choice.time, choice.zone);
     if (at !== null && at > now) return at;
   }
   return null;
