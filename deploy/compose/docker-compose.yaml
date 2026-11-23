@@ -416,6 +416,7 @@ services:
       # land on the same default (pg store, keep-forever) — see docs/ENV.md.
       WARDYN_RECORDING_STORE: "${WARDYN_RECORDING_STORE:-}"
       WARDYN_RECORDING_RETENTION_DAYS: "${WARDYN_RECORDING_RETENTION_DAYS:-}"
+      WARDYN_RUN_HISTORY_RETENTION_DAYS: "${WARDYN_RUN_HISTORY_RETENTION_DAYS:-}"
       # Recording delivery: wardyn-rec uploads finished casts through the
       # proxy's brokered route (run-token injected proxy-side; cross-run
       # uploads 403 at the control plane). No shared volume is mounted into

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -232,5 +233,18 @@ func TestStartBackgroundWorkersRegistersRunRetention(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("days %d: run_retention registered = %v, want %v", tc.days, got, tc.want)
 		}
+	}
+}
+
+// A compose install sets the window from its env file, as it does the recording window: the variable passes
+// through with an empty default, which keeps every run.
+func TestComposePassesRunHistoryRetentionThrough(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "compose", "docker-compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const line = `WARDYN_RUN_HISTORY_RETENTION_DAYS: "${WARDYN_RUN_HISTORY_RETENTION_DAYS:-}"`
+	if !strings.Contains(string(raw), line) {
+		t.Fatalf("deploy/compose/docker-compose.yaml has no %s", line)
 	}
 }
