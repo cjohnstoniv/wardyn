@@ -43,5 +43,6 @@ Two keys are needed, and both are off by default:
 - Each holder runs one Windows VM at a time. A second launch is refused `409` `windows_licence_in_use`, naming the run that holds the seat.
 - A run that ends frees its seat. A run marked lost keeps it until it is killed, so a VM that may still be running is never counted twice.
 - A Windows VM run is never recorded. A launch that would be recorded is refused, with `field` `recording`.
+- A Windows VM run needs recording off in the policy that launches it. On an install that keeps recordings and sets no level, a plain launch is refused until that policy says off.
 - An agent, a task, a workspace, a folder, a drive, web apps, exec, SSH, revive and support sessions are refused `windows_vm_feature_refused`.
 - Every refused launch writes a `run.create` row with status `denied` and the reason ([audit actions](../AUDIT-ACTIONS.md)).
