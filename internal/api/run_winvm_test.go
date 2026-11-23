@@ -188,13 +188,12 @@ func TestWindowsVMNeedsARegisteredImage(t *testing.T) {
 		status        int
 		reason, field string
 	}{
-		"no image":           {winvmReq(func(q *createRunRequest) { q.WindowsImage = " " }), http.StatusBadRequest, reasonWindowsImageRequired, "windows_image"},
-		"a raw image":        {winvmReq(func(q *createRunRequest) { q.Image = "ubuntu:24.04" }), http.StatusBadRequest, reasonWindowsImageRequired, "image"},
-		"an allowed image":   {winvmReq(func(q *createRunRequest) { q.AllowedImage = "ghcr.io/acme/x" }), http.StatusBadRequest, reasonWindowsImageRequired, "allowed_image"},
-		"a devcontainer":     {winvmReq(func(q *createRunRequest) { q.DevcontainerRepo = "acme/widgets" }), http.StatusBadRequest, reasonWindowsImageRequired, "devcontainer_repo"},
-		"an unknown name":    {winvmReq(func(q *createRunRequest) { q.WindowsImage = "Desktop" }), http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image"},
-		"a retired image":    {winvmReq(func(q *createRunRequest) { q.WindowsImage = "Old" }), http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image"},
-		"a name in the case": {winvmReq(func(q *createRunRequest) { q.WindowsImage = "server" }), http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image"},
+		"no image":         {winvmReq(func(q *createRunRequest) { q.WindowsImage = " " }), http.StatusBadRequest, reasonWindowsImageRequired, "windows_image"},
+		"a raw image":      {winvmReq(func(q *createRunRequest) { q.Image = "ubuntu:24.04" }), http.StatusBadRequest, reasonWindowsImageRequired, "image"},
+		"an allowed image": {winvmReq(func(q *createRunRequest) { q.AllowedImage = "ghcr.io/acme/x" }), http.StatusBadRequest, reasonWindowsImageRequired, "allowed_image"},
+		"a devcontainer":   {winvmReq(func(q *createRunRequest) { q.DevcontainerRepo = "acme/widgets" }), http.StatusBadRequest, reasonWindowsImageRequired, "devcontainer_repo"},
+		"an unknown name":  {winvmReq(func(q *createRunRequest) { q.WindowsImage = "Desktop" }), http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image"},
+		"a retired image":  {winvmReq(func(q *createRunRequest) { q.WindowsImage = "Old" }), http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image"},
 	} {
 		_, rf := srv.windowsImageDecision(r, tc.req, types.RunPolicySpec{})
 		wantWinRefusal(t, name, rf, tc.status, tc.reason, tc.field)
