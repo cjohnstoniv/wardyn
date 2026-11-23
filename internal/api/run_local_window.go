@@ -42,7 +42,7 @@ const (
 	localWindowNotYourComputerMsg = "Wardyn opens a window only onto a run on a runner you registered on your own computer. Watch its desktop from the run page instead."
 	localWindowRecordingMsg       = "This run's recording level is Screen and actions, and a window on your computer isn't recorded, so Wardyn won't open one. Watch its desktop from the run page instead."
 	localWindowOfflineMsg         = "This run's runner isn't connected to this server, so Wardyn can't open a window onto it."
-	localWindowRunnerTooOldMsg    = "This run's runner can't open a window on your computer. Upgrade it to this server's version."
+	localWindowRunnerTooOldMsg    = "This run's runner can't open a window on your computer: it is older than this server, or it was started with --local-attach=off."
 	localWindowPausedMsg          = "This run is paused. You can open its window once it is running again."
 	localWindowPreparingMsg       = "This run is still being prepared. You can open its window once preparation finishes."
 	localWindowOpenMsg            = "A window onto this run is already open."

@@ -1004,7 +1004,7 @@ start.
 | `local_window_not_your_computer` | `403`: the run is not on a runner the caller registered as their own, or the caller is not its creator, or came through a delegated token. |
 | `local_window_recording` | `403`: the run's recording level is Screen and actions, and a local window isn't recorded. |
 | `local_window_offline` | `409`: the run's runner is not connected to this server. |
-| `local_window_runner_too_old` | `409`: the run's runner cannot open a local window; upgrade it. |
+| `local_window_runner_too_old` | `409`: the run's runner cannot open a local window: it is older than this server, or it was started with `--local-attach=off`. |
 | `local_window_paused` | `409`: the run is paused. At a re-check it closes an open window. |
 | `local_window_preparing` | `409`: the run is still being prepared. |
 | `local_window_open` | `409`: the run already has a window open. |
