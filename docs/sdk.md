@@ -772,6 +772,13 @@ to launch, and the same value when you retry that launch.
 
 `/healthz` shows only the replica that answers, so `Retry` is unsafe while replicas run mixed versions.
 
+## Sites
+
+- `GET /api/v1/org-sites` and `GET /api/v1/org-sites/{id}` list and read sites. A site names only the pools you may use.
+- Admins write them: `POST /org-sites`, `PUT` and `DELETE /org-sites/{id}`, `PUT` and `DELETE /runner-pools/{id}/site` with `{"site_id": "<id>"}`, and `PUT` and `DELETE /drives/{id}/site` with the same body.
+- While sites are on, a run that names no pool goes to the default pool of the one site its homed drives are at. Its `runner_pool_selection` is then `site_default` (`client.RunnerPoolSelectedSite`), and it carries `site_id`.
+- The Go client has no site methods yet: call the routes over HTTP. See [Sites](operations/sites.md).
+
 ## Error handling
 
 Non-2xx responses are returned as `*client.APIError`:
@@ -1072,6 +1079,14 @@ start.
 | `credential_delivery_invalid` / `credential_delivery_unavailable` / `credential_delivery_stale` | `PUT /governance/credential-delivery`: an unknown or fixed class, a mode outside the class's bounds, or `require_posture` without `runner_resident`; under `by_trust`, an unknown trust class, an override that sets `via_org` or overrides a class delivered `via_org`, or `require_posture` under `org_cluster`; or the store is not Postgres; or `If-Match` is stale. `GET` returns `buildable_modes` beside `policy`: per class, the modes a local run can be delivered under today. A stored mode outside them refuses at every door; a write setting a class or `by_trust` override to one is `422`, and a stored document is left as it is. `GET` lists stored rows outside them as `unbuildable` (`class`, `trust_class`, `mode`, `buildable_modes`; absent when none); `/setup/status` warns of them. |
 | `site_config_request_invalid` / `site_config_integrations_via_own_route` / `site_config_invalid` / `site_config_stale` / `site_config_egress_via_own_route` / `site_config_recording_via_own_route` | `PUT /site-config`: the body did not decode, integrations were named inline instead of through their own endpoints, the submitted config fails one of the agent/model-provider/default-provider validators, `If-Match` is stale, or the body changes the egress baseline (the `egress` block or the baseline-marked `internal_hosts`), which only `PUT /governance/egress-baseline` writes (`PutSiteConfigResult` sends neither, so a captured document restores, and `EgressBaselineIgnored` reports a baseline it did not apply; `PutSiteConfig` sends the document as given and gets this refusal; a restore is still refused when the security tier marked an internal host the older capture does not list: lift the mark first), or changes the `recording` block, which only `PUT /governance/recording` writes (`PutSiteConfigResult` sends none, and `RecordingIgnored` reports one it did not apply). `PUT /agent-providers`, `/model-providers` and `/workspace-providers` check `If-Match` against this document's ETag and answer `site_config_stale` too: one reason for one cause, whichever sub-block the write targeted. |
 | `feature_unavailable` | `400` on `PUT /site-config`: the body turns on, or sets a setting of, a `features` key this release cannot turn on yet. Leaving the key out and `{"enabled": false}` are always accepted. |
+| `org_sites_off` | `403` from a site write that adds (`POST /org-sites`, `PUT /org-sites/{id}`, `PUT /runner-pools/{id}/site`, `PUT /drives/{id}/site`) while `features.org_sites` is off. Taking a pool or a drive off a site, and deleting a site, still work. |
+| `org_site_not_found` | `404` on the site routes: no such site, or a deleted one. |
+| `org_site_invalid` | `400`: a site name or storage note that breaks the site rules, such as a storage link with a user name, password, query or fragment. |
+| `org_site_name_taken` | `409`: a live site already has that name. |
+| `org_site_stale` | `409` on `PUT /org-sites/{id}`: the `revision` sent is not the site's. Read it again and retry. |
+| `org_site_in_use` | `409` on `DELETE /org-sites/{id}`: a pool or a drive is still at the site. |
+| `org_site_pool_scope` | `422`: only an organization pool can be at a site, and only an admin drive can have a home site. |
+| `org_site_default_pool` | `422` on `PUT /org-sites/{id}`: `default_pool_id` is not one of the site's own live pools. |
 | `expected_principal_mismatch` | `412`: any write carrying the console's `X-Wardyn-Expected-Principal` header whose person is not the one now signed in (another tab signed in as someone else after the draft was composed). Nothing is written; reload and retry. Writes without the header (the CLI, scripts) are not checked. |
 | `site_config_probe_request_invalid` / `site_config_probe_url_invalid` / `egress_redirect_from_required` / `egress_redirect_not_found` | `POST /site-config/test-proxy` and `POST /site-config/test-redirect`. |
 | `governance_unit_request_invalid` / `governance_ceiling_invalid` / `governance_unit_name_conflict` / `governance_unit_in_use` / `governance_membership_invalid` / `governance_preview_claims_invalid` | `PUT/POST /governance/units` and `/governance/memberships`, and the preview routes — `governance_preview_claims_invalid` is shared with the user-drive naming preview (`user_drives_preview.go`), which feeds `normalizeGovernancePreviewClaims` too. `governance_unit_in_use` is a `409` when a profile is still assigned or still the base of another profile (the body names those profiles). An SDK predating composition reads a composed profile as `ceiling: {}` and `limits: {}`, ignoring `effective`; its `PUT` omits the composition fields, which are kept, so it cannot flatten the profile. |
