@@ -83,6 +83,7 @@ var namespaceCensusColumns = []censusColumn{
 	{"run_launch_intents", "created_by", false, ""},
 	{"run_mask_manifest", "owner", false, ""},
 	{"run_mask_values", "owner", false, ""},
+	{"run_previews", "created_by", false, ""},
 	{"run_queue", "owner", false, ""},
 	{"run_support_grants", "helper", false, ""},
 	{"run_template_revisions", "created_by", false, ""},
