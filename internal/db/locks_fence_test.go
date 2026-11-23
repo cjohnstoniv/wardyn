@@ -248,3 +248,68 @@ func TestFenceLockHeldWaitsOutABusyConnection(t *testing.T) {
 		return errors.Is(context.Cause(holds[1]), ErrLockLost)
 	})
 }
+
+// TestFenceLockHeldBusyPastItsCap: with the connection's mutex held past fenceHeldWait and a stream of statements
+// queued behind it, LockHeld answers lost within the cap and a second, and leaves the connection alone. Once the
+// stream runs freely, a check still gets its turn among the statements and answers held.
+func TestFenceLockHeldBusyPastItsCap(t *testing.T) {
+	l := fakeLocker(&fakeFence{})
+	hctx, release, err := l.Lock(context.Background(), startKey(1), time.Second)
+	if err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	defer release()
+	c := heldFrom(hctx).conn
+
+	c.mu.Lock()
+	unlocked := make(chan struct{})
+	time.AfterFunc(fenceHeldWait+1500*time.Millisecond, func() { c.mu.Unlock(); close(unlocked) })
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				c.mu.Lock()
+				time.Sleep(time.Millisecond)
+				c.mu.Unlock()
+			}
+		}()
+	}
+	defer func() { close(stop); wg.Wait() }()
+	// held asks LockHeld on its own goroutine, so a check that never returns fails the test at its bound
+	// rather than hanging it.
+	held := func(within time.Duration) (time.Duration, error) {
+		start, done := time.Now(), make(chan error, 1)
+		go func() { done <- LockHeld(hctx) }()
+		select {
+		case err := <-done:
+			return time.Since(start), err
+		case <-time.After(within):
+			t.Fatalf("LockHeld had not answered after %s", within)
+			return 0, nil
+		}
+	}
+
+	d, err := held(fenceHeldWait + 3*time.Second)
+	<-unlocked
+	if !errors.Is(err, ErrLockLost) {
+		t.Fatalf("LockHeld with the connection busy past its cap = %v; want ErrLockLost", err)
+	}
+	if d < fenceHeldWait || d > fenceHeldWait+time.Second {
+		t.Fatalf("LockHeld answered after %s; want between %s and a second past it", d, fenceHeldWait)
+	}
+	if err := context.Cause(c.lost); err != nil {
+		t.Fatalf("a check that ran out of its wait failed the connection: %v", err)
+	}
+
+	if _, err := held(fenceHeldWait + time.Second); err != nil {
+		t.Fatalf("LockHeld beside a stream of statements = %v; want nil", err)
+	}
+}

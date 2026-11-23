@@ -44,6 +44,8 @@ const (
 	fenceBackoffMax   = 200 * time.Millisecond
 	// fenceDefaultWait is a Lock's wait when it names none, as for the dialled path.
 	fenceDefaultWait = 10 * time.Second
+	// fenceHeldWait caps LockHeld's wait for a busy fence connection.
+	fenceHeldWait = 3 * fenceStmtWait
 )
 
 // fenceStmts is the statements the fence path runs on a connection. None waits for a lock.
@@ -375,13 +377,17 @@ func (f *fenceSet) unlockKey(c *lockConn, k LockKey) {
 }
 
 // fenceHeld is LockHeld for a hold of keys on fence connection c, which other holds share. A busy connection is
-// waited for, not read as lost: every statement on it holds its mutex for fenceStmtWait at most, and a connection
-// that has died is lost (c.lost) by the statement that found it so. The query then runs under a fenceStmtWait
+// waited for, not read as lost at once: every statement on it holds its mutex for fenceStmtWait at most, and a
+// connection that has died is lost (c.lost) by the statement that found it so. The wait is capped at fenceHeldWait;
+// past it the answer is lost (the caller refuses), and c is left alone. The query then runs under a fenceStmtWait
 // deadline of its own. A query that fails has broken the shared connection, so it fails c and every hold on it; a
 // key the session no longer holds (a released hold) ends this answer only.
 func (c *lockConn) fenceHeld(keys []LockKey) error {
-	if !c.lockUntil(c.lost) {
-		return fmt.Errorf("%w: %w", ErrLockLost, context.Cause(c.lost))
+	if !c.lockWithin(fenceHeldWait) {
+		if err := context.Cause(c.lost); err != nil {
+			return fmt.Errorf("%w: %w", ErrLockLost, err)
+		}
+		return fmt.Errorf("%w: the start lock connection stayed busy past %s", ErrLockLost, fenceHeldWait)
 	}
 	if c.closed || c.lost.Err() != nil {
 		c.mu.Unlock()
@@ -399,6 +405,31 @@ func (c *lockConn) fenceHeld(keys []LockKey) error {
 	}
 	c.fail(err)
 	return fmt.Errorf("%w: %w", ErrLockLost, err)
+}
+
+// lockWithin takes c's mutex within d, giving up early when c is lost, and reports whether it holds it. It queues
+// with a plain Lock on a goroutine, so a stream of statements cannot starve it as a TryLock poll can; once it has
+// given up, that goroutine unlocks the mutex as soon as it gets it.
+func (c *lockConn) lockWithin(d time.Duration) bool {
+	got, gaveUp := make(chan struct{}), make(chan struct{})
+	go func() {
+		c.mu.Lock()
+		select {
+		case got <- struct{}{}:
+		case <-gaveUp:
+			c.mu.Unlock()
+		}
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-got:
+		return true
+	case <-t.C:
+	case <-c.lost.Done():
+	}
+	close(gaveUp)
+	return false
 }
 
 // fail ends every hold on c with ErrLockLost and closes it.
