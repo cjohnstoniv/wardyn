@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.
 - The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
 - WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
 - WARDYN_LOCK_POOL_MAX_CONNS (flag -lock-pool-max-conns, default 8, 1 to 64) sets how many connections each server holds for cross-replica locks at once, and how many guarded credential writes it dials at once. Each replica can use up to twice this number on top of its pool, so budget Postgres max_connections for it.

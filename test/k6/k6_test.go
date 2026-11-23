@@ -193,6 +193,7 @@ func TestK6(t *testing.T) {
 	kase("finalizer-api-semantics", caseFinalizerAPI)
 	kase("normal-stop", caseNormalStop)
 	kase("pod-ip-reuse-after-stop", casePodIPReuse)
+	kase("kept-copy-out", caseKeptCopyOut)
 	kase("h1-create-window", caseH1Window)
 	kase("bind-delete-serial", caseBindDeleteSerial)
 	kase("bind-delete-overlap", caseBindDeleteOverlap)

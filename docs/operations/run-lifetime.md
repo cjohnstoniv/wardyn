@@ -227,6 +227,20 @@ The agent-sandbox backend with keep turned on is the exception for some runs ([K
 
 - A Kubernetes run's end and limits still fire on schedule.
 - After a long control-plane outage a server Kubernetes run is still ended.
+- The exception is a registered Kubernetes runner. There a run lost to an outage is kept with its agent running and no network, and cannot be revived.
+- Until the run's end, its owner, and nobody else, can open it to copy work out: the terminal, SSH and the Files panel's download, each where the run's policy allows it.
+- Nothing can be uploaded through the Files panel. The command route (`POST /runs/{id}/exec`), UI apps, a support session and a delegated or issuer portal attach stay closed.
+- A run created with the admin token or in local mode has no personal owner, so nobody can open it this way.
+- `GET /runs/{id}` carries `kept_copy_out: true` for the owner while the door is open. At the run's end the run is ended and torn down.
+
+| The owner is refused when | Answer |
+| --- | --- |
+| The run has reached its end or its maximum age | `409` `attach_run_kept`: "This run has reached its end, so work can no longer be copied out of it." |
+| Its agent was stopped | `409` `attach_run_kept`: "This run's agent has stopped, so there is nothing running to copy work out of." |
+| Wardyn has not confirmed that the network was cut | `409` `attach_run_kept`: "Wardyn has not confirmed that this run's network was cut, so it cannot be opened to copy work out yet. Try again in a minute." |
+| Its runner could not confirm the network was cut, and removed the sandbox | `409` `attach_run_kept`: "This run's runner could not confirm that its network was cut, so it removed the run's sandbox. There is nothing left to copy out." |
+| Wardyn could not read the run's state | `409` `attach_run_kept`: "Wardyn could not check whether this run's agent is still running, so it cannot be opened to copy work out. Try again." |
+
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.
