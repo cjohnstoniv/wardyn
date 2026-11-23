@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -35,10 +36,11 @@ func capDenyOverlaps(kind, denyValue, want string) bool {
 
 // onlyPrefixAllows reports whether every image allow covering value is a
 // registry-prefix grant (none is the wildcard). Asked after scan loaded the
-// grants and a covering allow was found.
-func (b *capBatch) onlyPrefixAllows(kind, value string) bool {
+// grants and a covering allow was found. A row unverifiedEmailAllow says
+// grants nothing is not a covering allow.
+func (b *capBatch) onlyPrefixAllows(ctx context.Context, kind, value string) bool {
 	for _, g := range b.byKind[kind] {
-		if g.Effect != types.CapabilityAllow || !capValueMatches(kind, g.Value, value) {
+		if g.Effect != types.CapabilityAllow || !capValueMatches(kind, g.Value, value) || b.unverifiedEmailAllow(ctx, g) {
 			continue
 		}
 		if _, ok := imagePrefixGrant(g.Value); !ok {

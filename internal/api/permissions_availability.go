@@ -8,7 +8,9 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -188,6 +190,68 @@ func (s *Server) writeAvailability(r *http.Request, kind, value string, restrict
 		return lifter.LiftComponentRestriction(r.Context(), id, principalFromRequest(r))
 	}
 	return s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, value, restricted, principalFromRequest(r))
+}
+
+// createRestricted reads a create's ?restricted. Absent is false and a single "true" is true; any other value, an empty
+// one or a repeated parameter, or a query string that does not parse (url.Query would drop the bad pair and read the
+// flag as absent), is refused 400 with reason, so a misspelled flag never creates the resource open.
+func createRestricted(w http.ResponseWriter, r *http.Request, reason string) (restricted, ok bool) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	vals, present := query["restricted"]
+	switch {
+	case err != nil:
+		writeErrorReason(w, http.StatusBadRequest, reason, `restricted: only "true" is accepted`)
+		return false, false
+	case !present:
+		return false, true
+	case len(vals) == 1 && vals[0] == "true":
+		return true, true
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reason, `restricted: only "true" is accepted`)
+		return false, false
+	}
+}
+
+// restrictBeforeCreate restricts each value of kind before the resource that carries it is written, so no reader can
+// find the resource open to every member ("Available to: Only these" on a create, before its list exists). It is a
+// tightening of a value no resource has yet, so it is written directly and never held, as an org component's create
+// is. Only admins may use the resource until the list is written. undo lifts the rows this call inserted (a value
+// already restricted is left alone), for a resource write that then failed; it runs on a context the client cannot
+// cancel, and a lift that fails is logged, not returned: the value stays closed.
+func (s *Server) restrictBeforeCreate(r *http.Request, kind string, values []string) (undo func(), err error) {
+	before, err := s.cfg.Store.ListCapabilityRestrictions(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	by := principalFromRequest(r)
+	var added []string
+	undo = func() {
+		ctx := context.WithoutCancel(r.Context())
+		for _, v := range added {
+			if err := s.cfg.Store.SetCapabilityRestriction(ctx, kind, v, false, by); err != nil {
+				slog.WarnContext(ctx, "api: lift the restriction a failed create wrote", "capability", kind, "value", v, "err", err)
+			}
+		}
+	}
+	for _, v := range values {
+		if before[kind][v] {
+			continue
+		}
+		if err := s.cfg.Store.SetCapabilityRestriction(r.Context(), kind, v, true, by); err != nil {
+			undo()
+			return nil, err
+		}
+		added = append(added, v)
+	}
+	return undo, nil
+}
+
+// auditCreatedRestricted writes the row PUT /permissions/availability would, for each value a create restricted.
+func (s *Server) auditCreatedRestricted(r *http.Request, kind string, values []string) {
+	for _, v := range values {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"capability.availability.write", kind, "success", mustJSON(availabilityAuditData(kind, v, true))))
+	}
 }
 
 // handlePutAvailability turns one value's restriction on or off. securityOps:

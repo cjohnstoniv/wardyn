@@ -229,6 +229,33 @@ test.describe("Available to — a stored policy (#923)", () => {
     ]);
   });
 
+  test("the policy saved but its list was refused: it stays restricted", async ({ page }) => {
+    await gotoConsole(page, "admin");
+    await navTo(page, "Policies");
+    await page.getByRole("button", { name: "New policy" }).first().click();
+    // Not filtered on "New policy": once the list is refused the sheet is the saved policy's edit.
+    const dialog = page.getByRole("dialog");
+    await dialog.getByLabel("Name", { exact: true }).fill(`${POLICY_NAME}-partial`);
+    await dialog.getByLabel(SPEC_LABEL).fill(POLICY_SPEC);
+    await dialog.getByRole("radio", { name: AVAILABILITY.ONLY }).click();
+    await dialog.getByPlaceholder(AVAILABILITY.ADD_PLACEHOLDER).fill("portfolio-mgr");
+    await dialog.getByRole("button", { name: AVAILABILITY.ADD_CTA, exact: true }).click();
+    await dialog.getByRole("button", { name: "Create policy" }).click();
+
+    await expect(dialog.getByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeVisible();
+    await expect(dialog.getByText(`The user type "portfolio-mgr" doesn't exist. Create it under User types first.`)).toBeVisible();
+    await expect(dialog.getByText(AVAILABILITY.CREATE_PARTIAL_RESTRICTED)).toBeVisible();
+
+    const list = await (await page.request.get("/api/v1/policies", { headers: auth })).json();
+    const rows = (Array.isArray(list) ? list : list.policies ?? list.items) as { id: string; name: string }[];
+    const partialId = rows.find((p) => p.name === `${POLICY_NAME}-partial`)!.id;
+    const view = await (
+      await page.request.get(`/api/v1/permissions/availability/policy/${partialId}`, { headers: auth })
+    ).json();
+    expect(view.restricted).toBe(true);
+    expect(view.allowed_by).toEqual([]);
+  });
+
   test("the policy's sheet shows its Available to: Only these, the type listed and locked, the policy's lines", async ({
     page,
   }) => {

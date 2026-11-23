@@ -80,6 +80,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
 - Publishing a patch release for an older release line no longer moves the `:latest` tag of the agent images (`agent-base`, `agent-codex-cli`, `agent-aws-sso`) back to it: `:latest` always names the newest final release across all lines.
 - `scripts/verify-release.sh` checks an older release only for the images and files that release shipped, and fails when the Latest release, or `:latest` on the agent images, names anything but the newest final release.
+- A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
+- With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
 
 ### Security
 

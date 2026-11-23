@@ -86,7 +86,7 @@ the ADMIN pre-authorized.
 
 - **Subjects, and the group snapshot's ceiling.**
 - A grant's `subject_type` is
-  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits),
+  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits, while an allow on the email counts only when sign-in vouches for the email: [`WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`](../ENV.md#wardyn_capability_grants_verified_email), on by default),
   - `group` (the login-time union of the ID token's `roles` and `groups` claims, lowercased and deduped — so Entra App Roles are grantable for free),
   - `user_type` (everyone of one user type, named by the type's id),
   - or `all` (every signed-in human).
@@ -226,6 +226,7 @@ the ADMIN pre-authorized.
 - Security admins are bound like anyone; only the admin tier is exempt.
 - On `image`, the one widening kind, the restriction also switches that one image on for the people listed while the kind stays off for every other image.
 - Turning "Only…" on with no allow row naming the value is refused `400`, since the resource would then be available to nobody.
+- A policy created with `POST /policies?restricted=true`, or a model provider added with `PUT /model-providers?restricted=true`, is restricted before it is written, so it is never available to everyone, not even for a moment. Until its list is written through `POST /permissions/grants`, only admins may use it. If the restriction cannot be written, nothing is created; if the create fails after it, the restriction is lifted once the resource is confirmed absent. The console does this whenever "Only these" is chosen on a new policy or provider. An organisation `component` always starts restricted.
 - `egress_host` and `secret` values can't be restricted (`400`).
 - The value is the rest of the path, so an image ref's slashes need no escaping.
 

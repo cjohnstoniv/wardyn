@@ -728,7 +728,7 @@ func (r *capRead) denied(ctx context.Context) bool { r.scan(ctx); return r.deny 
 // the allow that matched is a wildcard.
 func (r *capRead) granted(ctx context.Context) bool {
 	r.scan(ctx)
-	if !r.allow || r.err != nil || r.b.namedAllow(r.kind, r.value) {
+	if !r.allow || r.err != nil || r.b.namedAllow(ctx, r.kind, r.value) {
 		return r.allow && r.err == nil
 	}
 	restricted, err := r.b.isRestricted(ctx, r.kind, r.value)
@@ -742,7 +742,7 @@ func (r *capRead) granted(ctx context.Context) bool {
 	// A prefix allow must not open another tag or digest of a repository an
 	// admin restricted: the restriction names one reference, the prefix names
 	// the whole repository. A wildcard allow keeps its existing reading.
-	if r.kind == capImage && r.b.onlyPrefixAllows(r.kind, r.value) && r.b.imageSiblingRestricted(r.value) {
+	if r.kind == capImage && r.b.onlyPrefixAllows(ctx, r.kind, r.value) && r.b.imageSiblingRestricted(r.value) {
 		return false
 	}
 	return true
@@ -789,10 +789,12 @@ func (b *capBatch) isRestricted(ctx context.Context, kind, value string) (bool, 
 
 // namedAllow reports whether the caller holds an allow naming value itself,
 // not a wildcard. Asked only after scan loaded the grants; restrictable kinds
-// are exact ids, so the compare is capValueMatches' exact arm.
-func (b *capBatch) namedAllow(kind, value string) bool {
+// are exact ids, so the compare is capValueMatches' exact arm. A row that
+// matches the caller only through an email that sign-in does not vouch for counts
+// for nothing here, as in scan (unverifiedEmailAllow).
+func (b *capBatch) namedAllow(ctx context.Context, kind, value string) bool {
 	for _, g := range b.byKind[kind] {
-		if g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == strings.TrimSpace(value) {
+		if g.Effect == types.CapabilityAllow && strings.TrimSpace(g.Value) == strings.TrimSpace(value) && !b.unverifiedEmailAllow(ctx, g) {
 			return true
 		}
 	}

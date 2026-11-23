@@ -111,10 +111,10 @@ describe("the provider editor's Available to", () => {
     expect(upsertGrantMock).not.toHaveBeenCalled();
   });
 
-  it("a new provider asks, starting at Everyone; Save creates it, then writes the list, then Only these", async () => {
+  it("a new provider asks, starting at Everyone; Save creates it restricted, then writes the list", async () => {
     const calls: string[] = [];
-    putMock.mockImplementation(async (doc: { providers: ModelProvider[] }) => {
-      calls.push(`put ${doc.providers.map((p) => p.id).join(",")}`);
+    putMock.mockImplementation(async (doc: { providers: ModelProvider[] }, _etag: unknown, opts?: { restricted?: boolean }) => {
+      calls.push(`put ${doc.providers.map((p) => p.id).join(",")} restricted=${String(opts?.restricted)}`);
       return { providers: doc, etag: '"e2"' };
     });
     upsertGrantMock.mockImplementation(async (g: { subject: string; capability: string; value: string }) =>
@@ -139,10 +139,10 @@ describe("the provider editor's Available to", () => {
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(calls).toEqual([
-      "put bloomberg-gateway",
+      "put bloomberg-gateway restricted=true",
       "grant portfolio-manager model_provider bloomberg-gateway",
-      "restrict model_provider bloomberg-gateway true",
     ]);
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it("a list written after another person signed in still names the person who saved the provider", async () => {
@@ -166,9 +166,9 @@ describe("the provider editor's Available to", () => {
 
     setExpectedPrincipal("b@example.com");
     saved(undefined);
-    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
     expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
-    expect(putAvailabilityMock.mock.calls[0][3]).toBe("a@example.com");
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
     setExpectedPrincipal("");
   });
 
@@ -194,7 +194,7 @@ describe("the provider editor's Available to", () => {
 
   it("the provider saved but the list didn't: stays open on the saved provider, with the server's sentence", async () => {
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
-    getAvailabilityMock.mockResolvedValue({ kind: "model_provider", value: "bloomberg-gateway", restricted: false, allowed_by: [] });
+    getAvailabilityMock.mockResolvedValue({ kind: "model_provider", value: "bloomberg-gateway", restricted: true, allowed_by: [] });
     const { onSaved, onClose } = renderEditor(null);
     await userEvent.click(screen.getByRole("button", { name: MODEL_PROVIDERS.KIND.anthropic_api_key }));
     const d = screen.getByRole("dialog");
@@ -207,12 +207,13 @@ describe("the provider editor's Available to", () => {
 
     expect(await within(d).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
     expect(within(d).getByText(UNKNOWN_TYPE)).toBeInTheDocument();
-    expect(within(d).getByText(AVAILABILITY.CREATE_PARTIAL_EVERYONE)).toBeInTheDocument();
+    expect(within(d).getByText(AVAILABILITY.CREATE_PARTIAL_RESTRICTED)).toBeInTheDocument();
+    expect(within(d).queryByText(AVAILABILITY.CREATE_PARTIAL_EVERYONE)).not.toBeInTheDocument();
     // Titled as the saved provider with its kind chip, the live control, and Remove.
     expect(within(d).getByRole("heading", { name: "Bloomberg gateway" })).toBeInTheDocument();
     expect(within(d).getByText(MODEL_PROVIDERS.KIND.anthropic_api_key)).toBeInTheDocument();
     await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalledWith("model_provider", "bloomberg-gateway"));
-    expect(await within(d).findByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    expect(await within(d).findByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
     expect(within(d).getByRole("button", { name: E.REMOVE })).toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
     expect(putAvailabilityMock).not.toHaveBeenCalled();

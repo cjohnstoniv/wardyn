@@ -139,10 +139,10 @@ describe("New policy asks who gets it (decision 4)", () => {
     return dialog;
   }
 
-  it("starts at Everyone; Create writes the policy, then the list, then Only these", async () => {
+  it("starts at Everyone; Create writes the policy restricted, then the list", async () => {
     const calls: string[] = [];
-    createPolicyMock.mockImplementation(async (name: string) => {
-      calls.push(`create ${name}`);
+    createPolicyMock.mockImplementation(async (name: string, _spec: unknown, opts?: { restricted?: boolean }) => {
+      calls.push(`create ${name} restricted=${String(opts?.restricted)}`);
       return POLICY;
     });
     upsertGrantMock.mockImplementation(async (g: { subject: string; capability: string; value: string }) =>
@@ -165,10 +165,21 @@ describe("New policy asks who gets it (decision 4)", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(calls).toEqual([
-      "create Read-only research",
+      "create Read-only research restricted=true",
       `grant portfolio-manager policy ${POLICY.id}`,
-      `restrict policy ${POLICY.id} true`,
     ]);
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("Everyone kept: the policy is created without the flag, with no list and no restriction", async () => {
+    createPolicyMock.mockResolvedValue(POLICY);
+    const dialog = await openNew();
+    await userEvent.click(within(dialog).getByRole("button", { name: /create policy/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(createPolicyMock).toHaveBeenCalledTimes(1);
+    expect(createPolicyMock.mock.calls[0][2]).toEqual({ restricted: false });
+    expect(upsertGrantMock).not.toHaveBeenCalled();
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it("a list written after another person signed in still names the person who created the policy", async () => {
@@ -188,9 +199,9 @@ describe("New policy asks who gets it (decision 4)", () => {
 
     setExpectedPrincipal("b@example.com");
     created(POLICY);
-    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
     expect(upsertGrantMock.mock.calls[0][1]).toBe("a@example.com");
-    expect(putAvailabilityMock.mock.calls[0][3]).toBe("a@example.com");
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
     setExpectedPrincipal("");
   });
 
@@ -212,9 +223,10 @@ describe("New policy asks who gets it (decision 4)", () => {
     expect(create).toBeEnabled();
   });
 
-  it("the policy saved but its list was refused: stays open on it, with the server's sentence and what holds now", async () => {
+  it("the policy saved but its list was refused: stays open on it, with the server's sentence and what was saved", async () => {
     createPolicyMock.mockResolvedValue(POLICY);
     upsertGrantMock.mockRejectedValue(new HttpError(400, UNKNOWN_TYPE));
+    getAvailabilityMock.mockImplementation(async () => ({ kind: "policy", value: POLICY.id, restricted: true, allowed_by: [], covered_by: [] }));
     const dialog = await openNew();
 
     await userEvent.click(within(dialog).getByRole("radio", { name: AVAILABILITY.ONLY }));
@@ -224,11 +236,12 @@ describe("New policy asks who gets it (decision 4)", () => {
 
     expect(await within(dialog).findByText(AVAILABILITY.CREATE_PARTIAL_TITLE)).toBeInTheDocument();
     expect(within(dialog).getByText(UNKNOWN_TYPE)).toBeInTheDocument();
-    expect(within(dialog).getByText(AVAILABILITY.CREATE_PARTIAL_EVERYONE)).toBeInTheDocument();
+    expect(within(dialog).getByText(AVAILABILITY.CREATE_PARTIAL_RESTRICTED)).toBeInTheDocument();
+    expect(within(dialog).queryByText(AVAILABILITY.CREATE_PARTIAL_EVERYONE)).not.toBeInTheDocument();
     expect(putAvailabilityMock).not.toHaveBeenCalled();
     // The live control on the saved policy, and the editor is now its edit.
     await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalledWith("policy", POLICY.id));
-    expect(await within(dialog).findByRole("radio", { name: AVAILABILITY.EVERYONE })).toBeChecked();
+    expect(await within(dialog).findByRole("radio", { name: AVAILABILITY.ONLY })).toBeChecked();
     expect(within(dialog).getByRole("heading", { name: "Edit policy" })).toBeInTheDocument();
     expect(createPolicyMock).toHaveBeenCalledTimes(1);
   });
