@@ -9,10 +9,14 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/api"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -181,5 +185,52 @@ func TestRunRetentionSweepTickAuditsAfterTheTermEnds(t *testing.T) {
 	assertRunRetentionRow(t, rec, 7, 30*24*time.Hour)
 	if rec.doneCtxs != 0 {
 		t.Fatal("the audit row was recorded on the cancelled tick context")
+	}
+}
+
+// Boot refuses a window inside the floor: WARDYN_RUN_HISTORY_RETENTION_DAYS=15 stops the server before any worker
+// starts, and 30 passes.
+func TestValidateBootPostureRefusesAShortRunHistoryWindow(t *testing.T) {
+	prevArgs, prevFlags := os.Args, flag.CommandLine
+	t.Cleanup(func() { os.Args = prevArgs; flag.CommandLine = prevFlags })
+	os.Args = []string{"wardynd-test"}
+	for _, tc := range []struct {
+		days    string
+		refused bool
+	}{{"15", true}, {"30", false}} {
+		t.Setenv("WARDYN_RUN_HISTORY_RETENTION_DAYS", tc.days)
+		resetFlags(t)
+		err := validateBootPosture(parseBootFlags(), tlsPosture{})
+		if got := err != nil && strings.Contains(err.Error(), "WARDYN_RUN_HISTORY_RETENTION_DAYS"); got != tc.refused {
+			t.Errorf("days %s: validateBootPosture = %v, want refused %v", tc.days, err, tc.refused)
+		}
+	}
+}
+
+// The boot wiring registers the run_retention sweep when a window is set, and not when it is unset.
+func TestStartBackgroundWorkersRegistersRunRetention(t *testing.T) {
+	for _, tc := range []struct {
+		days int
+		want bool
+	}{{0, false}, {30, true}} {
+		ctx, cancel := context.WithCancel(context.Background())
+		srv := api.New(api.Config{ImageBuilder: &fakeSweepImageBuilder{}, RunnerTarget: "none"})
+		zeroDur := time.Duration(0)
+		zeroInt, persistOff, days := 0, false, tc.days
+		f := &bootFlags{
+			runOutputPersist: &persistOff, autoStopInterval: &zeroDur, approvalExpiryInterval: &zeroDur,
+			approvalExpiryAfter: &zeroDur, recordingRetention: &zeroInt, runHistoryRetention: &days,
+		}
+		t.Setenv("WARDYN_GROUNDTRUTH_TOKEN_FILE", "")
+		ticks := sweephealth.New(sweephealth.NewMemStore(), "r1", nil)
+		startBackgroundWorkers(ctx, f, srv, nil, nil, store.PG{}, nil, nil, nil, nil, nil, ticks, nil)
+		got := false
+		for _, s := range ticks.Registered() {
+			got = got || s.Name == sweephealth.RunRetention
+		}
+		cancel()
+		if got != tc.want {
+			t.Errorf("days %d: run_retention registered = %v, want %v", tc.days, got, tc.want)
+		}
 	}
 }

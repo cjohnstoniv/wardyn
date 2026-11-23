@@ -386,3 +386,31 @@ func TestDeleteExpiredRunsBatchHasAStatementTimeoutPG(t *testing.T) {
 		t.Fatal("the cancelled batch deleted the run or left a tombstone")
 	}
 }
+
+// The pending-action arm holds a run only for another run's action: a run whose own actions chain (one of its
+// actions supersedes another of its own) is deleted with both rows in one statement.
+func TestDeleteExpiredRunsDeletesARunWhoseOwnActionsChainPG(t *testing.T) {
+	f := newActionFixture(t)
+	run := f.run(t)
+	ref := run.SandboxRef
+	endRun(t, f.pool, run.ID, types.RunKilled, 40)
+	first := uuid.New()
+	retentionExec(t, f.pool, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref) VALUES ($1, $2, $3, 'end', $4)`,
+		first, f.rn.ID, run.ID, ref)
+	retentionExec(t, f.pool, `INSERT INTO runner_pending_actions (id, runner_id, run_id, kind, ref, binding_version, owner, supersedes)
+		VALUES ($1, $2, $3, 'kill', $4, 1, $5, $6)`, uuid.New(), f.rn.ID, run.ID, ref, f.rn.Owner, first)
+
+	if n := deleteExpired(t, f.st, 500); n != 1 {
+		t.Fatalf("deleted %d runs, want 1", n)
+	}
+	if runExists(t, f.pool, run.ID) || tombstoneCount(t, f.pool, run.ID) != 1 {
+		t.Fatal("the run whose own actions chain was kept, or has no tombstone")
+	}
+	var left int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM runner_pending_actions WHERE run_id = $1`, run.ID).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatalf("%d of the run's actions are left", left)
+	}
+}
