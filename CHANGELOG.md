@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).
+- A `write:` requirement on a path inside a workspace folder that is on a person's runner is now checked by its text, like one on the folder itself. Before, the server checked a path inside such a folder against its own files ([#3913](https://github.com/cjohnstoniv/wardyn/issues/3913)).
+
+### Changed
+
+- On a run that attaches a workspace, an inline policy or policy overlay mount that the server refuses on its own files is now refused when the workspace is seeded (422 `workspace_seed_policy_conflict`), no longer with the policy (400 `inline_policy_invalid` or `policy_overlay_invalid`). A run that attaches no workspace is refused as before.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

@@ -205,6 +205,23 @@ func TestSources_MissingLocatorReportsLocatorError(t *testing.T) {
 	}
 }
 
+// The library door builds an unbound source: its body has no runner_id, so validateSourceWrite only ever
+// sees a folder on this host and its host check is the right one. If the door ever takes a runner_id, that
+// check needs a bound branch.
+func TestSources_LibraryDoorTakesNoRunnerBinding(t *testing.T) {
+	h := newHarness(t)
+	fake := &sourcesEndpointFake{}
+	srv := New(baseTestConfig(h, fake))
+	body := `{"kind":"local_dir","locator":"/home/me/payments","runner_id":"` + uuid.NewString() + `"}`
+	w := do(t, srv, http.MethodPost, "/api/v1/sources", adminToken, body)
+	if w.Code != http.StatusBadRequest || wireReason(t, w) != reasonInvalidRequestBody {
+		t.Errorf("code = %d reason %q, want 400 %s; body=%s", w.Code, wireReason(t, w), reasonInvalidRequestBody, w.Body.String())
+	}
+	if len(fake.lib.sources) != 0 {
+		t.Errorf("the library holds %d sources, want none", len(fake.lib.sources))
+	}
+}
+
 func TestSources_ContractRefusesIntegrationKeys(t *testing.T) {
 	h := newHarness(t)
 	srv := New(baseTestConfig(h, &sourcesEndpointFake{}))

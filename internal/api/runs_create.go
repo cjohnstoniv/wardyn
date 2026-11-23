@@ -196,10 +196,18 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
-	// A folder seeded from a source bound to a runner is on that machine: only its text is checked.
+	// Where each folder is. A mount the seed added is held by the workspace that seeded it; a mount the
+	// policy names is held by the attached workspaces that carry its folder, the holders the run gate reads
+	// (validateWorkspaceSources). A folder its holders bind to one runner is on that machine, and only its
+	// text is checked. Every other mount, a policy folder no attached workspace holds included, is checked
+	// on this host.
 	onRunner := map[int]bool{}
-	for i, m := range newMounts {
-		if rid, ok := mountBinding(seed.mountOwners[i:i+1], m.Source); ok && rid != nil {
+	for i, m := range spec.WorkspaceMounts {
+		holders := localDirHolders(seed.attached, m.Source)
+		if i < len(newMounts) {
+			holders = seed.mountOwners[i : i+1]
+		}
+		if rid, ok := mountBinding(holders, m.Source); ok && rid != nil {
 			onRunner[i] = true
 		}
 	}

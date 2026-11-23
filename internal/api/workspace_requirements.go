@@ -169,7 +169,7 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 }
 
 // runnerBoundPath answers, for the workspace named by r's path, whether a path is
-// a folder bound to a runner. The workspace is read on the first question only,
+// a folder bound to a runner or a path inside one (inBoundFolder). The workspace is read on the first question only,
 // and a failed read answers no: the path then gets the full check on this host,
 // as before.
 func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
@@ -186,8 +186,7 @@ func (s *Server) runnerBoundPath(r *http.Request) func(string) bool {
 		if !read {
 			return false
 		}
-		rid, agree := mountBinding([]types.Workspace{ws}, path)
-		return agree && rid != nil
+		return inBoundFolder(ws, path)
 	}
 }
 
