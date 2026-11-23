@@ -66,6 +66,8 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
 	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
 	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
+	// The Walls view's routes.
+	"GET /api/v1/walls/topology": {"reads each unit's ceiling for its egress mode only (allowlist, allow-all, sealed or unknown); the boundary is served as its mode and restrictions as id and name, never a spec", ""},
 }
 
 // specCensus is the parsed source the route census reads.

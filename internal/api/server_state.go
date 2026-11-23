@@ -180,6 +180,7 @@ type Server struct {
 	scimState                        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState                    // the run lease sweep's process state (run_lease_server.go)
 	runEndState                      // the end loops' process state (run_end_loops.go)
+	wallsState                       // the Walls view's limiters and topology snapshots (walls_routes.go)
 	pause                pauseClocks // the pause sweep's process-local state (run_pause.go)
 	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
 	activity activitySignal

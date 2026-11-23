@@ -648,6 +648,7 @@ func (s *Server) routes() chi.Router {
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 			s.mountKeptMachineRoutes(r, operatorOnly) // kept_machines.go: a person's own kept machines; the super admin's list and delete
 			s.mountRecordingRoutes(r)
+			s.mountWallsRoutes(r) // walls_routes.go: the Walls view's topology, run walls and live streams
 		})
 
 		// Interactive attach (WebSocket). Its own group: browsers cannot put

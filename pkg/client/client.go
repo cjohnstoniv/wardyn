@@ -144,6 +144,7 @@
 //     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
+//   - /api/v1/walls          — the Walls view's topology and live stream, and /api/v1/runs/{id}/walls: the 3D view's reads, a console surface rather than tooling
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller

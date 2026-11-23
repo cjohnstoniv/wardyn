@@ -1487,6 +1487,17 @@ The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/p
 
 The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) answer `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals; they never carry `purge_after`. Suspend, reactivate and purge answer `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. `GET /admin/portal-lifecycle/status` answers `deactivated`, `pending`, `pending_suspensions` and `pending_purges`. A suspend with a positive `purge_after_seconds` is a super admin's; a security admin suspends without one. A purge refused because a reactivation committed first answers `person_not_suspended`. [The steps](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
 
+### The Walls view
+
+`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins; a unit admin reads only their own units' runs. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. The two stream routes answer 501 `walls_view_unavailable` until the live stream ships. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
+
+| Reason | Meaning |
+|---|---|
+| `walls_rate_limited` | (429): too many Walls view reads from one caller. Retry after the `Retry-After` seconds. |
+| `walls_snapshot_gone` | (409): the topology snapshot a continuation page named has expired or belongs to another caller; fetch the first page again. |
+| `walls_query_invalid` | (400): `window`, `edges`, `limit` or `cursor` is not a value the Walls view route takes. |
+| `walls_view_unavailable` | (501): this server does not serve that Walls view route yet, or its store cannot read decision rows. |
+
 ## Pending approval (governance writes)
 
 A deployment can require a second approver for governance writes: a covered write is

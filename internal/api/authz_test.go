@@ -650,6 +650,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
 	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
+	// The Walls view's routes.
+	"GET /api/v1/walls/topology": {class: classUnit},
+	"GET /api/v1/walls/stream":   {class: classUnit},
 	// Requests (elevation, image): the member router, so a group decider reaches them; who may see or decide a request is the approver table's, inside the handler.
 	"GET /api/v1/governance/requests":               {class: classMember},
 	"POST /api/v1/governance/requests":              {class: classMember},
@@ -941,6 +944,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// The Walls view's routes.
+	"GET /api/v1/runs/{id}/walls":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/walls/stream": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
@@ -1936,16 +1942,18 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// /runs/{id}/egress (tierSuper, as revive); 57 since the Walls view added
+		// GET /runs/{id}/walls and its stream.
+		if probed != 57 {
+			t.Errorf("probed %d classOwner routes, want 57 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 19 routes: GET /governance, the three unit writes, the two
-	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the six change routes.
+	// and refuses a member at the door. 21 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run, the six change routes,
+	// and the Walls topology and stream.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1964,8 +1972,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 19 {
-		t.Errorf("probed %d classUnit routes, want 19", unit)
+	if unit != 21 {
+		t.Errorf("probed %d classUnit routes, want 21", unit)
 	}
 
 	var sec, super int
