@@ -148,57 +148,47 @@ func raisingProbe(kind string) (types.GovernanceChange, bool) {
 	return types.GovernanceChange{}, false
 }
 
-// kindPools is who can approve a kind: its ordinary pool (for a unit kind, the unit with the fewest people,
-// named by unitName), and, for a kind with a raising probe, the pool of the changes only a super admin decides.
-type kindPools struct {
-	ordinary poolResult
+// kindPool is one pool a kind is judged on: a unit's for a unit kind (named by unitName), the one pool of any
+// other kind, or, raised, the pool of its changes that only a super admin decides.
+type kindPool struct {
+	res      poolResult
 	unitName string
-	raised   *poolResult
+	raised   bool
 }
 
-// reported is the pool the page shows: the one with fewer people, the raised one on a tie.
-func (k kindPools) reported() (res poolResult, unitName string, raised bool) {
-	if k.raised != nil && len(k.raised.Eligible) <= len(k.ordinary.Eligible) {
-		return *k.raised, "", true
-	}
-	return k.ordinary, k.unitName, false
-}
-
-// whoCanApprove counts who can approve kind on the loaded inputs: every unit for a unit kind (uuid.Nil when there is
-// none), one pool for any other kind, and the raising probe's pool through poolForChange.
-func (s *Server) whoCanApprove(in *poolInputs, units []types.GovernanceUnit, kind string) (kindPools, error) {
-	var out kindPools
-	if isUnitCountKind(kind) && len(units) > 0 {
-		for i, u := range units {
-			res, err := s.poolForKind(in, kind, u.ID)
-			if err != nil {
-				return kindPools{}, err
-			}
-			if i == 0 || len(res.Eligible) < len(out.ordinary.Eligible) {
-				out.ordinary, out.unitName = res, u.Name
-			}
-		}
-	} else {
-		res, err := s.poolForKind(in, kind, uuid.Nil)
-		if err != nil {
-			return kindPools{}, err
-		}
-		out.ordinary = res
-	}
+// whoCanApprove counts who can approve kind on the loaded inputs: the raising probe's pool through
+// poolForChange first, then every unit for a unit kind, else the kind's one pool (uuid.Nil).
+func (s *Server) whoCanApprove(in *poolInputs, units []types.GovernanceUnit, kind string) ([]kindPool, error) {
+	var out []kindPool
 	if probe, ok := raisingProbe(kind); ok {
 		res, err := s.poolForChange(in, probe, nil)
 		if err != nil {
-			return kindPools{}, err
+			return nil, err
 		}
-		out.raised = &res
+		out = append(out, kindPool{res: res, raised: true})
+	}
+	if !isUnitCountKind(kind) || len(units) == 0 {
+		res, err := s.poolForKind(in, kind, uuid.Nil)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, kindPool{res: res}), nil
+	}
+	for _, u := range units {
+		res, err := s.poolForKind(in, kind, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, kindPool{res: res, unitName: u.Name})
 	}
 	return out, nil
 }
 
-// poolStatus compares a pool with a count: ok with someone to spare, exact, else cant_confirm when someone
-// cannot be counted and short when everyone was.
+// poolStatus compares the people who can decide a change of the kind with its count. The proposer of a change
+// is in their own kind's pool and never decides it, so Count is the pool less one: ok with someone to spare,
+// exact, else cant_confirm when someone cannot be counted and short when everyone was.
 func poolStatus(res poolResult, required int) approvalCountsPool {
-	p := approvalCountsPool{Count: len(res.Eligible)}
+	p := approvalCountsPool{Count: max(len(res.Eligible)-1, 0)}
 	switch {
 	case p.Count > required:
 		p.Status = poolStatusOK
@@ -212,9 +202,23 @@ func poolStatus(res poolResult, required int) approvalCountsPool {
 	return p
 }
 
-// isShort reports a pool that is below the count with everyone counted.
-func isShort(res poolResult, required int) bool {
-	return poolStatus(res, required).Status == poolStatusShort
+// poolRank orders the statuses from the best to the worst.
+var poolRank = map[string]int{poolStatusOK: 0, poolStatusExact: 1, poolStatusCantConfirm: 2, poolStatusShort: 3}
+
+// worstPool is the pool a kind is shown and judged on, and whether it is the raised one: the worst status
+// (short, then cant_confirm, then exact, then ok), the fewer people on a tie, then the first, so the raised
+// pool wins a full tie.
+func worstPool(pools []kindPool, required int) (approvalCountsPool, bool) {
+	var worst approvalCountsPool
+	var raised bool
+	for i, kp := range pools {
+		p := poolStatus(kp.res, required)
+		p.UnitName = kp.unitName
+		if r, w := poolRank[p.Status], poolRank[worst.Status]; i == 0 || r > w || r == w && p.Count < worst.Count {
+			worst, raised = p, kp.raised
+		}
+	}
+	return worst, raised
 }
 
 // approvalCountsDefault is the default row, or the minimum (at least 1) with no security rule.
@@ -310,7 +314,8 @@ func (s *Server) readApprovalCounts(ctx context.Context, fn func(rd approvalCoun
 	})
 }
 
-// approvalCountsViewOf is the page: the counts as stored, and for each kind who can approve it now.
+// approvalCountsViewOf is the page: the counts as stored, and for each kind who can approve it now, judged on
+// the count in force, the minimum when that is higher than the row.
 func (s *Server) approvalCountsViewOf(rd approvalCountsReads) (approvalCountsView, error) {
 	minimum := s.GovernanceMinApprovals()
 	state := approvalCountsState(rd.rows, minimum)
@@ -321,10 +326,9 @@ func (s *Server) approvalCountsViewOf(rd approvalCountsReads) (approvalCountsVie
 		if err != nil {
 			return approvalCountsView{}, err
 		}
-		res, unitName, raised := pools.reported()
+		pool, raised := worstPool(pools, max(minimum, rule.Required))
 		row := approvalCountsKind{Kind: kind, Own: own, Required: rule.Required, RequireSecurity: rule.RequireSecurity,
-			Approvers: approversOf(kind), Pool: poolStatus(res, rule.Required)}
-		row.Pool.UnitName = unitName
+			Approvers: approversOf(kind), Pool: pool}
 		if raised {
 			row.Approvers = approversSuperAdmin
 		}
@@ -398,31 +402,59 @@ func approvalCountsOutOfRange(c approvalCountsWrite, minimum int) string {
 	return ""
 }
 
-// approvalCountsUnreachable is the 422's sentence for a write, "" when it can be saved. It names each kind
-// the write gives a count above the people who can approve it, everyone counted: a kind it lists, and a kind
-// that follows a default above the minimum. A kind whose changes can move to the super-admin tier is judged
-// on both of its pools. It also refuses a write after which an edit to the counts could not pass: the
-// security admins and super admins, less the proposer, below the new highest count, everyone counted.
-func (s *Server) approvalCountsUnreachable(rd approvalCountsReads, c approvalCountsWrite) (string, error) {
-	minimum := s.GovernanceMinApprovals()
-	var short []string
+// countRefusals is the 422's sentences for a write c over the counts before it, in kind order. For a PUT
+// (recheck false) it judges each kind c lists and each kind that follows a default above the minimum: refused
+// when any of its pools is short, and, when c raises the kind, when one cannot be counted in full. For an
+// approval of a held edit (recheck true) it judges only the kinds c raises, and only for short.
+func (s *Server) countRefusals(in *poolInputs, units []types.GovernanceUnit, before, c approvalCountsWrite, minimum int, recheck bool) ([]string, error) {
+	var out []string
 	for _, kind := range approvalCountKinds() {
 		rule, own := kindCountOf(c, kind)
-		if !own && rule.Required <= minimum {
+		was, _ := kindCountOf(before, kind)
+		raises := rule.Required > max(minimum, was.Required)
+		if recheck && !raises || !own && rule.Required <= minimum {
 			continue
 		}
-		pools, err := s.whoCanApprove(rd.in, rd.units, kind)
+		pools, err := s.whoCanApprove(in, units, kind)
 		if err != nil {
-			return "", err
+			return nil, err
+		}
+		p, raised := worstPool(pools, rule.Required)
+		what := "it"
+		switch {
+		case raised:
+			what = "its changes that need a super admin"
+		case p.UnitName != "":
+			what = fmt.Sprintf("it in the unit %q", p.UnitName)
 		}
 		switch {
-		case pools.raised != nil && isShort(*pools.raised, rule.Required):
-			short = append(short, fmt.Sprintf("%s needs %d and only %d people can approve its changes that need a super admin.",
-				kindLabel(kind), rule.Required, len(pools.raised.Eligible)))
-		case isShort(pools.ordinary, rule.Required):
-			short = append(short, fmt.Sprintf("%s needs %d and only %d people can approve it.",
-				kindLabel(kind), rule.Required, len(pools.ordinary.Eligible)))
+		case p.Status == poolStatusShort:
+			out = append(out, fmt.Sprintf("%s needs %d approvals and only %s besides the proposer can approve %s.",
+				kindLabel(kind), rule.Required, peopleCount(p.Count), what))
+		case p.Status == poolStatusCantConfirm && raises && !recheck:
+			out = append(out, fmt.Sprintf("%s can't be raised to %d: only %s besides the proposer can be counted to approve %s, and someone who might can't be counted.",
+				kindLabel(kind), rule.Required, peopleCount(p.Count), what))
 		}
+	}
+	return out, nil
+}
+
+// peopleCount is n people in words: "1 person", "3 people".
+func peopleCount(n int) string {
+	if n == 1 {
+		return "1 person"
+	}
+	return fmt.Sprintf("%d people", n)
+}
+
+// approvalCountsUnreachable is the 422's sentence for a write, "" when it can be saved: countRefusals over the
+// counts stored now, and a write after which an edit to the counts could not pass: the security admins and
+// super admins, less the proposer, below the new highest count, everyone counted.
+func (s *Server) approvalCountsUnreachable(rd approvalCountsReads, c approvalCountsWrite) (string, error) {
+	minimum := s.GovernanceMinApprovals()
+	short, err := s.countRefusals(rd.in, rd.units, approvalCountsState(rd.rows, minimum), c, minimum, false)
+	if err != nil {
+		return "", err
 	}
 	edits, err := s.poolForKind(rd.in, govKindApprovalCounts, uuid.Nil)
 	if err != nil {
@@ -522,8 +554,8 @@ func (s *Server) handlePutApprovalCounts(w http.ResponseWriter, r *http.Request)
 }
 
 // applyApprovalCountsChange applies a held edit inside the decision transaction: the target lock, the counts as
-// they now stand compared with what the proposal reviewed, the counts re-checked against the minimum now, then
-// the write on q. The people who can approve are not counted again: the approvers are deciding.
+// they now stand compared with what the proposal reviewed, the counts re-checked against the minimum now, each
+// kind the edit raises re-checked against the people now, then the write on q. A refusal leaves the edit held.
 func applyApprovalCountsChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	ctx := r.Context()
 	var held approvalCountsWrite
@@ -540,11 +572,39 @@ func applyApprovalCountsChange(s *Server, r *http.Request, q store.Querier, ch t
 	if computeETag(storedApprovalCounts(rows)) != ch.BaseHash {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	if msg := approvalCountsOutOfRange(held, s.GovernanceMinApprovals()); msg != "" {
+	minimum := s.GovernanceMinApprovals()
+	if msg := approvalCountsOutOfRange(held, minimum); msg != "" {
 		return govApplied{}, writeRefusal(http.StatusBadRequest, reasonGovernanceApprovalCountsInvalid, "%s", msg)
+	}
+	msg, err := recheckRaisedCounts(s, ctx, q, approvalCountsState(rows, minimum), held, minimum)
+	if err != nil {
+		return govApplied{}, err
+	}
+	if msg != "" {
+		return govApplied{}, writeRefusal(http.StatusUnprocessableEntity, reasonGovernanceApprovalCountsUnreachable, "%s", msg)
 	}
 	if err := store.ReplaceGovernanceApprovalCountsQ(ctx, q, approvalCountsRows(held)); err != nil {
 		return govApplied{}, err
 	}
-	return govApplied{action: approvalCountsWriteAction, target: approvalCountsKey, data: approvalCountsAuditData(s.GovernanceMinApprovals(), held)}, nil
+	return govApplied{action: approvalCountsWriteAction, target: approvalCountsKey, data: approvalCountsAuditData(minimum, held)}, nil
+}
+
+// recheckRaisedCounts is an approval's re-check of a held edit: each kind it raises over the counts now stored,
+// judged on the people now. It is set in init because it reads the kinds table, whose row for the counts names
+// applyApprovalCountsChange.
+var recheckRaisedCounts func(s *Server, ctx context.Context, q store.Querier, before, held approvalCountsWrite, minimum int) (string, error)
+
+func init() { recheckRaisedCounts = (*Server).recheckRaised }
+
+func (s *Server) recheckRaised(ctx context.Context, q store.Querier, before, held approvalCountsWrite, minimum int) (string, error) {
+	in, err := s.loadPoolInputs(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	units, err := store.ListGovernanceUnitsQ(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	short, err := s.countRefusals(in, units, before, held, minimum, true)
+	return strings.Join(short, " "), err
 }

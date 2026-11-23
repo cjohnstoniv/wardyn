@@ -1122,7 +1122,7 @@ start.
 | `governance_change_proposer_inactive` | `POST /governance/changes/{id}/approve` (409): the last approval, while the person who proposed the change is deactivated. |
 | `governance_change_reason_required` | `POST /governance/changes/{id}/reject` (400): a change needing more approvals is rejected by someone other than its proposer, with no reason. |
 | `governance_change_approval_not_found` | `DELETE /governance/changes/{id}/approval` (404): the caller holds no approval of the change that counts. |
-| `governance_approval_counts_minimum_unset` | `PUT /governance/approval-counts` (409): `WARDYN_GOVERNANCE_MIN_APPROVALS` is unset, so every held change has one approver. |
+| `governance_approval_counts_minimum_unset` | `PUT /governance/approval-counts` (409): `WARDYN_GOVERNANCE_MIN_APPROVALS` is unset, so new held changes need one approver; a held change keeps the count it was proposed with. |
 | `governance_approval_counts_local_mode` | `PUT /governance/approval-counts` (503): local mode authenticates nobody, so no edit can be held for distinct people. |
 | `governance_approval_counts_invalid` | `PUT /governance/approval-counts` (400): a count below the minimum (or 1) or above 9, a kind the counts do not list, a kind with one decider, the counts' own kind, or a kind listed twice. |
 | `governance_approval_counts_unreachable` | `PUT /governance/approval-counts` (422), the admin token included: a count above the people who can approve its kind, or a highest count that the security admins other than the proposer could not reach on an edit to the counts. |

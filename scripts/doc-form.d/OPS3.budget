@@ -137,7 +137,7 @@ docs/operations/ownership-and-offboarding.md=2453 share=35 # 2453 measured (+29:
 # docs/operations/governance-writes.md 3974 adds 23 over 3951, measured: a held change to a unit itself is decided from above it.
 # docs/operations/governance-writes.md 4213 adds 1 over 4212, measured: `data_out`: data_out in the restriction knob list.
 # docs/operations/governance-writes.md 4556 adds 334 over 4222, measured: one file per platform (`--under`) and the deciders section.
-docs/operations/governance-writes.md=5398 share=35 # 5398 measured (+545: the several approvers section and the approvals commands); earlier: 4853
+docs/operations/governance-writes.md=5497 share=35 # 5497 measured (+99: what the approval counts refuse, counted without the proposer); earlier: 5398 measured (+545: the several approvers section and the approvals commands); earlier: 4853
 # docs/operations/governance-writes.md 4113 adds 162 over 3951, measured: the knobs a restriction can carry, the open-egress rule, and keeping the strictest floor.
 # docs/operations/governance-writes.md 4149 adds 36 over 4113, measured: a restriction binds a run that is already running.
 # docs/operations/governance-writes.md 3991 adds 40 over 3951, measured: the strict workspace pin and the component unit pin.

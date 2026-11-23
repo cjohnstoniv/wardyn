@@ -107,44 +107,58 @@ func peopleN(n int) []poolPerson {
 	return out
 }
 
-// TestPoolStatusAtEachBoundary: one more than the count is ok, the count is exact, one fewer is short, and
-// one fewer with someone uncountable is cant_confirm with the reason.
+// TestPoolStatusAtEachBoundary: the proposer never decides their own change, so a pool of the count plus two is
+// ok, the count plus one is exact, the count is short, and the count with someone uncountable is cant_confirm with
+// the reason; the count shown is the pool less one, never below 0.
 func TestPoolStatusAtEachBoundary(t *testing.T) {
 	const required = 3
 	for _, c := range []struct {
-		count       int
+		pool        int
 		uncountable []poolSource
 		want, why   string
 	}{
-		{required + 1, nil, poolStatusOK, ""},
-		{required, nil, poolStatusExact, ""},
-		{required - 1, nil, poolStatusShort, ""},
-		{required + 1, []poolSource{{Why: uncountableUnconfirmed, Count: 1}}, poolStatusOK, ""},
-		{required - 1, []poolSource{{Why: uncountableUnconfirmed, Count: 1}}, poolStatusCantConfirm, uncountableUnconfirmed},
-		{required - 1, []poolSource{{Why: uncountableTooMany}}, poolStatusCantConfirm, uncountableTooMany},
+		{required + 2, nil, poolStatusOK, ""},
+		{required + 1, nil, poolStatusExact, ""},
+		{required, nil, poolStatusShort, ""},
+		{0, nil, poolStatusShort, ""},
+		{required + 2, []poolSource{{Why: uncountableUnconfirmed, Count: 1}}, poolStatusOK, ""},
+		{required + 1, []poolSource{{Why: uncountableUnconfirmed, Count: 1}}, poolStatusExact, ""},
+		{required, []poolSource{{Why: uncountableUnconfirmed, Count: 1}}, poolStatusCantConfirm, uncountableUnconfirmed},
+		{required, []poolSource{{Why: uncountableTooMany}}, poolStatusCantConfirm, uncountableTooMany},
 	} {
-		got := poolStatus(poolResult{Eligible: peopleN(c.count), Uncountable: c.uncountable}, required)
-		if got.Status != c.want || got.Why != c.why || got.Count != c.count {
-			t.Errorf("count %d, uncountable %v: %+v, want %s %q", c.count, c.uncountable, got, c.want, c.why)
+		got := poolStatus(poolResult{Eligible: peopleN(c.pool), Uncountable: c.uncountable}, required)
+		if got.Status != c.want || got.Why != c.why || got.Count != max(c.pool-1, 0) {
+			t.Errorf("pool %d, uncountable %v: %+v, want %s %q", c.pool, c.uncountable, got, c.want, c.why)
 		}
 	}
 }
 
-// TestReportedPoolIsTheSmaller: the raised pool is reported when it is smaller or the same size, with no unit;
-// the ordinary pool, with its unit, when it is smaller.
-func TestReportedPoolIsTheSmaller(t *testing.T) {
+// TestWorstPoolIsShown: a kind is shown and judged on its worst pool: short beats cant_confirm beats exact beats
+// ok, the fewer people win a tie, and the raised pool (first) wins a full tie, with no unit name.
+func TestWorstPoolIsShown(t *testing.T) {
+	unconfirmed := []poolSource{{Why: uncountableUnconfirmed, Count: 1}}
+	pool := func(n int, unit string, raised bool, unc []poolSource) kindPool {
+		return kindPool{res: poolResult{Eligible: peopleN(n), Uncountable: unc}, unitName: unit, raised: raised}
+	}
+	const required = 2
 	for _, c := range []struct {
-		ordinary, raised int
-		wantRaised       bool
-	}{{4, 2, true}, {2, 2, true}, {2, 4, false}} {
-		raised := poolResult{Eligible: peopleN(c.raised)}
-		k := kindPools{ordinary: poolResult{Eligible: peopleN(c.ordinary)}, unitName: "Data", raised: &raised}
-		res, unit, isRaised := k.reported()
-		if isRaised != c.wantRaised || (isRaised && unit != "") || (!isRaised && unit != "Data") {
-			t.Errorf("ordinary %d raised %d: raised = %v unit = %q", c.ordinary, c.raised, isRaised, unit)
-		}
-		if want := min(c.ordinary, c.raised); len(res.Eligible) != want {
-			t.Errorf("ordinary %d raised %d: count %d, want %d", c.ordinary, c.raised, len(res.Eligible), want)
+		name       string
+		pools      []kindPool
+		wantStatus string
+		wantUnit   string
+		wantRaised bool
+	}{
+		{"short beats cant_confirm with fewer people", []kindPool{pool(2, "A", false, nil), pool(1, "B", false, unconfirmed)}, poolStatusShort, "A", false},
+		{"short in a larger unit beats cant_confirm", []kindPool{pool(1, "A", false, unconfirmed), pool(2, "B", false, nil)}, poolStatusShort, "B", false},
+		{"cant_confirm beats exact", []kindPool{pool(3, "A", false, nil), pool(2, "B", false, unconfirmed)}, poolStatusCantConfirm, "B", false},
+		{"exact beats ok", []kindPool{pool(9, "A", false, nil), pool(3, "B", false, nil)}, poolStatusExact, "B", false},
+		{"fewer people on a tie", []kindPool{pool(9, "A", false, nil), pool(5, "B", false, nil)}, poolStatusOK, "B", false},
+		{"the raised pool on a full tie", []kindPool{pool(4, "", true, nil), pool(4, "", false, nil)}, poolStatusOK, "", true},
+		{"a smaller ordinary pool", []kindPool{pool(4, "", true, nil), pool(3, "", false, nil)}, poolStatusExact, "", false},
+	} {
+		got, raised := worstPool(c.pools, required)
+		if got.Status != c.wantStatus || got.UnitName != c.wantUnit || raised != c.wantRaised {
+			t.Errorf("%s: %+v raised=%v, want %s %q raised=%v", c.name, got, raised, c.wantStatus, c.wantUnit, c.wantRaised)
 		}
 	}
 }
@@ -193,18 +207,18 @@ func putCounts(t *testing.T, srv *Server, body string) *httptest.ResponseRecorde
 }
 
 // TestPutApprovalCountsOrder: the minimum unset is a 409 and local mode a 503, each before the body is read,
-// the admin token included.
+// the admin token included; the 409 comes first.
 func TestPutApprovalCountsOrder(t *testing.T) {
 	const bad = `{"default":{"required":0},"kinds":[{"kind":"no_such_kind","required":1}]}`
 	if w := putCounts(t, countsServer(t, 0), bad); w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceApprovalCountsMinimumUnset {
 		t.Errorf("minimum unset = %d %s", w.Code, w.Body)
 	}
-	local := countsServer(t, 2, func(c *Config) {
-		c.LocalMode = true
-		c.LocalOperator = "local:alice"
-		c.OIDC = nil
-	})
-	for _, bearer := range []string{"", adminToken} {
+	localPut := func(minimum int, bearer string) *httptest.ResponseRecorder {
+		local := countsServer(t, minimum, func(c *Config) {
+			c.LocalMode = true
+			c.LocalOperator = "local:alice"
+			c.OIDC = nil
+		})
 		req := httptest.NewRequest(http.MethodPut, approvalCountsPath, strings.NewReader(bad))
 		req.Host = "127.0.0.1:8080"
 		req.RemoteAddr = "127.0.0.1:54321"
@@ -213,8 +227,15 @@ func TestPutApprovalCountsOrder(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		panicFails(t, local.Handler()).ServeHTTP(w, req)
-		if w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonGovernanceApprovalCountsLocalMode {
+		return w
+	}
+	for _, bearer := range []string{"", adminToken} {
+		if w := localPut(2, bearer); w.Code != http.StatusServiceUnavailable || errorReason(w) != reasonGovernanceApprovalCountsLocalMode {
 			t.Errorf("local mode (bearer %q) = %d %s, want 503 %s", bearer, w.Code, w.Body, reasonGovernanceApprovalCountsLocalMode)
+		}
+		// Local mode with the minimum unset is the 409: the minimum is checked first.
+		if w := localPut(0, bearer); w.Code != http.StatusConflict || errorReason(w) != reasonGovernanceApprovalCountsMinimumUnset {
+			t.Errorf("local mode, minimum unset (bearer %q) = %d %s, want 409 %s", bearer, w.Code, w.Body, reasonGovernanceApprovalCountsMinimumUnset)
 		}
 	}
 }

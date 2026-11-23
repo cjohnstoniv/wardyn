@@ -200,12 +200,12 @@ func TestPG_ApprovalCounts_OwnRowAndDefault(t *testing.T) {
 	}
 }
 
-// TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool: a unit kind reports the unit with the fewest people who can
-// approve it, by name.
+// TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool: with everyone counted, a unit kind reports the unit with the
+// fewest people who can approve it, by name, less the proposer.
 func TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
-	want := approvalCountsPool{Count: -1}
+	smallest, unitName := -1, ""
 	poolOn(t, e.srv, func(in *poolInputs) {
 		units, err := e.pg.ListGovernanceUnits(context.Background())
 		if err != nil {
@@ -216,26 +216,26 @@ func TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if want.Count < 0 || len(res.Eligible) < want.Count {
-				want = approvalCountsPool{Count: len(res.Eligible), UnitName: u.Name}
+			if smallest < 0 || len(res.Eligible) < smallest {
+				smallest, unitName = len(res.Eligible), u.Name
 			}
 		}
 	})
 	got := kindRow(t, e.counts(e.alice), govKindMembership).Pool
-	if got.Count != want.Count || got.UnitName != want.UnitName || got.UnitName == "" {
-		t.Errorf("membership pool = %+v, want %d people in %q", got, want.Count, want.UnitName)
+	if got.Count != max(smallest-1, 0) || got.UnitName != unitName || got.UnitName == "" {
+		t.Errorf("membership pool = %+v, want %d people less the proposer in %q", got, smallest, unitName)
 	}
 }
 
-// TestPG_ApprovalCounts_StatusAtEachBoundary: three security admins against a count of 2, 3 and 4; and a
-// truncated record makes a short count cant_confirm, but leaves an ample one ok.
+// TestPG_ApprovalCounts_StatusAtEachBoundary: three security admins, two besides any proposer, against a count of
+// 1, 2 and 3; and a truncated record makes a short count cant_confirm, but leaves an ample one ok.
 func TestPG_ApprovalCounts_StatusAtEachBoundary(t *testing.T) {
-	e := newApEnv(t, 2)
+	e := newApEnv(t, 1)
 	e.seedPeople()
-	for required, want := range map[int]string{2: poolStatusOK, 3: poolStatusExact, 4: poolStatusShort} {
+	for required, want := range map[int]string{1: poolStatusOK, 2: poolStatusExact, 3: poolStatusShort} {
 		e.requireCounts(govKindEgressBaseline, required, false)
-		if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != want || p.Count != 3 {
-			t.Errorf("required %d: pool %+v, want %s with 3", required, p, want)
+		if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != want || p.Count != 2 {
+			t.Errorf("required %d: pool %+v, want %s with 2", required, p, want)
 		}
 	}
 	e.record("sub-counts-partial", "partial@corp.example", []string{apGroupUsers}, nil, true)
@@ -243,21 +243,36 @@ func TestPG_ApprovalCounts_StatusAtEachBoundary(t *testing.T) {
 	if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != poolStatusCantConfirm || p.Why != uncountableUnconfirmed {
 		t.Errorf("short with a truncated record: %+v, want cant_confirm unconfirmed_people", p)
 	}
-	e.requireCounts(govKindEgressBaseline, 2, false)
+	e.requireCounts(govKindEgressBaseline, 1, false)
 	if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != poolStatusOK {
 		t.Errorf("ample with a truncated record: %+v, want ok", p)
 	}
 }
 
+// TestPG_ApprovalCounts_GetJudgesTheCountInForce: a stored count below a raised minimum reads as stored, and its
+// pool is judged on the minimum, which is what a held change of the kind needs.
+func TestPG_ApprovalCounts_GetJudgesTheCountInForce(t *testing.T) {
+	e := newApEnv(t, 1)
+	e.seedPeople()
+	e.requireCounts(govKindEgressBaseline, 2, false)
+	if k := kindRow(t, e.counts(e.alice), govKindEgressBaseline); k.Required != 2 || k.Pool.Status != poolStatusExact {
+		t.Errorf("at minimum 1: %+v, want 2 and exact", k)
+	}
+	e.srv.cfg.GovernanceMinApprovals = 3
+	if k := kindRow(t, e.counts(e.alice), govKindEgressBaseline); k.Required != 2 || k.Pool.Status != poolStatusShort {
+		t.Errorf("at minimum 3: %+v, want the row 2 judged on 3: short", k)
+	}
+}
+
 // TestPG_ApprovalCounts_DistinctHumans: two security-tier principals with one email in different case are one
-// person, so a count of 2 is short, not exact.
+// person, so nobody besides a proposer can approve: 0, not 1.
 func TestPG_ApprovalCounts_DistinctHumans(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.record("sub-counts-x1", "X@corp.example", []string{apGroupSec}, nil, false)
 	e.record("sub-counts-x2", "x@corp.example", []string{apGroupSec}, nil, false)
 	e.requireCounts(govKindEgressBaseline, 2, false)
-	if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != poolStatusShort || p.Count != 1 {
-		t.Errorf("pool = %+v, want short with 1 person", p)
+	if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != poolStatusShort || p.Count != 0 {
+		t.Errorf("pool = %+v, want short with 0 besides the proposer", p)
 	}
 }
 
@@ -270,24 +285,26 @@ func superEnv(t *testing.T) *apEnv {
 }
 
 // TestPG_ApprovalCounts_RunnerChangesCountSuperAdmins: a use policy that names a runner is a super admin's to
-// decide, so the page counts the two super admins, not the six security-tier people, and names their tier.
+// decide, so the page counts the two super admins (one besides the proposer), not the six security-tier people,
+// and names their tier.
 func TestPG_ApprovalCounts_RunnerChangesCountSuperAdmins(t *testing.T) {
 	e := superEnv(t)
 	e.requireCounts(govKindRunnerPoolUsePolicy, 3, false)
 	k := kindRow(t, e.counts(e.alice), govKindRunnerPoolUsePolicy)
-	if k.Pool.Status != poolStatusShort || k.Pool.Count != 2 || k.Approvers != approversSuperAdmin {
-		t.Errorf("runner_pool_use_policy = %+v, want short with 2 and super_admin", k)
+	if k.Pool.Status != poolStatusShort || k.Pool.Count != 1 || k.Approvers != approversSuperAdmin {
+		t.Errorf("runner_pool_use_policy = %+v, want short with 1 and super_admin", k)
 	}
 	// A super admin with no email on their sign-in record is still one more person.
 	e.record("sub-counts-root-noemail", "", []string{apGroupRoot}, nil, false)
-	if k := kindRow(t, e.counts(e.alice), govKindRunnerPoolUsePolicy); k.Pool.Count != 3 || k.Approvers != approversSuperAdmin {
-		t.Errorf("with an email-less super admin: %+v, want 3 super admins", k)
+	if k := kindRow(t, e.counts(e.alice), govKindRunnerPoolUsePolicy); k.Pool.Count != 2 || k.Approvers != approversSuperAdmin {
+		t.Errorf("with an email-less super admin: %+v, want 3 super admins, 2 besides the proposer", k)
 	}
 }
 
 // TestPG_ApprovalCounts_PutRefusesARaisedPoolThatIsShort: setting the use policy's count to 3 with two super
 // admins is a 422 for a person and for the admin token, though six security-tier people would pass the table
-// tier; at 2 it is saved.
+// tier. So is 2, which would leave a super admin's change with one approver besides its proposer (exact is the
+// most a write may set); with a third super admin, 2 is saved.
 func TestPG_ApprovalCounts_PutRefusesARaisedPoolThatIsShort(t *testing.T) {
 	e := superEnv(t)
 	body := func(n int) string {
@@ -298,15 +315,19 @@ func TestPG_ApprovalCounts_PutRefusesARaisedPoolThatIsShort(t *testing.T) {
 		"the admin token":  e.admin(http.MethodPut, approvalCountsPath, body(3)),
 	} {
 		if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonGovernanceApprovalCountsUnreachable ||
-			!strings.Contains(w.Body.String(), "Runner pool use policy needs 3 and only 2 people can approve its changes that need a super admin.") {
+			!strings.Contains(w.Body.String(), "Runner pool use policy needs 3 approvals and only 1 person besides the proposer can approve its changes that need a super admin.") {
 			t.Errorf("%s: %d %s, want 422 naming the raised case", who, w.Code, w.Body)
 		}
 	}
 	if n := e.countRows(); n != 0 {
 		t.Errorf("%d rows written by refused saves", n)
 	}
+	if w := e.admin(http.MethodPut, approvalCountsPath, body(2)); w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("at 2 with two super admins: %d %s, want 422", w.Code, w.Body)
+	}
+	e.record("sub-counts-root-3", "root-3@corp.example", []string{apGroupRoot}, nil, false)
 	if w := e.admin(http.MethodPut, approvalCountsPath, body(2)); w.Code != http.StatusOK {
-		t.Errorf("at 2: %d %s, want 200", w.Code, w.Body)
+		t.Errorf("at 2 with three super admins: %d %s, want 200", w.Code, w.Body)
 	}
 }
 
@@ -323,7 +344,7 @@ func TestPG_ApprovalCounts_PutRefusesAUnitKindOnlySuperAdminsCouldReach(t *testi
 	}
 	w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"governance_unit","required":3}]}`)
 	if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonGovernanceApprovalCountsUnreachable ||
-		!strings.Contains(w.Body.String(), "Governance unit needs 3 and only 2 people can approve its changes that need a super admin.") {
+		!strings.Contains(w.Body.String(), "Governance unit needs 3 approvals and only 1 person besides the proposer can approve its changes that need a super admin.") {
 		t.Errorf("governance_unit at 3 = %d %s, want 422 naming the raised case", w.Code, w.Body)
 	}
 }
@@ -406,8 +427,15 @@ func TestPG_ApprovalCounts_AdminTokenWritesDirectly(t *testing.T) {
 	if k := kindRow(t, v, govKindEgressBaseline); !k.Own || k.Required != 3 || !k.RequireSecurity || v.Highest != 3 {
 		t.Errorf("egress_baseline = %+v, highest %d, want its own 3 with the security rule", k, v.Highest)
 	}
-	if n := len(e.audits(approvalCountsWriteAction)); n != 1 {
-		t.Errorf("%d %s rows, want 1", n, approvalCountsWriteAction)
+	rows := e.audits(approvalCountsWriteAction)
+	if len(rows) != 1 {
+		t.Fatalf("%d %s rows, want 1", len(rows), approvalCountsWriteAction)
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil || len(data) != 3 ||
+		string(data["minimum"]) != "2" || string(data["default"]) != `{"required":2,"require_security":false}` ||
+		string(data["kinds"]) != `[{"kind":"egress_baseline","required":3,"require_security":true}]` {
+		t.Errorf("audit data = %s (%v), want exactly minimum, default and kinds", rows[0].Data, err)
 	}
 	if n := len(e.audits("governance.change.bypass")); n != 1 {
 		t.Errorf("%d bypass rows, want 1", n)
@@ -415,10 +443,12 @@ func TestPG_ApprovalCounts_AdminTokenWritesDirectly(t *testing.T) {
 }
 
 // TestPG_ApprovalCounts_ApprovalWritesTheRows: an approval of a held edit writes the rows; an edit whose rows
-// changed in between is stale.
+// changed in between is stale. A default of 2 over a minimum of 1 judges every kind, so three super admins sign
+// in: two besides the proposer of a super admin's change.
 func TestPG_ApprovalCounts_ApprovalWritesTheRows(t *testing.T) {
 	e := newApEnv(t, 1)
 	e.seedPeople()
+	e.people("sub-counts-root", apGroupRoot, 3)
 	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":2}]}`))
 	e.approve(e.bob, ch.ID, http.StatusOK)
 	if s := e.changeState(ch.ID); s != types.GovernanceChangeApplied || e.countRows() != 2 {
@@ -433,38 +463,95 @@ func TestPG_ApprovalCounts_ApprovalWritesTheRows(t *testing.T) {
 	}
 }
 
-// TestPG_ApprovalCounts_ApplyRechecksTheMinimum: a held edit proposed with counts of 2, then the minimum raised to
-// 3 before its last approval: the apply refuses it 400 governance_approval_counts_invalid, nothing is written and
-// the edit stays pending.
+// TestPG_ApprovalCounts_ApplyRechecksTheMinimum: a held edit of the default to 2, approved once at the minimum 2,
+// then the minimum raised to 3: the next approval is refused 400 governance_approval_counts_invalid naming the
+// default, nothing is written and the edit stays pending.
 func TestPG_ApprovalCounts_ApplyRechecksTheMinimum(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
-	e.record("sub-counts-dave", "dave@corp.example", []string{apGroupSec}, nil, false)
-	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":2}]}`))
-	e.srv.cfg.GovernanceMinApprovals = 3
+	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[]}`))
 	e.approve(e.bob, ch.ID, http.StatusOK)
-	e.approve(e.carol, ch.ID, http.StatusOK)
-	dave := ssoSession(t, "sub-counts-dave", "dave@corp.example", oidc.RoleSecurityAdmin)
-	if w := e.call(dave, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonGovernanceApprovalCountsInvalid {
-		t.Errorf("last approval = %d %s, want 400 %s", w.Code, w.Body, reasonGovernanceApprovalCountsInvalid)
+	e.srv.cfg.GovernanceMinApprovals = 3
+	if w := e.call(e.carol, http.MethodPost, approvePath(ch.ID), ""); w.Code != http.StatusBadRequest || wireReason(t, w) != reasonGovernanceApprovalCountsInvalid ||
+		!strings.Contains(w.Body.String(), "The default count must be from 3 to 9.") {
+		t.Errorf("approval after the minimum rose = %d %s, want 400 %s naming the default", w.Code, w.Body, reasonGovernanceApprovalCountsInvalid)
 	}
 	if s := e.changeState(ch.ID); s != types.GovernanceChangePending || e.countRows() != 0 {
 		t.Errorf("state %s with %d rows, want pending with none", s, e.countRows())
 	}
 }
 
-// TestPG_ApprovalCounts_ApprovalDoesNotCountPeopleAgain: a held edit whose pool shrank below its count after the
-// proposal (a super admin deactivated) is applied by its last approval: the approvers are deciding.
+// TestPG_ApprovalCounts_ApprovalDoesNotCountPeopleAgain: a held edit that raises no kind, whose pool shrank below
+// its count after the proposal (a super admin deactivated), is applied by its last approval: only a raise is
+// re-counted.
 func TestPG_ApprovalCounts_ApprovalDoesNotCountPeopleAgain(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
-	e.people("sub-counts-root", apGroupRoot, 2)
+	e.people("sub-counts-root", apGroupRoot, 3)
 	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"role_mapping","required":2}]}`))
-	e.deactivate("sub-counts-root-2")
+	e.deactivate("sub-counts-root-3")
 	e.approve(e.bob, ch.ID, http.StatusOK)
 	e.approve(e.carol, ch.ID, http.StatusOK)
 	if s := e.changeState(ch.ID); s != types.GovernanceChangeApplied || e.countRows() != 2 {
 		t.Errorf("state %s with %d rows, want applied with 2", s, e.countRows())
+	}
+}
+
+// TestPG_ApprovalCounts_ApplyRechecksARaisedKind: a held edit that raises role_mapping to 3 with four super
+// admins (three besides the proposer), then one deactivated: the approval re-counts the raised kind and refuses
+// it 422 with the same sentence, nothing is written and the edit stays pending.
+func TestPG_ApprovalCounts_ApplyRechecksARaisedKind(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	e.people("sub-counts-root", apGroupRoot, 4)
+	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"role_mapping","required":3}]}`))
+	e.deactivate("sub-counts-root-4")
+	w := e.call(e.bob, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonGovernanceApprovalCountsUnreachable ||
+		!strings.Contains(w.Body.String(), "Role mapping needs 3 approvals and only 2 people besides the proposer can approve it.") {
+		t.Errorf("approval after a super admin left = %d %s, want 422 naming role_mapping", w.Code, w.Body)
+	}
+	if s := e.changeState(ch.ID); s != types.GovernanceChangePending || e.countRows() != 0 {
+		t.Errorf("state %s with %d rows, want pending with none", s, e.countRows())
+	}
+}
+
+// TestPG_ApprovalCounts_DefaultAboveTheMinimumIsJudged: a default above the minimum judges every kind that follows
+// it, so with no super admin signed in a default of 3 is refused naming role_mapping; a default at the minimum
+// judges none of them and is saved.
+func TestPG_ApprovalCounts_DefaultAboveTheMinimumIsJudged(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	e.people("sub-counts-sec", apGroupSec, 2) // five security admins, so edits to the counts stay possible
+	w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":3},"kinds":[]}`)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "Role mapping needs 3 approvals and only 0 people besides the proposer can approve it.") {
+		t.Errorf("default 3 = %d %s, want 422 naming role_mapping", w.Code, w.Body)
+	}
+	if w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[]}`); w.Code != http.StatusOK {
+		t.Errorf("default at the minimum = %d %s, want 200", w.Code, w.Body)
+	}
+}
+
+// TestPG_ApprovalCounts_UncountablePoolRefusesOnlyARaise: with a truncated sign-in record, three security admins
+// cannot be confirmed for a count of 3: raising egress_baseline to it is a 422 with the cant_confirm sentence, and
+// the edit check is skipped as well; the same count already stored is saved again, and so is a lower one.
+func TestPG_ApprovalCounts_UncountablePoolRefusesOnlyARaise(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	e.record("sub-counts-partial", "partial@corp.example", []string{apGroupUsers}, nil, true)
+	const at3 = `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":3}]}`
+	w := e.admin(http.MethodPut, approvalCountsPath, at3)
+	if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonGovernanceApprovalCountsUnreachable ||
+		!strings.Contains(w.Body.String(), "Egress baseline can't be raised to 3: only 2 people besides the proposer can be counted to approve it") ||
+		strings.Contains(w.Body.String(), "Edits to these counts") {
+		t.Errorf("raise on an uncountable pool = %d %s, want 422 with only the cant_confirm sentence", w.Code, w.Body)
+	}
+	e.requireCounts(govKindEgressBaseline, 3, false)
+	if w := e.admin(http.MethodPut, approvalCountsPath, at3); w.Code != http.StatusOK {
+		t.Errorf("the stored count again = %d %s, want 200", w.Code, w.Body)
+	}
+	if w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":2}]}`); w.Code != http.StatusOK {
+		t.Errorf("a lower count = %d %s, want 200", w.Code, w.Body)
 	}
 }
 

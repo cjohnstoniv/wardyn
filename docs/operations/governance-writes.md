@@ -306,9 +306,12 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 **How many approvals each kind needs.** `GET` and `PUT /governance/approval-counts` (security admins) read and set each kind's count and whether one approver must be a security admin.
 
 - A count is from the minimum to 9. A kind with no count of its own follows the default.
-- A count above the people who can approve its kind is refused (`422` `governance_approval_counts_unreachable`), for every caller.
-- Changes that name a runner, and unit changes that set a mount's host path, are approved by super admins only, so the page counts whichever pool is smaller.
-- A save is refused when the security admins other than its proposer could not approve the next edit at the highest count, so the counts can never lock themselves.
+- The proposer never approves their own change, so a kind's pool is counted without one person. The page judges each kind on the count in force: the minimum when it is higher than the stored count.
+- A save is refused (`422` `governance_approval_counts_unreachable`), for every caller, when a count it sets is above that pool, everyone counted. A unit kind is refused when any unit is short, and the page shows its worst unit.
+- When someone can't be counted, a save that raises a kind's count is refused; one that keeps or lowers it is saved.
+- Changes that name a runner, and unit changes that set a mount's host path, are approved by super admins only, so both pools are counted.
+- Each approval of a held edit counts the people again for every kind it raises, and refuses with the same `422` while one is short. The edit stays held.
+- A save is refused when the security admins other than its proposer could not approve the next edit at the highest count, everyone counted.
 - A person's edit is always held for the highest count in force, whatever the switch says. The admin token writes directly, recorded as a bypass.
 - With the minimum unset the `PUT` is refused (`409`), and in local mode too (`503`).
 
