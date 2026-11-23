@@ -225,6 +225,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	leaderGo(rootCtx, leader, "service.grant.cleanup", srv.RunServiceGrantCleanup)
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
+	startRunScheduleSweeper(rootCtx, leader, srv, runScheduleSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
 	// Every replica retries the owed audit rows of a release of the legacy Docker drives, with portals on or off.
