@@ -27,7 +27,7 @@
 //   2. Cookie-tossing outbound: a sandbox response whose Set-Cookie uses a
 //      wardyn_* name (here wardyn_ui_sess, an authentication-attack cookie) is
 //      DROPPED before it reaches the operator's browser, while the app's own
-//      cookie survives — uiStripOutbound (internal/api/uigateway.go). If the
+//      cookie survives — uiStripOutbound (internal/api/uigateway_proxy.go). If the
 //      strip regresses, the sandbox can overwrite the relay session cookie and
 //      the test FAILS.
 
