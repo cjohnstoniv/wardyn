@@ -2654,7 +2654,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_PROBE_CONNECT_TIMEOUT` | int (seconds) | `5` | redirectProbeScript's curl `--connect-timeout` for both probe legs. Test-only knob so a test that deliberately stalls a probe (an accept-and-hold listener) can shrink it instead of waiting out the real 5s per curl — unset in production |
 | `WARDYN_PROBE_MAX_TIME` | int (seconds) | `15` | redirectProbeScript's curl `--max-time` for both probe legs. Test-only knob, same reason as `WARDYN_PROBE_CONNECT_TIMEOUT` above — unset in production |
 | `WARDYN_SCAN_ONLY` | bool | (unset) | scan-only run flag |
-| `WARDYN_ASSISTANT` | bool | (unset) | `1` marks the run of an assistant session, set by dispatch only, never on a workspace or source run (`applyDispatchModeEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). The run carries the session's turns instead of an agent task |
+| `WARDYN_ASSISTANT` | bool | (unset) | `1` marks the run of an assistant session, set by dispatch only, never on a workspace or source run (`applyDispatchModeEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)) |
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` | base64 | (unset) | captured AWS SSO session as a synthetic `~/.aws`, materialized by `agent-run`. Always a placeholder in plain env with no token; the sign-in token stays at the proxy. The resident form that made it a secret was removed in 0.10.0 |
