@@ -177,7 +177,6 @@ func (a *Authenticator) discoverProvider(ctx context.Context) (*providerState, e
 	groupsScopeUnrequested := providerGatesGroupsScope(provider, a.oauth2.Scopes)
 	warnUnrequestedGroupsScope(groupsScopeUnrequested, a.oauth2.Scopes, cfg)
 	var doc struct {
-		Issuer      string   `json:"issuer"`
 		JWKSURI     string   `json:"jwks_uri"`
 		SigningAlgs []string `json:"id_token_signing_alg_values_supported"`
 	}
@@ -200,10 +199,12 @@ func (a *Authenticator) discoverProvider(ctx context.Context) (*providerState, e
 	}
 	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(idpClient))
 	return &providerState{
-		endpoint:               endpoint,
-		verifier:               provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID}),
-		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
-		issuer:                 doc.Issuer,
+		endpoint:        endpoint,
+		verifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID}),
+		subjectVerifier: provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
+		// The configured issuer, which go-oidc's own verifiers expect too: under a split-horizon issuer the
+		// internal document may name another value, and the held-logout drain must accept the public one.
+		issuer:                 cfg.IssuerURL,
 		jwksURL:                doc.JWKSURI,
 		signingAlgs:            doc.SigningAlgs,
 		httpClient:             idpClient,

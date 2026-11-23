@@ -118,6 +118,8 @@ type logoutQueue struct {
 	// rlCount and rlStart are the rate-limited refusals not yet summarised, and when the window began.
 	rlCount int
 	rlStart time.Time
+	// rlLast is when a summary was last emitted from a refusal.
+	rlLast time.Time
 }
 
 func (q *logoutQueue) clock() time.Time {
@@ -172,8 +174,10 @@ func (a *Authenticator) NoteLogoutRateLimited(ctx context.Context) {
 	}
 	var n int
 	var from time.Time
-	if now.Sub(q.rlStart) >= logoutRateSummaryEvery {
+	// The first refusal of a pending run is summarised at once, so a burst followed by quiet is still on record.
+	if q.rlLast.IsZero() || now.Sub(q.rlLast) >= logoutRateSummaryEvery {
 		n, from = q.takeRateWindowLocked()
+		q.rlLast = now
 	}
 	q.mu.Unlock()
 	q.emitRateSummary(ctx, n, from, now)
@@ -381,10 +385,10 @@ func (a *Authenticator) drainAndPublish(ctx context.Context, st *providerState) 
 		if len(q.entries) == 0 {
 			// Under the mutex, so no token arrives between the last drain and the publish.
 			a.prov.CompareAndSwap(nil, st)
+			a.pending.Store(false)
 			n, from := q.takeRateWindowLocked()
 			q.mu.Unlock()
 			q.emitRateSummary(ctx, n, from, q.clock())
-			a.pending.Store(false)
 			return nil
 		}
 		e := q.entries[0]
@@ -441,7 +445,7 @@ func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *g
 
 func (a *Authenticator) logoutReserved(sub string) bool {
 	rf := a.logouts.reserved.Load()
-	return rf != nil && (*rf)(sub)
+	return rf != nil && *rf != nil && (*rf)(sub)
 }
 
 func (a *Authenticator) applyHeld(ctx context.Context, sub string, e logoutEntry) error {

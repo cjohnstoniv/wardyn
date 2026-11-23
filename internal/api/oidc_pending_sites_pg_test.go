@@ -334,8 +334,9 @@ func TestBackchannelPending_BurstExemptBounded(t *testing.T) {
 	if st := pc.auth.LogoutQueueStats(); st.RateLimited < 20-int(backchannelLogoutBurst)-1 {
 		t.Errorf("RateLimited = %d, want the rest of the 20 malformed POSTs counted", st.RateLimited)
 	}
-	if n := len(rowsOf(rec, "session.revoke_hold.coalesce")); n != 0 {
-		t.Errorf("%d summary rows inside the first minute, want none until the minute passes or the publish", n)
+	// The first refusal is summarised at once; the rest wait for the minute or the publish.
+	if n := len(rowsOf(rec, "session.revoke_hold.coalesce")); n != 1 {
+		t.Errorf("%d summary rows inside the first minute, want the one for the first refusal", n)
 	}
 	// With the queue full the limiter applies as at v0.10.2: the 429s are counted, and the publish records them once.
 	for i := 20; i < oidc.LogoutQueueCap; i++ {
@@ -352,8 +353,8 @@ func TestBackchannelPending_BurstExemptBounded(t *testing.T) {
 		t.Errorf("429s %d, counted %d; want every 429 while pending counted", got429, pc.auth.LogoutQueueStats().RateLimited-before)
 	}
 	pc.recoverProvider(t)
-	if n := len(rowsOf(rec, "session.revoke_hold.coalesce")); n != 1 {
-		t.Errorf("summary rows after the publish = %d, want exactly one", n)
+	if n := len(rowsOf(rec, "session.revoke_hold.coalesce")); n != 2 {
+		t.Errorf("summary rows after the publish = %d, want the first-refusal row and the publish row", n)
 	}
 	for _, ev := range rowsOf(rec, "session.revoke_hold.coalesce") {
 		if ev.Target != backchannelLogoutTarget || ev.Outcome != "failure" {
@@ -362,7 +363,25 @@ func TestBackchannelPending_BurstExemptBounded(t *testing.T) {
 	}
 }
 
-// P4b (P3-1-4): an anonymous caller who fills the queue with well-formed junk leaves a genuine logout recorded as
+// A flood of well-formed tokens whose sub is a reserved principal is charged to the limiter like malformed ones:
+// the hold rows it writes are bounded, and none takes a queue place.
+func TestBackchannelPending_ReservedFloodBounded(t *testing.T) {
+	rev := &fakeSessionRevocations{}
+	pc := newPendingConsole(t, rev)
+	srv, rec := pendingServer(t, pc, rev)
+	for i := 0; i < 50; i++ {
+		postHeldLogout(t, srv, pc.token(t, fmt.Sprintf("subject:x%d", i), fmt.Sprintf("jr%d", i), nil))
+	}
+	if st := pc.auth.LogoutQueueStats(); st.Held != 0 {
+		t.Errorf("held %d, want none: a reserved sub takes no place", st.Held)
+	}
+	n := countState(holdStates(t, rec), "refused_reserved")
+	if n < 1 || n > int(backchannelLogoutBurst)+1 {
+		t.Errorf("refused_reserved rows = %d, want between 1 and %d for 50 posts", n, int(backchannelLogoutBurst)+1)
+	}
+}
+
+// P4b: an anonymous caller who fills the queue with well-formed junk leaves a genuine logout recorded as
 // refused_queue_full with its own hash, not held.
 func TestBackchannelPending_CrowdOutRecorded(t *testing.T) {
 	rev := &fakeSessionRevocations{}

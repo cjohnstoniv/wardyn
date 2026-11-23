@@ -192,7 +192,7 @@ func TestLogoutQueue_PrecheckRefusals(t *testing.T) {
 	}
 }
 
-// B10-F2: a reserved sub is refused at receipt, takes no slot, and carries no sub in its event.
+// A reserved sub is refused at receipt, takes no slot, and carries no sub in its event.
 func TestLogoutQueue_ReservedRefusedAtReceipt(t *testing.T) {
 	p := newPendingEnv(t)
 	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
@@ -554,7 +554,7 @@ func TestLogoutQueue_DrainPublishRace(t *testing.T) {
 	}
 }
 
-// P7 (R2-1-5): a handler that read "not published", then lost the race to the final drain and publish, serves
+// P7: a handler that read "not published", then lost the race to the final drain and publish, serves
 // its token on the discovered path instead of queueing it behind a drain that is over.
 func TestLogoutQueue_EnqueueRechecksUnderMutex(t *testing.T) {
 	p := newPendingEnv(t)
@@ -582,27 +582,65 @@ func TestLogoutQueue_RateLimitedSummaryOncePerMinute(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		p.auth.NoteLogoutRateLimited(context.Background())
 	}
-	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 0 {
-		t.Errorf("a summary inside the first minute: %v", p.sink.states())
+	// The first refusal is summarised at once; the other 49 wait for the minute.
+	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 1 || p.sink.events[0].Count != 1 {
+		t.Fatalf("events %+v, want one summary of 1 inside the first minute", p.sink.events)
 	}
 	now = now.Add(61 * time.Second)
 	p.auth.NoteLogoutRateLimited(context.Background())
-	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 1 || p.sink.events[0].Count != 51 {
-		t.Fatalf("events %+v, want one summary of 51", p.sink.events)
+	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 2 || p.sink.events[1].Count != 50 {
+		t.Fatalf("events %+v, want a second summary of 50", p.sink.events)
 	}
 	p.auth.NoteLogoutRateLimited(context.Background())
 	p.recover()
 	if err := p.auth.Discover(p.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 2 || p.sink.events[1].Count != 1 {
-		t.Errorf("events %+v, want a second summary of 1 at the publish", p.sink.events)
+	if p.sink.count(writoidc.LogoutRateLimitedSummary) != 3 || p.sink.events[2].Count != 1 {
+		t.Errorf("events %+v, want a third summary of 1 at the publish", p.sink.events)
 	}
-	if got := strings.Count(logs.String(), "refused as rate limited"); got != 2 {
-		t.Errorf("ERROR lines = %d, want one per summary row (2)", got)
+	if got := strings.Count(logs.String(), "refused as rate limited"); got != 3 {
+		t.Errorf("ERROR lines = %d, want one per summary row (3)", got)
 	}
 	if st := p.auth.LogoutQueueStats(); st.RateLimited != 52 {
 		t.Errorf("RateLimited = %d, want 52", st.RateLimited)
+	}
+}
+
+// A nil reserved func is an accepted argument: draining a genuine held logout through it does not panic.
+func TestLogoutQueue_NilReservedFuncDrainsWithoutPanic(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(nil, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.logoutToken(t, "pairwise-1", nil)), http.StatusServiceUnavailable)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if st := p.auth.LogoutQueueStats(); st.Applied != 1 || st.Held != 0 {
+		t.Errorf("stats = %+v, want the logout applied", st)
+	}
+}
+
+// Under a split-horizon issuer the internal discovery document may name another issuer than the public one the
+// provider puts in its tokens: a genuine held logout is still applied, not dropped as unverifiable.
+func TestLogoutQueue_SplitHorizonIssuerApplied(t *testing.T) {
+	const public = "https://idp.public.example"
+	p := newPendingEnv(t, func(c *writoidc.Config) {
+		c.InternalIssuerURL = c.IssuerURL // the test provider's own URL; its document names that issuer
+		c.IssuerURL = public
+	})
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	tok := p.env.logoutToken(t, "pairwise-1", func(c map[string]any) { c["iss"] = public })
+	wantStatus(t, "a logout while pending", holdToken(t, h, tok), http.StatusServiceUnavailable)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if st := p.auth.LogoutQueueStats(); st.Applied != 1 || st.Unverifiable != 0 || st.Held != 0 {
+		t.Errorf("stats = %+v, want the genuine logout applied and none unverifiable", st)
+	}
+	if len(p.sink.applied) != 1 || !strings.HasPrefix(p.sink.applied[0], "pairwise-1:") {
+		t.Errorf("applied %v, want [pairwise-1]", p.sink.applied)
 	}
 }
 

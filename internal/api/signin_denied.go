@@ -130,8 +130,8 @@ type logoutQueueSink struct{ s *Server }
 // Noted writes one session.revoke.hold row per queued, refused or unverifiable logout, and one
 // session.revoke_hold.coalesce row per rate-limit summary. The target is never a person and never caller text:
 // logout_token:<sha256 of the token>, or the fixed route name when no token was posted. The unverified sub is
-// data.sub_unverified, which the seal stores as a sponsor field. A malformed POST that came in under the
-// pending exemption is charged to the limiter here; past it, it writes no row and is counted as rate limited.
+// data.sub_unverified, which the seal stores as a sponsor field. A malformed POST, or one whose sub is reserved,
+// that came in under the pending exemption is charged to the limiter here; past it, it writes no row and is counted as rate limited.
 func (k logoutQueueSink) Noted(ctx context.Context, ev oidc.LogoutQueueEvent) {
 	s := k.s
 	switch ev.State {
@@ -141,7 +141,7 @@ func (k logoutQueueSink) Noted(ctx context.Context, ev oidc.LogoutQueueEvent) {
 		s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, oidcCallbackActor, "session.revoke_hold.coalesce", backchannelLogoutTarget, "failure",
 			mustJSON(map[string]any{"count": ev.Count, "window_start": ev.WindowStart, "window_end": ev.WindowEnd})))
 		return
-	case oidc.LogoutRefusedUnreadable:
+	case oidc.LogoutRefusedUnreadable, oidc.LogoutRefusedReserved:
 		if ctx.Value(backchannelExemptKey{}) != nil && !s.backchannelLimiter.allow("", s.cfg.Now()) {
 			s.cfg.OIDC.NoteLogoutRateLimited(ctx)
 			return

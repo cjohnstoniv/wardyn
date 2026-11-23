@@ -305,3 +305,92 @@ func TestDiscoverUntilReady_KeyFetchBacksOff(t *testing.T) {
 		t.Errorf("pending %v, cuts %v; want the held logout applied and the state published", a.Pending(), rev.cuts)
 	}
 }
+
+type countingGrantSink struct {
+	mu     sync.Mutex
+	scopes int
+}
+
+func (s *countingGrantSink) LoginGrantGeneration(context.Context) (int64, error) { return 0, nil }
+func (s *countingGrantSink) LoginScopes(context.Context) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scopes++
+	return nil
+}
+func (s *countingGrantSink) CaptureLoginGrant(context.Context, string, oidc.LoginGrant) {}
+
+// Every site that reads "an authenticator exists" as "SSO is configured" gives the same answer for a pending
+// authenticator as for a discovered one, and a different one for no authenticator at all.
+func TestNilAuthenticatorSites_PendingIsConfigured(t *testing.T) {
+	p := newPendingIdP(t)
+	p.rt.set(pendingDiscoveryPath, 503)
+	pend, err := oidc.NewPending(p.config(), pendingKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pend.Discover(p.ctx); !errors.Is(err, oidc.ErrProviderUnreachable) || !pend.Pending() {
+		t.Fatalf("Discover = %v, pending %v; want unreachable and pending", err, pend.Pending())
+	}
+	var none *oidc.Authenticator
+
+	logOf := func(f func()) string {
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+		defer slog.SetDefault(prev)
+		f()
+		return buf.String()
+	}
+	on := true
+	cli := cliSignInFlags{enabled: &on}
+	for _, row := range []struct {
+		site string
+		run  func(a *oidc.Authenticator) string
+		// wantNone is what no authenticator at all gives, so the row can tell the two apart.
+		wantNone string
+	}{
+		{"main.go warnPublicAPIDisabled", func(a *oidc.Authenticator) string {
+			return logOf(func() { warnPublicAPIDisabled("", false, a != nil) })
+		}, "public API is DISABLED"},
+		{"main.go warnGovernAdminRunsUnbound", func(a *oidc.Authenticator) string {
+			return logOf(func() { warnGovernAdminRunsUnbound(true, a != nil) })
+		}, "binds nobody"},
+		{"main.go warnWithoutSSO", func(a *oidc.Authenticator) string {
+			return logOf(func() { cli.warnWithoutSSO(a != nil) })
+		}, "CLI sign-in stays off"},
+		{"validateMemberModePosture", func(a *oidc.Authenticator) string {
+			if err := validateMemberModePosture(true, false, a != nil); err != nil {
+				return err.Error()
+			}
+			return ""
+		}, "no OIDC issuer is configured"},
+		{"sessionRevocationsFor", func(a *oidc.Authenticator) string {
+			if sessionRevocationsFor(a, nil) == nil {
+				return "nil store"
+			}
+			return ""
+		}, "nil store"},
+	} {
+		if got := row.run(pend); got != "" {
+			t.Errorf("%s: pending answered %q, want the configured answer (empty)", row.site, got)
+		}
+		if got := row.run(none); !strings.Contains(got, row.wantNone) {
+			t.Errorf("%s: no authenticator answered %q, want it to contain %q", row.site, got, row.wantNone)
+		}
+	}
+
+	// attachLoginGrantSink: the sink reaches a pending authenticator, so the first sign-in after discovery uses it.
+	sink := &countingGrantSink{}
+	attachLoginGrantSink(pend, sink)
+	attachLoginGrantSink(none, sink) // a nil authenticator is a no-op
+	p.rt.set(pendingDiscoveryPath, 0)
+	if err := pend.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover after recovery: %v", err)
+	}
+	w := httptest.NewRecorder()
+	pend.LoginHandler(w, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	if w.Code != http.StatusFound || sink.scopes != 1 {
+		t.Errorf("login after recovery = %d, sink asked for scopes %d times; want a redirect and 1", w.Code, sink.scopes)
+	}
+}
