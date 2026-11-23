@@ -194,8 +194,9 @@ type RunnerSettingsRequest struct {
 	Enabled              *bool `json:"enabled"`
 	RequireManagedDevice *bool `json:"require_managed_device,omitempty"`
 	// MDMDeviceCAPEM and MDMDeviceCRLURL set the MDM device CA and its CRL URL; an empty string clears.
-	MDMDeviceCAPEM  *string `json:"mdm_device_ca_pem,omitempty"`
-	MDMDeviceCRLURL *string `json:"mdm_device_crl_url,omitempty"`
+	MDMDeviceCAPEM     *string              `json:"mdm_device_ca_pem,omitempty"`
+	MDMDeviceCRLURL    *string              `json:"mdm_device_crl_url,omitempty"`
+	MachineKindDenials *[]MachineKindDenial `json:"machine_kind_denials,omitempty"`
 }
 
 // RunnerUpdateRequest is an owner's change to their own runner (PUT /me/runners/{id}): the whole limit

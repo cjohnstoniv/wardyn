@@ -10,6 +10,7 @@
 // dispatch/injection time.
 
 import type { RecordingLevel } from "./policy";
+import type { RunnerTrustClass } from "./runners";
 
 // One outbound redirect: requests to `from` are substituted to `to` (from's
 // host dropped from egress, to's host allowed), with an optional token
@@ -41,6 +42,14 @@ export interface RunnerSettings {
   // certificate that chains to it. Both or neither; set only by PUT /runners/settings. Omitted when unset.
   mdm_device_ca_pem?: string;
   mdm_device_crl_url?: string;
+  // Machine kinds a new local run may not take on a runner of a trust class (deny-only; a macOS VM still needs a
+  // managed_device runner). Always on the wire, [] when none; set only by PUT /runners/settings.
+  machine_kind_denials?: readonly MachineKindDenial[];
+}
+
+export interface MachineKindDenial {
+  trust_class: RunnerTrustClass;
+  machine_kind: "container" | "linux_vm" | "macos_vm";
 }
 
 export interface SiteConfig {

@@ -42,6 +42,7 @@ func (s *Server) classifyLocalDispatch(ctx context.Context, run types.AgentRun, 
 		return false
 	}
 	p.TrustedOutput = p.TrustedOutput || trustedOutput
+	p.MachineKindDenials = machineKindDenialsOf(sc)       // a new run is judged against them; a revive keeps its runner
 	corpus := inspectionCorpusOf(spec.ProxyConfig.Policy) // before the laptop copy drops it
 	adoGate := spec.ProxyConfig.ADOGrant                  // before a via_org laptop copy drops it
 	ref, err := s.dispatchTrustRefusal(ctx, run, p)
@@ -111,6 +112,7 @@ func (s *Server) localResolvedPlan(ctx context.Context, run types.AgentRun, self
 	p := placement.LocalPlan{Spec: spec, Origins: map[string]placement.CredentialOrigin{}, OrgConfigKeys: orgConfigKeys,
 		UpstreamProxySecretRef: sc.UpstreamProxySecretRef, LocalSelfDefinedComponents: selfDefinedAllowed,
 		TrustedOutput: localTrustedOutputRun(run), SelfDefinedComponents: selfDefinedSnapshotNames(comps),
+		MachineKind: run.MachineKind.Normalize(),
 	}
 	if run.RunnerID != nil {
 		p.VerifiedLocalPaths = mergePaths(s.drivePathsOn(*run.RunnerID, spec.Drives), s.mountPathsOn(*run.RunnerID, spec.Mounts))

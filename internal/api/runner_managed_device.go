@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -20,7 +21,7 @@ func requiresManagedDevice(cfg types.SiteConfig) bool {
 
 // runnerSettingsOf is the stored runner settings as the settings routes answer them.
 func runnerSettingsOf(cfg types.SiteConfig) types.RunnerSettings {
-	st := types.RunnerSettings{Enabled: runnersEnabled(cfg), RequireManagedDevice: requiresManagedDevice(cfg)}
+	st := types.RunnerSettings{Enabled: runnersEnabled(cfg), RequireManagedDevice: requiresManagedDevice(cfg), MachineKindDenials: machineKindDenialsOf(cfg)}
 	if cfg.Runners != nil {
 		st.MDMDeviceCAPEM, st.MDMDeviceCRLURL = cfg.Runners.MDMDeviceCAPEM, cfg.Runners.MDMDeviceCRLURL
 	}
@@ -40,6 +41,9 @@ func applyRunnerSettingsRequest(st *types.RunnerSettings, req types.RunnerSettin
 	}
 	if req.MDMDeviceCRLURL != nil {
 		st.MDMDeviceCRLURL = *req.MDMDeviceCRLURL
+	}
+	if req.MachineKindDenials != nil {
+		st.MachineKindDenials = slices.Clone(*req.MachineKindDenials)
 	}
 }
 
@@ -99,5 +103,10 @@ func (s *Server) storeRunnerSettings(w http.ResponseWriter, r *http.Request, req
 		auditSetting("runners.require_managed_device", before.RequireManagedDevice, after.RequireManagedDevice)
 	}
 	s.auditMDMDeviceSettings(r, req, before, after)
+	if req.MachineKindDenials != nil {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			placement.ActionRunnersEnabledSet, "runners.machine_kind_denials", "success",
+			mustJSON(map[string]any{"before": before.MachineKindDenials, "after": after.MachineKindDenials})))
+	}
 	return before, after, true
 }
