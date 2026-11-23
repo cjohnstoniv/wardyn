@@ -5,9 +5,10 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,71 +16,89 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// fakeFirstStatement serves one client connection on srv: it answers the startup with no password and
-// sends back the text of the first statement the client sends, then hangs up.
-func fakeFirstStatement(srv net.Conn) <-chan string {
-	got := make(chan string, 1)
-	go func() {
-		defer srv.Close()
-		be := pgproto3.NewBackend(srv, srv)
-		for started := false; !started; {
-			msg, err := be.ReceiveStartupMessage()
-			if err != nil {
-				got <- "startup: " + err.Error()
-				return
-			}
-			switch msg.(type) {
-			case *pgproto3.SSLRequest, *pgproto3.GSSEncRequest:
-				if _, err := srv.Write([]byte("N")); err != nil {
-					got <- "startup: " + err.Error()
-					return
-				}
-			default:
-				started = true
-			}
-		}
-		be.Send(&pgproto3.AuthenticationOk{})
-		be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
-		if err := be.Flush(); err != nil {
-			got <- "startup: " + err.Error()
-			return
-		}
-		for {
-			msg, err := be.Receive()
-			if err != nil {
-				got <- "receive: " + err.Error()
-				return
-			}
-			switch m := msg.(type) {
-			case *pgproto3.Query:
-				got <- m.String
-				return
-			case *pgproto3.Parse:
-				got <- m.Query
-				return
-			}
-		}
-	}()
-	return got
-}
-
-// TestLifetimeLockDialSetsNoKeepalive: a process-lifetime lock (the single-instance lock, the gateway key
-// rotation lock) dials with the pool's own dialer, not the lock connections' keepalive dialer, and its
-// first statement is the lock itself, with no keepalive SET before it. The election dial, by contrast,
-// replaces the pool's dialer.
-func TestLifetimeLockDialSetsNoKeepalive(t *testing.T) {
-	cfg, err := pgxpool.ParseConfig("postgres://wardyn@127.0.0.1:1/wardyn?sslmode=disable&connect_timeout=5")
+// fakeServer accepts connections on a loopback port and serves each as a Postgres server that asks for no
+// password: it answers every simple-protocol statement (a SET) as done, and hangs up at the first
+// extended-protocol one (a lock try). Each session's statements, in order, are sent on stmts when it ends; a
+// connection that starts no session (the cancel request pgx sends after a failed statement) sends nothing.
+func fakeServer(t *testing.T) (addr string, stmts <-chan []string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var dials atomic.Int32
-	cli, srv := net.Pipe()
-	first := fakeFirstStatement(srv)
-	cfg.ConnConfig.DialFunc = func(context.Context, string, string) (net.Conn, error) {
-		if dials.Add(1) > 1 {
-			return nil, net.ErrClosed
+	t.Cleanup(func() { ln.Close() })
+	out := make(chan []string, 4)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				if got := serveFake(conn); got != nil {
+					out <- got
+				}
+			}()
 		}
-		return cli, nil
+	}()
+	return ln.Addr().String(), out
+}
+
+func serveFake(conn net.Conn) []string {
+	be := pgproto3.NewBackend(conn, conn)
+	for started := false; !started; {
+		msg, err := be.ReceiveStartupMessage()
+		if err != nil {
+			return nil
+		}
+		switch msg.(type) {
+		case *pgproto3.SSLRequest, *pgproto3.GSSEncRequest:
+			if _, err := conn.Write([]byte("N")); err != nil {
+				return nil
+			}
+		case *pgproto3.StartupMessage:
+			started = true
+		default: // a cancel request, which pgx dials after a session fails: not a session
+			return nil
+		}
+	}
+	be.Send(&pgproto3.AuthenticationOk{})
+	be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	if err := be.Flush(); err != nil {
+		return nil
+	}
+	seen := []string{}
+	for {
+		msg, err := be.Receive()
+		if err != nil {
+			return seen
+		}
+		switch m := msg.(type) {
+		case *pgproto3.Query:
+			seen = append(seen, m.String)
+			be.Send(&pgproto3.CommandComplete{CommandTag: []byte("SET")})
+			be.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+			if err := be.Flush(); err != nil {
+				return seen
+			}
+		case *pgproto3.Parse:
+			return append(seen, m.Query)
+		case *pgproto3.Terminate:
+			return seen
+		}
+	}
+}
+
+// TestLifetimeLockDialSetsNoKeepalive: a process-lifetime lock (the single-instance lock, the gateway key
+// rotation lock) sets none of the lock connections' keepalives: the first statement its session sends is the
+// lock itself. The election dial (dialDedicated), on the same server, sends every one of them first. The
+// keepalive dialer's socket options are not visible to a server, so the SETs are what tells the two apart.
+func TestLifetimeLockDialSetsNoKeepalive(t *testing.T) {
+	addr, stmts := fakeServer(t)
+	cfg, err := pgxpool.ParseConfig(fmt.Sprintf("postgres://wardyn@%s/wardyn?sslmode=disable&connect_timeout=5", addr))
+	if err != nil {
+		t.Fatal(err)
 	}
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
@@ -88,29 +107,39 @@ func TestLifetimeLockDialSetsNoKeepalive(t *testing.T) {
 	defer pool.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	session := func(what string) []string {
+		t.Helper()
+		select {
+		case got := <-stmts:
+			return got
+		case <-ctx.Done():
+			t.Fatalf("the fake server saw no session for %s", what)
+			return nil
+		}
+	}
 
 	if _, _, ok, err := TryAdvisoryLockDedicated(ctx, pool, 42); ok || err == nil {
-		t.Fatalf("TryAdvisoryLockDedicated against a server that hangs up = ok %v, err %v; want an error", ok, err)
+		t.Fatalf("TryAdvisoryLockDedicated against a server that hangs up at the lock = ok %v, err %v; want an error", ok, err)
 	}
-	if n := dials.Load(); n != 1 {
-		t.Fatalf("the pool's own dialer ran %d times, want 1: the lifetime lock must not swap in the keepalive dialer", n)
+	got := session("the lifetime lock")
+	if len(got) == 0 || !strings.Contains(got[0], "pg_try_advisory_lock") {
+		t.Fatalf("the lifetime lock's statements = %q; want the lock try first", got)
 	}
-	select {
-	case sql := <-first:
-		if strings.Contains(sql, "tcp_") || !strings.Contains(sql, "pg_try_advisory_lock") {
-			t.Fatalf("the lifetime lock's first statement = %q, want the lock try with no keepalive SET before it", sql)
+	for _, s := range got {
+		if strings.Contains(s, "tcp_") {
+			t.Fatalf("the lifetime lock's session sent %q; want no keepalive setting", s)
 		}
-	case <-ctx.Done():
-		t.Fatal("the fake server saw no statement")
 	}
 
-	// The election dial does replace the dialer: the pool's own one is not called.
-	dials.Store(0)
-	if conn, err := dialDedicated(ctx, pool); err == nil {
-		conn.Close(context.Background()) //nolint:errcheck // nothing listens on port 1
-		t.Fatal("the election dial reached port 1")
+	conn, err := dialDedicated(ctx, pool)
+	if err != nil {
+		t.Fatalf("the election dial: %v", err)
 	}
-	if n := dials.Load(); n != 0 {
-		t.Fatalf("the election dial used the pool's own dialer (%d calls); this test can no longer tell the two apart", n)
+	conn.Close(ctx) //nolint:errcheck // the fake server ends the session either way
+	got = session("the election dial")
+	for _, p := range lockKeepalives {
+		if want := "SET " + p.name + " = " + p.value; !slices.Contains(got, want) {
+			t.Fatalf("the election dial's statements = %q; want %q among them, or this test can no longer tell the two dials apart", got, want)
+		}
 	}
 }
