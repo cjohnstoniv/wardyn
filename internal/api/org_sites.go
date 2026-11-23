@@ -377,11 +377,12 @@ func writeOrgSitePoolScope(w http.ResponseWriter, msg string) {
 // handleAssignPoolSite puts an organization pool at a site, moving it from any other. A move raises the pool's
 // revision, so a run admitted against the pool before it is refused as stale, never recorded at the old site.
 func (s *Server) handleAssignPoolSite(w http.ResponseWriter, r *http.Request) {
-	ss, ok := s.orgSiteStore(w, r)
+	// The pool store first: like every pool route, a server without pool storage answers 501.
+	_, pool, ok := s.orgSitePool(w, r, true)
 	if !ok {
 		return
 	}
-	_, pool, ok := s.orgSitePool(w, r, true)
+	ss, ok := s.orgSiteStore(w, r)
 	if !ok {
 		return
 	}
@@ -424,11 +425,12 @@ func (s *Server) handleAssignPoolSite(w http.ResponseWriter, r *http.Request) {
 // handleClearPoolSite takes an organization pool, live or deleted, off its site, and clears the site's
 // default when it named the pool. A pool at no site is left as it is, with no audit row.
 func (s *Server) handleClearPoolSite(w http.ResponseWriter, r *http.Request) {
-	ss, ok := s.orgSiteStore(w, r)
+	// The pool store first: like every pool route, a server without pool storage answers 501.
+	_, pool, ok := s.orgSitePool(w, r, false)
 	if !ok {
 		return
 	}
-	_, pool, ok := s.orgSitePool(w, r, false)
+	ss, ok := s.orgSiteStore(w, r)
 	if !ok {
 		return
 	}
