@@ -86,7 +86,23 @@ CREATE TABLE IF NOT EXISTS run_dispatch_secret_facts (
 DO $mig$
 DECLARE
     r record;
+    t text;
 BEGIN
+    -- Three tables get fewer verbs than the app role's default privileges hand every new table on a split-role
+    -- install, so nobody but the owner keeps what a table was created with before the grants below.
+    FOREACH t IN ARRAY ARRAY['machine_snapshot_holds', 'run_fork_sources', 'run_dispatch_secret_facts'] LOOP
+        EXECUTE format('REVOKE ALL ON %I FROM PUBLIC', t);
+        FOR r IN
+            SELECT DISTINCT ro.rolname::text AS rolname
+              FROM pg_catalog.pg_class c
+              CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+              JOIN pg_catalog.pg_roles ro ON ro.oid = a.grantee
+             WHERE c.oid = t::regclass
+               AND a.grantee <> c.relowner
+        LOOP
+            EXECUTE format('REVOKE ALL ON %I FROM %I', t, r.rolname);
+        END LOOP;
+    END LOOP;
     FOR r IN
         SELECT DISTINCT ro.rolname::text AS rolname
           FROM pg_catalog.pg_class c

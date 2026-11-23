@@ -22,9 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_fork_sources`,
   `SELECT, INSERT, DELETE` on `machine_snapshot_holds`, `SELECT, INSERT, UPDATE` on `run_dispatch_secret_facts`, and
   `SELECT, INSERT, UPDATE, DELETE` on `machine_snapshots`, to every role that was granted `DELETE` on `run_attach_leases`,
-  other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new
-  tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
-  migration has run.
+  other than that table's owner. If the app role is not one of those roles or a member of one, grant it the same on each
+  table as soon as the migration has run. The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover the three
+  tables granted fewer verbs: the migrations take every other privilege on them away from every role but their owner.
 
 ## [0.10.2] — 2026-11-22
 
