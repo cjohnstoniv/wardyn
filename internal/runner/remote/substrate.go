@@ -258,6 +258,11 @@ func (s *Substrate) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) 
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
 		return runner.Sandbox{}, err
 	}
+	if len(spec.Containers) > 0 {
+		if c, ok := s.Caps(); !ok || !c.Support.ExtraContainers {
+			return runner.Sandbox{}, runner.ErrExtraContainersUnsupported
+		}
+	}
 	if err := s.checkProxySettings(spec.ProxyConfig); err != nil {
 		return runner.Sandbox{}, err
 	}

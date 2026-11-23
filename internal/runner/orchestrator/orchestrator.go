@@ -367,6 +367,7 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 	locals := o.locals()
 	drives := len(locals) > 0
 	managed := len(locals) > 0
+	extras := len(locals) > 0
 	var enforcement types.StorageEnforcement
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
@@ -400,12 +401,14 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.ExecOutputUncaptured = caps.ExecOutputUncaptured || cs.ExecOutputUncaptured
 		drives = drives && cs.UserDrives
 		managed = managed && cs.ManagedFiles
+		extras = extras && cs.ExtraContainers
 		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
 			enforcement = cs.EphemeralDiskEnforcement
 		}
 	}
 	caps.UserDrives = drives
 	caps.ManagedFiles = managed
+	caps.ExtraContainers = extras
 	caps.EphemeralDiskEnforcement = enforcement
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })

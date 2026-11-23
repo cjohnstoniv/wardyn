@@ -101,6 +101,34 @@ func TestAdvertisedCarriesDiskWordKeepAndDrives(t *testing.T) {
 	}
 }
 
+// A runner that does not advertise extra containers (every runner older than 0.11) is refused a spec carrying
+// them before anything is sent; one that does is not refused.
+func TestCreateSandboxRefusesExtraContainersWithoutTheCap(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		extras bool
+	}{
+		{"caps without the flag", false},
+		{"caps with the flag", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			data, err := json.Marshal(runnerwire.Caps{Support: substrate.ClassSupport{
+				Classes: []types.ConfinementClass{types.CC1}, ExtraContainers: c.extras}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rig.Sub.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: data})
+			spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1,
+				Containers: []runner.ExtraContainer{{Name: "db", Image: "db@sha256:abc", CPUMillis: 100, MemoryMiB: 64}}}
+			_, err = rig.Sub.CreateSandbox(ctxT(t), spec)
+			if got := errors.Is(err, runner.ErrExtraContainersUnsupported); got == c.extras {
+				t.Fatalf("errors.Is(ErrExtraContainersUnsupported) = %v with extras=%v; err = %v", got, c.extras, err)
+			}
+		})
+	}
+}
+
 // A k8s runner's runs namespaces reach the placement facts, in the order it advertised them; an older
 // runner says none.
 func TestAdvertisedCarriesTheRunsNamespaces(t *testing.T) {
