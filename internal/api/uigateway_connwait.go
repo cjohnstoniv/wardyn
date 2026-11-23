@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,15 @@ import (
 // the transport hands the request a pooled connection or dials a new one; it never covers a dial or
 // a response. Fifteen seconds lets a slow but finite backlog drain before the refusal; the refusal
 // itself is unchanged.
-var uiConnWait = 15 * time.Second
+func uiConnWait() time.Duration { return time.Duration(uiConnWaitNanos.Load()) }
+
+// uiConnWaitNanos holds uiConnWait atomically, so a test can shorten it while an earlier test's relay goroutines
+// still read it (setUIConnWait).
+var uiConnWaitNanos = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(15 * time.Second))
+	return &v
+}()
 
 var uiConnCapMsg = fmt.Sprintf("too many open UI connections for this run (max %d) — close a tab and retry", maxUIConnsPerRun)
 
@@ -77,8 +86,9 @@ func (w *uiConnWaiter) done() {
 func (s *Server) serveUIRelay(w http.ResponseWriter, r *http.Request) {
 	base, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	wait := &uiConnWaiter{base: base, cancel: cancel, end: time.Now().Add(uiConnWait)}
-	proxy, every := s.uiReverseProxy(), uiConnWait
+	every := uiConnWait()
+	wait := &uiConnWaiter{base: base, cancel: cancel, end: time.Now().Add(every)}
+	proxy := s.uiReverseProxy()
 	if d, ok := uiDispatchFrom(r.Context()); ok {
 		left := d.by.Sub(d.now())
 		if left <= 0 {

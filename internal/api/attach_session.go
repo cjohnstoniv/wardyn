@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,8 +81,17 @@ func runIsUnrecordable(run types.AgentRun) bool {
 const maxSessionCastBytes = 8 << 20
 
 // sessionRecordingSaveWait bounds one session recording save: the store's 65 s
-// admission wait plus 30 s for the write. A var so tests can shorten it.
-var sessionRecordingSaveWait = 95 * time.Second
+// admission wait plus 30 s for the write. Held atomically so tests can shorten
+// it while an earlier test's save goroutines still read it.
+func sessionRecordingSaveWait() time.Duration {
+	return time.Duration(sessionRecordingSaveWaitNanos.Load())
+}
+
+var sessionRecordingSaveWaitNanos = func() *atomic.Int64 {
+	var v atomic.Int64
+	v.Store(int64(95 * time.Second))
+	return &v
+}()
 
 // capBuffer is the bounded sink under a session CastWriter. CastWriter emits one
 // complete JSON line per Write, so refusing a write WHOLE (never partially)
@@ -155,7 +165,7 @@ func (s *Server) newSessionRecorder(run types.AgentRun, sessionID string, opts r
 		key := recording.CastKey(runID.String(), sessionID)
 		// ctx lives as long as the daemon; bound only the save, so the audit
 		// below (and the session.detach after it) is never held behind a store wait.
-		saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
+		saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait())
 		err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), sessionID, bytes.NewReader(snap))
 		cancel()
 		outcome := "success"

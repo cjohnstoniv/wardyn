@@ -175,9 +175,7 @@ func TestUIRelayIssuerPortal_FreshDialPerRequest(t *testing.T) {
 		hold := make(chan struct{})
 		cr := &closeHeldRunner{dispatchRunner: &dispatchRunner{sshFakeRunner: rig.runner}, ref: "sandbox-b", hold: hold}
 		rig.srv.cfg.Runner = cr
-		oldWait := uiConnWait
-		uiConnWait = 300 * time.Millisecond
-		t.Cleanup(func() { uiConnWait = oldWait })
+		setUIConnWait(t, 300*time.Millisecond)
 		// Run B: one idle shared connection, whose exec close is held.
 		runB := types.AgentRun{ID: uuid.New(), CreatedBy: "alice", State: types.RunRunning, SandboxRef: "sandbox-b"}
 		rig.store.putRun(runB)
@@ -216,8 +214,8 @@ func TestUIRelayIssuerPortal_FreshDialPerRequest(t *testing.T) {
 			if a.rec.Code != http.StatusServiceUnavailable || dispatchReason(a.rec) != reasonUIGatewayConnCapReached {
 				t.Fatalf("a portal request at a full run: %d %s, want the connection-cap 503", a.rec.Code, a.rec.Body.String())
 			}
-			if a.took > uiConnWait+100*time.Millisecond {
-				t.Fatalf("the connection-cap 503 took %s, want within 100ms of the %s wait's end", a.took, uiConnWait)
+			if a.took > uiConnWait()+100*time.Millisecond {
+				t.Fatalf("the connection-cap 503 took %s, want within 100ms of the %s wait's end", a.took, uiConnWait())
 			}
 		}
 		if n := rig.srv.uiDispatch.idleCloseStarts.Load() - startsBefore; n != 1 || cr.entered.Load() != 1 {

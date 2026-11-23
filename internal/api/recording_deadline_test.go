@@ -291,13 +291,18 @@ func (blockedSaveStore) SaveCastNamed(ctx context.Context, _, _ string, _ io.Rea
 	return ctx.Err()
 }
 
+// setSessionRecordingSaveWait shortens sessionRecordingSaveWait for one test.
+func setSessionRecordingSaveWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := sessionRecordingSaveWaitNanos.Swap(int64(d))
+	t.Cleanup(func() { sessionRecordingSaveWaitNanos.Store(old) })
+}
+
 // A session recording save waits at most sessionRecordingSaveWait, even on the
 // daemon-lifetime context, and its audit row is still written.
 func TestSessionRecorder_SaveWaitIsBounded(t *testing.T) {
 	logs := captureSlog(t)
-	old := sessionRecordingSaveWait
-	sessionRecordingSaveWait = 50 * time.Millisecond
-	t.Cleanup(func() { sessionRecordingSaveWait = old })
+	setSessionRecordingSaveWait(t, 50*time.Millisecond)
 	audit := &recRecorder{}
 	srv := New(Config{RecordingStore: &blockedSaveStore{}, Audit: audit, AdminToken: adminToken})
 	tee, finish := srv.newSessionRecorder(types.AgentRun{ID: uuid.New()}, "ssh-"+uuid.NewString(), runner.AttachOptions{Cols: 80, Rows: 24})

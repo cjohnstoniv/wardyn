@@ -18,14 +18,19 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// setUIConnWait shortens uiConnWait for one test.
+func setUIConnWait(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := uiConnWaitNanos.Swap(int64(d))
+	t.Cleanup(func() { uiConnWaitNanos.Store(old) })
+}
+
 // TestUIGateway_AWaitBehindHeldStreamsEndsInTheCapRefusal: behind maxUIConnsPerRun long-lived
 // streams (a websocket, an event stream) no connection comes free, so a request waits no longer
 // than uiConnWait and then gets the connection-cap 503 it got at once before requests could wait.
 // The streams it queued behind are untouched.
 func TestUIGateway_AWaitBehindHeldStreamsEndsInTheCapRefusal(t *testing.T) {
-	prev := uiConnWait
-	uiConnWait = 300 * time.Millisecond
-	t.Cleanup(func() { uiConnWait = prev })
+	setUIConnWait(t, 300*time.Millisecond)
 	arrived, release := make(chan struct{}, maxUIConnsPerRun), make(chan struct{})
 	h := newUIHarness(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/events" {
@@ -53,8 +58,8 @@ func TestUIGateway_AWaitBehindHeldStreamsEndsInTheCapRefusal(t *testing.T) {
 		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), reasonUIGatewayConnCapReached) {
 			t.Errorf("a request behind %d held streams = %d %s, want 503 %s", maxUIConnsPerRun, rec.Code, rec.Body, reasonUIGatewayConnCapReached)
 		}
-	case <-time.After(uiConnWait + 5*time.Second):
-		t.Errorf("a request behind %d held streams was still waiting %v past the %v bound", maxUIConnsPerRun, 5*time.Second, uiConnWait)
+	case <-time.After(uiConnWait() + 5*time.Second):
+		t.Errorf("a request behind %d held streams was still waiting %v past the %v bound", maxUIConnsPerRun, 5*time.Second, uiConnWait())
 	}
 	close(release)
 	for range maxUIConnsPerRun {
@@ -95,8 +100,8 @@ func TestUIConnWaiter_AnUndeliveredWaitExpires(t *testing.T) {
 // TestUIConnWait_BoundIsAtLeastFifteenSeconds: a slow but finite backlog must be able to drain
 // before the connection-cap refusal (#3170).
 func TestUIConnWait_BoundIsAtLeastFifteenSeconds(t *testing.T) {
-	if uiConnWait < 15*time.Second {
-		t.Errorf("uiConnWait = %v, want at least 15s", uiConnWait)
+	if uiConnWait() < 15*time.Second {
+		t.Errorf("uiConnWait = %v, want at least 15s", uiConnWait())
 	}
 }
 
