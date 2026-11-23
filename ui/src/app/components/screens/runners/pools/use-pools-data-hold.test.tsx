@@ -172,4 +172,20 @@ describe("usePoolsData failure hold", () => {
     expect(result.current.status).toBe("unavailable");
     expect(result.current.message).toBe(NO_POOL_STORAGE);
   });
+
+  it("a Retry answered 501 after a hung tick shows unavailable, not the error it replaced", async () => {
+    listMock.mockRejectedValueOnce(new HttpError(500, "boom"));
+    const { result } = renderHook(() => usePoolsData(null));
+    await settle();
+    expect(result.current.status).toBe("error");
+    listMock.mockReturnValueOnce(new Promise(() => {}));
+    await tick();
+    expect(listMock).toHaveBeenCalledTimes(2);
+    listMock.mockRejectedValueOnce(new HttpError(501, NO_POOL_STORAGE));
+    act(() => result.current.retry());
+    await settle();
+    expect(listMock).toHaveBeenCalledTimes(3);
+    expect(result.current.status).toBe("unavailable");
+    expect(result.current.message).toBe(NO_POOL_STORAGE);
+  });
 });
