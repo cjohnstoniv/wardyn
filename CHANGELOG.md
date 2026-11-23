@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The `git_credential` probe in `examples/workspaces/probes.sh` passes only on the helper's exact answers; other error text is now a failure, not a pass.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
