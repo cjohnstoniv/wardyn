@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -19,13 +20,15 @@ import (
 )
 
 // windowRunner is a runner end that answers local_window: it refuses with refuse when set, else opens a
-// local_window stream and writes line on it (none when line is ""), then half-closes it.
+// local_window stream and writes line on it (none when line is ""), half-closes it, then reads it until the
+// organisation closes it and sends how that read ended on readEnd.
 type windowRunner struct {
-	mu     sync.Mutex
-	peer   *runnerwire.Peer
-	args   []runnerwire.LocalWindowArgs
-	refuse error
-	line   string
+	mu      sync.Mutex
+	peer    *runnerwire.Peer
+	args    []runnerwire.LocalWindowArgs
+	refuse  error
+	line    string
+	readEnd chan error
 }
 
 func (l *windowRunner) handle(ctx context.Context, id uint32, method string, raw json.RawMessage) (any, error) {
@@ -50,6 +53,8 @@ func (l *windowRunner) handle(ctx context.Context, id uint32, method string, raw
 			_, _ = st.Write([]byte(line + "\n"))
 		}
 		_ = st.CloseWrite()
+		_, err := io.Copy(io.Discard, st)
+		l.readEnd <- err
 	}()
 	return runnerwire.StreamResult{Stream: st.ID()}, nil
 }
@@ -66,7 +71,7 @@ func windowRig(t *testing.T, capWindow bool) (*remote.Substrate, *windowRunner, 
 	var link remote.Link
 	sub := remote.New(rid, &link, remote.Options{})
 	org, run := runnerwire.Loopback()
-	wr := &windowRunner{}
+	wr := &windowRunner{readEnd: make(chan error, 1)}
 	wr.peer = runnerwire.NewPeer(run, runnerwire.PeerConfig{OnCall: wr.handle})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -117,6 +122,15 @@ func TestLocalWindowSessionEndLine(t *testing.T) {
 			}
 			defer w.Close()
 			waitEnded(t, w)
+			select { // the org closes its end once it has the line, before anything calls Close
+			case err := <-wr.readEnd:
+				var reset *runnerwire.ResetError
+				if !errors.As(err, &reset) {
+					t.Fatalf("the runner's read ended with %v, want the organisation's reset", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("the organisation kept the stream open after the end line")
+			}
 			if w.EndReason() != tc.reason || w.RefusalKind() != tc.refusal || w.CutTextDropped() != tc.dropped {
 				t.Fatalf("end = %q %q %d, want %q %q %d", w.EndReason(), w.RefusalKind(), w.CutTextDropped(), tc.reason, tc.refusal, tc.dropped)
 			}

@@ -21,6 +21,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -289,7 +290,7 @@ func (r *localWindowRig) wantRefused(w *localWindow, rf *runRefusal, status int,
 	}
 }
 
-// V-5: only the run creator's own claimed person runner opens a window, with no delegated token; another person,
+// Only the run creator's own claimed person runner opens a window, with no delegated token; another person,
 // a service identity, an agent, a delegate, an operator's run, an organisation's runner and a remote run are all
 // refused with the not-your-computer sentence, before any runner call.
 func TestLocalWindowOwnRunner(t *testing.T) {
@@ -342,7 +343,7 @@ func TestLocalWindowOwnRunner(t *testing.T) {
 	}
 }
 
-// V-6: AUTH_OK's local_window follows the switch: false for an absent key, {}, {"enabled": false}, an unavailable
+// AUTH_OK's local_window follows the switch: false for an absent key, {}, {"enabled": false}, an unavailable
 // hook, an unreadable site config and a local-mode server; true only when on.
 func TestRunnerLocalWindowFollowsTheSwitch(t *testing.T) {
 	r := newLocalWindowRig(t)
@@ -377,7 +378,7 @@ func TestRunnerLocalWindowFollowsTheSwitch(t *testing.T) {
 	}
 }
 
-// V-12: an organisation's runner is never told local_window, whatever the switch says.
+// An organisation's runner is never told local_window, whatever the switch says.
 func TestRunnerLocalWindowPersonOnly(t *testing.T) {
 	r := newLocalWindowRig(t)
 	for _, c := range []struct {
@@ -390,7 +391,7 @@ func TestRunnerLocalWindowPersonOnly(t *testing.T) {
 	}
 }
 
-// V-7: with the switch off the owner's open is refused 403 local_window_site_off before any runner call, an
+// With the switch off the owner's open is refused 403 local_window_site_off before any runner call, an
 // unreadable site config is a server error, and turning the switch off ends an open window at the next re-check.
 func TestLocalWindowSwitch(t *testing.T) {
 	t.Run("off refuses the owner", func(t *testing.T) {
@@ -460,7 +461,7 @@ func TestLocalWindowSwitch(t *testing.T) {
 	})
 }
 
-// V-7 on the matrix server: entry authorization answers before the switch, so with it off the owner gets 403
+// On the matrix server: entry authorization answers before the switch, so with it off the owner gets 403
 // local_window_site_off, a super admin run_owner_only and a non-owning member the run-not-found 404, and with
 // it on the owner reaches the handler's own answer.
 func TestAuthzMatrixLocalWindowSiteSwitch(t *testing.T) {
@@ -495,7 +496,7 @@ func TestAuthzMatrixLocalWindowSiteSwitch(t *testing.T) {
 	}
 }
 
-// V-8: Screen and actions recording refuses, since a local window isn't recorded.
+// Screen and actions recording refuses, since a local window isn't recorded.
 func TestLocalWindowRecordingRefused(t *testing.T) {
 	r := newLocalWindowRig(t)
 	r.set(func(run *types.AgentRun) { run.RecordingLevel = types.RecordingScreenActions })
@@ -506,7 +507,7 @@ func TestLocalWindowRecordingRefused(t *testing.T) {
 	}
 }
 
-// V-13: a background-only run is refused with the door's own reason, as the door contract keeps its desktop
+// A background-only run is refused with the door's own reason, as the door contract keeps its desktop
 // closed.
 func TestLocalWindowBackgroundOnlyRefused(t *testing.T) {
 	r := newLocalWindowRig(t)
@@ -577,7 +578,7 @@ func TestLocalWindowRunnerCaps(t *testing.T) {
 	}
 }
 
-// V-9: a revoked credential, a governance change, a stopped run, a stamp that fails and anything unread each end
+// A revoked credential, a governance change, a stopped run, a stamp that fails and anything unread each end
 // the window with their reason at the next re-check, closing the runner's session once.
 func TestLocalWindowRecheckEnds(t *testing.T) {
 	cases := []struct {
@@ -632,7 +633,7 @@ func TestLocalWindowRecheckEnds(t *testing.T) {
 	}
 }
 
-// V-10: one window per run. The slot is reserved before the yield and the yield runs before the runner call;
+// One window per run. The slot is reserved before the yield and the yield runs before the runner call;
 // a browser session that does not close refuses the open and releases the slot; a second open, or a Mac window
 // on the run, is refused before any runner call.
 func TestLocalWindowOneKeyboard(t *testing.T) {
@@ -696,7 +697,7 @@ func TestLocalWindowOneKeyboard(t *testing.T) {
 	})
 }
 
-// V-11: an open writes takeover.begin success and every end takeover.close, both with surface local_window, the
+// An open writes takeover.begin success and every end takeover.close, both with surface local_window, the
 // grant and the runner; the close carries refusal_kind and cut_text_dropped when the runner reports them; a
 // denial writes the denied row.
 func TestLocalWindowAudit(t *testing.T) {
@@ -730,7 +731,7 @@ func TestLocalWindowAudit(t *testing.T) {
 	r.wantRefused(w, rf, http.StatusForbidden, reasonLocalWindowSiteOff)
 }
 
-// V-14: each re-check that keeps the window stamps the run's presence and touches it, as the open does once.
+// Each re-check that keeps the window stamps the run's presence and touches it, as the open does once.
 func TestLocalWindowIsPresence(t *testing.T) {
 	r := newLocalWindowRig(t)
 	r.st.stampMode.Store(stampStoreFails) // no stamp lands, so none is debounced: every pass reaches the store
@@ -747,7 +748,7 @@ func TestLocalWindowIsPresence(t *testing.T) {
 	}
 }
 
-// V-14: a re-check that finds the run paused ends the window with local_window_paused and stamps and touches
+// A re-check that finds the run paused ends the window with local_window_paused and stamps and touches
 // nothing; an open on a paused run is refused with no stamp.
 func TestLocalWindowClosesOnPause(t *testing.T) {
 	r := newLocalWindowRig(t)
@@ -774,7 +775,7 @@ func TestLocalWindowClosesOnPause(t *testing.T) {
 	}
 }
 
-// V-16: until the window is served end to end the key is unavailable: a write that turns it on is refused
+// Until the window is served end to end the key is unavailable: a write that turns it on is refused
 // feature_unavailable, and a stored switch reads off. Real registrations, no matrix server.
 func TestLocalWindowUnavailableUntilServed(t *testing.T) {
 	if siteFeatureAvailable(featureLocalWindow) {
@@ -784,5 +785,199 @@ func TestLocalWindowUnavailableUntilServed(t *testing.T) {
 	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"local_window":{"enabled":true}}}`), fake, reasonSiteFeatureUnavailable)
 	if localWindowOn(localWindowOnConfig()) {
 		t.Fatal("a stored local_window switch reads on while the key is unavailable")
+	}
+}
+
+// The open re-reads the credential after the rows and before it reserves the slot: a credential that is cut off,
+// unreadable or bound to nothing refuses with no slot, no yield of browser control and no runner call, and writes
+// one denied row. A console session, an API token and a CLI session each open while live.
+func TestLocalWindowOpenChecksTheCredential(t *testing.T) {
+	gone := errors.New("conn closed by peer")
+	token := func(r *localWindowRig, id uuid.UUID) macWindowAuthority {
+		a := r.auth()
+		a.Token, a.TokenID = true, id
+		return a
+	}
+	cli := func(r *localWindowRig, id uuid.UUID) macWindowAuthority {
+		a := r.auth()
+		a.Token, a.CLISessionID = true, id
+		return a
+	}
+	cases := []struct {
+		name   string
+		auth   func(r *localWindowRig) macWindowAuthority
+		opens  bool
+		status int // the refusal's status; 0 on a refusal is a server error
+		reason string
+	}{
+		{"a live console session", func(r *localWindowRig) macWindowAuthority { return r.auth() }, true, 0, ""},
+		{"a console session that was cut off", func(r *localWindowRig) macWindowAuthority {
+			r.rev.set(true, nil)
+			return r.auth()
+		}, false, http.StatusForbidden, reasonMacWindowRevoked},
+		{"a console session whose revocation can't be read", func(r *localWindowRig) macWindowAuthority {
+			r.rev.set(false, gone)
+			return r.auth()
+		}, false, 0, ""},
+		{"a token authority bound to no token or CLI session", func(r *localWindowRig) macWindowAuthority {
+			a := r.auth()
+			a.Token = true
+			return a
+		}, false, http.StatusForbidden, uiDeniedReasonRevocationUnavailable},
+		{"a live API token", func(r *localWindowRig) macWindowAuthority {
+			id := uuid.New()
+			r.st.liveToken(id)
+			return token(r, id)
+		}, true, 0, ""},
+		{"a revoked API token", func(r *localWindowRig) macWindowAuthority {
+			id := uuid.New()
+			r.st.liveToken(id)
+			if _, err := r.st.RevokeAPIToken(context.Background(), id, "", time.Now()); err != nil {
+				r.t.Fatal(err)
+			}
+			return token(r, id)
+		}, false, http.StatusForbidden, reasonMacWindowRevoked},
+		{"a live CLI session", func(r *localWindowRig) macWindowAuthority { return cli(r, r.st.cliSession(nil)) }, true, 0, ""},
+		{"an ended CLI session", func(r *localWindowRig) macWindowAuthority {
+			id := r.st.cliSession(nil)
+			r.st.endCLISession(id)
+			return cli(r, id)
+		}, false, http.StatusForbidden, reasonMacWindowRevoked},
+		{"a CLI session past its lifetime", func(r *localWindowRig) macWindowAuthority {
+			return cli(r, r.st.cliSession(func(row *store.CLISessionRow) { row.ExpiresAt = time.Now().Add(-time.Minute) }))
+		}, false, http.StatusForbidden, reasonMacWindowRevoked},
+		{"a CLI session that no longer exists", func(r *localWindowRig) macWindowAuthority { return cli(r, uuid.New()) },
+			false, http.StatusForbidden, reasonMacWindowRevoked},
+		{"a live CLI session whose sign-in was cut off", func(r *localWindowRig) macWindowAuthority {
+			id := r.st.cliSession(nil)
+			r.rev.set(true, nil)
+			return cli(r, id)
+		}, false, http.StatusForbidden, reasonMacWindowRevoked},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLocalWindowRig(t)
+			a := tc.auth(r)
+			yield, yielded := context.WithCancel(context.Background())
+			t.Cleanup(yielded)
+			untrack := r.h.srv.desktopControl.track(r.h.run.ID, yielded) // a browser desktop with control of the run
+			go func() { <-yield.Done(); untrack() }()
+			w, rf := r.open(a)
+			if tc.opens {
+				if rf != nil || w == nil || r.sub.openCount() != 1 || yield.Err() == nil {
+					t.Fatalf("open = %v %+v, %d runner calls, yielded %v; want an open window", w, rf, r.sub.openCount(), yield.Err() != nil)
+				}
+				return
+			}
+			if tc.status != 0 {
+				r.wantRefused(w, rf, tc.status, tc.reason)
+			} else {
+				if w != nil || rf == nil || rf.err == nil {
+					t.Fatalf("open = %v %+v, want a server error", w, rf)
+				}
+				if n := r.sub.openCount(); n != 0 {
+					t.Errorf("%d runner calls on a refused open", n)
+				}
+				if b := r.rows("takeover.begin"); len(b) != 1 || b[0].Outcome != "denied" {
+					t.Errorf("begin rows = %+v, want one denied row", b)
+				}
+			}
+			if yield.Err() != nil {
+				t.Error("a refused open ended browser control of the run")
+			}
+			if r.h.srv.localWindows.open(r.h.run.ID) != nil {
+				t.Error("a refused open holds the slot")
+			}
+		})
+	}
+}
+
+// GET /runs/{id}'s local_window is there only for the run's creator, on a Linux VM run that is starting or running
+// and not kept. It says open, with when, for a window that is open or still opening, and closed otherwise.
+func TestLocalWindowViewFor(t *testing.T) {
+	r := newLocalWindowRig(t)
+	kinds := []types.MachineKind{types.MachineLinuxVM, types.MachineMacOSVM, types.MachineContainer, ""}
+	states := []types.RunState{types.RunQueued, types.RunPending, types.RunStarting, types.RunRunning, types.RunWaiting,
+		types.RunStopped, types.RunArchived, types.RunFailed, types.RunKilled, types.RunCompleted}
+	callers := []struct {
+		name, creator, principal string
+		operator, enters         bool
+	}{
+		{"the creator", "alice", "alice", false, true},
+		{"another member", "alice", "bob", false, false},
+		{"a super admin on an operator's run", "ops", "admin", true, false},
+		{"no principal on a run with no creator", "", "", false, false},
+	}
+	lost := time.Now()
+	n := 0
+	for _, kind := range kinds {
+		for _, state := range states {
+			for _, kept := range []bool{false, true} {
+				for _, c := range callers {
+					run := types.AgentRun{ID: uuid.New(), MachineKind: kind, State: state, CreatedBy: c.creator, OperatorOwned: c.operator}
+					if kept {
+						run.LostAt = &lost
+					}
+					want := kind == types.MachineLinuxVM && (state == types.RunStarting || state == types.RunRunning) && !kept && c.enters
+					v := r.h.srv.localWindowViewFor(run, c.principal)
+					if (v != nil) != want || (v != nil && (v.Open || v.OpenedAt != nil)) {
+						t.Errorf("%s, %s, kept %v, %s: view = %+v, want present %v and closed", kind, state, kept, c.name, v, want)
+					}
+					n++
+				}
+			}
+		}
+	}
+	if n != 320 {
+		t.Fatalf("%d combinations, want 320", n)
+	}
+
+	opening := types.AgentRun{ID: uuid.New(), MachineKind: types.MachineLinuxVM, State: types.RunRunning, CreatedBy: "alice"}
+	reserved := &localWindow{runID: opening.ID, opened: time.Now().Add(-time.Second)}
+	if !r.h.srv.localWindows.reserve(reserved) {
+		t.Fatal("reserve refused")
+	}
+	if v := r.h.srv.localWindowViewFor(opening, "alice"); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(reserved.opened) {
+		t.Errorf("a window still opening: view = %+v, want open at %v", v, reserved.opened)
+	}
+	r.h.srv.localWindows.release(reserved)
+
+	w := r.mustOpen()
+	if v := r.h.srv.localWindowViewFor(r.h.run, r.h.run.CreatedBy); v == nil || !v.Open || v.OpenedAt == nil || !v.OpenedAt.Equal(w.opened) {
+		t.Errorf("an open window: view = %+v, want open at %v", v, w.opened)
+	}
+	if v := r.h.srv.localWindowViewFor(r.h.run, "bob"); v != nil {
+		t.Errorf("an open window seen by another member: view = %+v, want none", v)
+	}
+	other := r.h.run
+	other.ID = uuid.New()
+	if v := r.h.srv.localWindowViewFor(other, other.CreatedBy); v == nil || v.Open || v.OpenedAt != nil {
+		t.Errorf("another run beside an open window: view = %+v, want closed", v)
+	}
+}
+
+// A presence stamp that fails after the runner opened the window closes the runner's session, frees the slot and
+// writes only the denied row: no success row and no touch of the run.
+func TestLocalWindowStampFailureReleases(t *testing.T) {
+	r := newLocalWindowRig(t)
+	r.st.stampMode.Store(stampThawFails)
+	w, rf := r.open(r.auth())
+	if w != nil || rf == nil || rf.status != http.StatusConflict || rf.body.Reason != reasonLocalWindowPaused {
+		t.Fatalf("open = %v %+v, want 409 %s", w, rf, reasonLocalWindowPaused)
+	}
+	if n := r.sub.openCount(); n != 1 {
+		t.Fatalf("%d runner calls, want the one that opened", n)
+	}
+	if !r.sub.session(0).closed.Load() {
+		t.Error("the runner's session was not closed")
+	}
+	if r.h.srv.localWindows.open(r.h.run.ID) != nil {
+		t.Error("the slot was kept")
+	}
+	if b := r.rows("takeover.begin"); len(b) != 1 || b[0].Outcome != "denied" || rowData(t, b[0])["reason"] != reasonLocalWindowPaused {
+		t.Errorf("begin rows = %+v, want one denied row naming %s", b, reasonLocalWindowPaused)
+	}
+	if n := r.st.touched.Load(); n != 0 {
+		t.Errorf("the run was touched %d times", n)
 	}
 }
