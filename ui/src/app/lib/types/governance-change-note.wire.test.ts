@@ -64,12 +64,12 @@ describe("Governance change wire (GET /governance/changes)", () => {
     const goNote = readFileSync(join(root, "internal/types/governance_change_note.go"), "utf8");
     const goClient = readFileSync(join(root, "pkg/client/governance.go"), "utf8");
     const ts = readFileSync(join(root, "ui/src/app/lib/types/governance-change.ts"), "utf8");
-    // approvers rides only the read of one change (governanceChangeRead), and tokens_revocation_failed,
+    // approvals and approvers ride only the routes (governanceChangeRead and the list rows), and tokens_revocation_failed,
     // runs_end_failed and detail only an approval's answer, and warnings only a 202's pending_change, so the
     // SDK struct carries them too.
     const tsKeys = tsInterfaceTopKeys(ts, "GovernanceChange").sort();
     expect(tsKeys.length).toBeGreaterThanOrEqual(12); // stale-regex guard
-    const routeOnly = ["approvers", "detail", "runs_end_failed", "tokens_revocation_failed", "warnings"];
+    const routeOnly = ["approvals", "approvers", "detail", "runs_end_failed", "tokens_revocation_failed", "warnings"];
     expect(tsKeys.filter((k) => !routeOnly.includes(k))).toEqual(goJSONTags(goTypes, "GovernanceChange").sort());
     expect(tsKeys).toEqual(goJSONTags(goClient, "GovernanceChange").sort());
     expect(tsInterfaceTopKeys(ts, "GovernanceChangeNote").sort()).toEqual(goJSONTags(goNote, "ChangeNote").sort());

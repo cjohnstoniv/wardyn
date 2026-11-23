@@ -53,7 +53,9 @@
 //     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
 //     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange, GetGovernanceChangeImpact,
+//     ApproveGovernanceChangeWithReason, TakeBackGovernanceApproval
+//   - approval counts (/api/v1/governance/approval-counts): GetApprovalCounts, PutApprovalCounts
 //   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
 //     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription

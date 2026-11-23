@@ -67,7 +67,8 @@ func governanceCmd(client clientFn) *cobra.Command {
 			"`wardyn governance changes approve <id>`.",
 	}
 	cmd.AddCommand(governanceGetCmd(client), governancePlanCmd(client), governanceSetCmd(client), governanceChangesCmd(client),
-		governanceCheckCmd(client), governanceDryRunCmd(client), governanceAdminsCmd(client), governanceDecidersCmd(client))
+		governanceCheckCmd(client), governanceDryRunCmd(client), governanceAdminsCmd(client), governanceDecidersCmd(client),
+		governanceApprovalsNeededCmd(client))
 	return subcommandGroup(cmd)
 }
 
@@ -314,7 +315,7 @@ func printGovernancePending(w io.Writer, res sdk.GovernanceApplyResult) {
 func governanceChangesCmd(client clientFn) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "changes",
-		Short: "List, approve or reject governance changes held for a second approver",
+		Short: "List, show, approve, take back or reject governance changes held for approval",
 	}
 	var state string
 	var asJSON bool
@@ -342,26 +343,16 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 	list.Flags().StringVar(&state, "state", "", "filter by state: pending, applied, rejected, expired or stale (default: the server's)")
 	list.Flags().BoolVar(&asJSON, "json", false, "emit raw JSON")
 
+	var approveReason string
 	approve := &cobra.Command{
 		Use:   "approve <change-id>",
-		Short: "Approve a pending governance change, which applies it",
+		Short: "Approve a pending governance change; it applies once enough people have approved",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := parseID("governance change", args[0])
-			if err != nil {
-				return err
-			}
-			ch, err := client().ApproveGovernanceChange(cmd.Context(), id)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "governance change %s -> %s\n", ch.ID, ch.State)
-			if ch.TokensRevocationFailed {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", ch.Detail)
-			}
-			return nil
+			return approveChange(cmd, client(), args[0], approveReason)
 		},
 	}
+	approve.Flags().StringVar(&approveReason, "reason", "", "reason recorded with your approval")
 
 	var reason string
 	reject := &cobra.Command{
@@ -385,7 +376,7 @@ func governanceChangesCmd(client clientFn) *cobra.Command {
 		},
 	}
 	reject.Flags().StringVar(&reason, "reason", "", "reason recorded with the rejection")
-	cmd.AddCommand(list, approve, reject)
+	cmd.AddCommand(list, changeShowCmd(client), approve, reject, changeTakeBackCmd(client))
 	return subcommandGroup(cmd)
 }
 
