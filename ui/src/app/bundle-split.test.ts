@@ -5,7 +5,7 @@
 
 // @vitest-environment node
 
-// Guards the route-level code-splitting in App.tsx.
+// Guards the route-level code-splitting in lazy-routes.ts (imported by App.tsx).
 //
 // The split is one-import fragile: any module reachable from the EAGER entry
 // graph (App -> AppShell -> RunsScreen) that statically imports a lazy screen
