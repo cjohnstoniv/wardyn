@@ -38,6 +38,7 @@ type forwardOrgFixture struct {
 	checks  atomic.Int32
 	dials   atomic.Int32
 	check   func(w http.ResponseWriter, r *http.Request)
+	dial    func(w http.ResponseWriter, r *http.Request) bool // true: it answered, no WebSocket
 	mint    func(n int, w http.ResponseWriter)
 	mu      sync.Mutex
 	ports   []string
@@ -74,6 +75,9 @@ func newForwardOrgFixture(t *testing.T) *forwardOrgFixture {
 		f.ports = append(f.ports, q.Get("port"))
 		f.tickets = append(f.tickets, q.Get("ticket"))
 		f.mu.Unlock()
+		if f.dial != nil && f.dial(w, r) {
+			return
+		}
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -367,4 +371,48 @@ func TestRunForward_LocalPortInUse(t *testing.T) {
 	if f.dials.Load() != 0 {
 		t.Errorf("dials = %d, want 0", f.dials.Load())
 	}
+}
+
+// dropConn ends the request's connection with no answer, as a transport failure does.
+func dropConn(w http.ResponseWriter) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err == nil {
+		_ = conn.Close()
+	}
+}
+
+// TestRunForward_TransportErrorNeverPrintsTheTicket: an error that quotes the request's URL carries the ticket
+// query; the ticket was never spent, so it stays off stderr.
+func TestRunForward_TransportErrorNeverPrintsTheTicket(t *testing.T) {
+	t.Run("pre_check", func(t *testing.T) {
+		f := newForwardOrgFixture(t)
+		f.check = func(w http.ResponseWriter, _ *http.Request) { dropConn(w) }
+		_, err := runForwardSync(t, f, strconv.Itoa(freePort(t))+":4000")
+		if err == nil || !strings.HasPrefix(err.Error(), "forward:") {
+			t.Fatalf("err = %v, want a forward: refusal", err)
+		}
+		if strings.Contains(err.Error(), "ticket-") || !strings.Contains(err.Error(), "ticket=REDACTED") {
+			t.Errorf("err = %q, want the ticket value redacted", err)
+		}
+	})
+	t.Run("dial", func(t *testing.T) {
+		f := newForwardOrgFixture(t)
+		f.dial = func(w http.ResponseWriter, _ *http.Request) bool { dropConn(w); return true }
+		port := freePort(t)
+		stderr, cancel, done := startForward(t, f, strconv.Itoa(port)+":4000")
+		waitForText(t, stderr, "(Ctrl-C to stop)")
+		conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = conn.Read(make([]byte, 1))
+		conn.Close()
+		waitForText(t, stderr, "forward: 4000:")
+		if out := stderr.String(); strings.Contains(out, "ticket-") {
+			t.Errorf("stderr %q holds a ticket value", out)
+		}
+		cancel()
+		<-done
+	})
 }

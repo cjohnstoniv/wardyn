@@ -416,7 +416,7 @@ func TestAttachForward_SwitchReadIsOneFunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var calls []string
+	var calls, literals []string
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
@@ -425,6 +425,12 @@ func TestAttachForward_SwitchReadIsOneFunction(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Value == `"`+envAttachForward+`"` {
+				literals = append(literals, name)
+			}
+			return true
+		})
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if !ok || fd.Body == nil {
@@ -449,6 +455,10 @@ func TestAttachForward_SwitchReadIsOneFunction(t *testing.T) {
 	}
 	if want := []string{"attach_forward.go:attachForwardOn"}; !slices.Equal(calls, want) {
 		t.Errorf("envEnabled(envAttachForward) is called in %v, want %v", calls, want)
+	}
+	// The name is spelled once, as the const: any other literal could read the switch around attachForwardOn.
+	if want := []string{"runs_dispatch_mounts.go"}; !slices.Equal(literals, want) {
+		t.Errorf("the literal %q appears in %v, want only %v", envAttachForward, literals, want)
 	}
 }
 
@@ -678,17 +688,67 @@ func (fr *forwardRig) memberCookie(t *testing.T, sub string) *http.Cookie {
 
 func TestAttachForward_TicketLaneOwnerRule(t *testing.T) {
 	fr := newForwardRig(t, true, nil)
-	other := fr.addRun("another-member", nil)
-	// A ticket minted for run B and presented on run A is refused at redemption.
-	tk := fr.ticketFor(t, other, "another-member", oidc.RoleUser)
-	w := fr.get(t, fr.runID, "port=3000&ticket="+tk)
-	if w.Code < 400 || w.Code >= 500 {
-		t.Errorf("another run's ticket = %d %s, want a refusal", w.Code, w.Body)
-	}
+	// A ticket the owner minted for their own run B and presented on their own run A is refused at redemption: the
+	// entry rule would let the same person into A, so only the ticket's run binding refuses it.
+	otherOwn := fr.addRun(forwardOwner, nil)
+	tk := fr.ticketFor(t, otherOwn, forwardOwner, oidc.RoleUser)
+	fr.wantReason(t, fr.get(t, fr.runID, "port=3000&check=1&ticket="+tk), http.StatusForbidden, reasonUIGatewayTicketInvalid)
 	// An admin-stamped ticket on a person's run is refused by the owner rule.
 	adminTk := fr.ticketFor(t, fr.runID, "some-admin", oidc.RoleAdmin)
 	fr.wantReason(t, fr.get(t, fr.runID, "port=3000&ticket="+adminTk), http.StatusForbidden, runOwnerOnlyReason)
 	fr.wantNoExec(t)
+}
+
+// TestAttachForward_AcceptFailureWritesTheStartFailureRow: a request that is not a WebSocket upgrade passes every
+// check and starts the relay, then Accept refuses it: the relay is closed, the slot is free and one failure row says so.
+func TestAttachForward_AcceptFailureWritesTheStartFailureRow(t *testing.T) {
+	fr := newForwardRig(t, true, nil)
+	w := fr.refusedAs(t, "3000", "")
+	if w.Code < 400 {
+		t.Errorf("a plain GET = %d %s, want Accept's refusal", w.Code, w.Body)
+	}
+	if n := fr.execs.Load(); n != 1 {
+		t.Fatalf("ExecStream calls = %d, want 1", n)
+	}
+	if relay := fr.relay(0); relay == nil || relay.closes.Load() == 0 {
+		t.Error("the relay was left open after Accept failed")
+	}
+	rows := fr.waitRows(t, 1)
+	f := rowFields(t, rows[0])
+	if len(rows) != 1 || rows[0].Outcome != "failure" || f["port"] != float64(3000) || f["error"] != attachForwardFailedMsg {
+		t.Errorf("rows = %v, want one failure on port 3000 with error %q", rows, attachForwardFailedMsg)
+	}
+	if !fr.slotsFree() {
+		t.Error("a failed Accept left a channel slot held")
+	}
+}
+
+// TestAttachForward_RecheckReadFailures: with no credential check (base nil, a super admin's ticket with no
+// revocation store), a run that cannot be read ends the forward as a failed read, never as an ended run.
+func TestAttachForward_RecheckReadFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prep func(*forwardRig)
+		want error
+	}{
+		{"run_read_fails", func(fr *forwardRig) { fr.st.getRunErr.Store(true) }, errAttachForwardReadFailed},
+		{"run_completed", func(fr *forwardRig) { fr.setRun(fr.runID, func(r *types.AgentRun) { r.State = types.RunCompleted }) }, errAttachForwardRunEnded},
+		{"rule_read_fails", func(fr *forwardRig) { fr.st.ruleErr.Store(true) }, errAttachForwardReadFailed},
+		{"rule_blocked", func(fr *forwardRig) { fr.st.rule.Store(types.TransferBlocked) }, errAttachForwardDataOut},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := newForwardRig(t, true, nil)
+			tc.prep(fr)
+			var cause error
+			stop := func(c error) error { cause = c; return errAttachAuthorityEnded }
+			if err := fr.srv.attachForwardRecheck(fr.runID, nil, stop)(context.Background()); err == nil {
+				t.Fatal("the re-check passed")
+			}
+			if !errors.Is(cause, tc.want) {
+				t.Errorf("the re-check ended with %v, want %v", cause, tc.want)
+			}
+		})
+	}
 }
 
 func TestAttachForward_CheckOpensNothing(t *testing.T) {
@@ -845,6 +905,7 @@ func TestAttachForward_GonePeerIsReaped(t *testing.T) {
 			fr.srv.pingEvery = forwardTick
 			c := fr.dial(t, "3000")
 			relay := fr.waitRelayOpen(t)
+			start := time.Now() // the dial, or the last byte below
 			if tc != "no_byte_moved" {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
@@ -854,9 +915,13 @@ func TestAttachForward_GonePeerIsReaped(t *testing.T) {
 				if _, _, err := c.Read(ctx); err != nil {
 					t.Fatal(err)
 				}
+				start = time.Now()
 			}
 			// The client reads nothing from here on, so it answers no ping.
 			waitFor(t, "the relay to be closed by the ping", func() bool { return relay.closes.Load() > 0 })
+			if took := time.Since(start); took > 20*forwardTick {
+				t.Errorf("the gone peer was reaped after %s, want within 20 intervals (%s)", took, 20*forwardTick)
+			}
 			rows := fr.waitRows(t, 1)
 			if rows[0].Outcome != "failure" || rowFields(t, rows[0])["error"] != attachForwardEndPing {
 				t.Errorf("row = %s %s, want a failure with error %q", rows[0].Outcome, rows[0].Data, attachForwardEndPing)

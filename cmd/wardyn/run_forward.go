@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,15 +108,6 @@ func formatForward(local, remote int) string {
 	return "127.0.0.1:" + strconv.Itoa(local) + ":127.0.0.1:" + strconv.Itoa(remote)
 }
 
-// parseForward turns "R" or "L:R" into ssh's "127.0.0.1:L:127.0.0.1:R".
-func parseForward(spec string) (string, error) {
-	local, remote, err := splitForward(spec)
-	if err != nil {
-		return "", err
-	}
-	return formatForward(local, remote), nil
-}
-
 // forwardSSHArgs is ssh(1)'s argv for forward.
 func forwardSSHArgs(acc sshAccess, runID string, forwards []string) []string {
 	a := []string{"-N", "-o", "ExitOnForwardFailure=yes"}
@@ -200,14 +192,14 @@ func forwardPreCheck(ctx context.Context, c *sdk.Client, runID string, port int)
 	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach/forward?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return fmt.Errorf("forward: %w", err)
+		return errors.New("forward: " + redactTicket(err.Error()))
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	resp, err := orgClient(c.BaseURL, 30*time.Second).Do(req)
 	if err != nil {
-		return fmt.Errorf("forward: %w", err)
+		return errors.New("forward: " + redactTicket(err.Error()))
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
@@ -282,5 +274,12 @@ func apiSentence(err error) string {
 			return env.Error
 		}
 	}
-	return err.Error()
+	return redactTicket(err.Error())
 }
+
+// ticketQuery matches a ticket's value in a URL query, which a transport error's text carries whole.
+var ticketQuery = regexp.MustCompile(`ticket=[^&\s"']*`)
+
+// redactTicket hides every ticket value in s, so a transport error that quotes the request's URL never puts a
+// ticket that was not spent on stderr.
+func redactTicket(s string) string { return ticketQuery.ReplaceAllString(s, "ticket=REDACTED") }

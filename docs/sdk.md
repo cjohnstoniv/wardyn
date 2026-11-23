@@ -347,7 +347,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - A helper's, a portal's or an issuer portal's ticket is refused with `403 attach_ticket_not_your_run`.
 - The route is off unless the operator turns it on (`WARDYN_ATTACH_FORWARD`); `WARDYN_SSH_CHANNELS` without `forward` also turns it off (`409 run_forward_off`).
 - Its other refusals: `data_out_blocked`, `run_background_only`, `run_forward_invalid`, `run_forward_port_refused`, `run_forward_unavailable`, `run_forward_busy` (the run's SSH channel cap) and `run_forward_failed`, plus `run_inspect_exec_stream_unsupported`.
-- `&check=1` runs every check and answers `204` without opening anything.
+- `&check=1` runs the entry, switch, port, `data_out` and run-state checks and answers `204` without opening anything. It skips the thaw and the channel cap, so a full run can still answer `429` to the forward itself.
 - An open forward is checked again every 30 s: its credential, the entry rule, `deny_interactive`, the run's state and its `data_out` rule. The first check that fails ends it.
 - A client that answers no ping is ended (`Ping timeout.`): within 90 s of the last byte either way, or 60 s when none moved. A window in which a write into the sandbox, or to the client, was waiting does not count, so a stalled transfer is not cut. A client that reads nothing while the run has nothing more to send looks the same as one that is gone.
 - There is no half-close: a client that sends and then half-closes may lose the reply.
