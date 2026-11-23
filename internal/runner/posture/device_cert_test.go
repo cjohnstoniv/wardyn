@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -234,4 +235,90 @@ func TestDeviceCertSender_TrimsAnOversizeReportAndKeepsSending(t *testing.T) {
 		t.Fatalf("second send: %v, %d events", err, len(sizes))
 	}
 	<-got
+}
+
+// A helper that skipped an identity says so on stderr and still exits 0: the runner logs it and uses the report.
+func TestDeviceCert_ExecHelperLogsItsNotesOnSuccess(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	p := fakeHelper(t, `echo 'wardyn-macvm: skipped the identity whose certificate has SHA-256 abc: refused' >&2
+echo '{"proofs":[]}'
+`)
+	rep, err := execHelper(p)(t.Context(), "/state", strings.Repeat("b", 64), certNow)
+	if err != nil || len(rep.Proofs) != 0 {
+		t.Fatalf("report %+v, %v", rep, err)
+	}
+	if got := logs.String(); !strings.Contains(got, "level=INFO") || !strings.Contains(got, "skipped the identity whose certificate has SHA-256 abc") {
+		t.Fatalf("log %q does not carry the helper's note at Info", got)
+	}
+}
+
+func reportSize(t *testing.T, proofs []runnerwire.DeviceCertProof) int {
+	t.Helper()
+	b, err := runnerwire.Marshal(runnerwire.DeviceCertReport{Proofs: proofs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(b)
+}
+
+func proofOf(n int, b byte) runnerwire.DeviceCertProof {
+	return runnerwire.DeviceCertProof{Chain: [][]byte{bytes.Repeat([]byte{b}, n)}, SignedAt: certNow, Signature: []byte{b}}
+}
+
+// A lone identity over the cap leaves an empty report, which still goes out; the boundary is the cap itself.
+func TestMarshalWithinCap_LoneIdentityAndExactBoundary(t *testing.T) {
+	data, err := marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{proofOf(devicecert.MaxEventBytes, 1)}})
+	var rep runnerwire.DeviceCertReport
+	if err != nil || len(data) > devicecert.MaxEventBytes || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 0 {
+		t.Fatalf("lone oversize identity: %d bytes, %+v, %v", len(data), rep, err)
+	}
+	// The largest identity that still fits beside a small one is kept; one byte more group of base64 drops it.
+	small := proofOf(10, 2)
+	fit := 0
+	for n := devicecert.MaxEventBytes*3/4 - 1000; reportSize(t, []runnerwire.DeviceCertProof{small, proofOf(n, 3)}) <= devicecert.MaxEventBytes; n++ {
+		fit = n
+	}
+	if fit == 0 {
+		t.Fatal("no identity fits")
+	}
+	if gap := devicecert.MaxEventBytes - reportSize(t, []runnerwire.DeviceCertProof{small, proofOf(fit, 3)}); gap < 0 || gap >= 4 {
+		t.Fatalf("the largest fitting report is %d bytes under the cap, want under 4", gap)
+	}
+	data, err = marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{small, proofOf(fit, 3)}})
+	rep = runnerwire.DeviceCertReport{}
+	if err != nil || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 2 {
+		t.Fatalf("a report within the cap lost an identity: %d proofs, %v", len(rep.Proofs), err)
+	}
+	data, err = marshalWithinCap(t.Context(), runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{small, proofOf(fit+1, 3)}})
+	rep = runnerwire.DeviceCertReport{}
+	if err != nil || runnerwire.Unmarshal(data, &rep) != nil || len(rep.Proofs) != 1 || rep.Proofs[0].Signature[0] != 2 {
+		t.Fatalf("a report over the cap kept %d proofs, want only the small one", len(rep.Proofs))
+	}
+}
+
+// The helper's context ends with the session: a Watch whose helper is waiting returns when the peer ends.
+func TestDeviceCertSender_WatchEndsWithThePeer(t *testing.T) {
+	run, _ := deviceCertPeers(t)
+	started := make(chan struct{})
+	s := newDeviceCertSender(func(ctx context.Context, _, _ string, _ time.Time) (runnerwire.DeviceCertReport, error) {
+		close(started)
+		<-ctx.Done()
+		return runnerwire.DeviceCertReport{}, ctx.Err()
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	done := make(chan struct{})
+	go func() { s.Watch(run); close(done) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the helper never started")
+	}
+	run.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Watch kept waiting on the helper after the peer ended")
+	}
 }

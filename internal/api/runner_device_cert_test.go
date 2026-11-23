@@ -1264,3 +1264,38 @@ func TestMDMDeviceSetActionIsThePlacementOne(t *testing.T) {
 		t.Fatalf("%q is not placement's %q", auditRunnersMDMDeviceSet, placement.ActionRunnersMDMDeviceSet)
 	}
 }
+
+// mdmChainRefusal names the certificate Go found at fault: the device's, a CA's or an intermediate's, expired or not yet
+// valid, and falls back to the device's when Go names none.
+func TestMDMChainRefusal_NamesTheCertificateAtFault(t *testing.T) {
+	now := time.Date(2030, 6, 15, 12, 0, 0, 0, time.UTC)
+	cert := func(raw byte, from, to time.Duration) *x509.Certificate {
+		return &x509.Certificate{Raw: []byte{raw}, NotBefore: now.Add(from), NotAfter: now.Add(to)}
+	}
+	day := func(c *x509.Certificate, end bool) string {
+		if end {
+			return c.NotAfter.UTC().Format("2006-01-02")
+		}
+		return c.NotBefore.UTC().Format("2006-01-02")
+	}
+	notYet := cert(1, 48*time.Hour, 72*time.Hour)
+	gone := cert(1, -96*time.Hour, -48*time.Hour)
+	caNotYet := cert(2, 72*time.Hour, 96*time.Hour)
+	interGone := cert(3, -96*time.Hour, -48*time.Hour)
+	for name, c := range map[string]struct {
+		leaf, bad *x509.Certificate
+		want      string
+	}{
+		"no certificate named, device not yet valid": {notYet, nil, "'s MDM device certificate is not valid until " + day(notYet, false) + "."},
+		"no certificate named, device expired":       {gone, nil, "'s MDM device certificate expired on " + day(gone, true) + "."},
+		"the device's own certificate named":         {notYet, notYet, "'s MDM device certificate is not valid until " + day(notYet, false) + "."},
+		"a CA not yet valid":                         {notYet, caNotYet, "'s MDM device certificate chain holds a CA certificate that is not valid until " + day(caNotYet, false) + "."},
+		"a presented intermediate that expired":      {notYet, interGone, "'s MDM device certificate chain holds a CA certificate that expired on " + day(interGone, true) + "."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mdmChainRefusal(x509.CertificateInvalidError{Cert: c.bad, Reason: x509.Expired}, c.leaf, now); got != c.want {
+				t.Fatalf("sentence %q, want %q", got, c.want)
+			}
+		})
+	}
+}

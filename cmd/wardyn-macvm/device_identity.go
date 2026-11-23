@@ -60,6 +60,9 @@ func cmdDeviceIdentity(args []string, d deps) int {
 	return 0
 }
 
+// maxSkipLines is how many skipped identities get a line of their own; the runner reads at most 4096 bytes of stderr.
+const maxSkipLines = 8
+
 // helperErrorPrefix starts the helper's own error line; the runner reads it back (wardyn-runnerd's helperFailurePrefix).
 const helperErrorPrefix = "wardyn-macvm: "
 
@@ -120,12 +123,18 @@ func printDeviceIdentity(args []string, d deps) error {
 		}
 		if err != nil {
 			// One key that will not sign must not cost the others their proof: say which, and go on.
-			leaf := sha256.Sum256(id.Chain[0])
-			fmt.Fprintf(d.stderr, "%sskipped the identity whose certificate has SHA-256 %x: %v\n", helperErrorPrefix, leaf, err)
+			// At most maxSkipLines lines, then one count, so the runner's stderr budget is never passed.
+			if refused < maxSkipLines {
+				leaf := sha256.Sum256(id.Chain[0])
+				fmt.Fprintf(d.stderr, "%sskipped the identity whose certificate has SHA-256 %x: %v\n", helperErrorPrefix, leaf, err)
+			}
 			refused++
 			continue
 		}
 		report.Proofs = append(report.Proofs, identityProof{Chain: id.Chain, SignedAt: signedAt, Signature: sig})
+	}
+	if refused > maxSkipLines {
+		fmt.Fprintf(d.stderr, "%s%d more identities skipped\n", helperErrorPrefix, refused-maxSkipLines)
 	}
 	if refused > 0 && len(report.Proofs) == 0 {
 		return fmt.Errorf("device-identity: no identity could be signed (%d refused)", refused)

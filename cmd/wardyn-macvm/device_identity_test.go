@@ -245,3 +245,24 @@ func TestDeviceIdentity_TheCapCountsProofsNotIdentities(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
 	}
 }
+
+// More refusing identities than the runner's 4096-byte stderr budget has lines for: at most 8 lines of their own and
+// one count, so the usable identity beside them is still reported.
+func TestDeviceIdentity_SkipLinesStayWithinTheRunnersStderrBudget(t *testing.T) {
+	dir, _ := identityFixture(t)
+	args := []string{"device-identity", "--state-dir", dir, "--org-sha256", orgHash(), "--signed-at", identityNow.Format(time.RFC3339)}
+	var ids []deviceIdentity
+	for i := 0; i < 30; i++ {
+		ids = append(ids, deviceIdentity{Chain: [][]byte{{byte(i + 1)}}, sign: func([]byte) ([]byte, error) { return nil, errors.New("the keychain refused to sign") }})
+	}
+	ids = append(ids, deviceIdentity{Chain: [][]byte{{200}}, sign: func([]byte) ([]byte, error) { return []byte{7}, nil }})
+	d, out, errb := deviceDeps(fakeSource{ids: ids})
+	var rep runnerwire.DeviceCertReport
+	if code := run(context.Background(), args, d); code != 0 || json.Unmarshal(out.Bytes(), &rep) != nil || len(rep.Proofs) != 1 {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
+	}
+	lines := strings.Split(strings.TrimSpace(errb.String()), "\n")
+	if errb.Len() >= 4096 || len(lines) != maxSkipLines+1 || !strings.HasSuffix(lines[len(lines)-1], "22 more identities skipped") {
+		t.Fatalf("%d bytes, %d lines, last %q", errb.Len(), len(lines), lines[len(lines)-1])
+	}
+}

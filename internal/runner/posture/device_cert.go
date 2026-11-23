@@ -182,6 +182,10 @@ func execHelper(path string) DeviceIdentityHelper {
 		if err := cmd.Run(); err != nil {
 			return runnerwire.DeviceCertReport{}, fmt.Errorf("device identity helper: %w: %s", err, lastLine(errb.String()))
 		}
+		// The helper's own notes (an identity it skipped) are the only place an operator learns of one.
+		if note := strings.TrimSpace(errb.String()); note != "" {
+			slog.InfoContext(ctx, "device identity helper", "note", note)
+		}
 		var rep runnerwire.DeviceCertReport
 		dec := json.NewDecoder(&out)
 		dec.DisallowUnknownFields()
