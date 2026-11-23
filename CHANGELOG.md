@@ -22,9 +22,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT` on `windows_licence_leases`, and
   `SELECT, INSERT, UPDATE, DELETE` on `windows_licence_pools`, `windows_licence_holders` and `windows_images`, to every role that
   was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
-  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same
-  on each table as soon as the migration has run. Seats are taken and freed only by the migrations' triggers, which run as
-  the table owner.
+  member of one, grant it the same on each table as soon as the migration has run: the `ALTER DEFAULT PRIVILEGES` step in
+  Operations no longer covers the leases, since the migration takes back every other grant on them. Seats are taken and
+  freed only by the migrations' triggers, which run as the table owner.
 
 ## [0.10.2] — 2026-11-22
 

@@ -14,7 +14,8 @@
 --
 -- The app role is granted the tables here, found from the catalog and never by name: every role but the owner
 -- that holds DELETE on run_attach_leases gets SELECT, INSERT, UPDATE, DELETE on the pools, holders and images,
--- and SELECT only on the leases, so no app write takes or frees a seat. Never a secret.
+-- and SELECT only on the leases, so no app write takes or frees a seat; every other grant on the leases, a
+-- default privilege's included, is revoked first. Never a secret.
 CREATE TABLE IF NOT EXISTS windows_licence_pools (
     id         UUID        PRIMARY KEY,
     name       TEXT        NOT NULL,
@@ -66,6 +67,19 @@ DO $mig$
 DECLARE
     r record;
 BEGIN
+    -- Nobody but the owner keeps anything the leases table was created with: a split-role install's ALTER DEFAULT
+    -- PRIVILEGES hands the app role INSERT, UPDATE and DELETE on every new table, which this one must not have.
+    REVOKE ALL ON windows_licence_leases FROM PUBLIC;
+    FOR r IN
+        SELECT DISTINCT ro.rolname::text AS rolname
+          FROM pg_catalog.pg_class c
+          CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+          JOIN pg_catalog.pg_roles ro ON ro.oid = a.grantee
+         WHERE c.oid = 'windows_licence_leases'::regclass
+           AND a.grantee <> c.relowner
+    LOOP
+        EXECUTE format('REVOKE ALL ON windows_licence_leases FROM %I', r.rolname);
+    END LOOP;
     FOR r IN
         SELECT DISTINCT ro.rolname::text AS rolname
           FROM pg_catalog.pg_class c

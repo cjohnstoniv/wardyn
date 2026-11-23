@@ -342,6 +342,9 @@ func TestPG_WindowsLease_AppRoleReadOnly(t *testing.T) {
 	// The app role is the role holding DELETE on run_attach_leases; the migration finds it from the catalog. Run the
 	// licence migration again (it is re-runnable) so its grant step sees this role.
 	f.exec(`GRANT SELECT, INSERT, UPDATE, DELETE ON run_attach_leases, agent_runs TO ` + role)
+	// A split-role install's ALTER DEFAULT PRIVILEGES gives the app role every verb on each new table; the
+	// migration must take the leases' back.
+	f.exec(`GRANT ALL ON windows_licence_leases TO ` + role)
 	matches, err := filepath.Glob("../db/migrations/*_windows_licences.sql")
 	if err != nil || len(matches) != 1 {
 		t.Fatalf("the licence migration: %v %v", matches, err)
