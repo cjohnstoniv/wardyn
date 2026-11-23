@@ -105,7 +105,7 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 		})
 	}
 
-	t.Run("K1", func(t *testing.T) {
+	t.Run("FirstExecReachesProxyThroughService", func(t *testing.T) {
 		if firstCode != 0 {
 			t.Errorf("the first exec's connect to wardyn-proxy:3128 exited %d: %s", firstCode, firstOut)
 		}
@@ -133,7 +133,7 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 		}
 	})
 
-	t.Run("K2", func(t *testing.T) {
+	t.Run("SliceIsTheOnlyRoute", func(t *testing.T) {
 		decoy, _ := startControlPod(t, ctx, cs, ns, agentImage,
 			"echo done=1; while true; do nc -l -p 3128 </dev/null >/dev/null 2>&1; done", map[string]string{"app": "wardyn-conformance-decoy"})
 		_, lines := startControlPod(t, ctx, cs, ns, agentImage,
@@ -149,7 +149,7 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 		restore(t)
 	})
 
-	t.Run("K3", func(t *testing.T) {
+	t.Run("EmptySliceBlocksProxyAndDNS", func(t *testing.T) {
 		// The proxy answers every lookup but its own name REFUSED; an unanswered one times out.
 		lookup := "timeout 10 nslookup wardyn-conformance.invalid " + svc.Spec.ClusterIP + "; echo rc=$?"
 		answered := func(out string) bool {
@@ -170,7 +170,7 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 		restore(t)
 	})
 
-	t.Run("K4", func(t *testing.T) {
+	t.Run("TeardownRemovesRunObjects", func(t *testing.T) {
 		stopCtx, stop := context.WithTimeout(context.Background(), runServiceStopWait)
 		defer stop()
 		if err := r.StopSandbox(stopCtx, sb.Ref); err != nil {
@@ -187,7 +187,7 @@ func testRunService(t *testing.T, r runner.Runner, agentImage string) {
 		}
 	})
 
-	t.Run("K7", func(t *testing.T) { testFirstPacket(t, cs, agentImage) })
+	t.Run("FirstPacketPolicyHolds", func(t *testing.T) { testFirstPacket(t, cs, agentImage) })
 }
 
 // runObjectsLeft names every Service, EndpointSlice, pod, Secret and NetworkPolicy of the run that still exists.
@@ -271,13 +271,13 @@ func testFirstPacket(t *testing.T, cs kubernetes.Interface, image string) {
 	})
 
 	reached, ms := firstPacketProbe(ctx, t, cs, ns, image, "control", false)
-	t.Logf("K7 control reached=%t create_to_first_ms=%d", reached, ms)
+	t.Logf("first-packet control reached=%t create_to_first_ms=%d", reached, ms)
 	if !reached {
 		t.Fatal("first packet: the control pod, under no policy, never reached the API server: a silent probe proves nothing")
 	}
 	for i := 1; i <= firstPacketAttempts; i++ {
 		reached, ms := firstPacketProbe(ctx, t, cs, ns, image, "attempt-"+strconv.Itoa(i), true)
-		t.Logf("K7 attempt=%d reached=%t create_to_first_ms=%d", i, reached, ms)
+		t.Logf("first-packet attempt=%d reached=%t create_to_first_ms=%d", i, reached, ms)
 		if reached {
 			t.Errorf("first packet attempt %d: the pod reached the API server before its deny-all egress NetworkPolicy held", i)
 		}
