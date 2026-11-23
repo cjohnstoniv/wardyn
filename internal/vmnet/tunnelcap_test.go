@@ -14,6 +14,7 @@ import (
 
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/cjohnstoniv/wardyn/internal/vmnet/vmnettest"
@@ -251,6 +252,55 @@ func TestOpaqueRefusedAskReturnsItsSlot(t *testing.T) {
 		c3.Close()
 		t.Fatal("a third tunnel was admitted at a bound of two")
 	}
+}
+
+// rawSYN is an IPv4 packet carrying one TCP SYN from src:sport to dst:dport.
+func rawSYN(src [4]byte, sport uint16, dst [4]byte, dport uint16, seq uint32) []byte {
+	b := make([]byte, header.IPv4MinimumSize+header.TCPMinimumSize)
+	ip := header.IPv4(b)
+	ip.Encode(&header.IPv4Fields{
+		TotalLength: uint16(len(b)), TTL: 64, Protocol: uint8(header.TCPProtocolNumber),
+		SrcAddr: tcpip.AddrFrom4(src), DstAddr: tcpip.AddrFrom4(dst),
+	})
+	ip.SetChecksum(^ip.CalculateChecksum())
+	t := header.TCP(b[header.IPv4MinimumSize:])
+	t.Encode(&header.TCPFields{
+		SrcPort: sport, DstPort: dport, SeqNum: seq, DataOffset: header.TCPMinimumSize,
+		Flags: header.TCPFlagSyn, WindowSize: 65535,
+	})
+	xsum := header.PseudoHeaderChecksum(header.TCPProtocolNumber, tcpip.AddrFrom4(src), tcpip.AddrFrom4(dst), header.TCPMinimumSize)
+	t.SetChecksum(^t.CalculateChecksum(xsum))
+	return b
+}
+
+// A SYN the guest sent again before the relay's reset reached it is reset again with no second ask and no
+// slot (#3932); a new connection (a new source port) is still asked.
+func TestARetransmittedSYNAfterARefusalIsResetWithoutAnAsk(t *testing.T) {
+	h := startHoldProxy(t)
+	h.denied["denied.test:2000"] = true
+	rl, g, _ := capRelay(t, h, 2)
+	d := g.Resolve(t, "denied", "test")
+	guest := [4]byte{10, 0, 2, 15}
+	asks0, _, _ := h.snapshot()
+
+	if err := g.SendRaw(0x0800, rawSYN(guest, 40000, d, 2000, 1)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the refused ask", func() bool { asks, _, _ := h.snapshot(); return asks == asks0+1 && rl.opaque.Load() == 0 })
+
+	if err := g.SendRaw(0x0800, rawSYN(guest, 40000, d, 2000, 1)); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+		if asks, _, _ := h.snapshot(); asks != asks0+1 || rl.opaque.Load() != 0 {
+			t.Fatalf("the retransmitted SYN asked the proxy again or held a slot: asks %d (want %d), opaque %d", asks, asks0+1, rl.opaque.Load())
+		}
+	}
+
+	if err := g.SendRaw(0x0800, rawSYN(guest, 40001, d, 2000, 1)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a new connection's ask", func() bool { asks, _, _ := h.snapshot(); return asks == asks0+2 })
 }
 
 // slotCountSettles waits for the relay's slot count to return to want and stay
