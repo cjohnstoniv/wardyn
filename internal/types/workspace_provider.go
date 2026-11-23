@@ -330,6 +330,10 @@ type MemberDrivePolicy struct {
 	// KeepMainDrive lets a run keep its work folder as its person's own drive
 	// (CreateRunRequest.KeepWorkFolder). Off by default; has no effect unless Enabled.
 	KeepMainDrive bool `json:"keep_main_drive,omitempty"`
+	// TeamDrives lets a person make a team drive of their own (POST /me/drives with team): one folder shared with
+	// everyone in their governance unit and the units below it (#3459). Off by default; it also needs Enabled and
+	// UserDriveProvider.TeamDrives, and a Docker deployment.
+	TeamDrives bool `json:"team_drives,omitempty"`
 }
 
 // MaxMemberDrivesPerPerson is the ceiling on MemberDrivePolicy.MaxPerPerson.

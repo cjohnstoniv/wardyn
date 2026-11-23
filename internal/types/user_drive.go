@@ -516,6 +516,11 @@ func DriveTeamHome(d UserDrive) string {
 // row or pool rule can carry it, and the resolvers that match a person's subjects never select a portal row.
 const DriveSubjectPortal CapabilitySubjectType = "portal"
 
+// DriveSubjectUnit is the tier of a person's own team drive's allocation to the governance unit it belongs to
+// (#3459). It is built in memory from user_drives.team_unit_id and never stored: no grant row, capability grant or
+// governance row carries it, and CapabilitySubjectType.Valid does not know it.
+const DriveSubjectUnit CapabilitySubjectType = "unit"
+
 // drivePortalObjectPrefix starts the object name of a portal's folder. No other Wardyn-named drive object
 // begins with it: every other one begins driveObjectPrefix, and neither prefix begins with the other.
 const drivePortalObjectPrefix = "wardyn-portal-"
