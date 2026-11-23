@@ -216,16 +216,20 @@ func (l *login) signIn(ctx context.Context, base *storedSession) error {
 		code   string
 		finish = func(bool) {}
 	)
+	check := copyCheckCode
+	if created.CodeEntry {
+		check = copyTypeCode
+	}
 	if mode == types.CLISignInModeLoopback {
 		fmt.Fprintf(l.out, copyOpening+"\n", approve)
-		fmt.Fprintf(l.out, copyCheckCode+"\n", created.UserCode)
+		fmt.Fprintf(l.out, check+"\n", created.UserCode)
 		_ = openBrowser(approve)
 		if code, finish, err = awaitCallback(ln, created.ID, l.paste); err != nil {
 			return err
 		}
 	} else {
 		fmt.Fprintf(l.out, copyPasteOpen+"\n", approve)
-		fmt.Fprintf(l.out, copyCheckCode+"\n", created.UserCode)
+		fmt.Fprintf(l.out, check+"\n", created.UserCode)
 		if code, err = readPasted(l.in, l.errOut); err != nil {
 			return err
 		}

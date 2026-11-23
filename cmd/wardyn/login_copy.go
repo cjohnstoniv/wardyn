@@ -9,6 +9,7 @@ const (
 	// login, through the browser (board ATT1-Terminal).
 	copyOpening    = "Opening %s in your browser."             // the approve URL
 	copyCheckCode  = "Check that the page shows this code: %s" // the user code
+	copyTypeCode   = "Type this code on the page: %s"          // the user code, when the page asks for it
 	copySignedIn   = "Signed in to %s as %s on %s"             // host, person, computer
 	copyWhoUnknown = "you"                                     // the person, when GET /api/v1/me did not answer
 

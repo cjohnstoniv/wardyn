@@ -36,10 +36,12 @@ import (
 // cli_sessions.go ship: it checks the PKCE verifier, the device proof against its own URL, single-use codes,
 // secret rotation and reuse, and the per-device sign-out.
 type signInOrg struct {
-	t       *testing.T
-	srv     *httptest.Server
-	paste   bool
-	version string // /healthz.version
+	t     *testing.T
+	srv   *httptest.Server
+	paste bool
+	// codeEntry is the create answer's code_entry: the approve page asks the person to type the code.
+	codeEntry bool
+	version   string // /healthz.version
 	// origin is /healthz.cli_sign_in_origin ("" sends none) and the origin proofs are checked over;
 	// "" checks them over the server's own URL.
 	origin string
@@ -176,7 +178,7 @@ func (f *signInOrg) create(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.signIns[id] = &fakeSignIn{req: req}
 	f.mu.Unlock()
-	writeFake(w, http.StatusCreated, types.CLISignInCreateResponse{ID: id, UserCode: "KQ7M-2XJD", ExpiresIn: 600})
+	writeFake(w, http.StatusCreated, types.CLISignInCreateResponse{ID: id, UserCode: "KQ7M-2XJD", ExpiresIn: 600, CodeEntry: f.codeEntry})
 }
 
 // approve is the console's Approve: it returns K and, for loopback, the redirect the page navigates to.
@@ -498,6 +500,24 @@ func storedItem(t *testing.T, origin string) cliItem {
 		t.Fatal(err)
 	}
 	return it
+}
+
+// TestLoginSaysTypeTheCodeWhenThePageAsksForIt: when the create answer says the page asks for the code,
+// the terminal tells the person to type it.
+func TestLoginSaysTypeTheCodeWhenThePageAsksForIt(t *testing.T) {
+	pages := make(chan string, 1)
+	f := newSignInOrg(t)
+	f.codeEntry = true
+	cliEnv(t, nil)
+	openBrowser = func(approve string) error { go approveInBrowser(t, f, pages)(approve); return nil }
+
+	out, _, err := runCLI(t, "", "login", f.srv.URL)
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if !strings.Contains(out, "Type this code on the page: KQ7M-2XJD\n") || strings.Contains(out, "Check that the page shows") {
+		t.Errorf("login printed %q, want the line that says to type the code", out)
+	}
 }
 
 // TestLoginLoopbackSignsInAndWhoamiPrintsNoSecret: a browser sign-in stores the session, the device key
