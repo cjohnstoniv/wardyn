@@ -159,15 +159,26 @@ func TestRelay_EndToEndOverLoopback(t *testing.T) {
 	}
 }
 
-// getRunCounter counts the run reads one request makes.
+// getRunCounter counts the run reads one request makes, and the grant reads. While fail is set a run read
+// answers an error.
 type getRunCounter struct {
 	store.PG
-	n atomic.Int32
+	n      atomic.Int32
+	grants atomic.Int32
+	fail   atomic.Bool
 }
 
 func (c *getRunCounter) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	c.n.Add(1)
+	if c.fail.Load() {
+		return types.AgentRun{}, errors.New("injected run read failure")
+	}
 	return c.PG.GetRun(ctx, id)
+}
+
+func (c *getRunCounter) ListGrantsByRun(ctx context.Context, id uuid.UUID) ([]types.CredentialGrant, error) {
+	c.grants.Add(1)
+	return c.PG.ListGrantsByRun(ctx, id)
 }
 
 // bindingFixture is a Server on the admission fixture's database (runner R

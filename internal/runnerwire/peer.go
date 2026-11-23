@@ -268,9 +268,13 @@ func (p *Peer) sendData(s *Stream, payload []byte) error {
 // sendChecked is sendFrame with admit, when set, run with the writer held and before any sequence is
 // assigned: an error from it writes nothing and is the answer.
 func (p *Peer) sendChecked(ctx context.Context, f Frame, admit func() error) (uint64, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(p.ctx, cancel)
-	defer func() { stop(); cancel() }()
+	if ctx != p.ctx {
+		// The caller's own bound ends with the link too; DATA frames pass the link's own context and need no pair.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		stop := context.AfterFunc(p.ctx, cancel)
+		defer func() { stop(); cancel() }()
+	}
 	if f.Type.Sequenced() {
 		if err := p.replay.Reserve(ctx, len(f.Payload)); err != nil {
 			return 0, err

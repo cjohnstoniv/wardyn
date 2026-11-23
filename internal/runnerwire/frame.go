@@ -189,6 +189,22 @@ func (f Frame) Encode(dst []byte) ([]byte, error) {
 	return append(append(dst, h[:]...), f.Payload...), nil
 }
 
+// parseHeader reads a frame header: everything ReadFrame checks before the payload. n is the payload length.
+func parseHeader(h []byte) (Frame, uint32, error) {
+	f := Frame{Type: Type(h[0]), Flags: h[1], Stream: binary.BigEndian.Uint32(h[4:]), Seq: binary.BigEndian.Uint64(h[8:])}
+	if binary.BigEndian.Uint16(h[2:]) != 0 {
+		return Frame{}, 0, fmt.Errorf("%w: reserved field set", ErrBadFrame)
+	}
+	if !f.Type.valid() {
+		return Frame{}, 0, fmt.Errorf("%w: unknown type %d", ErrBadFrame, h[0])
+	}
+	n := binary.BigEndian.Uint32(h[16:])
+	if int64(n) > int64(f.maxPayload()) {
+		return Frame{}, 0, fmt.Errorf("%w: %s length %d", ErrFrameTooLarge, f.Type, n)
+	}
+	return f, n, nil
+}
+
 // ReadFrame reads one frame from r. A length over the type's limit is refused
 // before any payload is read, so an oversized frame cannot make the reader
 // allocate; a short read is io.ErrUnexpectedEOF.
@@ -197,16 +213,9 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	if _, err := io.ReadFull(r, h[:]); err != nil {
 		return Frame{}, err
 	}
-	f := Frame{Type: Type(h[0]), Flags: h[1], Stream: binary.BigEndian.Uint32(h[4:]), Seq: binary.BigEndian.Uint64(h[8:])}
-	if binary.BigEndian.Uint16(h[2:]) != 0 {
-		return Frame{}, fmt.Errorf("%w: reserved field set", ErrBadFrame)
-	}
-	if !f.Type.valid() {
-		return Frame{}, fmt.Errorf("%w: unknown type %d", ErrBadFrame, h[0])
-	}
-	n := binary.BigEndian.Uint32(h[16:])
-	if int64(n) > int64(f.maxPayload()) {
-		return Frame{}, fmt.Errorf("%w: %s length %d", ErrFrameTooLarge, f.Type, n)
+	f, n, err := parseHeader(h[:])
+	if err != nil {
+		return Frame{}, err
 	}
 	if n > 0 {
 		f.Payload = make([]byte, n)
@@ -232,6 +241,35 @@ func Decode(b []byte) (Frame, error) {
 	}
 	if len(r.b) != 0 {
 		return Frame{}, fmt.Errorf("%w: %d trailing bytes", ErrBadFrame, len(r.b))
+	}
+	return f, nil
+}
+
+// decodeOwned is Decode for a message the caller owns and never reuses (one WebSocket read): the payload is
+// the message's own bytes, not a copy. Its answers are Decode's.
+func decodeOwned(b []byte) (Frame, error) {
+	if len(b) == 0 {
+		return Frame{}, io.EOF
+	}
+	if len(b) < HeaderLen {
+		return Frame{}, io.ErrUnexpectedEOF
+	}
+	f, n, err := parseHeader(b[:HeaderLen])
+	if err != nil {
+		return Frame{}, err
+	}
+	rest := b[HeaderLen:]
+	if uint64(len(rest)) < uint64(n) {
+		return Frame{}, io.ErrUnexpectedEOF
+	}
+	if n > 0 {
+		f.Payload = rest[:n:n]
+	}
+	if err := f.Validate(); err != nil {
+		return Frame{}, err
+	}
+	if extra := uint64(len(rest)) - uint64(n); extra > 0 {
+		return Frame{}, fmt.Errorf("%w: %d trailing bytes", ErrBadFrame, extra)
 	}
 	return f, nil
 }

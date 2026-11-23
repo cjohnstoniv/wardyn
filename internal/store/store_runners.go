@@ -120,6 +120,22 @@ func (s PG) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
 	return scanRunner(s.Pool.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE id = $1`, id))
 }
 
+// RunnerBatchReader reads several runners in one statement: the runner hub's stored-row recheck of every live
+// session at once.
+type RunnerBatchReader interface {
+	GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error)
+}
+
+var _ RunnerBatchReader = PG{}
+
+// GetRunnersByID returns the rows of ids that exist, in no set order; an id with no row is left out.
+func (s PG) GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return collect(ctx, s.Pool, "list", "runners", `SELECT `+runnerCols+` FROM runners WHERE id = ANY($1)`, []any{ids}, scanRunner)
+}
+
 // ListRunners returns every runner, newest first, revoked included.
 func (s PG) ListRunners(ctx context.Context) ([]types.Runner, error) {
 	return collect(ctx, s.Pool, "list", "runners", `SELECT `+runnerCols+` FROM runners ORDER BY created_at DESC, id`, nil, scanRunner)

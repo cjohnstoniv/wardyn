@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,7 +50,10 @@ type Admission struct {
 type HubConfig struct {
 	OrgURL string
 	Lookup func(context.Context, uuid.UUID) (types.Runner, error)
-	Admit  func(context.Context, types.Runner) (Admission, error)
+	// LookupMany, when set, reads the stored rows of several runners in one call, for the stored-row recheck of
+	// every live session at once. A runner missing from its answer is read as not found. Nil reads each with Lookup.
+	LookupMany func(context.Context, []uuid.UUID) ([]types.Runner, error)
+	Admit      func(context.Context, types.Runner) (Admission, error)
 	// Connected and Disconnected are audit/lifecycle callbacks. A resumed
 	// session emits neither; Disconnected waits for the resume window.
 	Connected    func(context.Context, uuid.UUID) error
@@ -61,11 +65,12 @@ type HubConfig struct {
 	// owner is deactivated), without revoking it. Such a connection is sent
 	// GOAWAY (runner_owner_inactive) before admission, and the stored-row
 	// recheck ends a live session with GOAWAY (fresh_session_required), so a
-	// connection after reactivation is admitted again.
+	// connection after reactivation is admitted again. The stored-row recheck asks once per person for all of
+	// that person's runners, so for a person's runner (OwnerKind not org) the answer must depend on its Owner alone.
 	Inactive func(context.Context, types.Runner) (bool, error)
 	// Disabled, when set, says runners are switched off. The stored-row recheck ends a live session with
 	// GOAWAY, so a session admitted while the switch was being turned off cannot outlive it by more than
-	// one recheck.
+	// one recheck. The stored-row recheck asks once for all live sessions.
 	Disabled func(context.Context) bool
 	// ProxyImage, when set, names the proxy image the organisation runs for a claimed runner (chosen
 	// for its reported architecture); AUTH_OK carries it, so the runner follows the organisation's
@@ -125,11 +130,26 @@ type Hub struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*hubSession
 	closed   bool
+	// live is every session serveClaimed serves past its admission, by its peer: the set the stored-row recheck
+	// reads, once per recheckEvery for all of them together (recheckAll). Under mu.
+	live map[*runnerwire.Peer]liveSession
+	// recheckEvery is storedRowRecheck as NewHub read it; recheckOnce starts the one recheck loop.
+	recheckEvery time.Duration
+	recheckOnce  sync.Once
+	// rechecking is the sessions whose last stored-row action (recheckRow) is still running: recheckAll starts each
+	// action and does not wait for it, so a stuck one is skipped at the next tick, never doubled. Under mu.
+	rechecking map[*runnerwire.Peer]bool
+}
+
+// liveSession is one session the stored-row recheck covers.
+type liveSession struct {
+	id uuid.UUID
+	s  *hubSession
 }
 
 // NewHub does not enable dispatch when Admit is absent.
 func NewHub(ctx context.Context, cfg HubConfig) *Hub {
-	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}}
+	h := &Hub{ctx: ctx, cfg: cfg, sessions: map[uuid.UUID]*hubSession{}, live: map[*runnerwire.Peer]liveSession{}, rechecking: map[*runnerwire.Peer]bool{}, recheckEvery: storedRowRecheck}
 	context.AfterFunc(ctx, h.Close)
 	return h
 }
@@ -252,22 +272,15 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 		}
 		return err
 	}
-	recheck := time.NewTicker(storedRowRecheck)
-	defer recheck.Stop()
-	for live := true; live; {
-		select {
-		case <-peer.Done():
-			live = false
-		case <-ctx.Done():
-			peer.Close()
-			live = false
-		case <-h.ctx.Done():
-			peer.Close()
-			live = false
-		case <-recheck.C:
-			h.recheck(ctx, row.ID, s, peer)
-		}
+	h.addLive(row.ID, s, peer)
+	select {
+	case <-peer.Done():
+	case <-ctx.Done():
+		peer.Close()
+	case <-h.ctx.Done():
+		peer.Close()
 	}
+	h.removeLive(peer)
 	h.ended(row.ID, s, peer)
 	return peer.Err()
 }
@@ -277,7 +290,7 @@ func (h *Hub) serveClaimed(ctx context.Context, conn runnerwire.Conn, row types.
 var errFreshSessionRequired = errors.New("runner: an action was queued for this runner; a fresh session carries it")
 
 // storedRowRecheck bounds how long a session outlives a revocation, or its
-// owner's deactivation, committed through another replica.
+// owner's deactivation, committed through another replica. NewHub reads it once.
 var storedRowRecheck = runnerwire.PingInterval
 
 // reasonOwnerInactive is the GOAWAY reason of a runner whose owner is deactivated.
@@ -285,32 +298,168 @@ const reasonOwnerInactive = "runner_owner_inactive"
 
 var errOwnerInactive = errors.New("runner hub: the runner's owner is deactivated")
 
-// recheck ends the session with REVOKED once the stored row says so, and with
-// GOAWAY once its owner is deactivated or its per-run limits differ from the pair AUTH_OK carried. A failed read is retried at the next
-// tick: the store already refuses a revoked runner's writes, so this only
-// bounds the session's lifetime.
-func (h *Hub) recheck(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
-	current, err := h.cfg.Lookup(ctx, id)
-	if err != nil || current.ID != id {
-		return
-	}
-	if current.State == types.RunnerRevoked {
-		_ = h.Revoke(ctx, id)
-		return
-	}
-	if h.cfg.Inactive != nil {
-		if inactive, err := h.cfg.Inactive(ctx, current); err == nil && inactive {
-			_ = h.Goaway(ctx, id)
+func (h *Hub) addLive(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
+	h.mu.Lock()
+	h.live[peer] = liveSession{id: id, s: s}
+	h.mu.Unlock()
+	h.recheckOnce.Do(func() { go h.recheckLoop() })
+}
+
+func (h *Hub) removeLive(peer *runnerwire.Peer) {
+	h.mu.Lock()
+	delete(h.live, peer)
+	h.mu.Unlock()
+}
+
+// recheckLoop runs the stored-row recheck every recheckEvery until the daemon stops or the Hub closes.
+func (h *Hub) recheckLoop() {
+	t := time.NewTicker(h.recheckEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
 			return
+		case <-t.C:
+			if !h.recheckAll(h.ctx) {
+				return
+			}
 		}
 	}
-	if h.cfg.Disabled != nil && h.cfg.Disabled(ctx) {
-		_ = h.Goaway(ctx, id)
+}
+
+// recheckAll is the stored-row recheck of every live session at once: one read of their runner rows, one read
+// of the runners switch, and one owner check per person, all under a timeout of one recheckEvery. Each session is
+// then ended as recheckRow decides, in a goroutine of its own that recheckAll does not wait for, and only if that
+// session's last action has finished: a stalled link, or an admission holding a runner's slot, delays that session
+// alone, never another runner's revocation. A row that cannot be read is checked again at the next tick, as before.
+// It reports false once the Hub is closed.
+func (h *Hub) recheckAll(ctx context.Context) bool {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return false
+	}
+	live := maps.Clone(h.live)
+	h.mu.Unlock()
+	rctx, cancel := context.WithTimeout(ctx, h.recheckEvery)
+	defer cancel()
+	rows := h.lookupLive(rctx, live)
+	if len(rows) == 0 {
+		return true
+	}
+	disabled := h.cfg.Disabled != nil && h.cfg.Disabled(rctx)
+	inactive := h.inactiveOf(rctx, rows)
+	for peer, ls := range live {
+		row, ok := rows[ls.id]
+		if !ok || !h.claimRecheck(peer) {
+			continue
+		}
+		go func() { // on ctx, not rctx: the tick's reads end with the tick, an action may outlast it
+			defer h.releaseRecheck(peer)
+			h.recheckRow(ctx, ls.id, ls.s, peer, row, inactive[ls.id], disabled)
+		}()
+	}
+	return true
+}
+
+// claimRecheck marks peer's stored-row action as running, and reports false when the last one still is.
+func (h *Hub) claimRecheck(peer *runnerwire.Peer) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.rechecking[peer] {
+		return false
+	}
+	h.rechecking[peer] = true
+	return true
+}
+
+func (h *Hub) releaseRecheck(peer *runnerwire.Peer) {
+	h.mu.Lock()
+	delete(h.rechecking, peer)
+	h.mu.Unlock()
+}
+
+// lookupLive reads the stored row of each live session's runner: by LookupMany when set, else by Lookup for
+// each. A row that could not be read, or that names another runner, is left out.
+func (h *Hub) lookupLive(ctx context.Context, live map[*runnerwire.Peer]liveSession) map[uuid.UUID]types.Runner {
+	want := map[uuid.UUID]bool{}
+	ids := make([]uuid.UUID, 0, len(live))
+	for _, ls := range live {
+		if !want[ls.id] {
+			want[ls.id] = true
+			ids = append(ids, ls.id)
+		}
+	}
+	rows := make(map[uuid.UUID]types.Runner, len(ids))
+	if len(ids) == 0 {
+		return rows
+	}
+	if h.cfg.LookupMany != nil {
+		got, err := h.cfg.LookupMany(ctx, ids)
+		if err != nil {
+			return rows
+		}
+		for _, rn := range got {
+			if want[rn.ID] {
+				rows[rn.ID] = rn
+			}
+		}
+		return rows
+	}
+	for _, id := range ids {
+		if rn, err := h.cfg.Lookup(ctx, id); err == nil && rn.ID == id {
+			rows[id] = rn
+		}
+	}
+	return rows
+}
+
+// inactiveOf asks Inactive once per person among rows' owners and once per organisation runner, skipping
+// revoked rows (recheckRow revokes those first). A failed answer reads as active, as before.
+func (h *Hub) inactiveOf(ctx context.Context, rows map[uuid.UUID]types.Runner) map[uuid.UUID]bool {
+	out := map[uuid.UUID]bool{}
+	if h.cfg.Inactive == nil {
+		return out
+	}
+	person := map[string]bool{}
+	for id, rn := range rows {
+		if rn.State == types.RunnerRevoked {
+			continue
+		}
+		if rn.OwnerKind == types.RunnerOwnerOrg {
+			v, err := h.cfg.Inactive(ctx, rn)
+			out[id] = err == nil && v
+			continue
+		}
+		v, asked := person[rn.Owner]
+		if !asked {
+			got, err := h.cfg.Inactive(ctx, rn)
+			v = err == nil && got
+			person[rn.Owner] = v
+		}
+		out[id] = v
+	}
+	return out
+}
+
+// recheckRow ends one live session as its stored row current says: with REVOKED once the row is revoked, and
+// with GOAWAY once its owner is inactive, runners are switched off, or its per-run limits differ from the pair
+// peer's AUTH_OK carried. The store already refuses a revoked runner's writes, so this only bounds the
+// session's lifetime.
+func (h *Hub) recheckRow(ctx context.Context, id uuid.UUID, s *hubSession, peer *runnerwire.Peer, current types.Runner, inactive, disabled bool) {
+	if current.ID != id {
 		return
 	}
-	if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
-		// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
-		_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
+	switch {
+	case current.State == types.RunnerRevoked:
+		_ = h.Revoke(ctx, id)
+	case inactive || disabled:
+		_ = h.Goaway(ctx, id)
+	default:
+		if sent := s.perRun.Load(); sent != nil && *sent != perRunOf(current) {
+			// The pair is the one peer's AUTH_OK carried: a reconnect since then has its own, so end only peer's session.
+			_ = h.endWithControl(ctx, id, runnerwire.TypeGoaway, "fresh_session_required", peer, "")
+		}
 	}
 }
 
