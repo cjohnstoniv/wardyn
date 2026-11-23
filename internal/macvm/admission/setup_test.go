@@ -1562,3 +1562,133 @@ func TestSetupOccupiedRefusesOnAnyOtherLstatError(t *testing.T) {
 		}
 	}
 }
+
+// linkRefusedOnce is a fault that refuses the first link of name with EPERM, as the system does for a file
+// carrying the user immutable flag.
+func linkRefusedOnce(name string) func(op, dir, n string) error {
+	done := false
+	return func(op, _, n string) error {
+		if op == "link" && n == name && !done {
+			done = true
+			return unix.EPERM
+		}
+		return nil
+	}
+}
+
+// immutableRig is two entries in an entries directory the relink rebuilds, the first one's link refused.
+func immutableRig(t *testing.T) (r *rig, names []string, path string, mod func(*SetupConfig)) {
+	t.Helper()
+	r = newRig(t, bigMac())
+	names = admitN(t, r, 2)
+	path = filepath.Join(r.dir, names[0])
+	fs := drift(t, r, "03777")
+	mod = func(c *SetupConfig) { c.Fstat = fs; c.fault = linkRefusedOnce(names[0]) }
+	return r, names, path, mod
+}
+
+func TestSetupClearsTheUserImmutableFlagAndCarriesTheEntry(t *testing.T) {
+	r, names, path, mod := immutableRig(t)
+	want := ino(t, path)
+	var cleared []uint32
+	var logs []string
+	err := Setup(r.setupCfg(mod, func(c *SetupConfig) {
+		c.flagsOf = func(st unix.Stat_t) uint32 {
+			if st.Ino == want {
+				return flagUserImmutable
+			}
+			return 0
+		}
+		c.fchflags = func(_ int, flags uint32) error { cleared = append(cleared, flags); return nil }
+		c.Logf = func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	}))
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if len(cleared) != 1 || cleared[0] != 0 {
+		t.Fatalf("fchflags calls = %v, want one with 0", cleared)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the relink past a uchg entry")
+	wantLayout(t, r)
+	if all := strings.Join(logs, "\n"); !strings.Contains(all, "carried the user immutable flag (uchg); setup cleared it") ||
+		!strings.Contains(all, names[0]) {
+		t.Fatalf("setup did not log the clear: %q", all)
+	}
+}
+
+func TestSetupStopsOnTheSystemImmutableFlagNamingTheCommand(t *testing.T) {
+	r, names, path, mod := immutableRig(t)
+	err := Setup(r.setupCfg(mod, func(c *SetupConfig) {
+		c.flagsOf = func(unix.Stat_t) uint32 { return flagSystemImmutable | flagUserImmutable }
+		c.fchflags = func(int, uint32) error { t.Fatal("fchflags ran on a schg file"); return nil }
+	}))
+	want := fmt.Sprintf("admission: %s carries the system immutable flag (schg), which setup does not clear; clear it as root with: chflags noschg %s, then reinstall the Wardyn runner package", path, shellQuote(path))
+	if err == nil || err.Error() != want {
+		t.Fatalf("Setup = %v, want %q", err, want)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the stop on schg")
+}
+
+func TestSetupStopsWhenTheUserImmutableFlagCannotBeCleared(t *testing.T) {
+	r, names, path, mod := immutableRig(t)
+	err := Setup(r.setupCfg(mod, func(c *SetupConfig) {
+		c.flagsOf = func(unix.Stat_t) uint32 { return flagUserImmutable }
+		c.fchflags = func(int, uint32) error { return errors.New("refused") }
+	}))
+	want := fmt.Sprintf("admission: clearing the user immutable flag (uchg) on %s failed (refused); clear it as root with: chflags nouchg %s, then reinstall the Wardyn runner package", path, shellQuote(path))
+	if err == nil || err.Error() != want {
+		t.Fatalf("Setup = %v, want %q", err, want)
+	}
+	if n := counted(t, r); n != 2 {
+		t.Fatalf("a helper counts %d of 2 entries", n)
+	}
+	wantEntries(t, r, names, "the stop on a failed clear")
+}
+
+func TestSetupNeverClearsAFlagOnAnEntryWithAnotherName(t *testing.T) {
+	r, _, path, mod := immutableRig(t)
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.Link(path, other); err != nil {
+		if !errors.Is(err, unix.EXDEV) {
+			t.Fatal(err)
+		}
+		other = filepath.Join(filepath.Dir(filepath.Dir(r.dir)), "other-name")
+		if err := os.Link(path, other); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(other) })
+	}
+	err := Setup(r.setupCfg(mod, func(c *SetupConfig) {
+		c.flagsOf = func(unix.Stat_t) uint32 { return flagUserImmutable }
+		c.fchflags = func(int, uint32) error { t.Fatal("fchflags ran on a file with another name"); return nil }
+	}))
+	want := fmt.Sprintf("admission: %s carries the user immutable flag (uchg) and has another name, so setup does not clear it. Check whose file it is (ls -lOi %s); if it is a stray link, clear it as root with: chflags nouchg %s, then reinstall the Wardyn runner package", path, shellQuote(path), shellQuote(path))
+	if err == nil || err.Error() != want {
+		t.Fatalf("Setup = %v, want %q", err, want)
+	}
+}
+
+func TestSetupKeepsTheLinkErrorForARefusalThatIsNotAFlag(t *testing.T) {
+	r, _, path, mod := immutableRig(t)
+	err := Setup(r.setupCfg(mod, func(c *SetupConfig) {
+		c.flagsOf = func(unix.Stat_t) uint32 { return 0 }
+		c.fchflags = func(int, uint32) error { t.Fatal("fchflags ran on a file with no flag"); return nil }
+	}))
+	if err == nil || !strings.HasPrefix(err.Error(), "admission: linking "+path) || !errors.Is(err, unix.EPERM) {
+		t.Fatalf("Setup = %v, want the link error for %s", err, path)
+	}
+}
+
+func TestShellQuote(t *testing.T) {
+	for in, want := range map[string]string{"a'b": `'a'\''b'`, "/plain/path": "'/plain/path'"} {
+		if got := shellQuote(in); got != want {
+			t.Errorf("shellQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
