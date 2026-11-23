@@ -341,7 +341,7 @@
 # docs/sdk.md 31212 = ours 30672 + theirs 30628 - base 30088 at the 0.10 W7 merge of egress-edit.
 # docs/sdk.md 31262 = ours 31212 + theirs 30678 - base 30628 at the 0.10 W7 merge of egress-edit.
 # docs/sdk.md 31284 = ours 31262 + theirs 30700 - base 30678 at the 0.10 W7 merge of egress-edit.
-docs/sdk.md=35747 share=21 # 35747 measured (+10: a held change keeps its count when the minimum is unset); earlier: 35737 measured (+200: the four approval counts reason rows, the approvals SDK methods and commands); earlier: 35537
+docs/sdk.md=35770 share=21 # 35770 measured (+23: the approval route also answers the unreachable count, judged without the proposer); earlier: 35747 measured (+10: a held change keeps its count when the minimum is unset); earlier: 35737 measured (+200: the four approval counts reason rows, the approvals SDK methods and commands); earlier: 35537
 # docs/sdk.md 28793 adds 34 over 28759, measured: the component_unit_pinned row and the two pin reasons beside the workspace pin's.
 # docs/sdk.md 20423 = ours 20195 + theirs 20288 - base 20060 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/sdk.md 20315 = ours + theirs - base at the 0.10 HYB-C merge of main onto VM-A, measured.

@@ -147,7 +147,9 @@ func TestPG_ApprovalCounts_OneGETReadsRecordsAndGrantsOnce(t *testing.T) {
 
 // TestPG_ApprovalCounts_ScopeReadsCountGrantHolders: 40 candidates who are not security admins, 3 of them grant
 // holders, and 2 units: one GET reads the unit scope at most 2 × 2 × 3 = 12 times, and never with no grant.
-func TestPG_ApprovalCounts_ScopeReadsCountGrantHolders(t *testing.T) {
+// counterEnv is an approvals env at the minimum 2 whose store counts the unit-scope reads, with one unit under
+// the default.
+func counterEnv(t *testing.T) (*apEnv, *govEnv, countsReadCounter, types.GovernanceUnit) {
 	c := newCounter()
 	g := newGovEnv(t, minApprovals(2), func(cfg *Config) { c.PG = cfg.Store.(store.PG); cfg.Store = c })
 	e := &apEnv{&unitAdminEnv{govEnv: g}}
@@ -156,7 +158,11 @@ func TestPG_ApprovalCounts_ScopeReadsCountGrantHolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	unit := treeChild(t, g, uaUnitBody("counts-a", store.DefaultUnitID, uaDomains("pypi.org"), nil))
+	return e, g, c, treeChild(t, g, uaUnitBody("counts-a", store.DefaultUnitID, uaDomains("pypi.org"), nil))
+}
+
+func TestPG_ApprovalCounts_ScopeReadsCountGrantHolders(t *testing.T) {
+	e, g, c, unit := counterEnv(t)
 	units, err := g.pg.ListGovernanceUnits(context.Background())
 	if err != nil || len(units) != 2 {
 		t.Fatalf("units = %d (%v), want 2", len(units), err)
@@ -534,7 +540,7 @@ func TestPG_ApprovalCounts_DefaultAboveTheMinimumIsJudged(t *testing.T) {
 
 // TestPG_ApprovalCounts_UncountablePoolRefusesOnlyARaise: with a truncated sign-in record, three security admins
 // cannot be confirmed for a count of 3: raising egress_baseline to it is a 422 with the cant_confirm sentence, and
-// the edit check is skipped as well; the same count already stored is saved again, and so is a lower one.
+// the edit check is skipped as well. A stored 4 is saved again, and lowered to 3, both still cant_confirm.
 func TestPG_ApprovalCounts_UncountablePoolRefusesOnlyARaise(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
@@ -546,12 +552,70 @@ func TestPG_ApprovalCounts_UncountablePoolRefusesOnlyARaise(t *testing.T) {
 		strings.Contains(w.Body.String(), "Edits to these counts") {
 		t.Errorf("raise on an uncountable pool = %d %s, want 422 with only the cant_confirm sentence", w.Code, w.Body)
 	}
-	e.requireCounts(govKindEgressBaseline, 3, false)
-	if w := e.admin(http.MethodPut, approvalCountsPath, at3); w.Code != http.StatusOK {
+	e.requireCounts(govKindEgressBaseline, 4, false)
+	if w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":4}]}`); w.Code != http.StatusOK {
 		t.Errorf("the stored count again = %d %s, want 200", w.Code, w.Body)
 	}
-	if w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":2}]}`); w.Code != http.StatusOK {
-		t.Errorf("a lower count = %d %s, want 200", w.Code, w.Body)
+	w = e.admin(http.MethodPut, approvalCountsPath, at3)
+	if p := kindRow(t, decodeCounts(t, w), govKindEgressBaseline).Pool; p.Status != poolStatusCantConfirm {
+		t.Errorf("lowered to 3: pool %+v, want cant_confirm", p)
+	}
+}
+
+// TestPG_ApprovalCounts_ApprovalReadsScopesOnItsTransaction: an approval of an edit that raises a unit kind
+// re-counts the unit pools, grant holders included, on the decision's transaction: no unit scope is read on the
+// store.
+func TestPG_ApprovalCounts_ApprovalReadsScopesOnItsTransaction(t *testing.T) {
+	e, g, c, unit := counterEnv(t)
+	e.seedPeople()
+	e.people("sub-counts-sec", apGroupSec, 2) // five security admins
+	for _, sub := range []string{"sub-counts-ua-1", "sub-counts-ua-2", "sub-counts-ua-3"} {
+		e.record(sub, sub+"@corp.example", []string{apGroupUsers}, nil, false)
+		if _, err := store.GrantUnitAdminQ(context.Background(), g.pool, types.GovernanceUnitAdmin{UnitID: unit.ID, SubjectType: types.CapabilitySubjectUser, Subject: sub, GrantedBy: "seed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ch := e.pending(e.call(g.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"governance_membership","required":3}]}`))
+	c.scopes.Store(0)
+	e.approve(g.bob, ch.ID, http.StatusOK)
+	if n := c.scopes.Load(); n != 0 {
+		t.Errorf("unit scope reads on the store during the approval = %d, want 0", n)
+	}
+}
+
+// TestPG_ApprovalCounts_PutNamesTheShortUnit: a unit kind short in a unit, everyone counted, is refused naming
+// that unit.
+func TestPG_ApprovalCounts_PutNamesTheShortUnit(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	w := e.admin(http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"governance_membership","required":3}]}`)
+	if w.Code != http.StatusUnprocessableEntity || wireReason(t, w) != reasonGovernanceApprovalCountsUnreachable ||
+		!strings.Contains(w.Body.String(), `Governance membership needs 3 approvals and only 2 people besides the proposer can approve it in the unit \"`) {
+		t.Errorf("membership at 3 = %d %s, want 422 naming a unit", w.Code, w.Body)
+	}
+}
+
+// TestPG_ApprovalCounts_ApprovalAppliesOnACantConfirmRaise: an edit raising egress_baseline to 3, saved with four
+// security admins; then one is deactivated and a truncated record signs in, so the kind is cant_confirm, not
+// short: the approvals re-count it and apply the edit.
+func TestPG_ApprovalCounts_ApprovalAppliesOnACantConfirmRaise(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	e.people("sub-counts-sec", apGroupSec, 1)
+	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, `{"default":{"required":2},"kinds":[{"kind":"egress_baseline","required":3}]}`))
+	e.deactivate("sub-counts-sec-1")
+	e.record("sub-counts-partial", "partial@corp.example", []string{apGroupUsers}, nil, true)
+	e.requireCounts(govKindEgressBaseline, 3, false)
+	if p := kindRow(t, e.counts(e.alice), govKindEgressBaseline).Pool; p.Status != poolStatusCantConfirm {
+		t.Fatalf("egress_baseline at 3 = %+v, want cant_confirm", p)
+	}
+	if _, err := e.pool.Exec(context.Background(), `DELETE FROM governance_approval_counts`); err != nil {
+		t.Fatal(err)
+	}
+	e.approve(e.bob, ch.ID, http.StatusOK)
+	e.approve(e.carol, ch.ID, http.StatusOK)
+	if s := e.changeState(ch.ID); s != types.GovernanceChangeApplied || e.countRows() != 2 {
+		t.Errorf("state %s with %d rows, want applied with 2", s, e.countRows())
 	}
 }
 
@@ -574,5 +638,32 @@ func TestPG_Approvals_OwnRowOutranksAnEarlierEmailMatch(t *testing.T) {
 	w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), "")
 	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeAlreadyApproved || !strings.Contains(w.Body.String(), "take your approval back") {
 		t.Errorf("the approver's second approval = %d %s, want 409 offering the take-back", w.Code, w.Body)
+	}
+}
+
+// TestPG_Approvals_OwnRowThatDropsOffersNoTakeBack: the caller's own row would drop on re-check (its API token is
+// gone) while an earlier row sharing their email, which sign-in does not vouch for, still counts: the 409 names
+// the email and does not offer the take-back, as the change's page judges it.
+func TestPG_Approvals_OwnRowThatDropsOffersNoTakeBack(t *testing.T) {
+	e := newApEnv(t, 3)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	const alias = "sub-ap-earlier"
+	adminEmail := uaSubAdminA + "@corp.example"
+	e.grant(e.a, types.CapabilitySubjectUser, alias)
+	e.record(alias, adminEmail, []string{apGroupUsers}, nil, false)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO governance_change_approvals (change_id, approver, approver_email, tier, approved_at)
+		VALUES ($1, $2, $3, 'unit_admin', now() - interval '2 hours')`, ch.ID, alias, adminEmail); err != nil {
+		t.Fatal(err)
+	}
+	// The caller's own row was given with an API token that no longer exists, so it drops on re-check.
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO governance_change_approvals (change_id, approver, approver_email, tier, approved_at, api_token_id, api_token_kind)
+		VALUES ($1, $2, $3, 'unit_admin', now() - interval '1 hour', $4, $5)`, ch.ID, uaSubAdminA, adminEmail, uuid.New(), types.APITokenKindAPI); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeAlreadyApproved ||
+		!strings.Contains(w.Body.String(), "Someone with your email address") || strings.Contains(w.Body.String(), "take your approval back") {
+		t.Errorf("approval with only a dropping own row = %d %s, want 409 naming the email, no take-back", w.Code, w.Body)
 	}
 }

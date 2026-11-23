@@ -601,6 +601,7 @@ func (s *Server) recheckRaised(ctx context.Context, q store.Querier, before, hel
 	if err != nil {
 		return "", err
 	}
+	in.base = withUnitScopeTx(in.base, q) // the unit scope is read on the decision's transaction too
 	units, err := store.ListGovernanceUnitsQ(ctx, q)
 	if err != nil {
 		return "", err

@@ -307,8 +307,8 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 
 - A count is from the minimum to 9. A kind with no count of its own follows the default.
 - The proposer never approves their own change, so a kind's pool is counted without one person. The page judges each kind on the count in force: the minimum when it is higher than the stored count.
-- A save is refused (`422` `governance_approval_counts_unreachable`), for every caller, when a count it sets is above that pool, everyone counted. A unit kind is refused when any unit is short, and the page shows its worst unit.
-- When someone can't be counted, a save that raises a kind's count is refused; one that keeps or lowers it is saved.
+- A save is refused (`422` `governance_approval_counts_unreachable`), for every caller, when a kind's own count, or a default above the minimum, is above that pool, everyone counted. A default at the minimum is never judged. A unit kind is refused when any unit is short, and the page shows its worst unit.
+- When someone can't be counted, a save that raises a kind's count above the people who can be counted is refused; one that keeps or lowers it is saved.
 - Changes that name a runner, and unit changes that set a mount's host path, are approved by super admins only, so both pools are counted.
 - Each approval of a held edit counts the people again for every kind it raises, and refuses with the same `422` while one is short. The edit stays held.
 - A save is refused when the security admins other than its proposer could not approve the next edit at the highest count, everyone counted.

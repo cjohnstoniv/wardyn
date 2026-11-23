@@ -413,8 +413,8 @@ func (s *Server) applyHeld(r *http.Request, q store.Querier, kind govKind, ch ty
 }
 
 // replayApply runs the held write under a savepoint and rolls it back: what a decision would answer for
-// stale or invalid, found without writing the target. An apply may read the pool inputs but never writes them,
-// and never audits, so the rollback leaves nothing behind.
+// stale or invalid, found without writing the target. An apply reads and writes only on q, and never audits,
+// so the rollback leaves nothing behind.
 func (s *Server) replayApply(ctx context.Context, r *http.Request, q store.Querier, kind govKind, ch types.GovernanceChange) error {
 	if _, err := q.Exec(ctx, `SAVEPOINT governance_approval`); err != nil {
 		return err
