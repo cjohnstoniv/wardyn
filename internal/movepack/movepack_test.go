@@ -22,9 +22,15 @@ type file struct {
 	content string
 }
 
-func dir(p string) file          { return file{h: movepack.Header{Path: p, Type: movepack.TypeDir, Mode: 0o755}} }
-func reg(p, content string) file { return file{h: movepack.Header{Path: p, Type: movepack.TypeFile, Mode: 0o644, Size: int64(len(content))}, content: content} }
-func link(p, to string) file     { return file{h: movepack.Header{Path: p, Type: movepack.TypeSymlink, Mode: 0o777, Link: to}} }
+func dir(p string) file {
+	return file{h: movepack.Header{Path: p, Type: movepack.TypeDir, Mode: 0o755}}
+}
+func reg(p, content string) file {
+	return file{h: movepack.Header{Path: p, Type: movepack.TypeFile, Mode: 0o644, Size: int64(len(content))}, content: content}
+}
+func link(p, to string) file {
+	return file{h: movepack.Header{Path: p, Type: movepack.TypeSymlink, Mode: 0o777, Link: to}}
+}
 
 // pack writes files as a stream through movepack.Writer.
 func pack(t *testing.T, files ...file) ([]byte, movepack.Manifest) {
