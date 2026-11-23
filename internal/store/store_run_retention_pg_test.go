@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -327,5 +328,40 @@ func TestRefuseOrgRunsRefusesATombstonedRunPG(t *testing.T) {
 	_, err = st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}})
 	if !errors.Is(err, store.ErrFederatedOrgRun) {
 		t.Fatalf("ingest of a row under deleted run %s: err = %v, want ErrFederatedOrgRun", run.ID, err)
+	}
+}
+
+// A batch statement runs under its statement timeout: one that waits past it on a lock is cancelled (SQLSTATE
+// 57014) instead of holding the sweep, and the run stays for the next tick.
+func TestDeleteExpiredRunsBatchHasAStatementTimeoutPG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	run := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	endRun(t, pool, run.ID, types.RunCompleted, 40)
+	store.SetRunRetentionStatementTimeout(t, "300ms")
+
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	if _, err := holder.Exec(ctx, `LOCK TABLE approvals IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = st.DeleteExpiredRuns(ctx, retentionWindow, 10)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "57014" {
+		t.Fatalf("DeleteExpiredRuns under a held lock = %v, want a statement timeout (57014)", err)
+	}
+	if waited := time.Since(start); waited > 30*time.Second {
+		t.Fatalf("the cancelled batch took %v", waited)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !runExists(t, pool, run.ID) || tombstoneCount(t, pool, run.ID) != 0 {
+		t.Fatal("the cancelled batch deleted the run or left a tombstone")
 	}
 }

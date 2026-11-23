@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -37,9 +40,14 @@ const runRetentionHeldSQL = `(
 	EXISTS (SELECT 1 FROM workloads x WHERE x.current_run_id = r.id) OR
 	EXISTS (SELECT 1 FROM run_teardown_holds x WHERE x.run_id = r.id))`
 
+// runRetentionStatementTimeout bounds one batch statement, as the recording sweep bounds its delete: a batch
+// that cannot finish in it is cancelled, and the next tick tries again.
+var runRetentionStatementTimeout = "5min"
+
 // DeleteExpiredRuns deletes up to limit ended runs whose end time is older than olderThan, with every row that
 // cascades from them, and records a run_history_tombstones row for each in the same statement. A run held by
-// runRetentionHeldSQL is kept. It returns how many runs it deleted.
+// runRetentionHeldSQL is kept. The statement runs under runRetentionStatementTimeout. It returns how many runs
+// it deleted.
 func (s PG) DeleteExpiredRuns(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
 	q := `WITH doomed AS (
 		SELECT r.id FROM agent_runs r
@@ -53,8 +61,19 @@ func (s PG) DeleteExpiredRuns(ctx context.Context, olderThan time.Duration, limi
 	)
 	INSERT INTO run_history_tombstones (run_id, unit_id, created_at, ended_at)
 	SELECT id, unit_id, created_at, ended_at FROM gone`
-	tag, err := s.Pool.Exec(ctx, q, retentionTerminalStates, int64(olderThan.Seconds()), limit)
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
+		return 0, fmt.Errorf("store: delete expired runs: %w", err)
+	}
+	defer db.Rollback(ctx, tx) // no-op after commit
+	if _, err := tx.Exec(ctx, `SELECT set_config('statement_timeout', $1, true)`, runRetentionStatementTimeout); err != nil {
+		return 0, fmt.Errorf("store: delete expired runs: %w", err)
+	}
+	tag, err := tx.Exec(ctx, q, retentionTerminalStates, int64(olderThan.Seconds()), limit)
+	if err != nil {
+		return 0, fmt.Errorf("store: delete expired runs: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("store: delete expired runs: %w", err)
 	}
 	return int(tag.RowsAffected()), nil
