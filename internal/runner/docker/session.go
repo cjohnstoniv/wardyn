@@ -302,7 +302,7 @@ const streamExitAfterCut = time.Second
 // reaches afterwards is not how it ended. So does an exec still running, a TTY
 // stream (no demux), or a daemon that does not answer within streamExitAfterCut.
 func (d *Driver) waitStreamExit(ctx context.Context, execID string, outEnded *atomic.Bool) (int, error) {
-	code, err := d.pollExecExit(ctx, execID)
+	code, err := d.pollExecExit(ctx, execID, pollInterval)
 	if err == nil || ctx.Err() == nil || !outEnded.Load() {
 		return code, err
 	}
