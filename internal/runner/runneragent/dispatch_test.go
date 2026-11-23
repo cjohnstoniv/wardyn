@@ -523,8 +523,9 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 		if _, err := wrong.ExportState(ctx, ref, set); err == nil || !strings.Contains(err.Error(), "stream") {
 			t.Errorf("export answered with an exec stream = %v; want it refused", err)
 		}
-		if _, _, err := wrong.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); !errors.Is(err, runner.ErrMoveFiles) {
-			t.Errorf("import answered with an exec stream = %v; want it refused", err)
+		if _, _, err := wrong.ImportSandbox(ctx, good, set, 1<<20, strings.NewReader("x")); !errors.Is(err, runner.ErrMoveFiles) ||
+			!strings.Contains(err.Error(), `with a "exec" stream`) {
+			t.Errorf("import answered with an exec stream = %v; want it refused for the stream's kind", err)
 		}
 	})
 }
