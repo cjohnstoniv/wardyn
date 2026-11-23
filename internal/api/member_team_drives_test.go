@@ -43,6 +43,13 @@ type teamDriveStore struct {
 	unitOf      map[string]uuid.UUID
 	team        map[uuid.UUID]*teamFacts
 	anyStarting bool
+	// failedRuns counts the runs a failed re-read asked to fail (UpdateRunStateIf); none is applied.
+	failedRuns int
+}
+
+func (s *teamDriveStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
+	s.failedRuns++
+	return false, nil
 }
 
 // teamTree is Engineering with Platform and Data under it, Platform SRE under Platform, and Default.
@@ -415,6 +422,27 @@ func TestMemberTeamDriveDispatch_RereadUnderFrozenUnit(t *testing.T) {
 	delete(st.drives, d.ID)
 	if srv.memberTeamDriveStillThere(ctx, run(&tr.child.ID), d.ID) {
 		t.Error("a lost row passed the re-read")
+	}
+}
+
+// TestMemberTeamDriveDispatch_OwnerRunNeedsTeamSwitch: the owner's own run re-reads their team drive under the
+// platform switch too: present with team drives on, failed with them off; a plain member drive ignores the switch.
+func TestMemberTeamDriveDispatch_OwnerRunNeedsTeamSwitch(t *testing.T) {
+	st, tr := newTeamDriveStore()
+	srv, _, _ := teamDriveServer(st, "docker")
+	d := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
+	plain := seedMemberDrive(st.memberDriveStore, aliceSub, "Notes")
+	run := func() types.AgentRun { return types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, UnitID: &tr.unit.ID} }
+	ctx := context.Background()
+	if !srv.memberDrivesStillThere(ctx, run(), map[uuid.UUID]string{d.ID: aliceSub}) {
+		t.Fatal("the owner's run failed the re-read of their team drive with team drives on")
+	}
+	st.site = teamDriveSite(false, true)
+	if srv.memberDrivesStillThere(ctx, run(), map[uuid.UUID]string{d.ID: aliceSub}) || st.failedRuns != 1 {
+		t.Errorf("the owner's run passed the re-read of their team drive with team drives off (runs failed %d)", st.failedRuns)
+	}
+	if !srv.memberDrivesStillThere(ctx, run(), map[uuid.UUID]string{plain.ID: aliceSub}) {
+		t.Error("the owner's plain member drive failed the re-read with team drives off")
 	}
 }
 

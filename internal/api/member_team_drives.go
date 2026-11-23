@@ -145,6 +145,17 @@ func (s *Server) memberTeamReachableDrives(ctx context.Context, out []reachableD
 	return out, nil
 }
 
+// memberTeamDriveSwitchOn is the platform switch at dispatch's re-read of a run owner's own member drive: false for
+// a team drive while storage.user_drive.team_drives is off or unreadable, so not even its owner's run mounts it; true
+// for any other member drive.
+func (s *Server) memberTeamDriveSwitchOn(ctx context.Context, d types.UserDrive) bool {
+	if !d.Team {
+		return true
+	}
+	provider, err := s.userDriveProvider(ctx)
+	return err == nil && provider.TeamDrives
+}
+
 // memberTeamSharedWithUnit is whether a catalogue row is a person's team drive that its unit reaches: false for one
 // whose unit was deleted, which memberTeamReachableDrives allocates to its owner alone.
 func memberTeamSharedWithUnit(w store.UserDriveWinner) bool {

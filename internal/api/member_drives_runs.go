@@ -163,7 +163,7 @@ func (s *Server) memberDrivesStillThere(ctx context.Context, run types.AgentRun,
 	for id, owner := range owners {
 		if ms != nil && owner == runOwner {
 			d, err := ms.GetMemberDriveOf(ctx, runOwner, id)
-			if err == nil && !d.Deleting() && !d.LegacyUnsettled {
+			if err == nil && !d.Deleting() && !d.LegacyUnsettled && s.memberTeamDriveSwitchOn(ctx, d) {
 				continue
 			}
 			if err == nil && d.LegacyUnsettled && !d.Deleting() {
