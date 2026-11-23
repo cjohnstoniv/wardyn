@@ -60,12 +60,10 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var v lapseVerdict
-	computed, held := false, 0
+	v, computed := s.lapseVerdictNow(ctx), true // on the pass context, not the per-run one below
+	s.recordServerOutageWindow(ctx, v)
+	held := 0
 	for _, run := range runs {
-		if !computed {
-			v, computed = s.lapseVerdictNow(ctx), true // on the pass context, not the per-run one below
-		}
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()

@@ -180,6 +180,7 @@ var namespaceCensusExempt = map[string]string{
 	"governance_units.overlay_limits":           "limits, contact details and boundary settings; no person list (a boundary spec has no ui_apps field)",
 	"groundtruth_sensors.observed_by_kind":      "runner, run-containment and sweep telemetry; not an authority source",
 	"key_domain_login_groups.groups":            "group names or claim values, never a person principal",
+	"outage_windows.detail":                     "a gap length, or a sweep's census counts and condition names; no principal",
 	"principal_groups.groups":                   "group names or claim values, never a person principal",
 	"principal_prefs.value":                     "a person's own display or preference data, keyed by a TEXT principal column the census reads",
 	"run_components.definition":                 "component and wall definitions; no person list",

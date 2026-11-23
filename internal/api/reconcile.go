@@ -117,6 +117,9 @@ func (s *Server) ReconcileOnBoot(ctx context.Context) error {
 	if _, ok := s.cfg.ImageBuilder.(ImageBuildSweeper); ok && s.watcherBaseCtx() != nil {
 		s.goBackground(func() { s.orphanedBuildSweeper(s.watcherBaseCtx(), buildSweepInterval) })
 	}
+	if s.watcherBaseCtx() != nil {
+		s.goBackground(func() { s.runCPHeartbeat(s.watcherBaseCtx()) })
+	} // every replica beats, runner or not (cp_heartbeat.go)
 	if s.cfg.Runner == nil {
 		return buildErr
 	}

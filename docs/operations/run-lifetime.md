@@ -113,6 +113,19 @@ When the database or the server is unreachable, a run's proxy cannot renew its t
 - A held sandbox has its proxy and agent stopped, and only its files are kept. It costs disk until the hold ends.
 - It has no record, so it cannot be ended or opened from the console, and is copied out only with host access.
 
+The server records outage windows on the database's clock, from its own observations only, and keeps them for 30 days:
+
+- `cp_outage`: no server beat for more than 30 seconds.
+- `runner_link`: a registered runner's link was down.
+- `server_outage`: the server's own proxies stopped renewing as a group. It needs at least two of the server's own runs; a single run whose proxy stops renewing is ended or kept as before.
+- A session the server ended itself because the runner may not come back (the runner was revoked, its owner deactivated, or runners switched off) records no runner outage.
+- A connection pool starved for more than 30 seconds records a `cp_outage` window while the server was up.
+- A database restored to an earlier point records one window, from the restored beat to the first beat after the restore. Both cases only widen what may recover, within a 24-hour bound.
+- A runner's link outage is recorded only by the server that held its session, two minutes after the link dropped.
+- A link that drops less than two minutes before that server stops (a restart, a deploy or a crash) is not recorded.
+- Nor is a runner that was still connected when the server stopped and cannot reach the new one: a deploy that breaks runner connectivity is not recorded as a runner outage.
+- Only the time during which no server was running is recorded, as a control-plane outage, when it is longer than 30 seconds. Runs on such a runner end as they did before this release.
+
 See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 
 ## Revive

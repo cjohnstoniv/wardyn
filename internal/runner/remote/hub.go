@@ -58,6 +58,10 @@ type HubConfig struct {
 	// session emits neither; Disconnected waits for the resume window.
 	Connected    func(context.Context, uuid.UUID) error
 	Disconnected func(context.Context, uuid.UUID) error
+	// LinkLost, when set, is called once when the resume window passes with the session not resumed. sessionID is the
+	// session that ended and droppedFor is how long ago it ended, on this replica's monotonic clock. It is not called
+	// by Close (a server shutdown) or when a fresh session replaces a live one.
+	LinkLost func(ctx context.Context, runnerID uuid.UUID, sessionID string, droppedFor time.Duration)
 	// Verified runs once the runner proves possession of its stored key,
 	// before any further lookup or admission. An error refuses the connection.
 	Verified func(context.Context, uuid.UUID) error
@@ -707,7 +711,8 @@ func (h *Hub) ended(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 	if !current {
 		return
 	}
-	s.ended = time.Now()
+	endedAt, endedID := time.Now(), s.id
+	s.ended = endedAt
 	s.timer = time.AfterFunc(runnerwire.ResumeWindow, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -719,6 +724,9 @@ func (h *Hub) ended(id uuid.UUID, s *hubSession, peer *runnerwire.Peer) {
 			delete(h.sessions, id)
 		}
 		h.mu.Unlock()
+		if s.connected && h.cfg.LinkLost != nil {
+			h.cfg.LinkLost(h.ctx, id, endedID, time.Since(endedAt))
+		}
 		if s.connected && h.cfg.Disconnected != nil {
 			_ = h.cfg.Disconnected(h.ctx, id)
 			s.connected = false
