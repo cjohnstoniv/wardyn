@@ -256,6 +256,11 @@ export interface AgentRun {
   // runs. Server/crash-recovery bookkeeping only; no console reader today, kept
   // for mirror parity, same reason as source_id above.
   agent_exec_id?: string;
+  // The organisation site of the run's pool when it was placed
+  // (internal/types/types.go's AgentRun.SiteID), written once at create while
+  // sites are on; absent otherwise. No console reader today, kept for mirror
+  // parity, same reason as source_id above.
+  site_id?: string;
   // The user type the run's creator resolved as at create time
   // (internal/types/types.go's AgentRun.UserType, migration 0080) — the chosen
   // type for a run launched in the user view, the stamped one otherwise. Empty
