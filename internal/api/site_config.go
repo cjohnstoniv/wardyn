@@ -513,6 +513,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteMacOSVM(cfg, existing, present)
 	carryForwardSiteImages(cfg, existing, present)
 	carryForwardSiteFeatures(cfg, existing, present)
+	carryForwardSiteDesktopWatermark(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
