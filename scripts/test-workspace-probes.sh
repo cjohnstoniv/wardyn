@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
 # Drives the git_credential probe in examples/workspaces/probes.sh against a `docker` stub on PATH, so the
 # probe's pass and fail arms are checked with no daemon, no network and no running sandbox. The stub answers
 # `docker inspect -f {{.State.Running}}` from a file of lines (one consumed per call, the last repeating) and
