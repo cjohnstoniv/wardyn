@@ -16,7 +16,7 @@ type clock struct{ t time.Time }
 func (c *clock) now() time.Time          { return c.t }
 func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
-func newClock() *clock { return &clock{t: time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)} }
+func newClock() *clock { return &clock{t: time.Now()} }
 
 func TestTracker_HealthyForCountsFromTheFirstGoodPing(t *testing.T) {
 	c := newClock()
