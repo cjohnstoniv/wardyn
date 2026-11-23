@@ -616,8 +616,8 @@ type ApprovalDecision struct {
 	// the decision is recorded as it is without deciders.
 	Basis string
 	Rule  *DeciderRuleRef
-	// DecidersUnreadable: the unit deciders or the unit tree could not be read, and a security caller decided under
-	// the narrowest rule. Basis and Rule are then empty.
+	// DecidersUnreadable: the unit deciders, the unit tree or the run could not be read, and a security caller
+	// decided under the narrowest rule. Basis and Rule are then empty.
 	DecidersUnreadable bool
 }
 

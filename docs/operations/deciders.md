@@ -91,7 +91,7 @@
 - Group membership comes from the caller's session snapshot. Leaving a group at the identity provider takes effect at the next sign-in, or when the person is removed through SCIM; an API token's groups are bounded as in [Group deciders and sign-in age](#group-deciders-and-sign-in-age).
 - A run with no unit, or a deleted unit, is decided as without rules.
 - Rules or the unit tree that cannot be read answer the run's owner `503` `deciders_unreadable`, and anyone else the usual `404`. A security admin and the admin token still decide, under the narrowest rule: `once` at most, whether or not a rule exists for the hold. The `approval.decide` row carries `deciders_unreadable`. See [the residual](../../threatmodel/THREAT-MODEL.md#unit-deciders-who-may-decide-a-hold-and-five-residuals).
-- While they cannot be read, a security admin never decides a hold on a run of their own. The admin token is the audited break-glass (`switch` `unit deciders (unreadable)`). In local mode, and on a run whose row cannot be read, only the admin token decides then.
+- While they cannot be read, a security admin never decides a hold on a run of their own. The admin token is the audited break-glass (`switch` `unit deciders (unreadable)`). In local mode nobody decides then; on a run whose row cannot be read, only the admin token does.
 - The widest scope under any rule is `run`. A decision sent with no scope keeps the kind's default, except an egress decision under a cap below `run`, which is stored as `once`. A wider scope answers `403` `decision_scope_above_rule`.
 
 | Reason | Status | When |
