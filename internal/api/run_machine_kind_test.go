@@ -344,20 +344,20 @@ func TestPlacementTrust_DispatchRefusesALaterDenial(t *testing.T) {
 		return types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, MachineKindDenials: ds}}
 	}
 	if ok, audit, _, run := dispatchOfKind(t, types.MachineLinuxVM, types.RunnerTrustPersonal, types.SiteConfig{}); !ok {
-		t.Fatalf("a Linux VM on a personal runner with no list was refused: %s", auditDump(audit.events, run.ID))
+		t.Fatalf("a Linux VM on a personal runner with no list was refused: %s", auditDump(audit.snapshot(), run.ID))
 	}
 	if ok, audit, _, run := dispatchOfKind(t, types.MachineLinuxVM, types.RunnerTrustPersonal,
 		siteWith(types.MachineKindDenial{Trust: types.RunnerTrustOrgCluster, MachineKind: types.MachineLinuxVM})); !ok {
-		t.Fatalf("a Linux VM on personal with the denial on org_cluster was refused: %s", auditDump(audit.events, run.ID))
+		t.Fatalf("a Linux VM on personal with the denial on org_cluster was refused: %s", auditDump(audit.snapshot(), run.ID))
 	}
 	ok, audit, st, run := dispatchOfKind(t, types.MachineLinuxVM, types.RunnerTrustPersonal,
 		siteWith(types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM}))
 	if ok {
 		t.Fatal("a Linux VM on a personal runner was dispatched against a denial of it")
 	}
-	ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+	ev := findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure")
 	if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonPlacementDenied)) || !strings.Contains(string(ev.Data), `"machine_kind"`) {
-		t.Fatalf("no placement_denied refusal naming machine_kind: %s", auditDump(audit.events, run.ID))
+		t.Fatalf("no placement_denied refusal naming machine_kind: %s", auditDump(audit.snapshot(), run.ID))
 	}
 	if !strings.Contains(st.failureHint, "Your organisation does not allow Linux VM sandboxes on personal runners.") {
 		t.Fatalf("failure hint %q, want the denial's sentence", st.failureHint)
@@ -372,13 +372,13 @@ func TestPlacementTrust_DispatchFloorRefusesAMacNoLongerManaged(t *testing.T) {
 		if ok {
 			t.Fatalf("a macOS VM was dispatched to a %s runner", class)
 		}
-		ev := findAudit(audit.events, run.ID, "run.dispatch", "failure")
+		ev := findAudit(audit.snapshot(), run.ID, "run.dispatch", "failure")
 		if ev == nil || !strings.Contains(string(ev.Data), string(placement.ReasonRunnerTrustRequired)) {
-			t.Fatalf("%s: no runner_trust_required refusal: %s", class, auditDump(audit.events, run.ID))
+			t.Fatalf("%s: no runner_trust_required refusal: %s", class, auditDump(audit.snapshot(), run.ID))
 		}
 	}
 	if ok, audit, _, run := dispatchOfKind(t, types.MachineMacOSVM, types.RunnerTrustManagedDevice, types.SiteConfig{}); !ok {
-		t.Fatalf("a macOS VM on a managed_device runner was refused: %s", auditDump(audit.events, run.ID))
+		t.Fatalf("a macOS VM on a managed_device runner was refused: %s", auditDump(audit.snapshot(), run.ID))
 	}
 }
 
