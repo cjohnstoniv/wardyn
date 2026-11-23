@@ -128,6 +128,7 @@ Each sweep and its interval:
 | `run_secret` | 15m | Always, on every replica; only the leader records `success` |
 | `credential_expiry` | 24h | Always |
 | `recording_retention` | 1h | The recording store can sweep and `WARDYN_RECORDING_RETENTION_DAYS` is above 0 (default 0, off) |
+| `run_retention` | 1h | `WARDYN_RUN_HISTORY_RETENTION_DAYS` is above 0 (default 0, off) |
 | `run_watcher` | 1m | A runner exists, on every replica; only the leader records `success` |
 | `orphaned_build` | 30m | The image builder can sweep orphaned builds |
 | `run_output` | 1m | `WARDYN_RUN_OUTPUT_PERSIST` is on (the default): deletes run output past `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and resolves abandoned pending rows. Runs on the sweeper leader; with persistence off the retention delete still runs but is not reported |

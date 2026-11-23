@@ -493,6 +493,9 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := validateRecordingRetentionDays(*f.recordingRetention); err != nil {
 		return err
 	}
+	if err := validateRunHistoryRetentionDays(orZero(f.runHistoryRetention)); err != nil {
+		return err
+	}
 	if err := validateOIDCSessionTTL(*f.oidcSessionTTL); err != nil {
 		return err
 	}

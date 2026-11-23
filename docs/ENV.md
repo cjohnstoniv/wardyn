@@ -160,6 +160,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RECORDING_DIR` | string | `./data/recordings` | PTY recording directory; `fs` store only, **ignored by `pg`** (flag `-recording-dir`). An EMPTY value keeps the default (0.7, like every env var here) — it disables nothing; turn recording off with `WARDYN_RECORDING_STORE=off` |
 | `WARDYN_RECORDING_RETENTION_DAYS` | int | `0` | delete stored session recordings older than N days; `0` (the default) keeps them forever (flag `-recording-retention-days`). Nothing is deleted unless you set a window. [Details](#wardyn_recording_retention_days) |
 | `WARDYN_AUDIT_RETENTION_DAYS` | int | `0` | the audit log's retention window in days; `0` (the default) keeps it forever (flag `-audit-retention-days`). An **increase** applies at once; a **decrease** takes effect **30 days after the boot that first saw it**. [Details](#wardyn_audit_retention_days) |
+| `WARDYN_RUN_HISTORY_RETENTION_DAYS` | int | `0` | delete ended runs, with their approvals and usage, older than N days; `0` (the default) keeps them forever, otherwise at least `30` (flag `-run-history-retention-days`). See the section below. |
 | `WARDYN_AUDIT_RETENTION_AUTODROP` | bool | `false` | let the leader sweeper drop eligible oldest audit partitions itself (flag `-audit-retention-autodrop`). **Unattested**: no operator exported or checked the partition first. [Details](#wardyn_audit_retention_autodrop) |
 | `WARDYN_EXEC_OUTPUT_TAIL` | bool | `true` | keep the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of every non-interactive run's combined stdout/stderr, readable through `GET /api/v1/runs/{id}/output` by the run's owner or an admin (flag `-exec-output-tail`). [Details](#wardyn_exec_output_tail) |
 | `WARDYN_RUN_OUTPUT_TAIL_BYTES` | int | `65536` | size of each non-interactive run's in-memory output tail, and the cap on `GET /api/v1/runs/{id}/output?tail=` (flag `-run-output-tail-bytes`). Boot refuses a value below `1024` or above `1048576`. Memory bound: see OPERATIONS.md "Run output" |
@@ -678,6 +679,16 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The window only makes the oldest closed monthly partition *eligible*: it is removed by an attested, digest-checked drop (`POST /audit/retention/drop`, `wardyn audit retention drop`) or by the autodrop below, never by this setting alone.
 - Set the same value on every replica.
 - 0..36500; see [`docs/OPERATIONS.md`](OPERATIONS.md), "Audit retention".
+
+### `WARDYN_RUN_HISTORY_RETENTION_DAYS`
+
+- Delete runs that ended more than N days ago; `0` (the default) keeps every run forever. A value from 1 to 29 is refused at startup.
+- A deleted run takes its approvals, model usage and other per-run rows with it. Its audit rows stay, under the audit log's own retention.
+- Kept whatever their age: a run with a held push's path list or an MCP call send, or one a runner retirement or a watermark names.
+- Also kept: a run another run's pending action names (an action with no run holds it while it exists), a kept machine's run or fresh start, a workload's current run, a teardown hold's run.
+- The leader sweeps hourly, at most 10,000 runs an hour. A sweep that deleted anything writes a `run.retention.sweep` audit row.
+- A deleted run's recordings are not deleted with it; `WARDYN_RECORDING_RETENTION_DAYS` governs them. Set it no longer than this window, or a recording outlives the run page it plays on.
+- A unit's model usage report counts only the runs still kept: a period that reaches before the window reads part of its data.
 
 ### `WARDYN_AUDIT_RETENTION_AUTODROP`
 

@@ -331,3 +331,27 @@ func TestRunCredentialSweeper_AlsoSweepsExpiredEphemeralRows(t *testing.T) {
 		t.Fatal("the credential sweep never swept the expired attach tickets and delegated tokens")
 	}
 }
+
+// The run-history retention sweep is registered only when a window is set: unset (0) it never runs, so it has no
+// series and can never be stale.
+func TestRegisterSweepHealth_RunRetentionOnlyWhenSet(t *testing.T) {
+	for _, tc := range []struct {
+		days int
+		want bool
+	}{{0, false}, {30, true}} {
+		clk := &healthClock{t: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
+		tr := registeredFor(t, sweepInstall{runHistoryRetentionDays: tc.days}, clk)
+		got := false
+		for _, s := range tr.Registered() {
+			if s.Name == sweephealth.RunRetention {
+				got = true
+				if s.Interval != runRetentionSweepInterval {
+					t.Errorf("run_retention interval = %v, want %v", s.Interval, runRetentionSweepInterval)
+				}
+			}
+		}
+		if got != tc.want {
+			t.Errorf("days %d: run_retention registered = %v, want %v", tc.days, got, tc.want)
+		}
+	}
+}

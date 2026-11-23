@@ -151,8 +151,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	registerSweepHealth(ticks, sweepInstall{
 		runner: run != nil, autoStop: *f.autoStopInterval, approvalExpiry: approvalExpiry,
 		recordingSweepable: recSweepable, recordingRetentionDays: *f.recordingRetention,
-		runOutputPersist: *f.runOutputPersist,
-		api:              srv.HealthSweeps(),
+		runHistoryRetentionDays: orZero(f.runHistoryRetention),
+		runOutputPersist:        *f.runOutputPersist,
+		api:                     srv.HealthSweeps(),
 	})
 	// The audit retention policy and the daily partition sweep (a nil pool is a unit test).
 	if pool != nil {
@@ -211,6 +212,9 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 			runRecordingSweeper(ctx, rs, maskedRec, recordingSweepInterval, after, ticks)
 		})
 		slog.Info("wardynd: recording retention sweeper started", slog.Duration("after", after))
+	}
+	if pool != nil {
+		startRunRetention(rootCtx, leader, store.NewPG(pool), maskedRec, orZero(f.runHistoryRetention), ticks)
 	}
 
 	// Run-secret eviction lane: drop the in-memory plaintext masking corpus of

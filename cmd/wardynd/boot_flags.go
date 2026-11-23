@@ -203,6 +203,8 @@ type bootFlags struct {
 	approvalNotify     *string
 	auditSpool         *string
 	auditSource        *string
+	// runHistoryRetention is WARDYN_RUN_HISTORY_RETENTION_DAYS (0 = keep forever); see run_retention.go.
+	runHistoryRetention *int
 	// auditSeal is WARDYN_AUDIT_SEAL (off|fields|full): whether personal audit fields are stored sealed under the person's own key.
 	auditSeal *string
 	// auditStrict is WARDYN_AUDIT_STRICT: a covered change is refused if its audit intent row cannot be written first.
@@ -582,6 +584,8 @@ func parseBootFlags() *bootFlags {
 		auditSpool:         flagEnv("audit-spool", "WARDYN_AUDIT_SPOOL", "./data/audit-spool.jsonl", "local append-only JSONL fallback for audit events whose Postgres write fails; empty disables"),
 		auditSeal:          flagEnv("audit-seal", "WARDYN_AUDIT_SEAL", "off", "off|fields|full: with fields, the personal fields of an audit row (docs/AUDIT-ACTIONS.md, Sealed fields) are stored, spooled and sent to sinks only as ciphertext under the person's own key, so erasing the person makes them unreadable everywhere they were copied. Rows written before it was turned on stay plaintext. full also stores a human actor as subject:<uuid>, so SIEM rules keyed on actor see subject ids (default off)"),
 		auditStrict:        flagBool("audit-strict", "WARDYN_AUDIT_STRICT", false, "strict audit: a covered policy, governance, approval or grant change is refused (503 audit_unavailable) if its audit intent row cannot be written to the store first; the handler's own detailed row can still spool (default false)"),
+		// OFF by default (0 = keep forever): a run's row is what its approvals, usage and audit trail hang from.
+		runHistoryRetention: flagIntEnv("run-history-retention-days", "WARDYN_RUN_HISTORY_RETENTION_DAYS", 0, "delete ended runs, with their approvals and usage, whose end is older than N days (default 0, keep forever; otherwise 30 or more)"),
 
 		// OFF by default (0 = keep forever), like recordingRetention above and for the same reason; unlike
 		// it, the audit log is only ever trimmed a whole closed partition at a time, through an attested drop.

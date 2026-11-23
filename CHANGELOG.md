@@ -16,6 +16,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.
 - The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
 - WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+- `WARDYN_RUN_HISTORY_RETENTION_DAYS` (default `0`, keep forever) deletes runs that ended more than N days ago (at least 30), with their approvals and model usage; audit rows stay, and runs that held push or MCP evidence are kept. Each sweep that deleted anything writes a `run.retention.sweep` audit row (#4068).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_history_tombstones` to every role that was granted UPDATE on the runs table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then the unit admins' audit view and the device audit ingest fail.
 
 ### Changed
 
@@ -40,6 +42,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 - Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
+- Migration `0400_run_history_tombstones` adds a table, grants the app role (every role granted `UPDATE` on `agent_runs`) `SELECT, INSERT` on it, and changes no row. On a split-role install, grant the app role `DELETE` on `agent_runs` before you set `WARDYN_RUN_HISTORY_RETENTION_DAYS`.
 
 ## [0.10.3] — 2026-11-23
 
