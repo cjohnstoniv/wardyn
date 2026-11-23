@@ -14,6 +14,7 @@
 package envbuild
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -90,6 +92,8 @@ type Builder struct {
 	// cli is the Docker API client; set by New / newWithClient.
 	cli        envbuilderDockerAPI
 	liveBuilds liveBuildTracker // in-flight build container IDs; see reaper.go
+	// reuseIDs maps a reuse key to the ID of the image this process built for it (reuse.go).
+	reuseIDs sync.Map
 
 	// EnvbuilderImage is the envbuilder OCI image reference to use. Defaults to defaultEnvbuilderImage.
 	EnvbuilderImage string
@@ -800,22 +804,39 @@ func (b *Builder) pushedBaseRef(buildTag string) string {
 	return repo + ":" + buildTag
 }
 
+// finalizeInput is one finalize stage's input: the base it builds FROM, the base digest it records, and the
+// build context (the generated Dockerfile, the gitconfig and the tools).
+type finalizeInput struct {
+	from, baseDigest string
+	context          []byte
+}
+
 // finalizeImage runs the second-stage build: FROM the pushed image, COPY Wardyn's runner tools onto
 // PATH, tag as outputTag. Only FROM+COPY on the host daemon — no untrusted RUN — so it needs no build
 // sandbox. pullBase pulls fresh before the wrap; BYOI passes false since ensureImage already made the base present.
 func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDir string, logSink io.Writer, pullBase bool) (Built, error) {
+	in, err := b.prepareFinalize(ctx, baseRef, toolsDir, pullBase)
+	if err != nil {
+		return Built{}, err
+	}
+	return b.runFinalize(ctx, in, outputTag, nil, logSink)
+}
+
+// prepareFinalize checks and pulls the base as finalizeImage does, runs the wrap-safety preflight, and builds the
+// finalize context in memory.
+func (b *Builder) prepareFinalize(ctx context.Context, baseRef, toolsDir string, pullBase bool) (finalizeInput, error) {
 	if strings.ContainsAny(baseRef, " \t\r\n\x00") {
-		return Built{}, fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
+		return finalizeInput{}, fmt.Errorf("envbuild: finalize base ref %q contains illegal whitespace/control characters", baseRef)
 	}
 	// Pull here (not via ImageBuild's PullParent) so the ONBUILD preflight below inspects the exact image the wrap build resolves as FROM (avoids TOCTOU).
 	if pullBase {
 		if err := dockerutil.PullImage(ctx, b.cli, baseRef, "envbuild"); err != nil {
-			return Built{}, err
+			return finalizeInput{}, err
 		}
 	}
 	baseID, digestRef, err := b.assertWrapSafeBase(ctx, baseRef)
 	if err != nil {
-		return Built{}, err
+		return finalizeInput{}, err
 	}
 	// A BYOI wrap (pullBase=false) builds FROM the image ID the preflight inspected: its tag is shared, and a refresh
 	// that pulls it again in between must not hand the build an image the preflight never saw. The digest the image
@@ -830,13 +851,23 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 	}
 	tarCtx, err := buildFinalizeContext(from, toolsDir)
 	if err != nil {
-		return Built{}, err
+		return finalizeInput{}, err
 	}
-	resp, err := b.cli.ImageBuild(ctx, tarCtx, client.ImageBuildOptions{
+	data, err := io.ReadAll(tarCtx)
+	if err != nil {
+		return finalizeInput{}, fmt.Errorf("envbuild: read the finalize context: %w", err)
+	}
+	return finalizeInput{from: from, baseDigest: baseDigest, context: data}, nil
+}
+
+// runFinalize builds in under outputTag, with labels on the image (nil for none).
+func (b *Builder) runFinalize(ctx context.Context, in finalizeInput, outputTag string, labels map[string]string, logSink io.Writer) (Built, error) {
+	resp, err := b.cli.ImageBuild(ctx, bytes.NewReader(in.context), client.ImageBuildOptions{
 		Tags:        []string{outputTag},
 		Dockerfile:  "Dockerfile",
 		Remove:      true,
 		ForceRemove: true,
+		Labels:      labels,
 		// The base already passed the ONBUILD preflight above; re-pulling here would build from an image the preflight never saw.
 		PullParent: false,
 	})
@@ -849,7 +880,7 @@ func (b *Builder) finalizeImage(ctx context.Context, baseRef, outputTag, toolsDi
 	if err != nil {
 		return Built{}, fmt.Errorf("envbuild: finalize image build failed: %w", err)
 	}
-	return Built{Ref: outputTag, ID: id, BaseDigest: baseDigest}, nil
+	return Built{Ref: outputTag, ID: id, BaseDigest: in.baseDigest}, nil
 }
 
 // assertWrapSafeBase enforces the wrap-only contract: wrapping adds layers, it never executes
