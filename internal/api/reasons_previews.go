@@ -8,7 +8,7 @@ package api
 // run_background_only, and an unreadable data_out rule is data_out_unreadable, as at every web app's door.
 const (
 	reasonPreviewURLsOff       = "preview_urls_off"        // features.preview_urls is off, or this release cannot turn it on: no preview is created or opened
-	reasonPreviewConsoleOnly   = "preview_console_only"    // a preview is created, and an org preview opened, by a person signed in to the console only
+	reasonPreviewConsoleOnly   = "preview_console_only"    // a preview is created by a person signed in to the console only
 	reasonPreviewInvalid       = "preview_invalid"         // the body did not decode, or its visibility or ttl_seconds is out of range
 	reasonPreviewAboveCeiling  = "preview_above_ceiling"   // the visibility is wider than features.preview_urls.max_visibility
 	reasonPreviewNotRunning    = "preview_not_running"     // the run is not running

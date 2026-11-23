@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,26 +21,37 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The preview routes' tests turn the key on with withSiteFeatureHooks, so none of them runs in parallel.
 
-// previewRows is an in-memory run_previews table with store_run_previews.go's semantics, and a revoke above a
-// ceiling that a test can fail.
+// previewRows is an in-memory run_previews table with store_run_previews.go's semantics, and the faults a test
+// sets: a revoke above a ceiling that fails, an upsert or a row read that fails, and a step run just before an
+// upsert writes.
 type previewRows struct {
-	previewMu sync.Mutex
-	rows      []types.RunPreview
-	aboveErrs []error                   // what the next RevokeRunPreviewsAbove calls answer, first first
-	above     []types.PreviewVisibility // every ceiling RevokeRunPreviewsAbove was asked
+	previewMu    sync.Mutex
+	rows         []types.RunPreview
+	aboveErrs    []error                   // what the next RevokeRunPreviewsAbove calls answer, first first
+	above        []types.PreviewVisibility // every ceiling RevokeRunPreviewsAbove was asked
+	upsertErr    error                     // UpsertRunPreview's answer, with nothing written, when set
+	liveErr      error                     // LiveRunPreview's answer when set
+	beforeUpsert func()                    // run before UpsertRunPreview writes: what lands between a check and the write
 }
 
 func previewLive(p types.RunPreview) bool { return p.RevokedAt == nil && p.ExpiresAt.After(time.Now()) }
 
 func (s *previewRows) UpsertRunPreview(_ context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, _ []byte) (types.RunPreview, bool, error) {
+	if s.beforeUpsert != nil {
+		s.beforeUpsert()
+	}
 	s.previewMu.Lock()
 	defer s.previewMu.Unlock()
+	if s.upsertErr != nil {
+		return types.RunPreview{}, false, s.upsertErr
+	}
 	now := time.Now().UTC()
 	for i := range s.rows {
 		p := &s.rows[i]
@@ -73,6 +85,9 @@ func (s *previewRows) ListRunPreviews(_ context.Context, runID uuid.UUID) ([]typ
 func (s *previewRows) LiveRunPreview(_ context.Context, runID uuid.UUID, port int) (types.RunPreview, error) {
 	s.previewMu.Lock()
 	defer s.previewMu.Unlock()
+	if s.liveErr != nil {
+		return types.RunPreview{}, s.liveErr
+	}
 	for _, p := range s.rows {
 		if p.RunID == runID && p.Port == port && previewLive(p) {
 			return p, nil
@@ -358,9 +373,168 @@ func TestPreviewDefaultsPrivate(t *testing.T) {
 	if changed.Visibility != types.PreviewPrivate || changed.ID == org.ID {
 		t.Fatalf("changed %+v, want a new private row in place of org row %s", changed, org.ID)
 	}
-	rows := g.h.audit.auditRows("preview.update", "success")
-	if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"from":"org"`) || !strings.Contains(string(rows[0].Data), `"replaced":"`+org.ID.String()+`"`) {
-		t.Fatalf("preview.update rows = %+v, want one naming the org row it replaced", rows)
+	// Create or update is the upsert's own answer: a new row is a create, an extended one an update.
+	if creates, updates := g.h.audit.auditRows("preview.create", "success"), g.h.audit.auditRows("preview.update", "success"); len(creates) != 3 || len(updates) != 0 ||
+		!strings.Contains(string(creates[2].Data), changed.ID.String()) {
+		t.Fatalf("after the change: create rows %+v, update rows %+v; want three creates, the last naming row %s", creates, updates, changed.ID)
+	}
+	extended := g.preview("the same visibility again", g.put(previewOwner, "3001", `{}`))
+	if updates := g.h.audit.auditRows("preview.update", "success"); extended.ID != changed.ID || len(updates) != 1 || !strings.Contains(string(updates[0].Data), changed.ID.String()) {
+		t.Fatalf("extended %+v, update rows %+v; want row %s kept and one update naming it", extended, updates, changed.ID)
+	}
+}
+
+// TestPreviewBodyRefusals: a create's body is one JSON object of at most 1 MiB with no unknown or repeated key,
+// a visibility of private, org or public as written, and a ttl_seconds from 3600 to 604800; anything else is 400
+// preview_invalid with a preview.deny row and stores nothing. Both ends of the ttl are stored exactly.
+func TestPreviewBodyRefusals(t *testing.T) {
+	g := newPreviewRig(t)
+	for _, c := range []struct{ what, body string }{
+		{"ttl_seconds 3599", `{"ttl_seconds":3599}`},
+		{"ttl_seconds 604801", `{"ttl_seconds":604801}`},
+		{"ttl_seconds 0", `{"ttl_seconds":0}`},
+		{"ttl_seconds -1", `{"ttl_seconds":-1}`},
+		{"ttl_seconds max int64", `{"ttl_seconds":9223372036854775807}`},
+		{"visibility team", `{"visibility":"team"}`},
+		{"visibility Private", `{"visibility":"Private"}`},
+		{"an unknown field", `{"visibility":"private","ttl":3600}`},
+		{"a repeated key", `{"visibility":"private","visibility":"org"}`},
+		{"a body over 1 MiB", `{"visibility":"private"` + strings.Repeat(" ", 1<<20) + `}`},
+	} {
+		g.refused(c.what, g.put(previewOwner, "3000", c.body), http.StatusBadRequest, reasonPreviewInvalid)
+	}
+	if n := g.st.liveCount(); n != 0 {
+		t.Fatalf("the refusals stored %d previews, want none", n)
+	}
+	for port, secs := range map[string]int64{"3001": 3600, "3002": 604800} {
+		p := g.preview("ttl_seconds "+port, g.put(previewOwner, port, `{"ttl_seconds":`+strconv.FormatInt(secs, 10)+`}`))
+		if got := p.ExpiresAt.Sub(p.CreatedAt); got != time.Duration(secs)*time.Second {
+			t.Errorf("ttl_seconds %d stored a life of %s, want exactly %ds", secs, got, secs)
+		}
+	}
+}
+
+// TestPreviewCeilingLoweredDuringCreate: a site config write that lowers the ceiling or turns previews off between
+// the create's check and its write cannot revoke a row that does not exist yet, so the create reads the ceiling
+// again after its write. A row the ceiling no longer allows is revoked, with a preview.revoke row naming the
+// ceiling, and the create answers as the ceiling does; a site config it cannot read again revokes the row too.
+// No live row survives any of them.
+func TestPreviewCeilingLoweredDuringCreate(t *testing.T) {
+	g := newPreviewRig(t)
+	for _, c := range []struct {
+		what    string
+		port    string
+		body    string
+		site    types.SiteConfig
+		siteErr error
+		status  int
+		reason  string
+		ceiling string // the preview.revoke row's ceiling; "-" for none
+	}{
+		{"lowered to private", "3000", `{"visibility":"org"}`, previewSite(true, "private"), nil, http.StatusForbidden, reasonPreviewAboveCeiling, `"ceiling":"private"`},
+		{"switched off", "3001", `{}`, previewSite(false, "org"), nil, http.StatusForbidden, reasonPreviewURLsOff, `"ceiling":""`},
+		{"unreadable", "3002", `{}`, types.SiteConfig{}, errors.New("database is down"), http.StatusServiceUnavailable, reasonRosterUnreadable, "-"},
+	} {
+		g.st.setSite(previewSite(true, "org"), nil)
+		g.st.beforeUpsert = func() { g.st.setSite(c.site, c.siteErr) }
+		revokes := len(g.h.audit.auditRows("preview.revoke", "success"))
+		g.refused(c.what, g.put(previewOwner, c.port, c.body), c.status, c.reason)
+		g.st.beforeUpsert = nil
+		rows := g.h.audit.auditRows("preview.revoke", "success")
+		if len(rows) != revokes+1 || rows[len(rows)-1].Target != "__preview-"+c.port {
+			t.Fatalf("%s: preview.revoke rows %+v, want one more, on __preview-%s", c.what, rows, c.port)
+		}
+		if data := string(rows[len(rows)-1].Data); (c.ceiling == "-") == strings.Contains(data, `"ceiling"`) || c.ceiling != "-" && !strings.Contains(data, c.ceiling) {
+			t.Errorf("%s: the revoke row's data %s, want ceiling %s", c.what, data, c.ceiling)
+		}
+		if n := g.st.liveCount(); n != 0 {
+			t.Fatalf("%s: %d live previews after the create, want none", c.what, n)
+		}
+	}
+	g.st.setSite(previewSite(true, "org"), nil)
+	g.preview("a ceiling that holds", g.put(previewOwner, "3003", `{"visibility":"org"}`))
+	if n := g.st.liveCount(); n != 1 {
+		t.Fatalf("%d live previews, want the one the ceiling allows", n)
+	}
+}
+
+// TestPreviewFailsClosed: a kept run is not running; a store that cannot write the row or read it answers 500
+// with no row, no ticket and no preview.deny row, except that a caller the run's entry rule does not admit gets
+// the foreign-run 404 for a row it cannot read; a profile that cannot be read is 503 run_unreadable.
+func TestPreviewFailsClosed(t *testing.T) {
+	g := newPreviewRig(t)
+	g.preview("org create", g.put(previewOwner, "3000", `{"visibility":"org"}`))
+	denies := func() int { return len(g.h.audit.auditRows("preview.deny", "denied")) }
+	tickets := func() int {
+		g.h.store.mu.Lock()
+		defer g.h.store.mu.Unlock()
+		return len(g.h.store.tickets)
+	}
+
+	g.st.upsertErr = errors.New("database is down")
+	d := denies()
+	if rec := g.put(previewOwner, "3001", `{}`); rec.Code != http.StatusInternalServerError || g.st.liveCount() != 1 || denies() != d {
+		t.Fatalf("create, store down: %d %s, %d live, deny rows %d to %d; want 500, no row, no deny row", rec.Code, rec.Body.String(), g.st.liveCount(), d, denies())
+	}
+	g.st.upsertErr = nil
+
+	g.st.liveErr = errors.New("database is down")
+	n := tickets()
+	if rec := g.ticket(previewOwner, "3000"); rec.Code != http.StatusInternalServerError || tickets() != n || denies() != d {
+		t.Fatalf("owner's ticket, store down: %d %s, tickets %d to %d; want 500 and no ticket", rec.Code, rec.Body.String(), n, tickets())
+	}
+	if rec := g.ticket(previewMember, "3000"); rec.Code != http.StatusNotFound || respondedReason(t, rec) != reasonRunNotFound || tickets() != n {
+		t.Fatalf("a member's ticket, store down: %d %s, want the run-not-found 404", rec.Code, rec.Body.String())
+	}
+	g.st.liveErr = nil
+
+	now := time.Now()
+	g.set(func(run *types.AgentRun) { run.LostAt = &now })
+	g.refused("create, kept run", g.put(previewOwner, "3001", `{}`), http.StatusConflict, reasonPreviewNotRunning)
+	g.refused("ticket, kept run", g.ticket(previewOwner, "3000"), http.StatusConflict, reasonPreviewNotRunning)
+	g.set(func(run *types.AgentRun) { run.LostAt = nil })
+
+	walledRun(g.h)
+	g.h.store.sshMemStore.mu.Lock()
+	g.h.store.profilesErr = errors.New("database is down")
+	g.h.store.sshMemStore.mu.Unlock()
+	g.refused("create, profile unreadable", g.put(previewOwner, "3001", `{}`), http.StatusServiceUnavailable, reasonRunUnreadable)
+	g.refused("ticket, profile unreadable", g.ticket(previewOwner, "3000"), http.StatusServiceUnavailable, reasonRunUnreadable)
+	if n := g.st.liveCount(); n != 1 {
+		t.Fatalf("%d live previews, want only the first", n)
+	}
+}
+
+// TestPreviewOverlayUnsatisfiable: a run whose composed profile nothing satisfies refuses the create and the
+// ticket with the audited 403 governance_overlay_unsatisfiable, as the web application gateway's other doors do,
+// written as authz.denied rather than preview.deny.
+func TestPreviewOverlayUnsatisfiable(t *testing.T) {
+	g := newPreviewRig(t)
+	g.preview("create", g.put(previewOwner, "3000", `{}`))
+	post := []string{"POST"}
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "team", Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	g.h.store.sshMemStore.mu.Lock()
+	g.h.store.profiles = []types.GovernanceUnit{unit}
+	g.h.store.sshMemStore.mu.Unlock()
+	g.set(func(run *types.AgentRun) { run.UnitID = &unit.ID })
+	// The deployment's methods and the overlay's are disjoint, so nothing satisfies the two together.
+	g.h.srv.cfg.DefaultPolicy.AllowedMethods = []string{"GET"}
+	for _, c := range []struct {
+		what string
+		rec  func() *httptest.ResponseRecorder
+	}{
+		{"create", func() *httptest.ResponseRecorder { return g.put(previewOwner, "3001", `{}`) }},
+		{"ticket", func() *httptest.ResponseRecorder { return g.ticket(previewOwner, "3000") }},
+	} {
+		denied, denies := len(g.h.audit.auditRows("authz.denied", "denied")), len(g.h.audit.auditRows("preview.deny", "denied"))
+		rec := c.rec()
+		if rec.Code != http.StatusForbidden || respondedReason(t, rec) != string(authz.ReasonGovernanceOverlayUnsatisfiable) {
+			t.Errorf("%s: %d %s, want 403 governance_overlay_unsatisfiable", c.what, rec.Code, rec.Body.String())
+		}
+		if len(g.h.audit.auditRows("authz.denied", "denied")) != denied+1 || len(g.h.audit.auditRows("preview.deny", "denied")) != denies {
+			t.Errorf("%s: want one authz.denied row and no preview.deny row", c.what)
+		}
+		g.h.clock.advance(time.Minute)
 	}
 }
 

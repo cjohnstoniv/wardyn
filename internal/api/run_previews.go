@@ -39,7 +39,7 @@ const previewCallerOrg = "preview:org"
 // The refusal sentences of the preview routes, each beside its reason in reasons_previews.go.
 const (
 	previewURLsOffMsg        = "Preview URLs are off on this deployment. An administrator turns them on with features.preview_urls.enabled in site config."
-	previewConsoleOnlyMsg    = "Only a person signed in to the console can create a preview, or open one shared with the organisation."
+	previewConsoleOnlyMsg    = "Only a person signed in to the console can create a preview."
 	previewVisibilityMsg     = "A preview's visibility is private, org or public; %q is none of them."
 	previewTTLMsg            = "A preview lives from 1 hour to 7 days (ttl_seconds 3600 to 604800); %d is outside that."
 	previewAboveCeilingMsg   = "This deployment allows previews no wider than %s, so a %s preview can't be created or opened."
@@ -130,10 +130,11 @@ func (a *previewAsk) settle() *runRefusal {
 	}
 	a.ttl = types.PreviewTTLDefault
 	if a.body.TTLSeconds != nil {
-		a.ttl = time.Duration(*a.body.TTLSeconds) * time.Second
-		if *a.body.TTLSeconds < int64(types.PreviewTTLMin/time.Second) || *a.body.TTLSeconds > int64(types.PreviewTTLMax/time.Second) {
-			return runError(http.StatusBadRequest, reasonPreviewInvalid, fmt.Sprintf(previewTTLMsg, *a.body.TTLSeconds))
+		secs := *a.body.TTLSeconds
+		if secs < int64(types.PreviewTTLMin/time.Second) || secs > int64(types.PreviewTTLMax/time.Second) {
+			return runError(http.StatusBadRequest, reasonPreviewInvalid, fmt.Sprintf(previewTTLMsg, secs))
 		}
+		a.ttl = time.Duration(secs) * time.Second
 	}
 	return nil
 }
@@ -183,10 +184,14 @@ func (s *Server) runPreviewCheck(ctx context.Context, run types.AgentRun, ask *p
 }
 
 // previewProfileRefusal is the profile row: a profile that denies UI apps or interactive sessions has no
-// previews. A profile that cannot be read refuses.
+// previews. A composed profile nothing satisfies is the audited 403 governance_overlay_unsatisfiable, as at the
+// web application gateway's other doors (refuseRunUnitError); a profile that cannot be read refuses.
 func (s *Server) previewProfileRefusal(ctx context.Context, run types.AgentRun) *runRefusal {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
+		if u, ok := isOverlayUnsatisfiable(err); ok {
+			return runDenied(authz.Deny(authz.ReasonGovernanceOverlayUnsatisfiable, "runs.ui_apps", u.Error()).OnRun(run.ID))
+		}
 		slog.ErrorContext(ctx, "wardynd: a preview's governance profile could not be read; refusing", "run_id", run.ID, "err", err)
 		return runError(http.StatusServiceUnavailable, reasonRunUnreadable, previewUnitUnreadableMsg)
 	}
@@ -247,9 +252,10 @@ func (s *Server) auditPreview(r *http.Request, runID uuid.UUID, port int, action
 }
 
 // denyPreview answers a refusal of a create or a ticket after the run's entry check, and records it as preview.deny within
-// authFailedAllowed's bound. A server fault is logged by its answer and writes no row.
+// authFailedAllowed's bound. A server fault is logged by its answer, and an authz decision is recorded as
+// authz.denied by its answer; neither writes a row here.
 func (s *Server) denyPreview(w http.ResponseWriter, r *http.Request, run types.AgentRun, ask previewAsk, request string, rf *runRefusal) {
-	if rf.err == nil && s.authFailedAllowed() {
+	if rf.err == nil && rf.decision == nil && s.authFailedAllowed() {
 		data := map[string]any{"request": request, "reason": rf.body.Reason}
 		port := 0
 		if ask.portOK {
@@ -298,9 +304,10 @@ func (s *Server) handleListRunPreviews(w http.ResponseWriter, r *http.Request) {
 //	PUT /api/v1/runs/{id}/previews/{port}   {"visibility": "private"|"org"|"public", "ttl_seconds": N}
 //
 // It asks the run's entry first (getRunForEntry: the foreign-run 404, or 403 run_owner_only for a super admin on a
-// person's run), then a console person (previewConsolePerson), then runPreviewCheck. The same
-// visibility on a live row extends it (preview.update); another one replaces it with a new row (preview.update,
-// naming the row it replaced); a port with no live row gets one (preview.create). It answers {"preview": row}.
+// person's run), then a console person (previewConsolePerson), then runPreviewCheck. The same visibility on a
+// live row extends it (preview.update); any other write stores a new row (preview.create), revoking the port's
+// live one in the same transaction. Which of the two it was is the upsert's own answer. Then previewStillAllowed
+// asks the ceiling again. It answers {"preview": row}.
 func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -326,28 +333,62 @@ func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 		writeServerError(w, r, "read run previews", errPreviewStoreUnsupported)
 		return
 	}
-	prev, err := ps.LiveRunPreview(r.Context(), run.ID, ask.port)
-	had := err == nil
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		writeServerError(w, r, "read a run preview", err)
-		return
-	}
 	_, by := actorFromRequest(r)
 	p, created, err := ps.UpsertRunPreview(r.Context(), run.ID, ask.port, ask.vis, ask.ttl, by, nil)
 	if err != nil {
 		writeServerError(w, r, "create a run preview", err)
 		return
 	}
-	data := previewData(p)
-	if created && !had {
-		s.auditPreview(r, run.ID, p.Port, "preview.create", "success", data)
+	if created {
+		s.auditPreview(r, run.ID, p.Port, "preview.create", "success", previewData(p))
 	} else {
-		if created {
-			data["replaced"], data["from"] = prev.ID.String(), string(prev.Visibility)
-		}
-		s.auditPreview(r, run.ID, p.Port, "preview.update", "success", data)
+		s.auditPreview(r, run.ID, p.Port, "preview.update", "success", previewData(p))
+	}
+	if rf := s.previewStillAllowed(r, ps, p, by); rf != nil {
+		s.denyPreview(w, r, run, ask, "create", rf)
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"preview": p})
+}
+
+// previewStillAllowed is a PUT's second look at the ceiling, after its write commits. A site config write that
+// lowers the ceiling or turns previews off revokes the rows above it (revokePreviewsAboveCeiling), but one that
+// lands between runPreviewCheck's read and this write cannot see the row the write adds. So the ceiling is read
+// again: a row it no longer allows is revoked here, as the writer, and the PUT answers as the ceiling does. A
+// site config that cannot be read again revokes the row too, as the first read refuses. The revoke is of the
+// port's unrevoked row, which is this write's unless another write on the port has replaced it since.
+func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p types.RunPreview, by string) *runRefusal {
+	ctx := r.Context()
+	sc, siteErr := s.cfg.Store.GetSiteConfig(ctx)
+	var rf *runRefusal
+	switch {
+	case siteErr != nil:
+		slog.ErrorContext(ctx, "wardynd: the site config could not be read again after a preview was written; revoking it",
+			"run_id", p.RunID, "err", siteErr)
+		rf = runError(http.StatusServiceUnavailable, reasonRosterUnreadable, previewSiteUnreadableMsg)
+	case !previewURLsOn(sc):
+		rf = runError(http.StatusForbidden, reasonPreviewURLsOff, previewURLsOffMsg)
+	case !p.Visibility.AtMost(previewCeiling(sc)):
+		rf = runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewCeiling(sc), p.Visibility))
+	default:
+		return nil
+	}
+	gone, err := ps.RevokeRunPreview(ctx, p.RunID, p.Port, by)
+	switch {
+	case errors.Is(err, store.ErrNotFound): // revoked already, by the site config write or a DELETE
+	case err != nil:
+		return runServerError("revoke a run preview the ceiling no longer allows", err)
+	default:
+		data := previewData(gone)
+		if siteErr == nil {
+			data["ceiling"] = ""
+			if previewURLsOn(sc) {
+				data["ceiling"] = string(previewCeiling(sc))
+			}
+		}
+		s.auditPreview(r, p.RunID, gone.Port, "preview.revoke", "success", data)
+	}
+	return rf
 }
 
 // handleDeleteRunPreview revokes the preview of one port:
@@ -391,27 +432,34 @@ func (s *Server) handleDeleteRunPreview(w http.ResponseWriter, r *http.Request) 
 // previewTicketCaller is who may mint the ticket: the live preview of the {port} segment, and the callers entry
 // the caller opens it as: "" for a person the run's entry rule admits (mayEnterRunOrSponsor, as an app's ticket
 // asks it, never a role), and previewCallerOrg for any other console person on an org or public row. admitted is
-// false when there is no live row or the caller is neither.
+// false when there is no live row or the caller is neither. Who is asking is decided before the row is read, and
+// a caller the entry rule does not admit gets the foreign-run 404 for a row that cannot be read, as for a missing
+// run, so a store fault tells them nothing about this one.
 func (s *Server) previewTicketCaller(r *http.Request, run types.AgentRun, principal string, since time.Time) (p types.RunPreview, caller string, admitted bool, err error) {
+	entry := s.mayEnterRunOrSponsor(r.Context(), run, principal, false, since)
+	if !entry && !previewConsolePerson(r) {
+		return types.RunPreview{}, "", false, nil
+	}
 	port, ok := previewPort(chi.URLParam(r, "port"))
 	if !ok {
 		return types.RunPreview{}, "", false, nil
 	}
-	ps, ok := s.cfg.Store.(runPreviewStore)
-	if !ok {
-		return types.RunPreview{}, "", false, errPreviewStoreUnsupported
+	err = errPreviewStoreUnsupported
+	if ps, ok := s.cfg.Store.(runPreviewStore); ok {
+		p, err = ps.LiveRunPreview(r.Context(), run.ID, port)
 	}
-	p, err = ps.LiveRunPreview(r.Context(), run.ID, port)
-	if errors.Is(err, store.ErrNotFound) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return types.RunPreview{}, "", false, nil
-	}
-	if err != nil {
+	case err != nil && !entry:
+		slog.WarnContext(r.Context(), "wardynd: a preview could not be read for a caller the run's entry rule does not admit; answering not found",
+			"run_id", run.ID, "err", err)
+		return types.RunPreview{}, "", false, nil
+	case err != nil:
 		return types.RunPreview{}, "", false, err
-	}
-	if s.mayEnterRunOrSponsor(r.Context(), run, principal, false, since) {
+	case entry:
 		return p, "", true, nil
-	}
-	if p.Visibility != types.PreviewPrivate && previewConsolePerson(r) {
+	case p.Visibility != types.PreviewPrivate:
 		return p, previewCallerOrg, true, nil
 	}
 	return types.RunPreview{}, "", false, nil
