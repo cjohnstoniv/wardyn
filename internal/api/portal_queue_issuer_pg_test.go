@@ -284,3 +284,34 @@ func TestPortalPin_QueuedStartRechecksCurrentTree_PG(t *testing.T) {
 		t.Errorf("a run whose unit was reparented out of the pin = %s %q %q", got.State, got.StatusDetail, got.FailureHint)
 	}
 }
+
+// TestPortalPinContext_QueuedStartNoMembership_PG: a portal person with no membership launches into a full pool;
+// the run waits, and its queued start places it in the pin as the launch did.
+func TestPortalPinContext_QueuedStartNoMembership_PG(t *testing.T) {
+	e := newQueueEnv(t)
+	ctx := context.Background()
+	if _, err := e.pg.ActivatePortalIssuers(ctx, "test", nil); err != nil {
+		t.Fatal(err)
+	}
+	pool := e.cappedPool("Busy", 1)
+	pin, err := e.pg.UpsertGovernanceUnit(ctx, types.GovernanceUnit{ID: uuid.New(), Name: "pin", CreatedBy: "seed",
+		Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := e.issuerPortal(t, &pin.ID)
+	principal, bearer := e.portalBearer(t, f.portal, "no-membership")
+	if ms, err := e.pg.ListMembershipsFor(ctx, []string{principal}, nil, f.portal.UserType); err != nil || len(ms) != 0 {
+		t.Fatalf("the person's memberships = %+v %v, want none", ms, err)
+	}
+	busy := e.occupy(pool)
+	w := do(t, e.srv, http.MethodPost, "/api/v1/runs", bearer, endBody("background", `"runner_pool_id":"`+pool.ID.String()+`"`))
+	var out queuedLaunchAnswer
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != http.StatusCreated || out.State != types.RunQueued {
+		t.Fatalf("a launch into a full pool with no membership = %d %s, want 201 QUEUED", w.Code, w.Body)
+	}
+	e.free(busy)
+	if got := e.waitStarted(out.ID); got.UnitID == nil || *got.UnitID != pin.ID {
+		t.Errorf("the queued run started in %v, want the pin %s", got.UnitID, pin.ID)
+	}
+}
