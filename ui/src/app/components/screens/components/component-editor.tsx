@@ -350,6 +350,19 @@ export function ComponentEditor({
           />
         </Field>
 
+        <Field label={T.IMAGE} htmlFor="component-image" hint={T.IMAGE_HINT}>
+          <Input
+            id="component-image"
+            value={draft.image ?? ""}
+            maxLength={255}
+            placeholder={T.IMAGE_PLACEHOLDER}
+            onChange={(e) => setDraft({ ...draft, image: e.target.value })}
+            className="font-mono placeholder:font-sans"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+
         {audienceEditable(component) && (
           <AudienceField value={audience} onChange={setAudience} saved={savedAudience !== ""} refusal={audienceRefused ? error : null} />
         )}

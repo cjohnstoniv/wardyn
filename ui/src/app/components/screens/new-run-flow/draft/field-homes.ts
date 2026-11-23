@@ -8,7 +8,7 @@
 // as `inline_policy.<name>`; a registry row without a home fails its test.
 
 import { KEPT_MACHINE_REASON, type KeptMachineReason } from "../../../../lib/kept-machine-refusals";
-import type { ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
+import type { ComponentGateReason, ImageAdmissionReason, NewRunReason, PlacementReason, WorkspaceDoorReason } from "../../../../lib/new-run-refusals";
 import type { RunModeReason } from "../../../../lib/run-mode-refusals";
 import type { RunnerPoolReason } from "../../../../lib/runner-pool-refusals";
 import type { ScheduleReason } from "../../../../lib/schedule-refusals";
@@ -69,7 +69,7 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
 };
 
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = ComponentGateReason | ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -81,6 +81,8 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   workspace_repo_not_admitted: "files", repo_url_credentials: "files", capability_workspace: "files", capability_workspace_provider: "files",
   resources_invalid: "review", request_field_unavailable: "review",
   override_invalid: "tools", override_refused: "tools",
+  // The way out is the Tools step, where the component can be removed; the run's image is set in the run document.
+  component_image_unmet: "tools",
   placement_unavailable: "run", placement_denied: "run", placement_trusted_output: "run",
   runner_offline: "run", runner_at_capacity: "run", runner_limits_unset: "run", runner_ambiguous: "run", runner_not_found: "run", runner_unclaimed: "run", runner_revoked: "run",
   runner_token_invalid: "run", runner_claim_mismatch: "run", runner_posture_unmet: "run", runner_trust_changed: "run", runner_trust_required: "run", runner_keystore_unavailable: "run",

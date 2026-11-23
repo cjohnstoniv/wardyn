@@ -83,6 +83,15 @@ describe("CustomComponentDialog: this run only", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("carries the image a run must use on the inline definition, and leaves it out when blank", async () => {
+    const { props, user } = open();
+    expect(screen.getByLabelText("Image")).toHaveAttribute("placeholder", "ghcr.io/acme/tools:1.2");
+    await type(user, /^Hosts it reaches/, "api.acme.test");
+    await type(user, "Image", "ghcr.io/acme/tools");
+    await user.click(screen.getByRole("button", { name: "Add to this run" }));
+    expect(props.onAttach).toHaveBeenCalledWith({ inline: { hosts: ["api.acme.test"], image: "ghcr.io/acme/tools" } });
+  });
+
   it("labels the inline component when it has a name", async () => {
     const { props, user } = open();
     await type(user, /^Name/, "Acme API");
@@ -240,6 +249,22 @@ describe("CustomComponentDialog: save to reuse", () => {
     expect(screen.getByLabelText(/^Hosts it reaches/)).toHaveValue("api.acme.test");
     expect(props.onClose).not.toHaveBeenCalled();
     expect(props.onAttach).not.toHaveBeenCalled();
+  });
+
+  it("a refused image shows the server's sentence in the form's own alert, and keeps what was typed", async () => {
+    const msg = 'invalid component: definition.image: "tools:" is not an image reference';
+    fetchMock.mockResolvedValue(json(422, { error: msg, reason: "component_definition_invalid" }));
+    const { props, user } = open();
+    await fill(user);
+    await type(user, "Image", "tools:");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(msg)).toBeInTheDocument();
+    const field = screen.getByLabelText("Image");
+    expect(field).toHaveValue("tools:");
+    expect(field).not.toHaveAttribute("aria-invalid", "true");
+    expect(calls()[0].body.definition.image).toBe("tools:");
+    expect(props.onClose).not.toHaveBeenCalled();
   });
 
   it("a name already in use belongs to the name field", async () => {

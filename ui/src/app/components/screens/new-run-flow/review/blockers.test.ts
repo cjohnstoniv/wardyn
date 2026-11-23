@@ -109,6 +109,19 @@ describe("Review blockers", () => {
     }
   });
 
+  it("shows a component whose image the run does not use in the server's sentence, linked to the Tools step", () => {
+    const text = "components[0]: Search tools needs the image ghcr.io/acme/tools:1.2, and this run uses ghcr.io/acme/base:2. Use that image for the run, or remove the component.";
+    const [b] = buildBlockers({ ...NOTHING, refusal: { text, reason: "component_image_unmet" } });
+    expect(b).toMatchObject({ kind: "refusal", text, to: { screen: "step", step: "tools" } });
+  });
+
+  it("a bad image on a run-only component stays plain text: component_definition_invalid has no step", () => {
+    const text = 'components[0]: inline.image: "tools:" is not an image reference';
+    const [b] = buildBlockers({ ...NOTHING, refusal: { text, reason: "component_definition_invalid" } });
+    expect(b).toMatchObject({ kind: "refusal", text });
+    expect(b.to).toBeUndefined();
+  });
+
   it("a byoi_user refusal is a blocker in the server's sentence, with and without the Approvals clause", () => {
     const tail = "or launch with the agent's convention image or an onboarded workspace's base image";
     const plain = `image ghcr.io/acme/tool:1 is not granted to you — ask an admin for an image grant that covers it, ${tail}`;

@@ -52,6 +52,15 @@ export type ImageAdmissionReason = (typeof IMAGE_ADMISSION_REASONS)[number];
 export type NewRunReason = (typeof NEW_RUN_REASON)[keyof typeof NEW_RUN_REASON];
 
 /**
+ * The component gate's refusal a person fixes on the Tools step (internal/api/reasons_routes.go): the run's
+ * image does not meet an attached component's image requirement. Kept apart from NEW_RUN_REASON, which is
+ * the contract block of reasons.go.
+ */
+export const COMPONENT_GATE_REASONS = ["component_image_unmet"] as const;
+
+export type ComponentGateReason = (typeof COMPONENT_GATE_REASONS)[number];
+
+/**
  * The workspace-door reasons a launch answers with that the Files step owns (internal/api/reasons.go,
  * reasons_routes.go): a repository off the admitted list, a repository URL carrying a user name or token,
  * and a workspace or its provider the caller's capabilities no longer open.
