@@ -40,9 +40,12 @@ Two keys are needed, and both are off by default:
 ## What a run takes
 
 - A run names its image by name in `windows_image`, and starts as an interactive desktop on an organization runner.
+- Every runner the run's pool offers must be an organization runner that reports Windows VMs. If one does not, every launch into that pool is refused `422` `windows_vm_runner_unsupported`.
+- Only a person signed in interactively launches one. A service identity, a schedule, an API token (the CLI's sign-in token too) and a token delegated to a portal are refused `403` `windows_vm_feature_refused`.
+- A holder's `subject` is the person's sign-in principal, the `created_by` of their runs. Case and surrounding spaces aside, any other value holds a seat that no launch uses.
 - Each holder runs one Windows VM at a time. A second launch is refused `409` `windows_licence_in_use`, naming the run that holds the seat.
 - A run that ends frees its seat. A run marked lost keeps it until it is killed, so a VM that may still be running is never counted twice.
 - A Windows VM run is never recorded. A launch that would be recorded is refused, with `field` `recording`.
 - A Windows VM run needs recording off in the policy that launches it. On an install that keeps recordings and sets no level, a plain launch is refused until that policy says off.
-- An agent, a task, a workspace, a folder, a drive, web apps, exec, SSH, revive and support sessions are refused `windows_vm_feature_refused`.
-- Every refused launch writes a `run.create` row with status `denied` and the reason ([audit actions](../AUDIT-ACTIONS.md)).
+- An agent, a task, a workspace, a folder, a drive, web apps, exec, SSH and revive are refused `windows_vm_feature_refused`. A support session is refused `409` `support_run_ineligible`.
+- A refused launch writes a `run.create` row with status `denied` and the reason ([audit actions](../AUDIT-ACTIONS.md)). A race that only the seat trigger catches, such as two launches at once by one holder, answers its `409` or `403` without that row.

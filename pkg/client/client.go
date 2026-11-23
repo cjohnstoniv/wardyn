@@ -119,7 +119,8 @@
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
 //   - /api/v1/windows-licence-pools, /api/v1/windows-images — the Windows VM licence
-//     pools, their holders and seats, and the registered Windows images. Admin-only
+//     pools, their holders and seats (admin), and the registered Windows images
+//     (admin or security admin)
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
 //   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
