@@ -41,6 +41,11 @@ type leaseCovLeases struct {
 	renewed chan struct{}
 	// beforeReacquire runs, with no lock held, ahead of each ReacquireAttachLease is evaluated.
 	beforeReacquire func()
+	batchCalls      []int // the key count of each RenewAttachLeases call
+	// latency, when set, is slept once per renew statement (RenewAttachLeases) and per fence read (HoldsAttachLease).
+	latency time.Duration
+	// beforeHolds runs, with no lock held, ahead of each HoldsAttachLease is evaluated.
+	beforeHolds func()
 }
 
 type leaseCovAcquire struct {
@@ -202,7 +207,38 @@ func (l *leaseCovLeases) RenewAttachLease(_ context.Context, run, holder uuid.UU
 	return ok, err
 }
 
+func (l *leaseCovLeases) RenewAttachLeases(ctx context.Context, keys []store.AttachLeaseKey, ttl time.Duration) (map[store.AttachLeaseKey]bool, error) {
+	l.mu.Lock()
+	l.batchCalls = append(l.batchCalls, len(keys))
+	lat, err := l.latency, l.errs["renew"]
+	l.mu.Unlock()
+	time.Sleep(lat)
+	renewed := map[store.AttachLeaseKey]bool{}
+	for _, k := range keys {
+		if ok, _ := l.RenewAttachLease(ctx, k.RunID, k.HolderID, ttl); ok {
+			renewed[k] = true
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return renewed, nil
+}
+
+func (l *leaseCovLeases) batchCallCounts() []int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]int(nil), l.batchCalls...)
+}
+
 func (l *leaseCovLeases) HoldsAttachLease(_ context.Context, run, holder uuid.UUID) (bool, error) {
+	l.mu.Lock()
+	hook, lat := l.beforeHolds, l.latency
+	l.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	time.Sleep(lat)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.holds++

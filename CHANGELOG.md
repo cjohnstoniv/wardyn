@@ -44,6 +44,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
   its database banner. `/readyz` still pings Postgres.
 - On the GitHub App and personal-token git lanes, a push refused because it touches a review path on an unattended run, or because its paths could not be worked out, now reaches git as a rejected ref. Git prints the reason, the paths and what to do, as it already did on the Azure DevOps lane, instead of a bare HTTP 403. The audit row is unchanged.
+- Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
+- Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke. A session's first keystroke, and the first after 570 seconds without one, still wait for the stamp, so a run paused meanwhile is thawed before the keystroke reaches it.
+- SSH gateway defaults, per replica: 256 authenticated connections (was 64) and 8 channels per run, SSH channels and API commands together (was 4). `WARDYN_SSH_MAX_HANDSHAKES` (default 64) sets the number of connections handshaking at once, which was fixed at 64.
 
 ### Fixed
 
@@ -74,6 +77,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - VM runs: a guest's repeat of a connection attempt Wardyn just refused (a retransmitted SYN) is refused again at once, without asking the proxy a second time. Before, it briefly held a tunnel slot, which at the run's tunnel limit could refuse a real connection with a false tunnel-limit report ([#3932](https://github.com/cjohnstoniv/wardyn/issues/3932)).
 - `wardyn-runnerd doctor` and `status.json`: a start refused with no stage stays the reported failure when the computer's clock moved back between starts. An older refusal at a stage no longer replaces it.
 - On a desktop install, the launcher's refusal of a symlinked envelope file now says which check failed: the link's directory is owned by another account, or other accounts can write to it, with or without the sticky bit.
+- SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
 
 ### Security
 
@@ -100,6 +104,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   path keeps it, and `helm upgrade --reuse-values` keeps the previous release's `/readyz`. To see the path in use:
   `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
 - If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
+- The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 
 ## [0.10.3] — 2026-11-23
 
