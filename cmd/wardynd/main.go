@@ -226,12 +226,6 @@ func run() error {
 	}
 	defer releaseInstance()
 
-	// bootCtx bounds the REST of the boot sequence (signing-key load, optional
-	// features) — unrelated to the connect/migrate split above, which now runs
-	// under its own two budgets rather than sharing this one.
-	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
 	// can be masked ("<secret-hidden>") from PTY/asciicast captures and audit
@@ -260,6 +254,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// bootCtx bounds the REST of the boot sequence (the boot-key reads, signing-key load,
+	// optional features). It starts once the secret store is open: opening it can convert rows
+	// or prove key domains for longer than this budget, under rootCtx, and must not use it up.
+	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
 	// The key-domain service behind /key-domains: the domains the file
 	// declares (already built and proven by the store above), and the
 	// assignments that place a person's next principal key.

@@ -8,8 +8,12 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -431,19 +435,31 @@ func TestPut_CheckAndSetAndCreateOnly(t *testing.T) {
 }
 
 // A write retried after its answer was lost meets its own first attempt as a
-// check-and-set mismatch. The retry confirms the landed version from the
-// metadata, so the value is not orphaned; a version Vault says was created
-// before the write began is someone else's and stays a failure.
+// check-and-set mismatch. The retry confirms its version by its own write id,
+// so the value is not orphaned and no clock is consulted; a version that does
+// not carry the id is someone else's and stays a failure.
 func TestPut_ARetriedWriteThatAlreadyLandedSucceeds(t *testing.T) {
 	for _, c := range []struct {
-		name      string
-		skew      time.Duration
-		noCreated bool
-		want      bool
-	}{{"landed", 0, false, true}, {"created before the write", -time.Hour, false, false}, {"no creation time", 0, true, false}} {
+		name          string
+		foreignFirst  int
+		failDataReads bool
+		skew          time.Duration
+		noCreated     bool
+		want          bool
+	}{
+		{"landed", 0, false, 0, false, true},
+		{"landed, Vault clock an hour behind", 0, false, -time.Hour, false, true},
+		{"landed, no creation time", 0, false, 0, true, true},
+		{"another writer's version", 1, false, 0, false, false},
+		{"landed, then unreadable", 0, true, 0, false, false},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFakeVault(t)
 			f.landThenFail, f.createdSkew, f.noCreated = 1, c.skew, c.noCreated
+			f.foreignFirst, f.failDataReads = c.foreignFirst, c.failDataReads
+			if c.foreignFirst > 0 {
+				f.landThenFail = 0
+			}
 			s := newFakeStore(t, f)
 			ref, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false)
 			if (err == nil) != c.want {
@@ -454,7 +470,148 @@ func TestPut_ARetriedWriteThatAlreadyLandedSucceeds(t *testing.T) {
 					t.Fatalf("Get = (%q, %v); want v1", v, err)
 				}
 			}
+			if c.foreignFirst > 0 {
+				rel, _ := s.rel("", "k")
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				e := f.kv[rel]
+				cur := e.versions[e.current]
+				if cur["value"] != base64.StdEncoding.EncodeToString([]byte("theirs")) {
+					t.Fatalf("the current version holds %q; want the other writer's value", cur["value"])
+				}
+				if _, ok := cur[dataWriteID]; ok {
+					t.Fatalf("the other writer's version carries a %s key", dataWriteID)
+				}
+			}
 		})
+	}
+}
+
+// Every write names itself: a fresh id sits beside the value.
+func TestPut_WritesAWriteIDBesideTheValue(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := s.rel("", "k")
+	f.mu.Lock()
+	first := f.kv[rel].versions[f.kv[rel].current]
+	f.mu.Unlock()
+	if _, err := s.Put(t.Context(), "", "k", ref, []byte("v2"), false); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	second := f.kv[rel].versions[f.kv[rel].current]
+	for _, v := range []map[string]string{first, second} {
+		if v["value"] == "" || len(v[dataWriteID]) != 26 {
+			t.Fatalf("stored version %v; want a value and a 26-character %s", v, dataWriteID)
+		}
+	}
+	if first[dataWriteID] == second[dataWriteID] {
+		t.Fatalf("two writes share the id %q", first[dataWriteID])
+	}
+}
+
+// A value written before the id existed, or by hand, reads as before.
+func TestGet_ReadsAValueWithoutAWriteID(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	ref, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := s.rel("", "k")
+	f.mu.Lock()
+	delete(f.kv[rel].versions[f.kv[rel].current], dataWriteID)
+	f.mu.Unlock()
+	if v, err := s.Get(t.Context(), "", "k", ref); err != nil || string(v) != "v1" {
+		t.Fatalf("Get of a value with no write id = (%q, %v); want v1", v, err)
+	}
+}
+
+// landed takes a version only when it is the one expected and holds the id.
+func TestLanded_NeedsTheVersionAndTheID(t *testing.T) {
+	f := newFakeVault(t)
+	s := newFakeStore(t, f)
+	if _, err := s.Put(t.Context(), "", "k", "", []byte("v1"), false); err != nil {
+		t.Fatal(err)
+	}
+	rel, _ := s.rel("", "k")
+	f.mu.Lock()
+	cur := f.kv[rel].current
+	id := f.kv[rel].versions[cur][dataWriteID]
+	f.mu.Unlock()
+	if !s.landed(t.Context(), rel, cur, id) {
+		t.Fatal("landed refused the current version with its own id")
+	}
+	if s.landed(t.Context(), rel, cur, "other") {
+		t.Fatal("landed took the current version under another id")
+	}
+	if s.landed(t.Context(), rel, cur+1, id) {
+		t.Fatal("landed took a version that does not exist yet")
+	}
+	if s.landed(t.Context(), "no/such/path", cur, id) {
+		t.Fatal("landed took a path that does not exist")
+	}
+}
+
+// Only Get and landed read data/ (landed reads only the write id and the
+// version of what it receives). A third reader is a reviewed change.
+func TestOnlyGetAndLandedReadTheDataPath(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no source files: %v", err)
+	}
+	readers := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range file.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			who := fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				if star, ok := fn.Recv.List[0].Type.(*ast.StarExpr); ok {
+					if id, ok := star.X.(*ast.Ident); ok {
+						who = id.Name + "." + who
+					}
+				}
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok || len(c.Args) < 3 {
+					return true
+				}
+				sel, ok := c.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "call" && sel.Sel.Name != "callRetried") {
+					return true
+				}
+				if m, ok := c.Args[1].(*ast.SelectorExpr); !ok || m.Sel.Name != "MethodGet" {
+					return true
+				}
+				ast.Inspect(c.Args[2], func(a ast.Node) bool {
+					if l, ok := a.(*ast.BasicLit); ok && l.Kind == token.STRING && l.Value == `"/data/"` {
+						readers[who] = true
+					}
+					return true
+				})
+				return true
+			})
+		}
+	}
+	if len(readers) != 2 || !readers["Store.Get"] || !readers["Store.landed"] {
+		t.Fatalf("functions that GET data/ = %v; want exactly Store.Get and Store.landed", readers)
 	}
 }
 
