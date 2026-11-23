@@ -338,3 +338,62 @@ func TestStatusStageStartRefusedWithoutAStageFailsUntilAStartSucceeds(t *testing
 		t.Errorf("the start refusal stayed after a connect: %+v", st)
 	}
 }
+
+// A start refused with no stage stays the reported failure when the clock moved back between starts: an
+// older refusal at a stage, kept in the startup file, is not replayed over it.
+func TestStatusStageStartRefusalWithoutAStageSurvivesAClockMovedBack(t *testing.T) {
+	r := newRig(t)
+	state := filepath.Join(r.home, ".config", "wardyn", "runner")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, refusal := (serveOptions{localAttach: "maybe"}).localAttachEnabled()
+	if refusal == nil {
+		t.Fatal("--local-attach=maybe was accepted")
+	}
+	now := statusAt
+	tick := func() *time.Time { now = now.Add(time.Minute); return &now }
+	start := func() (*statusWriter, *offlineLog) { return stageFixture(t, state, tick()) }
+	status := func() runnerStatus {
+		t.Helper()
+		st, err := loadStatus(statusPath(state))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	fails := func(what, want string) doctor.Report {
+		t.Helper()
+		rep := r.run(doctorOptions{})
+		s := stage(t, rep, "status")
+		if s.Status != doctor.StatusFail || !strings.Contains(s.Detail, want) {
+			t.Fatalf("%s: status = %s %q, want FAIL naming %q", what, s.Status, s.Detail, want)
+		}
+		return rep
+	}
+
+	// A: a staged refusal, made at statusAt+1m.
+	w, l := start()
+	l.startFailed(atStage(types.RunnerStageEngine, errors.New("engine: no socket")))
+	w.stopped()
+
+	// B: the clock moved back an hour, and the next start is refused with no stage.
+	now = statusAt.Add(-time.Hour)
+	w, l = start()
+	l.startFailed(refusal)
+	w.stopped()
+	if st := status(); st.StartRefusal == nil || st.Stage != "" {
+		t.Fatalf("status after B = %+v, want a start refusal and no stage", st)
+	}
+
+	// C: the next start still shows B, not A's older refusal at a stage.
+	w, _ = start()
+	_ = w
+	if st := status(); st.StartRefusal == nil {
+		t.Fatalf("a new writer's file = %+v, want B carried", st)
+	}
+	d := stage(t, fails("C after a clock moved back", "local attach must be on or off"), "status").Detail
+	if strings.Contains(d, "stage engine") || strings.Contains(d, "no socket") {
+		t.Errorf("B's remedy was replaced by A's: %q", d)
+	}
+}

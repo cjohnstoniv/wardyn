@@ -142,6 +142,7 @@ type Relay struct {
 	// proxy ask until both copy directions have ended; maxOpaque is its bound.
 	opaque    atomic.Int64
 	maxOpaque int64
+	resets    *resetMemory // the SYNs just reset (resetMemory)
 	// guestProxy is Config.GuestProxy, and proxyName and proxyPort its host and
 	// port (proxyDirect).
 	guestProxy string
@@ -169,6 +170,7 @@ func New(cfg Config) (*Relay, error) {
 		prep:  cfg.Prep,
 
 		maxOpaque: maxOpaqueTunnels,
+		resets:    newResetMemory(now),
 	}
 	if cfg.maxOpaque > 0 {
 		rl.maxOpaque = int64(cfg.maxOpaque)
@@ -380,6 +382,11 @@ func (rl *Relay) serveDNS(c *gonet.UDPConn) {
 func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	id := r.ID()
 	port := id.LocalPort
+	if rl.resets.recent(id) {
+		// A retransmit of a SYN this relay just reset (resetMemory): the same answer, and nothing else.
+		r.Complete(true)
+		return
+	}
 	if rl.prep {
 		// Base preparation has no egress: reset at the SYN, whatever the target.
 		r.Complete(true)
@@ -416,6 +423,7 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	// is taken before the ask and given back when this flow ends, after both
 	// copy directions in splice have finished, or on any earlier return.
 	if !rl.admit() {
+		rl.resets.add(id)
 		r.Complete(true)
 		rl.rep.refuse(refusal{Flow: flow, Reason: reasonTunnelLimit, Host: name, Port: int(port)})
 		return
@@ -425,6 +433,7 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 	ok, status, err := rl.proxy.ask(name, port, flow)
 	if !ok {
 		// The proxy logged its own refusal or hold; the guest sees a reset.
+		rl.resets.add(id)
 		r.Complete(true)
 		rl.log.Info("tcp_deny", "flow", flow, "host", name, "port", port, "proxy_status", status, "err", errString(err))
 		return
@@ -471,6 +480,7 @@ func (rl *Relay) handleTCP(r *tcp.ForwarderRequest) {
 // container is. It holds an opaque-tunnel slot like any other.
 func (rl *Relay) proxyDirect(r *tcp.ForwarderRequest, flow, name string, port uint16) {
 	if !rl.admit() {
+		rl.resets.add(r.ID())
 		r.Complete(true)
 		rl.rep.refuse(refusal{Flow: flow, Reason: reasonTunnelLimit, Host: name, Port: int(port)})
 		return
@@ -480,6 +490,7 @@ func (rl *Relay) proxyDirect(r *tcp.ForwarderRequest, flow, name string, port ui
 	pc, err := rl.proxy.dial(ctx, "tcp", rl.guestProxy)
 	cancel()
 	if err != nil {
+		rl.resets.add(r.ID())
 		r.Complete(true)
 		rl.log.Info("tcp_deny", "flow", flow, "host", name, "port", port, "err", err.Error())
 		return
