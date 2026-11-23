@@ -293,3 +293,33 @@ func TestUnsealReadsAnUnknownSubjectAsStoredAndAsksOncePerSubject(t *testing.T) 
 		t.Error("Unseal answered with the directory down; a subject id would pass for the record")
 	}
 }
+
+// TestForgedSubject_SessionRevokeHoldShapes: every row shape a held back-channel logout writes is one Seal
+// accepts. The actor is a system actor, the target is a token hash or the fixed route name (never a person), and
+// the unverified sub sits in data.sub_unverified, which is stored as a subject and so must never already look
+// like one: a sub that begins with the subject prefix is the one shape ForgedSubject refuses.
+func TestForgedSubject_SessionRevokeHoldShapes(t *testing.T) {
+	hash := "logout_token:" + strings.Repeat("a", 64)
+	rows := map[string]types.AuditEvent{
+		"queued":             {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"queued","sub_unverified":"alice","token_sha256":"x","sub_verified":false}`)},
+		"refused_unreadable": {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"refused_unreadable","token_sha256":"x","problem":"p"}`)},
+		"no token posted":    {Action: "session.revoke.hold", Target: "backchannel_logout", Data: []byte(`{"state":"refused_unreadable","problem":"p"}`)},
+		"refused_queue_full": {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"refused_queue_full","sub_unverified":"alice"}`)},
+		"refused_reserved":   {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"refused_reserved"}`)},
+		"unverifiable":       {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"unverifiable","sub_unverified":"alice"}`)},
+		"lost_at_shutdown":   {Action: "session.revoke.hold", Target: hash, Data: []byte(`{"state":"lost_at_shutdown","sub_unverified":"alice"}`)},
+		"summary":            {Action: "session.revoke_hold.coalesce", Target: "backchannel_logout", Data: []byte(`{"count":3}`)},
+	}
+	for name, ev := range rows {
+		ev.ActorType, ev.Actor = types.ActorSystem, "wardyn/oidcCallback"
+		if ForgedSubject(ev) {
+			t.Errorf("%s: ForgedSubject refuses a row the queue writes", name)
+		}
+	}
+	forged := rows["queued"]
+	forged.ActorType, forged.Actor = types.ActorSystem, "wardyn/oidcCallback"
+	forged.Data = []byte(`{"state":"queued","sub_unverified":"` + SubjectActorPrefix + `x"}`)
+	if !ForgedSubject(forged) {
+		t.Error("a sub_unverified that begins with the subject prefix is not refused")
+	}
+}

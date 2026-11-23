@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 )
 
 const (
@@ -36,7 +38,12 @@ func (a *Authenticator) BackchannelLogoutEnabled() bool { return a.cfg.Backchann
 //
 // ponytail: no jti replay cache. A token replayed inside backchannelIATWindow cuts the person's
 // sessions again, ending a sign-in made since; the token only travels provider to wardynd over TLS.
+//
+// While the provider has not been reached (a pending authenticator) a token cannot be verified: one that
+// passes the unverified shape checks is held and applied once the provider answers (logout_queue.go), and the
+// provider is answered 503.
 func (a *Authenticator) BackchannelLogoutHandler(reserved func(sub string) bool, onCut func(r *http.Request, sub string, err error)) http.HandlerFunc {
+	a.logouts.reserved.Store(&reserved)
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		r.Body = http.MaxBytesReader(w, r.Body, backchannelBodyMax)
@@ -44,7 +51,14 @@ func (a *Authenticator) BackchannelLogoutHandler(reserved func(sub string) bool,
 			backchannelRefuse(w, http.StatusBadRequest, "invalid_request", "the body is not a form")
 			return
 		}
-		sub, problem := a.logoutTokenSub(r.Context(), r.PostForm.Get("logout_token"))
+		st, closed := a.state()
+		if closed && a.pendingBackchannel(w, r, reserved) {
+			return
+		}
+		if closed {
+			st, _ = a.state() // published since the first read: the discovered path
+		}
+		sub, problem := logoutTokenSub(r.Context(), st.verifier, r.PostForm.Get("logout_token"), time.Now())
 		if problem != "" {
 			backchannelRefuse(w, http.StatusBadRequest, "invalid_request", problem)
 			return
@@ -69,13 +83,18 @@ func (a *Authenticator) BackchannelLogoutHandler(reserved func(sub string) bool,
 	}
 }
 
-// logoutTokenSub verifies raw as a logout token for this client and returns its sub, or the reason
-// it is not one. The provider's signature, issuer, audience and expiry are the ID token verifier's.
-func (a *Authenticator) logoutTokenSub(ctx context.Context, raw string) (sub, problem string) {
+// logoutTokenSub verifies raw as a logout token with v and returns its sub, or the reason it is not one. The
+// provider's signature, issuer, audience and expiry are the ID token verifier's. now is when the token was
+// received: a held token is checked at its receipt time, so the delay in reaching the provider does not
+// expire it.
+func logoutTokenSub(ctx context.Context, v *gooidc.IDTokenVerifier, raw string, now time.Time) (sub, problem string) {
 	if raw == "" {
 		return "", "logout_token is missing"
 	}
-	tok, err := a.verifier.Verify(ctx, raw)
+	if v == nil {
+		return "", "the logout token did not verify"
+	}
+	tok, err := v.Verify(ctx, raw)
 	if err != nil {
 		return "", "the logout token did not verify"
 	}
@@ -92,7 +111,7 @@ func (a *Authenticator) logoutTokenSub(ctx context.Context, raw string) (sub, pr
 		return "", "a logout token carries no nonce"
 	case len(claims["jti"]) == 0:
 		return "", "the logout token has no jti"
-	case tok.IssuedAt.IsZero() || absDuration(time.Since(tok.IssuedAt)) > backchannelIATWindow:
+	case tok.IssuedAt.IsZero() || absDuration(now.Sub(tok.IssuedAt)) > backchannelIATWindow:
 		return "", "the logout token iat is too far from now"
 	case tok.Subject == "":
 		return "", "the logout token names no sub; sessions are not cut by sid"

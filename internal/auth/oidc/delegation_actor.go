@@ -78,10 +78,11 @@ func readMayAct(tok *gooidc.IDToken) *MayAct {
 // No person admission runs on the actor: being named grants it nothing to admit. denied is non-empty on
 // any refusal, with a zero Actor.
 func (a *Authenticator) VerifyActorToken(r *http.Request, raw, portalClientID string, subject Session) (Actor, string) {
-	if a.subjectVerifier == nil {
+	st, _ := a.state() // a pending authenticator has no verifier: nil, so refused
+	if st.subjectVerifier == nil {
 		return Actor{}, ActorTokenInvalid
 	}
-	tok, err := a.subjectVerifier.Verify(r.Context(), raw)
+	tok, err := st.subjectVerifier.Verify(r.Context(), raw)
 	if err != nil || tok.IssuedAt.IsZero() || tok.Subject == "" {
 		return Actor{}, ActorTokenInvalid
 	}

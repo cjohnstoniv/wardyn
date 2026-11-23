@@ -168,3 +168,18 @@ func SetIDPHTTPTimeoutForTest(d time.Duration) (restore func()) {
 	idpHTTPTimeout = d
 	return func() { idpHTTPTimeout = prev }
 }
+
+// SetLogoutClockForTest replaces the held-logout queue's clock: the receipt time of a held token and the
+// window of the rate-limit summary.
+func SetLogoutClockForTest(a *Authenticator, now func() time.Time) { a.logouts.now = now }
+
+// SetBeforeHoldHookForTest runs f after a pending back-channel request passed its shape checks and before it
+// takes the queue mutex, to force the order "the handler read the state, then the state was published".
+func SetBeforeHoldHookForTest(a *Authenticator, f func()) { a.logouts.beforeHold = f }
+
+// AuthenticatorClosedForTest reports whether a's provider-dependent operations refuse because it was built by
+// NewPending and has not published a provider state. The zero value is never closed.
+func AuthenticatorClosedForTest(a *Authenticator) bool {
+	_, closed := a.state()
+	return closed
+}

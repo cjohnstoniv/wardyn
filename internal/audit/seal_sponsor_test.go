@@ -56,6 +56,12 @@ func TestServiceIdentity_SponsorFieldsSealed(t *testing.T) {
 			ev.ActorType = types.ActorSystem
 			return ev
 		}(), map[string]string{"target": "bob"}},
+		{func() types.AuditEvent {
+			ev := serviceEvent("session.revoke.hold", "wardyn/oidcCallback", `{"state":"queued","sub_verified":false,"sub_unverified":"alice","token_sha256":"ab"}`)
+			ev.ActorType = types.ActorSystem
+			ev.Target = "logout_token:ab"
+			return ev
+		}(), map[string]string{"sub_unverified": "alice"}},
 	}
 	for _, c := range cases {
 		sealed, pending, err := s.Seal(t.Context(), c.ev)
@@ -90,6 +96,17 @@ func TestServiceIdentity_SponsorFieldsSealed(t *testing.T) {
 	back, err := s.Unseal(t.Context(), []types.AuditEvent{sealed})
 	if err != nil || dataField(t, back[0], "sponsor") != ErasedValue {
 		t.Errorf("sponsor after erasure = %q (%v), want %q", dataField(t, back[0], "sponsor"), err, ErasedValue)
+	}
+	// A held logout's sub_unverified is erased with the person; the row's token-hash target is not a person.
+	held := serviceEvent("session.revoke.hold", "wardyn/oidcCallback", `{"state":"unverifiable","sub_unverified":"alice"}`)
+	held.ActorType, held.Target = types.ActorSystem, "logout_token:cd"
+	heldSealed, _, _ := s.Seal(t.Context(), held)
+	mk.destroy("alice")
+	dir.destroyed["alice"] = heldSealed.Time.Add(time.Minute)
+	heldBack, err := s.Unseal(t.Context(), []types.AuditEvent{heldSealed})
+	if err != nil || dataField(t, heldBack[0], "sub_unverified") != ErasedValue || heldBack[0].Target != "logout_token:cd" {
+		t.Errorf("session.revoke.hold after erasure: sub_unverified %q, target %q (%v); want the sub erased and the target kept",
+			dataField(t, heldBack[0], "sub_unverified"), heldBack[0].Target, err)
 	}
 	// A sponsor with no identity row keeps their name, as an actor does.
 	kept, _, err := s.Seal(t.Context(), serviceEvent("run.create", "service:ci", `{"sponsor":"never-signed-in"}`))

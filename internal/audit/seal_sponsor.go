@@ -19,7 +19,8 @@ import (
 // covers an id and not a name, and after the sponsor's erasure the service's trail names nobody. The same
 // step stores sponsor_from and sponsor_to on service_identity.* rows, and target on invitation.* rows.
 // A person with no identity row keeps their name, as an actor does; a sponsor always has one. The value
-// waits under the pending key, as an actor does, when the subject cannot be had.
+// waits under the pending key, as an actor does, when the subject cannot be had. A session.revoke.hold row's
+// sub_unverified, the sub a held logout token claimed before the provider could be asked, is stored the same way.
 
 // sponsorFieldNames are the data fields of ev that can hold a person who is neither its actor nor its
 // target column. "sponsor" is checked on every row because the recorder chain stamps it on all of a
@@ -32,12 +33,16 @@ func sponsorFieldNames(ev types.AuditEvent) []string {
 	if strings.HasPrefix(ev.Action, "invitation.") {
 		names = append(names, "target")
 	}
+	if ev.Action == "session.revoke.hold" {
+		names = append(names, "sub_unverified")
+	}
 	return names
 }
 
 // sponsorsIn is ev's data object and the sponsor fields it holds as non-empty strings.
 func sponsorsIn(ev types.AuditEvent) (map[string]json.RawMessage, []string) {
-	if len(ev.Data) == 0 || !bytes.Contains(ev.Data, []byte(`"sponsor`)) && !bytes.Contains(ev.Data, []byte(`"target"`)) {
+	if len(ev.Data) == 0 || !bytes.Contains(ev.Data, []byte(`"sponsor`)) && !bytes.Contains(ev.Data, []byte(`"target"`)) &&
+		!bytes.Contains(ev.Data, []byte(`"sub_unverified"`)) {
 		return nil, nil
 	}
 	var m map[string]json.RawMessage

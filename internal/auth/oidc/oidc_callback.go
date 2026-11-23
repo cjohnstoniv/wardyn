@@ -221,6 +221,12 @@ func (a *Authenticator) CallbackHandlerWithDenials(reserved func(sub string) boo
 }
 
 func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserved func(string) bool, onDenied func(*http.Request, string)) {
+	prov, closed := a.state()
+	if closed {
+		// The provider has not been reached: no cookie is consumed and no exchange is made.
+		pendingSignIn503(w)
+		return
+	}
 	// (1) CSRF and the one-time cookies — consumeCallbackCookies below.
 	nonce, verifier, widened, ok := a.consumeCallbackCookies(w, r)
 	if !ok {
@@ -257,15 +263,15 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 	// Inject the stored HTTP client so tests with a custom transport (e.g.
 	// rewriteTokenRT) work for token exchange.
 	exchangeCtx := r.Context()
-	if a.httpClient != nil {
-		exchangeCtx = gooidc.ClientContext(exchangeCtx, a.httpClient)
+	if prov.httpClient != nil {
+		exchangeCtx = gooidc.ClientContext(exchangeCtx, prov.httpClient)
 	}
 	grantGeneration, captureGrant := a.loginGrantGeneration(r.Context())
 	// A transient IdP hiccup (5xx, timeout) gets tokenExchangeRetries
 	// short-backoff attempts. A permanent rejection (bad secret, expired/
 	// replayed code) is never retried — the code is single-use, so resending
 	// it would just trade a clear error for a confusing invalid_grant one.
-	token, exchangeErr := retryExchange(exchangeCtx, a.oauth2, code, verifier)
+	token, exchangeErr := retryExchange(exchangeCtx, a.oauthConfig(prov), code, verifier)
 	if exchangeErr != nil {
 		if isTransientOIDCErr(exchangeErr) {
 			a.redirectAuthError(w, r, authErrorOIDCTransient)
@@ -282,7 +288,7 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request, reserve
 		http.Error(w, "id_token absent in token response", http.StatusUnauthorized)
 		return
 	}
-	idToken, err := a.verifier.Verify(r.Context(), rawIDToken)
+	idToken, err := prov.verifier.Verify(r.Context(), rawIDToken)
 	if err != nil {
 		http.Error(w, "id_token verification failed", http.StatusUnauthorized)
 		return
