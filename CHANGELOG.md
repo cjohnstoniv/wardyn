@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - People can make a team drive of their own, shared with their governance unit and the units below it, read-only for others until a super admin allows writing (`storage.user_drive.member_create.team_drives`, off by default; Docker only) (#3459).
 
+### Changed
+
+- A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it (#4061).
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
