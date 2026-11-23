@@ -301,6 +301,19 @@ func TestSendGitScript_SameHashHalfMadeRepoIsFinished(t *testing.T) {
 	}
 }
 
+// oldGitPath is a PATH entry for a sandbox git older than 2.29: in a repository it prints rev-parse's
+// --show-object-format back and succeeds, and it rejects --object-format=sha256 as unknown (rc 129).
+func (g *gitRig) oldGitPath() string {
+	old := g.t.TempDir()
+	g.write(old, "git", "#!/bin/sh\n[ \"$1 ${2:-}\" = 'rev-parse --show-object-format' ] && [ -e .git/HEAD ] && { echo --show-object-format; exit 0; }\n"+
+		"for a in \"$@\"; do [ \"$a\" = --object-format=sha256 ] && { echo \"error: unknown option 'object-format=sha256'\" >&2; exit 129; }; done\n"+
+		"exec "+shellQuote(filepath.Join(g.bin, "git"))+" \"$@\"\n")
+	if err := os.Chmod(filepath.Join(old, "git"), 0o755); err != nil {
+		g.t.Fatal(err)
+	}
+	return "PATH=" + old + string(os.PathListSeparator) + g.bin + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
 // A git older than 2.29 prints an unknown rev-parse flag back and succeeds. It only knows SHA-1, so a half-made
 // SHA-1 repository is finished as before.
 func TestSendGitScript_OldGitHalfMadeSha1RepoIsFinished(t *testing.T) {
@@ -310,14 +323,70 @@ func TestSendGitScript_OldGitHalfMadeSha1RepoIsFinished(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	old := t.TempDir()
-	g.write(old, "git", "#!/bin/sh\n[ \"$1 ${2:-}\" = 'rev-parse --show-object-format' ] && [ -e .git/HEAD ] && { echo --show-object-format; exit 0; }\nexec "+
-		shellQuote(filepath.Join(g.bin, "git"))+" \"$@\"\n")
-	if err := os.Chmod(filepath.Join(old, "git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, errs, rc := g.send(dir, "PATH="+old+string(os.PathListSeparator)+g.bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, errs, rc := g.send(dir, g.oldGitPath())
 	g.wantSetUp(dir, out, errs, rc)
+}
+
+// A SHA-256 send to a sandbox whose git is older than 2.29 says so and gives no advice to remove .git: removing it
+// cannot help, that git cannot make a SHA-256 repository.
+func TestSendGitScript_OldGitCannotHoldSHA256(t *testing.T) {
+	for _, mark := range []bool{false, true} {
+		name := "a finished repository"
+		if mark {
+			name = "a half-made repository"
+		}
+		t.Run(name, func(t *testing.T) {
+			g := newGitRigHash(t, true)
+			dir := g.box(t.TempDir())
+			g.run(dir, "init", "-q")
+			if mark {
+				if err := os.MkdirAll(filepath.Join(dir, sendGitIncomplete), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, errs, rc := g.send(dir, g.oldGitPath())
+			if rc == 0 || out != "" {
+				t.Fatalf("out %q rc %d stderr %q; want the send refused", out, rc, errs)
+			}
+			if !strings.Contains(errs, gitTooOld) || strings.Contains(errs, "remove .git") {
+				t.Errorf("stderr %q; want %q and no advice to remove .git", errs, gitTooOld)
+			}
+		})
+	}
+}
+
+// --pull-commits across hashes is refused before git verifies or fetches the bundle, naming both hashes, and no
+// pack file is left in the laptop's repository.
+func TestCheckPullHash_RefusesABundleOfTheOtherHash(t *testing.T) {
+	for _, c := range []struct{ sandbox256, laptop256 bool }{{true, false}, {false, true}, {false, false}, {true, true}} {
+		name := map[bool]string{false: "sha1", true: "sha256"}
+		t.Run("a "+name[c.sandbox256]+" sandbox and a "+name[c.laptop256]+" laptop", func(t *testing.T) {
+			g := newGitRigHash(t, c.sandbox256)
+			laptop := t.TempDir()
+			args := []string{"init", "-q"}
+			if c.laptop256 {
+				args = append(args, "--object-format=sha256")
+				if out, err := exec.Command(g.git, append([]string{"-C", laptop}, args...)...).CombinedOutput(); err != nil {
+					t.Skipf("this git cannot make a SHA-256 repository: %v: %s", err, out)
+				}
+			} else {
+				g.run(laptop, args...)
+			}
+			err := checkPullHash(t.Context(), laptop, g.bundle)
+			if c.sandbox256 == c.laptop256 {
+				if err != nil {
+					t.Fatalf("the same hash on both sides: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "sha1") || !strings.Contains(err.Error(), "sha256") {
+				t.Fatalf("err %v; want a refusal naming both hashes", err)
+			}
+			if packs, _ := filepath.Glob(filepath.Join(laptop, ".git", "objects", "pack", "*")); len(packs) != 0 {
+				t.Errorf("the refused pull left %v", packs)
+			}
+		})
+	}
 }
 
 // A pull before the next send says the repository is not finished while its

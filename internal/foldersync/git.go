@@ -388,6 +388,7 @@ const sendGitIncomplete = ".git/wardyn-setup-incomplete"
 const (
 	gitDanglingLink = ".git in the synced directory is a link to something that does not exist; it is left as it is: remove it or point it at a repository"
 	gitUnfinished   = "this send did not finish setting up the repository in the synced directory; it is kept, and the next --git carries on with it if no other send has finished it"
+	gitTooOld       = "The sandbox's git is older than 2.29 and cannot hold SHA-256 history. Update git in the sandbox image, or send from a SHA-1 repository."
 	gitPullNothing  = "the repository in the synced directory is not finished and has no commits to bring back; send with --git to finish it"
 )
 
@@ -432,10 +433,10 @@ func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
 	}
 	// oh is the object format of a repository git can already open. A git older than 2.29 echoes the unknown flag
-	// and knows only SHA-1. A repository of the other hash ends the send with a reason and nothing changed; the
+	// and knows only SHA-1 (old is then set, so a SHA-256 send says that, not to remove .git). A repository of the other hash ends the send with a reason and nothing changed; the
 	// fetch never sees it.
-	read := "oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1;; esac; }"
-	refuse := "{ [ \"$oh\" = " + hash + " ] || { echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
+	read := "old=; oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1; old=1;; esac; }"
+	refuse := "{ [ \"$oh\" = " + hash + " ] || { [ -z \"$old\" ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
 		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
 	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
 	check := "if " + read + "; then " + refuse + "; fi; "
@@ -503,6 +504,9 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 	if err != nil {
 		return fmt.Errorf("bring the git bundle back: %w", err)
 	}
+	if err := checkPullHash(ctx, root, tmp.Name()); err != nil {
+		return err
+	}
 	if _, err := laptopGit(ctx, root, "bundle", "verify", "-q", tmp.Name()); err != nil {
 		return err
 	}
@@ -511,6 +515,48 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 		return err
 	}
 	fmt.Fprintf(w, "git: fetched %s commit(s) from the sandbox into the branch %s; review it with 'git log %s'. Your working tree is unchanged\n", Shown(out), branch, branch)
+	return nil
+}
+
+// bundleHash is the object format a bundle's header names: sha256 when it has the object-format capability, SHA-1
+// otherwise. ok is false when the file does not start like a bundle.
+func bundleHash(file string) (hash string, ok bool) {
+	f, err := os.Open(file)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() || !strings.HasPrefix(sc.Text(), "# v") {
+		return "", false
+	}
+	hash = "sha1"
+	for sc.Scan() && strings.HasPrefix(sc.Text(), "@") {
+		if v, found := strings.CutPrefix(sc.Text(), "@object-format="); found {
+			hash = v
+		}
+	}
+	return hash, true
+}
+
+// checkPullHash refuses a bundle of the sandbox's repository when the laptop's repository holds the other hash,
+// before git verifies or fetches it: git's own errors for that are a corrupted pack and a bad header, and the
+// fetch leaves a tmp_pack file behind. A bundle or repository it cannot read is left to the git steps after it.
+func checkPullHash(ctx context.Context, root, bundle string) error {
+	theirs, ok := bundleHash(bundle)
+	if !ok {
+		return nil
+	}
+	ours, err := laptopGit(ctx, root, "rev-parse", "--show-object-format")
+	if err != nil {
+		return nil
+	}
+	if ours != "sha1" && ours != "sha256" {
+		ours = "sha1" // a git older than 2.29 echoes the flag and knows only SHA-1
+	}
+	if ours != theirs {
+		return fmt.Errorf("the sandbox's repository uses %s object names and the repository on this computer uses %s, so its commits cannot be brought back", theirs, ours)
+	}
 	return nil
 }
 
