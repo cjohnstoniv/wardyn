@@ -65,7 +65,9 @@ var (
 		"UserDrive.DeleteStartedAt": true,
 
 		// Fields added after the projection was written: securityAdminDrive copies none of them, so a
-		// security admin's read goes without them. Copying one is a decision, made in both places.
+		// security admin's read goes without them. Each was decided a super admin's, and
+		// TestGetDrivesWithholdsTheLaterDriveFieldsFromASecurityAdmin pins that on the wire. Copying one
+		// is a new decision, made in both places, with its own pin.
 		"UserDriveListItem.PlacementEligible": true,
 		"UserDriveListItem.MountsFrom":        true,
 		"UserDrive.KeptFromRun":               true,
