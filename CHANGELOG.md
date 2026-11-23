@@ -65,6 +65,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).
 - A `write:` requirement on a path inside a workspace folder that is on a person's runner is now checked by its text, like one on the folder itself. Before, the server checked a path inside such a folder against its own files ([#3913](https://github.com/cjohnstoniv/wardyn/issues/3913)).
 - In the light theme, the title bar of a live terminal is now dark like the terminal under it, so its text is readable.
+- A response the run's proxy relays from an upstream now reaches the sandbox as each part arrives, instead of when the proxy's write buffer fills. A model's streamed answer, on the brokered model route or on an inspected Anthropic or OpenAI connection, no longer reaches the agent late and in bursts.
+- A plain-log recording uploaded through the run's proxy now keeps the recorder's statement that it is a plain log, as a direct upload already did. The server applies the plain-log output cap and cut marker to it, instead of judging the format from the log's first bytes.
 
 ### Security
 
