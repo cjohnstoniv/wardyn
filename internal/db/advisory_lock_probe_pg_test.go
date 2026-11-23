@@ -71,15 +71,16 @@ func serverSessions(t *testing.T, pool *pgxpool.Pool) int64 {
 	return n
 }
 
-// TestSweeperLeader_FollowerDoesNotDialASessionEveryTick: replica A leads;
-// replica B retries on a short backoff. Every one of B's attempts must report
-// standby, and NONE of them may open a database session of its own — the probe
-// answers from B's pool, which keeps one connection and reuses it.
+// TestSweeperLeader_FollowerDoesNotDialASessionEveryTick: an older replica A
+// leads on the single sweeper lock, held exclusively; replica B retries on a
+// short backoff. Every one of B's rounds must lead nothing, and together they
+// may open at most one database session: B keeps its election connection
+// between rounds rather than dialling one per round.
 //
-// Counting server SESSIONS rather than the live backends is the point: the
-// dedicated connection a follower used to dial is closed again immediately, so
-// it is invisible to pg_stat_activity by the time anyone could look, while the
-// cumulative counter still carries it.
+// Counting server SESSIONS rather than the live backends is the point: a
+// connection dialled and closed again each round is invisible to
+// pg_stat_activity by the time anyone could look, while the cumulative counter
+// still carries it.
 func TestSweeperLeader_FollowerDoesNotDialASessionEveryTick(t *testing.T) {
 	const attempts = 6
 
@@ -102,9 +103,11 @@ func TestSweeperLeader_FollowerDoesNotDialASessionEveryTick(t *testing.T) {
 	}
 	before := serverSessions(t, leaderPool)
 
+	follower.runCtx = ctx
+	defer follower.shutdown()
 	for i := range attempts {
-		if got := follower.lead(ctx); got != "another replica holds the lock" {
-			t.Fatalf("attempt %d = %q, want a standby that never dialled", i+1, got)
+		if lost := follower.round(); lost || follower.lockedCount() != 0 {
+			t.Fatalf("round %d: lost %v, %d families led; want a follower that leads none", i+1, lost, follower.lockedCount())
 		}
 	}
 
@@ -183,10 +186,14 @@ func TestAdvisoryLockHeld_IgnoresAnotherDatabasesLock(t *testing.T) {
 	}
 
 	leader := NewSweeperLeader(ours, "replica-a")
-	leader.monitor, leader.poll = 10*time.Millisecond, time.Millisecond
-	lctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-	defer cancel()
-	if got := leader.lead(lctx); got != "led" {
-		t.Fatalf("our only replica's attempt = %q, want it to lead while another database holds the same key", got)
+	leader.runCtx = ctx
+	defer leader.shutdown()
+	if lost := leader.round(); lost {
+		t.Fatal("our only replica's round lost its election connection")
+	}
+	if _, _, end, ok := leader.Join(); !ok {
+		t.Fatal("our only replica does not lead the runs family while another database holds the same key")
+	} else {
+		end()
 	}
 }

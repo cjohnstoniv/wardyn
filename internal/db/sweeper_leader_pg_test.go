@@ -28,6 +28,17 @@ func fastLeader(t *testing.T, name string) *SweeperLeader {
 	return l
 }
 
+// electionPID is the backend pid of l's election connection.
+func electionPID(t *testing.T, l *SweeperLeader) uint32 {
+	t.Helper()
+	l.connMu.Lock()
+	defer l.connMu.Unlock()
+	if l.conn == nil {
+		t.Fatal("the leader has no election connection")
+	}
+	return l.conn.PgConn().PID()
+}
+
 func waitFor(t *testing.T, what string, within time.Duration, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -163,11 +174,8 @@ func TestSweeperLeader_LostLockCancelsAndJoinsTheSweeps(t *testing.T) {
 		t.Fatal("b swept while a led")
 	}
 
-	// pg_locks lists the whole server: end the leader in this database, never another test's.
-	if _, err := killer.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks
-		WHERE locktype = 'advisory' AND granted AND classid::bigint = $1 AND objid::bigint = $2 AND objsubid = 1
-		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
-		(SweeperLeaderLockKey>>32)&0xffffffff, SweeperLeaderLockKey&0xffffffff); err != nil {
+	// End a's election session only: b holds the single sweeper lock in shared mode too, as every family leader does.
+	if _, err := killer.Exec(ctx, `SELECT pg_terminate_backend($1)`, electionPID(t, a)); err != nil {
 		t.Fatalf("ending the leader's session: %v", err)
 	}
 

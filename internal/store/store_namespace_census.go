@@ -139,6 +139,7 @@ var namespaceCensusExempt = map[string]string{
 	"runner_registration_tokens.owner_kind":     "a kind word, not a principal",
 	"runners.owner_kind":                        "a kind word, not a principal",
 	"sweeper_leader.holder":                     "the replica that holds the sweeper lease, not a person",
+	"sweeper_families.holder":                   "the replica that leads a sweep family, not a person",
 	"agent_runs.allowed_models":                 "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.created_via_actor":              "the agent a provider named as acting, recorded and never authorised",
 	"agent_runs.image_admission":                "a run's own settings and recorded state, not a list that names people",

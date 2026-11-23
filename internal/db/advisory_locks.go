@@ -37,19 +37,30 @@ const ReaperAdvisoryLockKey int64 = 0x5741524459_524541 // ASCII "WARDYREA"
 // reuse this key.
 const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 
-// SweeperLeaderLockKey elects the one replica that runs the sweepers which must
-// run once (approvals, recordings, credentials, the always-egress reconcile and
-// the run pause). Acquired ONCE and held for the process lifetime by
-// SweeperLeader; followers retry on a backoff and take over when the leader's
-// session ends.
+// SweeperLeaderLockKey elected the one replica that ran every sweeper which must
+// run once, in releases before the sweep families. An older replica still takes
+// it exclusively, after a probe (AdvisoryLockHeld), and leads every sweep while
+// it holds it.
+//
+// The legacy rule: every replica of this version that leads a sweep family
+// holds this key in SHARED mode on its election connection (SweeperLeader), from
+// before its first family until after it leads none. So while any family leader
+// exists, an older replica's probe sees the key held and its exclusive try fails,
+// and a replica of this version whose shared try fails knows an older replica
+// leads, and leads nothing. No replica of this version takes it exclusively.
 //
 // HONEST CEILING, as for GroundTruthRotatorLockKey: an advisory lock dies with
 // its SESSION, so a Postgres failover can release it under a still-running
-// leader. Unlike the rotator, this lock IS used for work that needs fencing, so
-// each acquisition bumps the durable epoch in sweeper_leader (0110) and a
-// multi-step operation re-checks its epoch (SweeperLeader.Current) before it
-// writes.
+// leader. Each acquisition bumps the durable epoch in sweeper_leader (0110),
+// which every family acquisition bumps too, and a multi-step operation of an
+// older replica re-checks it before it writes.
 const SweeperLeaderLockKey int64 = 0x5741524459_53574C // ASCII "WARDYSWL"
+
+// SweeperFamilyLockClass is the classid half of each sweep family's two-key
+// advisory lock (SweeperLeader); the object half is crc32 of the family's name.
+// It has no place in LockOrder: it is not a Locker class, and it is only ever
+// tried, on the election connection, never waited for.
+const SweeperFamilyLockClass int32 = 0x57535746 // ASCII "WSWF"
 
 // SingleInstanceLockKey is the RUNTIME half of the one-replica safety control
 // (the Helm chart's `replicas > 1` render refusal is the other half). Taken
@@ -236,7 +247,7 @@ const dedicatedLockReleaseWait = 2 * time.Second
 // within dedicatedLockReleaseWait. Unlock comes first so the lock is free when
 // release returns, not when the server notices the socket is gone.
 func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64) (conn *pgx.Conn, release func(), ok bool, err error) {
-	conn, err = pgx.ConnectConfig(ctx, pool.Config().ConnConfig.Copy())
+	conn, err = dialDedicated(ctx, pool)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("db: dial advisory lock conn: %w", err)
 	}
@@ -256,6 +267,19 @@ func TryAdvisoryLockDedicated(ctx context.Context, pool *pgxpool.Pool, key int64
 		conn.Exec(bg, `SELECT pg_advisory_unlock($1)`, key) //nolint:errcheck // best-effort; closing the session drops it anyway
 		conn.Close(bg)                                      //nolint:errcheck // best-effort
 	}, true, nil
+}
+
+// dialDedicated dials one session for a process-lifetime lock outside pool, from
+// pool's own connection settings with the lock connections' TCP keepalives
+// (lockConnConfig, setLockKeepalives), so a vanished holder's lock is freed in
+// about a minute. The sweeper election connection is dialled here too.
+func dialDedicated(ctx context.Context, pool *pgxpool.Pool) (*pgx.Conn, error) {
+	conn, err := pgx.ConnectConfig(ctx, lockConnConfig(pool.Config().ConnConfig))
+	if err != nil {
+		return nil, err
+	}
+	setLockKeepalives(ctx, func(sctx context.Context, sql string) error { _, err := conn.Exec(sctx, sql); return err })
+	return conn, nil
 }
 
 // AdvisoryLock is TryAdvisoryLock's BLOCKING sibling: waits for session-level
