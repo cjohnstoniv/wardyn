@@ -321,7 +321,7 @@ func TestHubRecheckAllEndsStalledSessionsTogether(t *testing.T) {
 	check(t, hub.recheckAll(t.Context()), "recheckAll reported a closed Hub")
 	check(t, time.Since(start) < 500*time.Millisecond, "recheckAll waited for the stalled links")
 	// Each Revoke waits out its own 1 s bound, so calls run one after another would take 2 s or more.
-	eventually(t, func() bool { return !fa.link.Online() && !fb.link.Online() }, 1800*time.Millisecond, "the stalled links did not end together")
+	eventually(t, func() bool { return !fa.peer.Online() && !fb.peer.Online() }, 1800*time.Millisecond, "the stalled links did not end together")
 	requireOffline(t, fa)
 	requireOffline(t, fb)
 }

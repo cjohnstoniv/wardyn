@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once per runner connection. Revocations still end a runner's session within one check (15 seconds).
+- Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once for as long as the run stays on its runner. Revocations still end a runner's session within one check (15 seconds).
 
 ## [0.10.2] — 2026-11-22
 
