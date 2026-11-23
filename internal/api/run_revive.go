@@ -278,6 +278,7 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	}
 	cfg.RunToken = id.Token
 	freshJTI := id.JTI
+	s.recordRevivedSecretFacts(ctx, run, cfg, freshJTI)
 	cfgJSON, rerr := encodeRevivedConfig(ctx, cfg) // loaded as the new proxy will load it, before the claim
 	if rerr != nil {
 		return reviveResult{}, rerr

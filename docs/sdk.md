@@ -909,6 +909,22 @@ start.
 | `kept_machine_unavailable` | The run was not launched: its dispatch could not make or claim the machine. |
 | `kept_machine_fresh_base` | `422`: a fresh start names a base other than its machine's own; start a new kept machine to use a different base. |
 | `kept_machine_reset_unconfirmed` | `409`: a fresh start of the machine was asked of its Mac and never confirmed, so only another fresh start may use it. |
+| `snapshots_off` | `409`: `features.machine_snapshots` is off, so no snapshot is made and no run starts from one. |
+| `snapshot_busy` | `409`: another snapshot of the run is being made. |
+| `snapshot_no_space` | The runner has too little free disk for the copy. |
+| `snapshot_secrets_present` | The run held a secret, or a fact the check reads could not be read; `reasons` names the causes, never a value. |
+| `snapshot_machine_kind_unsupported` | `409`: only a Linux VM run is snapshotted, and only a Linux VM run starts from a snapshot. |
+| `snapshot_in_use` | `409`: a run started from the snapshot still uses it, so it can't be deleted. |
+| `snapshot_source_ended` | The run ended while its snapshot was being made. |
+| `snapshot_commit_unconfirmed` | The runner never confirmed it kept the copy, so the snapshot failed. |
+| `snapshot_orphaned` | The snapshot was left being made with nothing to finish it, so it failed. |
+| `fork_context_changed` | The run's unit or workspaces are no longer the snapshot's. |
+| `fork_image_not_admitted` | The snapshot's image has no digest, or that digest is no longer admitted. |
+| `fork_base_changed` | The runner no longer has the image base the snapshot backs onto. |
+| `fork_not_delegable` | `403`: a delegated token or a portal grant cannot start a run from a snapshot. |
+| `fork_support_session` | `403`: a support helper was let into the snapshot's source run. |
+| `fork_snapshot_unavailable` | The run was not launched: its snapshot was no longer ready when its dispatch claimed it. |
+| `run_secret_facts_unrecorded` | The run was not launched: its dispatch could not record the facts a snapshot of it is checked against. |
 | `runner_token_invalid` | Registration token is unknown, expired, consumed, or bound to another org. |
 | `runner_claim_mismatch` | The personal owner, fingerprint, org binding, claim state, or expiry does not match. |
 | `runner_not_found` | No such runner to revoke: absent, already revoked, an unclaimed one past its wait, or (on `/me`) another person's. |

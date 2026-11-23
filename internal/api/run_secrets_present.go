@@ -5,8 +5,9 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
+	"log/slog"
+	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -15,92 +16,95 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// secretsPresentAuditScan bounds the run's audit rows the gatherer reads. A
-// run with this many or more cannot be proven free of a resident component or
-// AWS session, so it counts as unreadable.
-const secretsPresentAuditScan = 2000
+// The facts secretspresent.Evaluate reads for one run, all from durable state: the run's grant rows, its
+// run_components rows, its human_takeover approvals, its accepted support grants, its desktop sign-ins, its own
+// task, its run_dispatch_secret_facts row, the credential.mint rows its broker wrote in each mint's own
+// transaction, and the audit retention anchors. A best-effort audit row and server config read now are never a
+// source: either can disagree with what the run was actually given.
 
-// errTakeoverUnrecorded: nothing records a "Needs you" takeover yet.
-var errTakeoverUnrecorded = errors.New("takeovers are not recorded yet")
-
-// takeoverHappened reports whether a "Needs you" takeover was ever taken on
-// the run. SEAM for DSK-B (#2963): its takeover holder replaces this body.
-// Until then it cannot answer, so it errs and secretsPresent fails closed
-// (Unknown): a stub that answered false would let a snapshot through.
-var takeoverHappened = func(context.Context, *Server, uuid.UUID) (bool, error) {
-	return false, errTakeoverUnrecorded
+// residentGrantKinds are the grant kinds whose credential lives inside the sandbox for the whole run.
+var residentGrantKinds = map[types.GrantKind]bool{
+	types.GrantEnvSecret: true, types.GrantFileSecret: true, types.GrantSSHKey: true,
 }
 
-// secretsPresent gathers the facts secretspresent.Evaluate reads for one run.
-// Callers in 0.10.0 are tests; a snapshot or fork calls it before it copies a
-// sandbox and refuses when present. Every read error fails closed.
-func (s *Server) secretsPresent(ctx context.Context, runID uuid.UUID) (bool, []secretspresent.Reason) {
-	var in secretspresent.Inputs
-	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
+// brokeredGrantKinds are the grant kinds minted per use, each with the longest time a minted credential of that
+// kind stays valid: the broker caps every minted credential at an hour (broker.ttlFor). A git_pat grant's token
+// lives in the sandbox only when the broker was off, which is the dispatch row's fact, not the grant's. A grant
+// kind in neither map counts as resident, and a mint of a kind not here counts as valid for as long as the run
+// lives.
+var brokeredGrantKinds = map[types.GrantKind]time.Duration{
+	types.GrantGitHubToken: time.Hour, types.GrantCloudSTS: time.Hour, types.GrantAPIKey: time.Hour, types.GrantGitPAT: time.Hour,
+}
+
+// componentDeliveryResident says, for each delivery mode of a component secret, whether the secret lives inside
+// the sandbox. A mode not here counts as resident.
+var componentDeliveryResident = map[string]bool{
+	types.ComponentDeliveryHeader: false, types.ComponentDeliveryEnv: true, types.ComponentDeliveryFile: true,
+}
+
+// secretsPresent gathers the facts for runID and evaluates the rule. w is R4's window for brokered mints. Every
+// fact that cannot be read, and a dispatch row that does not name the run's current token, answers Unknown.
+func (s *Server) secretsPresent(ctx context.Context, runID uuid.UUID, w mintWindow) (bool, []secretspresent.Reason) {
+	st, ok := s.cfg.Store.(store.RunSecretFacts)
+	if !ok {
+		return secretspresent.Evaluate(secretspresent.Inputs{Unreadable: true})
+	}
+	var upTo *time.Time
+	if !w.to.IsZero() {
+		upTo = &w.to
+	}
+	f, err := st.ReadRunSecretFacts(ctx, runID, harnessLoginTask, upTo)
 	if err != nil {
-		in.Unreadable = true
+		slog.ErrorContext(ctx, "api: read the run's secret facts", slog.String("run_id", runID.String()), slog.Any("err", err))
+		return secretspresent.Evaluate(secretspresent.Inputs{Unreadable: true})
 	}
-	for _, g := range grants {
-		switch g.Spec.Kind {
-		case types.GrantEnvSecret, types.GrantFileSecret, types.GrantSSHKey:
-			in.ResidentGrants++
+	in := secretsInputs(f, w)
+	if f.Dispatch != nil {
+		jti, err := s.currentRunJTI(ctx, runID)
+		if err != nil {
+			slog.WarnContext(ctx, "api: read the run's current token", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
-	}
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, secretsPresentAuditScan)
-	if err != nil || len(events) >= secretsPresentAuditScan {
-		in.Unreadable = true
-	}
-	for _, ev := range events {
-		if residentByAudit(ev) {
-			in.ResidentGrants++
-		}
-	}
-	if in.TakeoverHappened, err = takeoverHappened(ctx, s, runID); err != nil {
-		in.Unreadable = true
-	}
-	if st, ok := s.cfg.Store.(store.DesktopSigninStore); ok {
-		if in.SigninBegun, err = st.RunHadDesktopSignin(ctx, runID); err != nil {
-			in.Unreadable = true
-		}
+		in.Unreadable = in.Unreadable || err != nil || jti == "" || jti != f.Dispatch.RecordedJTI
 	}
 	return secretspresent.Evaluate(in)
 }
 
-// residentByAudit reports whether one audit row records a credential that
-// lives in the sandbox: a Bedrock AWS SSO session (its role credentials are
-// resident in every mode but bearer), or a component that delivers a secret
-// as an environment variable or file, or an organisation's custom component,
-// which may be an AWS CLI whose role credentials are resident (its row does
-// not say, so it counts).
-func residentByAudit(ev types.AuditEvent) bool {
-	if ev.Outcome != "success" {
-		return false
+// secretsInputs turns one run's facts into the rule's inputs. A run with no dispatch row (dispatched while the
+// switch was off), and a run some of whose audit rows a retention drop removed, are unreadable.
+func secretsInputs(f store.SecretFacts, w mintWindow) secretspresent.Inputs {
+	in := secretspresent.Inputs{
+		TakeoverHappened: f.TakeoverGiven,
+		SigninBegun:      f.SigninBegun,
+		HarnessLogin:     f.HarnessLogin,
+		SupportSession:   f.SupportSessionAccepted,
+		Unreadable:       f.Dispatch == nil || f.AuditRowsDropped,
 	}
-	switch canonicalAction(ev.Action) {
-	case "run.bedrock.configure":
-		var d struct {
-			Mode string `json:"mode"`
-		}
-		return json.Unmarshal(ev.Data, &d) != nil || d.Mode != "bearer"
-	case "run.component.attach":
-		var d struct {
-			Kind    string `json:"kind"`
-			Source  string `json:"source"`
-			Secrets []struct {
-				Delivery string `json:"delivery"`
-			} `json:"secrets"`
-		}
-		if json.Unmarshal(ev.Data, &d) != nil {
-			return true
-		}
-		if d.Kind == string(types.ComponentCustom) && d.Source == componentSourceOrg {
-			return true
-		}
-		for _, sec := range d.Secrets {
-			if sec.Delivery == types.ComponentDeliveryEnv || sec.Delivery == types.ComponentDeliveryFile {
-				return true
-			}
+	for kind, n := range f.GrantKinds {
+		if _, brokered := brokeredGrantKinds[types.GrantKind(kind)]; residentGrantKinds[types.GrantKind(kind)] || !brokered {
+			in.ResidentGrants += n
 		}
 	}
-	return false
+	for _, c := range f.Components {
+		if c.Org || c.Cleared || slices.ContainsFunc(c.Deliveries, func(mode string) bool {
+			resident, known := componentDeliveryResident[mode]
+			return resident || !known
+		}) {
+			in.ResidentGrants++
+		}
+	}
+	if f.Dispatch != nil {
+		if f.Dispatch.BedrockResident {
+			in.ResidentGrants++
+		}
+		in.GitTokenResident = f.Dispatch.GitTokenResident
+	}
+	from := w.from
+	if from.IsZero() {
+		from = f.Now
+	}
+	for kind, at := range f.NewestMints {
+		ttl, known := brokeredGrantKinds[types.GrantKind(kind)]
+		in.RecentCredential = in.RecentCredential || !known || at.Add(ttl).After(from)
+	}
+	return in
 }

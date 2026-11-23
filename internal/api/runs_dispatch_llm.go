@@ -539,7 +539,10 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 
 	// Fail CLOSED at schedule time when inspection is REQUIRED but the resolved
 	// LLM transport is OPAQUE — see enforceInspectableLLM.
-	if !s.enforceInspectableLLM(ctx, run, policy, llm) {
+	// A snapshot of this run is checked against facts its dispatch records next (recordDispatchSecretFacts), only
+	// once that check held; the two share one branch, so this function's complexity is unchanged.
+	inspectable := s.enforceInspectableLLM(ctx, run, policy, llm)
+	if !s.recordDispatchSecretFacts(ctx, run, p, llm, siteCfg, siteCfgOK, inspectable) {
 		return dispatchLLMPlan{}, false
 	}
 
