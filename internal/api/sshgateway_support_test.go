@@ -576,6 +576,94 @@ func TestSSHSupport_OwnerAttachDisplacesAHelperShell(t *testing.T) {
 	}
 }
 
+// takeoverGate is an audit recorder that holds the session.takeover row's writer until hold closes. The
+// owner's claim displaces the helper only after that row is written (evictSupportWriter), so while the writer
+// is held the helper is evicted but not yet told why.
+type takeoverGate struct {
+	*sshTestRecorder
+	seen chan struct{} // closed once the takeover row is in
+	hold <-chan struct{}
+}
+
+func (g *takeoverGate) Record(ctx context.Context, ev types.AuditEvent) error {
+	err := g.sshTestRecorder.Record(ctx, ev)
+	if ev.Action == "session.takeover" {
+		close(g.seen)
+		<-g.hold
+	}
+	return err
+}
+
+// The owner joins while the helper's shell is still opening (#4184): the helper's Attach returns only after it
+// was evicted, and the displacement's line is held back until the helper's channel has closed or 300ms have
+// passed. The helper still reads why: its shell waits for the displacement before the channel closes.
+func TestSSHSupport_HelperDisplacedWhileItsShellOpensReadsWhy(t *testing.T) {
+	hold := make(chan struct{})
+	gate := &takeoverGate{seen: make(chan struct{}), hold: hold}
+	r := newSSHSupportRig(t, []string{"terminal"}, func(c *Config) {
+		gate.sshTestRecorder = c.Audit.(*sshTestRecorder)
+		c.Audit = gate
+	})
+	fr := r.h.srv.cfg.Runner.(*sshFakeRunner)
+	fr.mu.Lock()
+	fr.attachFn = func() (runner.Session, error) { <-gate.seen; return newFakeShellSession(), nil }
+	fr.mu.Unlock()
+	client, err := r.dial(t)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	if _, err := sess.StdinPipe(); err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := sess.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	closed := make(chan struct{})
+	go func() { _ = sess.Wait(); close(closed) }()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if w := r.h.srv.attachHolderFor(r.run.ID); w != nil && w.support == r.grant.ID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the helper's shell never took the writer seat as a support holder")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	go func() {
+		select {
+		case <-closed:
+		case <-time.After(300 * time.Millisecond):
+		}
+		close(hold)
+	}()
+	owner := &attachHolder{principal: sshSupportOwner, actorType: types.ActorHuman, since: time.Now().UTC(), source: attachSourceWeb,
+		sandboxRef: r.run.SandboxRef, displace: func(string) {}, notify: func(bool, *attachHolder) {}}
+	if readOnly, _ := r.h.srv.registerAttachHolder(r.run.ID, owner); readOnly {
+		t.Fatal("the owner joined read-only, want the seat")
+	}
+	got := make(chan string, 1)
+	go func() { b, _ := io.ReadAll(stderr); got <- string(b) }()
+	select {
+	case s := <-got:
+		if !strings.Contains(s, "wardyn: "+supportOwnerJoinedReason) {
+			t.Errorf("the helper's channel read %q, want %q", s, "wardyn: "+supportOwnerJoinedReason)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the helper's shell was never displaced")
+	}
+}
+
 // A helper's shell refused at the session cap writes the cap row naming its grant and the support entry, on the
 // ssh transport, as the helper's other rows do.
 func TestSSHSupport_CapRefusedShellNamesItsGrant(t *testing.T) {
