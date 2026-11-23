@@ -414,7 +414,8 @@ func (e *env) kubelet(t *testing.T) string {
 
 // casePodIPReuse: after a normal stop the next proxy on the node may receive the freed IP and still
 // starts (the refusal was released at witness save); a run still pending keeps its refusal, so a
-// proxy that receives a pending run's IP is refused with relay_ip_fenced. In each half the IP under
+// proxy that receives a pending run's IP is replaced twice, each replacement receiving the same only
+// address, and then refused with relay_ip_fenced. In each half the IP under
 // test is the only address the runs pool can hand out, so the next proxy must receive it.
 func casePodIPReuse(t *testing.T, e *env) {
 	if e.stoppedIP == "" {
@@ -476,6 +477,9 @@ func casePodIPReuse(t *testing.T, e *env) {
 	release()
 	if !errors.Is(err, runner.ErrRelayIPFenced) || !strings.Contains(err.Error(), ip) {
 		t.Fatalf("the next proxy, with the pending run's IP %s the only address left: %v, want the relay fence's refusal", ip, err)
+	}
+	if got := e.evidence(t, next); !strings.Contains(err.Error(), "each of its 3 draws") || len(got.Redrawn) != 2 {
+		t.Fatalf("the fenced draw was not replaced twice before the refusal: %v (retired draws: %d)", err, len(got.Redrawn))
 	}
 	note(t, "the next proxy received the pending run's IP %s and was refused: %v", ip, err)
 	e.waitRunGone(t, next, goneWait) // the pending run stays fenced: its address is reserved when the case ends (kase)

@@ -35,6 +35,10 @@ type startClock struct {
 	// alone: that is a mistyped selector or an untolerated taint, which more time never fixes.
 	unplaceable func() bool
 
+	// fenced, set only by startProxyPod on a runner, reports a pod IP the relay still refuses for another
+	// run. waitPodIP ends on it (errFencedDraw) at the first read that shows the IP, before Ready. Nil elsewhere.
+	fenced func(ip string) bool
+
 	blockedSince time.Time     // zero while no pod is waiting for room
 	blocked      time.Duration // closed stretches of waiting for room
 }
