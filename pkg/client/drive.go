@@ -28,6 +28,14 @@ type MemberDriveAdminItem struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Deleting is true while a delete of the drive is in flight.
 	Deleting bool `json:"deleting"`
+	// Team is true on a person's own team drive, shared with a governance unit (#3459).
+	Team bool `json:"team,omitempty"`
+	// TeamUnitID is the unit the team drive belongs to; absent once that unit is deleted.
+	TeamUnitID *uuid.UUID `json:"team_unit_id,omitempty"`
+	// MembersCanWrite is true once a super admin let the unit write to the team drive.
+	MembersCanWrite bool `json:"members_can_write,omitempty"`
+	// TeamUnitName is the team unit's name, empty when the unit is gone or could not be read.
+	TeamUnitName string `json:"team_unit_name,omitempty"`
 }
 
 // MemberDriveList is GET /api/v1/drives/member: one page of every person's
@@ -48,6 +56,12 @@ type MemberDriveDeleteResult struct {
 	Backend types.DriveBackend `json:"backend"`
 	Object  string             `json:"object"`
 	Outcome string             `json:"outcome"`
+}
+
+// MemberTeamDriveWrite is the body of PUT /api/v1/drives/member/{id}/team: a super admin lets a person's team drive's
+// unit write to it, or stops it.
+type MemberTeamDriveWrite struct {
+	MembersCanWrite bool `json:"members_can_write"`
 }
 
 // ListMemberDrives returns one page of every person's drives

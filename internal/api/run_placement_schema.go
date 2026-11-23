@@ -71,7 +71,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.Integration]():          strings.Fields("ID Name Kind Disabled Secrets Egress Config Docs DisabledCapabilities CreatedAt UpdatedAt legacyTopology"),
 	reflect.TypeFor[types.IntegrationDelivery]():  strings.Fields("Mode Header Format Path Var"),
 	reflect.TypeFor[types.IntegrationSecret]():    strings.Fields("Role SecretName Delivery"),
-	reflect.TypeFor[types.MemberDrivePolicy]():    strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass"),
+	reflect.TypeFor[types.MemberDrivePolicy]():    strings.Fields("Enabled KeepMainDrive MaxPerPerson SizeMiB StorageClass TeamDrives"),
 	reflect.TypeFor[types.ModelProvider]():        strings.Fields("ID UID Name Kind Disabled BaseURL Auth Bedrock Azure Local GatewayIdentity Harnesses OIDC ExtraHeaders"),
 	reflect.TypeFor[types.ProviderOIDC]():         strings.Fields("Issuer AuthorizeURL TokenURL ClientID ClientSecretRef Scopes IdentityBinding RequireIDToken ServiceGrant"), // ClientSecretRef names an operator secret, never its value
 	reflect.TypeFor[types.ProviderServiceGrant](): strings.Fields("GrantType TokenURL ClientID Scope Audience ClientAuth ServiceIdentities"),                                  // the client secret is never part of it

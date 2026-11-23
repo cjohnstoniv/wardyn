@@ -76,12 +76,13 @@ func (s *Server) handleListMemberDrives(w http.ResponseWriter, r *http.Request) 
 		writeServerError(w, r, "list member drives", err)
 		return
 	}
+	facts, names := s.memberTeamDriveFactsOf(r.Context(), drives)
 	for _, d := range drives {
-		mount, _ := memberDriveMount(d)
-		out.Drives = append(out.Drives, client.MemberDriveAdminItem{
-			ID: d.ID, Name: d.Name, Owner: d.OwnerSubject, Backend: d.Backend, HomeRunnerID: d.HomeRunnerID, SizeMiB: d.SizeMiB,
-			StorageClass: d.StorageClass, Object: mount.ObjectName, CreatedAt: d.CreatedAt, Deleting: d.Deleting(),
-		})
+		item := memberDriveAdminItem(d)
+		if t, ok := facts[d.ID]; ok {
+			memberTeamDriveAdminFields(&item, t, names)
+		}
+		out.Drives = append(out.Drives, item)
 	}
 	out.Total = total
 	if page.Offset+len(drives) < total {

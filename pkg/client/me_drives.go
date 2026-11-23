@@ -56,6 +56,9 @@ type MemberDriveCreate struct {
 	// Enforcement is what binds a new drive's size here: none on Docker, whose
 	// volumes have no size limit, so a screen says the size is not enforced.
 	Enforcement types.StorageEnforcement `json:"enforcement,omitempty"`
+	// TeamDrivesAllowed is whether the caller may make a team drive now (POST /me/drives with team): both switches
+	// on, a Docker deployment, and a unit that is not Default. False whenever Allowed is false.
+	TeamDrivesAllowed bool `json:"team_drives_allowed"`
 }
 
 // MemberDriveCreateReason is why a person cannot create a drive now. Closed;
@@ -111,6 +114,9 @@ type MeDrive struct {
 	// SharedWith names, on a team drive, the caller's own groups that carry its
 	// allocation. Never a group the caller does not hold.
 	SharedWith []string `json:"shared_with,omitempty"`
+	// SharedWithUnit is true on a team drive a person made, shared with their governance unit and the units below it
+	// rather than with groups (#3459).
+	SharedWithUnit bool `json:"shared_with_unit,omitempty"`
 	// KeptFromRun is the id of the run whose work folder this drive kept
 	// (CreateRunRequest.KeepWorkFolder); "" on a drive made by hand.
 	KeptFromRun string `json:"kept_from_run,omitempty"`
@@ -142,6 +148,9 @@ type MemberDriveCreateRequest struct {
 	// RunnerID, when set, makes the drive a disk kept on that Mac (backend mac_disk): one of the caller's
 	// own runners, online, that keeps disk drives. Only macOS VM runs on that Mac can use it.
 	RunnerID string `json:"runner_id,omitempty"`
+	// Team makes the drive a team drive shared with your governance unit and the units below it (#3459). Docker
+	// deployments only.
+	Team bool `json:"team,omitempty"`
 }
 
 // MyDriveDeleteResult is the body of a disk drive's delete that did not finish on its Mac: 202

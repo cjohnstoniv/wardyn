@@ -590,6 +590,9 @@ export interface MemberDrivePolicy {
   storage_class?: string;
   // Lets a run keep its work folder as its person's drive. Absent = off; no effect unless enabled.
   keep_main_drive?: boolean;
+  // Lets a person make a team drive shared with their governance unit and the units below it. Absent = off; it also
+  // needs storage.user_drive.team_drives and a Docker deployment.
+  team_drives?: boolean;
 }
 
 // One SiteConfig.internal_hosts entry — see that field's doc.

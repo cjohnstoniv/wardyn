@@ -29,9 +29,14 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 	if err != nil {
 		return nil, err
 	}
-	deleted := 0
+	deleted, keptTeam := 0, 0
 	var errs []error
 	for _, o := range owned {
+		// A person's own team drive belongs to its unit: a leaver's cleanup keeps it (#3459).
+		if o.Team {
+			keptTeam++
+			continue
+		}
 		refused, err := s.memberDriveOwnerStarting(ctx, ms, o, memberDriveByAdmin)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("member drive %q: %w", o.Name, err))
@@ -83,5 +88,5 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 		}
 	}
 	machines, err := s.eraseKeptMachinesOf(ctx, person) // the same scope reaches a kept machine (kept_machine_delete.go)
-	return map[string]any{"drives": deleted, "kept_machines": machines}, errors.Join(append(errs, err)...)
+	return map[string]any{"drives": deleted, "kept_machines": machines, "kept_team_drives": keptTeam}, errors.Join(append(errs, err)...)
 }

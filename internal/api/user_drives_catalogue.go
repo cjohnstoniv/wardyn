@@ -111,7 +111,10 @@ func (s *Server) reachableDrives(ctx context.Context, profileMaxDriveMiB int) ([
 		}
 		out = append(out, d)
 	}
-	return s.memberReachableDrives(ctx, out, ceiling)
+	if out, err = s.memberReachableDrives(ctx, out, ceiling); err != nil {
+		return nil, err
+	}
+	return s.memberTeamReachableDrives(ctx, out, ceiling)
 }
 
 // handleListMeDrives is GET /me/drives: the drive catalogue New Run attaches
@@ -168,6 +171,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 			if row.Team = d.resolved.Team; row.Team {
 				// drive.enabled mounts a team drive under /home/agent/shared, never as the person's own.
 				row.SharedWith, row.Legacy = sharedWith[drive.ID], false
+				row.SharedWithUnit = d.winner.Grant.SubjectType == types.DriveSubjectUnit
 			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
@@ -257,7 +261,7 @@ func driveSource(tier types.CapabilitySubjectType) string {
 	switch tier {
 	case types.CapabilitySubjectUser:
 		return client.MeDriveSourcePersonal
-	case types.CapabilitySubjectGroup:
+	case types.CapabilitySubjectGroup, types.DriveSubjectUnit:
 		return client.MeDriveSourceTeam
 	default:
 		return client.MeDriveSourceOrganisation

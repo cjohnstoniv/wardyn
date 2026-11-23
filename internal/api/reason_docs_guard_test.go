@@ -322,10 +322,11 @@ var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // one surface's reasons beside its code: reasons_governance.go the run-context reasons, reasons_kept_machine.go the
 // kept-machine ones, reasons_desktop_review.go the reviewed-download ones, reasons_policies.go those of
 // /api/v1/policies, reasons_service_grant.go the model provider service grant ones and reasons_portal_exchange.go
-// reasons_portal_registration.go and reasons_portal_lifecycle.go the issuer portal ones. Every reader of the whole set (this guard, and the
+// reasons_portal_registration.go and reasons_portal_lifecycle.go the issuer portal ones, and reasons_member_team_drives.go
+// those of a person's own team drive. Every reader of the whole set (this guard, and the
 // coverage guard in reason_coverage_guard_test.go) reads this list, so a file left off it hides its values from
 // both.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go", "reasons_service_grant.go", "reasons_portal_exchange.go", "reasons_portal_registration.go", "reasons_portal_lifecycle.go"}
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go", "reasons_service_grant.go", "reasons_portal_exchange.go", "reasons_portal_registration.go", "reasons_portal_lifecycle.go", "reasons_member_team_drives.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a
