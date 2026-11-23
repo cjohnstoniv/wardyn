@@ -583,7 +583,7 @@ def wget_key_file(words):
 
 def wget_downloads(node, piped=False):
     if isinstance(node, list):
-        return [path for child in node for path in wget_downloads(child, piped)]
+        return [fetch for child in node for fetch in wget_downloads(child, piped)]
     if node.kind == "simple":
         words = command_words(node.words)
         if not any(re.search(r"\bwget\b", word.value) for word in node.words):
@@ -592,7 +592,7 @@ def wget_downloads(node, piped=False):
         if name == "wget":
             if piped:
                 raise ValueError("wget in a pipeline is unverified; download to a file and assert its fingerprint")
-            return [wget_key_file(words)]
+            return [(wget_key_file(words), words[0])]
         references = [word.value for word in words[1:] if re.search(r"\bwget\b", word.value)]
         if name in PACKAGES and references == ["wget"] * len(references):
             return []
@@ -610,11 +610,15 @@ def check_wget(body):
         if ("$(" in token.raw or "`" in token.raw) and re.search(r"\bwget\b", token.value):
             raise ValueError("wget in command substitution is unverified; download to a checked file")
     tree = Parser(tokens).sequence()
-    paths = wget_downloads(tree)
+    fetches = wget_downloads(tree)
+    paths = [path for path, _ in fetches]
+    order = {id(token): index for index, token in enumerate(tokens)}
+    # The RUN's own commands: a chain of one command, under no &&, ||, if, case or group.
+    own = [chain.children[0].children[0] for chain in tree if not chain.ops and len(chain.children[0].children) == 1]
     body = executed(body)
     if paths and not re.match(r"set -e(u|o errexit)?;", body):
         raise ValueError("a wget key fetch must fail closed: start the RUN with set -eu")
-    for path in paths:
+    for path, fetch in fetches:
         if paths.count(path) != 1:
             raise ValueError(f"wget download {path} is fetched more than once in one RUN; fetch each key file once, then assert it before use")
         show = f'keys="$(gpg --show-keys --with-colons {path})"'
@@ -625,7 +629,10 @@ def check_wget(body):
                              "[ \"$(printf '%s\\n' \"$keys\" | grep -c '^pub:')\" = 1 ] || { ...; exit 1; }; "
                              "fpr=\"$(printf '%s\\n' \"$keys\" | awk -F: '$1 == \"fpr\" { print $10; exit }')\"; "
                              "[ \"$fpr\" = \"<40 hex>\" ] || { ...; exit 1; }")
-        if not re.search(r"(?:^|[;&|({])\s*wget\s(?:[^;|&]*\s)?-q?O\s+" + re.escape(path) + r"(?=[\s;|&]|$)", body[:at]):
+        shown = next((node.words[0] for node in own if node.kind == "simple" and node.words[0].raw == show), None)
+        if shown is None:
+            raise ValueError(f"wget download {path} needs its fingerprint assert among the RUN's own commands, not under &&, ||, if, case or a group")
+        if order[id(fetch)] > order[id(shown)]:
             raise ValueError(f"wget download {path} is fetched after its fingerprint is asserted; fetch it, then assert it, then use it")
         if body[:check.end()].count(path) != 2:
             raise ValueError(f"wget download {path} is used before its fingerprint is asserted")

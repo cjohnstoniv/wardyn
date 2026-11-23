@@ -212,6 +212,9 @@ class ImageDownloads(unittest.TestCase):
             "wget_refetched_after_assert": (f"RUN set -eu; {KEY_FETCH}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched more than once"),
             "wget_fetched_after_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/k.asc; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
             "wget_mentioned_before_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/; command -v wget  /tmp/k.asc || :; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_named_in_another_fetch_url": (f'RUN set -eu; cp /usr/share/keys/k.asc /tmp/; wget -qO /tmp/o.asc "https://example.invalid/o# -O /tmp/k.asc "; ' + KEY_SHOW.replace("/tmp/k.asc", "/tmp/o.asc") + f"; {KEY_ASSERT}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_named_in_a_package_install": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/; apt-get install {{ wget -O /tmp/k.asc || true; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_assert_never_runs": (f"RUN set -eu; {KEY_FETCH}; false && {{ {KEY_SHOW}; {KEY_ASSERT}; }}; {KEY_USE}", "among the RUN's own commands"),
             "wget_sequence_in_a_comment": (f"RUN set -eu; {KEY_FETCH} # {KEY_SHOW}; {KEY_ASSERT}", "as one sequence"),
             "unquoted_hash_record": (f"RUN set -e; sum={HASH}; {DOWNLOAD}; echo $sum\\ \\ /tmp/a.tgz | sha256sum -c -", "double-quoted"),
         }
