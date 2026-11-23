@@ -48,6 +48,9 @@ const (
 	// LayerWallPreset is the wall preset a run was launched with (types.WallPreset): a named, narrow-only
 	// document its owner chose at launch, frozen on the run.
 	LayerWallPreset = "wall_preset"
+	// LayerAgentRules is an organisation's rules for an agent harness (types.AgentRules): a narrow-only
+	// document that binds every run including that harness; Provenance.Name is the harness id.
+	LayerAgentRules = "agent_rules"
 
 	mailtoScheme = "mailto:"
 )
