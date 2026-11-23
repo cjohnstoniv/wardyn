@@ -12,11 +12,11 @@ import (
 )
 
 // Without the governance arm (an actor-filtered feed) the query is the one the unit feed had before it read
-// governance rows, byte for byte.
+// governance rows, byte for byte (the run rows include a retained run's tombstone).
 func TestUnitAuditQueryRunRowsUnchanged(t *testing.T) {
 	units := []uuid.UUID{uuid.New()}
 	q, args := unitAuditQuery(units, AuditFilter{}, false)
-	want := "\n\t\tSELECT " + auditCols + "\n\t\tFROM audit_events\n\t\tWHERE run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))\n\t\tORDER BY seq DESC"
+	want := "\n\t\tSELECT " + auditCols + "\n\t\tFROM audit_events\n\t\tWHERE " + unitRunRowsClause + "\n\t\tORDER BY seq DESC"
 	if q != want || len(args) != 1 {
 		t.Errorf("run-row query = %q with %d args, want %q with 1", q, len(args), want)
 	}
@@ -36,7 +36,7 @@ func TestUnitAuditQueryFeedReadsGovernanceArm(t *testing.T) {
 	if got, ok := args[2].([]string); !ok || len(got) != 2 || got[0] != units[0].String() {
 		t.Errorf("$3 = %v, want the unit ids as text", args[2])
 	}
-	for _, frag := range []string{"run_id IN (SELECT id FROM agent_runs WHERE unit_id = ANY($1))", "run_id IS NULL AND action = ANY($2)",
+	for _, frag := range []string{unitRunRowsClause, "run_id IS NULL AND action = ANY($2)",
 		"target = ANY($3)", "data->>'unit_id' = ANY($3)", "jsonb_typeof(data->'units') = 'array' AND data->'units' ?| $3", "$4",
 		"action = ANY($2) AND NOT " + federatedRowSQL} {
 		if !strings.Contains(q, frag) {
