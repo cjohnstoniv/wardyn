@@ -177,8 +177,12 @@ type Entry struct {
 	HelperPID       int    `json:"helper_pid,omitempty"`
 	HelperStart     int64  `json:"helper_start,omitempty"`
 	HelperMonoStart uint64 `json:"helper_mono_start,omitempty"`
-	GuestCPUs       int    `json:"guest_cpus"`
-	GuestMemory     uint64 `json:"guest_memory_bytes"`
+	// HelperEndMono bounds the processes that may be this entry's VM from above (MarkHelperEnded): the
+	// newest MonoStart in a snapshot taken once its helper and every helper process that may be its own
+	// were gone. 0 when not taken, as in every entry an earlier release wrote.
+	HelperEndMono uint64 `json:"helper_end_mono,omitempty"`
+	GuestCPUs     int    `json:"guest_cpus"`
+	GuestMemory   uint64 `json:"guest_memory_bytes"`
 	// DockerMemory is the memory the login's Docker engine is configured with.
 	DockerMemory uint64 `json:"docker_memory_bytes"`
 	Overhead     uint64 `json:"overhead_bytes"`

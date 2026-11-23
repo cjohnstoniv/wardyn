@@ -253,6 +253,44 @@ func TestMacOSVMReconcilesClaimedHelperExit(t *testing.T) {
 	}
 }
 
+// Docker's Linux VM restarting after the job ended (a Virtualization process of this user created after the
+// helper) no longer keeps the slot once the runner has noted the helper's exit (#3871).
+func TestMacOSVMFinishedJobPastADockerVMStartedAfterItsHelperExited(t *testing.T) {
+	for _, kind := range []admission.Kind{admission.KindPrepare, admission.KindToolsUpdate} {
+		t.Run(string(kind), func(t *testing.T) {
+			run := func(t *testing.T, note bool) int {
+				r := newMacLedgerRig(t)
+				runnerd := admission.Proc{PID: 30, UID: 501, Start: 3, MonoStart: 100, Name: "wardyn-runnerd"}
+				helper := admission.Proc{PID: 40, UID: 501, Start: 4, MonoStart: 200, Name: admission.HelperProcess}
+				r.host.setProcs(runnerd, helper)
+				m := r.open(t)
+				e, err := m.ledger.Admit(admission.Request{Kind: kind, GuestCPUs: 4, GuestMemory: 8 * gib,
+					DiskReserve: admission.PrepareDiskReservation(macvm.BaseDiskBytes), OwnerPID: 30, OwnerStart: 3})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := m.ledger.ClaimHelper(e.ID, helper.PID, helper.Start); err != nil {
+					t.Fatal(err)
+				}
+				r.host.setProcs(runnerd) // the helper exits
+				if note {
+					m.noteHelperExit(e.ID)
+				}
+				r.host.setProcs(runnerd, admission.Proc{PID: 51, UID: 501, Start: 5, MonoStart: 300, Name: admission.VirtualizationProcess})
+				m.recompute()
+				counted, _ := m.ledger.Counted()
+				return len(counted)
+			}
+			if n := run(t, true); n != 0 {
+				t.Fatalf("finished %s still counted past a VM started after its helper exited: %d", kind, n)
+			}
+			if n := run(t, false); n != 1 {
+				t.Fatalf("without the helper's exit noted the slot is freed: %d counted, want 1", n)
+			}
+		})
+	}
+}
+
 // The runner refuses a ledger the package did not install whole, and never repairs it.
 func TestMacOSVMLedgerChecked(t *testing.T) {
 	cases := map[string]func(r *macLedgerRig){
