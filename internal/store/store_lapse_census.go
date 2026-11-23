@@ -25,6 +25,8 @@ type LapseCensusReader interface {
 	LapseCensus(ctx context.Context, life, window time.Duration) (LapseCensus, error)
 }
 
+var _ LapseCensusReader = PG{}
+
 // LapseCensus — see LapseCensusReader. A run's lapse moment is token_renewed_at + life; it counts in L when
 // that moment is inside the window and the run was still live at it: RUNNING and not lost, lost to an outage
 // at or after it, or ended at or after it (and not kept before it).

@@ -327,6 +327,17 @@ func TestLostRun_OneHoldRowPerEpisode(t *testing.T) {
 	if rows := holdRows(f.audit); len(rows) != 2 {
 		t.Fatalf("an outage pass after a non-outage pass left %d hold rows, want 2", len(rows))
 	}
+
+	// A pass that has a lapsed run and is not outage-class closes the episode too.
+	f.srv.cfg.StoreHealth = healthyTracker(lapseTestGrace, lapseTestGrace+time.Minute)
+	reopen(f)
+	f.sweepTokens(t)
+	f.srv.cfg.StoreHealth = recoveringTracker(lapseTestGrace)
+	reopen(f)
+	f.sweepTokens(t)
+	if rows := holdRows(f.audit); len(rows) != 3 {
+		t.Fatalf("an outage pass after a non-outage pass with a lapsed run left %d hold rows, want 3", len(rows))
+	}
 }
 
 func TestLostRun_AnInteractiveRunGainsOnlyTheCause(t *testing.T) {

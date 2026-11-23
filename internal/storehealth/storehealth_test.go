@@ -152,3 +152,35 @@ func TestTracker_AClockSteppedBackIsNeverNegative(t *testing.T) {
 		t.Fatalf("a good ping before the old span restarts it: HealthyFor = %s, want 0", got)
 	}
 }
+
+func TestTracker_FailedPingsNeverCountAsGood(t *testing.T) {
+	c := newClock()
+	tr := New(c.now, 25*time.Minute)
+	tr.Observe(nil)
+	for i := 0; i < 6; i++ {
+		c.advance(PingEvery)
+		tr.Observe(errors.New("down"))
+	}
+	if got := tr.HealthyFor(); got != 0 {
+		t.Fatalf("HealthyFor after %s of failed pings = %s, want 0", ResetAfter, got)
+	}
+	tr.Observe(nil)
+	c.advance(PingEvery)
+	tr.Observe(nil)
+	if got := tr.HealthyFor(); got != PingEvery {
+		t.Fatalf("the span must restart at the first good ping after the failures: HealthyFor = %s, want %s", got, PingEvery)
+	}
+}
+
+func TestTracker_AGoodPingAfterAStepBackStartsANewSpan(t *testing.T) {
+	c := newClock()
+	tr := New(c.now, time.Minute)
+	tr.Observe(nil)
+	c.advance(-time.Minute)
+	tr.Observe(nil)
+	c.advance(7 * time.Second)
+	tr.Observe(nil)
+	if got := tr.HealthyFor(); got != 7*time.Second {
+		t.Fatalf("HealthyFor = %s, want 7s: the span counts from the first good ping after the step back", got)
+	}
+}
