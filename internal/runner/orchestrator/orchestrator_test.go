@@ -29,6 +29,7 @@ type fakeSubstrate struct {
 	recording  bool
 	drives     bool
 	managed    bool
+	extras     bool
 	diskEnf    types.StorageEnforcement
 	freeze     map[types.ConfinementClass]bool
 	refPrefix  string
@@ -51,6 +52,7 @@ func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error)
 		SessionRecording:         f.recording,
 		UserDrives:               f.drives,
 		ManagedFiles:             f.managed,
+		ExtraContainers:          f.extras,
 		EphemeralDiskEnforcement: f.diskEnf,
 		Freeze:                   f.freeze,
 	}, nil
@@ -430,6 +432,46 @@ func TestCapabilitiesManagedFilesIsAConjunction(t *testing.T) {
 	}
 	if caps.ManagedFiles {
 		t.Error("ManagedFiles = true with no substrates wired")
+	}
+}
+
+func TestCapabilitiesExtraContainersIsAConjunction(t *testing.T) {
+	ctx := context.Background()
+	sub := func(name string, extras bool) *fakeSubstrate {
+		return &fakeSubstrate{name: name, classes: []types.ConfinementClass{types.CC1}, extras: extras}
+	}
+
+	for _, tc := range []struct {
+		name string
+		subs []*fakeSubstrate
+		want bool
+	}{
+		{name: "every substrate can run them", subs: []*fakeSubstrate{sub("a", true), sub("b", true)}, want: true},
+		{name: "one cannot, so the deployment cannot", subs: []*fakeSubstrate{sub("a", true), sub("b", false)}, want: false},
+		{name: "order does not matter", subs: []*fakeSubstrate{sub("a", false), sub("b", true)}, want: false},
+		{name: "a single capable substrate can", subs: []*fakeSubstrate{sub("a", true)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var subs []substrate.Substrate
+			for _, s := range tc.subs {
+				subs = append(subs, s)
+			}
+			caps, err := New(subs...).Capabilities(ctx)
+			if err != nil {
+				t.Fatalf("Capabilities: %v", err)
+			}
+			if caps.ExtraContainers != tc.want {
+				t.Errorf("ExtraContainers = %v, want %v", caps.ExtraContainers, tc.want)
+			}
+		})
+	}
+
+	caps, err := New().Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities (no substrates): %v", err)
+	}
+	if caps.ExtraContainers {
+		t.Error("ExtraContainers = true with no substrates wired")
 	}
 }
 
