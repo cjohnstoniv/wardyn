@@ -19,6 +19,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
   than its ceiling; its runs still start, with the kind added.
 
+### Fixed
+
+- A run that declares a desktop under a governance profile that denies interactive sessions now gets a warning at create and in Review: its desktop will not open.
+- A desktop refused by the run's governance profile now shows a readable page in the browser, not the gateway's raw JSON.
+- An open desktop sign-in display now closes within about 5 seconds when its end could not stop it, while that end is retried. Before, it stayed open until the sign-in was over.
+- New Run no longer says a background run's ports open from the run page: only a port callable from outside the run can be reached.
+- The run page of a service with no end time and no lifetime limit now says it keeps running until someone stops it.
+
 ### Before you upgrade
 
 - A desktop declared under a name other than `novnc` is still relayed unfiltered until its `ui_apps` entry, or its
