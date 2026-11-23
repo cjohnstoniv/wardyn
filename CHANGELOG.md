@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A HashiCorp Vault or OpenBao secret write whose answer was lost and retried is now recognised by an id stored beside its value, instead of by comparing the two servers' clocks. A correct write is no longer refused when Vault's clock is behind or reports no creation time, and another writer's value is no longer taken as this write's.
+- wardynd's 30-second limit for reading its boot keys now starts after the secret store is open. A slow first open, such as a one-time conversion of stored rows, no longer leaves the boot-key reads without time and fails the start.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
