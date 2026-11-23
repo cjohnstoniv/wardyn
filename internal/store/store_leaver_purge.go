@@ -145,7 +145,8 @@ func (s PG) PendingLeavers(ctx context.Context, issuer, tenant string, idleFor t
 
 // DeleteUserSubjectRows deletes the user-subject capability grants and governance assignments of the
 // purged identity id, matched case-insensitively, and says how many of each; the same user subjects are
-// stripped from every runner pool use policy. A direct delete, never the
+// stripped from every runner pool use policy, and lose their seats in Windows licence pools. A seat a run still
+// holds refuses the whole delete, naming the run, so the step is retried once the run has ended. A direct delete, never the
 // GOV4 apply path. Rows keyed by one of principals go: the subject is a purged identity that can never
 // authenticate again. Rows keyed by one of emails go only while no other principal holds that address,
 // because an address can be recycled and the new holder's deny rows are theirs: another identity that is
@@ -178,6 +179,9 @@ func (s PG) DeleteUserSubjectRows(ctx context.Context, id uuid.UUID, principals,
 	}
 	out.Assignments = tag.RowsAffected()
 	if out.Pools, err = stripRunnerPoolUseSubjects(ctx, tx, subjects); err != nil {
+		return UserSubjectRowsDeleted{}, err
+	}
+	if _, err = deleteWindowsLicenceHolders(ctx, tx, subjects); err != nil {
 		return UserSubjectRowsDeleted{}, err
 	}
 	out.PoolsNarrowed = int64(len(out.Pools))

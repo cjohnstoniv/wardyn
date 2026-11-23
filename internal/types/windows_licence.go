@@ -44,7 +44,7 @@ type WindowsLicencePool struct {
 	Name  string    `json:"name"`
 	Seats int       `json:"seats"`
 	State string    `json:"state"`
-	// Revision starts at 1 and rises by one on every change to the pool.
+	// Revision starts at 1 and rises by one on every change to the pool's name, seats or state.
 	Revision  int64     `json:"revision"`
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`

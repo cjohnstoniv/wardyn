@@ -119,7 +119,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 		}
 	}
 	if _, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
-		steps[erasure.RunnerPools] = s.eraseRunnerPoolsOf
+		steps[erasure.RunnerPools] = s.alsoEraseWindowsSeats(s.eraseRunnerPoolsOf)
 	}
 	if _, ok := s.cfg.Store.(store.MemberDriveStore); ok {
 		steps[erasure.MemberDrives] = s.eraseMemberDrivesOf

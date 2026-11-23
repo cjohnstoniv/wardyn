@@ -48,7 +48,8 @@ const (
 	MaskCopies Scope = "mask_copies"
 	// RunnerPools: the person's own Self-Hosted runner pools, deleted (their
 	// runners leave them and runs waiting for them end), and their name on
-	// every pool of theirs, the deleted ones included.
+	// every pool of theirs, the deleted ones included, and their seats in Windows
+	// licence pools. A seat a run still holds fails the scope, naming the run.
 	RunnerPools Scope = "runner_pools"
 	// MemberDrives: the drives the person created for themselves, each deleted
 	// with its files through the same path as their own delete. A drive a run
