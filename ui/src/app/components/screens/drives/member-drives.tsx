@@ -128,7 +128,7 @@ export function MemberDrives() {
 
   // The switch keeps its state: the row changes only when the PUT answers 200.
   const openWrite = (d: MemberDriveAdminItem, on: boolean) => {
-    const label = T.TEAM_WRITE_SWITCH(d.name);
+    const label = T.TEAM_WRITE_SWITCH(d.name, d.owner);
     const opener = Array.from(document.querySelectorAll<HTMLElement>('[role="switch"]')).find((el) => el.getAttribute("aria-label") === label) ?? null;
     setWriteError(null);
     writeOpener.current = opener;
@@ -243,7 +243,7 @@ export function MemberDrives() {
                     <TableCell data-testid="member-drive-write">
                       {d.team && d.team_unit_id ? (
                         <span className="inline-flex items-center gap-2">
-                          <Switch checked={!!d.members_can_write} onChange={(on) => openWrite(d, on)} label={T.TEAM_WRITE_SWITCH(d.name)} />
+                          <Switch checked={!!d.members_can_write} onChange={(on) => openWrite(d, on)} label={T.TEAM_WRITE_SWITCH(d.name, d.owner)} />
                           <span aria-hidden="true" className="text-sm text-muted-foreground">
                             {d.members_can_write ? T.TEAM_WRITE_ON : T.TEAM_WRITE_OFF}
                           </span>

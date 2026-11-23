@@ -29,8 +29,8 @@ export const MEMBER_DRIVES = {
   /** NEW, no sheet id: after a delete that removed only the record, when the runner list no longer names the Mac */
   RECORD_ONLY_UNNAMED:
     "This drive's Mac is no longer registered, so its disk stays on that Mac. Deleting removes only the record.",
-  /** The per-row write switch's name: the column name, then the drive. */
-  TEAM_WRITE_SWITCH: (drive: string) => `${DRIVES.FIELD_TEAM_WRITE}: ${drive}`,
+  /** The per-row write switch's name: the column name, then the drive and its owner (names are unique per owner only). */
+  TEAM_WRITE_SWITCH: (drive: string, owner: string) => `${DRIVES.FIELD_TEAM_WRITE}: ${drive} (${owner})`,
   TEAM_WRITE_ALLOW_TITLE: (drive: string) => `Let members write to ${drive}?`,
   TEAM_WRITE_ALLOW_BODY: (unit: string) =>
     `Once it's on, any run started by someone in ${unit}, or in a unit below it, can change what the others' runs read and run. Runs that were created before this keep the access they had.`,

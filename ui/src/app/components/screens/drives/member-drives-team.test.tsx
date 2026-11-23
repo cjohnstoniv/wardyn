@@ -37,10 +37,10 @@ const ORPHAN: MemberDriveAdminItem = { ...TEAM, id: "m4", name: "old-templates",
 const PLAIN: MemberDriveAdminItem = { ...base, id: "m5", name: "Notes" };
 
 const rowOf = (name: string) => screen.getByText(name, { selector: "td *, td" }).closest("tr")!;
-const switchOf = (name: string) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(name) });
+const switchOf = (d: MemberDriveAdminItem) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(d.name, d.owner) });
 // The row's switch while the confirm is open: the page behind an open AlertDialog is aria-hidden, so it is read with
 // hidden: true, as the person sees it on the page.
-const switchBehind = (name: string) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(name), hidden: true });
+const switchBehind = (d: MemberDriveAdminItem) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(d.name, d.owner), hidden: true });
 const show = async (rows: MemberDriveAdminItem[]) => {
   listMemberDrives.mockResolvedValue({ drives: rows, total: rows.length });
   render(<MemberDrives />);
@@ -63,7 +63,7 @@ describe("MemberDrives: a person's own team drive", () => {
     expect(row.getByText(DRIVES.TEAM_ONE_HOST_CHIP)).toBeInTheDocument();
     expect(row.getByTestId("member-drive-unit")).toHaveTextContent("Platform");
     expect(within(rowOf(NO_NAME.name)).getByTestId("member-drive-unit")).toHaveTextContent(UNIT);
-    expect(switchOf("design-assets")).toBeInTheDocument();
+    expect(switchOf(TEAM)).toBeInTheDocument();
     expect(screen.getByText(DRIVES.TEAM_ONE_HOST)).toBeInTheDocument();
   });
 
@@ -77,7 +77,7 @@ describe("MemberDrives: a person's own team drive", () => {
 
   it("allow writing opens on Cancel", async () => {
     await show([TEAM]);
-    await userEvent.click(switchOf(TEAM.name));
+    await userEvent.click(switchOf(TEAM));
     const dlg = within(await screen.findByRole("alertdialog"));
     expect(dlg.getByText(T.TEAM_WRITE_ALLOW_TITLE(TEAM.name))).toBeInTheDocument();
     expect(dlg.getByText(T.TEAM_WRITE_ALLOW_BODY("Platform"))).toBeInTheDocument();
@@ -86,7 +86,7 @@ describe("MemberDrives: a person's own team drive", () => {
 
   it("make read-only opens on its button", async () => {
     await show([TEAM_ON]);
-    await userEvent.click(switchOf(TEAM_ON.name));
+    await userEvent.click(switchOf(TEAM_ON));
     const dlg = within(await screen.findByRole("alertdialog"));
     expect(dlg.getByText(T.TEAM_WRITE_STOP_TITLE(TEAM_ON.name))).toBeInTheDocument();
     expect(dlg.getByText(T.TEAM_WRITE_STOP_BODY(TEAM_ON.owner))).toBeInTheDocument();
@@ -97,57 +97,64 @@ describe("MemberDrives: a person's own team drive", () => {
     let answer: (d: MemberDriveAdminItem) => void = () => {};
     setMemberTeamDriveWrite.mockReturnValueOnce(new Promise<MemberDriveAdminItem>((done) => (answer = done)));
     await show([TEAM]);
-    await userEvent.click(switchOf(TEAM.name));
+    await userEvent.click(switchOf(TEAM));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.TEAM_WRITE_ALLOW }));
     expect(setMemberTeamDriveWrite).toHaveBeenCalledWith(TEAM.id, true);
-    expect(switchBehind(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    expect(switchBehind(TEAM)).toHaveAttribute("aria-checked", "false");
     await act(async () => answer({ ...TEAM, members_can_write: true }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "true");
-    await waitFor(() => expect(switchOf(TEAM.name)).toHaveFocus());
+    expect(switchOf(TEAM)).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(switchOf(TEAM)).toHaveFocus());
   });
 
   it("Cancel returns focus to the switch", async () => {
     await show([TEAM]);
-    await userEvent.click(switchOf(TEAM.name));
+    await userEvent.click(switchOf(TEAM));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: PEOPLE.CANCEL }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    await waitFor(() => expect(switchOf(TEAM.name)).toHaveFocus());
-    expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    await waitFor(() => expect(switchOf(TEAM)).toHaveFocus());
+    expect(switchOf(TEAM)).toHaveAttribute("aria-checked", "false");
     expect(setMemberTeamDriveWrite).not.toHaveBeenCalled();
   });
 
   it("a 409 shows the server's sentence and keeps the switch", async () => {
     setMemberTeamDriveWrite.mockRejectedValueOnce(new HttpError(409, "This drive is already being deleted.", "member_drive_busy"));
     await show([TEAM]);
-    await userEvent.click(switchOf(TEAM.name));
+    await userEvent.click(switchOf(TEAM));
     const dlg = within(await screen.findByRole("alertdialog"));
     await userEvent.click(dlg.getByRole("button", { name: T.TEAM_WRITE_ALLOW }));
     expect(await dlg.findByRole("alert")).toHaveTextContent("This drive is already being deleted.");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(switchBehind(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    expect(switchBehind(TEAM)).toHaveAttribute("aria-checked", "false");
   });
 
   it("another failure shows the alert line", async () => {
     setMemberTeamDriveWrite.mockRejectedValueOnce(new HttpError(500, "The server could not save this change."));
     await show([TEAM_ON]);
-    await userEvent.click(switchOf(TEAM_ON.name));
+    await userEvent.click(switchOf(TEAM_ON));
     const dlg = within(await screen.findByRole("alertdialog"));
     await userEvent.click(dlg.getByRole("button", { name: T.TEAM_WRITE_STOP }));
     expect(await dlg.findByRole("alert")).toHaveTextContent("The server could not save this change.");
-    expect(switchBehind(TEAM_ON.name)).toHaveAttribute("aria-checked", "true");
+    expect(switchBehind(TEAM_ON)).toHaveAttribute("aria-checked", "true");
   });
 
   it("the write switch shows its state in words", async () => {
     await show([TEAM, TEAM_ON]);
     const off = within(rowOf(TEAM.name)).getByTestId("member-drive-write");
     const on = within(rowOf(TEAM_ON.name)).getByTestId("member-drive-write");
-    expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    expect(switchOf(TEAM)).toHaveAttribute("aria-checked", "false");
     expect(within(off).getByText(T.TEAM_WRITE_OFF)).toHaveAttribute("aria-hidden", "true");
-    expect(switchOf(TEAM_ON.name)).toHaveAttribute("aria-checked", "true");
+    expect(switchOf(TEAM_ON)).toHaveAttribute("aria-checked", "true");
     expect(within(on).getByText(T.TEAM_WRITE_ON)).toHaveAttribute("aria-hidden", "true");
-    expect(switchOf(TEAM.name)).toHaveAccessibleName(`${DRIVES.FIELD_TEAM_WRITE}: ${TEAM.name}`);
-    expect(switchOf(TEAM_ON.name)).toHaveAccessibleName(`${DRIVES.FIELD_TEAM_WRITE}: ${TEAM_ON.name}`);
+    expect(switchOf(TEAM)).toHaveAccessibleName(`${DRIVES.FIELD_TEAM_WRITE}: ${TEAM.name} (${TEAM.owner})`);
+    expect(switchOf(TEAM_ON)).toHaveAccessibleName(`${DRIVES.FIELD_TEAM_WRITE}: ${TEAM_ON.name} (${TEAM_ON.owner})`);
+  });
+
+  it("two people's same-named team drives have different switch names", async () => {
+    const SAMS: MemberDriveAdminItem = { ...TEAM, id: "m6", owner: "sam@example.com" };
+    await show([TEAM, SAMS]);
+    expect(switchOf(TEAM)).not.toBe(switchOf(SAMS));
+    expect(screen.getAllByRole("switch", { name: new RegExp(`^${DRIVES.FIELD_TEAM_WRITE}: ${TEAM.name} `) })).toHaveLength(2);
   });
 
   it("deleting a team drive says the unit loses it too", async () => {
