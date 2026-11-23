@@ -48,8 +48,9 @@ func NewSubstrate(cfg Config) (substrate.Substrate, error) {
 	return served(d), nil
 }
 
-// runService reads the run's namespace and its Service. A run with no Service is not one that can be kept, and
-// answers runner.ErrReviveUnsupported.
+// runService reads the run's namespace and its Service, for a run that is kept. Every server run has a Service, so
+// kept-ness is read from the agent's Sandbox, as keptSandbox reads it: a run whose Sandbox is gone, being deleted or not
+// labelled kept, or that has no Service, answers runner.ErrReviveUnsupported.
 func (k *keepDriver) runService(ctx context.Context, ref string) (uuid.UUID, string, *corev1.Service, error) {
 	runID, err := runIDFromAgentPodName(ref)
 	if err != nil {
@@ -66,10 +67,21 @@ func (k *keepDriver) runService(ctx context.Context, ref string) (uuid.UUID, str
 	if err != nil {
 		return uuid.Nil, "", nil, fmt.Errorf("k8s: keep: read the run's Service: %w", err)
 	}
+	sb, err := k.dynamic.Resource(sandboxesGVR).Namespace(ns).Get(ctx, agentPodName(runID), metav1.GetOptions{})
+	if isNotFound(err) {
+		return uuid.Nil, "", nil, runner.ErrReviveUnsupported
+	}
+	if err != nil {
+		return uuid.Nil, "", nil, fmt.Errorf("k8s: keep: read the agent's Sandbox: %w", err)
+	}
+	labels, _, _ := unstructured.NestedStringMap(sb.Object, "spec", "podTemplate", "metadata", "labels")
+	if sb.GetDeletionTimestamp() != nil || labels[labelKeep] != "true" {
+		return uuid.Nil, "", nil, runner.ErrReviveUnsupported
+	}
 	return runID, ns, svc, nil
 }
 
-// CanReplaceProxy answers nil only for a run whose Service exists.
+// CanReplaceProxy answers nil only for a kept run whose Service exists.
 func (k *keepDriver) CanReplaceProxy(ctx context.Context, ref string) error {
 	_, _, _, err := k.runService(ctx, ref)
 	return err

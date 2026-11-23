@@ -413,10 +413,13 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 	// The run's Service and EndpointSlices: every server-mode run has them; a run made by an older release has none,
 	// and the delete finds nothing. They go after the Secret, so a failed delete here never leaves the Secret, and
 	// before the NetworkPolicies, so a run whose Service survives is still found by the orphan sweep, which deletes
-	// it again. With keep off, a Role that lacks these verbs (k8s.rbac.create=false, not yet updated) made no Service
-	// either, so a 403 is logged and the NetworkPolicies still go.
+	// it again. With keep off, a 403 is logged and the NetworkPolicies still go only when the run's Service then reads
+	// as gone, or cannot be read at all: a Role that lacks every per-run Service verb (k8s.rbac.create=false, not yet
+	// updated) made no Service either. A Service that is still there keeps the NetworkPolicies. What this leaves: a
+	// Role that may create Services but may neither delete nor get them leaves the Service unfound by the sweep, and an
+	// EndpointSlice whose delete is refused after its Service went is left behind, routing nothing.
 	if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
-		if d.keepOn() || !apierrors.IsForbidden(err) {
+		if d.keepOn() || !apierrors.IsForbidden(err) || d.runServiceRemains(ctx, ns, runID) {
 			return fmt.Errorf("k8s: teardown: %w", err)
 		}
 		slog.Warn("wardynd: k8s substrate: teardown could not delete the run's Service or EndpointSlices: the runs Role lacks the per-run Service verbs",

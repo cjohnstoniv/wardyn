@@ -180,7 +180,7 @@ func agentPod(t *testing.T, cs *fake.Clientset, runID uuid.UUID) *corev1.Pod {
 	return pod
 }
 
-func TestRunService_U1_ServerAgentPinsTheServiceAddress(t *testing.T) {
+func TestRunService_ServerAgentPinsTheServiceAddress(t *testing.T) {
 	d, cs, spec, _ := serverRun(t, Config{}, readyAt7)
 	spec.Interactive = true
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
@@ -223,7 +223,7 @@ func TestRunService_U1_ServerAgentPinsTheServiceAddress(t *testing.T) {
 	}
 }
 
-func TestRunService_U2_AgentCreatedBeforeTheProxyIsReady(t *testing.T) {
+func TestRunService_AgentCreatedBeforeTheProxyIsReady(t *testing.T) {
 	pending := proxyRead{ip: "10.244.0.7"}
 	d, _, spec, log := serverRun(t, Config{}, pending, pending, pending, readyAt7)
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
@@ -235,7 +235,7 @@ func TestRunService_U2_AgentCreatedBeforeTheProxyIsReady(t *testing.T) {
 	}
 }
 
-func TestRunService_U3_ActionOrder(t *testing.T) {
+func TestRunService_ActionOrder(t *testing.T) {
 	pending := proxyRead{ip: "10.244.0.7"}
 	d, cs, spec, log := serverRun(t, Config{}, pending, pending, pending, readyAt7)
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
@@ -256,7 +256,7 @@ func TestRunService_U3_ActionOrder(t *testing.T) {
 	}
 }
 
-func TestRunService_U3b_ChangedAddressIsWrittenAgain(t *testing.T) {
+func TestRunService_ChangedAddressIsWrittenAgain(t *testing.T) {
 	d, cs, spec, _ := serverRun(t, Config{},
 		proxyRead{ip: "10.244.0.7"}, proxyRead{ip: "10.244.0.8"}, proxyRead{ip: "10.244.0.8"}, proxyRead{ip: "10.244.0.8", ready: true})
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
@@ -270,7 +270,7 @@ func TestRunService_U3b_ChangedAddressIsWrittenAgain(t *testing.T) {
 	}
 }
 
-func TestRunService_U4_ProxyNeverReadyRollsEverythingBack(t *testing.T) {
+func TestRunService_ProxyNeverReadyRollsEverythingBack(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		read    proxyRead
@@ -334,7 +334,7 @@ func agentCreates(cs *fake.Clientset, runID uuid.UUID) int {
 	return n
 }
 
-func TestRunService_U5_TeardownDeletesTheServiceBetweenSecretAndPolicies(t *testing.T) {
+func TestRunService_TeardownDeletesTheServiceBetweenSecretAndPolicies(t *testing.T) {
 	d, cs, spec, _ := serverRun(t, Config{}, readyAt7)
 	sb, err := d.CreateSandbox(context.Background(), spec)
 	if err != nil {
@@ -422,7 +422,7 @@ func createForTeardown(t *testing.T, keep bool) (*Driver, *fake.Clientset, uuid.
 	return d, cs, spec.RunID, sb.Ref
 }
 
-func TestRunService_U5b_ForbiddenServiceDelete(t *testing.T) {
+func TestRunService_ForbiddenServiceDelete(t *testing.T) {
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", errors.New("test: the Role lacks services delete"))
 	for _, keep := range []bool{false, true} {
 		t.Run("keep="+strconv.FormatBool(keep), func(t *testing.T) {
@@ -439,14 +439,39 @@ func TestRunService_U5b_ForbiddenServiceDelete(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || !policies {
-				t.Errorf("keep off: KillSandbox = %v, NetworkPolicies deleted %v; want nil and the policies deleted", err, policies)
+			// The Service is still there and readable, so the NetworkPolicies stay for the sweep.
+			if err == nil || !apierrors.IsForbidden(err) || policies {
+				t.Errorf("keep off, Service readable: KillSandbox = %v, NetworkPolicies deleted %v; want the 403 returned and the policies kept", err, policies)
 			}
 		})
 	}
 }
 
-func TestRunService_U5c_FailedServiceDeleteKeepsPolicies(t *testing.T) {
+// With keep off, a 403 is tolerated only where the Service reads as gone or cannot be read at all: a Role of an older
+// release with no per-run Service verb, or a slice delete refused after the Service went.
+func TestRunService_ForbiddenDeleteToleratedOnlyWithNoServiceLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		refuse [][2]string // verb, resource answered 403
+	}{
+		{"role without service verbs", [][2]string{{"delete", "services"}, {"get", "services"}}},
+		{"slice delete after the service went", [][2]string{{"delete-collection", "endpointslices"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs, _, ref := createForTeardown(t, false)
+			for _, r := range tc.refuse {
+				failServiceDelete(cs, r[0], r[1], apierrors.NewForbidden(schema.GroupResource{Resource: r[1]}, "", errors.New("test: refused")))
+			}
+			err := d.KillSandbox(context.Background(), ref)
+			secrets, policies := teardownVerbs(cs)
+			if err != nil || !secrets || !policies {
+				t.Errorf("KillSandbox = %v, Secret deleted %v, NetworkPolicies deleted %v; want nil and both deleted", err, secrets, policies)
+			}
+		})
+	}
+}
+
+func TestRunService_FailedServiceDeleteKeepsPolicies(t *testing.T) {
 	for _, target := range []struct{ verb, resource string }{{"delete", "services"}, {"delete-collection", "endpointslices"}} {
 		for _, keep := range []bool{false, true} {
 			t.Run(target.resource+"/keep="+strconv.FormatBool(keep), func(t *testing.T) {
@@ -475,7 +500,7 @@ func TestRunService_U5c_FailedServiceDeleteKeepsPolicies(t *testing.T) {
 	}
 }
 
-func TestRunService_U6_RunnerModeMakesNoService(t *testing.T) {
+func TestRunService_RunnerModeMakesNoService(t *testing.T) {
 	px := httptest.NewServer(http.NotFoundHandler())
 	defer px.Close()
 	h := newRunnerHarness(t)
@@ -523,7 +548,7 @@ func TestRunService_U6_RunnerModeMakesNoService(t *testing.T) {
 	}
 }
 
-func TestRunService_U7_EveryCallIsInRunAddressAccess(t *testing.T) {
+func TestRunService_EveryCallIsInRunAddressAccess(t *testing.T) {
 	allowed := map[string]bool{}
 	for _, a := range runAddressAccess {
 		allowed[a.Resource+" "+a.Verb] = true
@@ -581,7 +606,7 @@ func TestRunService_U7_EveryCallIsInRunAddressAccess(t *testing.T) {
 	check(t, "kept revive", rcs)
 }
 
-func TestRunService_U8_KeptRecordSurvivesTheAddressWrite(t *testing.T) {
+func TestRunService_KeptRecordSurvivesTheAddressWrite(t *testing.T) {
 	d, cs, _ := keepRig(t, Config{AgentSandboxKeep: true})
 	if _, err := d.CreateSandbox(context.Background(), claudeKeptSpec()); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -610,7 +635,7 @@ func TestRunService_U8_KeptRecordSurvivesTheAddressWrite(t *testing.T) {
 	}
 }
 
-func TestRunService_U9_ProxyWaitEnvNeverMutates(t *testing.T) {
+func TestRunService_ProxyWaitEnvNeverMutates(t *testing.T) {
 	server := &Driver{cfg: Config{StartTimeout: time.Minute, CapacityWait: time.Minute}}
 	env := map[string]string{"A": "1"}
 	got := server.proxyWaitEnv(runner.SandboxSpec{Interactive: true, Env: env})
@@ -634,7 +659,7 @@ func TestRunService_U9_ProxyWaitEnvNeverMutates(t *testing.T) {
 	}
 }
 
-func TestRunService_U10_DualStackPicksTheServiceFamily(t *testing.T) {
+func TestRunService_DualStackPicksTheServiceFamily(t *testing.T) {
 	t.Run("has_the_family", func(t *testing.T) {
 		d, cs, spec, _ := serverRun(t, Config{}, proxyRead{ip: "10.244.0.7", ips: []string{"10.244.0.7", "fd00:10:244::7"}, ready: true})
 		installKeepServiceReactor(cs, "fd00:10:96::7")

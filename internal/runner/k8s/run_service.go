@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -98,4 +100,11 @@ func (d *Driver) proxyWaitEnv(spec runner.SandboxSpec) map[string]string {
 	}
 	env[proxyWaitSecsEnv] = strconv.Itoa(int((d.cfg.StartTimeout+d.cfg.CapacityWait)/time.Second) + 1)
 	return env
+}
+
+// runServiceRemains reports whether the run's Service may still exist: false only when a read of it answers not found
+// or forbidden.
+func (d *Driver) runServiceRemains(ctx context.Context, ns string, runID uuid.UUID) bool {
+	_, err := d.clientset.CoreV1().Services(ns).Get(ctx, keepServiceName(runID), metav1.GetOptions{})
+	return !isNotFound(err) && !apierrors.IsForbidden(err)
 }
