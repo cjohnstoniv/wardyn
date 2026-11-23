@@ -22,6 +22,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A connection the run's proxy terminates TLS for (an inspected model host, a token-injection host, or a host a request rule names) now counts toward the run's limit of 1,024 open tunnels, as an uninspected tunnel already did. It is also closed if the sandbox has not finished its TLS handshake within 30 seconds. Once the handshake is done, nothing changes for the connection: a long streamed answer is unaffected.
 - A HashiCorp Vault or OpenBao secret write whose answer was lost and retried is now recognised by an id stored beside its value, instead of by comparing the two servers' clocks. A correct write is no longer refused when Vault's clock is behind or reports no creation time, and another writer's value is no longer taken as this write's.
 - wardynd's 30-second limit for reading its boot keys now starts after the secret store is open. A slow first open, such as a one-time conversion of stored rows, no longer leaves the boot-key reads without time and fails the start.
+- The `git_credential` probe in `examples/workspaces/probes.sh` passes only on the helper's exact answers; other error text is now a failure, not a pass.
 
 ### Before you upgrade
 
