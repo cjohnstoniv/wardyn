@@ -31,7 +31,7 @@ func TestSSHGatewayDefaults(t *testing.T) {
 func TestSSHGateway_HandshakeTotalFollowsConfig(t *testing.T) {
 	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{}, func(c *Config) {
 		c.SSHMaxHandshakes = 3
-		c.SSHMaxHandshakesPerSource = 3
+		c.SSHMaxHandshakesPerSource = 4
 	})
 
 	var conns []net.Conn

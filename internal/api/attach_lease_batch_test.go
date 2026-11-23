@@ -369,6 +369,30 @@ func TestLeaseFenceAJoinerOfAnOlderGenerationAsksAgain(t *testing.T) {
 	}
 }
 
+// A joiner is refused once the lease is marked suspect while it waits, as a caller arriving after is.
+func TestLeaseFenceAJoinerIsRefusedOnceTheLeaseIsSuspect(t *testing.T) {
+	leases := newLeaseCovLeases()
+	srv, alice, _ := leaseRecoveryWriter(t, leases)
+	l := alice.h.lease
+	l.verified.Store(nil)
+	gen, _ := l.state()
+	entered, release := leaseBatchGate(leases)
+	t.Cleanup(release)
+	leader := make(chan bool, 1)
+	go func() { leader <- l.live() }()
+	waitForCount(t, entered, 1)
+	joiner := make(chan bool, 1)
+	go func() { joiner <- l.live() }()
+	time.Sleep(100 * time.Millisecond)          // the joiner is waiting on the leader's check
+	l.at(gen, func() { l.suspect.Store(true) }) // what a renew does for a key its statement left out
+	release()
+	<-leader
+	if <-joiner {
+		t.Error("a joiner was admitted after the lease was marked suspect")
+	}
+	srv.WaitBackground()
+}
+
 // waitForCount waits up to two seconds for n to reach want; it does not fail, so the caller's assertion names
 // the outcome.
 func waitForCount(t *testing.T, n *atomic.Int32, want int32) {
