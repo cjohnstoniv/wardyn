@@ -77,7 +77,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 	}
 	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
 	uiCallerHeaders(pr.Out.Header, sess)
-	if uiDesktopApp(sess.App) {
+	if sess.desktopApp() {
 		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
 		pr.Out = desktopConnTrace(pr.Out)
 	}

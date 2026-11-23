@@ -42,6 +42,9 @@ export interface UIApp {
   // Callable from outside the run through the gateway, by the callers listed.
   inbound?: boolean;
   callers?: string[];
+  // "desktop": the app serves a desktop, so the gateway filters its clipboard and puts it behind the desktop door,
+  // whatever its name (Go's UIAppKindDesktop). The "novnc" app is a desktop without it.
+  kind?: "desktop";
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <

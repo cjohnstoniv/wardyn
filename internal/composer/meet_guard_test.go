@@ -53,7 +53,7 @@ var meetRules = map[string]meetRule{
 	"workspace_mounts":                 {"none", "intersection by (source, target); read-only if either side is"},
 	"workspace_repos":                  {"none", "intersection by identity"},
 	"llm_inspection":                   {"none", "present on one side yields that side; both present and unequal is refused"},
-	"ui_apps":                          {"none", "intersection by (name, port, path); empty over a base with apps keeps them and sets deny_ui_apps; a non-empty one sharing none is unsatisfiable"},
+	"ui_apps":                          {"none", "intersection by (name, port, path); a kept app is a desktop when either side's is; empty over a base with apps keeps them and sets deny_ui_apps; a non-empty one sharing none is unsatisfiable; an unknown kind in the overlay is refused at write"},
 	"resources.cpu_millis":             {"the deployment size", "smaller after normalising"},
 	"resources.memory_mib":             {"the deployment size", "smaller after normalising"},
 	"resources.pids_limit":             {"the deployment size", "smaller after normalising"},

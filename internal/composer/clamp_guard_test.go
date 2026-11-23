@@ -36,7 +36,7 @@ var clampRules = map[string]string{
 	"auto_stop_after_sec":              "capped at the ceiling's positive maximum",
 	"workspace_mounts":                 "always dropped: host mounts are operator-authored",
 	"llm_inspection":                   "the ceiling's mode stands; a proposal's is dropped where the ceiling sets none",
-	"ui_apps":                          "kept only where the ceiling lists the app (clampUIApps)",
+	"ui_apps":                          "kept only where the ceiling lists the app, and a desktop wherever the ceiling's entry is (clampUIApps)",
 	"resources.cpu_millis":             "bounded by the member cap (clampResources)",
 	"resources.memory_mib":             "bounded by the member cap (clampResources)",
 	"resources.pids_limit":             "capped at the ceiling's (clampResources)",

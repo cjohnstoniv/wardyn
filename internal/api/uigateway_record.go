@@ -28,7 +28,7 @@ import (
 )
 
 // desktopApp is the UI app whose relayed stream is a desktop's RFB (deploy/images/novnc).
-const desktopApp = "novnc"
+const desktopApp = types.UIAppDesktopName
 
 // desktopRecordingSuffix starts a desktop recording's cast key suffix; the console tells a screen
 // recording from a terminal cast by its desktop.recording.write row, never by the bytes.
@@ -129,7 +129,7 @@ func stopRefusedRecording(rec *recording.RFBRecorder, err error) {
 
 // recordsDesktopApp is whether recordDesktopConn records sess's connections on run.
 func (s *Server) recordsDesktopApp(run types.AgentRun, sess uiSession) bool {
-	return sess.App == desktopApp && s.desktopRecorded(run)
+	return (sess.App == desktopApp || sess.DesktopKind) && s.desktopRecorded(run)
 }
 
 // watchDesktopApp admits a recorded desktop app connection as a Linux VM's display is admitted

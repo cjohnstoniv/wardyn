@@ -28,10 +28,13 @@ var supportCallList = map[string]string{
 	"Server.attachAuthority":    "the open terminal's re-check, its ticket branch only",
 	"Server.handleRunExec":      "POST /exec, and the open command's re-check",
 	"Server.uiTicketMayEnter":   "the UI gateway's ticket entry, inside ta.caller == \"\"",
-	"Server.uiSessionArms":      "the UI session's re-check, after the portal's arm (uiSessionAuthority)",
-	"Server.desktopRun":         "the Files panel",
-	"Server.sshAuth":            "the SSH gateway's authentication, inside the operator-owned rule's branch",
-	"Server.sshCurrentKey":      "the SSH gateway's re-check of an open connection",
+	// refuseDesktopKindApp is a second ask at an existing door, not a new door: the UI gateway's entry asks it
+	// after uiTicketMayEnter, for a declared app of kind desktop only.
+	"Server.refuseDesktopKindApp": "the UI gateway's entry for a declared app of kind desktop: the desktop door, on top of uiTicketMayEnter's web_apps door",
+	"Server.uiSessionArms":        "the UI session's re-check, after the portal's arm (uiSessionAuthority)",
+	"Server.desktopRun":           "the Files panel",
+	"Server.sshAuth":              "the SSH gateway's authentication, inside the operator-owned rule's branch",
+	"Server.sshCurrentKey":        "the SSH gateway's re-check of an open connection",
 }
 
 // supportNeverList is every function that must never call supportMayEnter, nor any function of the call list,
@@ -520,14 +523,14 @@ func TestSupportCensus_TheArmSitsInsideTheTicketLane(t *testing.T) {
 	}
 }
 
-// TestSupportCensus_ListsAreDisjoint: no name is on both lists, and the call list holds the design's nine.
+// TestSupportCensus_ListsAreDisjoint: no name is on both lists, and the call list holds the design's ten.
 func TestSupportCensus_ListsAreDisjoint(t *testing.T) {
 	for name := range supportNeverList {
 		if _, both := supportCallList[name]; both {
 			t.Errorf("%s is on supportCallList and supportNeverList. %s", name, supportCensusEdit)
 		}
 	}
-	if len(supportCallList) != 9 {
-		t.Errorf("supportCallList holds %d names, want the design's nine: %s", len(supportCallList), strings.Join(sortedKeys(supportCallList), ", "))
+	if len(supportCallList) != 10 {
+		t.Errorf("supportCallList holds %d names, want the design's ten: %s", len(supportCallList), strings.Join(sortedKeys(supportCallList), ", "))
 	}
 }

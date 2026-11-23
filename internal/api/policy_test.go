@@ -480,6 +480,10 @@ func TestValidatePolicySpec_UIApps(t *testing.T) {
 		{"protocol-relative path is an open redirect", spec(types.UIApp{Name: "code", Port: 8080, Path: "//evil.example.com/"}), false},
 		{"absolute URL is not a path", spec(types.UIApp{Name: "code", Port: 8080, Path: "https://evil.example.com/"}), false},
 		{"dot-dot path", spec(types.UIApp{Name: "code", Port: 8080, Path: "/../x"}), false},
+		{"desktop kind", spec(types.UIApp{Name: "desk", Port: 5900, Kind: types.UIAppKindDesktop}), true},
+		{"novnc needs no kind", spec(types.UIApp{Name: "novnc", Port: 6080}), true},
+		{"kind is case-sensitive", spec(types.UIApp{Name: "desk", Port: 5900, Kind: "Desktop"}), false},
+		{"unknown kind", spec(types.UIApp{Name: "desk", Port: 5900, Kind: "vnc"}), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -491,6 +495,13 @@ func TestValidatePolicySpec_UIApps(t *testing.T) {
 				t.Fatal("want rejected, got nil error")
 			}
 		})
+	}
+
+	for _, kind := range []string{"Desktop", "vnc"} {
+		err := validatePolicySpec(spec(types.UIApp{Name: "desk", Port: 5900, Kind: kind}))
+		if err == nil || !strings.Contains(err.Error(), "invalid kind") {
+			t.Errorf("kind %q: err = %v, want one containing %q", kind, err, "invalid kind")
+		}
 	}
 
 	over := make([]types.UIApp, 0, maxUIAppsPerPolicy+1)
