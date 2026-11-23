@@ -685,6 +685,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Delete runs that ended more than N days ago; `0` (the default) keeps every run forever. A value from 1 to 29 is refused at startup.
 - A deleted run takes its approvals, model usage and other per-run rows with it. Its audit rows stay, under the audit log's own retention.
 - Kept whatever their age: a run with a held push's path list or an MCP call send, or one a runner retirement or a watermark names.
+- A run dispatched to an enrolled runner since 0.9.3 is kept: its output watermark holds it. On an install whose runs go to runners, the sweep deletes only server-local runs.
 - Also kept: a run another run's pending action names (an action with no run holds it while it exists), a kept machine's run or fresh start, a workload's current run, a teardown hold's run.
 - The leader sweeps hourly, at most 10,000 runs an hour. A sweep that deleted anything writes a `run.retention.sweep` audit row.
 - A deleted run's recordings are not deleted with it; `WARDYN_RECORDING_RETENTION_DAYS` governs them. Set it no longer than this window, or a recording outlives the run page it plays on.
