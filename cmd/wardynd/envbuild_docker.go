@@ -28,9 +28,10 @@ type envBuilderAdapter struct {
 }
 
 var (
-	_ api.ImageBuilder      = envBuilderAdapter{}
-	_ api.ImageBuildSweeper = envBuilderAdapter{}
-	_ api.ImageIdentifier   = envBuilderAdapter{}
+	_ api.ImageBuilder        = envBuilderAdapter{}
+	_ api.ImageBuildSweeper   = envBuilderAdapter{}
+	_ api.ImageIdentifier     = envBuilderAdapter{}
+	_ api.ReusingImageBuilder = envBuilderAdapter{}
 )
 
 // builtImage maps the builder's result to the api's.
@@ -58,6 +59,18 @@ func (e envBuilderAdapter) BuildFromDevcontainerFiles(ctx context.Context, files
 // a cleared ENTRYPOINT via the trusted finalize stage.
 func (e envBuilderAdapter) FinalizeBase(ctx context.Context, baseRef, outputTag string, logSink io.Writer, forcePull bool) (api.BuiltImage, error) {
 	return builtImage(e.b.FinalizeBase(ctx, baseRef, outputTag, e.tee(logSink), forcePull))
+}
+
+// reuseOf is the builder's form of the api's reuse.
+func reuseOf(r api.ImageReuse) envbuild.Reuse {
+	return envbuild.Reuse{Scope: r.Scope, Hold: r.Hold, Announce: r.Announce}
+}
+
+// FinalizeBaseReused satisfies api.ReusingImageBuilder.
+func (e envBuilderAdapter) FinalizeBaseReused(ctx context.Context, baseRef string, reuse api.ImageReuse, logSink io.Writer) (api.BuiltImage, bool, error) {
+	b, reused, err := e.b.FinalizeBaseReused(ctx, baseRef, reuseOf(reuse), e.tee(logSink))
+	built, err := builtImage(b, err)
+	return built, reused, err
 }
 
 // LocalImage satisfies api.ImageIdentifier.
