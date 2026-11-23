@@ -18,8 +18,8 @@ import (
 // Organisation sites: an admin's label for a place over organization pools and admin drives, with one default
 // pool. Placement reads them (run_placement_site.go); these routes write them.
 //
-//	GET /org-sites, GET /org-sites/{id}                     member: a site names only the pools the caller's
-//	                                                        catalogue shows
+//	GET /org-sites, GET /org-sites/{id}                     member: a site names a live pool only when the
+//	                                                        caller's catalogue shows it
 //	GET /org-sites/drives                                   security (admin or security_admin), as GET /drives
 //	POST /org-sites, PUT and DELETE /org-sites/{id},        admin (SUPER)
 //	PUT and DELETE /runner-pools/{id}/site,
@@ -133,24 +133,37 @@ func (s *Server) readOrgSite(w http.ResponseWriter, r *http.Request, ss store.Or
 	return site, true
 }
 
-// visibleOrgSites keeps, on each site, only the pools the caller's pool catalogue shows, so a site never names
-// a pool the pool routes answer as unknown. A security admin or an admin sees every pool, a deleted one still
-// at a site included, so it can be taken off. ok=false: the answer is written.
+// visibleOrgSites keeps, on each site, only the live pools the caller's pool catalogue shows (every live pool for
+// a security admin or an admin), so a site never names a live pool the pool routes answer as unknown. A deleted
+// pool still at a site stays listed, so an admin can take it off: no one can use it. ok=false: the answer is
+// written.
 func (s *Server) visibleOrgSites(w http.ResponseWriter, r *http.Request, sites []types.OrgSite) ([]types.OrgSite, bool) {
 	if sites == nil {
 		sites = []types.OrgSite{}
 	}
-	if s.isSecurityOperator(r.Context()) {
+	ps, ok := s.cfg.Store.(store.RunnerPoolStore)
+	if !ok {
 		return sites, true
 	}
+	rows, ok := s.poolCatalogue(w, r, ps, false)
+	if !ok {
+		return nil, false
+	}
 	shown := map[uuid.UUID]bool{}
-	if ps, ok := s.cfg.Store.(store.RunnerPoolStore); ok {
-		rows, ok := s.poolCatalogue(w, r, ps, true)
-		if !ok {
-			return nil, false
-		}
-		for _, row := range rows {
-			shown[row.Pool.ID] = true
+	for _, row := range rows {
+		shown[row.Pool.ID] = true
+	}
+	for _, site := range sites {
+		for _, id := range site.PoolIDs {
+			if shown[id] {
+				continue
+			}
+			p, err := ps.GetRunnerPool(r.Context(), id)
+			if err != nil && !errors.Is(err, store.ErrNotFound) {
+				writeServerError(w, r, "read runner pool", err)
+				return nil, false
+			}
+			shown[id] = err == nil && p.State == types.RunnerPoolDeleted
 		}
 	}
 	for i := range sites {

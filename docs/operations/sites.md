@@ -18,7 +18,7 @@
 
 | Route | Who | What it does |
 |---|---|---|
-| `GET /org-sites`, `GET /org-sites/{id}` | Anyone signed in | Lists sites, or reads one. A site names only the pools the reader may use. |
+| `GET /org-sites`, `GET /org-sites/{id}` | Anyone signed in | Lists sites, or reads one. A site lists a live pool only when the reader may use it, and a deleted pool still at it always. |
 | `POST /org-sites` | Admin | Adds a site: `name`, and an optional `storage_label` and `storage_url`. |
 | `PUT /org-sites/{id}` | Admin | Replaces the name, the storage note and `default_pool_id`, at the `revision` you read. |
 | `DELETE /org-sites/{id}` | Admin | Deletes a site with no pool and no drive at it. A deleted site stays on the runs placed there. |

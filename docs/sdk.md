@@ -774,7 +774,7 @@ to launch, and the same value when you retry that launch.
 
 ## Sites
 
-- `GET /api/v1/org-sites` and `GET /api/v1/org-sites/{id}` list and read sites. A site names only the pools you may use.
+- `GET /api/v1/org-sites` and `GET /api/v1/org-sites/{id}` list and read sites. A site lists a live pool only when you may use it, and a deleted pool still at it always.
 - Admins write them: `POST /org-sites`, `PUT` and `DELETE /org-sites/{id}`, `PUT` and `DELETE /runner-pools/{id}/site` with `{"site_id": "<id>"}`, and `PUT` and `DELETE /drives/{id}/site` with the same body.
 - While sites are on, a run that names no pool goes to the default pool of the one site its homed drives are at. Its `runner_pool_selection` is then `site_default` (`client.RunnerPoolSelectedSite`), and it carries `site_id`.
 - The Go client has no site methods yet: call the routes over HTTP. See [Sites](operations/sites.md).
