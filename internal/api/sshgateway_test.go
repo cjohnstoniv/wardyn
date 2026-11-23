@@ -1575,7 +1575,7 @@ func sshSessionRefusedBy(t *testing.T, client *ssh.Client, start func(*ssh.Sessi
 // TCP level (no auth needed to observe it; the cap bites before
 // NewServerConn is even called).
 func TestSSHGateway_MaxConnectionsEnforced(t *testing.T) {
-	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{}, func(c *Config) { c.SSHMaxHandshakesPerSource = DefaultSSHMaxHandshakes })
+	h := newSSHTestHarness(t, newSSHMemStore(), &sshFakeRunner{}, func(c *Config) { c.SSHMaxHandshakesPerSource = DefaultSSHMaxHandshakes + 1 })
 
 	var conns []net.Conn
 	defer func() {

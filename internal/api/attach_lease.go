@@ -186,7 +186,7 @@ func (l *attachLease) live() bool {
 	if c := l.check; c != nil && c.gen == gen {
 		l.fmu.Unlock()
 		<-c.done
-		return c.ok && l.at(gen, func() {})
+		return c.ok && !l.suspect.Load() && l.at(gen, func() {})
 	}
 	c := &leaseCheck{gen: gen, done: make(chan struct{})}
 	l.check = c
