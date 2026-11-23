@@ -9,8 +9,9 @@
 // paths compared component by component, followed by its manifest. Paths are relative to the sandbox's
 // root ("home/agent/work/a.txt"). Only directories, regular files and symlinks are carried, with no
 // setuid, setgid or sticky bit. The manifest is one JSON line after the archive's end: the entry count, the
-// file bytes, the files the exporter skipped (sockets, fifos and devices) and the digest of the entry
-// records. An entry's record is its path, type, mode, size, the SHA-256 of its bytes and its link target,
+// file bytes, the fifos and devices the exporter skipped, and the digest of the entry records. Sockets are
+// not listed: tar has no socket type, so an engine's archive cannot hold one for the exporter to see. The skipped
+// list is outside the digest. An entry's record is its path, type, mode, size, the SHA-256 of its bytes and its link target,
 // in stream order. Every reader recomputes the records from the bytes it read, so a flipped byte, a cut, a
 // reordered entry or an extra file fails at the digest or before it.
 //
@@ -130,7 +131,9 @@ type Header struct {
 }
 
 // Manifest is a stream's manifest: what a writer wrote and a reader read. Digest is the hex SHA-256 of the
-// entry records in stream order, so two streams with equal digests carry the same entries.
+// entry records in stream order, so two streams with equal digests carry the same entries. Skipped is not
+// in the digest: two streams with one digest can list different skipped files, and a reader checks only
+// that each is a carried path.
 type Manifest struct {
 	Entries int      `json:"entries"`
 	Bytes   int64    `json:"bytes"`

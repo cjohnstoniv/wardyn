@@ -34,8 +34,9 @@ type StateExport struct {
 
 // StateExporter is an OPTIONAL Runner capability: read a stopped, kept sandbox's carried files. The
 // exporter never follows a link: a symlink is carried as its text and a root that is one refuses. A
-// hardlink is carried as a file, setuid, setgid and sticky bits are cleared, and sockets, fifos and devices
-// are skipped and listed.
+// hardlink is carried as a file, setuid, setgid and sticky bits are cleared, and fifos and devices are
+// skipped and listed in the manifest (outside its digest). Sockets are left out and not listed: tar has no socket
+// type, so an engine's archive cannot hold one.
 type StateExporter interface {
 	ExportState(ctx context.Context, ref string, set CarriedSet) (StateExport, error)
 }
@@ -44,8 +45,9 @@ type StateExporter interface {
 // no proxy process and no proxy config (CheckImportSpec), and write carried, a movepack stream of set,
 // beneath set's roots in it. maxBytes is the move's own bound on the stream (CheckCarriedLimit), the
 // number the organisation's relay reads with too. The answer's manifest is what the importer read,
-// computed by its own reader. An import that fails after the create removes what it created. ErrMoveCreate
-// or ErrMoveFiles says which half failed.
+// computed by its own reader. An import that fails after the create removes what it created as far as it
+// can: a removal that fails is not always reported, and what it leaves is the orphan sweep's to find. ErrMoveCreate or
+// ErrMoveFiles says which half failed.
 type StateImporter interface {
 	ImportSandbox(ctx context.Context, spec SandboxSpec, set CarriedSet, maxBytes int64, carried io.Reader) (Sandbox, CarriedManifest, error)
 }
