@@ -7,9 +7,11 @@
 # Deployment and Service that target made in NAMESPACE (Makefile helm-install-test). It needs that
 # cluster, kubectl, helm and curl, and is run from the repository root.
 #
-# The cut: the postgres Service's selector is pointed at no pod, so a new connection is refused, and
-# wardynd's open sessions are ended from inside the postgres pod. Postgres keeps running and keeps
-# its data; restoring the selector ends the cut.
+# The cut: the wardyn database is set to refuse new connections (ALLOW_CONNECTIONS false), so
+# Postgres answers each one with an error at once, and wardynd's open sessions are ended. Postgres
+# keeps running and keeps its data; allowing connections again ends the cut. A Service pointed at no
+# pod is not used: on kind it left wardynd's reads hanging, the stalled-database case that
+# docs/operations/high-availability.md says restarts the pod.
 #
 # 1. The release as installed (readiness on /healthz, the chart default): through a CUT_SECS cut the
 #    pod stays Ready and is not restarted, /healthz answers 200 and /readyz answers 503, which is
@@ -28,7 +30,8 @@ pf_log=$(mktemp)
 pf_pid=""
 
 k() { kubectl -n "$NS" "$@"; }
-restore() { k patch service postgres --type=merge -p '{"spec":{"selector":{"app":"postgres"}}}' >/dev/null; }
+pg() { k exec deploy/postgres -- psql -U wardyn -d postgres -Atc "$1" >/dev/null; }
+restore() { pg "ALTER DATABASE wardyn WITH ALLOW_CONNECTIONS true"; }
 cleanup() {
 	if [ -n "$pf_pid" ]; then kill "$pf_pid" 2>/dev/null || true; fi
 	restore 2>/dev/null || true
@@ -71,11 +74,9 @@ wait_ready() {
 }
 
 cut() {
-	k patch service postgres --type=merge -p '{"spec":{"selector":{"app":"wardyn-db-cut"}}}' >/dev/null
-	sleep 3 # let kube-proxy drop the endpoint before the sessions end, so they cannot reconnect
+	pg "ALTER DATABASE wardyn WITH ALLOW_CONNECTIONS false"
 	for _ in 1 2; do
-		k exec deploy/postgres -- psql -U wardyn -d wardyn -Atc \
-			"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = 'wardyn' AND pid <> pg_backend_pid()" >/dev/null
+		pg "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = 'wardyn' AND pid <> pg_backend_pid()"
 		sleep 2
 	done
 }
