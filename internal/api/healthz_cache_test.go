@@ -70,7 +70,7 @@ func healthzCacheServer(t *testing.T, ttl time.Duration) (*Server, *capsCounting
 	t.Helper()
 	h := newHarness(t)
 	rn := &capsCountingRunner{}
-	clock := &healthzClock{t: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)}
+	clock := &healthzClock{t: time.Now()}
 	cfg := h.srv.cfg
 	cfg.Runner = rn
 	cfg.HealthzProbeTTL = ttl

@@ -35,7 +35,7 @@ type fakeTerminalSandboxPager struct {
 
 // newRunCursors is n runs, newest first, each a minute older than the last.
 func newRunCursors(n int) []store.RunCursor {
-	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	out := make([]store.RunCursor, n)
 	for i := range out {
 		out[i] = store.RunCursor{CreatedAt: now.Add(-time.Duration(i) * time.Minute), ID: uuid.New()}
