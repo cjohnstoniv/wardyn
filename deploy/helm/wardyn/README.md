@@ -432,12 +432,26 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - The value is the RuntimeClass NAME, which may be anything. CC3 is advertised only when that class exists in the cluster and its HANDLER is non-empty and does not start with `runc`, `crun`, `sysbox` or `runsc` (the list is in [`internal/runner/sandbox.go`](../../../internal/runner/sandbox.go); `kata`, `kata-qemu` and `krun` pass).
     - A missing class, an empty pin or a refused handler makes a CC3 run fail to start; it never falls back to the node's default runtime.
     - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
+    - On a managed Kata pool, tolerate the pool's taint and prefer other nodes, and let the RuntimeClass's own `scheduling` pin the CC3 pods onto Kata nodes:
+      ```yaml
+      k8s:
+        runtimeClasses: {CC3: kata-vm-isolation}
+        sandbox:
+          tolerations: [{key: kata-vm-isolation, operator: Equal, value: "true", effect: NoSchedule}]
+          affinity: {nodeAffinity: {preferredDuringSchedulingIgnoredDuringExecution: [{weight: 100, preference: {matchExpressions: [{key: <pool label>, operator: NotIn, values: [kata]}]}}]}}
+      ```
+      - `k8s.sandbox.*` reaches every sandbox pod, so runs of other classes prefer other nodes and the CC3 pods land on Kata nodes.
+      - This relies on the RuntimeClass carrying `scheduling`; check that yours does, because a self-installed class may not.
+    - Offering CC3 changes runs that exist today. A run that holds a write-capable grant, or an `api_key` for a host outside the baseline, is raised to CC3. Before CC3 is offered such a run is refused; once it is offered, each one needs a Kata slot, so size the pool for them.
+    - Set an organisation default barrier before you offer CC3. A launch that names no barrier gets the organisation's default; with none set it gets the strongest class offered, so every such run moves to the Kata pool when CC3 appears.
     - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
+    - A Kata guest is sized from those limits (CPU and memory), not from the node. Size JVM heaps under `memory_mib`.
     - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
     - A Linux VM sandbox (`k8s.linuxVM=true` in the `wardyn-runnerd` chart, not this one) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
     - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
+    - A field report shows CC3 runs and `k8s_pvc` drives (a block-storage CSI disk, ReadWriteOnce) working on a managed Kata pool at 0.10.3.
     - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
-    - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
+    - Unknown: shared (ReadWriteMany) drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
     - Nothing here states what your cloud's node pools support (sizes, hardening modes, scanners); check your provider's documentation.
 - `k8s.apiServer.ports`: port(s) the control-plane NetworkPolicy opens so wardynd can reach the API server.
   - Defaults to `[443, 6443]` — `kubernetes.default.svc`'s Service port (443, what client-go's in-cluster config always targets) PLUS the typical kubeadm/kind apiserver backend port (6443):

@@ -287,6 +287,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 - The command starts once, after the workspace is prepared, in the run's terminal session (attach shows its output); it stops with the run and is not restarted if it exits. A revive starts it again.
 - With no launcher, the gateway waits up to 20s for the port of a run whose startup is a command, before the 502 below. The wait counts from when the app is opened, so an open during a long workspace preparation can still show the error.
 - A harness prompt seed gets the 502 at once.
+- With `WARDYN_START_AFTER_READBACK=on`, this form is failed before the sandbox is created, with a hint: the startup command rides the interactive boot seed, and that setting refuses any interactive run that carries one. Turn the setting off to serve an application.
 
 ## 3. Open an app
 
