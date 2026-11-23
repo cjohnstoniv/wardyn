@@ -11,6 +11,23 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A UI app can be declared with `"kind": "desktop"`. The desktop's clipboard rules, its recording and `deny_interactive`
+  then bind that app whatever its name, as they bind the `novnc` app, and a support helper needs both the web apps and
+  the desktop door to open it. A ceiling whose entry for an app says `desktop` keeps the kind on every policy under it.
+  Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
+  than its ceiling; its runs still start, with the kind added.
+
+### Before you upgrade
+
+- A desktop declared under a name other than `novnc` is still relayed unfiltered until its `ui_apps` entry, or its
+  ceiling's, says `"kind": "desktop"`. Under a `data_out` rule of `review` or `blocked`, such an app is refused like
+  any other web app; only the `novnc` app is exempt.
+- Declare `kind: desktop` only once every wardynd runs this release.
+
+Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
