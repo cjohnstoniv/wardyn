@@ -158,9 +158,11 @@ func TestMovePack_RefusesHostileEntries(t *testing.T) {
 		{"sticky", []rawEntry{{h: dirH(w)}, {h: sticky}}, w + "/s"},
 		{"PAX header over 64 KiB", []rawEntry{{h: dirH(w)}, {h: paxBig, content: "x"}}, w + "/p"},
 		{"link target over 4096", []rawEntry{{h: dirH(w)}, {h: tar.Header{Name: w + "/l", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("t", 4097), Format: tar.FormatPAX}}}, w + "/l"},
-		{"through an earlier symlink", []rawEntry{{h: dirH(w)}, {h: tar.Header{Name: w + "/l", Typeflag: tar.TypeSymlink, Linkname: "/etc", Format: tar.FormatPAX}}, {h: regH(w + "/l/shadow"), content: "x"}}, w + "/l/shadow"},
+		// The directory rule would refuse it too, so the row names the symlink rule's own reason.
+		{"through an earlier symlink", []rawEntry{{h: dirH(w)}, {h: tar.Header{Name: w + "/l", Typeflag: tar.TypeSymlink, Linkname: "/etc", Format: tar.FormatPAX}}, {h: regH(w + "/l/shadow"), content: "x"}}, `passes through the symlink entry "` + w + `/l"`},
 		{"a root that is a symlink", []rawEntry{{h: tar.Header{Name: w, Typeflag: tar.TypeSymlink, Linkname: "/etc", Format: tar.FormatPAX}}}, w},
 		{"an undeclared parent directory", []rawEntry{{h: dirH(w)}, {h: regH(w + "/sub/deeper/x"), content: "x"}}, w + "/sub/deeper"},
+		{"a parent that is a file", []rawEntry{{h: dirH(w)}, {h: regH(w + "/a"), content: "a"}, {h: regH(w + "/a/x"), content: "x"}}, `its directory "` + w + `/a" is not an earlier entry`},
 		{"a parent declared only as a sibling's", []rawEntry{{h: dirH(w)}, {h: dirH(w + "/a")}, {h: regH(w + "/a/x"), content: "x"}, {h: regH(w + "/b/y"), content: "y"}}, w + "/b"},
 		{"an excluded path", []rawEntry{{h: dirH(w)}, {h: regH(w + "/x/.credentials.json"), content: "x"}}, ".credentials.json"},
 	}
