@@ -153,7 +153,7 @@ ok()  { echo "ok: $*"; }
 # no release waits on it and a red one would say nothing about the code.
 NIGHTLY=.github/workflows/nightly.yml
 # ai-gateway-kind (#3862): the pinned agentgateway image in front of test/gatewayfake on a kind cluster. It was exempt
-# here until a scheduled green (<STEP-0 RUN ID>); it is in notify-new-lanes.needs and release.yml's watched= now
+# here until a scheduled green (45036863985); it is in notify-new-lanes.needs and release.yml's watched= now
 # (guard 13), and runs under scope=candidate. Its own notify job went with the exemption.
 NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan k6-rerun-rate kind-node-restart kind-agent-sandbox-keep-walk"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out

@@ -598,7 +598,7 @@ jobs:
   #
   # WATCHED: in notify-new-lanes' needs and release.yml's watched=, and run under scope=candidate, so a train head and
   # a release candidate run it (scripts/test-repo-guards.sh guard 13 and the scope guard). Promoted after scheduled run
-  # <STEP-0 RUN ID> went green.
+  # 45036863985 went green.
   ai-gateway-kind:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
