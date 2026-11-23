@@ -667,8 +667,8 @@ func (sw *scheduleSweep) run(ctx context.Context) error {
 	return nil
 }
 
-// one is a due schedule's turn: the owner's standing and groups first, a missed slot or a fresh booking, then
-// the booking's outcome.
+// one is a due schedule's turn: the owner's standing, then their groups and email from the latest sign-in, a
+// missed slot or a fresh booking, then the booking's outcome.
 func (sw *scheduleSweep) one(ctx context.Context, sc store.RunSchedule) scheduleTick {
 	rule, err := scheduleRuleOf(sc)
 	if err != nil {
@@ -697,6 +697,9 @@ func (sw *scheduleSweep) one(ctx context.Context, sc store.RunSchedule) schedule
 		return scheduleTickNone
 	}
 	a.Groups, a.GroupsTruncated = kept, truncated
+	if rec.Email != "" {
+		a.Email = rec.Email // the booked run's start derives role and user type from it, so it is the live one
+	}
 
 	if sc.NextAt.Before(sw.now) {
 		return sw.missed(ctx, sc, rule, a)

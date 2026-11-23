@@ -675,3 +675,31 @@ func TestRunScheduleSweep_TwoSweepsWriteOneFireRow(t *testing.T) {
 		})
 	}
 }
+
+// A booking acts with the email of the owner's latest sign-in, not the one stored at create, since the start
+// derives role and user type from it; a sign-in record with no email keeps the stored one.
+func TestRunScheduleSweep_BookingTakesTheLiveEmail(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct{ signedIn, want string }{
+		{"renamed@corp.example", "renamed@corp.example"},
+		{"", "person@corp.example"},
+	} {
+		now := time.Now()
+		st := newFakeScheduleStore()
+		sc := st.seed(now.Add(time.Minute), false)
+		sc.Authority = mustJSON(queueAuthority{Sub: "sub-person", Email: "person@corp.example", Groups: []string{}})
+		st.rows[sc.ID] = sc
+		st.groups.Email = tc.signedIn
+		var got string
+		sw, creates := testSweep(scheduleTestServer(st), st, now, func(w http.ResponseWriter, r *http.Request) {
+			got = oidcEmailFromContext(r.Context())
+			answers(http.StatusUnprocessableEntity)(w, r)
+		}, true)
+		if err := sw.run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if *creates != 1 || got != tc.want {
+			t.Errorf("sign-in email %q: the booking acted as %q (%d creates); want %q", tc.signedIn, got, *creates, tc.want)
+		}
+	}
+}
