@@ -8,7 +8,8 @@
 -- the entries: repository, folder, outcome and cause. The file is the sandbox's own word, a hint and never a verdict.
 --
 -- The app role is granted the table here, found from the catalog and never by name: every role but the owner that
--- holds UPDATE on agent_runs, which the application writes, gets SELECT, INSERT and DELETE on run_clone_status.
+-- holds UPDATE on agent_runs, which the application writes, gets SELECT, INSERT, UPDATE and DELETE on run_clone_status (a
+-- final state replaces the in-progress mark by INSERT ... ON CONFLICT DO UPDATE, which needs UPDATE).
 -- The table alters nothing existing.
 CREATE TABLE IF NOT EXISTS run_clone_status (
     run_id      UUID        PRIMARY KEY REFERENCES agent_runs (id) ON DELETE CASCADE,
@@ -29,7 +30,7 @@ BEGIN
          WHERE c.oid = 'agent_runs'::regclass
            AND a.privilege_type = 'UPDATE' AND a.grantee <> c.relowner
     LOOP
-        EXECUTE format('GRANT SELECT, INSERT, DELETE ON run_clone_status TO %I', r.rolname);
+        EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON run_clone_status TO %I', r.rolname);
     END LOOP;
 END
 $mig$;
