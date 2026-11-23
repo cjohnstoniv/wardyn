@@ -386,7 +386,8 @@ func TestFenceWriterNotStarvedByStartStream_PG(t *testing.T) {
 }
 
 // TestFenceHoldBlocksNestedWriter_PG: a writer nested under its run's operation lock queues for k behind a start's
-// fence hold; while it waits a third locker's start cannot take k; and when the start lets go the writer gets k.
+// fence hold and is still waiting while the start holds k; a third locker takes k back to back on the fence all the
+// while, and when the start lets go the writer still gets k within its wait.
 func TestFenceHoldBlocksNestedWriter_PG(t *testing.T) {
 	pool := pgPool(t)
 	a, b, c := NewPGLocker(pool, 4), NewPGLocker(pool, 4), NewPGLocker(pool, 4)
@@ -409,13 +410,38 @@ func TestFenceHoldBlocksNestedWriter_PG(t *testing.T) {
 		}
 		got <- err
 	}()
+	// c's stream of starts, each hold 50 ms, as in TestFenceWriterNotStarvedByStartStream_PG.
+	stop, streamed := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(streamed)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_, release, err := c.Lock(ctx, k, 100*time.Millisecond)
+			if err != nil {
+				continue
+			}
+			time.Sleep(50 * time.Millisecond)
+			release()
+		}
+	}()
+	defer func() { close(stop); <-streamed }()
 	time.Sleep(300 * time.Millisecond) // b is queued
+	select {
+	case err := <-got:
+		releaseA()
+		t.Fatalf("b's nested writer finished while a still held k: %v", err)
+	default:
+	}
 	if _, _, ok, err := c.TryLock(ctx, k); ok || err != nil {
 		releaseA()
 		t.Fatalf("c's start while b's writer waits = %v, %v; want false, nil", ok, err)
 	}
 	releaseA()
 	if err := <-got; err != nil {
-		t.Fatalf("b's nested writer once a let go: %v", err)
+		t.Fatalf("b's nested writer once a let go, beside c's stream of starts: %v", err)
 	}
 }

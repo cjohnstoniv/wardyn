@@ -23,7 +23,12 @@ import (
 // famLeader is a leader on its own pool that tries families every retry and checks its connection every 50 ms.
 func famLeader(t *testing.T, name string, retry time.Duration) *SweeperLeader {
 	t.Helper()
-	l := NewSweeperLeader(pgPool(t), name)
+	return famLeaderOn(pgPool(t), name, retry)
+}
+
+// famLeaderOn is famLeader on pool.
+func famLeaderOn(pool *pgxpool.Pool, name string, retry time.Duration) *SweeperLeader {
+	l := NewSweeperLeader(pool, name)
 	l.retry, l.monitor, l.poll = retry, 50*time.Millisecond, 10*time.Millisecond
 	return l
 }
@@ -159,35 +164,37 @@ func TestFamiliesSpreadAcrossTwoLeaders_PG(t *testing.T) {
 // unit returns 300 ms after its cancel, and the family's lock, tried from another session, stays held until it has
 // returned; the election connection is not closed while it runs.
 func TestFamilyLossJoinsBeforeUnlock_PG(t *testing.T) {
-	probe := pgPool(t)
 	for _, tc := range []struct {
 		name  string
-		cause func(t *testing.T)
-		after func(t *testing.T)
+		cause func(t *testing.T, probe *pgxpool.Pool)
+		after func(t *testing.T, probe *pgxpool.Pool)
 	}{
-		{"moved epoch", func(t *testing.T) {
+		{"moved epoch", func(t *testing.T, probe *pgxpool.Pool) {
 			if _, err := probe.Exec(context.Background(), `UPDATE sweeper_families SET epoch = epoch + 1 WHERE family = 'runs'`); err != nil {
 				t.Fatalf("move the epoch: %v", err)
 			}
-		}, func(*testing.T) {}},
-		{"failed monitor query", func(t *testing.T) {
+		}, func(*testing.T, *pgxpool.Pool) {}},
+		{"failed monitor query", func(t *testing.T, probe *pgxpool.Pool) {
 			if _, err := probe.Exec(context.Background(), `ALTER TABLE sweeper_families RENAME TO sweeper_families_away`); err != nil {
 				t.Fatalf("hide the families table: %v", err)
 			}
-		}, func(t *testing.T) {
+		}, func(t *testing.T, probe *pgxpool.Pool) {
 			if _, err := probe.Exec(context.Background(), `ALTER TABLE sweeper_families_away RENAME TO sweeper_families`); err != nil {
 				t.Fatalf("restore the families table: %v", err)
 			}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// A database of its own: the renamed table, should the binary die before it is restored, is no other
+			// test's.
+			probe := pgPoolIsolated(t)
 			restored := false
 			defer func() {
 				if !restored {
-					tc.after(t)
+					tc.after(t, probe)
 				}
 			}()
-			l := famLeader(t, "replica-a", time.Hour) // one round: only the boot's take
+			l := famLeaderOn(probe, "replica-a", time.Hour) // one round: only the boot's take
 			var started, returned atomic.Bool
 			stop := runLeader(t, l)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -200,7 +207,7 @@ func TestFamilyLossJoinsBeforeUnlock_PG(t *testing.T) {
 			})
 			waitFor(t, "the runs unit to start", 5*time.Second, started.Load)
 			pid := electionPID(t, l)
-			tc.cause(t)
+			tc.cause(t, probe)
 			waitFor(t, "the runs term to end", 5*time.Second, func() bool { return !leads(l, SweeperFamilyRuns) })
 			for !returned.Load() {
 				if familyFree(t, probe, SweeperFamilyRuns) && !returned.Load() {
@@ -215,7 +222,7 @@ func TestFamilyLossJoinsBeforeUnlock_PG(t *testing.T) {
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			tc.after(t)
+			tc.after(t, probe)
 			restored = true
 			waitFor(t, "the family's lock to be free once its unit returned", 5*time.Second, func() bool {
 				return familyFree(t, probe, SweeperFamilyRuns)
@@ -398,12 +405,14 @@ func TestFamilyRetakeRefusedWhileSweepAlive_PG(t *testing.T) {
 // whatever the taker already leads, and a replica whose own election session is lost (a Postgres restart drops every session
 // at once) retakes every family it held in its first round after redialling, not one per spreading wait.
 func TestFamilyFreedTakenWithoutSpreadingWait_PG(t *testing.T) {
-	const retry = 200 * time.Millisecond
+	// The spreading wait would leave n1's second family until 3*retry after n2 took its first, and the retake below
+	// until 6*retry; each bound stays under those and leaves a second or more for a loaded runner.
+	const retry = time.Second
 	probe := pgPool(t)
 	n1, n2 := famLeader(t, "replica-n1", retry), famLeader(t, "replica-n2", retry)
 	stop1 := runLeader(t, n1)
 	runLeader(t, n2)
-	waitFor(t, "the two to share the four families", 5*time.Second, func() bool {
+	waitFor(t, "the two to share the four families", 15*time.Second, func() bool {
 		return len(ledFamilies(n1)) > 0 && len(ledFamilies(n1))+len(ledFamilies(n2)) == len(SweeperFamilies)
 	})
 	time.Sleep(2 * retry) // n2's rounds try n1's families and find them held
@@ -412,7 +421,7 @@ func TestFamilyFreedTakenWithoutSpreadingWait_PG(t *testing.T) {
 	terminate(t, probe, electionPID(t, n1))
 	stop1()
 	start := time.Now()
-	waitFor(t, "n2 to lead all four within two rounds", 2*retry+100*time.Millisecond, func() bool {
+	waitFor(t, "n2 to lead all four within two rounds", 2*retry+500*time.Millisecond, func() bool {
 		return len(ledFamilies(n2)) == len(SweeperFamilies)
 	})
 	t.Logf("n2 took n1's families in %s", time.Since(start))
@@ -421,8 +430,8 @@ func TestFamilyFreedTakenWithoutSpreadingWait_PG(t *testing.T) {
 	before := familyEpochs(t, probe)
 	terminate(t, probe, electionPID(t, n2))
 	start = time.Now()
-	waitFor(t, "n2 to notice the loss", time.Second, func() bool { return len(ledFamilies(n2)) < len(SweeperFamilies) })
-	waitFor(t, "n2 to retake all four in one round", n2.monitor+retry+300*time.Millisecond, func() bool {
+	waitFor(t, "n2 to notice the loss", 3*time.Second, func() bool { return len(ledFamilies(n2)) < len(SweeperFamilies) })
+	waitFor(t, "n2 to retake all four in one round", n2.monitor+retry+time.Second, func() bool {
 		return len(ledFamilies(n2)) == len(SweeperFamilies)
 	})
 	t.Logf("n2 retook its families in %s", time.Since(start))
