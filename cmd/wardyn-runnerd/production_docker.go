@@ -465,12 +465,14 @@ func runnerKeystore(ks runneragent.Keystore, runnerID string) runneragent.Keysto
 }
 
 // hostCaps is the part of the caps report that belongs to the machine and the substrate: what it
-// supports, its name, version and arch, whether it keeps a sandbox after the run ends, and whether it can
-// cut an agent off its networks (ProxyFence: the substrate's, never the process's).
+// supports, its name, version and arch, whether it keeps a sandbox after the run ends, whether it can
+// cut an agent off its networks (ProxyFence: the substrate's, never the process's), and whether a run
+// moved to it reads present before it starts (MoveImportPresent: the substrate's too).
 func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runnerwire.Caps, error) {
 	_, keeps := sub.(runner.SandboxEnder)
 	_, fences := sub.(runner.ProxyFencer)
 	_, narrows := sub.(runner.ProxyNarrower)
+	_, importPresent := sub.(runner.MoveImportPresenter)
 	support, err := sub.Classes(ctx)
 	if err != nil {
 		return runnerwire.Caps{}, err
@@ -480,7 +482,8 @@ func hostCaps(ctx context.Context, sub substrate.Substrate, arch string) (runner
 	if arch == "" {
 		arch = engineArch(ctx)
 	}
-	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows}, nil
+	return runnerwire.Caps{Support: support, Version: version.String(), MachineName: machine, Arch: arch, EndsUnkept: !keeps, ProxyFence: fences, ProxyNarrow: narrows,
+		MoveState: true, MoveImportPresent: importPresent}, nil
 }
 
 // checkLapsesAtStartup runs the first lapse check. Run retries transient containment errors, and
@@ -546,6 +549,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
 		WorkloadStatus: extra.workloadStatus,
+		SpoolDrained:   manager.SpoolDrained, MoveUnbound: manager.MoveUnbound,
 	})
 	if err != nil {
 		return runnerRuntime{}, err
