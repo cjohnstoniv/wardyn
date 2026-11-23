@@ -14,7 +14,7 @@ const assistantSettingsWriteAction = "assistant.settings.write"
 const (
 	assistantSessionStartAction = "assistant.session.start"
 	assistantSessionEndAction   = "assistant.session.end"
-	assistantSuggestionAction   = "assistant.suggestion"
+	assistantSuggestionAction   = "assistant.suggestion.create"
 )
 
 // assistantTargetKey is the audit target of the assistant block and the target key of its held change: the
