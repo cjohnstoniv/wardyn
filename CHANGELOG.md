@@ -21,6 +21,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before
   upgrading. An unset or empty value now takes the `on` default; an install that sets any other value keeps it.
+  On Compose, a value in `.env` reaches `wardynd` only through this release's `docker-compose.yaml`, which re-running the
+  installer fetches; a compose file kept from an earlier release needs `WARDYN_ATTACH_LOCAL` added to `wardynd`'s
+  `environment`.
 
 ## [0.10.2] — 2026-11-22
 
