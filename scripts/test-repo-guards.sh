@@ -806,7 +806,7 @@ else
     [ "$(yq -r '.on.workflow_dispatch.inputs.scope.default' "$NIGHTLY")" = full ] \
         || { bad "$NIGHTLY: workflow_dispatch input 'scope' must exist and default to full"; scope_fail=1; }
     # The workflow_call entry is kept though nothing calls it today (train-suites dispatches with
-    # scope=candidate and publish=false); its input must exist, be a string (no choice type there)
+    # scope=candidate, and publish from the head's candidate marker); its input must exist, be a string (no choice type there)
     # and default to full like the dispatch one.
     [ "$(yq -r '.on.workflow_call.inputs.scope.default' "$NIGHTLY")" = full ] \
         && [ "$(yq -r '.on.workflow_call.inputs.scope.type' "$NIGHTLY")" = string ] \

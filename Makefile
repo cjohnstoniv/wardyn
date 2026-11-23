@@ -725,6 +725,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/lib/walk_api_test.sh
 	./scripts/test-check-managed-settings-drift.sh
 	./scripts/test-ci-cache-prune.sh
+	./scripts/test-ci-candidate-marker.sh
 	./scripts/test-ci-pick-dispatched-run.sh
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-ci-wait-run.sh

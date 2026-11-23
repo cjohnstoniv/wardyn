@@ -310,4 +310,126 @@ ok "floor docker: TestGatewayRecipes_Live is not required while GITHUB_ACTIONS i
 floor_each "l0-docker" l0-docker WARDYN_TEST_DOCKER=1 "${l0_names[@]}"
 floor_each "conformance-vm" conformance-vm "" "${vm_names[@]}"
 floor_each "unit" unit "" "${unit_names[@]}"
+# ── internal/api's slices: WARDYN_TEST_REPORT_SPLIT_BIN ─────────────────────
+# A fixture module with one package run as three slices of its test binary beside the others. Wrappers stand in
+# for a binary that misbehaves (drops a case, lists a name no slice selects, lists one twice); test-report.sh
+# is not changed for them.
+sp="${tmp}/sp"
+mkdir -p "${sp}/split" "${sp}/other"
+cat > "${sp}/go.mod" <<'MOD'
+module fixture
+
+go 1.20
+MOD
+cat > "${sp}/split/split.go" <<'GO'
+package split
+
+func Half(n int) int { return n / 2 }
+GO
+cat > "${sp}/split/a_test.go" <<'GO'
+package split
+
+import "testing"
+
+func TestAaOne(t *testing.T) {
+	if Half(4) != 2 {
+		t.Fatal("half")
+	}
+}
+func TestAbTwo(t *testing.T)   {}
+func TestBaThree(t *testing.T) {}
+func TestBbFour(t *testing.T)  {}
+func TestCaFive(t *testing.T)  {}
+func TestCbSix(t *testing.T) {
+	t.Run("good", func(t *testing.T) {})
+	t.Run("bad", func(t *testing.T) { t.Fatal("bad subtest") })
+}
+func TestDaQuarantined(t *testing.T) { t.Fatal("quarantined") }
+func TestEaSkips(t *testing.T)       { t.Skip("explicit") }
+GO
+cat > "${sp}/other/b_test.go" <<'GO'
+package other
+
+import "testing"
+
+func TestOther(t *testing.T) {}
+GO
+printf 'fixture | TestDaQuarantined | #1 | @cjohnstoniv | %s\nfixture | TestCbSix/bad | #2 | @cjohnstoniv | %s\n' "${future}" "${future}" > "${tmp}/spq.txt"
+grep -v 'TestCbSix/bad' "${tmp}/spq.txt" > "${tmp}/spq-nobad.txt"
+(cd "${sp}" && go test -c -o "${tmp}/split.test" ./split) || fail "split fixture: building the test binary failed"
+(cd "${sp}" && go test -c -covermode=atomic -coverpkg=./... -o "${tmp}/splitcov.test" ./split) || fail "split fixture: building the coverage binary failed"
+sp_out="${REPO_ROOT}/test/reports/go/${report}"
+sp_run() { # <binary> <cover 0|1> <quarantine file> <args...>: runs the split fixture, prints its log, returns its exit code
+  local bin="$1" cov="$2" q="$3"
+  shift 3
+  (cd "${sp}" && WARDYN_GO_QUARANTINE="${q}" WARDYN_TEST_REPORT_NAME="${report}" WARDYN_TEST_REPORT_SKIP_FLOOR=1 \
+    WARDYN_TEST_REPORT_COVER="${cov}" WARDYN_TEST_REPORT_SPLIT_PKG=fixture/split WARDYN_TEST_REPORT_SPLIT_N=3 \
+    WARDYN_TEST_REPORT_SPLIT_BIN="${bin}" "${REPO_ROOT}/scripts/test-report.sh" fixture "$@" 2>&1)
+}
+mk_wrapper() { # <name>: a script that runs the real split binary after the body on stdin; $REAL is the binary
+  { printf '#!/usr/bin/env bash\nREAL=%q\n' "${tmp}/split.test"; cat; } > "${tmp}/$1"
+  chmod +x "${tmp}/$1"
+}
+sp_count() { grep -c "\"Action\":\"$1\",\"Package\":\"fixture/split\",\"Test\":\"$2\"" "${sp_out}/test-output.json" || true; }
+
+log="$(sp_run "${tmp}/split.test" 0 "${tmp}/spq.txt" ./...)" || fail "split: the real binary should pass, got: ${log}"
+grep -qF ">> split: 3 slices, 8 names listed, 7 ran once, 1 quarantined" <<<"${log}" || fail "split: no summary line in: ${log}"
+for t in TestAaOne TestAbTwo TestBaThree TestBbFour TestCaFive TestCbSix; do
+  [ "$(sp_count pass "${t}")" = 1 ] || fail "split: ${t} has $(sp_count pass "${t}") pass events, want 1"
+done
+[ "$(sp_count skip TestEaSkips)" = 1 ] || fail "split: TestEaSkips has no skip event"
+[ "$(grep -c '"Action":"pass","Package":"fixture/other","Test":"TestOther"' "${sp_out}/test-output.json")" = 1 ] || fail "split: TestOther did not run once"
+grep -q '"Test":"TestDaQuarantined"' "${sp_out}/test-output.json" && fail "split: TestDaQuarantined ran although quarantined"
+for i in 1 2 3; do [ -s "${sp_out}/split-${i}.list" ] || fail "split: split-${i}.list is missing or empty"; done
+want_names="$(printf '%s\n' TestAaOne TestAbTwo TestBaThree TestBbFour TestCaFive TestCbSix TestDaQuarantined TestEaSkips | sort)"
+[ "$(cat "${sp_out}"/split-[123].list | sort)" = "${want_names}" ] || fail "split: the slices' lists are not the 8 names: $(cat "${sp_out}"/split-[123].list | sort | tr '\n' ' ')"
+ls "${sp_out}"/split-*.json >/dev/null 2>&1 && fail "split: a split-*.json is left in the report directory"
+ok "split: every test runs once in one slice"
+
+mk_wrapper drop <<'EOF2'
+args=("$@")
+for a in "$@"; do
+  if [[ $a == -test.run=* && TestBbFour =~ ${a#-test.run=} ]]; then
+    for i in "${!args[@]}"; do [[ ${args[$i]} == -test.skip=* ]] && args[$i]="${args[$i]}|^TestBbFour\$"; done
+  fi
+done
+exec "$REAL" "${args[@]}"
+EOF2
+log="$(sp_run "${tmp}/drop" 0 "${tmp}/spq.txt" ./...)" && fail "split: a dropped case must fail the run, got: ${log}"
+grep -q ">> SPLIT: TestBbFour is selected by slice " <<<"${log}" && grep -q "but has no outcome in it" <<<"${log}" || fail "split: dropped case: no message naming TestBbFour in: ${log}"
+ok "split: a dropped case fails the run (the selector is unchanged)"
+
+mk_wrapper ghost <<'EOF2'
+[ "$1" = "-test.list=.*" ] && { "$REAL" "$@"; echo TestZzGhost; exit 0; }
+exec "$REAL" "$@"
+EOF2
+log="$(sp_run "${tmp}/ghost" 0 "${tmp}/spq.txt" ./...)" && fail "split: a name no slice selects must fail the run, got: ${log}"
+grep -q ">> SPLIT: TestZzGhost is selected by no slice" <<<"${log}" || fail "split: no 'selected by no slice' message in: ${log}"
+ok "split: a name no slice selects fails"
+
+mk_wrapper twice <<'EOF2'
+case "$1" in -test.list=*) [ "$1" = "-test.list=.*" ] || { "$REAL" "$@"; echo TestAaOne; exit 0; } ;; esac
+exec "$REAL" "$@"
+EOF2
+log="$(sp_run "${tmp}/twice" 0 "${tmp}/spq.txt" ./...)" && fail "split: a name two slices select must fail the run, got: ${log}"
+grep -q ">> SPLIT: TestAaOne is selected by slices" <<<"${log}" || fail "split: no 'selected by slices' message in: ${log}"
+ok "split: a name two slices select fails"
+
+log="$(sp_run "${tmp}/nope" 0 "${tmp}/spq.txt" ./...)"; rc=$?
+[ "${rc}" = 2 ] && grep -q "is not an executable test binary" <<<"${log}" || fail "split: a missing binary: want exit 2 and the message, got ${rc}: ${log}"
+ok "split: a missing binary is refused"
+
+log="$(sp_run "${tmp}/split.test" 0 "${tmp}/spq.txt" -run X ./...)"; rc=$?
+[ "${rc}" = 2 ] && grep -q "only -race, -tags and ./... may be passed" <<<"${log}" || fail "split: other arguments: want exit 2 and the message, got ${rc}: ${log}"
+ok "split: other arguments are refused"
+
+log="$(sp_run "${tmp}/splitcov.test" 1 "${tmp}/spq.txt" ./...)" || fail "split: the coverage run should pass, got: ${log}"
+[ "$(grep -c '^mode: ' "${sp_out}/cover.out")" = 1 ] && [ "$(head -1 "${sp_out}/cover.out")" = "mode: atomic" ] || fail "split: cover.out must hold one 'mode: atomic' line, first: $(grep -n '^mode: ' "${sp_out}/cover.out")"
+grep -qE '^fixture/split/split\.go:.* [1-9][0-9]*$' "${sp_out}/cover.out" || fail "split: cover.out has no covered block of split.go: $(cat "${sp_out}/cover.out")"
+ok "split: coverage merges like go test's"
+
+log="$(sp_run "${tmp}/split.test" 0 "${tmp}/spq-nobad.txt" ./...)" && fail "split: a failing test must fail the run, got: ${log}"
+grep -q "fixture/split TestCbSix/bad" <<<"${log}" || fail "split: the failing test block does not name fixture/split TestCbSix/bad in: ${log}"
+ok "split: a failing test still fails the run"
+
 echo "test-test-report: PASS"

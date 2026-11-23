@@ -6,6 +6,9 @@
 # Go module seeding, watched kind walks, write steps tied to a release tag ref, the guest agent's stamp). They sit in their own
 # file to keep test-repo-guards.sh under the file-size limit. Not run on its own: test-repo-guards.sh
 # sources it after guard 25, so these guards share its fail, bad, ok, REL, NIGHTLY and NOTIFY_EXEMPT.
+#  36. ci.yml's go legs build with the Makefile recipes' flags; one split binary.
+#  34. nightly.yml's concurrency group: a dispatch shares its ref and scope's group; a called run gets its own.
+#  35. lane-check.yml's steps equal the ci.yml jobs they copy (ordered, with the named omissions).
 
 # ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
 # The binaries job builds every TARGETS entry in one step, but each target has its
@@ -240,4 +243,121 @@ elif ! bash "$ROOT/scripts/test-check-release-stamp.sh" >/dev/null 2>&1; then
     bad "scripts/test-check-release-stamp.sh failed — check-release-stamp.sh no longer tells a stamped binary from an unstamped one (#3636)"
 else
     ok "release.yml checks the packaged guest agent's release stamp, and the check refuses an unstamped binary"
+fi
+
+# ── 36. ci.yml's go job: matrix.build equals the Makefile recipe's flags, and both split steps name one binary ──
+# CI-1 (r2, M1): with internal/api's tests split into slices of the prebuilt binary, the make step runs that file as
+# given, so the go job's `matrix.build` decides which tags and flags internal/api's tests are built with, and nothing
+# else ties it to the test-report* recipes. A recipe changed without its leg (or the reverse) would run internal/api
+# under the old tag set, green, while every other package uses the new one. This guard compares each leg's `build:`
+# with the recipe's words between the suite name and `./...` plus ` -covermode=atomic -coverpkg=./...`, and needs the
+# two steps that set WARDYN_TEST_REPORT_SPLIT_BIN to give it the same value.
+ci_split_problems() {
+    local ci="$1" mk="$2" rows suite tgt build want bins
+    rows="$(yq -r '.jobs.go.strategy.matrix.include[] | .suite + " " + .target + " " + .build' "$ci" 2>/dev/null)" || rows=""
+    [ -n "$rows" ] || { echo "the go job has no readable matrix legs"; return 0; }
+    while read -r suite tgt build; do
+        want="$(sed -nE "s#^[[:space:]]+WARDYN_TEST_PG= \./scripts/test-report\.sh ${suite} (.*) \./\.\.\.\$#\1#p" "$mk" | head -1)"
+        if [ -z "$want" ]; then
+            echo "leg $suite: no 'WARDYN_TEST_PG= ./scripts/test-report.sh $suite … ./...' recipe line in the Makefile"
+        elif [ "$build" != "$want -covermode=atomic -coverpkg=./..." ]; then
+            echo "leg $suite: build is '$build' but the Makefile recipe says '$want -covermode=atomic -coverpkg=./...'"
+        fi
+    done <<< "$rows"
+    bins="$(yq -r '.jobs.go.steps[] | .env.WARDYN_TEST_REPORT_SPLIT_BIN // ""' "$ci" 2>/dev/null)"
+    [ "$(printf '%s\n' "$bins" | sed '/^$/d' | wc -l)" = 2 ] || echo "exactly two go-job steps (the prebuild and the make step) must set WARDYN_TEST_REPORT_SPLIT_BIN"
+    [ "$(printf '%s\n' "$bins" | sed '/^$/d' | sort -u | wc -l)" = 1 ] || echo "the go job's two WARDYN_TEST_REPORT_SPLIT_BIN values differ"
+}
+split_ci="$(mktemp -d)"
+split_real="$(ci_split_problems .github/workflows/ci.yml Makefile)"
+cp .github/workflows/ci.yml "$split_ci/ci.yml"
+sed -i 's#build: -race -tags docker -covermode#build: -race -covermode#' "$split_ci/ci.yml"
+split_plant="$(ci_split_problems "$split_ci/ci.yml" Makefile)"
+rm -rf "$split_ci"
+if [ -n "$split_real" ]; then
+    bad "ci.yml's go job and the Makefile disagree about how internal/api's tests are built (CI-1): $split_real"
+elif [ -z "$split_plant" ]; then
+    bad "guard 36's plant (a leg without its -tags) was not caught, so the guard checks nothing"
+else
+    ok "ci.yml's go legs build with the Makefile recipes' flags, and the two split steps name one binary"
+fi
+
+# ── 34. nightly.yml's concurrency key: a dispatch shares its ref and scope's group, a called run gets its own ──
+# The run-id suffix belongs to the called arm only. With `A && '' || B` the empty string is falsy, so B always won and
+# every dispatch got a group of its own: a re-dispatch never cancelled the run it replaced. No local tool evaluates a
+# GitHub expression, so this pins the exact line, and refuses the always-falsy arm anywhere in the file.
+nightly_group_line="  group: nightly-\${{ github.event_name }}-\${{ github.ref }}-\${{ inputs.scope || 'full' }}\${{ (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') && format('-{0}', github.run_id) || '' }}"
+nightly_group_problems() {
+    local f="$1"
+    [ "$(grep -cxF -- "$nightly_group_line" "$f")" = 1 ] \
+        || echo "the concurrency group is not exactly the pinned line"
+    ! grep -qF "&& '' ||" "$f" || echo "a line has the always-falsy '&& '' ||' arm"
+}
+group_plant="$(mktemp -d)"
+sed "s#^  group: nightly-.*#  group: nightly-\${{ github.event_name }}-\${{ github.ref }}-\${{ inputs.scope || 'full' }}\${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') \&\& '' || format('-{0}', github.run_id) }}#" "$NIGHTLY" > "$group_plant/nightly.yml"
+group_real="$(nightly_group_problems "$NIGHTLY")"
+group_planted="$(nightly_group_problems "$group_plant/nightly.yml")"
+rm -rf "$group_plant"
+if [ -n "$group_real" ]; then
+    bad "$NIGHTLY: $group_real: a dispatch must share its ref and scope's group, so a re-dispatch cancels the run it replaces; a called run must not"
+elif [ -z "$group_planted" ]; then
+    bad "guard 34's plant (the old always-falsy group line) was not caught, so the guard checks nothing"
+else
+    ok "nightly.yml's concurrency group gives a dispatch its ref and scope's group and a called run its own"
+fi
+
+# ── 35. lane-check.yml's steps are copies of the ci.yml jobs they stand in for ──
+# lane-check.yml runs go (lint), go (unit) and the store and race Postgres shards on a dispatched lane branch. A copy that
+# drifts from ci.yml proves nothing about the train, so each lane-check job's whole ordered step list (unnamed steps
+# included) must equal its ci.yml job's, after the named omissions: the go job's docs-only step and every job's cache save.
+# `if` is not compared, since lane-check drops the `needs.changes` conditions.
+LC=.github/workflows/lane-check.yml
+if [ -f "$LC" ]; then
+    if ! command -v yq >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+        bad "guard 35 needs yq and jq (lane-check.yml parity); install them"
+    else
+        lc_steps() {  # FILE JOB OMIT_JSON: the job's steps, without the omitted names, as one JSON array
+            yq -o=json ".jobs[\"$2\"].steps" "$1" |
+                jq -c --argjson omit "$3" '[.[] | select(((.name // "") as $n | $omit | index($n)) == null) | {name, id, uses, with, run, env, shell, "working-directory", "timeout-minutes", "continue-on-error"}]'
+        }
+        lc_save='"Save Go build cache (push to main only)"'
+        lc_docs='"Docs- or console-only change — the guard packages only (no race, no coverage)"'
+        lc_pair() {  # CI_FILE LANE_FILE LANE_JOB CI_JOB OMIT_JSON
+            local a b
+            a="$(lc_steps "$1" "$4" "$5")"
+            b="$(lc_steps "$2" "$3" '[]')"
+            [ -n "$a" ] && [ "$a" != null ] && [ "$a" = "$b" ] \
+                || echo "lane-check job '$3' differs from ci.yml's '$4' (ordered steps, minus the named omissions)"
+        }
+        lc_problems() {  # CI_FILE LANE_FILE: one line per difference
+            local ci="$1" lane="$2"
+            lc_pair "$ci" "$lane" lint go-lint "[$lc_save]"
+            lc_pair "$ci" "$lane" unit go "[$lc_docs,$lc_save]"
+            lc_pair "$ci" "$lane" pg test-pg-shard "[$lc_save]"
+            [ "$(yq -r '.jobs[].if' "$lane" | sort -u)" = "startsWith(github.ref, 'refs/heads/lane/')" ] \
+                || echo "every lane-check job's if must be exactly startsWith(github.ref, 'refs/heads/lane/')"
+            [ "$(yq -o=json -I0 '.on | keys' "$lane")" = '["workflow_dispatch"]' ] \
+                || echo "lane-check's on: must hold workflow_dispatch only"
+            ! yq -r '.jobs[].steps[].uses // ""' "$lane" | grep -q '^actions/cache/save@' \
+                || echo "a lane-check step saves a cache; a lane ref's entries would be readable by no train"
+        }
+        lc_plant="$(mktemp -d)"
+        lc_real="$(lc_problems .github/workflows/ci.yml "$LC")"
+        # Three plants, each of which must fail: one run line changed, one unnamed step's fetch-depth deleted, one named step deleted.
+        sed '0,/run: make ${{ matrix.target }}/s//run: make ${{ matrix.target }} -x/' "$LC" > "$lc_plant/run.yml"
+        yq 'del(.jobs.lint.steps[0].with.fetch-depth)' "$LC" > "$lc_plant/depth.yml"
+        yq 'del(.jobs.lint.steps[] | select(.name == "Whole-tree guard tests (every Go test that reads the repository)"))' "$LC" > "$lc_plant/gone.yml"
+        lc_missed=""
+        for p in run depth gone; do
+            [ -n "$(lc_problems .github/workflows/ci.yml "$lc_plant/$p.yml")" ] || lc_missed="$lc_missed $p"
+        done
+        rm -rf "$lc_plant"
+        if [ -n "$lc_real" ]; then
+            bad "$LC: $lc_real"
+        elif [ -n "$lc_missed" ]; then
+            bad "guard 35's plants were not caught ($lc_missed ), so the guard checks nothing"
+        else
+            ok "lane-check.yml's steps equal the ci.yml jobs they copy (self-test catches a changed run line, a dropped fetch-depth and a deleted step)"
+        fi
+    fi
 fi

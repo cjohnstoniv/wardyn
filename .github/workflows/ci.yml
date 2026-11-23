@@ -76,8 +76,8 @@ jobs:
   # branch protection accepts, and it never waits for a runner just to do
   # nothing.
   #
-  # Start order. The account runs 20 jobs at once and a change to Go asks for
-  # about 35, so some wait, and GitHub picks which among the jobs that became
+  # Start order. The account runs 40 jobs at once across all of its runs, and a change to Go asks for
+  # about 35, so when runs overlap some wait, and GitHub picks which among the jobs that became
   # ready together. The long jobs (go, go-lint, ui, ui-e2e, helm-install-test, both
   # conformance jobs, envbuild-integration, test-pg-shard) need only this job.
   # The short ones (gates, notices, the trivy scans) also need `diagrams`, a
@@ -307,6 +307,9 @@ jobs:
       # leaves a near-empty newest entry. The unhashed restore-key keeps a
       # go.mod/go.sum change warm (the build caches are content-addressed, so
       # an older entry is safe to restore).
+      # Marks the job's start: the save step below keeps only the build-cache entries this job used.
+      - name: Mark the cache start
+        run: touch "$RUNNER_TEMP/go-cache-start"
       # The module cache is one entry shared by every job (go-modules saves it).
       - name: Restore the Go module cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -347,6 +350,8 @@ jobs:
           # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
           # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # Kept for the next step, which runs internal/api's tests as three slices of it (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
         run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
       - name: make ${{ matrix.target }}
         if: needs.changes.outputs.backend != 'false'
@@ -355,6 +360,9 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: '1'
           # The same GOFLAGS as the prebuild above, so this step reuses its internal/api build.
           GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # internal/api runs as three slices of the prebuilt binary beside the other packages (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+          WARDYN_TEST_REPORT_SPLIT_PKG: github.com/cjohnstoniv/wardyn/internal/api
       # The guard packages: the directories of every test file that names a docs
       # path, threatmodel/, ui/, .github/ or a .md file. A tag leg keeps only the
       # files built under one of its tags (their packages run with -tags; the rest
@@ -399,6 +407,15 @@ jobs:
           path: test/reports/go/${{ matrix.suite }}/**
           overwrite: true
           if-no-files-found: error
+      # Go refreshes a cache entry's mtime when it uses one more than an hour old, so a file older than the start
+      # marker is a restored entry this job never read. Only those go; an entry used within its first hour can go too,
+      # which costs a recompile, never a wrong build.
+      - name: Drop the build-cache entries this job did not use
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          du -sh ~/.cache/go-build
+          find ~/.cache/go-build -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+          du -sh ~/.cache/go-build
       - name: Save Go build cache (push to main only)
         if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -3478,8 +3495,9 @@ jobs:
   # run. A dispatched run takes the nightly's own permissions, and a newer
   # dispatch on the same ref cancels it (the nightly's concurrency group), as a
   # newer push cancels this run. The job holds one runner while it waits.
-  # publish=false: a train is not a release candidate, so the nightly's
-  # buildx-smoke still builds but skips its image push and attest steps.
+  # publish: false unless the head commit carries the lead's `Candidate: v<version>` line (scripts/ci-candidate-marker.sh). Then the
+  # dispatched nightly stages and attests the images that green-by-tree.sh and release.yml's promote need, so no second
+  # candidate nightly is dispatched by hand.
   train-suites:
     if: >-
       github.event_name == 'pull_request' &&
@@ -3492,6 +3510,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       # The nightly checks out the branch, so its run is the head's only while
       # the branch has not moved; a run on another sha is never taken.
       - name: Dispatch the nightly's candidate scope on this head and wait for it
@@ -3500,18 +3520,23 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+          [ -x scripts/ci-candidate-marker.sh ] || { echo "::error::the head predates the candidate marker; merge its base first"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "::error::checked out $(git rev-parse HEAD), not the head $HEAD_SHA"; exit 1; }
+          publish="$(./scripts/ci-candidate-marker.sh)"
+          echo "candidate marker: publish=$publish (scripts/ci-candidate-marker.sh)"
           since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
-          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish="$publish" -f dispatch_id="$DISPATCH_ID"
           id=
           for _ in $(seq 40); do
             id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
-              --json databaseId,headSha,createdAt | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since")"
+              --json databaseId,headSha,createdAt,displayTitle | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since" "$DISPATCH_ID")"
             [ -z "$id" ] || break
             sleep 15
           done
-          [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
+          [ -n "$id" ] || { echo "::error::no dispatched nightly run [$DISPATCH_ID] appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
           # The wait polls rather than `gh run watch` and gives up after ten
           # failed reads in a row (see ci-wait-run.sh).
@@ -3784,7 +3809,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       actions: write
+      contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: Delete the Go cache entries this run superseded
         env:
           GH_TOKEN: ${{ github.token }}
@@ -3794,11 +3823,7 @@ jobs:
         run: |
           set -euo pipefail
           caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=refs/heads/main&key=go&per_page=100" --jq '.actions_caches[]')"
-          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" '
-            def fam: .key | sub("-[0-9]+$"; "") | sub("-[0-9a-f]{64}$"; "") | sub("-(Linux|Windows|macOS)$"; "");
-            (map(select((.key | endswith($r)) or ($mod != "" and .key == $mod))) | map({key: fam, value: .created_at}) | from_entries) as $fresh
-            | .[] | select(fam as $f | $fresh[$f] != null and .created_at < $fresh[$f])
-            | "\(.id)\t\(.key)"')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" -f scripts/ci-go-cache-prune.jq)"
           [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
           while IFS=$'\t' read -r id key; do
             echo "deleting $key"

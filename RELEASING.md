@@ -46,7 +46,7 @@
     - with every required status check green in it;
     - plus the newest dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every watched job green.
   - A newer red nightly is not rescued by an older green one: re-dispatching the nightly is the deliberate recovery.
-  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
+  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks, and the Go cache warm when `WARDYN_RELEASE_GO_CACHE` is set) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
   - If no run qualifies, `preflight-green` fails loudly naming what is missing.
   - When the only CI run on the tree is a release PR whose merge tree differs from its head,
     - rebase the PR head onto the base tip so the merge adds nothing,

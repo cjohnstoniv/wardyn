@@ -14,25 +14,28 @@
 # the race and coverage flags, the test compile's largest process fell from 13.9 to 11.0 GiB and the link's from
 # 3.2 to 2.5 GiB. The count above runs under this step's GOFLAGS, so a next step with another value compiles the
 # package again unseen; the callers give both steps the same value.
+# With WARDYN_TEST_REPORT_SPLIT_BIN set, the binary is written there and kept, for scripts/test-report.sh to run
+# in slices (ci.yml's go job); otherwise it goes to $RUNNER_TEMP and is deleted, as every other caller expects.
 set -euo pipefail
 workers=${1:?usage: ci-api-prebuild.sh <workers> [go test build flags...]}
 shift
 tmp="${RUNNER_TEMP:-/tmp}"
+out="${WARDYN_TEST_REPORT_SPLIT_BIN:-$tmp/api.test}"
 vmstat -t 15 &
 vm=$!
 trap 'kill "$vm" 2>/dev/null || true' EXIT
 free -m; df -h /
 rc=0
 if [ -x /usr/bin/time ]; then
-  /usr/bin/time -v -o "$tmp/api.time" go test -c -p "$workers" "$@" -o "$tmp/api.test" ./internal/api/ || rc=$?
+  /usr/bin/time -v -o "$tmp/api.time" go test -c -p "$workers" "$@" -o "$out" ./internal/api/ || rc=$?
   cat "$tmp/api.time"
   echo "::notice title=internal/api test compile, the largest single process::exit $rc; $(grep -E 'Maximum resident|Elapsed' "$tmp/api.time" | sed 's/^[[:space:]]*//' | paste -sd ';' -)"
 else
   start=$SECONDS
-  go test -c -p "$workers" "$@" -o "$tmp/api.test" ./internal/api/ || rc=$?
+  go test -c -p "$workers" "$@" -o "$out" ./internal/api/ || rc=$?
   echo "::warning title=internal/api test compile::exit $rc after $((SECONDS - start)) s; /usr/bin/time is missing, so the peak is not measured"
 fi
-rm -f "$tmp/api.test"
+[ -n "${WARDYN_TEST_REPORT_SPLIT_BIN:-}" ] || rm -f "$out"
 free -m; df -h /
 [ "$rc" = 0 ] || exit "$rc"
 n="$(go test -n "$@" ./internal/api/ 2>&1)" || { printf '%s\n' "$n"; echo "::error::go test -n failed, so the compiles left were not counted"; exit 1; }

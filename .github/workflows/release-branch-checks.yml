@@ -2,8 +2,10 @@ name: Release branch checks
 
 # ci.yml has no push run on release/** (#1461): release.yml accepts CI by tree.
 # That left a commit pushed straight to a release branch without a DCO or secret
-# check until someone cut a release from it (#1466). These two jobs close that,
-# and nothing else runs here.
+# check until someone cut a release from it (#1466). The dco and gitleaks jobs close that.
+# Three more jobs (go-cache, go-modules and go-cache-prune) warm and prune the Go caches a pull request into a
+# release branch restores. They run only with the repository variable WARDYN_RELEASE_GO_CACHE set to 'true',
+# which the owner sets once the repository's cache quota allows it, and nothing else runs here.
 on:
   push:
     branches: ['release/**']
@@ -49,3 +51,178 @@ jobs:
           cache: false
       - name: make gitleaks
         run: make gitleaks
+
+  # ── Go caches for pull requests into a release branch ─────────────────────
+  # A pull request restores its own base branch's entries before main's, so a push to release/** that saves the three
+  # Go build caches (and the module cache below) gives the next pull request into that branch a warm start. Off
+  # until WARDYN_RELEASE_GO_CACHE is 'true': these entries add to the repository's 10 GB cache, and main's live
+  # entries are evicted first when it fills.
+  go-cache:
+    if: vars.WARDYN_RELEASE_GO_CACHE == 'true'
+    name: go-cache (${{ matrix.suite }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: unit
+            target: test-report
+            tags: ''
+            build: -race -covermode=atomic -coverpkg=./...
+          - suite: docker
+            target: test-report-docker
+            tags: docker
+            build: -race -tags docker -covermode=atomic -coverpkg=./...
+          - suite: k8s
+            target: test-report-k8s
+            tags: docker,k8s
+            build: -race -tags docker,k8s -covermode=atomic -coverpkg=./...
+    steps:
+      - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
+        run: |
+          command -v dockerd >/dev/null || exit 0
+          f=/etc/docker/daemon.json
+          cur='{}'; [ -s "$f" ] && cur="$(sudo cat "$f")"
+          printf '%s' "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f" >/dev/null
+          # A SIGHUP reload resets the host-gateway address, so restart, then bring back any service container.
+          running="$(docker ps -q)"; sudo systemctl restart docker
+          [ -z "$running" ] || docker start $running >/dev/null
+          docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q mirror.gcr.io
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Marks the job's start: the save step below keeps only the build-cache entries this job used.
+      - name: Mark the cache start
+        run: touch "$RUNNER_TEMP/go-cache-start"
+      # The module cache is one entry shared by every job (go-modules saves it).
+      - name: Restore the Go module cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          restore-keys: gomod-${{ runner.os }}-
+      # On this ref the restore finds release/**'s own newest entry first, then main's.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-${{ matrix.suite }}-${{ runner.os }}-
+      - name: Add swap for the coverage compile
+        run: |
+          swapon --show
+          sudo fallocate -l 8G /swapfile-wardyn
+          sudo chmod 600 /swapfile-wardyn
+          sudo mkswap /swapfile-wardyn
+          sudo swapon /swapfile-wardyn
+          free -m
+      - name: Prebuild internal/api's tests with two workers
+        env:
+          GOMAXPROCS: "2"
+          # A soft limit for each process: a compile collects harder near it, and with it set the compiler skips
+          # its starting-heap boost. It cannot hold a compile below its live heap.
+          GOMEMLIMIT: "10GiB"
+          # internal/api compiles and links without DWARF (scripts/ci-api-prebuild.sh has the figures). The step
+          # that reuses this build sets the same GOFLAGS; with any other value it compiles the package again.
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+          # Kept for the next step, which runs internal/api's tests as three slices of it (scripts/test-report.sh).
+          WARDYN_TEST_REPORT_SPLIT_BIN: ${{ runner.temp }}/api.test
+        run: scripts/ci-api-prebuild.sh 2 ${{ matrix.build }}
+      # Compiles and links every test binary without running one, so the build cache holds what the suite's compile
+      # would, and no test body runs, TestMain included.
+      - name: Compile every test binary (no test runs)
+        env:
+          GOFLAGS: "-gcflags=github.com/cjohnstoniv/wardyn/internal/api=-dwarf=false -ldflags=-w"
+        run: WARDYN_TEST_PG='' go test -count=1 -run '^$' -exec /bin/true ${{ matrix.build }} ./...
+      - name: Drop the build-cache entries this job did not use
+        if: success()
+        run: |
+          du -sh ~/.cache/go-build
+          find ~/.cache/go-build -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+          du -sh ~/.cache/go-build
+      - name: Save Go build cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ matrix.suite }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
+
+  # The shared module cache, as ci.yml's go-modules job saves it on main: one entry per go.mod/go.sum, saved when
+  # none has the key yet.
+  go-modules:
+    if: vars.WARDYN_RELEASE_GO_CACHE == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    outputs:
+      saved: ${{ steps.saved.outputs.key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Is this module cache saved already?
+        id: have
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+          lookup-only: true
+      - name: Download the modules
+        if: steps.have.outputs.cache-hit != 'true'
+        # Bounded retry of the module fetch only; go.sum verifies each module.
+        run: for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep $((i*5)); done && du -sh ~/go/pkg/mod
+      - name: Save the module cache
+        id: save
+        if: steps.have.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}
+      - name: Name the entry this run saved
+        id: saved
+        if: steps.save.outcome == 'success'
+        run: echo "key=gomod-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}" >> "$GITHUB_OUTPUT"
+
+  # One Go cache generation per family on this branch, as ci.yml's go-cache-prune does on main: for each family this
+  # run saved, it deletes this branch's entries created before this run's, by the same tested program.
+  go-cache-prune:
+    needs: [go-modules, go-cache]
+    if: ${{ !cancelled() && vars.WARDYN_RELEASE_GO_CACHE == 'true' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Delete the Go cache entries this run superseded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          MOD_KEY: ${{ needs.go-modules.outputs.saved }}
+        run: |
+          set -euo pipefail
+          caches="$(gh api --paginate "repos/$GH_REPO/actions/caches?ref=$GITHUB_REF&key=go&per_page=100" --jq '.actions_caches[]')"
+          stale="$(printf '%s\n' "$caches" | jq -rs --arg r "-$RUN_ID" --arg mod "$MOD_KEY" -f scripts/ci-go-cache-prune.jq)"
+          [ -n "$stale" ] || { echo "no superseded Go cache entry"; exit 0; }
+          while IFS=$'\t' read -r id key; do
+            echo "deleting $key"
+            gh cache delete "$id" || echo "::warning::could not delete cache $key"
+          done <<< "$stale"
