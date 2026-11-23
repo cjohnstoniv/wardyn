@@ -31,10 +31,13 @@ func TestFirstPayloadOrderAndUntrusted(t *testing.T) {
 	if got := labels(p); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("labels = %v, want %v", got, want)
 	}
+	// Every record holding text another party can write is untrusted; the admins line is letters alone.
+	untrusted := map[string]bool{LabelUnit: true, LabelRun: true, LabelTemplates: true, LabelAdmins: false,
+		LabelGrants: true, LabelHistory: true, LabelChange: true, LabelBuild: true}
 	for _, s := range p.Sections {
-		wantUntrusted := s.Label == LabelTemplates || s.Label == LabelChange || s.Label == LabelBuild
-		if s.Untrusted != wantUntrusted {
-			t.Errorf("%s untrusted = %v", s.Label, s.Untrusted)
+		wantUntrusted, known := untrusted[s.Label]
+		if !known || s.Untrusted != wantUntrusted {
+			t.Errorf("%s untrusted = %v, want %v (a label this test does not know: %v)", s.Label, s.Untrusted, wantUntrusted, !known)
 		}
 		if strings.Contains(s.Text, "@corp.example") {
 			t.Errorf("%s still names a person: %q", s.Label, s.Text)
@@ -79,12 +82,12 @@ func TestFirstPayloadCaps(t *testing.T) {
 	}
 }
 
-// A run target's policy goes under its own label, never the unit's, and is trusted as policy text; a change's
+// A run target's policy goes under its own label, never the unit's, and is untrusted like every stored record; a change's
 // assignee and any address in it become letters like its proposer.
 func TestFirstPayloadRunRecordAndChangePeople(t *testing.T) {
 	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, RunRecord: `{"allowed_domains":["a.example"]}`})
-	if got := labels(p); len(got) != 1 || got[0] != LabelRun || p.Sections[0].Untrusted {
-		t.Errorf("sections = %+v, want one trusted run record", p.Sections)
+	if got := labels(p); len(got) != 1 || got[0] != LabelRun || !p.Sections[0].Untrusted {
+		t.Errorf("sections = %+v, want one untrusted run record", p.Sections)
 	}
 	sam := Person{Name: "sub-sam"}
 	p = FirstPayload(Inputs{Purpose: types.AssistantReview, ChangeProposer: &Person{Email: "pat@corp.example"},

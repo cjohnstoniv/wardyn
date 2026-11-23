@@ -52,8 +52,7 @@ type Inputs struct {
 	UnitRecord string
 	// RunRecord is a run target's policy, cut the same way. A run's free-text task is never sent.
 	RunRecord string
-	// Templates are one record each: the target template, or for a new draft names and summaries. Untrusted:
-	// a template's name and description are text people wrote, other people's included.
+	// Templates are one record each: the target template, or for a new draft names and summaries.
 	Templates []string
 	// UnitAdmins, ChangeProposer and RunOwners are the people the records name, in the order their letters
 	// are handed out.
@@ -102,13 +101,16 @@ func FirstPayload(in Inputs) Payload {
 			secs = append(secs, types.AssistantSection{Label: label, Text: l.Apply(text), Untrusted: untrusted})
 		}
 	}
-	add(LabelUnit, in.UnitRecord, false)
-	add(LabelRun, in.RunRecord, false)
+	// Every record holding text a party other than the reader or the model can write is untrusted: a unit's
+	// name and ceiling strings, a run's stored policy, templates, grant hosts, and the hosts sandboxes asked
+	// for. Only the admins line, which is letters alone, is trusted.
+	add(LabelUnit, in.UnitRecord, true)
+	add(LabelRun, in.RunRecord, true)
 	add(LabelTemplates, strings.Join(in.Templates, "\n"), true)
 	add(LabelAdmins, adminLine(in.UnitAdmins, l), false)
-	add(LabelGrants, strings.Join(in.Grants, "\n"), false)
+	add(LabelGrants, strings.Join(in.Grants, "\n"), true)
 	if in.RunHistoryOn {
-		add(LabelHistory, historyText(in.RunHistory), false)
+		add(LabelHistory, historyText(in.RunHistory), true)
 	}
 	if in.Purpose == types.AssistantReview {
 		add(LabelChange, in.Change, true)
