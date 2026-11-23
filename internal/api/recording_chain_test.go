@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -153,7 +154,8 @@ func TestRecordingChain_Answers(t *testing.T) {
 
 // heldRangeStore holds its first range check until released, so a second can arrive while it walks. The
 // first check waits for the test to take its signal: a send that gave up when the test was not yet
-// listening let the first check finish unheld, and the test then waited out its bound (#3600).
+// listening let the first check finish unheld, and the test then waited out its bound (#3600). Both waits end
+// with the request's context, which the test ties to its own, so a failure cannot strand the walk.
 type heldRangeStore struct {
 	store.Store
 	walking chan struct{}
@@ -161,10 +163,18 @@ type heldRangeStore struct {
 	held    atomic.Bool
 }
 
-func (s *heldRangeStore) VerifyRecordingAuditRange(context.Context, uuid.UUID, string, time.Time) (store.AuditChainRange, bool, error) {
+func (s *heldRangeStore) VerifyRecordingAuditRange(ctx context.Context, _ uuid.UUID, _ string, _ time.Time) (store.AuditChainRange, bool, error) {
 	if s.held.CompareAndSwap(false, true) {
-		s.walking <- struct{}{}
-		<-s.release
+		select {
+		case s.walking <- struct{}{}:
+		case <-ctx.Done():
+			return store.AuditChainRange{}, false, ctx.Err()
+		}
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return store.AuditChainRange{}, false, ctx.Err()
+		}
 	}
 	return store.AuditChainRange{OK: true}, true, nil
 }
@@ -176,22 +186,47 @@ func TestRecordingChain_OneWalkAtATime(t *testing.T) {
 	srv, run, _, ses := entryServer(t, false)
 	hs := &heldRangeStore{Store: srv.cfg.Store, walking: make(chan struct{}), release: make(chan struct{})}
 	srv.cfg.Store = hs
+	var once sync.Once
+	release := func() { once.Do(func() { close(hs.release) }) }
+	var wg sync.WaitGroup
+	t.Cleanup(wg.Wait)
+	t.Cleanup(release)
 	path := "/api/v1/runs/" + run.ID.String() + "/recording-chain?key=k&from=2026-10-20T10:40:00Z"
 
-	first := make(chan *httptest.ResponseRecorder)
-	go func() { first <- doSSO(t, srv, http.MethodGet, path, ses["owner"], "") }()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		first <- doSSOCtx(t, srv, t.Context(), http.MethodGet, path, ses["owner"], "")
+	}()
 	select {
 	case <-hs.walking:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the first check never reached the walk")
 	}
-	w := doSSO(t, srv, http.MethodGet, path, ses["owner"], "")
-	close(hs.release)
+	second := make(chan *httptest.ResponseRecorder, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		second <- doSSOCtx(t, srv, t.Context(), http.MethodGet, path, ses["owner"], "")
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a second check while one walks was still waiting after 10s: it was queued, not refused with 503")
+	}
+	release()
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"reason":"`+reasonRecordingChainBusy+`"`) || w.Header().Get("Retry-After") == "" {
 		t.Errorf("a second check while one walks: %d %q Retry-After=%q, want 503 %s with Retry-After", w.Code, w.Body.String(), w.Header().Get("Retry-After"), reasonRecordingChainBusy)
 	}
-	if w := <-first; w.Code != http.StatusOK {
-		t.Fatalf("the first check: %d %s, want 200", w.Code, w.Body.String())
+	select {
+	case w := <-first:
+		if w.Code != http.StatusOK {
+			t.Fatalf("the first check: %d %s, want 200", w.Code, w.Body.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first check never finished after its walk was released")
 	}
 	if w := doSSO(t, srv, http.MethodGet, path, ses["owner"], ""); w.Code != http.StatusOK {
 		t.Fatalf("a check after the walk ended: %d %s, want 200", w.Code, w.Body.String())
