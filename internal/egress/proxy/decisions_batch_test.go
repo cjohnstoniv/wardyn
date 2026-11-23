@@ -415,12 +415,9 @@ func TestDecisionSinkBatch_ContactLostLabel(t *testing.T) {
 	}
 
 	// No answer at all also counts as lost contact.
-	dead := httptest.NewServer(http.NotFoundHandler())
-	url := dead.URL
-	dead.Close()
-	d := &decisionSink{endpoint: url, token: newTokenSource("tok"), client: &http.Client{Timeout: time.Second}}
+	d := &decisionSink{endpoint: "http://127.0.0.1:1/api/v1/internal/decisions", token: newTokenSource("tok"), client: &http.Client{Timeout: time.Second}}
 	if err := d.post(hostLog(4)); err == nil || !d.failing.Load() {
-		t.Fatalf("post to a closed server: err %v failing %v, want an error and failing", err, d.failing.Load())
+		t.Fatalf("post where nothing listens: err %v failing %v, want an error and failing", err, d.failing.Load())
 	}
 }
 
