@@ -287,7 +287,7 @@ func (e *apEnv) seedPeople() {
 // a unit admin and then a unit admin is refused 409 and writes nothing; a unit admin and then a security admin
 // applies; a security admin who was since mapped to the user role but keeps a unit-admin grant counts as a unit
 // admin (H3); a caller whose record now says user is refused 403 whatever their older session says; a record
-// that says security admin cannot raise a unit-admin request or a CLI token above the unit-admin tier (CX-017).
+// that says security admin cannot raise a unit-admin request or a CLI token above the unit-admin tier.
 func TestPG_Approvals_RequireSecurity(t *testing.T) {
 	e := newApEnv(t, 1)
 	e.requireCounts(govKindMembership, 2, true)
@@ -329,7 +329,7 @@ func TestPG_Approvals_RequireSecurity(t *testing.T) {
 	}
 	e.record(govSubBob, "bob@corp.example", []string{apGroupSec}, nil, false)
 
-	// CX-017: an older session as a security admin, a record that now says user and no grant: refused 403, no row,
+	// An older session as a security admin, a record that now says user and no grant: refused 403, no row,
 	// and the page says not_eligible.
 	e.record(govSubCarol, "carol@corp.example", []string{apGroupUsers}, nil, false)
 	ch = e.heldOn(e.a2)
