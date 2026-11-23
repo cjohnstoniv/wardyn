@@ -1268,7 +1268,7 @@ func TestMDMDeviceSetActionIsThePlacementOne(t *testing.T) {
 // mdmChainRefusal names the certificate Go found at fault: the device's, a CA's or an intermediate's, expired or not yet
 // valid, and falls back to the device's when Go names none.
 func TestMDMChainRefusal_NamesTheCertificateAtFault(t *testing.T) {
-	now := time.Date(2030, 6, 15, 12, 0, 0, 0, time.UTC)
+	now := time.Unix(1900000000, 0).UTC()
 	cert := func(raw byte, from, to time.Duration) *x509.Certificate {
 		return &x509.Certificate{Raw: []byte{raw}, NotBefore: now.Add(from), NotAfter: now.Add(to)}
 	}
