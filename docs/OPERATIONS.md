@@ -4953,6 +4953,16 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
 - A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
 
+**A delete that did not finish.**
+
+- A delete whose answer is not a confirmed delete keeps the drive deleting once the call to the runner was made: a daemon or API error, the 30-second time-out, or an unknown reply. No run attaches it, and it counts toward `max_per_person`. The answer is 503 `member_drive_delete_failed`, and a Kubernetes claim that is already terminating answers the same. A 503 before that call gives the drive back, and the list does not show it as deleting.
+- The drive is missing from its owner's drives and from New Run. The member drives list (`GET /api/v1/drives/member`, `wardyn drive member list`) shows it with `deleting: true` and its `object`.
+- The kept work folder of a run that ended before it started is left the same way if the server stops before deleting it.
+- Nothing retries it on Docker or Kubernetes. A delete a minute after the last try does: the owner's `DELETE /api/v1/me/drives/{id}`, or a super admin's `DELETE /api/v1/drives/member/{id}` (`wardyn drive member delete <id> --yes`). Sooner, the answer is 409 `member_drive_busy`. Every try that takes the delete over writes `drive.member.delete`; a 409 `member_drive_busy` writes none.
+- A disk drive kept on a Mac waits for its Mac instead, and the delete finishes when the Mac reconnects.
+- If the retry keeps failing on Docker, check that `docker volume inspect --format '{{ index .Labels "wardyn.drive" }}' <object>` prints the drive's id. Remove the volume with `docker volume rm <object>`, never `-f`: Docker refuses a volume a container still uses, and that refusal is the check that no run holds it. Then delete the drive again: a super admin's delete answers `already_absent`, the owner's answers 204, and the record goes.
+- On Kubernetes, wait until the claim has finished terminating, then delete the drive again.
+
 **Keep a run's work folder.**
 
 - With `keep_main_drive: true`, a run that asks for `keep_work_folder` gets a member drive, named after the run, mounted at `/home/agent/work` in place of scratch.
@@ -4985,7 +4995,6 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 **Orphans.**
 
-- A delete that stops part way leaves the drive hidden from its owner. A second delete after one minute takes it over. The admin list shows it as `deleting`.
 - A drive deleted while a run was launching against it can leave an object with no row. Find it by the `wardyn.drive` label and remove it by hand, as in "User drives on Docker".
 - Nothing sweeps these for you.
 

@@ -87,6 +87,9 @@ var changelogPreexistingCorrections = map[string]string{
 	// rc.12 said the guest turns a macOS VM's screen lock off at the start of each run; it only tries, and when
 	// that fails it logs why and the run starts anyway, so the line now says so.
 	"0.10.0-rc.12": "ed9061ab94a5cb6b3a59675a7f205c6a322d7e6f", // Docs: the screen-lock changelog line says the guest tries
+	// 0.10.2 said only that an empty or unknown reply holds a drive delete; the held cases, what the owner then sees
+	// and who finishes the delete were missing, so the line now says them.
+	"0.10.2": "1255b0d2a9e0e8b382d2f3b3e360f8e179cd3378", // changelog: correct the 0.10.2 line on held drive deletes
 }
 
 // changelogKnownGaps matches the spellings the #466 move unified into one
