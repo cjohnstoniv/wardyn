@@ -254,6 +254,8 @@ type Driver struct {
 	execLess sync.Map // ref -> runtime name: a container whose runtime has no exec (runtimeSupportsExec); ExecStream refuses it
 	macDisks sync.Map // run id -> runner.MacOSVMDisk: each macOS VM run's disk report (macvm_disk.go)
 	vmDial   func(ctx context.Context, path string) (net.Conn, error)
+	// heldOrphans holds the run ids whose row-less sandbox this process held cleanly (orphan_hold.go).
+	heldOrphans sync.Map
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers

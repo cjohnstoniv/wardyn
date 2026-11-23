@@ -579,7 +579,7 @@ func TestExecSFTPServerNamesTheLaunchFailure(t *testing.T) {
 			st, run := newSSHMemStore(), types.AgentRun{ID: uuid.New(), State: types.RunRunning, SandboxRef: "sb"}
 			st.putRun(run)
 			s := &Server{cfg: Config{Store: st, Runner: &sshFakeRunner{execFn: func(runner.ExecSpec) (*runner.ExecSession, error) { return nil, c.err }}}}
-			_, reason, err := s.execSFTPServer(context.Background(), run, true)
+			_, reason, err := s.execSFTPServer(context.Background(), run, &sshLiveRunWords)
 			if !errors.Is(err, c.err) {
 				t.Fatalf("err = %v, want %v", err, c.err)
 			}

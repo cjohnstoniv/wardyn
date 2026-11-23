@@ -499,7 +499,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := f.ssoRefresh.validate(); err != nil {
 		return err
 	}
-	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate()); err != nil {
+	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate(), f.outage.validate()); err != nil {
 		return err
 	}
 	if *f.oidcIssuer != "" {

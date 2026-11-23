@@ -139,7 +139,7 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 	if s.refuseBackgroundOnly(w, r, run, "desktop") {
 		return run, types.DesktopControls{}, false
 	}
-	if refuseDesktopNotLive(w, run) {
+	if s.refuseDesktopNotLive(w, r, run) {
 		return run, types.DesktopControls{}, false
 	}
 	if s.cfg.Runner == nil {
@@ -161,17 +161,30 @@ func (s *Server) desktopRun(w http.ResponseWriter, r *http.Request) (types.Agent
 		// data_out review: ~/Transfers is open for reviewed downloads alone, on a run with no desktop.
 		rules = types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: types.TransferReview}
 	}
+	// A kept run (only its owner gets this far: refuseDesktopNotLive) is open only to copy work out: nothing goes in,
+	// and a download needs the rule allowed outright, since the lost mark cancelled the run's approvals.
+	if runIsKept(run) {
+		download := types.TransferBlocked
+		if rules.Download == types.TransferAllowed {
+			download = types.TransferAllowed
+		}
+		rules = types.DesktopControls{PasteIn: types.TransferBlocked, CopyOut: types.TransferBlocked, Upload: types.TransferBlocked, Download: download}
+	}
 	return run, rules, true
 }
 
-// refuseDesktopNotLive answers a run with no live sandbox to move files to: not RUNNING, no sandbox, or kept.
-// True when it has answered.
-func refuseDesktopNotLive(w http.ResponseWriter, run types.AgentRun) bool {
+// refuseDesktopNotLive answers a run with no live sandbox to move files to: not RUNNING, no sandbox, or kept, except a
+// kept run whose owner may copy work out of it (keptCopyOutRefusal). True when it has answered.
+func (s *Server) refuseDesktopNotLive(w http.ResponseWriter, r *http.Request, run types.AgentRun) bool {
 	switch {
 	case run.State != types.RunRunning || run.SandboxRef == "":
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; no files can move (state="+string(run.State)+")")
 	case runIsKept(run):
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
+		msg := s.keptCopyOutRefusal(r.Context(), run, principalFromRequest(r), "run has ended; no files can move")
+		if msg == "" {
+			return false
+		}
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
 	default:
 		return false
 	}
@@ -205,7 +218,10 @@ func (s *Server) desktopAdmit(w http.ResponseWriter, r *http.Request, run types.
 	switch {
 	case err != nil:
 		writeServerError(w, r, "get run", err)
-	case refuseDesktopNotLive(w, fresh):
+	case !runIsKept(run) && runIsKept(fresh):
+		// Marked kept since desktopRun read it: its rules were the live run's, never the kept run's narrowed ones.
+		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; no files can move")
+	case s.refuseDesktopNotLive(w, r, fresh):
 	case !thaw && fresh.PausedAt != nil:
 		writeErrorReason(w, http.StatusConflict, reasonRunInspectPaused, runPausedReadMsg)
 	default:

@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -45,6 +46,8 @@ type Config struct {
 	// SweepHealth records each sweep's ticks in the shared sweep_ticks record and reads them
 	// back for the gauges and the substrate_health setup row. Nil records and reports nothing.
 	SweepHealth *sweephealth.Tracker
+	// StoreHealth is how long the store has been healthy, for the lapse sweep's outage rule (rule M); nil turns that rule off.
+	StoreHealth *storehealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit CRUD + reads),
 	// used instead of *pgxpool.Pool so a future pure-Go backend can be swapped in. Defaults
 	// to a store.NewPG(Pool) adapter when wired from wardynd.

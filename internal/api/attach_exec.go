@@ -39,6 +39,16 @@ var attachLiveRunWords = liveRunWords{
 	ended:      "run has ended; cannot attach",
 }
 
+// attachWordsFor is the words h's openings use: the run owner's copy-out exception (liveRunWords.copyOutFor) only
+// for a holder that is the person themselves, never a support helper's, a delegated one or one behind an issuer
+// portal's opening gate.
+func attachWordsFor(h *attachHolder, gated bool) liveRunWords {
+	if h.support != uuid.Nil || h.via != nil || gated {
+		return attachLiveRunWords
+	}
+	return attachLiveRunWords.copyOutFor(h.principal)
+}
+
 // attachPrepareEvery is attachPrepareTimeout unless THIS server was built with
 // an override (Server.attachPrepare, tests only).
 func (s *Server) attachPrepareEvery() time.Duration {
@@ -289,6 +299,7 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 	}
 	runID := run.ID
 	ticketBy, gated := h.openingGate(ctx)
+	words := attachWordsFor(h, gated)
 	if gated {
 		h.gated.Store(true) // before any opening: canDeliver then asks for this promotion's own writer
 	}
@@ -325,7 +336,7 @@ func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attac
 			actx, every = runner.WithStartCutoff(actx, by), min(every, time.Until(by))
 		}
 		timer := time.AfterFunc(every, acancel)
-		sess, err := startFresh(s, actx, runID, attachLiveRunWords, s.attachPrepareEvery(),
+		sess, err := startFresh(s, actx, runID, words, s.attachPrepareEvery(),
 			func(ctx context.Context, run types.AgentRun) (runner.Session, error) {
 				return s.cfg.Runner.Attach(ctx, run.SandboxRef, opts)
 			},
