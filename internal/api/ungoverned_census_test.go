@@ -176,6 +176,10 @@ var ungovernedCallerCensus = map[string]struct {
 	"workloads.go:mayReachWorkloadsOf":                         {2, "authz-only: workload reach, for workloadOwnerOf and for canRestartWorkload's display flag on every read; the flag grants nothing, as the restart route checks workloadOwnerOf itself, and a restart's launch is a run create, which meets the boundary at resolve"},
 	"workloads.go:workloadListOwners":                          {1, "authz-only: a list scope"},
 	"workloads.go:workloadReadTier":                            {2, "authz-only: the workload read tier, what a reader is shown of another owner's workload"},
+	// The Walls view's projection, scope and detail checks.
+	"walls_run.go:handleRunWalls":          {2, "authz-only: the owner or operator projection, and exit detail for a super admin; admits no run policy"},
+	"walls_topology.go:wallsTopoScopeFor":  {1, "authz-only: the organisation or unit-subtree scope; admits no run policy"},
+	"walls_topology_org.go:wallsTopoGates": {1, "authz-only: gate address detail for a super admin; admits no run policy"},
 }
 
 // ungovernedCensusTags are the classifications a census entry may name.

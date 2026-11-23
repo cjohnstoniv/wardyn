@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The Walls view's topology and run routes (`GET /api/v1/walls/topology`, `GET /api/v1/runs/{id}/walls`), for the 3D view. Its stream routes answer 501 until the live stream ships.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

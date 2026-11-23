@@ -156,6 +156,9 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
 	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
 	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
+	// The Walls view's routes.
+	"GET /runs/{id}/walls":        "read",
+	"GET /runs/{id}/walls/stream": "read",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

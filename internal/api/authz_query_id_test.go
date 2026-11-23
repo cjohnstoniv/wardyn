@@ -299,6 +299,9 @@ var queryParamNotAnID = map[string]string{
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
 	"runner":         "GET /machines/kept (super admin only, operatorOnly): a runner id narrowing the deployment-wide kept-machine list that tier already reads whole; a runner is shared infrastructure, not a principal's entity, and a member gets the router's 403 before it is read",
 	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
+	// The Walls view's routes.
+	"window": "GET /walls/topology: how far back the topology reads, a duration from 1m to 15m; it names no entity",
+	"edges":  "GET /walls/topology: summary or full, how much edge detail the topology serves; it names no entity",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a
