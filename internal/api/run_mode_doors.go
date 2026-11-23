@@ -102,8 +102,9 @@ var backgroundDoors = []backgroundDoor{
 	// one exception, so the predicate is asked where its ticket is spent: uiEnterCommon.
 	// The open session's re-check is uiSessionArms, not uiSessionStillAuthorized: the re-check asks the
 	// portal's arm first (uiSessionAuthority), then every other arm, this predicate among them, in uiSessionArms.
-	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionArms"},
-		Routes: []string{"POST /runs/{id}/apps/{app}/ticket"}, Enforced: true},
+	// A preview's PUT and ticket ask the predicate in runPreviewCheck, and its ticket is spent in uiEnterCommon.
+	{Door: "web application gateway", Owner: "C-mode-doors", Symbols: []string{"uiEnterCommon", "uiSessionArms", "runPreviewCheck"},
+		Routes: []string{"POST /runs/{id}/apps/{app}/ticket", "PUT /runs/{id}/previews/{port}", "POST /runs/{id}/previews/{port}/ticket"}, Enforced: true},
 	// The desktop's own display is the novnc app, behind the web application
 	// gateway above. Its routes here are the Files panel, which moves files in and
 	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
@@ -149,6 +150,11 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/revive":             "lifecycle recovery; the revived run keeps its stored experience, so every door above still refuses it",
 
 	"POST /runs/{id}/computer-folder/bring-back": "lifecycle: end the run, bringing its computer folder back first; opens no shell",
+
+	// A preview's list and its revoke (run_previews.go) open nothing; its PUT and ticket are the web application
+	// gateway's routes, above.
+	"GET /runs/{id}/previews":           "read the run's preview URLs; opens nothing",
+	"DELETE /runs/{id}/previews/{port}": "revoke a preview URL; opens nothing",
 
 	// A support helper's doors are the entry points supportMayEnter names (support_entry.go); these five open none.
 	"POST /runs/{id}/support":                 "a super admin asks to help; opens nothing until the owner accepts",

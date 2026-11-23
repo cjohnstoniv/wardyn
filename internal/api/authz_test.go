@@ -987,6 +987,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// does not admit gets the foreign-run 404, which the member probe's random id meets too.
 	"POST /api/v1/runs/{id}/apps/{app}/ticket": {class: classMember},
 
+	// A run's preview URLs (run_previews.go). Listing and revoking are inspect-or-stop, as kill is; creating one is
+	// entry, as the attach ticket is. A preview's ticket is classMember, as an app's ticket is: a console person
+	// opens an org preview without owning the run, and the handler answers anyone it does not admit with the
+	// foreign-run 404.
+	"GET /api/v1/runs/{id}/previews":                {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"PUT /api/v1/runs/{id}/previews/{port}":         {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"DELETE /api/v1/runs/{id}/previews/{port}":      {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"POST /api/v1/runs/{id}/previews/{port}/ticket": {class: classMember},
+
 	// Support sessions (support_grant.go): classMember, NOT classOwner — the helper is a super admin the owner
 	// rule would refuse, and each handler is its own gate (supportCaller, the run's owner, the grant's helper
 	// or a security operator); a caller who is none of them gets support_not_allowed or the foreign-run 404.
@@ -1223,7 +1232,8 @@ func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { re
 // authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
 // row for claude-code. The attended macOS window's site switch is on, so the
 // owner of a run reaches POST /runs/{id}/desktop/window's handler; the switch
-// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer.
+// is off by default, and TestAuthzMatrixMacWindowSiteSwitch pins that answer. Preview URLs are on, up to org, so
+// the owner of a run reaches the preview routes' own rows (authzMatrixFeatureHooks makes the key available).
 func authzMatrixSiteConfig() types.SiteConfig {
 	on := true
 	return types.SiteConfig{
@@ -1231,7 +1241,30 @@ func authzMatrixSiteConfig() types.SiteConfig {
 			ID: "claude-code",
 		}}},
 		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+		FeatureSwitches: &types.SiteFeatureSwitches{
+			PreviewURLs: &types.PreviewURLsFeature{Enabled: &on, MaxVisibility: "org"},
+		},
 	}
+}
+
+// authzMatrixFeatureHooks installs the registered site feature hooks with the keys below available, so the
+// matrix's owner probe reaches a route's own answer while its key is still unavailable to the release. Each
+// feature's last commit, which makes its key available, deletes its line. Callers never run in parallel
+// (withSiteFeatureHooks).
+func authzMatrixFeatureHooks(t *testing.T) {
+	t.Helper()
+	hooks := map[siteFeatureKey]siteFeatureHook{}
+	for k, h := range siteFeatureHooks {
+		hooks[k] = h
+	}
+	for _, k := range []siteFeatureKey{
+		featurePreviewURLs,
+	} {
+		h := hooks[k]
+		h.available = func() bool { return true }
+		hooks[k] = h
+	}
+	withSiteFeatureHooks(t, hooks)
 }
 
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
@@ -1301,6 +1334,7 @@ func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authz
 	// On, so a folder-only runner's folders answer on ownership rather than on the deployment's gate.
 	cfg.ComputerFolders = true
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	for _, f := range shape {
 		f(&cfg)
 	}
@@ -1346,6 +1380,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
 	cfg.SCIM = matrixSCIMConfig()
 	ast.siteCfg = authzMatrixSiteConfig()
+	authzMatrixFeatureHooks(t)
 	cfg.UIDir = dir
 	return matrixServer(cfg)
 }
@@ -1936,9 +1971,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// /runs/{id}/egress (tierSuper, as revive); 58 since 0.11 added GET
+		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
+		// PUT .../previews/{port} (tierEntry).
+		if probed != 58 {
+			t.Errorf("probed %d classOwner routes, want 58 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

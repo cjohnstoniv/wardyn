@@ -307,7 +307,7 @@ func TestStoreRunPreviewsRevokeAbove(t *testing.T) {
 	if list, err := f.pg.ListRunPreviews(f.ctx, r1.ID); err != nil || len(list) != 1 || list[0].ID != priv.ID {
 		t.Fatalf("live rows under a private ceiling = %+v (%v), want only %s", list, err, priv.ID)
 	}
-	above("", priv.ID)
+	above("", priv.ID) // keep stays a non-nil slice: pgx sends a nil one as NULL, and NOT (visibility = ANY(NULL)) revokes nothing
 	again, _ := f.upsert(r2, 8082, types.PreviewPrivate, time.Hour, nil)
 	above("team", again.ID)
 	for _, r := range []types.AgentRun{r1, r2} {
@@ -317,5 +317,107 @@ func TestStoreRunPreviewsRevokeAbove(t *testing.T) {
 	}
 	if !f.runUpdatedAt(r1).Equal(before1) || !f.runUpdatedAt(r2).Equal(before2) {
 		t.Fatal("a preview write moved agent_runs.updated_at")
+	}
+}
+
+// TestStoreRunPreviewsFirstRowClashRetried pins UpsertRunPreview's one retry: a write that inserts a port's first
+// row while another write's first row on that port is still uncommitted waits on run_previews_one_live, gets its
+// violation once the other commits, and runs once more, which sees the committed row. The same visibility keeps
+// that row, so the caller gets it back, not the violation.
+func TestStoreRunPreviewsFirstRowClashRetried(t *testing.T) {
+	f := newPreviewFixture(t)
+	r := f.run()
+	tx, err := f.pool.Begin(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(f.ctx) }()
+	first := uuid.New()
+	if _, err := tx.Exec(f.ctx, `INSERT INTO run_previews (id, run_id, port, visibility, created_by, expires_at)
+		VALUES ($1, $2, 8080, 'private', $3, now() + interval '1 hour')`, first, r.ID, r.CreatedBy); err != nil {
+		t.Fatalf("the other write's first row: %v", err)
+	}
+	type result struct {
+		p       types.RunPreview
+		created bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, created, err := f.pg.UpsertRunPreview(f.ctx, r.ID, 8080, types.PreviewPrivate, 2*time.Hour, r.CreatedBy, nil)
+		done <- result{p, created, err}
+	}()
+	// The upsert's insert waits on the uncommitted row's index entry. Commit only once it waits, so its first try is
+	// the one that clashes.
+	deadline := time.Now().Add(10 * time.Second)
+	for waiting := 0; waiting == 0; {
+		if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()`).Scan(&waiting); err != nil {
+			t.Fatalf("read the waiting writes: %v", err)
+		}
+		select {
+		case res := <-done:
+			t.Fatalf("the upsert returned before it waited on the other write's row: %+v", res)
+		default:
+		}
+		if waiting == 0 && time.Now().After(deadline) {
+			t.Fatal("the upsert never waited on the other write's row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(f.ctx); err != nil {
+		t.Fatalf("commit the other write: %v", err)
+	}
+	var res result
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upsert never returned after the other write committed")
+	}
+	if res.err != nil {
+		t.Fatalf("UpsertRunPreview after a clash on the port's first row: %v, want the retry to keep the committed row", res.err)
+	}
+	if res.created || res.p.ID != first || res.p.Visibility != types.PreviewPrivate || !res.p.ExpiresAt.After(time.Now().Add(90*time.Minute)) {
+		t.Fatalf("UpsertRunPreview after the clash = %+v, created %v; want row %s kept and extended to two hours", res.p, res.created, first)
+	}
+	var live int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM run_previews WHERE run_id = $1 AND port = 8080 AND revoked_at IS NULL`, r.ID).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("unrevoked rows on the port = %d (%v), want 1", live, err)
+	}
+}
+
+// TestStoreRunPreviewsColumnChecks pins the table's own checks at their edges: a port from 1024 to 65535, one of
+// the three visibilities as written, and a created_by that is not empty. Each refusal is a check violation (23514).
+func TestStoreRunPreviewsColumnChecks(t *testing.T) {
+	f := newPreviewFixture(t)
+	r := f.run()
+	for _, c := range []struct {
+		name     string
+		port     int
+		vis, by  string
+		accepted bool
+	}{
+		{"port 0", 0, "private", "owner", false},
+		{"port 1023", 1023, "private", "owner", false},
+		{"port 1024", 1024, "private", "owner", true},
+		{"port 65535", 65535, "private", "owner", true},
+		{"port 65536", 65536, "private", "owner", false},
+		{"visibility private", 2001, "private", "owner", true},
+		{"visibility org", 2002, "org", "owner", true},
+		{"visibility empty", 2003, "", "owner", false},
+		{"visibility Private", 2004, "Private", "owner", false},
+		{"visibility team", 2005, "team", "owner", false},
+		{"created_by empty", 2006, "private", "", false},
+		{"created_by one character", 2007, "private", "a", true},
+	} {
+		_, err := f.pool.Exec(f.ctx, `INSERT INTO run_previews (id, run_id, port, visibility, created_by, expires_at)
+			VALUES ($1, $2, $3, $4, $5, now() + interval '1 hour')`, uuid.New(), r.ID, c.port, c.vis, c.by)
+		code, _ := previewPGCode(err)
+		switch {
+		case c.accepted && err != nil:
+			t.Errorf("%s: %v, want the row stored", c.name, err)
+		case !c.accepted && code != "23514":
+			t.Errorf("%s: %v, want a check violation (23514)", c.name, err)
+		}
 	}
 }
