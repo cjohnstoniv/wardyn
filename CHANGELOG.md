@@ -29,6 +29,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
 - On a Kubernetes runner, a run whose new proxy pod is given a network address still held for an earlier run is no longer failed at once. The runner stops that pod, waits until it can prove it stopped, and starts another, preferring another node, up to two more times. The run fails with `relay_ip_fenced` only when every try is given a held address or a pod cannot be proven stopped. This needs the runner (`wardyn-runnerd`) from this release.
 - Computer folders: at the end of a run on a Kubernetes runner, or on a runner older than 0.10.0, Wardyn now stops the sandbox's network proxy before it brings the folder's changes back, so the agent has no network while they come back. The agent is left running during that copy. If the proxy can't be stopped, or a runner can't cut its agent off, no copy back runs, the sandbox is stopped and the run records why.
+- An open terminal, desktop, window on a Mac, app session or SSH connection no longer ends at the first check of the person's access that gets no answer from the database. It asks again every 5 seconds and ends only when no check has answered for the session budget, then closes in a way the console reconnects on; a terminal takes no input meanwhile. A revoked person is still cut off at the next check. Set the budget with `sessions.unconfirmed_budget_s` in the site config or in Settings: 0 to 120 seconds, default 30, and 0 ends a session at the first check that gets no answer; an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each such wait writes a `session.unconfirmed` audit row, at a budget of 0 too. (#4057)
+- A terminal or desktop that ends because access could not be confirmed now closes in a way the console reconnects on. (#4057)
+- A request to a UI app whose run cannot be read is answered 503, not 404, and so is a UI session check whose sponsor cannot be read (403 before). A UI session check whose run's profile composition nothing satisfies is answered 403 `governance_overlay_unsatisfiable`, not 503. (#4057)
+- An inbound caller that keeps calling a run already at its request limit now uses up its own limit as well. (#3766)
 
 ### Fixed
 
@@ -52,6 +56,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   installer fetches; a compose file kept from an earlier release needs `WARDYN_ATTACH_LOCAL` added to `wardynd`'s
   `environment`.
 - Computer folders on Kubernetes in server mode: a **Both ways** folder no longer comes back from a run that ends while its agent is still running (a stop, an idle or maximum-age stop, a lease end). The run is stopped without its changes, and the run records that they were not brought back.
+- An owner's idle SSH connection now closes when the database stays unreachable for the session budget (30 seconds by default) after a check that got no answer; before, it stayed open. Raise `sessions.unconfirmed_budget_s` (up to 120) to give it longer.
 
 ## [0.10.3] — 2026-11-23
 

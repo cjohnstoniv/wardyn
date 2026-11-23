@@ -141,6 +141,8 @@ export interface SiteConfig {
   macos_vm?: SiteMacOSVM;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
+  // types.SiteConfig.Sessions: how open sessions behave while Wardyn cannot check access.
+  sessions?: SiteSessions;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -694,4 +696,10 @@ export interface SiteMacOSVM {
   kept_machine_idle_days?: number;
   /** Kept machines one person may have. 1 to 4; absent reads 1. */
   max_kept_machines_per_person?: number;
+}
+
+/** Go: types.SiteSessions (SiteConfig.sessions). */
+export interface SiteSessions {
+  /** Seconds an open session keeps going while no check of the person's access answers. 0 to 120; absent reads 30. */
+  unconfirmed_budget_s?: number;
 }

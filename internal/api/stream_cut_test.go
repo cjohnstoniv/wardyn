@@ -248,7 +248,7 @@ func TestStreamCut_AbsoluteDeadlineCutsBlockedWriter(t *testing.T) {
 			conns := make(chan *stallConn, 64)
 			srv := cutTestServer(t, h2, conns, func(w http.ResponseWriter, r *http.Request) {
 				ctx, c, cw := cutStream(w, r, end)
-				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 				defer c.End()
 				if !h2 {
 					(<-conns).stall(true)
@@ -280,7 +280,7 @@ func TestStreamCut_FallbackWriteBeforeEndStopsAtEnd(t *testing.T) {
 			conns := make(chan *stallConn, 64)
 			srv := cutTestServer(t, h2, conns, func(w http.ResponseWriter, r *http.Request) {
 				ctx, c, cw := cutStream(w, r, end)
-				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 				defer c.End()
 				if !h2 {
 					sc = <-conns
@@ -320,7 +320,7 @@ func TestStreamCut_LookupPanicCutsBlocked200And101(t *testing.T) {
 		srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
 			ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
 			opened = time.Now()
-			c.watch(ctx, opened.Add(tick), tick, bound, panicky)
+			c.watch(ctx, opened.Add(tick), tick, bound, nil, panicky)
 			defer c.End()
 			(<-conns).stall(true)
 			at, _ := writeUntilError(cw)
@@ -343,7 +343,7 @@ func TestStreamCut_LookupPanicCutsBlocked200And101(t *testing.T) {
 		srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
 			ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
 			opened = time.Now()
-			c.watch(ctx, opened.Add(tick), tick, bound, panicky)
+			c.watch(ctx, opened.Add(tick), tick, bound, nil, panicky)
 			defer c.End()
 			sc := <-conns
 			conn, brw, err := cw.(http.Hijacker).Hijack()
@@ -561,7 +561,7 @@ func TestStreamCut_HandlerEndRacesCut(t *testing.T) {
 					}
 				}()
 				ctx, c, cw := cutStream(pw, r, time.Now().Add(time.Hour))
-				c.watch(ctx, time.Now(), time.Hour, time.Second, func(context.Context) error { return errTestRevoked })
+				c.watch(ctx, time.Now(), time.Hour, time.Second, nil, func(context.Context) error { return errTestRevoked })
 				defer c.End()
 				_, _ = io.WriteString(cw, "body")
 			})
@@ -597,7 +597,7 @@ func TestStreamCut_HandlerEndRacesCut(t *testing.T) {
 	t.Run("HTTP1 cut connection closed", func(t *testing.T) {
 		srv := cutTestServer(t, false, nil, func(w http.ResponseWriter, r *http.Request) {
 			ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
-			c.watch(ctx, time.Now(), time.Hour, time.Second, func(context.Context) error { return errTestRevoked })
+			c.watch(ctx, time.Now(), time.Hour, time.Second, nil, func(context.Context) error { return errTestRevoked })
 			defer c.End()
 			for !c.isCut() {
 				time.Sleep(time.Millisecond)
@@ -625,7 +625,7 @@ func TestStreamCut_EndWaitsForRunningLookup(t *testing.T) {
 	srv := cutTestServer(t, false, nil, func(w http.ResponseWriter, r *http.Request) {
 		started := make(chan struct{})
 		ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
-		c.watch(ctx, time.Now(), time.Hour, time.Second, func(context.Context) error {
+		c.watch(ctx, time.Now(), time.Hour, time.Second, nil, func(context.Context) error {
 			close(started)
 			time.Sleep(200 * time.Millisecond)
 			return errTestRevoked
@@ -677,7 +677,7 @@ func TestStreamCut_FinishAfterReturnBoundedByEnd(t *testing.T) {
 			srv := cutTestServer(t, false, conns, func(w http.ResponseWriter, r *http.Request) {
 				sc := <-conns
 				ctx, c, cw := cutStream(w, r, end)
-				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 				defer func() { sc.stall(true); stalled <- sc }() // after End: the client stops reading for the finish
 				defer c.End()
 				shape(cw)
@@ -709,7 +709,7 @@ func TestStreamCut_FinishAfterReturnBoundedByEnd(t *testing.T) {
 					t.Error("a request on a reused connection started cancelled")
 				}
 				ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
-				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+				c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 				defer c.End()
 				shapes[r.URL.Query().Get("shape")](cw)
 			})
@@ -752,7 +752,7 @@ func TestStreamCut_CleanSwitchedCloseSkipsFinish(t *testing.T) {
 		var hijacked atomic.Bool
 		pw := probeWriter{ResponseWriter: w, returned: &hijacked, late: &late}
 		ctx, c, cw := cutStream(pw, r, time.Now().Add(time.Hour))
-		c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+		c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 		defer func() {
 			select {
 			case <-c.exited:
@@ -803,7 +803,7 @@ func TestUIRelayIssuerPortal_CutDuringHijackFlushClosesSocket(t *testing.T) {
 		sc := <-conns
 		ctx, c, cw := cutStream(w, r, time.Now().Add(time.Hour))
 		cuts <- c
-		c.watch(ctx, time.Now().Add(200*time.Millisecond), time.Hour, time.Second, func(context.Context) error { return errTestRevoked })
+		c.watch(ctx, time.Now().Add(200*time.Millisecond), time.Hour, time.Second, nil, func(context.Context) error { return errTestRevoked })
 		defer c.End()
 		sc.stall(true)
 		cw.WriteHeader(http.StatusSwitchingProtocols)
@@ -1063,7 +1063,7 @@ func TestStreamCut_EndTimerCutsWithNoCheckDue(t *testing.T) {
 	defer cancel()
 	end := time.Now().Add(100 * time.Millisecond)
 	c := newStreamCut(newRecWriter(nil), end, cancel)
-	c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, passCheck)
+	c.watch(ctx, time.Now().Add(time.Hour), time.Hour, time.Second, nil, passCheck)
 	select {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
@@ -1205,5 +1205,129 @@ func TestStreamCut_IdleTLSCutSendsNothing(t *testing.T) {
 				t.Errorf("%d bytes reached the client after the cut began", n)
 			}
 		})
+	}
+}
+
+// watchBudgeted starts a cut's watch on a fresh stream over the budget b, with check answering each call from
+// answers (the last repeats), and returns the cut and a count of the checks made.
+func watchBudgeted(t *testing.T, b *sessionBudget, every time.Duration, answers ...error) (*streamCut, *atomic.Int32) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	c := newStreamCut(newRecWriter(nil), time.Now().Add(time.Hour), cancel)
+	var n atomic.Int32
+	check := func(context.Context) error {
+		i := int(n.Add(1)) - 1
+		return answers[min(i, len(answers)-1)]
+	}
+	c.watch(ctx, time.Now().Add(every), every, time.Second, b, check)
+	t.Cleanup(c.End)
+	return c, &n
+}
+
+// TestStreamCut_WatchRidesTheBudget: a check with no answer rides its budget, a refusal and an unmarked error cut
+// at once, a nil budget is strict, and the regular tick keeps its clock after a window.
+func TestStreamCut_WatchRidesTheBudget(t *testing.T) {
+	soft := unconfirmed(errors.New("store down"))
+	t.Run("one unanswered check then an answer does not cut", func(t *testing.T) {
+		h := newHarness(t)
+		c, _ := watchBudgeted(t, testBudget(h.srv, time.Hour, 5*time.Millisecond), 20*time.Millisecond, soft, nil)
+		time.Sleep(150 * time.Millisecond)
+		if c.isCut() {
+			t.Fatal("a window that closed cut the stream")
+		}
+		_, data := wantUnconfirmedRows(t, h.audit, 1)
+		if data[0]["result"] != "rode_through" {
+			t.Fatalf("row %v, want rode_through", data[0])
+		}
+	})
+	t.Run("no answer past the budget cuts with one ended row", func(t *testing.T) {
+		h := newHarness(t)
+		c, _ := watchBudgeted(t, testBudget(h.srv, 50*time.Millisecond, 5*time.Millisecond), 20*time.Millisecond, soft)
+		waitFor(t, "the cut", c.isCut)
+		_, data := wantUnconfirmedRows(t, h.audit, 1)
+		if data[0]["result"] != "ended" {
+			t.Fatalf("row %v, want ended", data[0])
+		}
+	})
+	t.Run("an unmarked error cuts at once", func(t *testing.T) {
+		h := newHarness(t)
+		c, _ := watchBudgeted(t, testBudget(h.srv, time.Hour, 5*time.Millisecond), 20*time.Millisecond, errors.New("x"))
+		waitFor(t, "the cut", c.isCut)
+	})
+	t.Run("a nil budget cuts at once on an unanswered check", func(t *testing.T) {
+		c, _ := watchBudgeted(t, nil, 20*time.Millisecond, soft)
+		waitFor(t, "the cut", c.isCut)
+	})
+	t.Run("the regular tick keeps its clock after a window", func(t *testing.T) {
+		h := newHarness(t)
+		every := 30 * time.Millisecond
+		c, n := watchBudgeted(t, testBudget(h.srv, time.Hour, 5*time.Millisecond), every, soft, nil)
+		waitFor(t, "the window to close", func() bool { return n.Load() >= 2 })
+		before := n.Load()
+		waitFor(t, "two regular checks after the window", func() bool { return n.Load()-before >= 2 })
+		if c.isCut() {
+			t.Fatal("the stream was cut after its window closed")
+		}
+	})
+}
+
+// TestStreamCut_LookupPastItsBoundIsUnconfirmed: a check that blocks past its bound answers an unconfirmed error,
+// and a panicking check a refusal.
+func TestStreamCut_LookupPastItsBoundIsUnconfirmed(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newStreamCut(newRecWriter(nil), time.Now().Add(time.Hour), cancel)
+	release := make(chan struct{})
+	defer close(release)
+	err := c.lookup(context.Background(), 20*time.Millisecond, func(context.Context) error { <-release; return nil })
+	if !errors.Is(err, errSessionUnconfirmed) {
+		t.Fatalf("a lookup past its bound answered %v, want an unconfirmed error", err)
+	}
+	err = c.lookup(context.Background(), time.Second, func(context.Context) error { panic("boom") })
+	if !errors.Is(err, errStreamLookupPanic) || errors.Is(err, errSessionUnconfirmed) {
+		t.Fatalf("a panicking lookup answered %v, want errStreamLookupPanic alone", err)
+	}
+}
+
+// TestStreamCut_FenceReachesAHolderMadeAfterTheWindowOpened: an issuer portal's cut watches before its holder
+// exists. The window's state is kept, replayed when the holder's fence is registered, and cleared when a check
+// answers; a fence registered with no window open stays clear.
+func TestStreamCut_FenceReachesAHolderMadeAfterTheWindowOpened(t *testing.T) {
+	h := newHarness(t)
+	soft := unconfirmed(errors.New("store down"))
+	var answered atomic.Bool
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := context.Background()
+	c := newStreamCut(newRecWriter(nil), time.Now().Add(time.Hour), cancel)
+	b := testBudget(h.srv, time.Hour, 10*time.Millisecond)
+	b.fence = c.fenced
+	var asked atomic.Bool
+	c.watch(ctx, time.Now().Add(10*time.Millisecond), time.Hour, time.Second, b, func(context.Context) error {
+		asked.Store(true)
+		if answered.Load() {
+			return nil
+		}
+		return soft
+	})
+	defer c.End()
+	waitFor(t, "the first unanswered check", asked.Load)
+	time.Sleep(30 * time.Millisecond)
+	holder := &attachHolder{}
+	c.setFence(holder.unconfirmed.Store)
+	if !holder.unconfirmed.Load() {
+		t.Fatal("a window already open was not replayed to the holder's fence")
+	}
+	answered.Store(true)
+	waitFor(t, "the fence to clear", func() bool { return !holder.unconfirmed.Load() })
+
+	_, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	quiet := newStreamCut(newRecWriter(nil), time.Now().Add(time.Hour), cancel2)
+	other := &attachHolder{}
+	quiet.setFence(other.unconfirmed.Store)
+	if other.unconfirmed.Load() {
+		t.Fatal("a fence registered with no window open was set")
 	}
 }

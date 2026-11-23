@@ -500,7 +500,7 @@ func (s *Server) runEventsIssuerCut(r *http.Request, w http.ResponseWriter, runI
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	cut := newStreamCut(w, time.Now().Add(end.Sub(s.cfg.Now())), cancel)
-	cut.watch(ctx, admitted.Add(every), every, bound, check)
+	cut.watch(ctx, admitted.Add(every), every, bound, nil, check)
 	return ctx, cut.Writer(w), cut, func() {
 		defer cancel()
 		cut.End()

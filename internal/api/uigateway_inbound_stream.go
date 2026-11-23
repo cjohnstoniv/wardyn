@@ -6,10 +6,13 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The inbound arm's hold on an upgraded stream an inbound token opened: re-admitted every half
@@ -31,7 +34,9 @@ import (
 // unless an earlier check named what failed). So a stream ends at most inboundResolveTTL plus one tick
 // after its last good check, hung store or not. The first good check is the lookup of the session the
 // stream opened on, a cached session's included (inboundReadmission.checked), and the first re-check is
-// due one tick after it, or at once when the session is older than that. The close comes first; its row is written after it, off the watch and within
+// due one tick after it, or at once when the session is older than that. Past that bound the stream also waits
+// out the site's session budget (session_budget.go), counted from the first check that had no answer, and asks
+// again every few seconds meanwhile; a budget of 0 keeps the bound alone. The close comes first; its row is written after it, off the watch and within
 // inboundReadmitTimeout, so an audit write that hangs delays no close. A browser session's stream carries
 // no re-admission and is left as it was (TestUIGateway_EstablishedConnectionOutlivesTheRevoke).
 func (s *Server) watchInboundStream(resp *http.Response) {
@@ -49,6 +54,12 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 		// ctx is the stream's: its end cancels a check still in flight.
 		ctx, cancel := context.WithCancel(a.r.Context())
 		defer cancel()
+		actor := types.ActorHuman // as auditInboundRefused writes it
+		if isServicePrincipal(a.principal) {
+			actor = serviceActorType
+		}
+		b := s.newSessionBudget(ctx, sessionWatchID{Run: a.runID, Actor: actor, Principal: a.principal, Surface: sessionSurfaceInbound})
+		defer b.leave()
 		every := cmp.Or(s.uiInboundStreamEvery, inboundResolveTTL/2)
 		tick := time.NewTimer(max(0, every-s.cfg.Now().Sub(a.checked)))
 		defer tick.Stop()
@@ -74,10 +85,23 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 				}()
 			}
 		}
-		unconfirmed := func(reason string) func(context.Context) {
+		unconfirmedRow := func(reason string) func(context.Context) {
 			return func(ctx context.Context) {
 				s.auditInboundRefused(ctx, a.r, a.runID, a.app, a.principal, a.tokenID, reason)
 			}
+		}
+		startCheck := func() {
+			if checking {
+				return
+			}
+			checking = true
+			go func() {
+				at := s.cfg.Now()
+				cctx, ccancel := context.WithTimeout(ctx, inboundReadmitTimeout)
+				defer ccancel()
+				ok, unavailable, refusal := s.readmitInbound(cctx, a)
+				results <- readmitted{at: at, ok: ok, unavailable: unavailable, refusal: refusal}
+			}()
 		}
 		for {
 			select {
@@ -85,32 +109,29 @@ func (s *Server) watchInboundStream(resp *http.Response) {
 				return
 			case <-tick.C:
 				tick.Reset(every)
-				if (checking || failing != "") && stale() {
-					end(unconfirmed(cmp.Or(failing, reasonTokenLookupUnavailable)))
+				if (checking || failing != "") && stale() && b.observe("readmit", unconfirmed(errors.New(cmp.Or(failing, reasonTokenLookupUnavailable)))) == budgetSpent {
+					b.end()
+					end(unconfirmedRow(cmp.Or(failing, reasonTokenLookupUnavailable)))
 					return
 				}
-				if !checking {
-					checking = true
-					go func() {
-						at := s.cfg.Now()
-						cctx, ccancel := context.WithTimeout(ctx, inboundReadmitTimeout)
-						defer ccancel()
-						ok, unavailable, refusal := s.readmitInbound(cctx, a)
-						results <- readmitted{at: at, ok: ok, unavailable: unavailable, refusal: refusal}
-					}()
-				}
+				startCheck()
+			case <-b.retryC():
+				startCheck()
 			case res := <-results:
 				checking = false
 				switch {
 				case res.ok:
 					confirmed, failing = res.at, ""
+					b.observe("readmit", nil)
 				case res.unavailable == "":
+					b.observe("readmit", errSessionRefused)
 					end(res.refusal)
 					return
 				default:
 					failing = res.unavailable
-					if stale() {
-						end(unconfirmed(failing))
+					if v := b.observe("readmit", unconfirmed(errors.New(failing))); stale() && v == budgetSpent {
+						b.end()
+						end(unconfirmedRow(failing))
 						return
 					}
 				}

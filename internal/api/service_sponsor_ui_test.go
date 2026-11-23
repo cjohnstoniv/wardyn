@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -172,5 +173,32 @@ func TestServiceIdentity_SponsorUIEntry(t *testing.T) {
 	// A super admin's stamp never takes the sponsor arm.
 	if rec := h.enter(url.Values{"run": {h.run.ID.String()}, "app": {"code"}, "ticket": {h.ticket(h.run.ID, "sponsor-sub", oidc.RoleAdmin)}}); rec.Code != http.StatusForbidden {
 		t.Errorf("an admin-stamped ticket on a service run: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+// A sponsor's UI session whose sponsorship lookup fails is answered 503 with the unverifiable sentence (it rides the
+// session budget; it was a 403 that ended the session), and a sponsorship that has ended is still 403 not_authorized.
+func TestUISessionArms_SponsorReadFailureIs503(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	st := &sponsorLookupStore{sponsorUIStore: &sponsorUIStore{uiMemStore: h.store}}
+	st.still.Store(true)
+	h.srv.cfg.Store = st
+	h.run.CreatedBy = "service:ci-bot"
+	h.store.putRun(h.run)
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "sponsor-sub", Role: oidc.RoleUser,
+		Expires: time.Now().Add(time.Hour).Unix(), IssuedAt: 1, AuthorizedAt: time.Now().Unix()}
+	if de := h.srv.uiSessionStillAuthorized(context.Background(), sess, h.run); de != nil {
+		t.Fatalf("a sponsor who still is one = %+v, want none", de)
+	}
+	st.err = errors.New("db down")
+	de := h.srv.uiSessionStillAuthorized(context.Background(), sess, h.run)
+	if de == nil || de.status != http.StatusServiceUnavailable || de.reason != uiDeniedReasonRevocationUnavailable || de.msg != uiSessionUnverifiableMsg {
+		t.Fatalf("a sponsorship lookup that fails = %+v, want 503 %s %q", de, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+	}
+	st.err = nil
+	st.still.Store(false)
+	de = h.srv.uiSessionStillAuthorized(context.Background(), sess, h.run)
+	if de == nil || de.status != http.StatusForbidden || de.reason != uiDeniedReasonNotAuthorized {
+		t.Fatalf("a sponsorship that ended = %+v, want 403 %s", de, uiDeniedReasonNotAuthorized)
 	}
 }

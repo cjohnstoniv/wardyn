@@ -258,8 +258,10 @@ func refill[K comparable](m *map[K]*inboundBucket, k K, now time.Time, rate, bur
 
 // take spends one request from runID's bucket and, unless principal is "", from principal's, recording ref
 // as the run's sandbox when it is known, and answers which bucket refused ("" when the request may go) and the
-// sandbox reference the run's bucket holds. A request either bucket refuses spends from neither, so a caller
-// over its own limit takes nothing from the run's callers. The run's bucket is checked first.
+// sandbox reference the run's bucket holds. A request the run's bucket refuses still spends one from principal's,
+// so a caller that keeps calling a run at its limit soon meets its own (#3766); one the caller's bucket refuses
+// spends from neither, so a caller over its own limit takes nothing from the run's callers. The run's bucket is
+// checked first.
 func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time, ref string) (refused, sandboxRef string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -273,6 +275,9 @@ func (st *uiInboundState) take(runID uuid.UUID, principal string, now time.Time,
 	}
 	switch {
 	case b.tokens < 1:
+		if c != nil && c.tokens >= 1 {
+			c.tokens--
+		}
 		return "run", b.ref
 	case c != nil && c.tokens < 1:
 		return "caller", b.ref
@@ -472,7 +477,7 @@ type inboundReadmission struct {
 // Its answers go nowhere: the stream has no response left to write them on. unavailable is the reason of a
 // refusal that is no verdict on the token or the profile, and writes no inbound.deny row here: a lookup that
 // could not be made (verifyAPIToken's 503, reasonTokenLookupUnavailable), or a run, policy or profile that
-// could not be read (reasonRunUnreadable). It is "" for an admission and for a verdict, and a verdict
+// could not be read (reasonRunUnreadable); a run that is gone is a verdict. It is "" for an admission and for a verdict, and a verdict
 // returns the writer of its inbound.deny row unrun, for the stream to run after its close.
 func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool, string, func(context.Context)) {
 	w := &inboundReadmitWriter{healthzGateWriter: healthzGateWriter{h: http.Header{}}}
@@ -488,7 +493,12 @@ func (s *Server) readmitInbound(ctx context.Context, a inboundReadmission) (bool
 		return false, reasonTokenLookupUnavailable, nil
 	}
 	run, err := s.cfg.Store.GetRun(ctx, a.runID)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, "", func(ctx context.Context) {
+			s.auditInboundRefused(ctx, a.r, a.runID, a.app, a.principal, a.tokenID, inboundDenyNotFound)
+		}
+	case err != nil:
 		return false, reasonRunUnreadable, nil
 	}
 	if de := s.uiInboundUnitDenial(ctx, sess, run); de != nil {
@@ -656,6 +666,14 @@ func (s *Server) uiInboundUnitDenies(ctx context.Context, sess uiSession, run ty
 func (s *Server) uiInboundUnitDenial(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
+		if !unitReadFailed(err) {
+			msg := uiUnitUnsatisfiableMsg
+			if u, ok := isOverlayUnsatisfiable(err); ok {
+				msg = u.Error() // the curated sentence (governance_compose.go)
+			}
+			slog.WarnContext(ctx, "wardynd: ui gateway: the run's governance profile cannot be composed", "run_id", run.ID, "err", err)
+			return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceOverlayUnsatisfiable), msg: msg}
+		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
 		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}

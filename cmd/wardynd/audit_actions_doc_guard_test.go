@@ -682,6 +682,10 @@ var auditActionGrammarAllow = map[string]bool{
 	"run.policy.enforced":     true,
 	"run.policy.unconfirmed":  true,
 	"run.policy.report_stale": true,
+	// An open session's unanswered re-check row (0.10), named by the session budget design before it met this
+	// grammar: "unconfirmed" says what the window found, a state the session was in while no check answered, not
+	// an act to ask for. It is the session sibling of run.policy.unconfirmed.
+	"session.unconfirmed": true,
 	// A sandbox's DNS lookup row (0.10), named by the DNS design before it met this grammar: "query" is a
 	// noun, the lookup the run made, with no imperative to stand in for it.
 	"run.dns.query": true,

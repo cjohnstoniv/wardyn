@@ -442,6 +442,51 @@ func TestUIGateway_InboundRunBucketIsSharedByCallers(t *testing.T) {
 	}
 }
 
+// TestUIGateway_InboundRunRefusalChargesTheCaller: a caller who keeps calling a run at its limit spends their own
+// bucket on each refusal, so after a burst's worth they meet their own limit on any other run (#3766).
+func TestUIGateway_InboundRunRefusalChargesTheCaller(t *testing.T) {
+	h, _ := inboundHarness(t)
+	for i := range int(inboundRunBurst) {
+		if refused, _ := h.srv.uiInbound.take(h.run.ID, fmt.Sprintf("p%d", i), h.clock.now(), ""); refused != "" {
+			t.Fatalf("call %d was refused by %q within the run's burst", i+1, refused)
+		}
+	}
+	for range int(inboundCallerBurst) {
+		if refused, _ := h.srv.uiInbound.take(h.run.ID, "bob", h.clock.now(), ""); refused != "run" {
+			t.Fatalf("a call on the empty run was refused by %q, want \"run\"", refused)
+		}
+	}
+	if refused, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); refused != "caller" {
+		t.Errorf("bob's call on another run after a burst of run refusals was refused by %q, want \"caller\"", refused)
+	}
+	if refused, _ := h.srv.uiInbound.take(uuid.New(), "carol", h.clock.now(), ""); refused != "" {
+		t.Errorf("carol's call on another run was refused by %q, want none", refused)
+	}
+}
+
+// TestInboundTake_CallerRefusalSpendsNothingFromTheRun: a caller over their own limit is refused by their own
+// bucket and takes nothing from the run's callers; this was so before and stays so.
+func TestInboundTake_CallerRefusalSpendsNothingFromTheRun(t *testing.T) {
+	h, _ := inboundHarness(t)
+	for range int(inboundCallerBurst) {
+		if refused, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); refused != "" {
+			t.Fatal("a caller's first calls, each on its own run, were refused")
+		}
+	}
+	runBucket := func() float64 {
+		h.srv.uiInbound.mu.Lock()
+		defer h.srv.uiInbound.mu.Unlock()
+		return refill(&h.srv.uiInbound.buckets, h.run.ID, h.clock.now(), inboundRunRatePerSec, inboundRunBurst).tokens
+	}
+	before := runBucket()
+	if refused, _ := h.srv.uiInbound.take(h.run.ID, "bob", h.clock.now(), ""); refused != "caller" {
+		t.Fatalf("a call from a caller with an empty bucket was refused by %q, want \"caller\"", refused)
+	}
+	if after := runBucket(); after != before {
+		t.Errorf("the run's bucket went from %v to %v, want it unchanged", before, after)
+	}
+}
+
 // TestUIGateway_InboundBothBucketsEmptyNamesTheRun: when a call finds the run's bucket and its own caller's both
 // empty, the refusal names the run's, which is checked first.
 func TestUIGateway_InboundBothBucketsEmptyNamesTheRun(t *testing.T) {
@@ -751,6 +796,7 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		t.Cleanup(func() { close(held) })
 		h := inboundHarnessOn(t, echoAfterUpgradeBackend(t, held), "service:payments")
 		h.srv.uiInboundStreamEvery = every
+		h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a budget of 0 keeps the bound alone: today's timing
 		gw := httptest.NewServer(h.gateway)
 		t.Cleanup(gw.Close)
 		return h, gw
@@ -899,6 +945,48 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		if rows := awaitDenies(h); len(rows) != 1 || rows[0].Actor != h.owner ||
 			!h.audit.hasDataValue("reason", reasonRunUnreadable) || h.audit.hasDataValue("reason", inboundDenyNotFound) {
 			t.Errorf("inbound.deny rows = %+v, want one run_unreadable by %s and no not_found", rows, h.owner)
+		}
+	})
+	// The budget only lengthens the bound: with 400 ms (wall clock) and the rig clock past inboundResolveTTL, the
+	// stream outlives the stale bound and closes with the same row once the budget has run.
+	t.Run("a budget outlives the stale bound and then ends the stream with the same row", func(t *testing.T) {
+		h, gw := open(t)
+		h.srv.sessionBudgets.test, h.srv.sessionBudgets.retry = ptr(400*time.Millisecond), 10*time.Millisecond
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		tokens(h).failReads(errors.New("connection refused"))
+		failedAt := time.Now()
+		time.Sleep(5 * every) // the first unanswerable re-admission opens the window
+		h.clock.advance(inboundResolveTTL)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived its budget")
+		}
+		if d := time.Since(failedAt); d < 400*time.Millisecond {
+			t.Fatalf("the stream closed %v after its first unanswered check, inside its 400 ms budget", d)
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || !h.audit.hasDataValue("reason", reasonRunUnreadable) {
+			t.Errorf("inbound.deny rows = %+v, want one run_unreadable", rows)
+		}
+	})
+	// A run that is gone is a verdict: the stream ends at the next re-admission under any budget, with a not_found
+	// row. A run read that fails some other way still rides.
+	t.Run("a deleted run ends the stream at once with a not_found row", func(t *testing.T) {
+		h, gw := open(t)
+		h.srv.sessionBudgets.test = ptr(time.Hour)
+		conn, br := openInboundStream(t, h, gw, "wdn_alice")
+		tokens(h).failReads(errors.New("connection refused"))
+		time.Sleep(5 * every)
+		h.clock.advance(inboundResolveTTL)
+		time.Sleep(5 * every)
+		if !echoes(conn, br) {
+			t.Fatal("a run read that failed closed the stream under an hour's budget")
+		}
+		tokens(h).failReads(nil)
+		h.store.dropRun(h.run.ID)
+		if !closes(conn, br) {
+			t.Fatal("the stream outlived its deleted run")
+		}
+		if rows := awaitDenies(h); len(rows) != 1 || !h.audit.hasDataValue("reason", inboundDenyNotFound) {
+			t.Errorf("inbound.deny rows = %+v, want one not_found", rows)
 		}
 	})
 	t.Run("lookups failing past the bound close the stream with a row", func(t *testing.T) {

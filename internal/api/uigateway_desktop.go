@@ -74,6 +74,8 @@ const (
 	uiTicketInvalidMsg = "Invalid, expired, or already-used attach ticket"
 	uiNoSessionMsg     = "No valid UI session for this run — open the app again from its run page"
 	uiNoDesktopMsg     = "This run has no desktop: only a desktop VM run has one"
+	// desktopUnconfirmedMsg is the close words of a stream whose access checks went unanswered for the session budget.
+	desktopUnconfirmedMsg = "Wardyn could not confirm access to this desktop. It reconnects when the service is back."
 )
 
 // The desktop stream's close codes (RFC 6455 private range): the viewer tells an ended session or
@@ -434,7 +436,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		return
 	}
 
-	run, code, why := s.desktopBoundedRunCheck(ctx, sess)
+	run, code, why, _ := s.desktopBoundedRunCheck(ctx, sess)
 	if code != 0 {
 		_ = c.Close(code, why)
 		return
@@ -527,7 +529,7 @@ func (s *Server) openDesktopDisplay(ctx context.Context, sess uiSession, dd runn
 	if err != nil {
 		return nil, types.AgentRun{}, desktopCloseUnreachable, lockUnavailableMsg
 	}
-	run, code, why := s.desktopBoundedRunCheck(h.ctx, sess)
+	run, code, why, _ := s.desktopBoundedRunCheck(h.ctx, sess)
 	if code != 0 {
 		h.release()
 		return nil, run, code, why
@@ -554,6 +556,8 @@ func (s *Server) openDesktopDisplay(ctx context.Context, sess uiSession, dd runn
 // relayDesktopStream carries frames both ways until either side ends, the stream's bound or Close lands, or a
 // re-check ends the session, and tells the viewer why with the stream's close code (serveDesktopRFB). With
 // watched set, the run's re-check runs beside the stream (desktopIssuerCut) and only the Closed set is read here.
+// A re-check that refuses ends the stream at once; one that could not read (unread) rides the session budget,
+// asking again every few seconds, and ends the stream with desktopCloseUnreachable once the budget runs out.
 func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession, c desktopSocket, ws *websocket.Conn,
 	conn net.Conn, viewer *viewerHijack, filtered *rfbfilter.Conn, windowOpened func(), watched bool) {
 	done := make(chan struct{}, 2)
@@ -573,6 +577,8 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 	}
 	closedTick := time.NewTicker(cmp.Or(s.uiDesktopClosedEvery, uiDesktopClosedRecheck))
 	defer closedTick.Stop()
+	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceDesktop))
+	defer b.leave()
 	for {
 		select {
 		case <-done:
@@ -592,15 +598,28 @@ func (s *Server) relayDesktopStream(reqCtx, ctx context.Context, sess uiSession,
 			}
 			return
 		case <-closedTick.C:
-			// A Close on another replica, or a Closed set that cannot be read, ends the stream.
-			if code, why := s.desktopBoundedClosedCheck(ctx, sess); code != 0 {
-				_ = c.Close(code, why)
+			// A Close on another replica ends the stream; a Closed set that cannot be read ends it once the budget runs out.
+			code, why, unread := s.desktopBoundedClosedCheck(ctx, sess)
+			if desktopStep(ctx, c, b, sess, "closed", code, why, unread) {
 				return
 			}
 		case <-recheck:
-			if _, code, why := s.desktopBoundedRunCheck(ctx, sess); code != 0 {
-				_ = c.Close(code, why)
+			_, code, why, unread := s.desktopBoundedRunCheck(ctx, sess)
+			if desktopStep(ctx, c, b, sess, "run", code, why, unread) {
 				return
+			}
+		case <-b.retryC():
+			if b.retrying("closed") {
+				code, why, unread := s.desktopBoundedClosedCheck(ctx, sess)
+				if desktopStep(ctx, c, b, sess, "closed", code, why, unread) {
+					return
+				}
+			}
+			if recheck != nil && b.retrying("run") {
+				_, code, why, unread := s.desktopBoundedRunCheck(ctx, sess)
+				if desktopStep(ctx, c, b, sess, "run", code, why, unread) {
+					return
+				}
 			}
 		}
 	}
@@ -638,48 +657,79 @@ func (d desktopSocket) Close(code websocket.StatusCode, why string) error {
 }
 
 // desktopBoundedRunCheck is desktopRunCheck under uiDesktopRecheckWait: a read that runs out of it is a read that failed.
-func (s *Server) desktopBoundedRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+func (s *Server) desktopBoundedRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
 	defer cancel()
 	return s.desktopRunCheck(ctx, sess)
 }
 
 // desktopBoundedClosedCheck is an open stream's read of the Closed set under uiDesktopRecheckWait, answering the
-// close code and words that end it, or 0 while it may go on. A watch that can't be verified ends as any re-check
-// ends a watch; a session its person closed says so, and any other session keeps the one answer it has.
-func (s *Server) desktopBoundedClosedCheck(ctx context.Context, sess uiSession) (websocket.StatusCode, string) {
+// close code and words that end it, or 0 while it may go on, and whether the answer is a read that failed
+// (unread). A watch that can't be verified ends as any re-check ends a watch; a session its person closed says
+// so, and any other session keeps the one answer it has.
+func (s *Server) desktopBoundedClosedCheck(ctx context.Context, sess uiSession) (websocket.StatusCode, string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait))
 	defer cancel()
 	closed, unread := s.uiDesktopClosedRead(ctx, sess, s.cfg.Now())
 	switch {
 	case unread && sess.backgroundWatch():
-		return desktopCloseWatchEnded, backgroundWatchEndedMsg
+		return desktopCloseWatchEnded, backgroundWatchEndedMsg, true
 	case closed || unread:
-		return desktopCloseSessionEnded, "this desktop session ended"
+		return desktopCloseSessionEnded, "this desktop session ended", unread
 	}
-	return 0, ""
+	return 0, "", false
+}
+
+// desktopStep folds one of an open stream's checks into its budget and closes the stream when it must end: with the
+// check's own code on a refusal, and with desktopCloseUnreachable, which the viewer retries, when the budget ran
+// out (a background watch keeps its own code, as every end of a watch does). It reports whether the stream ended.
+// A check that ctx ended meanwhile is not folded: the stream's own end (the loop's ctx.Done arm) says why it closed.
+func desktopStep(ctx context.Context, c desktopSocket, b *sessionBudget, sess uiSession, check string, code websocket.StatusCode, why string, unread bool) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	switch b.step(check, code != 0, unread) {
+	case budgetSpent:
+		b.end()
+		if sess.backgroundWatch() {
+			_ = c.Close(desktopCloseWatchEnded, backgroundWatchEndedMsg)
+		} else {
+			_ = c.Close(desktopCloseUnreachable, desktopUnconfirmedMsg)
+		}
+		return true
+	case budgetRefused:
+		_ = c.Close(code, why)
+		return true
+	}
+	return false
 }
 
 // desktopRunCheck loads the session's run fresh and answers the close code and words that end its
-// stream, or 0 while it may go on. On a watch, a run that can't be read ends the view rather than retry it.
-func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string) {
+// stream, or 0 while it may go on, and whether the answer is a read that failed (unread: the run could not be
+// read, or the UI re-check answered 503). On a watch, a run that can't be read ends the view with its own code.
+func (s *Server) desktopRunCheck(ctx context.Context, sess uiSession) (types.AgentRun, websocket.StatusCode, string, bool) {
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
 	if err != nil {
-		if sess.backgroundWatch() {
-			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+		missing := errors.Is(err, store.ErrNotFound)
+		switch {
+		case sess.backgroundWatch():
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg, !missing
+		case missing:
+			return run, desktopCloseRunEnded, "run not found", false
 		}
-		return run, desktopCloseUnreachable, "run not found"
+		return run, desktopCloseUnreachable, "run could not be read", true
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" || runIsKept(run) {
-		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app"
+		return run, desktopCloseRunEnded, "run has ended; cannot open a UI app", false
 	}
 	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		unread := de.status == http.StatusServiceUnavailable
 		if sess.backgroundWatch() {
-			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg
+			return run, desktopCloseWatchEnded, backgroundWatchEndedMsg, unread
 		}
-		return run, desktopCloseNotAuthorized, de.msg
+		return run, desktopCloseNotAuthorized, de.msg, unread
 	}
-	return run, 0, ""
+	return run, 0, "", false
 }
 
 // desktopClipboardFilter is uiFilterUpgrade's clipboard filter on a VM's display: the same desktop

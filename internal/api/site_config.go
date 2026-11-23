@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -317,6 +318,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// server state this deliberately pure function has no access to — the boot
 	// agent-image map, and WARDYN_ALLOW_TEST_ENDPOINTS for a Bedrock base URL.
 	// Both doors run each, so the "one validator, two doors" property is the same.
+	if err := validateSiteSessions(cfg.Sessions); err != nil {
+		return err
+	}
 	if err := validateSiteBranding(cfg.Branding); err != nil {
 		return err
 	}
@@ -445,7 +449,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth", "macos_vm", "images",
+	"recording", "governance_max_depth", "macos_vm", "images", "sessions",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -512,6 +516,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteRecording(cfg, existing, present)
 	carryForwardSiteMacOSVM(cfg, existing, present)
 	carryForwardSiteImages(cfg, existing, present)
+	carryForwardSiteSessions(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -747,48 +752,11 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	logWarnInternalHostsDeclared(saved.InternalHosts)
 	sshWideRows := sshLaneWidePastPathRows(saved.WorkspaceProviders)
 	logWarnSSHLaneWidePastPath(sshWideRows)
-	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
-	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
-	datum := map[string]any{
-		// upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
-		// from→to pairs and internal_hosts[].host_suffix are in the clear on
-		// purpose — same precedent as workspace_provider.write's base_urls:
-		// topology, not a credential (a secret ref is a NAME, never the value it
-		// names). Without them, an MDM-applied narrowing or opening of the
-		// upstream proxy / redirect table / internal-host allowlist left nothing
-		// but a count behind it, unreviewable from the audit log alone.
-		"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
-		"upstream_proxy_url":        saved.UpstreamProxyURL,
-		"upstream_proxy_secret_ref": saved.UpstreamProxySecretRef,
-		"egress_redirects_count":    len(saved.EgressRedirects),
-		"egress_redirects":          redirectPairs,
-		"scm_hosts_count":           len(saved.ScmHosts),
-		"internal_hosts_count":      len(saved.InternalHosts),
-		"internal_hosts":            hostSuffixes,
-		// The provider policy this door can also write (CLI/MDM): without these
-		// two, an MDM-applied narrowing or opening left nothing but a count of
-		// the legacy lists behind it.
-		"git_providers":      enabledGitProviderCount(saved),
-		"storage_configured": storageProvidersConfigured(saved),
-		// The agent roster this door can also write (CLI/MDM): the count of
-		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
-		// from the audit log alone.
-		"agent_providers": enabledAgentProviderCount(saved),
-		// The sign-in help pair (#484), in the clear: /healthz publishes both
-		// to anyone, so the log can hold what every signed-out reader sees.
-		"sign_in_help_text": saved.SignInHelpText,
-		"sign_in_help_url":  saved.SignInHelpURL,
-	}
+	datum := siteConfigAuditDatum(saved)
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])
 	auditSiteRecording(datum, saved.Recording, present["recording"])
 	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
-	if redirectsTruncated {
-		datum["egress_redirects_truncated"] = true
-	}
-	if hosts := goChecksumDBOffHosts(saved.EgressRedirects); len(hosts) > 0 {
-		datum["go_checksum_db_off"] = hosts
-	}
 	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	auditProviderBlocks(datum, saved, invalidated)
 	auditServiceGrantCleanup(datum, cleanup)
@@ -820,6 +788,52 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		BrandingLogoPending:          logoPending,
 		ModelProviderWarnings:        providerWarnings,
 	})
+}
+
+// siteConfigAuditDatum is the site_config.write row's data for the document just saved: what it holds in the
+// clear (topology, never a credential) and the counts. handlePutSiteConfig adds the parts that depend on the
+// request.
+func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
+	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
+	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
+	datum := map[string]any{
+		// upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
+		// from→to pairs and internal_hosts[].host_suffix are in the clear on
+		// purpose — same precedent as workspace_provider.write's base_urls:
+		// topology, not a credential (a secret ref is a NAME, never the value it
+		// names). Without them, an MDM-applied narrowing or opening of the
+		// upstream proxy / redirect table / internal-host allowlist left nothing
+		// but a count behind it, unreviewable from the audit log alone.
+		"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
+		"upstream_proxy_url":        saved.UpstreamProxyURL,
+		"upstream_proxy_secret_ref": saved.UpstreamProxySecretRef,
+		"egress_redirects_count":    len(saved.EgressRedirects),
+		"egress_redirects":          redirectPairs,
+		"scm_hosts_count":           len(saved.ScmHosts),
+		"internal_hosts_count":      len(saved.InternalHosts),
+		"internal_hosts":            hostSuffixes,
+		// The provider policy this door can also write (CLI/MDM): without these
+		// two, an MDM-applied narrowing or opening left nothing but a count of
+		// the legacy lists behind it.
+		"git_providers":      enabledGitProviderCount(saved),
+		"storage_configured": storageProvidersConfigured(saved),
+		// The agent roster this door can also write (CLI/MDM): the count of
+		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
+		// from the audit log alone.
+		"agent_providers": enabledAgentProviderCount(saved),
+		// The sign-in help pair (#484), in the clear: /healthz publishes both
+		// to anyone, so the log can hold what every signed-out reader sees.
+		"sign_in_help_text":            saved.SignInHelpText,
+		"sign_in_help_url":             saved.SignInHelpURL,
+		"session_unconfirmed_budget_s": int(saved.Sessions.UnconfirmedBudget() / time.Second),
+	}
+	if redirectsTruncated {
+		datum["egress_redirects_truncated"] = true
+	}
+	if hosts := goChecksumDBOffHosts(saved.EgressRedirects); len(hosts) > 0 {
+		datum["go_checksum_db_off"] = hosts
+	}
+	return datum
 }
 
 // projectPutSiteConfig projects the PUT response's read-only fields onto the

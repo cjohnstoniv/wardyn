@@ -398,6 +398,7 @@ func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, "commands")
+			rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // a grant that cannot be read ends it at the first check
 			var closed atomic.Bool
 			rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
 			done := make(chan *httptest.ResponseRecorder, 1)
@@ -420,6 +421,52 @@ func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A grant read that fails rides the session budget: the command runs on, and a rode_through row names the command.
+// Past the budget it ends with the support session's unverified words.
+func TestRunExecSupport_UnreadableGrantRidesTheBudget(t *testing.T) {
+	start := func(t *testing.T, budget time.Duration) (*supportTermRig, *atomic.Bool, chan *httptest.ResponseRecorder) {
+		rig := newSupportTermRig(t, "commands")
+		rig.srv.sessionBudgets.test = ptr(budget)
+		rig.srv.sessionBudgets.retry = 10 * time.Millisecond
+		var closed atomic.Bool
+		rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- rig.exec(rig.helper, "sleep 100") }()
+		waitFor(t, "the command to start", func() bool { return rig.fr.execs.Load() == 1 })
+		return rig, &closed, done
+	}
+	t.Run("one failed read rides", func(t *testing.T) {
+		rig, closed, _ := start(t, time.Hour)
+		rig.st.failOn("SupportGrantLive", errors.New("database down"))
+		waitFor(t, "the window to open", func() bool { return rig.st.failedLives() >= 1 })
+		rig.st.failOn("SupportGrantLive", nil)
+		_, data := wantUnconfirmedRows(t, rig.aud, 1)
+		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceCommand {
+			t.Fatalf("row %v, want rode_through on the command", data[0])
+		}
+		if closed.Load() {
+			t.Fatal("the command was cut by a grant read that failed and then answered")
+		}
+	})
+	t.Run("past the budget it ends", func(t *testing.T) {
+		rig, closed, done := start(t, 50*time.Millisecond)
+		rig.st.failOn("SupportGrantLive", errors.New("database down"))
+		waitFor(t, "the command to be cut", closed.Load)
+		select {
+		case w := <-done:
+			if res := execResult(t, w); res.ExitCode != -1 {
+				t.Errorf("exit code = %d, want -1 for a cut command", res.ExitCode)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("POST /exec did not answer after the budget ran out")
+		}
+		rows := rig.rows("run.command.exec")
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), runExecSupportUnverified) {
+			t.Fatalf("run.command.exec rows = %+v, want one naming %q", rows, runExecSupportUnverified)
+		}
+	})
 }
 
 // A helper's web attach refused at the run's session cap, through the real attach handler and a ticket the helper's
