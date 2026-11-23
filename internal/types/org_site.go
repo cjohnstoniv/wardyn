@@ -90,9 +90,9 @@ func ValidateOrgSiteName(name string) error {
 }
 
 // ValidateOrgSiteStorage checks a site's storage note. Both parts are optional. The label is one printable,
-// trimmed line. The URL is absolute, with a scheme, and carries no user name, password or query, so no
-// credential can be written into it; an opaque form (scheme:rest) is refused too, since its rest is not split
-// into those parts.
+// trimmed line. The URL is an http or https link to a host, and carries no user name, password, query or
+// fragment, so no credential can be written into it and no other scheme reaches a page that shows it; an
+// opaque form (https:rest) is refused too, since its rest is not split into those parts.
 func ValidateOrgSiteStorage(label, rawURL string) error {
 	if label != strings.TrimSpace(label) || !printableLine(label) {
 		return errors.New("a storage label is one printable line, without leading or trailing spaces")
@@ -107,14 +107,17 @@ func ValidateOrgSiteStorage(label, rawURL string) error {
 		return fmt.Errorf("a storage link is one printable line of at most %d characters", OrgSiteStorageURLMax)
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme == "" || u.Opaque != "" {
-		return errors.New("a storage link is an absolute URL, such as https://files.example.com/share")
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Opaque != "" || u.Host == "" {
+		return errors.New("a storage link is an http or https URL, such as https://files.example.com/share")
 	}
 	if u.User != nil {
 		return errors.New("a storage link carries no user name or password")
 	}
 	if u.RawQuery != "" || u.ForceQuery {
 		return errors.New("a storage link carries no query")
+	}
+	if strings.ContainsRune(rawURL, '#') {
+		return errors.New("a storage link carries no fragment")
 	}
 	return nil
 }

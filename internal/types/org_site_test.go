@@ -8,16 +8,16 @@ import (
 	"testing"
 )
 
-// The storage note is never a credential: a link with a user name, a password or a query is refused, and so
-// is a form whose parts are not split out (an opaque scheme:rest), which could hide either.
+// The storage note is never a credential and never another scheme: only an http or https link to a host is
+// stored, and one with a user name, a password, a query or a fragment is refused, and so is a form whose parts
+// are not split out (an opaque https:rest), which could hide any of them.
 func TestOrgSiteStorageURLRefusesUserinfoAndQuery(t *testing.T) {
 	for _, ok := range []string{
 		"",
 		"https://files.example.com/share",
-		"https://files.example.com:8443/share/designs#latest",
-		"smb://nas.office.example/designs",
-		"s3://designs-bucket/prefix",
-		"file:///mnt/designs",
+		"https://files.example.com:8443/share/designs",
+		"HTTPS://files.example.com/share",
+		"http://nas.office.example/designs",
 	} {
 		if err := ValidateOrgSiteStorage("Office NAS", ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
@@ -30,6 +30,16 @@ func TestOrgSiteStorageURLRefusesUserinfoAndQuery(t *testing.T) {
 		"https://files.example.com/share?sig=abc",
 		"https://files.example.com/share?",
 		"smb:alice:secret@nas.office.example/designs",
+		"https:alice:secret@files.example.com/share",
+		"javascript:alert(1)",
+		"javascript://x/%0aalert(1)",
+		"data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+		"https://files.example.com/share#token=abc",
+		"https://files.example.com/share#",
+		"https:///share",
+		"smb://nas.office.example/designs",
+		"s3://designs-bucket/prefix",
+		"file:///mnt/designs",
 		"files.example.com/share",
 		"/mnt/designs",
 		" https://files.example.com/share",

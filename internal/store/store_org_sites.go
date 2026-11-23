@@ -71,11 +71,17 @@ func (s PG) CreateOrgSite(ctx context.Context, site types.OrgSite) (types.OrgSit
 // UpdateOrgSite replaces a live site's name, storage note and default pool, only at the revision the caller
 // read: ErrOrgSiteStale otherwise, ErrNotFound for an unknown or deleted site, ErrConflict when the name is
 // taken. A default pool must be a live pool assigned to this site (ErrOrgSiteDefaultPool), checked under the
-// site's row lock, which every pool move also takes. A change that moves nothing writes nothing and keeps the
-// revision.
+// site's row lock, which every pool move also takes. When a default is named, its pool row is locked first, so
+// the order is pool then site, as in AssignPoolSite and ClearPoolSite, and the two cannot deadlock. A change
+// that moves nothing writes nothing and keeps the revision.
 func (s PG) UpdateOrgSite(ctx context.Context, id uuid.UUID, revision int64, name, storageLabel, storageURL string, defaultPoolID *uuid.UUID) (types.OrgSite, error) {
 	var out types.OrgSite
 	err := s.inTx(ctx, func(q Querier) error {
+		if defaultPoolID != nil {
+			if _, err := q.Exec(ctx, `SELECT 1 FROM runner_pools WHERE id = $1 FOR KEY SHARE`, *defaultPoolID); err != nil {
+				return err
+			}
+		}
 		cur, err := liveSiteForUpdate(ctx, q, id)
 		if err != nil {
 			return err

@@ -146,6 +146,9 @@ func TestPG_OrgSites_DeleteRefusedWhileReferenced(t *testing.T) {
 	if _, err := pg.DeleteRunnerPool(ctx, p.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := pg.AssignPoolSite(ctx, p.ID, site.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("assigning a deleted pool = %v, want ErrNotFound", err)
+	}
 	if _, err := pg.DeleteOrgSite(ctx, site.ID); !errors.Is(err, store.ErrOrgSiteInUse) {
 		t.Fatalf("delete with a deleted pool still assigned = %v, want ErrOrgSiteInUse", err)
 	}
@@ -282,6 +285,9 @@ func TestPG_OrgSites_DefaultPoolIsTheSitesOwn(t *testing.T) {
 	set, err := pg.UpdateOrgSite(ctx, office.ID, office.Revision, "Office", "Office NAS", "https://nas.office.example/share", &p.ID)
 	if err != nil || set.DefaultPoolID == nil || *set.DefaultPoolID != p.ID || set.Revision != office.Revision+1 || len(set.PoolIDs) != 1 {
 		t.Fatalf("set default = %+v, %v", set, err)
+	}
+	if _, err := pg.UpdateOrgSite(ctx, edge.ID, edge.Revision, "OFFICE", "", "", nil); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("renaming a site to another live site's name = %v, want ErrConflict", err)
 	}
 	if _, err := pg.UpdateOrgSite(ctx, office.ID, office.Revision, "Office", "", "", nil); !errors.Is(err, store.ErrOrgSiteStale) {
 		t.Errorf("an update at an old revision = %v, want ErrOrgSiteStale", err)
