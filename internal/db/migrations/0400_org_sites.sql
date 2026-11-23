@@ -19,7 +19,7 @@
 -- goes, so it has no home. A drive's row goes with the drive.
 --
 -- The app role is granted the tables here, found from the catalog and never by name: every role but the owner
--- that holds DELETE on runner_pools gets SELECT, INSERT, UPDATE and DELETE on the three tables.
+-- that holds UPDATE on runner_pools gets SELECT, INSERT, UPDATE and DELETE on the three tables.
 CREATE TABLE IF NOT EXISTS org_sites (
     id              UUID        PRIMARY KEY,
     name            TEXT        NOT NULL CHECK (name <> '' AND char_length(name) <= 64),
@@ -58,7 +58,7 @@ BEGIN
           CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
           JOIN pg_catalog.pg_roles ro ON ro.oid = a.grantee
          WHERE c.oid = 'runner_pools'::regclass
-           AND a.privilege_type = 'DELETE' AND a.grantee <> c.relowner
+           AND a.privilege_type = 'UPDATE' AND a.grantee <> c.relowner
     LOOP
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON org_sites, org_site_pools, org_site_drives TO %I', r.rolname);
     END LOOP;
