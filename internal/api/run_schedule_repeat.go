@@ -55,7 +55,17 @@ const (
 	scheduleOutcomeMissed        = "missed"
 	scheduleOutcomeRefused       = "refused"
 	scheduleOutcomeSkippedPrefix = "skipped:"
-	scheduleOutcomeCancelled     = "cancelled:" + schedulePausedIdentity
+	scheduleOutcomeCancelled     = "cancelled:"
+)
+
+// Why the sweep cancelled a booking it made, or recorded a replayed one as not booked: the kill's reason, the
+// fire row's, and after scheduleOutcomeCancelled the slot's outcome. A booking whose owner may no longer act is
+// killed session_revoked, as their queued runs are when their credentials are revoked (cancelQueuedRunsOf).
+const (
+	scheduleCancelGone   = "schedule_gone"
+	scheduleCancelPaused = "schedule_paused"
+	scheduleCancelUnread = "schedule_unread"
+	scheduleRunEnded     = "run_ended" // a replayed booking whose run ended before it started
 )
 
 // Every rule a schedule may repeat by.
@@ -588,14 +598,14 @@ func (s *Server) handleDeleteRunSchedule(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// cancelBookedRun kills the one run a booking just made, while it still waits, as the system. A run that left
-// QUEUED since keeps its own end: the kill's claim is QUEUED to KILLED only (cancelQueuedRunsOf).
-func (s *Server) cancelBookedRun(ctx context.Context, runID uuid.UUID) error {
+// cancelBookedRun kills the one run a booking just made, while it still waits, as the system, with reason. A run
+// that left QUEUED since keeps its own end: the kill's claim is QUEUED to KILLED only (cancelQueuedRunsOf).
+func (s *Server) cancelBookedRun(ctx context.Context, runID uuid.UUID, reason string) error {
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil || run.State != types.RunQueued {
 		return err
 	}
-	_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": queueCancelSessionRevoked})
+	_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": reason})
 	return err
 }
 
@@ -621,7 +631,7 @@ type scheduleSweep struct {
 	now    time.Time
 	create http.HandlerFunc
 	live   func(context.Context, queueAuthority, time.Time) (bool, error)
-	cancel func(context.Context, uuid.UUID) error
+	cancel func(context.Context, uuid.UUID, string) error
 }
 
 func (s *Server) newScheduleSweep(st runScheduleStore) *scheduleSweep {
@@ -791,8 +801,8 @@ func bookingReason(body []byte) string {
 }
 
 // outcome records what a booking came to. A fresh 201 re-reads the schedule (a Pause, Delete or erasure in the
-// tick cancels the run it made) and re-checks the owner; a replayed 201 was booked before any such change and
-// keeps its run. A refusal by the owner's standing pauses the schedule; a busy key or a fault leaves it for the
+// tick, or a failed read, cancels the run it made) and re-checks the owner; a replayed 201 was booked before any
+// such change and keeps its run, unless that run ended before it started. A refusal by the owner's standing pauses the schedule; a busy key or a fault leaves it for the
 // next tick; any other refusal skips this slot.
 func (sw *scheduleSweep) outcome(ctx context.Context, sc store.RunSchedule, rule scheduleRule, a queueAuthority, code int, hdr http.Header, body []byte) scheduleTick {
 	reason := bookingReason(body)
@@ -835,25 +845,27 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 		cur, err := sw.st.GetRunSchedule(ctx, sc.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			sw.dropBooked(ctx, sc, runID, true)
-			sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": "schedule_gone", "run_id": runID, "due_at": sc.NextAt})
-			return scheduleTickNone
+			return sw.dropBooked(ctx, sc, rule, runID, scheduleCancelGone)
 		case err != nil:
 			slog.WarnContext(ctx, "wardynd: run schedule unread after its booking", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
-			sw.dropBooked(ctx, sc, runID, false)
-			return scheduleTickNone
+			return sw.dropBooked(ctx, sc, rule, runID, scheduleCancelUnread)
 		case cur.PausedAt != nil:
-			sw.dropBooked(ctx, sc, runID, false)
-			sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": "schedule_paused", "run_id": runID, "due_at": sc.NextAt})
-			return scheduleTickNone
+			return sw.dropBooked(ctx, sc, rule, runID, scheduleCancelPaused)
 		}
+	} else if run, err := sw.s.cfg.Store.GetRun(ctx, runID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.WarnContext(ctx, "wardynd: run schedule booking unread", slog.String("run_id", runID.String()), slog.Any("err", err))
+		return scheduleTickNone // the next tick replays it again
+	} else if err != nil || (run.State.IsTerminal() && run.AdmittedAt == nil) {
+		sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+scheduleRunEnded)
+		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": scheduleRunEnded, "run_id": runID, "due_at": sc.NextAt, "replayed": true})
+		return scheduleTickNone
 	}
 	if live, err := sw.live(ctx, a, sc.AuthorityAt); err != nil || !live {
-		if err := sw.cancel(ctx, runID); err != nil {
+		if err := sw.cancel(ctx, runID, queueCancelSessionRevoked); err != nil {
 			slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
 		sw.pause(ctx, sc, schedulePausedIdentity)
-		sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled)
+		sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+schedulePausedIdentity)
 		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": schedulePausedIdentity, "run_id": runID, "due_at": sc.NextAt})
 		return scheduleTickNone
 	}
@@ -866,21 +878,25 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 	return scheduleTickBooked
 }
 
-// dropBooked cancels a fresh booking whose schedule is gone or paused. blank (the schedule is gone, by the
-// owner's Delete or an erasure) also blanks that one run's text while it still waits. Either call's error leaves
-// the other to run.
-func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, runID uuid.UUID, blank bool) {
-	if blank {
+// dropBooked cancels a fresh booking whose schedule is gone, paused or unread, with reason, and moves the
+// schedule past the slot with that outcome, so a later replay of the slot's key never records the killed run
+// booked. A gone schedule (the owner's Delete or an erasure) also blanks that one run's text while it still
+// waits. Either call's error leaves the other to run.
+func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, rule scheduleRule, runID uuid.UUID, reason string) scheduleTick {
+	if reason == scheduleCancelGone {
 		if run, err := sw.s.cfg.Store.GetRun(ctx, runID); err != nil || run.State == types.RunQueued {
 			if err := sw.st.BlankRunTaskByID(ctx, runID); err != nil {
 				slog.WarnContext(ctx, "wardynd: run schedule booking not blanked", slog.String("run_id", runID.String()), slog.Any("err", err))
 			}
 		}
 	}
-	if err := sw.cancel(ctx, runID); err != nil {
+	if err := sw.cancel(ctx, runID, reason); err != nil {
 		slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("schedule", sc.ID.String()),
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
+	sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason)
+	sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt})
+	return scheduleTickNone
 }
 
 // advance moves the schedule past this slot to the next after it.

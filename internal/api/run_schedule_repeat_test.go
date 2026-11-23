@@ -140,6 +140,8 @@ type fakeScheduleStore struct {
 	signInErr error
 	groups    store.PrincipalGroups
 	groupsErr error
+	getErr    error                        // GetRunSchedule's answer once set
+	runs      map[uuid.UUID]types.AgentRun // GetRun's rows
 }
 
 func newFakeScheduleStore() *fakeScheduleStore {
@@ -160,11 +162,24 @@ func (f *fakeScheduleStore) ListRunSchedules(context.Context, string) ([]store.R
 func (f *fakeScheduleStore) GetRunSchedule(_ context.Context, id uuid.UUID) (store.RunSchedule, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return store.RunSchedule{}, f.getErr
+	}
 	sc, ok := f.rows[id]
 	if !ok {
 		return store.RunSchedule{}, store.ErrNotFound
 	}
 	return sc, nil
+}
+
+func (f *fakeScheduleStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	run, ok := f.runs[id]
+	if !ok {
+		return types.AgentRun{}, store.ErrNotFound
+	}
+	return run, nil
 }
 
 func (f *fakeScheduleStore) PauseRunSchedule(_ context.Context, id uuid.UUID, reason string, at time.Time) (bool, error) {
@@ -418,7 +433,7 @@ func testSweep(srv *Server, st *fakeScheduleStore, now time.Time, create http.Ha
 		}
 	}
 	sw.live = func(context.Context, queueAuthority, time.Time) (bool, error) { return live, nil }
-	sw.cancel = func(context.Context, uuid.UUID) error { return nil }
+	sw.cancel = func(context.Context, uuid.UUID, string) error { return nil }
 	return sw, &creates
 }
 
@@ -517,5 +532,94 @@ func TestRunScheduleSweep_MissedNotLivePausesBeforeReplay(t *testing.T) {
 	}
 	if got := st.row(t, sc.ID); *creates != 0 || got.PausedAt == nil || got.PausedReason != schedulePausedIdentity {
 		t.Errorf("%d creates, schedule %+v; want paused %s and the create never called", *creates, got, schedulePausedIdentity)
+	}
+}
+
+// booking201 answers a create with one run, as a replay when replayed is set; before runs first.
+func booking201(runID uuid.UUID, replayed bool, before func()) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if before != nil {
+			before()
+		}
+		if replayed {
+			w.Header().Set(idempotentReplayedHeader, "true")
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"id": runID})
+	}
+}
+
+// A fresh booking whose schedule is paused or unreadable once the 201 is in is cancelled with that cause, never
+// session_revoked, and the slot moves on recorded cancelled, so no later replay of its key is recorded booked.
+func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		reason string
+		during func(*fakeScheduleStore, uuid.UUID)
+	}{
+		{scheduleCancelPaused, func(st *fakeScheduleStore, id uuid.UUID) {
+			_, _ = st.PauseRunSchedule(context.Background(), id, schedulePausedByOwner, time.Now())
+		}},
+		{scheduleCancelUnread, func(st *fakeScheduleStore, _ uuid.UUID) { st.getErr = errors.New("fake: read failed") }},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			sw, _ := testSweep(scheduleTestServer(st), st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
+			var cancelled []string
+			sw.cancel = func(_ context.Context, id uuid.UUID, reason string) error {
+				if id == runID {
+					cancelled = append(cancelled, reason)
+				}
+				return nil
+			}
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(cancelled) != 1 || cancelled[0] != tc.reason {
+				t.Errorf("cancel reasons = %v, want [%s]", cancelled, tc.reason)
+			}
+			st.getErr = nil
+			got := st.row(t, sc.ID)
+			if got.LastOutcome != scheduleOutcomeCancelled+tc.reason || got.LastRunID == nil || *got.LastRunID != runID || got.NextAt.Equal(sc.NextAt) {
+				t.Errorf("the schedule after the cancel = %+v; want it past the slot, recorded %s%s", got, scheduleOutcomeCancelled, tc.reason)
+			}
+		})
+	}
+}
+
+// A replayed 201 re-reads its run: one that ended before it started (killed while it waited) is recorded
+// cancelled:run_ended, never booked; one still waiting is recorded booked.
+func TestRunScheduleSweep_ReplayedEndedRunIsNotBooked(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	admitted := time.Now().Add(-time.Minute)
+	for _, tc := range []struct {
+		name string
+		run  *types.AgentRun
+		want string
+	}{
+		{"killed while it waited", &types.AgentRun{State: types.RunKilled}, scheduleOutcomeCancelled + scheduleRunEnded},
+		{"gone", nil, scheduleOutcomeCancelled + scheduleRunEnded},
+		{"still waiting", &types.AgentRun{State: types.RunQueued}, scheduleOutcomeBooked},
+		{"started and ended", &types.AgentRun{State: types.RunCompleted, AdmittedAt: &admitted}, scheduleOutcomeBooked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			st.runs = map[uuid.UUID]types.AgentRun{}
+			if tc.run != nil {
+				st.runs[runID] = *tc.run
+			}
+			sw, _ := testSweep(scheduleTestServer(st), st, now, booking201(runID, true, nil), true)
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != tc.want || got.NextAt.Equal(sc.NextAt) {
+				t.Errorf("the schedule after the replay = %+v; want it past the slot, recorded %s", got, tc.want)
+			}
+		})
 	}
 }
