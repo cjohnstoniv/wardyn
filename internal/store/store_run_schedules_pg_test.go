@@ -4,12 +4,15 @@
 package store_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -76,5 +79,40 @@ func TestRunSchedules_DueSkipsPaused_PG(t *testing.T) {
 	}
 	if got, err := pg.DueRunSchedules(ctx, now, 50); err != nil || len(got) != 0 {
 		t.Fatalf("due after the advance = %d, %v; want none", len(got), err)
+	}
+}
+
+// The erasure's delete is skipped for a role without INSERT on the table, which can have written no schedule, and
+// fails loudly for a role that can insert but not delete.
+func TestRunSchedules_EraseSkipsARoleWithoutTheGrant_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	ctx := t.Context()
+	if err := pg.CreateRunSchedule(ctx, runScheduleRow("sub-a", time.Now().UTC().Add(time.Hour)), 20); err != nil {
+		t.Fatal(err)
+	}
+	role := "wardyn_nosched_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	if _, err := pool.Exec(ctx, `CREATE ROLE `+role+` NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP OWNED BY `+role+`; DROP ROLE IF EXISTS `+role) })
+	cfg := pool.Config()
+	cfg.ConnConfig.RuntimeParams["role"] = role // every connection of this pool runs as the role
+	restricted, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restricted.Close)
+	if n, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err != nil || n != 0 {
+		t.Fatalf("erase without INSERT = %d, %v; want 0 and no error", n, err)
+	}
+	if _, err := pool.Exec(ctx, `GRANT INSERT ON run_schedules TO `+role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err == nil {
+		t.Fatal("erase with INSERT and no DELETE succeeded; want it to fail loudly")
+	}
+	if n, err := pg.DeleteRunSchedulesOf(ctx, "sub-a"); err != nil || n != 1 {
+		t.Fatalf("erase as the owner role = %d, %v; want 1", n, err)
 	}
 }

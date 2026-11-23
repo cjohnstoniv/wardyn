@@ -140,8 +140,17 @@ func (s PG) DeleteRunSchedule(ctx context.Context, id uuid.UUID) (bool, error) {
 	return tag.RowsAffected() == 1, nil
 }
 
-// DeleteRunSchedulesOf deletes every schedule owner keeps (the run tasks erasure) and returns how many.
+// DeleteRunSchedulesOf deletes every schedule owner keeps (the run tasks and credentials erasures) and returns how
+// many. It is skipped for a role without INSERT on the table (a split-role app role the migration's grant missed),
+// which can have written no schedule. A role that can insert but not delete fails the erasure loudly.
 func (s PG) DeleteRunSchedulesOf(ctx context.Context, owner string) (int, error) {
+	var canInsert bool
+	if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_schedules', 'INSERT')`).Scan(&canInsert); err != nil {
+		return 0, fmt.Errorf("store: read the run schedules privilege: %w", err)
+	}
+	if !canInsert {
+		return 0, nil
+	}
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_schedules WHERE owner = $1`, owner)
 	if err != nil {
 		return 0, fmt.Errorf("store: delete an owner's run schedules: %w", err)
