@@ -106,7 +106,7 @@ var kindTestCensus = map[string]censusSite{
 	"api/run_recording.go:applyRunRecording":                              {1, kindNonMac, "a Windows run's recording level is off, so the runner records nothing"},
 	"api/run_recording.go:refuseDeclinedUpload":                           {1, kindNonMac, "a Windows run's level is off, so an upload is refused as for any unrecorded run"},
 	"api/run_resources.go:handleRunResources":                             {1, kindUnreachable, "resource usage is refused before any exec"},
-	"api/run_revive_image.go:reviveImageAdmission":                        {1, kindUnreachable, "revive is refused first"},
+	"api/run_revive_image.go:reviveImageAdmission":                        {1, kindUnreachable, "reviveFromRequest, reviveRunProxy's one caller, refuses a Windows VM run first"},
 	"api/run_terminal_effects.go:macOSVMRun":                              {1, kindNonMac, "false: the container budgets, as linux_vm"},
 	"api/runs_create_validate.go:machineKindRefusal":                      {3, kindEdited, "windows_vm is admitted whatever the macOS switch says; the fold refuses it while the site switch is off"},
 	"api/runs_dispatch.go:dispatchRun":                                    {1, kindNonMac, "no unstarted-end marker: it serves a macOS kept drive"},

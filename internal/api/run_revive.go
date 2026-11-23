@@ -132,7 +132,7 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSuperAdmin)
-	if !ok || windowsVMDoorRefusal(run, "revive").write(s, w, r) {
+	if !ok {
 		return
 	}
 	res, err := s.reviveFromRequest(r, run, true)
@@ -143,9 +143,12 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// reviveFromRequest applies the local-mode rule, then revives run. startAgent
+// reviveFromRequest refuses a Windows VM run and applies the local-mode rule, then revives run. startAgent
 // allows a run lost to a reboot, whose agent must be started again. edits are an egress edit's (run_egress_edit.go).
 func (s *Server) reviveFromRequest(r *http.Request, run types.AgentRun, startAgent bool, edits ...liveEgressEdit) (reviveResult, *reviveError) {
+	if rf := windowsVMDoorRefusal(run, "revive"); rf != nil {
+		return reviveResult{}, reviveRefused(rf.status, rf.body.Reason, rf.body.Error)
+	}
 	actorType, actor := actorFromRequest(r)
 	// Local mode mints for the host operator (runIdentitySubject), not for the
 	// run's owner, so only the principal that created the run may revive it.
