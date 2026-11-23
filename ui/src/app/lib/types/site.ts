@@ -37,6 +37,10 @@ export interface RunnerSettings {
   // A new local run is refused on a personal-trust runner. Off by default, and always on the wire
   // (false included); set only by PUT /runners/settings.
   require_managed_device: boolean;
+  // The MDM device CA bundle (PEM) and the URL of its full CRL: a macOS sandbox then needs a device
+  // certificate that chains to it. Both or neither; set only by PUT /runners/settings. Omitted when unset.
+  mdm_device_ca_pem?: string;
+  mdm_device_crl_url?: string;
 }
 
 export interface SiteConfig {

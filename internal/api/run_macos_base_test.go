@@ -37,20 +37,20 @@ func TestMacOSVMOffer_PickedBase(t *testing.T) {
 	caps := runnerwire.Caps{MacOSVM: macWithBases(xcode, runnerwire.MacVMDerivedBase{Name: "sec", State: runnerwire.MacVMDerivedRebuilding, Progress: 30})}
 
 	for _, base := range []string{"", types.MacOSStandardBase} {
-		if o := macOSVMOffer(rn, caps, true, 0, false, macOSBaseLimit{Base: base}); !o.Offered || !slices.Equal(o.Harnesses, []string{"none", "claude-code"}) {
+		if o := macOSVMOffer(rn, caps, true, 0, false, deviceNotRequired, macOSBaseLimit{Base: base}); !o.Offered || !slices.Equal(o.Harnesses, []string{"none", "claude-code"}) {
 			t.Errorf("Standard (%q): %+v", base, o)
 		}
 	}
-	if o := macOSVMOffer(rn, caps, true, 0, false, macOSBaseLimit{Base: "xcode-16"}); !o.Offered || !slices.Equal(o.Harnesses, []string{"none"}) {
+	if o := macOSVMOffer(rn, caps, true, 0, false, deviceNotRequired, macOSBaseLimit{Base: "xcode-16"}); !o.Offered || !slices.Equal(o.Harnesses, []string{"none"}) {
 		t.Errorf("a ready other base: %+v", o)
 	}
-	o := macOSVMOffer(rn, caps, true, 0, false, macOSBaseLimit{Base: "xcode-16", MaxDays: 30, Now: now})
+	o := macOSVMOffer(rn, caps, true, 0, false, deviceNotRequired, macOSBaseLimit{Base: "xcode-16", MaxDays: 30, Now: now})
 	if o.Offered || o.Why != client.MacOSVMWhyBaseTooOld || o.Have != 41 {
 		t.Errorf("the picked base's age: %+v", o)
 	}
 	const b08 = "No Mac in this pool has the macOS base %s. Choose another base or another pool."
 	for _, base := range []string{"sec", "absent"} {
-		o := macOSVMOffer(rn, caps, true, 0, false, macOSBaseLimit{Base: base})
+		o := macOSVMOffer(rn, caps, true, 0, false, deviceNotRequired, macOSBaseLimit{Base: base})
 		if o.Offered || o.Why != client.MacOSVMWhyNoBase || o.Pool != "" || o.Refusal.Field != "macos_base" ||
 			o.Refusal.Detail != "No Mac in this pool has the macOS base "+base+". Choose another base or another pool." {
 			t.Errorf("%s: %+v, want %q", base, o, b08)
@@ -59,7 +59,7 @@ func TestMacOSVMOffer_PickedBase(t *testing.T) {
 
 	// macOSVMFit reads the picked base's harnesses.
 	fit := *caps.MacOSVM
-	fit.Harnesses = macOSVMOffer(rn, caps, true, 0, false, macOSBaseLimit{Base: "xcode-16"}).Harnesses
+	fit.Harnesses = macOSVMOffer(rn, caps, true, 0, false, deviceNotRequired, macOSBaseLimit{Base: "xcode-16"}).Harnesses
 	if ref := macOSVMFit(&fit, rn, macOSVMAsk{Harnesses: []string{"claude-code"}}, false); ref == nil || ref.Field != "harness" {
 		t.Errorf("a harness the picked base cannot serve: %+v", ref)
 	}

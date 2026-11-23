@@ -43,6 +43,8 @@ var auditHostViews = map[string]auditHostView{
 	// target: the scratch database's host:port/database.
 	"recovery.rehearse.begin": {allow: []string{"manifest_head_seq", "set_id"}},
 	"recovery.rehearse":       {allow: []string{"checks", "manifest_head_seq", "set_id", "verdict"}},
+	// The CRL URL, often an internal host, is a row's before/after (the CA's fingerprints share the pair).
+	"runners.mdm_device.set": {withhold: []string{"after", "before"}},
 	// What GET /site-config keeps super-only: the logo's host file, the internal host suffixes, the upstream
 	// proxy and the egress redirects with their targets (go_checksum_db_off is the go redirects' targets).
 	"site_config.write": {withhold: []string{"branding_logo_path", "egress_redirects", "go_checksum_db_off",

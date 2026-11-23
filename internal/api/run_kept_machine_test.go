@@ -550,12 +550,12 @@ func TestKeptMachineResumeChecksItsOwnRecordNotTheMacsBase(t *testing.T) {
 		"stale":     {State: runnerwire.MacVMBaseReady, CreatedAt: time.Now().AddDate(0, 0, -90).Format(time.RFC3339)},
 	} {
 		c := runnerwire.Caps{MacOSVM: &runnerwire.MacVMCaps{KeptMachines: true, Max: 2, Base: base}}
-		if offer := macOSVMOffer(rn, c, true, 0, false, stale...); offer.Refusal != nil {
+		if offer := macOSVMOffer(rn, c, true, 0, false, deviceNotRequired, stale...); offer.Refusal != nil {
 			t.Errorf("%s base: a resume was refused: %+v", name, offer.Refusal)
 		}
 		fresh := stale[0]
 		fresh.Kept = false
-		if offer := macOSVMOffer(rn, c, true, 0, false, fresh); offer.Refusal == nil {
+		if offer := macOSVMOffer(rn, c, true, 0, false, deviceNotRequired, fresh); offer.Refusal == nil {
 			t.Errorf("%s base: a new run was not refused", name)
 		}
 	}

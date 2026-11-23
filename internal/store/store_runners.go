@@ -58,7 +58,7 @@ var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the 
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
 	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name, arch,
-	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id,
+	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id, device_cert, device_cert_reported_at,
 	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
@@ -67,12 +67,12 @@ var prefixedRunnerCols = "r." + strings.ReplaceAll(strings.Join(strings.Fields(r
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
-	var posture []byte
+	var posture, deviceCert []byte
 	var lim limitCols
 	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
 		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName, &r.Arch,
-		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID}, lim.targets()...)...)
+		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID, &deviceCert, &r.DeviceCertReportedAt}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -83,6 +83,13 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	r.Limits = lim.limits(&r.MaxRuns)
 	if err := json.Unmarshal(posture, &r.Posture); err != nil {
 		return types.Runner{}, fmt.Errorf("store: unmarshal runner posture: %w", err)
+	}
+	if deviceCert != nil {
+		var dc types.RunnerDeviceCert
+		if err := json.Unmarshal(deviceCert, &dc); err != nil {
+			return types.Runner{}, fmt.Errorf("store: unmarshal runner device certificate: %w", err)
+		}
+		r.DeviceCert = &dc
 	}
 	return r, nil
 }
@@ -337,6 +344,48 @@ func (s PG) RecordRunnerPostureFrom(ctx context.Context, id uuid.UUID, session s
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: record runner posture: %w", err)
+	}
+	return changed, nil
+}
+
+// recordDeviceCert replaces a claimed runner's device certificate chains and says whether they differ from
+// the ones held. The reported-at time moves on every write, so it says when the runner last presented.
+const recordDeviceCert = `
+		UPDATE runners r SET device_cert = $2::jsonb, device_cert_reported_at = $3
+		FROM (SELECT id, device_cert FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE) old
+		WHERE r.id = old.id
+		RETURNING old.device_cert IS DISTINCT FROM $2::jsonb`
+
+// RecordRunnerDeviceCertFrom stores the MDM device certificate chains a claimed runner presented on session
+// and says whether they differ from the ones held, so only a change writes runner.device_cert.record. Like
+// RecordRunnerPostureFrom it writes only while session is the runner's current inventory session: a
+// superseded session's late report writes nothing and reports no change. A runner that is not claimed is
+// ErrNotFound. Whether a chain is trusted, current or revoked is not stored or judged here.
+func (s PG) RecordRunnerDeviceCertFrom(ctx context.Context, id uuid.UUID, session string, chains [][][]byte, now time.Time) (bool, error) {
+	if chains == nil {
+		chains = [][][]byte{}
+	}
+	b, err := json.Marshal(types.RunnerDeviceCert{Chains: chains})
+	if err != nil {
+		return false, err
+	}
+	var changed bool
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT 1 FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE`, id).Scan(new(int)); err != nil {
+			return err
+		}
+		var current bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+			id, session).Scan(&current); err != nil || !current {
+			return err
+		}
+		return q.QueryRow(ctx, recordDeviceCert, id, b, now).Scan(&changed)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: record runner device certificate: %w", err)
 	}
 	return changed, nil
 }

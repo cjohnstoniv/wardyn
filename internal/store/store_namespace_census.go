@@ -193,6 +193,7 @@ var namespaceCensusExempt = map[string]string{
 	"runner_pending_actions.proof":              "runner, run-containment and sweep telemetry; not an authority source",
 	"runner_pools.limits":                       "limits, contact details and boundary settings; no person list (a boundary spec has no ui_apps field)",
 	"runner_spool_cursors.recent_hashes":        "runner, run-containment and sweep telemetry; not an authority source",
+	"runners.device_cert":                       "a device's MDM-issued certificate chains; checked evidence, not a person list",
 	"runners.posture":                           "runner, run-containment and sweep telemetry; not an authority source",
 	"sources.profile":                           "workspace, source and image content; the owner is a TEXT column the census reads",
 	"sources.requirements":                      "workspace, source and image content; the owner is a TEXT column the census reads",

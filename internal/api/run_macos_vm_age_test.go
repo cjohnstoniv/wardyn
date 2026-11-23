@@ -34,26 +34,26 @@ func TestMacOSVMOffer_BaseAge(t *testing.T) {
 	limit := macOSBaseLimit{MaxDays: 30, Now: now}
 
 	for name, created := range map[string]string{"under": ago(5), "at the maximum": ago(30)} {
-		if o := macOSVMOffer(rn, mac(created), true, 0, false, limit); !o.Offered {
+		if o := macOSVMOffer(rn, mac(created), true, 0, false, deviceNotRequired, limit); !o.Offered {
 			t.Errorf("%s: refused: %+v", name, o.Refusal)
 		}
 	}
-	if o := macOSVMOffer(rn, mac(ago(400)), true, 0, false); !o.Offered {
+	if o := macOSVMOffer(rn, mac(ago(400)), true, 0, false, deviceNotRequired); !o.Offered {
 		t.Errorf("no maximum: refused: %+v", o.Refusal)
 	}
-	if o := macOSVMOffer(rn, mac(""), true, 0, false, macOSBaseLimit{}); !o.Offered {
+	if o := macOSVMOffer(rn, mac(""), true, 0, false, deviceNotRequired, macOSBaseLimit{}); !o.Offered {
 		t.Errorf("a zero limit refused a base with no age: %+v", o.Refusal)
 	}
 
 	// The pool sentence is "1 day" at a maximum of 1 and "<n> days" otherwise.
 	for maxDays, want := range map[int]string{1: "in the last 1 day,", 2: "in the last 2 days,"} {
-		o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, macOSBaseLimit{MaxDays: maxDays, Now: now})
+		o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, deviceNotRequired, macOSBaseLimit{MaxDays: maxDays, Now: now})
 		if !strings.Contains(o.Pool, want) {
 			t.Errorf("maximum %d: pool sentence %q, want it to contain %q", maxDays, o.Pool, want)
 		}
 	}
 
-	o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, limit)
+	o := macOSVMOffer(rn, mac(ago(41)), true, 0, false, deviceNotRequired, limit)
 	want := "mac-studio-07's macOS base was prepared 41 days ago, and your organisation allows 30. Its owner runs `wardyn-runnerd macos-vm prepare --new-image`."
 	if o.Offered || o.Why != client.MacOSVMWhyBaseTooOld || o.Refusal.Detail != want || o.Have != 41 || o.Need != 30 ||
 		o.Pool != "Every runner in this pool must have a macOS base prepared in the last 30 days, and at least one doesn't. Choose another pool, or ask the Mac's owner to prepare a new base." {
@@ -61,7 +61,7 @@ func TestMacOSVMOffer_BaseAge(t *testing.T) {
 	}
 
 	for name, created := range map[string]string{"no age": "", "not a date": "last week"} {
-		o := macOSVMOffer(rn, mac(created), true, 0, false, limit)
+		o := macOSVMOffer(rn, mac(created), true, 0, false, deviceNotRequired, limit)
 		if o.Offered || o.Why != client.MacOSVMWhyBaseTooOld || o.Have != 0 ||
 			o.Refusal.Detail != "mac-studio-07 doesn't report its macOS base's age, and your organisation sets a maximum. Update the runner." {
 			t.Errorf("%s: %+v", name, o)
@@ -71,7 +71,7 @@ func TestMacOSVMOffer_BaseAge(t *testing.T) {
 	// A base still preparing is told so, not that it is old.
 	pre := mac("")
 	pre.MacOSVM.Base = runnerwire.MacVMBase{State: runnerwire.MacVMBasePreparing, Progress: 40}
-	if o := macOSVMOffer(rn, pre, true, 0, false, limit); o.Why != client.MacOSVMWhyPreparing {
+	if o := macOSVMOffer(rn, pre, true, 0, false, deviceNotRequired, limit); o.Why != client.MacOSVMWhyPreparing {
 		t.Errorf("a preparing base: %+v", o)
 	}
 

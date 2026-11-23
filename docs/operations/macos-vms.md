@@ -76,7 +76,7 @@
 | Disk | Free space to prepare, and more to start a second VM ([Disk](macos-vm-host.md#disk)) |
 | Power | On AC power to start preparing ([Preparing the base image](macos-vm-base-image.md#preparing-the-base-image)) |
 | A login | Someone logged in on the Mac ([Logins, FileVault and restarts](macos-vm-host.md#logins-filevault-and-restarts)) |
-| Company-managed | The Mac's trust class is `managed_device` and its posture file says `mdm_managed` ([Which Macs qualify](#which-macs-qualify)) |
+| Company-managed | The Mac's trust class is `managed_device` and its posture file says `mdm_managed` and, when your organisation sets an MDM device CA, a current MDM device certificate ([Which Macs qualify](#which-macs-qualify)) |
 | The package | `wardyn-runnerd.pkg` from this release, which installs the VM helper and the shared ledger ([Installing with a macOS package and MDM](hybrid-laptops.md#installing-with-a-macos-package-and-mdm)) |
 
 ## Turn it on
@@ -84,7 +84,7 @@
 1. In the organisation, set `WARDYN_MACOS_VMS=1` ([`WARDYN_MACOS_VMS`](../ENV.md#wardyn_macos_vms)) and restart `wardynd`. With it off, create refuses the kind.
 2. Install the runner package on the Mac and register the Mac as a runner ([Claiming a runner](hybrid-laptops.md#claiming-a-runner)). Set its per-run limits for a macOS guest ([How many VMs a Mac offers](macos-vm-host.md#how-many-vms-a-mac-offers)).
 3. Turn the Mac's own switch on: `WARDYN_RUNNER_MACOS_VM=1` in the runner's environment, or the managed preference `MacOSVM` from your MDM, or answer yes when `wardyn-runnerd setup` asks.
-4. Have a security operator mark the Mac `managed_device` ([Which Macs qualify](#which-macs-qualify)) and have your MDM attest posture: the `MDMManaged` key in the profile, or the posture file.
+4. Have a security operator mark the Mac `managed_device` ([Which Macs qualify](#which-macs-qualify)) and have your MDM attest posture: the `MDMManaged` key in the profile, or the posture file. If your organisation sets an MDM device CA, the Mac also needs a current device certificate from it ([MDM device certificate](#mdm-device-certificate)).
 5. Prepare the base image: `wardyn-runnerd macos-vm prepare`, or answer yes to the setup question and let `setup` start it ([Preparing the base image](macos-vm-base-image.md#preparing-the-base-image)).
 6. Check it with `wardyn-runnerd macos-vm status`. A run is placed on the Mac only when the base is ready.
 
@@ -129,9 +129,25 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 - A macOS VM runs only on a Mac that both of these hold for:
   - its trust class is `managed_device`, which only a security operator sets (`wardyn runner trust <runner-id> managed_device --reason "<why>"`), held for a second person under four-eyes;
   - its posture says `mdm_managed`, with the MDM's root-owned posture file (`/Library/Application Support/Wardyn/posture.json`) or the profile's `MDMManaged` key as the evidence.
-- Both are assertions. The Mac's MDM device certificate is not checked in this release.
-- A Mac not marked `managed_device` is refused `placement_capability`. A Mac whose posture is missing or unmet is refused `runner_posture_unmet`.
+- Both are assertions, unless your organisation sets an MDM device CA: then a third check applies ([MDM device certificate](#mdm-device-certificate)).
+- A Mac not marked `managed_device` is refused `placement_capability`. A Mac whose posture is missing or unmet, or whose device certificate fails, is refused `runner_posture_unmet`.
 - Posture is self-reported and does not constrain a root developer ([Resident credentials and posture](hybrid-laptops.md#resident-credentials-and-posture)).
+
+### MDM device certificate
+
+- **Off until set.** With no MDM CA configured, nothing changes. A super admin sets one with `PUT /api/v1/runners/settings {"mdm_device_ca_pem": "...", "mdm_device_crl_url": "..."}`, both or neither. The bundle holds the CA that issues the device certificates and signs the CRL.
+- Once set, a Mac hosts a macOS sandbox only with a device certificate that chains to the CA, is inside its validity window and is not on the CA's current CRL. Its key must also have signed a statement naming this runner's key.
+- A certificate that is missing, expired, not yet valid, revoked or from another CA is refused with a sentence that says which.
+- Configure a CA that issues only device identities: any client-auth certificate, or one with no extended key usage, that the CA issues passes.
+- The CRL must be the CA's full CRL; a delta or partitioned CRL is refused. The control plane fetches it from its own network, follows at most 3 http or https redirects and refetches hourly.
+- Serve the CRL over https. Over http, a control plane that has just started takes any unexpired CRL signed by your CA as its first.
+- It fails closed. A CRL that cannot be fetched is used until its next-update time or 24 hours after the last good fetch, whichever comes first. Then every Mac is refused until a fetch succeeds.
+- After a failed fetch the control plane retries after 1 minute, doubling to 10 minutes. The refusal names the cause: `timeout`, `network`, `status`, `size`, `redirect`, `parse`, `signature`, `unsupported`, `expired` or `older`.
+- The macOS runner presents the device identities your MDM installed in the System keychain when it connects and every 6 hours. This has not yet been tried on a real Mac.
+- The trust class is still set by a security operator; a valid certificate is a further requirement, never a way to become `managed_device`.
+- Limits: a running sandbox is not stopped when its certificate is later revoked, and the device proves it holds the key when it reports, not at each run.
+- The proof shows that a runner key was on a Mac holding the MDM identity when it reported. Root on a managed Mac that copies another runner's key there can present for that runner.
+- Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
 
 ## Apple's licence and the two-VM limit
 
