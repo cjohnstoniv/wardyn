@@ -402,6 +402,21 @@ const (
 	RuleSourceTunnelFailed = "builtin:tunnel-failed"
 )
 
+// The three rule sources the host list itself decides. Every other rule_source on
+// an egress row (brokered, scan, approval, tool, host-rule, builtin) is something
+// else, and a caller that asks what a change to the host list would do counts only
+// these.
+const (
+	// RuleSourcePolicyAllowed marks a request the allow list admitted.
+	RuleSourcePolicyAllowed = "policy:allowed"
+	// RuleSourceDefaultDeny marks a request refused because its host is not on the
+	// allow list.
+	RuleSourceDefaultDeny = "policy:default-deny"
+	// RuleSourcePolicyDenied marks a request refused because its host is on the
+	// deny list.
+	RuleSourcePolicyDenied = "policy:denied"
+)
+
 // IsNetworkFault reports whether rule_source marks a network fault — a
 // destination policy ALLOWED and the network lost the connection — rather than
 // a refusal. Callers that count or report policy denials exclude these.
