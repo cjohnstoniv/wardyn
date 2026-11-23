@@ -227,6 +227,9 @@ func (r *hangingSandboxProbe) StopSandbox(ctx context.Context, ref string) error
 	return r.runnerExitTailProbe.StopSandbox(ctx, ref)
 }
 
+// StopProxy answers the proxy stop a runner without the fence is sent before its first pass back.
+func (r *hangingSandboxProbe) StopProxy(context.Context, string) error { return nil }
+
 // A runner exit whose computer folder's pass back would outlast the exit's bound still stops the
 // sandbox and completes: a sandbox on a runner is never kept for a resume, so the cut pass is
 // recorded as given up, and the next sweep does not run the pass again (#3466).
