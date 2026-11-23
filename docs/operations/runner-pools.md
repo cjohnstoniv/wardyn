@@ -156,7 +156,7 @@ With `WARDYN_SCHEDULED_RUNS` set, a person signed in with single sign-on keeps u
 - A schedule repeats daily, on weekdays (Monday to Friday) or weekly, at a local time in an IANA zone. A weekly one repeats on the weekday of its first start.
 - Each start is booked as one scheduled run 2 minutes ahead, and shows on the Runs board from then. It starts like any scheduled run, after the same checks.
 - A booking acts with the owner's stored groups, less any the latest sign-in dropped. A group gained since instead pauses the schedule.
-- A schedule pauses when its owner or an admin pauses it, or a refused booking does (`refused:<reason>`). It also pauses when its owner is deactivated or signed out everywhere (`identity_inactive`), has not signed in for 30 days (`owner_idle`), or gained a group since the last create or resume (`groups_changed`).
+- A schedule pauses when its owner or an admin pauses it, or a refused booking does (`refused:<reason>`). It also pauses when its owner is deactivated or their sessions are signed out (`identity_inactive`), or has not signed in for 30 days (`owner_idle`). It pauses too when they gained a group since the last create or resume (`groups_changed`).
 - A schedule whose owner loses the group that allowed the run pauses before its next start.
 - A schedule whose stored rule or owner this server cannot read, such as a time zone its time zone data lacks, pauses `refused:unreadable`.
 - Without SCIM, a group removed at the identity provider is seen at the owner's next sign-in, or else at the 30-day idle pause.

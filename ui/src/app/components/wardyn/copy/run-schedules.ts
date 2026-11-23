@@ -82,14 +82,14 @@ export const PAUSE_REASON: Record<string, { member: string; off: string; admin: 
     admin: "An admin paused this schedule. Only its owner can resume it.",
   },
   owner_idle: {
-    member: "Paused because you had not signed in for 30 days. Sign in, then resume it.",
-    off: "Paused because you had not signed in for 30 days.",
+    member: "Paused because you have not signed in for 30 days. Sign in, then resume it.",
+    off: "Paused because you have not signed in for 30 days.",
     admin: "Paused because its owner has not signed in for 30 days. Only its owner can resume it.",
   },
   identity_inactive: {
-    member: "Paused because your account was deactivated or you signed out everywhere. Resume it to start it again.",
-    off: "Paused because your account was deactivated or you signed out everywhere.",
-    admin: "Paused because its owner's account was deactivated or they signed out everywhere. Only its owner can resume it.",
+    member: "Paused because your account was deactivated or your sessions were signed out. Resume it to confirm.",
+    off: "Paused because your account was deactivated or your sessions were signed out.",
+    admin: "Paused because its owner's account was deactivated or their sessions were signed out. Only its owner can resume it.",
   },
   groups_changed: {
     member: "Paused because your groups changed since this schedule was made. A new group can add limits. Sign in again, then resume it to confirm.",
