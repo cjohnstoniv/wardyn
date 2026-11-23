@@ -289,11 +289,13 @@ func TestWindowsVMPlacementRefusals(t *testing.T) {
 		rn.OwnerKind = types.RunnerOwnerOrg
 		rows[id] = rn
 	}
-	fold := func(place runPlacement, req createRunRequest) *runFold {
-		return &runFold{r: winvmHTTP(memberContext()), req: &req, place: place}
+	type placed struct {
+		place runPlacement
+		req   createRunRequest
 	}
+	fold := func(place runPlacement, req createRunRequest) placed { return placed{place, req} }
 	for name, tc := range map[string]struct {
-		f    *runFold
+		f    placed
 		want bool // admitted
 	}{
 		"no runner":            {f: fold(runPlacement{}, winvmReq())},
@@ -305,7 +307,7 @@ func TestWindowsVMPlacementRefusals(t *testing.T) {
 		"named, not pooled":    {f: fold(runPlacement{}, winvmReq(func(q *createRunRequest) { q.Placement = types.PlacementLocal; q.RunnerID = org.String() })), want: true},
 		"a person's, unpooled": {f: fold(runPlacement{}, winvmReq(func(q *createRunRequest) { q.Placement = types.PlacementLocal; q.RunnerID = person.String() }))},
 	} {
-		rf := srv.windowsPlacementRefusal(tc.f)
+		rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), tc.f.req, types.RunPolicySpec{}, tc.f.place, governanceCeiling{}, true)
 		if tc.want {
 			if rf != nil {
 				t.Errorf("%s: refused %d %s (%s)", name, rf.status, rf.body.Reason, rf.body.Error)
@@ -319,9 +321,9 @@ func TestWindowsVMPlacementRefusals(t *testing.T) {
 // Web apps beside the desktop are refused by name.
 func TestWindowsVMRefusesUIApps(t *testing.T) {
 	srv := capsServer(&fakeRunner{})
-	req := winvmReq()
-	f := &runFold{r: winvmHTTP(memberContext()), req: &req, spec: types.RunPolicySpec{UIApps: []types.UIApp{{}}}}
-	wantWinRefusal(t, "ui_apps", srv.windowsPlacementRefusal(f), http.StatusForbidden, reasonWindowsVMFeatureRefused, "ui_apps")
+	spec := types.RunPolicySpec{UIApps: []types.UIApp{{}}}
+	rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), winvmReq(), spec, runPlacement{}, governanceCeiling{}, true)
+	wantWinRefusal(t, "ui_apps", rf, http.StatusForbidden, reasonWindowsVMFeatureRefused, "ui_apps")
 }
 
 // While features.windows_vm is off, a Windows VM launch is refused 403 windows_vms_off; the licence routes

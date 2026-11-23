@@ -262,7 +262,7 @@ func (s *Server) stepWindowsPlacement(f *runFold, _ *foldRecorder) bool {
 	if types.MachineKind(f.req.MachineKind) != types.MachineWindowsVM {
 		return true
 	}
-	rf := s.windowsPlacementRefusal(f)
+	rf := s.windowsPlacementRefusal(f.r, *f.req, f.spec, f.place, f.ceiling, f.policyID == nil)
 	if rf == nil {
 		return true
 	}
@@ -272,23 +272,24 @@ func (s *Server) stepWindowsPlacement(f *runFold, _ *foldRecorder) bool {
 	return !rf.write(s, f.w, f.r)
 }
 
-func (s *Server) windowsPlacementRefusal(f *runFold) *runRefusal {
-	if len(f.spec.UIApps) > 0 {
+func (s *Server) windowsPlacementRefusal(r *http.Request, req createRunRequest, spec types.RunPolicySpec, place runPlacement,
+	ceiling governanceCeiling, policyless bool) *runRefusal {
+	if len(spec.UIApps) > 0 {
 		return windowsFeatureRefused(http.StatusForbidden, "ui_apps", "web apps beside its desktop")
 	}
-	if rf := s.windowsRecordingRefusal(f); rf != nil {
+	if rf := s.windowsRecordingRefusal(r, spec.Recording, place, ceiling, policyless); rf != nil {
 		return rf
 	}
-	ctx := f.r.Context()
+	ctx := r.Context()
 	runners := []*uuid.UUID{}
-	if f.place.pooled {
-		if f.place.placement != types.PlacementLocal {
+	if place.pooled {
+		if place.placement != types.PlacementLocal {
 			return runError(http.StatusUnprocessableEntity, reasonWindowsVMRunnerUnsupported, windowsNotOrgRunnerMsg)
 		}
-		for _, t := range f.place.eligible {
+		for _, t := range place.eligible {
 			runners = append(runners, t.runnerID)
 		}
-	} else if id := requestRunnerID(*f.req); requestPlacement(*f.req) == types.PlacementLocal && id != uuid.Nil {
+	} else if id := requestRunnerID(req); requestPlacement(req) == types.PlacementLocal && id != uuid.Nil {
 		runners = append(runners, &id)
 	}
 	if len(runners) == 0 {
@@ -305,11 +306,12 @@ func (s *Server) windowsPlacementRefusal(f *runFold) *runRefusal {
 // windowsRecordingRefusal refuses a Windows run the organisation would record: under a requirement (the
 // organisation's or the pool's), or at any level but off. A deployment with no recording store records
 // nothing, and its requirement is refused at placement for every kind.
-func (s *Server) windowsRecordingRefusal(f *runFold) *runRefusal {
+func (s *Server) windowsRecordingRefusal(r *http.Request, policy types.RecordingLevel, place runPlacement, ceiling governanceCeiling,
+	policyless bool) *runRefusal {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return nil
 	}
-	choice, rf := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	choice, rf := s.createRecordingChoice(r.Context(), r, policy, place, ceiling, policyless)
 	if rf != nil {
 		return rf
 	}
