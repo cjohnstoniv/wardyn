@@ -23,6 +23,9 @@ var auditAppendSlotsByPool sync.Map // *pgxpool.Pool -> chan struct{}
 // waits on the chain lock at once, so a held lock cannot take every connection the pool has. It is sized when
 // first used, as guardDialSlots is.
 func auditAppendSlots(pool *pgxpool.Pool) chan struct{} {
+	if v, ok := auditAppendSlotsByPool.Load(pool); ok {
+		return v.(chan struct{}) // the common path: no config copy and no channel per append
+	}
 	n := max(1, min(4, int(pool.Config().MaxConns)/2))
 	v, _ := auditAppendSlotsByPool.LoadOrStore(pool, make(chan struct{}, n))
 	return v.(chan struct{})

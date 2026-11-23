@@ -499,8 +499,8 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := f.ssoRefresh.validate(); err != nil {
 		return err
 	}
-	// applyLockPoolSize validates and sets db.LockPoolMaxConns here, before the connect: db.LockerFor sizes on first use.
-	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate(), applyLockPoolSize(*f.lockPoolMaxConns)); err != nil {
+	// applyLockPoolFlag validates and sets db.LockPoolMaxConns here, before the connect: db.LockerFor sizes on first use.
+	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate(), applyLockPoolFlag(f.lockPoolMaxConns)); err != nil {
 		return err
 	}
 	if *f.oidcIssuer != "" {

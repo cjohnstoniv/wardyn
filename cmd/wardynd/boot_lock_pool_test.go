@@ -45,7 +45,21 @@ func TestLockPoolSizeIsAppliedBeforeTheConnect(t *testing.T) {
 	if validate < 0 || connect < 0 || validate > connect {
 		t.Fatalf("validateBootPosture( at %d, connectAndMigrate( at %d in main.go; want the first before the second", validate, connect)
 	}
-	if !strings.Contains(string(posture), "applyLockPoolSize(*f.lockPoolMaxConns)") {
+	if !strings.Contains(string(posture), "applyLockPoolFlag(f.lockPoolMaxConns)") {
 		t.Fatal("validateBootPosture does not apply the lock pool size")
+	}
+}
+
+// A bootFlags built without the flag, as the posture tests build theirs, keeps the default and is not refused.
+func TestLockPoolFlagUnregisteredKeepsTheDefault(t *testing.T) {
+	restore := db.LockPoolMaxConns
+	t.Cleanup(func() { db.LockPoolMaxConns = restore })
+	db.LockPoolMaxConns = 8
+	if err := applyLockPoolFlag(nil); err != nil || db.LockPoolMaxConns != 8 {
+		t.Errorf("applyLockPoolFlag(nil) = %v, size %d; want nil and 8", err, db.LockPoolMaxConns)
+	}
+	n := 12
+	if err := applyLockPoolFlag(&n); err != nil || db.LockPoolMaxConns != 12 {
+		t.Errorf("applyLockPoolFlag(12) = %v, size %d; want it set", err, db.LockPoolMaxConns)
 	}
 }

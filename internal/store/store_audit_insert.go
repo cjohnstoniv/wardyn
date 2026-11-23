@@ -118,7 +118,7 @@ const auditAppendSQL = `
 // auditReadBackSQL reads the first stored row of a replayed event (audit_events has no unique id, so an
 // at-least-once duplicate gives two rows; the sinks always get the first stored row's hashes). The time index
 // finds it; under the chain lock, every earlier writer has committed.
-const auditReadBackSQL = `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') FROM audit_events WHERE time = $1 AND id = $2 ORDER BY seq LIMIT 1`
+const auditReadBackSQL = `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') FROM audit_events WHERE time = $1 AND id = $2 ORDER BY seq + 0 LIMIT 1`
 
 // insertReplayedAuditEvent is InsertAuditEvent's body for a replayed event (WithAuditReplay): an event the
 // table already holds is not appended again, and ev carries the stored row's hashes. The lock wait bound, the

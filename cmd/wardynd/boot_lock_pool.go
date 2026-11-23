@@ -20,3 +20,12 @@ func applyLockPoolSize(n int) error {
 	db.LockPoolMaxConns = n
 	return nil
 }
+
+// applyLockPoolFlag is applyLockPoolSize for the boot flag. A bootFlags built without registering it, as a test
+// does, leaves the pointer nil, which keeps the default.
+func applyLockPoolFlag(n *int) error {
+	if n == nil {
+		return nil
+	}
+	return applyLockPoolSize(*n)
+}

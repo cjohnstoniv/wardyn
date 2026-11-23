@@ -419,6 +419,9 @@ func TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal(t *testing.T) {
 func TestPG_RunnerSpoolPreparesEveryEventBeforeTheChainLock(t *testing.T) {
 	pool, st, rn, _, row := spoolPGFixture(t)
 	ctx := context.Background()
+	// A scan pair is two audit rows: the second prepare runs after the first insert unless every event is prepared first.
+	row.Decision.Scan = &egress.ScanSummary{Action: "alert", Channel: "model", FindingsTotal: 101}
+	row = rehashSpoolRow(t, row)
 	var calls, free atomic.Int32
 	prepare := func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 		calls.Add(1)
@@ -444,8 +447,8 @@ func TestPG_RunnerSpoolPreparesEveryEventBeforeTheChainLock(t *testing.T) {
 	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepare); err != nil || !ok {
 		t.Fatalf("IngestRunnerDecision: %v %v", ok, err)
 	}
-	if calls.Load() == 0 || free.Load() != calls.Load() {
-		t.Fatalf("the chain lock was free in %d of %d prepare calls, want every one", free.Load(), calls.Load())
+	if calls.Load() != 2 || free.Load() != 2 {
+		t.Fatalf("the chain lock was free in %d of %d prepare calls, want 2 of 2", free.Load(), calls.Load())
 	}
 }
 
