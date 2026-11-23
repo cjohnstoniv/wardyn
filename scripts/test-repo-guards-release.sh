@@ -98,7 +98,7 @@ if [ "$walk_fail" = 0 ]; then ok "the five kind walks are watched by release.yml
 # The yq pipeline prints one row per write step with "guarded" true/false and awk filters, because
 # yq 4.44's select() on a value that does not depend on `.` keeps every row.
 release_write_steps() { # <workflow> -> "<guarded>\t<job>\t<step>" for each step that runs a write command
-    WRITE_RE='docker( buildx)?( [a-z-]+)* push|--push|imagetools +create|(^|[^A-Za-z0-9_-])cosign +(sign|sign-blob|attest|attach|copy)([^A-Za-z0-9_-]|$)|(^|[^A-Za-z0-9_-])crane +(copy|cp|tag|push|mutate)([^A-Za-z0-9_-]|$)|skopeo +copy|(^|[^A-Za-z0-9_-])regctl([^A-Za-z0-9_-]|$)|gh +release +(create|edit|upload|delete)|gh +api .*(-X|--method)[ =]*(POST|PUT|PATCH|DELETE)|notarytool|git +push|oras +push|helm +push|build-runner-pkg\.sh' \
+    WRITE_RE='docker( buildx)?( [a-z-]+)* push|--push|imagetools +create|(^|[^A-Za-z0-9_-])cosign +(sign|sign-blob|attest|attach|copy)([^A-Za-z0-9_-]|$)|(^|[^A-Za-z0-9_-])crane +(copy|cp|tag|push|mutate)([^A-Za-z0-9_-]|$)|skopeo +copy|(^|[^A-Za-z0-9_-])regctl([^A-Za-z0-9_-]|$)|gh +release +(create|edit|upload|delete)|gh +api .*(-X|--method)[ =]*(POST|PUT|PATCH|DELETE)|notarytool|git +push|oras +push|helm +push|build-runner-pkg\.sh|float-latest\.sh' \
     TAG_POS="(^|[^!])startsWith\\(github\\.ref, 'refs/tags/v'\\)" \
     ENV_DRY="\${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}" \
     ENV_PUBLISH="\${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}" \

@@ -510,7 +510,7 @@ if ! command -v yq >/dev/null 2>&1; then
     fi
 else
     preflight_fail=0
-    PUBLISH_JOBS="images binaries chart images-ui-sandbox images-ui-sandbox-signin release-assets promote"
+    PUBLISH_JOBS="images binaries chart images-ui-sandbox images-ui-sandbox-signin release-assets promote float-latest"
     reaches_preflight() {  # $1 = job name, $2 = space-separated jobs already visited (cycle guard)
         local job="$1" seen="$2" needs n
         case " $seen " in *" $job "*) return 1 ;; esac
@@ -559,7 +559,7 @@ else
             preflight_fail=1
         fi
     fi
-    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/images-ui-sandbox-signin/release-assets/promote all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
+    if [ "$preflight_fail" = 0 ]; then ok "images/binaries/chart/images-ui-sandbox/images-ui-sandbox-signin/release-assets/promote/float-latest all depend on preflight-green (no silent-pass escape hatch), and its watched= list matches notify-new-lanes.needs"; fi
 fi
 
 # ── 14. demo/live specs keep up with the 0.8 audit action renames (#1020) ────
