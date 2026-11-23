@@ -41,7 +41,7 @@ on:
 permissions:
   contents: read
 
-# GitHub gives this repository 20 concurrent job slots, and a candidate's PR CI,
+# GitHub gives this repository 40 concurrent job slots, and a candidate's PR CI,
 # its nightly and the 07:00 schedule all draw on them (docs/REPO-CI.md, "This
 # repository's own CI"). scope=candidate (see SCOPE below) cuts what a release
 # candidate's dispatch takes; this group stops a re-dispatch on the same ref from
@@ -896,16 +896,6 @@ jobs:
           path: test/reports/go/provider-subscription-docker-pg.log
           if-no-files-found: error
 
-  # ── Lanes still NOT wired anywhere, and why ────────────────────────────────
-  # Stated so "it runs nightly" is not read as "everything runs nightly":
-  #
-  #   make test-e2e-ssh-k8s     needs a kind cluster. ENV-BLOCKED on the
-  #                             maintainer's box (subnet collision) and not
-  #                             stood up here; its own §6/§7 arms have never
-  #                             been run live.
-  #
-  # A regression there still ships silently.
-  #
   # `make test-e2e-concurrent` (#697, T-37) is wired below as its own job —
   # it needed no blocker to clear, only a job. It is NOT the ui/e2e/walk
   # kind-cluster sign-in concurrency spec #697 also names (two Dex members
@@ -1042,6 +1032,90 @@ jobs:
         with:
           name: ui-sandbox-e2e-live-results
           path: test/reports/e2e/ui-sandbox-e2e.log
+          if-no-files-found: error
+
+  # The newest published agent-base, pulled by digest, still starts a harness-less run that serves an inbound app
+  # (#3801). ui-sandbox-e2e-live maps `base` to its local build, because a candidate's version has no published tag
+  # until the release is cut; this job runs the same script with the background command run started from the newest
+  # release's agent-base instead. That run's only door is an inbound app answered by socat inside the image. This
+  # tree's wardynd starts it. Not watched yet: it skips under scope=candidate (guard 18) and is in NOTIFY_EXEMPT
+  # (guard 1) until a scheduled run is green.
+  released-agent-base-run:
+    if: inputs.scope != 'candidate'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+    steps:
+      # Restoring the Go cache (about 2.6 GB compressed) on top of the image builds ran runners out of
+      # disk: the same disk step as the k6 legs (see k6-kind-conformance).
+      - name: Free disk for the images
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Serve Docker Hub base-image pins from the GHCR copy (docs/REPO-CI.md)
+        uses: ./.github/actions/base-image-mirror
+        with:
+          prime: '/library/(golang:[0-9.]+-alpine|node:[0-9]+-bookworm-slim|alpine:3\.24|golang:[0-9.]+|node:[0-9]+-trixie-slim)@'
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: ./.github/actions/nightly-go-cache
+        with:
+          suite: unit
+      - name: Docker available
+        run: docker --version
+      - name: Resolve the newest release's agent-base and pull it by digest
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/lib/common.sh
+          tree="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)"
+          [[ "${tree}" =~ ^([0-9]+)\.([0-9]+)\. ]] || { echo "::error::no Version in internal/version/version.go"; exit 1; }
+          tmaj="${BASH_REMATCH[1]}" tmin="${BASH_REMATCH[2]}"
+          # Newest first. The newest release of the highest minor line at or below the tree's own: a train head's
+          # own version is not published yet.
+          tags="$(retry gh release list --exclude-drafts --limit 200 --json tagName --jq '.[].tagName')"
+          tag="" best=-1
+          while IFS= read -r t; do
+            [[ "${t}" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-rc\.[0-9]+)?$ ]] || continue
+            maj="${BASH_REMATCH[1]}" min="${BASH_REMATCH[2]}"
+            (( maj < tmaj || (maj == tmaj && min <= tmin) )) || continue
+            key=$(( maj * 1000 + min ))
+            if (( key > best )); then best="${key}" tag="${t}"; fi
+          done <<<"${tags}"
+          [ -n "${tag}" ] || { echo "::error::no published release at or below ${tree}'s minor line"; exit 1; }
+          ref="ghcr.io/cjohnstoniv/agent-base:${tag#v}"
+          digest="$(retry docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}' | tail -n 1)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::could not resolve ${ref} to a digest (got '${digest}')"; exit 1; }
+          image="ghcr.io/cjohnstoniv/agent-base@${digest}"
+          retry docker pull "${image}"
+          echo "release ${tag}: ${ref} is ${image}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+      - name: UI-sandbox e2e with the background command run on the released agent-base
+        env:
+          WARDYN_TEST_DOCKER: "1"
+          WARDYN_E2E_UISBX_BASE_IMAGE: ${{ steps.base.outputs.image }}
+        shell: bash
+        run: |
+          mkdir -p test/reports/e2e
+          make test-e2e-ui-sandbox 2>&1 | tee test/reports/e2e/released-agent-base-run.log
+          grep -qF "runs ${WARDYN_E2E_UISBX_BASE_IMAGE} (image " test/reports/e2e/released-agent-base-run.log \
+            || { echo "::error::the background run's image was never checked against ${WARDYN_E2E_UISBX_BASE_IMAGE}"; exit 1; }
+          grep -qF 'UI-SANDBOX E2E: PASS' test/reports/e2e/released-agent-base-run.log \
+            || { echo "::error::the e2e never reached its closing PASS line"; exit 1; }
+      - name: Upload e2e results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: released-agent-base-run-results
+          path: test/reports/e2e/released-agent-base-run.log
           if-no-files-found: error
 
   # ── deploy: multi-arch build, and the staging images a release promotes ─────
@@ -1836,11 +1910,13 @@ jobs:
   # `make kind-quickstart` cluster kind-sso-walk reuses. Green on a real scheduled run (39782025578),
   # so it is in notify-new-lanes' needs and release.yml's watched= (guard 13), and runs under
   # scope=candidate: a watched job must never be skipped.
+  # It also runs the SSH gateway e2e (scripts/run-e2e-ssh-k8s.sh) on the same cluster before the walk.
   kind-survival-walk:
     runs-on: ubuntu-26.04
     # 50: the walk measured 16-18 minutes (four green nightlies on 2026-10-28) and the prewrapped check adds
     # about five, so twice the new maximum.
-    timeout-minutes: 50
+    # 60 with the SSH gateway e2e before the walk (not yet measured on a hosted runner); re-set from the measurement.
+    timeout-minutes: 60
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -1877,6 +1953,19 @@ jobs:
         env:
           WARDYN_QUICKSTART_HTTP_PORT: "8280"
         run: make kind-quickstart
+      # The SSH gateway e2e on this fresh cluster (#4046), before the survival walk below deletes the control-plane
+      # pod. scripts/run-e2e-ssh-k8s.sh never creates a cluster; it runs against the one the step above brought up.
+      # The script, not `make`: a self-skip must stay exit 77 for the assert step.
+      - name: SSH gateway e2e on the quickstart cluster
+        env:
+          WARDYN_TEST_K8S: "1"
+          WARDYN_QUICKSTART_HTTP_PORT: "8280"
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test/reports/e2e
+          ./scripts/run-e2e-ssh-k8s.sh 2>&1 | tee test/reports/e2e/ssh-e2e-k8s.log
+          echo "SSH_E2E_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
       - name: kind survival walk (control-plane pod delete; cordoned-node run-pod eviction)
         env:
           WARDYN_TEST_K8S: "1"
@@ -1932,6 +2021,20 @@ jobs:
           # A skip exits 0: both tests must have run and passed.
           grep -q '^--- PASS: TestKindPrewrappedCheck ' test/reports/e2e/prewrap-check.log
           grep -q '^--- PASS: TestKindPrewrappedCheckControlPlaneKilled ' test/reports/e2e/prewrap-check.log
+      - name: Assert the SSH gateway e2e actually ran (not a self-skip) and passed
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=test/reports/e2e/ssh-e2e-k8s.log
+          if [ "${SSH_E2E_EXIT:-}" = "77" ]; then
+            echo "::error::run-e2e-ssh-k8s.sh self-skipped (exit 77): no wardyn install answered in kind-wardyn-quickstart/wardyn"
+            exit 1
+          fi
+          if [ "${SSH_E2E_EXIT:-1}" != "0" ]; then
+            echo "::error::run-e2e-ssh-k8s.sh exited ${SSH_E2E_EXIT:-<unset>}; see the uploaded log"
+            exit 1
+          fi
+          grep -qF 'SSH E2E (k8s): PASS' "$log" || { echo "::error::the SSH e2e never reached its closing PASS line"; exit 1; }
       - name: Upload walk evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -1940,6 +2043,7 @@ jobs:
           path: |
             test/reports/e2e/kind-survival-walk.log
             test/reports/e2e/prewrap-check.log
+            test/reports/e2e/ssh-e2e-k8s.log
           if-no-files-found: error
 
   # scripts/k6-kind-conformance.sh, the Kubernetes runner's kind conformance. It creates and
@@ -2704,7 +2808,7 @@ jobs:
   # Nothing here retags, rebuilds or otherwise touches a published image.
   published-image-scan:
     if: inputs.scope != 'candidate'
-    name: published-image-scan (${{ matrix.name }})
+    name: published-image-scan (${{ matrix.name }}, line ${{ matrix.line }})
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -2713,6 +2817,8 @@ jobs:
       fail-fast: false
       matrix:
         name: [agent-base, agent-codex-cli, agent-aws-sso, agent-vscode, agent-novnc]
+        # line: the Nth newest minor line with a published release, so each line still patched is scanned.
+        line: [1, 2]
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -2727,17 +2833,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Resolve the latest published release
+      - name: Resolve the newest release of the line
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          LINE: ${{ matrix.line }}
+          NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
-          tag="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')"
-          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
-            || { echo "::error::no usable published release tag (got '${tag}')"; exit 1; }
-          echo "Scanning ${{ matrix.name }} from release ${tag}"
+          # gh lists releases newest first, so the first tag of a line is that line's newest release. `--limit 1`
+          # alone named whichever line published last, so a patch line went unscanned beside a newer one.
+          tags="$(gh release list --exclude-drafts --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || true)"
+          line="$(printf '%s\n' "$tags" | sed -nE 's/^v([0-9]+)\.([0-9]+)\..*/\1.\2/p' | sort -u -t. -k1,1nr -k2,2nr | sed -n "${LINE}p")"
+          [ -n "$line" ] || { echo "::error::no published release on the minor line ${LINE} places from the newest"; exit 1; }
+          tag="$(printf '%s\n' "$tags" | grep -E "^v${line//./\\.}\." | head -1)"
+          echo "Scanning ${NAME} from release ${tag} (line ${line})"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
       # Same DB cache ci.yml's trivy job restores (ci.yml saves it from main pushes),
       # so five parallel scans do not each download the vulnerability DB from a

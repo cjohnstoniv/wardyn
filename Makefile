@@ -601,6 +601,7 @@ test-e2e-ssh-editors: ## Real editor clients (Mutagen, JetBrains backend) in a c
 # "Image contract (BYOI)" is canonical); the compose lane above proves those.
 # Runs against the cluster `make kind-quickstart` leaves behind — it never
 # creates or deletes one — and self-skips without WARDYN_TEST_K8S=1.
+# nightly.yml's kind-survival-walk runs the script on the quickstart cluster that job brings up.
 test-e2e-ssh-k8s: ## Live SSH gateway e2e on Kubernetes (needs a kind-quickstart cluster up)
 	@echo "Running live SSH gateway e2e on Kubernetes (existing kind-quickstart cluster; shell lane only)..."
 	WARDYN_TEST_K8S=1 ./scripts/run-e2e-ssh-k8s.sh

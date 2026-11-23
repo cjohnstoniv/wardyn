@@ -281,6 +281,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - and the pooled-exec baseline.
   - It brings up its own uniquely-named compose stack on its own ports and tears it down on every exit path, and it builds `wardyn/agent-vscode:local` (`make agent-image-vscode`, +~228 MiB) if that image is not already local —
   - too heavy for every PR, so it runs in `nightly.yml`'s `ui-sandbox-e2e-live` job rather than `ci.yml`, and remains runnable by hand.
+  - `nightly.yml`'s `released-agent-base-run` job runs it again with the background command run started from the newest release's `agent-base`, pulled by digest (`WARDYN_E2E_UISBX_BASE_IMAGE`), so a released image is shown to start a run serving an inbound app.
   - Needs Docker; self-skips unless `WARDYN_TEST_DOCKER=1`.
 - **[`WARDYN_KIND_SSO_PROFILE=ado scripts/kind-sso-walk.sh`](../scripts/kind-sso-walk.sh)** ([`scripts/lib/ kind-sso-walk-ado.sh`](../scripts/lib/kind-sso-walk-ado.sh)) — live Azure DevOps SSO walk on kind:
   - the console signs in against a fake Entra tenant instead of Dex,
@@ -308,6 +309,7 @@ These scripts stay out of the per-PR [`ci.yml`](../.github/workflows/ci.yml) **b
   - Those two principals go in through `kubectl exec deploy/postgres`, because the API only ever stamps the *caller's* key and this install has one credential.
   - It does **not** create or delete a cluster — it runs against the one `make kind-quickstart` leaves behind, and cleans up only its own run and the keys it registered.
   - Needs `kubectl` and a real `ssh` client; self-skips unless `WARDYN_TEST_K8S=1`.
+  - Runs in `nightly.yml`'s `kind-survival-walk` job, on that job's fresh quickstart cluster before its survival walk, so a release waits for it.
 - **[`deploy/kind/quickstart.sh`](../deploy/kind/quickstart.sh)** (`make kind-quickstart`, `make kind-down`) — not a test at all: it builds `wardynd`, creates a `kind` cluster with a pinned Calico CNI and the k8s runner substrate on,
   - `helm install`s the chart, waits for a healthy control plane,
   - and prints the URL and admin token it minted.
