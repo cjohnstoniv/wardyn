@@ -32,6 +32,7 @@ const (
 	AssistantNoProvider   = "no_provider"
 	AssistantUnitDenies   = "unit_denies"
 	AssistantNotConnected = "not_connected"
+	AssistantAtRunLimit   = "at_run_limit"
 )
 
 // The wire reasons Validate refuses with. The API declares the same values with the rest of its reasons;

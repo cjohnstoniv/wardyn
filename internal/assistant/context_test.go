@@ -1,0 +1,80 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package assistant
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+func labels(p Payload) []string {
+	out := make([]string, len(p.Sections))
+	for i, s := range p.Sections {
+		out[i] = s.Label
+	}
+	return out
+}
+
+func TestFirstPayloadOrderAndUntrusted(t *testing.T) {
+	admin := Person{Email: "ada@corp.example", Name: "Ada"}
+	proposer := Person{Email: "pat@corp.example"}
+	p := FirstPayload(Inputs{
+		Purpose: types.AssistantReview, UnitRecord: "unit ada@corp.example", Templates: []string{"t1"},
+		UnitAdmins: []Person{admin}, ChangeProposer: &proposer, Grants: []string{"github api.github.com"},
+		RunHistoryOn: true, RunHistory: []HostCount{{"a.example", 3}},
+		Change: "note from pat@corp.example", BuildFiles: []BuildFile{{"go.mod", "module x"}},
+	})
+	want := []string{LabelUnit, LabelTemplates, LabelAdmins, LabelGrants, LabelHistory, LabelChange, LabelBuild}
+	if got := labels(p); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("labels = %v, want %v", got, want)
+	}
+	for _, s := range p.Sections {
+		wantUntrusted := s.Label == LabelChange || s.Label == LabelBuild
+		if s.Untrusted != wantUntrusted {
+			t.Errorf("%s untrusted = %v", s.Label, s.Untrusted)
+		}
+		if strings.Contains(s.Text, "@corp.example") {
+			t.Errorf("%s still names a person: %q", s.Label, s.Text)
+		}
+	}
+	if p.Letters["Person A"] != "ada@corp.example" || p.Letters["Person B"] != "pat@corp.example" {
+		t.Errorf("letters = %v", p.Letters)
+	}
+}
+
+func TestFirstPayloadLeavesOutWhatIsEmptyOrOff(t *testing.T) {
+	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, UnitRecord: "u", RunHistory: []HostCount{{"h", 1}}, Change: "ignored"})
+	if got := labels(p); len(got) != 1 || got[0] != LabelUnit {
+		t.Errorf("labels = %v, want only the unit record: history is off and a compose session has no change", got)
+	}
+}
+
+func TestFirstPayloadCaps(t *testing.T) {
+	big := strings.Repeat("é", MaxSectionBytes) // 2 bytes a rune: forces a rune-boundary cut
+	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, UnitRecord: big, Templates: []string{big}, Grants: []string{big},
+		BuildFiles: []BuildFile{{"f", big}}})
+	total := 0
+	for _, s := range p.Sections {
+		if len(s.Text) > MaxSectionBytes {
+			t.Errorf("%s is %d bytes, over the section cap", s.Label, len(s.Text))
+		}
+		if !strings.HasSuffix(s.Text, truncatedMark) && len(s.Text) < len(big) {
+			t.Errorf("%s was cut without the mark", s.Label)
+		}
+		total += len(s.Text)
+	}
+	if total > MaxPayloadBytes {
+		t.Errorf("payload is %d bytes, over the cap %d", total, MaxPayloadBytes)
+	}
+	if len(p.Sections) < 3 {
+		t.Errorf("got %d sections", len(p.Sections))
+	}
+	for _, s := range p.Sections {
+		if strings.ToValidUTF8(s.Text, "") != s.Text {
+			t.Errorf("%s was cut inside a rune", s.Label)
+		}
+	}
+}
