@@ -13,6 +13,7 @@ import (
 	"hash"
 	"io"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -49,6 +50,9 @@ type Reader struct {
 	// entry follows it at once, so only that entry can be a later path's ancestor: the reader keeps no
 	// per-entry state, and its memory grows with the path's depth, never the entry count.
 	lastLink string
+	// dirs is the directory entries the previous entry is inside or is, outermost first: the only ones a
+	// later entry's parent can be.
+	dirs []string
 	// gitOpen is the git directories (a directory holding HEAD) the current path is inside, outermost
 	// first. It is kept only for a scan.
 	gitOpen  []string
@@ -107,6 +111,7 @@ func (r *Reader) Next() (Header, io.Reader, error) {
 	}
 	r.index++
 	r.last = h.Path
+	r.trackDirs(h)
 	r.lastLink = ""
 	if h.Type == TypeSymlink {
 		r.lastLink = h.Path
@@ -213,7 +218,22 @@ func (r *Reader) check(th *tar.Header) (Header, error) {
 	if r.lastLink != "" && under(h.Path, r.lastLink) {
 		return Header{}, at("passes through the symlink entry %q", r.lastLink)
 	}
+	// Every entry below a root sits in a directory the stream declared, so nothing already at the destination
+	// decides where it lands.
+	if parent := path.Dir(h.Path); !isRoot(h.Path, r.roots) && !isRoot(parent, r.roots) && !slices.Contains(r.dirs, parent) {
+		return Header{}, at("its directory %q is not an earlier entry of the stream", parent)
+	}
 	return h, nil
+}
+
+// trackDirs leaves the directory entries h is not inside, and opens h when it is one.
+func (r *Reader) trackDirs(h Header) {
+	for n := len(r.dirs); n > 0 && !under(h.Path, r.dirs[n-1]); n = len(r.dirs) {
+		r.dirs = r.dirs[:n-1]
+	}
+	if h.Type == TypeDir {
+		r.dirs = append(r.dirs, h.Path)
+	}
 }
 
 // trackGit leaves the git directories h is not inside, and opens the one whose HEAD h is.

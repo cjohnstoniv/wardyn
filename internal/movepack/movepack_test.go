@@ -160,6 +160,8 @@ func TestMovePack_RefusesHostileEntries(t *testing.T) {
 		{"link target over 4096", []rawEntry{{h: dirH(w)}, {h: tar.Header{Name: w + "/l", Typeflag: tar.TypeSymlink, Linkname: strings.Repeat("t", 4097), Format: tar.FormatPAX}}}, w + "/l"},
 		{"through an earlier symlink", []rawEntry{{h: dirH(w)}, {h: tar.Header{Name: w + "/l", Typeflag: tar.TypeSymlink, Linkname: "/etc", Format: tar.FormatPAX}}, {h: regH(w + "/l/shadow"), content: "x"}}, w + "/l/shadow"},
 		{"a root that is a symlink", []rawEntry{{h: tar.Header{Name: w, Typeflag: tar.TypeSymlink, Linkname: "/etc", Format: tar.FormatPAX}}}, w},
+		{"an undeclared parent directory", []rawEntry{{h: dirH(w)}, {h: regH(w + "/sub/deeper/x"), content: "x"}}, w + "/sub/deeper"},
+		{"a parent declared only as a sibling's", []rawEntry{{h: dirH(w)}, {h: dirH(w + "/a")}, {h: regH(w + "/a/x"), content: "x"}, {h: regH(w + "/b/y"), content: "y"}}, w + "/b"},
 		{"an excluded path", []rawEntry{{h: dirH(w)}, {h: regH(w + "/x/.credentials.json"), content: "x"}}, ".credentials.json"},
 	}
 	for _, row := range rows {
