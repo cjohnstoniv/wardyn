@@ -101,7 +101,7 @@ cut
 watch "$p"
 restore
 if grep -qv '^True ' "$samples"; then fail "readiness on /healthz: $p left Ready during the cut: $(summary)"; fi
-if awk '$2 != 200' "$samples" | grep -q .; then fail "/healthz did not answer 200 throughout the cut: $(summary)"; fi
+if [ -n "$(awk '$2 != 200' "$samples")" ]; then fail "/healthz did not answer 200 throughout the cut: $(summary)"; fi
 n503=$(awk '$3 == 503' "$samples" | wc -l)
 ((n503 >= 5)) || fail "/readyz answered 503 $n503 times during the cut, so the cut did not reach wardynd: $(summary)"
 [ "$(restarts "$p")" = "$before" ] || fail "wardynd restarted during the cut (restartCount $before -> $(restarts "$p"))"
