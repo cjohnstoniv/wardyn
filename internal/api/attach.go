@@ -383,7 +383,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType:  principalType,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceWeb,
-		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		onInput:    s.presenceOnInput(ctx, id, principalType, principal),
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,

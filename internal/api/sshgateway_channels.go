@@ -547,7 +547,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		actorType:  types.ActorHuman,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceSSH,
-		onInput:    func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
+		onInput:    s.presenceOnInput(ctx, runID, types.ActorHuman, principal),
 		cols:       cols,
 		rows:       rows,
 		// Promotion: this channel just became the writer without reconnecting.
