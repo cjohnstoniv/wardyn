@@ -23,6 +23,7 @@ import type { ConfinementClass, HostRuleSet, RunPolicyHostMarks, RunPolicySpec, 
 import type { PolicyPreviewPending } from "../../../lib/types/policy-preview";
 import { hostRuleLines } from "../../screens/new-run-flow/review/host-rules-lines";
 import { HOST_RULES, IP_LITERALS, POLICY_TAB, SUMMARY } from "../../screens/run-detail/policy-tab-copy";
+import { HiddenChip } from "./hidden-chip";
 import { pushesLines, toolRulesTail } from "./policy-facts";
 import { WALL_PRESETS } from "../copy/wall-presets";
 
@@ -446,15 +447,6 @@ function MarkChip({ mark }: { mark: PolicyMark }) {
     <Chip tone="info">{POLICY_TAB.chipAdded}</Chip>
   ) : (
     <Chip tone="neutral">{POLICY_TAB.chipRemoved}</Chip>
-  );
-}
-
-// A value the reader may not see. Focusable, so the reason is reachable without a pointer.
-function HiddenChip({ tip = POLICY_TAB.hiddenTip }: { tip?: string }) {
-  return (
-    <span title={tip} tabIndex={0} role="note" aria-label={`${POLICY_TAB.hidden}. ${tip}`}>
-      <Chip tone="neutral">{POLICY_TAB.hidden}</Chip>
-    </span>
   );
 }
 

@@ -23,7 +23,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { PolicyTab } from "./policy-tab";
-import { CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
+import { AS_VALUE, AS_VALUE_CAUSE, CHANGE_HEADING, POLICY_TAB } from "./policy-tab-copy";
 import { GIT_PAT_SCOPE } from "../../wardyn/copy";
 
 const RUN = {
@@ -844,5 +844,74 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     const summary = within(screen.getByTestId("policy-summary"));
     expect(summary.queryByText("Pushes can't be stopped on this install.")).toBeNull();
     expect(summary.getByText("Every push refused")).toBeInTheDocument();
+  });
+});
+
+describe("PolicyTab: secrets that went in as their value", () => {
+  const row = (over: Partial<NonNullable<RunPolicyView["secrets_as_value"]>[number]> = {}) => ({
+    kind: "env_secret",
+    secret_name: "DEPLOY_TOKEN",
+    host: "api.example.com",
+    cause: "host_not_allowlisted",
+    reason: "the host is not an exact entry of the run's allowlist",
+    ...over,
+  });
+
+  it("draws nothing without rows", async () => {
+    show(view());
+    await ready();
+    expect(screen.queryByTestId("policy-as-value")).toBeNull();
+    expect(screen.queryByText(AS_VALUE.heading)).toBeNull();
+  });
+
+  it("shows each row with its kind, name, host and the board's sentence for the cause", async () => {
+    show(view({ secrets_as_value: [row(), row({ kind: "file_secret", secret_name: "SIGNING_CERT", host: "build.example.com", cause: "value_multiline" })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    expect(block.getByText("Went in as their value")).toBeInTheDocument();
+    expect(block.getByText(AS_VALUE.lede)).toBeInTheDocument();
+    expect(block.getByText("Environment secret")).toBeInTheDocument();
+    expect(block.getByText("File secret")).toBeInTheDocument();
+    expect(block.getByText("DEPLOY_TOKEN")).toBeInTheDocument();
+    expect(block.getByText("api.example.com")).toBeInTheDocument();
+    expect(block.getByText(AS_VALUE_CAUSE.host_not_allowlisted)).toBeInTheDocument();
+    expect(block.getByText("The value runs over more than one line, so it can't go in a request header.")).toBeInTheDocument();
+    expect(block.queryByText(AS_VALUE.toRunner)).toBeNull();
+  });
+
+  it("falls back to the row's own sentence for a row with no known cause", async () => {
+    show(view({ secrets_as_value: [row({ cause: undefined }), row({ cause: "something_new", reason: "a newer reason" })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    expect(block.getByText("the host is not an exact entry of the run's allowlist")).toBeInTheDocument();
+    expect(block.getByText("a newer reason")).toBeInTheDocument();
+  });
+
+  it("marks a value the runner got", async () => {
+    show(view({ secrets_as_value: [row({ delivery: "runner_resident", cause: "grant_unrecorded" })] }));
+    await ready();
+    expect(within(screen.getByTestId("policy-as-value")).getByText("Sent to the runner")).toBeInTheDocument();
+  });
+
+  it("the hidden name renders the moved HiddenChip, never inline text", async () => {
+    show(view({ secrets_as_value: [row({ secret_name: undefined })] }));
+    await ready();
+    const block = within(screen.getByTestId("policy-as-value"));
+    const chip = block.getByRole("note", { name: "Hidden. Only admins can see this." });
+    expect(chip).toHaveAttribute("tabindex", "0");
+    expect(chip).toHaveTextContent("Hidden");
+    expect(block.queryByText("DEPLOY_TOKEN")).toBeNull();
+  });
+
+  it('shows "Showing the first 50." when truncated', async () => {
+    show(view({ secrets_as_value: [row()], secrets_as_value_truncated: true }));
+    await ready();
+    expect(within(screen.getByTestId("policy-as-value")).getByText("Showing the first 50.")).toBeInTheDocument();
+  });
+
+  it('does not show "Showing the first 50." when the list is whole', async () => {
+    show(view({ secrets_as_value: [row()] }));
+    await ready();
+    expect(screen.queryByText("Showing the first 50.")).toBeNull();
   });
 });

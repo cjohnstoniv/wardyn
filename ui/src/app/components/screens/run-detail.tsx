@@ -75,6 +75,7 @@ import { NeedsYouBanner } from "../wardyn/needs-you-banner";
 import { NEEDS_YOU } from "../wardyn/copy/needs-you";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { LaunchWarningsNote } from "./run-detail/launch-warnings-note";
+import { CloneStatusNote } from "./run-detail/clone-status-note";
 import { RunLifetimeWithContainment } from "./run-detail/containment-pending";
 import { PolicyTab } from "./run-detail/policy-tab";
 import { WallPresetRefusalLine } from "./run-detail/wall-preset-run-lines";
@@ -355,6 +356,7 @@ function RunDetailPage({ id }: { id: string }) {
           />
 
           <LaunchWarningsNote />
+          <CloneStatusNote />
           {/* RL-15 (#580, #1197 L5): one lifetime banner (lost/ended/paused/
               ending-soon — mutually exclusive server facts), self-contained per the LaunchWarningsNote pattern
               above. The Ends and wait controls live in the header's facts row (#3034). */}

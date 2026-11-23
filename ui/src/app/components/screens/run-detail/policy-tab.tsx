@@ -40,7 +40,9 @@ import { cn } from "../../ui/utils";
 import { WALL_PRESETS } from "../../wardyn/copy/wall-presets";
 import { audienceOf } from "../../../lib/wall-preset-words";
 import { WallPresetRunLine } from "./wall-preset-run-lines";
-import { CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
+import { YOUR_WALLS } from "../../wardyn/copy/personal-walls";
+import { HiddenChip } from "../../wardyn/policy-document/hidden-chip";
+import { AS_VALUE, AS_VALUE_CAUSE, CHANGE_HEADING, FIELD_LABEL, IP_LITERALS, POLICY_TAB, SUMMARY, type PlainCause } from "./policy-tab-copy";
 
 type Load = { status: "loading" } | { status: "error" } | { status: "ready"; view: RunPolicyView };
 
@@ -206,6 +208,27 @@ function RecordedPolicy({
         </div>
       ))}
       {!view.complete && <p className="mt-3 text-body text-muted-foreground">{POLICY_TAB.incomplete}</p>}
+
+      {view.secrets_as_value && view.secrets_as_value.length > 0 && (
+        <section data-testid="policy-as-value" className="mt-5 min-w-0 rounded-lg border border-border px-3 py-2">
+          <h3 className="text-body font-semibold">{AS_VALUE.heading}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">{AS_VALUE.lede}</p>
+          <ul className="mt-1">
+            {view.secrets_as_value.map((s, i) => (
+              <li key={i} className="min-w-0 border-t border-border py-1.5 text-xs first:border-t-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <span className="text-muted-foreground">{YOUR_WALLS.KINDS[s.kind] ?? s.kind}</span>
+                  {s.secret_name ? <span className="break-all font-mono">{s.secret_name}</span> : <HiddenChip />}
+                  <span className="break-all font-mono text-muted-foreground">{s.host}</span>
+                  {s.delivery === "runner_resident" && <Chip tone="info">{AS_VALUE.toRunner}</Chip>}
+                </div>
+                <p className="mt-0.5">{(s.cause && AS_VALUE_CAUSE[s.cause]) || s.reason}</p>
+              </li>
+            ))}
+          </ul>
+          {view.secrets_as_value_truncated && <p className="mt-1 text-xs text-muted-foreground">{AS_VALUE.asValueTruncated}</p>}
+        </section>
+      )}
 
       {/* The shared read-only document. This run's own facts ride with it: the
           barrier it actually used, what launch added or removed, and whether

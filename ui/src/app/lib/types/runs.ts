@@ -708,6 +708,20 @@ export interface RunPolicyView {
   inspection_left_to?: string[]; // each model provider whose gateway checks the run's prompts itself, by name
   wall_preset?: RunPolicyWallPreset; // run-policy-wall-preset.ts
   pushes_unstoppable?: boolean; // the broker is off and the capability list leaves out code_write: a git token in the sandbox can still push
+  // Each host-scoped secret that went in as its value although a placeholder switch was on; the newest row per secret.
+  secrets_as_value?: RunPolicySecretAsValue[];
+  // Set when more than 50 matched; the list holds the first 50.
+  secrets_as_value_truncated?: boolean;
+}
+
+// internal/api/run_policy_as_value.go runPolicySecretAsValue. secret_name is absent below the security admin tier.
+export interface RunPolicySecretAsValue {
+  kind: string; // env_secret | file_secret
+  secret_name?: string;
+  host: string;
+  cause?: string; // absent on a row written before causes existed
+  reason: string;
+  delivery?: string; // runner_resident for a value the runner got
 }
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.

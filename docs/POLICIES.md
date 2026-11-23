@@ -13,6 +13,7 @@
 - A governance profile is the same object as a governance unit: the API calls it a unit (`/governance/units`), and a policy record's `source`, `cause` and `layer` say `unit`.
 - `GET /api/v1/runs/{id}/policy` and `wardyn run policy <run-id>` return the resolved policy, under `spec` as a `RunPolicySpec` document, where it started from, what changed and why, and whether a saved policy has since been edited (see [OPERATIONS.md](OPERATIONS.md#the-policy-a-run-got) and [sdk.md](sdk.md)).
 - The CLI prints YAML behind `#` comment lines, so `wardyn run policy <id> > p.yaml` is a policy file.
+- The run page's Policy tab lists each host-scoped secret that went in as its value, and why, under "Went in as their value"; a member sees the name as Hidden. The run page itself lists a repository whose clone was skipped, failed or went unreported, as the sandbox reported it.
 - Reuse is scoped: the document always strict-decodes as a policy, and it passes `validatePolicySpec` for a super admin.
 - For them `wardyn run --policy-file p.yaml` runs it again as is, as long as the run's allowlist, with what launch added, still fits the per-policy domain cap.
 - For anyone else, mount sources read `<redacted>` (and, below the security admin tier, grant secret names are dropped): it is a starting point, with those values to fill in.
