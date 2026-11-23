@@ -257,9 +257,16 @@ func TestComponentsParity_AdmittedAtThreeDoors(t *testing.T) {
 		}},
 		"an organisation's header with the resident switch on": {setup: parityOrg(types.ComponentDefinition{Hosts: []string{"org-api.example"},
 			Secrets: []types.ComponentSecret{{SecretName: compOwnSecret, Delivery: types.ComponentDelivery{Mode: types.ComponentDeliveryHeader, Host: "org-api.example"}}}}, residentOff)},
+		// A member's own image is refused before the component gate unless the image grant is enforced and held
+		// (runRequestGovernance, capImage) and an image builder is wired (validateImageBuildRequest), so the row
+		// supplies both and the component's requirement is what it answers.
 		"an image that meets the component's requirement (#1972)": {setup: func(_ *testing.T, f *componentFixture) map[string]any {
-			body := componentBody(f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}, Image: "ghcr.io/acme/tools:1.2"}))
-			body["image"] = "ghcr.io/acme/tools:1.2"
+			const image = "ghcr.io/acme/tools:1.2"
+			f.cs.enf = map[string]bool{capImage: true}
+			f.cs.grants = append(f.cs.grants, grant(types.CapabilitySubjectAll, "", capImage, image, types.CapabilityAllow))
+			f.srv.cfg.ImageBuilder = fakeImageBuilder{}
+			body := componentBody(f.org(compOrgID, types.ComponentDefinition{Hosts: []string{"org-api.example"}, Image: image}))
+			body["image"] = image
 			return body
 		}},
 		"a shared secret the operator holds (A28)": {setup: parityOrg(types.ComponentDefinition{Hosts: []string{"org-api.example"},
