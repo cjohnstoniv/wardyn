@@ -654,9 +654,11 @@ func TestRunFailureReason(t *testing.T) {
 
 	// A plain nonzero agent exit emits a run.complete FAILURE event, but its Data
 	// carries only exit_code/state — no error/reason/detail — so the helper stays
-	// silent (the exit code is the whole story; don't manufacture noise).
+	// silent (the exit code is the whole story; don't manufacture noise). A portal's
+	// refused read of the output is not a cause either.
 	srv2 := waitServer(t, runID, []types.RunState{types.RunFailed}, []types.AuditEvent{
 		{Action: "run.complete", Outcome: "failure", Data: json.RawMessage(`{"exit_code":3,"state":"FAILED"}`)},
+		{Action: "run.output.refuse", Outcome: "failure", Data: json.RawMessage(`{"reason":"run_output_not_captured","status":409}`)},
 	})
 	if got := runFailureReason(t.Context(), sdk.New(srv2.URL, "tok"), types.AgentRun{ID: runID, State: types.RunFailed}); got != "" {
 		t.Errorf("runFailureReason on a plain exit = %q, want empty", got)

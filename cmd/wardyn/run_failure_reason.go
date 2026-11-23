@@ -47,7 +47,8 @@ func runFailureReason(ctx context.Context, c *sdk.Client, run types.AgentRun) st
 		return ""
 	}
 	for _, e := range events {
-		if e.Outcome != "failure" || len(e.Data) == 0 {
+		// A run.output.refuse row records a refused read of the output, not a cause of the run's failure.
+		if e.Outcome != "failure" || len(e.Data) == 0 || e.Action == "run.output.refuse" {
 			continue
 		}
 		var d map[string]any
