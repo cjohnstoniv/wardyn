@@ -27,6 +27,9 @@ type MoveExportResult struct {
 type MoveImportArgs struct {
 	Spec runner.SandboxSpec `json:"spec"`
 	Set  runner.CarriedSet  `json:"set"`
+	// MaxBytes bounds the carried stream (runner.CheckCarriedLimit): the move's own bound, which the
+	// organisation's relay reads with too. An import without one is refused.
+	MaxBytes int64 `json:"max_bytes"`
 }
 
 // MoveImportEnd is the one line the runner writes on a move_import stream once the import has ended:

@@ -6,6 +6,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 
@@ -41,11 +42,25 @@ type StateExporter interface {
 
 // StateImporter is an OPTIONAL Runner capability: create a sandbox for spec with its agent not started,
 // no proxy process and no proxy config (CheckImportSpec), and write carried, a movepack stream of set,
-// beneath set's roots in it. The answer's manifest is what the importer read, computed by its own reader.
-// An import that fails after the create removes what it created. ErrMoveCreate or ErrMoveFiles says which
-// half failed.
+// beneath set's roots in it. maxBytes is the move's own bound on the stream (CheckCarriedLimit), the
+// number the organisation's relay reads with too. The answer's manifest is what the importer read,
+// computed by its own reader. An import that fails after the create removes what it created. ErrMoveCreate
+// or ErrMoveFiles says which half failed.
 type StateImporter interface {
-	ImportSandbox(ctx context.Context, spec SandboxSpec, set CarriedSet, carried io.Reader) (Sandbox, CarriedManifest, error)
+	ImportSandbox(ctx context.Context, spec SandboxSpec, set CarriedSet, maxBytes int64, carried io.Reader) (Sandbox, CarriedManifest, error)
+}
+
+// MaxCarriedBytes is the largest bound a move may set on its carried stream: the 200 GiB that a move's
+// max_carried_gib allows at most.
+const MaxCarriedBytes int64 = 200 << 30
+
+// CheckCarriedLimit refuses an import with no bound of its own: a missing or zero one, or one over
+// MaxCarriedBytes. A reader never falls back to its default for a move.
+func CheckCarriedLimit(maxBytes int64) error {
+	if maxBytes <= 0 || maxBytes > MaxCarriedBytes {
+		return fmt.Errorf("%w: %d bytes", errCarriedLimit, maxBytes)
+	}
+	return nil
 }
 
 // MoveImportPresenter is a marker: a substrate whose imported, unstarted sandbox its runner's observer
@@ -74,6 +89,7 @@ var (
 	// ErrMoveFiles: the import created the sandbox and failed writing the carried files into it.
 	ErrMoveFiles = errors.New("runner: the carried files could not be written")
 
+	errCarriedLimit        = errors.New("runner: an import's bound on the carried files must be from 1 byte to 200 GiB")
 	errImportCarriesPolicy = errors.New("runner: an imported sandbox takes no proxy config; its policy comes only from the revive that starts it")
 )
 

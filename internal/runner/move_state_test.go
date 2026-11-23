@@ -70,3 +70,16 @@ func nonZero(t *testing.T, typ reflect.Type) reflect.Value {
 	}
 	return v
 }
+
+// TestCheckCarriedLimit: an import's bound is its move's, from 1 byte to 200 GiB; a missing, zero, negative or
+// larger one is refused rather than read as the reader's default.
+func TestCheckCarriedLimit(t *testing.T) {
+	for _, row := range []struct {
+		n  int64
+		ok bool
+	}{{0, false}, {-1, false}, {1, true}, {1 << 30, true}, {MaxCarriedBytes, true}, {MaxCarriedBytes + 1, false}} {
+		if err := CheckCarriedLimit(row.n); (err == nil) != row.ok {
+			t.Errorf("CheckCarriedLimit(%d) = %v; want ok %v", row.n, err, row.ok)
+		}
+	}
+}

@@ -97,6 +97,9 @@ func (d *Dispatcher) moveImport(ctx context.Context, peer *runnerwire.Peer, id u
 	if err := runner.CheckImportSpec(spec); err != nil {
 		return nil, runnerwire.Refuse("%v", err)
 	}
+	if err := runner.CheckCarriedLimit(a.MaxBytes); err != nil {
+		return nil, runnerwire.Refuse("%v", err)
+	}
 	imp, ok := d.cfg.Substrate.(runner.StateImporter)
 	if !ok {
 		return nil, runnerwire.Refuse("this runner cannot take a moved run")
@@ -108,13 +111,13 @@ func (d *Dispatcher) moveImport(ctx context.Context, peer *runnerwire.Peer, id u
 	if err != nil {
 		return nil, d.importFailed(ctx, spec, err)
 	}
-	go d.runImport(stream, imp, spec, a.Set)
+	go d.runImport(stream, imp, spec, a.Set, a.MaxBytes)
 	return runnerwire.StreamResult{Stream: stream.ID()}, nil
 }
 
 // runImport imports the files the org writes on stream, records the sandbox as a create does, and writes
 // the end line.
-func (d *Dispatcher) runImport(stream *runnerwire.Stream, imp runner.StateImporter, spec runner.SandboxSpec, set runner.CarriedSet) {
+func (d *Dispatcher) runImport(stream *runnerwire.Stream, imp runner.StateImporter, spec runner.SandboxSpec, set runner.CarriedSet, maxBytes int64) {
 	ctx := stream.Context()
 	// The label is what proves the sandbox this runner's own once its durable record is lost.
 	filled := spec
@@ -123,7 +126,7 @@ func (d *Dispatcher) runImport(stream *runnerwire.Stream, imp runner.StateImport
 		filled.Labels = map[string]string{}
 	}
 	filled.Labels[runner.LabelRunnerID] = d.cfg.RunnerID
-	sandbox, manifest, err := imp.ImportSandbox(ctx, filled, set, stream)
+	sandbox, manifest, err := imp.ImportSandbox(ctx, filled, set, maxBytes, stream)
 	if err == nil {
 		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		err = d.cfg.Created(persist, spec, sandbox.Ref)

@@ -152,7 +152,7 @@ func TestMoveImport_WritesOnlyBeneathRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sb, m, err := d.ImportSandbox(ctx, moveSpec(false), set, &stream)
+	sb, m, err := d.ImportSandbox(ctx, moveSpec(false), set, 1<<20, &stream)
 	if err != nil {
 		t.Fatalf("ImportSandbox: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestMoveImport_WritesOnlyBeneathRoots(t *testing.T) {
 	_, _ = tw.Write([]byte("x"))
 	_ = tw.Close()
 	spec := moveSpec(false)
-	if _, _, err := d.ImportSandbox(ctx, spec, set, &hostile); !errors.Is(err, movepack.ErrArchiveRefused) || !errors.Is(err, runner.ErrMoveFiles) {
+	if _, _, err := d.ImportSandbox(ctx, spec, set, 1<<20, &hostile); !errors.Is(err, movepack.ErrArchiveRefused) || !errors.Is(err, runner.ErrMoveFiles) {
 		t.Fatalf("import of an entry outside the roots = %v; want ErrArchiveRefused at the files stage", err)
 	}
 	if _, err := cli.ContainerInspect(ctx, agentContainerName(spec.RunID), client.ContainerInspectOptions{}); !isNotFound(err) {
@@ -242,7 +242,7 @@ func TestMoveImport_CreatedReadsPresent(t *testing.T) {
 	if _, err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	sb, _, err := d.ImportSandbox(ctx, moveSpec(false), set, &stream)
+	sb, _, err := d.ImportSandbox(ctx, moveSpec(false), set, 1<<20, &stream)
 	if err != nil {
 		t.Fatalf("ImportSandbox: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestMoveImport_CreatedReadsPresent(t *testing.T) {
 	if st.State != types.RunStarting || st.ExitCode != nil {
 		t.Errorf("Status = %+v; want RunStarting with no exit code", st)
 	}
-	if _, _, err := d.ImportSandbox(ctx, moveSpec(true), set, bytes.NewReader(nil)); !errors.Is(err, runner.ErrMoveCreate) {
+	if _, _, err := d.ImportSandbox(ctx, moveSpec(true), set, 1<<20, bytes.NewReader(nil)); !errors.Is(err, runner.ErrMoveCreate) {
 		t.Errorf("import of a spec with proxy config = %v; want ErrMoveCreate", err)
 	}
 }

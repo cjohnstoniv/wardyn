@@ -358,7 +358,7 @@ func (m *movingFake) ExportState(_ context.Context, ref string, _ runner.Carried
 	return runner.StateExport{Stream: io.NopCloser(strings.NewReader("exported files")), SpoolDrained: true}, nil
 }
 
-func (m *movingFake) ImportSandbox(_ context.Context, spec runner.SandboxSpec, _ runner.CarriedSet, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
+func (m *movingFake) ImportSandbox(_ context.Context, spec runner.SandboxSpec, _ runner.CarriedSet, _ int64, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
 	b, err := io.ReadAll(carried)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -404,7 +404,7 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 	}
 
 	runID := uuid.New()
-	sb, m, err := org.ImportSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: runnerID, Image: "agent:1"}, set, strings.NewReader("carried files"))
+	sb, m, err := org.ImportSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: runnerID, Image: "agent:1"}, set, 1<<20, strings.NewReader("carried files"))
 	if err != nil {
 		t.Fatalf("move_import = %v; want the substrate's import", err)
 	}
@@ -443,7 +443,7 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 	if _, err := borg.ExportState(ctx, ref, set); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
 		t.Errorf("export on a substrate without one = %v; want a refusal", err)
 	}
-	if _, _, err := borg.ImportSandbox(ctx, runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID}, set, strings.NewReader("x")); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+	if _, _, err := borg.ImportSandbox(ctx, runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID}, set, 1<<20, strings.NewReader("x")); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
 		t.Errorf("import on a substrate without one = %v; want a refusal", err)
 	}
 }

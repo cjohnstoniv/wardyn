@@ -67,7 +67,7 @@ func (s *Substrate) ExportState(ctx context.Context, ref string, set runner.Carr
 // into it. It writes while it waits for the runner's end line, since the runner may end the import before
 // it has read everything. ctx bounds the whole import. On an error the copy from carried may still be
 // waiting on carried: the caller closes carried's source, which ends it.
-func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
+func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet, maxBytes int64, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
 	fail := func(stage, err error) (runner.Sandbox, runner.CarriedManifest, error) {
 		return runner.Sandbox{}, runner.CarriedManifest{}, fmt.Errorf("%w: %w", stage, err)
 	}
@@ -75,6 +75,9 @@ func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, 
 		return fail(runner.ErrMoveCreate, err)
 	}
 	if err := runner.CheckImportSpec(spec); err != nil {
+		return fail(runner.ErrMoveCreate, err)
+	}
+	if err := runner.CheckCarriedLimit(maxBytes); err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
@@ -85,7 +88,7 @@ func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, 
 		return fail(runner.ErrMoveCreate, err)
 	}
 	var res runnerwire.StreamResult
-	if err := sess.Call(ctx, runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: spec, Set: set}, &res); err != nil {
+	if err := sess.Call(ctx, runnerwire.MethodMoveImport, runnerwire.MoveImportArgs{Spec: spec, Set: set, MaxBytes: maxBytes}, &res); err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}
 	st, err := sess.TakeStream(res.Stream)

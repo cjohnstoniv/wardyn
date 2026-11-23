@@ -148,7 +148,7 @@ func (d *Driver) exportFile(ctx context.Context, ref, abs string) (io.ReadCloser
 // entry before its bytes reach the archive, and re-emitted as a tar this driver writes: owner and group the
 // agent's, mode masked to 0777, and the symlinks written after every other entry, once the stream's
 // manifest has matched. The import also writes the booted marker, so the run's seed does not run again.
-func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
+func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet, maxBytes int64, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
 	none := runner.CarriedManifest{}
 	if err := runner.CheckImportSpec(spec); err != nil {
 		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
@@ -156,7 +156,10 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 	if spec.MachineKind.Normalize() != "" {
 		return runner.Sandbox{}, none, fmt.Errorf("%w: docker: a moved run's sandbox is a container, never a %s", runner.ErrMoveCreate, spec.MachineKind)
 	}
-	rd, err := movepack.NewReader(carried, movepack.Options{Set: set})
+	if err := runner.CheckCarriedLimit(maxBytes); err != nil {
+		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
+	}
+	rd, err := movepack.NewReader(carried, movepack.Options{Set: set, Limits: movepack.Limits{MaxBytes: maxBytes}})
 	if err != nil {
 		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
 	}
