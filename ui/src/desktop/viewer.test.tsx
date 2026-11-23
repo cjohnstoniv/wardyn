@@ -239,6 +239,15 @@ describe("DesktopViewer", () => {
     expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("Invalid, expired, or already-used attach ticket");
   });
 
+  it("a door's refusal gets the denied card with the gateway's words", () => {
+    render(<DesktopViewer boot={{ state: "refused", said: "attaching is not allowed", cause: "denied" }} />);
+    const card = screen.getByRole("region", { name: DESKTOP.linkBlocked });
+    for (const s of [DESKTOP.deniedBody, DESKTOP.deniedWallBody, DESKTOP.deniedSetByBody, DESKTOP.whyEnforcedBody, DESKTOP.deniedCanChangeBody, DESKTOP.gatewaySaid])
+      expect(within(card).getByText(s)).toBeInTheDocument();
+    expect(within(card).queryByText(DESKTOP.linkBody)).toBeNull();
+    expect(within(card).getByTestId("desktop-refused-said")).toHaveTextContent("attaching is not allowed");
+  });
+
   it("a background watch says so, sends no input, and a re-check's end has its own words and doesn't retry", () => {
     vi.useFakeTimers();
     const sockets: FakeSocket[] = [];

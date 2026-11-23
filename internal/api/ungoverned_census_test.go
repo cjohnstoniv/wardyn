@@ -78,6 +78,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance_unit_admin.go:auditUnitScope":                  {1, "authz-only: the scope an audit row names"},
 	"governance_policy_ref.go:meGovernanceContact":             {1, "authz-only: a display contact"},
 	"governance_run_doors.go:inboundAppsDenied":                {1, "authz-only: a door the boundary holds no knob for (boundInboundApps and the application refusal read it)"},
+	"governance_run_doors.go:desktopAppsDeniedWarnings":        {1, "authz-only: a warning that drops nothing, so the boundary holds no knob for it (boundUIApps adds it for whoever the ceiling binds)"},
 	"governance_run_doors.go:uiAppsDenied":                     {1, "authz-only: a door the boundary holds no knob for (boundUIApps and the application refusal read it)"},
 	"grants.go:handleListGrants":                               {1, "authz-only: grant read reach"},
 	"helpers.go:ownsRunOrAdmin":                                {1, "authz-only: run reach"},

@@ -60,6 +60,7 @@ export const SERVICE_PANEL = {
   LEASE_RENEWED: (ends: string) => `Renewed while healthy · ends ${ends} if it stays unhealthy`,
   LEASE_NONE: "No end",
   NO_CAP: "No lifetime limit applies to this run, so Wardyn will not keep renewing it: the service ends at its lease like any run. Ask your admin to set a lifetime limit on the pool to keep a service up.",
+  NO_END: "This run has no end time and no lifetime limit applies, so the service keeps running until someone stops it. Ask your admin to set a lifetime limit on the pool if it should not run forever.",
   REASON_RESTARTING: "The service exited with an error. It restarts after a pause that grows up to 5 minutes.",
   REASON_PROBE_RESTARTED: (failures: number) => `The health check failed ${failures} times in a row, so the service was restarted.`,
   REASON_PROBE_FAILING: "The health check is failing.",

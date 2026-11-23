@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -399,5 +400,62 @@ func TestDenyInteractiveSSHFailsClosedOnAProfileReadError(t *testing.T) {
 	}
 	if !strings.Contains(string(ev.Data), "governance profile unreadable") {
 		t.Errorf("audit data = %s, want the unreadable profile named", ev.Data)
+	}
+}
+
+// TestBoundUIAppsWarnsADesktopUnderDenyInteractive: a desktop app kept under deny_interactive is warned about, in the
+// create and the preflight alike, and never dropped; the inbound drop's own warning comes first.
+func TestBoundUIAppsWarnsADesktopUnderDenyInteractive(t *testing.T) {
+	web := types.UIApp{Name: "web", Port: 3000}
+	novnc := types.UIApp{Name: types.UIAppDesktopName, Port: 6080}
+	screen := types.UIApp{Name: "screen", Port: 5900, Kind: types.UIAppKindDesktop}
+	inboundAPI := types.UIApp{Name: "api", Port: 8080, Inbound: true, Callers: []string{"group:payments"}}
+	inboundDesktop := types.UIApp{Name: "remote", Port: 5901, Kind: types.UIAppKindDesktop, Inbound: true, Callers: []string{"group:payments"}}
+	srv := New(Config{Audit: &recRecorder{}})
+	member := memberCtx([]string{"eng"})
+	deny := inboundCeiling(types.GovernanceLimits{DenyInteractive: true})
+
+	for _, tc := range []struct {
+		name      string
+		ceiling   governanceCeiling
+		ctx       context.Context
+		in        []types.UIApp
+		wantNames []string
+		wantWarns []string
+	}{
+		{"novnc under deny_interactive is kept and warned", deny, member, []types.UIApp{novnc, web}, []string{"novnc", "web"},
+			[]string{fmt.Sprintf(desktopAppsDeniedWarning, "walled", "novnc")}},
+		{"a desktop-kind app is named, a plain one is not", deny, member, []types.UIApp{screen, web}, []string{"screen", "web"},
+			[]string{fmt.Sprintf(desktopAppsDeniedWarning, "walled", "screen")}},
+		{"the inbound drop is said first, then the desktop", deny, member, []types.UIApp{novnc, inboundAPI}, []string{"novnc"},
+			[]string{"dropped 1 inbound ui_app(s)", fmt.Sprintf(desktopAppsDeniedWarning, "walled", "novnc")}},
+		{"an inbound desktop is dropped by the inbound rule alone", deny, member, []types.UIApp{inboundDesktop, web}, []string{"web"},
+			[]string{"dropped 1 inbound ui_app(s)"}},
+		{"deny_ui_apps strips both and says no desktop sentence", inboundCeiling(types.GovernanceLimits{DenyUIApps: true, DenyInteractive: true}), member,
+			[]types.UIApp{novnc, web}, nil, []string{"dropped 2 ui_app(s)"}},
+		{"a profile without deny_interactive does not warn", inboundCeiling(types.GovernanceLimits{}), member, []types.UIApp{novnc}, []string{"novnc"}, nil},
+		{"no profile does not warn", governanceCeiling{}, member, []types.UIApp{novnc}, []string{"novnc"}, nil},
+		{"an operator is not bound", deny, operatorCtx("sub-a", "a@corp.example", oidc.RoleAdmin), []types.UIApp{novnc}, []string{"novnc"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := types.RunPolicySpec{UIApps: slices.Clone(tc.in)}
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(tc.ctx)
+			warns := srv.boundUIApps(tc.ctx, r, &spec, tc.ceiling, true)
+			var names []string
+			for _, a := range spec.UIApps {
+				names = append(names, a.Name)
+			}
+			if !slices.Equal(names, tc.wantNames) {
+				t.Fatalf("ui_apps = %v, want %v", names, tc.wantNames)
+			}
+			if len(warns) != len(tc.wantWarns) {
+				t.Fatalf("warnings = %q, want %d", warns, len(tc.wantWarns))
+			}
+			for i, w := range tc.wantWarns {
+				if !strings.Contains(warns[i], w) {
+					t.Fatalf("warning %d = %q, want it to contain %q", i, warns[i], w)
+				}
+			}
+		})
 	}
 }

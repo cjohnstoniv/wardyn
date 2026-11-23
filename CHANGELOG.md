@@ -87,6 +87,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
 - With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
 - The high-availability page no longer lists the completion-watcher blocker as open: since 0.10.1 only the replica holding a runner's session claims its runs. It also says when a hung database restarts the pod, and what readiness does with several replicas.
+- A run that declares a desktop under a governance profile that denies interactive sessions now gets a warning at create and in Review: its desktop will not open.
+- A desktop refused by the run's governance profile now shows a readable page in the browser, not the gateway's raw JSON.
+- An open desktop sign-in display now closes within about 5 seconds when its end could not stop it, while that end is retried. Before, it stayed open until the sign-in was over.
+- New Run no longer says a background run's ports open from the run page: only a port callable from outside the run can be reached.
+- The run page of a service with no end time and no lifetime limit now says it keeps running until someone stops it.
 
 ### Security
 

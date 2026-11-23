@@ -50,6 +50,12 @@ describe("ServicePanel", () => {
     expect(screen.getByRole("note")).toHaveTextContent(T.NO_CAP);
   });
 
+  it("a service with no end and no cap says it runs until someone stops it", () => {
+    show(WITH_PATH, status({ health: "healthy" }), { ends_at: null, lifetime_cap_at: undefined });
+    expect(row(T.LEASE)).toHaveTextContent(/^No end$/);
+    expect(screen.getByRole("note")).toHaveTextContent(T.NO_END);
+  });
+
   it("starting with no read yet: waits for the first check", () => {
     show(WITH_PATH, undefined, { created_at: new Date(NOW - 60_000).toISOString() });
     expect(row(T.HEALTH)).toHaveTextContent("Starting · waiting for the first check");
