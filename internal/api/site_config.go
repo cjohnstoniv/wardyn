@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
@@ -317,6 +318,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	// server state this deliberately pure function has no access to — the boot
 	// agent-image map, and WARDYN_ALLOW_TEST_ENDPOINTS for a Bedrock base URL.
 	// Both doors run each, so the "one validator, two doors" property is the same.
+	if err := validateSiteSessions(cfg.Sessions); err != nil {
+		return err
+	}
 	if err := validateSiteBranding(cfg.Branding); err != nil {
 		return err
 	}
@@ -445,7 +449,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth", "macos_vm", "images",
+	"recording", "governance_max_depth", "macos_vm", "images", "sessions",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -512,6 +516,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteRecording(cfg, existing, present)
 	carryForwardSiteMacOSVM(cfg, existing, present)
 	carryForwardSiteImages(cfg, existing, present)
+	carryForwardSiteSessions(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -818,8 +823,9 @@ func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
 		"agent_providers": enabledAgentProviderCount(saved),
 		// The sign-in help pair (#484), in the clear: /healthz publishes both
 		// to anyone, so the log can hold what every signed-out reader sees.
-		"sign_in_help_text": saved.SignInHelpText,
-		"sign_in_help_url":  saved.SignInHelpURL,
+		"sign_in_help_text":            saved.SignInHelpText,
+		"sign_in_help_url":             saved.SignInHelpURL,
+		"session_unconfirmed_budget_s": int(saved.Sessions.UnconfirmedBudget() / time.Second),
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true

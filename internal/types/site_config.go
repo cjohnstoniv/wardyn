@@ -136,6 +136,9 @@ type SiteConfig struct {
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
 	// Images is the org's image rules. Absent reads as every rule off.
 	Images *SiteImages `json:"images,omitempty"`
+	// Sessions is how open sessions behave while Wardyn cannot check access (#4057). A POINTER for the same
+	// byte-identical-GET reason as the provider blocks; nil reads as the defaults.
+	Sessions *SiteSessions `json:"sessions,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
@@ -350,4 +353,26 @@ type RunnerSettings struct {
 	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
 	// Always on the wire, false included, so GET /runners/settings states it when it is off.
 	RequireManagedDevice bool `json:"require_managed_device"`
+}
+
+// SiteSessions is SiteConfig.Sessions.
+type SiteSessions struct {
+	// UnconfirmedBudgetSec is how long an open terminal, desktop, window, app or SSH connection keeps going, asking
+	// again every few seconds, while no check of the person's access gets an answer: 0 to SessionBudgetMaxSec. 0 ends
+	// it at the first check that gets none. A pointer so 0 survives omitempty: absent reads SessionBudgetDefaultSec.
+	UnconfirmedBudgetSec *int `json:"unconfirmed_budget_s,omitempty"`
+}
+
+// SessionBudgetDefaultSec and SessionBudgetMaxSec are UnconfirmedBudgetSec's default and its largest value.
+const (
+	SessionBudgetDefaultSec = 30
+	SessionBudgetMaxSec     = 120
+)
+
+// UnconfirmedBudget is the budget s sets: the default when s or its field is nil.
+func (s *SiteSessions) UnconfirmedBudget() time.Duration {
+	if s == nil || s.UnconfirmedBudgetSec == nil {
+		return SessionBudgetDefaultSec * time.Second
+	}
+	return time.Duration(*s.UnconfirmedBudgetSec) * time.Second
 }

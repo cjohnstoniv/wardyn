@@ -248,6 +248,14 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     expect(new Set(tsKeys)).toEqual(new Set(goTags));
   });
 
+  // The open-session block of the site config: the one budget key.
+  it("SiteSessions (`sessions` in site config): full parity with the TS mirror", () => {
+    const goTags = goJSONTags(readFileSync(join(root, "internal/types/site_config.go"), "utf8"), "SiteSessions");
+    expect(goTags).toEqual(["unconfirmed_budget_s"]);
+    const tsKeys = tsInterfaceTopKeys(readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8"), "SiteSessions");
+    expect(new Set(tsKeys)).toEqual(new Set(goTags));
+  });
+
 
   // withheld_scm_hosts rows: three tags, no Go struct beyond types.WithheldScmHost.
   it("WithheldScmHost (`withheld_scm_hosts` in site config): full parity with the TS mirror", () => {

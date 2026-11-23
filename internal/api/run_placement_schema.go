@@ -89,10 +89,11 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.RunnerSettings]():       strings.Fields("Enabled RequireManagedDevice"), // RequireManagedDevice: a bool refusing personal-trust runners; no credential
 	reflect.TypeFor[types.SiteBranding]():         strings.Fields("LogoPath"),
 	reflect.TypeFor[types.SiteConfig](): strings.Fields("Runners UpstreamProxySecretRef UpstreamProxyURL UpstreamProxyNoProxy EgressRedirects ScmHosts Integrations InternalHosts Egress " +
-		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images"),
+		"WorkspaceProviders AgentProviders ModelProviders SignInHelpText SignInHelpURL PolicyHelp GovernanceMaxDepth Branding Components Recording EffectiveScmHosts WithheldScmHosts OnboardingCompletedAt MacOSVM Images Sessions"),
 	reflect.TypeFor[types.SiteEgress]():         strings.Fields("BaselineHosts"),
 	reflect.TypeFor[types.SiteMacOSVM]():        strings.Fields("MaxBaseAgeDays AllowBackgroundWatch AllowAttendedWindow AllowKeptMachines KeptMachineIdleDays MaxKeptMachinesPerPerson"), // a placement limit, three switches and two kept-machine limits, no credential
 	reflect.TypeFor[types.SiteRecording]():      strings.Fields("Level Locked"),
+	reflect.TypeFor[types.SiteSessions]():       strings.Fields("UnconfirmedBudgetSec"), // a duration in seconds, no credential
 	reflect.TypeFor[types.StorageProviders]():   strings.Fields("Ephemeral UserDrive"),
 	reflect.TypeFor[types.UserDriveProvider]():  strings.Fields("Disabled MaxSizeMiB MemberCreate TeamDrives"),
 	reflect.TypeFor[types.WithheldScmHost]():    strings.Fields("Host ProviderID ProviderKind"),
