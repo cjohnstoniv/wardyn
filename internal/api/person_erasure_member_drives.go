@@ -32,8 +32,9 @@ func (s *Server) eraseMemberDrivesOf(ctx context.Context, person string) (any, e
 	deleted, keptTeam := 0, 0
 	var errs []error
 	for _, o := range owned {
-		// A person's own team drive belongs to its unit: a leaver's cleanup keeps it (#3459).
-		if o.Team {
+		// A person's own team drive belongs to its unit: a leaver's cleanup keeps it (#3459), unless its owner had
+		// already asked for its delete, which the cleanup then finishes.
+		if o.Team && !o.Deleting() {
 			keptTeam++
 			continue
 		}

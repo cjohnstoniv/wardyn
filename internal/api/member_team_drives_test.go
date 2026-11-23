@@ -490,6 +490,29 @@ func TestMemberTeamDriveErasure_Kept(t *testing.T) {
 	}
 }
 
+// TestMemberTeamDriveErasure_FinishesAnAskedDelete: a team drive its owner had already asked to delete is not kept by
+// the owner's erasure: the cleanup takes the stale claim over and deletes it.
+func TestMemberTeamDriveErasure_FinishesAnAskedDelete(t *testing.T) {
+	st, tr := newTeamDriveStore()
+	srv, _, rn := teamDriveServer(st, "docker")
+	team := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
+	at := st.now.Add(-2 * time.Minute)
+	tomb := st.drives[team.ID]
+	tomb.DeleteStartedAt = &at
+	st.drives[team.ID] = tomb
+	out, err := srv.eraseMemberDrivesOf(context.Background(), aliceSub)
+	if err != nil {
+		t.Fatalf("erasure: %v", err)
+	}
+	res, _ := out.(map[string]any)
+	if res["kept_team_drives"] != 0 || res["drives"] != 1 {
+		t.Errorf("result = %v, want the asked-for team drive deleted, none kept", res)
+	}
+	if _, kept := st.drives[team.ID]; kept || len(rn.calls) != 1 {
+		t.Errorf("team drive kept %v, calls %d; want it deleted by one call", kept, len(rn.calls))
+	}
+}
+
 // TestMemberTeamDriveCreate_AuditsTeamAndUnit: a team drive's drive.member.create row carries team and the unit; a
 // plain member drive's carries neither.
 func TestMemberTeamDriveCreate_AuditsTeamAndUnit(t *testing.T) {
