@@ -738,8 +738,9 @@ k8s:
     # runner Role. Empty (default) uses none. Needs enabled=true.
     template: ""
     # Experimental: keep an ended interactive claude-code or codex-cli run whose work folder is a kept drive, and
-    # revive it, on this backend. Each interactive run with a kept work folder reaches its proxy through its own
-    # Service, so the Role gains services and endpointslices verbs.
+    # revive it, on this backend. Each run on the server's cluster reaches its proxy through its own Service; keep
+    # makes an interactive run with a kept work folder own its agent by that Service, so the agent outlives a
+    # replaced proxy.
     # Drain kept runs before turning it off. docs/operations/kubernetes-agent-sandbox.md#keep-and-revive
     keep:
       enabled: false

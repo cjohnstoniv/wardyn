@@ -31,6 +31,9 @@
 #          call (pod logs, ephemeral containers, exec) has its verbs there too,
 #          and neither Role reads secrets — the one thing a fake-clientset k8s
 #          test can never catch.
+#     R-02c the server chart's runs Role grants exactly runAddressAccess
+#          (internal/runner/k8s/agentsandbox_keep.go) on services and
+#          endpointslices, and runnerd's grants neither.
 #
 #   MOVED to scripts/test-up-probes.sh (they drive a scripts/up.sh function
 #   against a stub — behavioural tests that belong beside that file's other
@@ -486,5 +489,29 @@ for f in ${rbacs}; do
 done
 pass "R-02 both charts' runs Roles grant every list and watch internal/runner/k8s issues, and no Secret read verb"
 pass "R-02b every subresource call internal/runner/k8s makes has its verbs on both charts' runs Roles"
+
+# R-02c: the per-run Service grants. runAddressAccess is the one list of what the driver's Service and EndpointSlice
+# calls need (its unit test holds every recorded call to it); the server chart's runs Role must grant exactly it, and
+# runnerd's, whose runner mode makes no Service and whose chart renders no admission policy to bound one, neither.
+addr_go="${k8s_src}/agentsandbox_keep.go"
+awk '/^var runAddressAccess = /{on=1; next} on && /^}/{exit} on' "${addr_go}" > "${WORK}/addr-access"
+[ -s "${WORK}/addr-access" ] || fail "runAddressAccess moved out of internal/runner/k8s/agentsandbox_keep.go — this guard would check nothing (R-02c)"
+runs_role "${ROOT}/deploy/helm/wardyn/templates/rbac.yaml" > "${WORK}/rbac-role-server"
+for res in services endpointslices; do
+  want="$(grep -oE "Resource: \"${res}\", Verb: \"[a-z]+\"" "${WORK}/addr-access" | sed -E 's/.*Verb: "([a-z]+)"/"\1"/' | paste -sd, - | sed 's/,/, /g')"
+  [ -n "${want}" ] || fail "runAddressAccess names no ${res} verb — this guard would check nothing (R-02c)"
+  [ "$(grep -c "resources: \[\"${res}\"\]" "${WORK}/rbac-role-server")" = 1 ] \
+    || fail "deploy/helm/wardyn/templates/rbac.yaml's runs Role does not have exactly one ${res} rule (R-02c)"
+  got="$(grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role-server" | sed -nE 's/^ *verbs: \[(.*)\]$/\1/p')"
+  [ "${got}" = "${want}" ] \
+    || fail "deploy/helm/wardyn/templates/rbac.yaml's runs Role grants [${got}] on ${res}, but runAddressAccess lists [${want}] — the Role must grant exactly what the driver's per-run Service calls use (R-02c)"
+done
+grep -B1 'resources: \["endpointslices"\]' "${WORK}/rbac-role-server" | grep -q 'apiGroups: \["discovery.k8s.io"\]' \
+  || fail "deploy/helm/wardyn/templates/rbac.yaml's endpointslices rule is not in apiGroups [\"discovery.k8s.io\"] (R-02c)"
+runs_role "${ROOT}/deploy/helm/wardyn-runnerd/templates/rbac.yaml" > "${WORK}/rbac-role-runnerd"
+if grep -qE 'resources: \[[^]]*"(services|endpointslices)"' "${WORK}/rbac-role-runnerd"; then
+  fail "deploy/helm/wardyn-runnerd/templates/rbac.yaml's runs Role grants services or endpointslices — runner mode makes no per-run Service and must not hold them (R-02c)"
+fi
+pass "R-02c the server chart's runs Role grants exactly runAddressAccess on services and endpointslices; runnerd's grants neither"
 
 echo "test-claims-match-code: self-test PASS"

@@ -5,17 +5,22 @@
 # test-helm-agent-sandbox.sh — the experimental agent-sandbox backend's switch (k8s.agentSandbox.enabled, #3863)
 # must be OFF by default and cost nothing off. Asserts on rendered output, not on the templates' text:
 #   - off (key absent, null, false, the 0.8.5 reuse-values file) renders the same bytes as one another, with no
-#     agents.x-k8s.io rule, no pods patch, no admissionregistration object, no CRD and no WARDYN_K8S_AGENT_SANDBOX;
+#     agents.x-k8s.io rule, no pods patch, no CRD, no WARDYN_K8S_AGENT_SANDBOX and no admissionregistration object but
+#     the two keep policies and their bindings, which render with k8s.enabled;
 #   - when BASE is a git rev (the CI check sets it to the commit before the key existed), the off render is
 #     byte-identical to that commit's chart under the same values;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
 #   - on with k8s.agentSandbox.template adds only get on that one sandboxtemplate and WARDYN_K8S_AGENT_SANDBOX_TEMPLATE;
 #     the template without the backend is refused;
-#   - keep off (k8s.agentSandbox.keep absent, null, false) renders the same bytes as on without it; keep on adds only the
-#     services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP, and the rest of the render is on's, document for document; keep on without the backend is refused;
-#   - keep on also renders two ValidatingAdmissionPolicies and two bindings, <fullname>-keep-service (Services only) and
-#     <fullname>-keep-endpoints (EndpointSlices only), selected on wardynd's identity; keep off, or the backend off, renders none;
+#   - every k8s.enabled render grants the per-run Service rules (services create/get/delete, endpointslices
+#     create/get/update/deletecollection) whatever the backend;
+#   - keep off (k8s.agentSandbox.keep absent, null, false) renders the same bytes as on without it; keep on adds only
+#     WARDYN_K8S_AGENT_SANDBOX_KEEP, and the rest of the render is on's, document for document; keep on without the backend is refused;
+#   - keep's two ValidatingAdmissionPolicies and two bindings, <fullname>-keep-service (Services only) and
+#     <fullname>-keep-endpoints (EndpointSlices only), selected on wardynd's identity and bounding create, update and
+#     delete, render with k8s.enabled whatever the backend; a k8s.enabled=false render has none;
+#   - a k8s.enabled render for Kubernetes below 1.30 is refused; a k8s-off render for it is not;
 #   - on without k8s.enabled, or with an unenforced-NetworkPolicy or ambient-default-deny override (value, env, extraEnv or valueFrom), is refused.
 # `make helm-lint` runs it. Needs helm and yq (mikefarah v4).
 set -euo pipefail
@@ -47,8 +52,9 @@ refused() { # <label> <message pattern> <helm args...>
 # Every marker the backend may add: none may appear in an off render.
 absent() { # <label> <render file>
   local f="$2"
-  if grep -qE 'agents\.x-k8s\.io|WARDYN_K8S_AGENT_SANDBOX|admissionregistration|ValidatingAdmissionPolic|CustomResourceDefinition|sandboxes' "$f"; then
-    grep -nE 'agents\.x-k8s\.io|WARDYN_K8S_AGENT_SANDBOX|admissionregistration|ValidatingAdmissionPolic|CustomResourceDefinition|sandboxes' "$f" >&2
+  y 'select(((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("-keep-(service|endpoints)$"))) | not)' "$f" >"$TMP/absent-f"
+  if grep -qE 'agents\.x-k8s\.io|WARDYN_K8S_AGENT_SANDBOX|admissionregistration|ValidatingAdmissionPolic|CustomResourceDefinition|sandboxes' "$TMP/absent-f"; then
+    grep -nE 'agents\.x-k8s\.io|WARDYN_K8S_AGENT_SANDBOX|admissionregistration|ValidatingAdmissionPolic|CustomResourceDefinition|sandboxes' "$TMP/absent-f" >&2
     die "$1: an off render carries an agent-sandbox marker"
   fi
   [[ "$(y 'select(.kind == "Role") | .rules[] | select(.resources[0] == "pods") | .verbs | contains(["patch"])' "$f" | sort -u | tr '\n' ' ')" != *true* ]] \
@@ -65,6 +71,16 @@ grep -qx 'kind: Role' "$TMP/key-absent.out" && grep -q 'WARDYN_K8S_READ_NODES\|n
   || die "the all-on render has no k8s Role or env: the absence checks below would pass on nothing"
 absent "default k8s-on render" "$TMP/key-absent.out"
 ok "off (absent, false, null): identical renders, no marker, no pods patch"
+
+# k8s on: the per-run Service rules, on every k8s.enabled render whatever the backend.
+k8srole='select(.kind == "Role" and (.metadata.name | test("k8s-runner$")))'
+[[ "$(y -o=json -I=0 "$k8srole | .rules[] | select(.resources[0] == \"services\")" "$TMP/key-absent.out")" == '{"apiGroups":[""],"resources":["services"],"verbs":["create","get","delete"]}' ]] \
+  || die "k8s on: the runner Role has no, or a wider, services rule"
+[[ "$(y -o=json -I=0 "$k8srole | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/key-absent.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","deletecollection"]}' ]] \
+  || die "k8s on: the runner Role has no, or a wider, endpointslices rule"
+[[ "$(y "$k8srole | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/key-absent.out" | grep -vx 0 || true)" == 2 ]] \
+  || die "k8s on: not exactly the services and endpointslices rules"
+ok "k8s on: the per-run Service rules, exactly"
 
 render -f "$REUSE" "${BASAL[@]}" >"$TMP/reuse.out"
 absent "0.8.5 reuse-values render" "$TMP/reuse.out"
@@ -116,68 +132,75 @@ render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.ke
 cmp -s "$TMP/on.out" "$TMP/keep-false.out" || die "keep.enabled=false renders differently from keep absent"
 cmp -s "$TMP/on.out" "$TMP/keep-null.out" || die "an explicit keep null renders differently from keep absent"
 render -f "$ALLON" --set k8s.agentSandbox.enabled=true --set k8s.agentSandbox.keep.enabled=true >"$TMP/keep.out"
-[[ "$(y -o=json -I=0 "$role | .rules[] | select(.resources[0] == \"services\")" "$TMP/keep.out")" == '{"apiGroups":[""],"resources":["services"],"verbs":["create","get","delete"]}' ]] \
-  || die "keep: the runner Role has no, or a wider, services rule"
-[[ "$(y -o=json -I=0 "$role | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/keep.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","delete","deletecollection"]}' ]] \
-  || die "keep: the runner Role has no, or a wider, endpointslices rule"
-[[ "$(y "$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/keep.out" | grep -vx 0 || true)" == 2 ]] \
-  || die "keep: not exactly the services and endpointslices rules"
+svcrules="$role | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")]"
+[[ "$(y -o=json -I=0 "$svcrules" "$TMP/keep.out")" == "$(y -o=json -I=0 "$svcrules" "$TMP/key-absent.out")" ]] \
+  || die "keep: the per-run Service rules differ from the k8s-on render's"
 [[ "$(y 'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP") | .value' "$TMP/keep.out")" == "true" ]] \
   || die "keep: the Deployment lacks WARDYN_K8S_AGENT_SANDBOX_KEEP=true"
-grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP\|endpointslices' "$TMP/on.out" && die "on without keep: a keep marker rendered"
-# Whole documents: keep.out less its two rules, its env and its policy objects is on.out, so nothing else changed.
-y 'select(((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("keep-"))) | not)
-  | del(.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))
-  | del(.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP"))' "$TMP/keep.out" >"$TMP/keep-less.out"
+grep -q 'WARDYN_K8S_AGENT_SANDBOX_KEEP' "$TMP/on.out" && die "on without keep: a keep marker rendered"
+# Whole documents: keep.out less its env is on.out, so nothing else changed.
+y 'del(.spec.template.spec.containers[0].env[] | select(.name == "WARDYN_K8S_AGENT_SANDBOX_KEEP"))' "$TMP/keep.out" >"$TMP/keep-less.out"
 y '.' "$TMP/on.out" >"$TMP/on-whole.out"
-diff "$TMP/on-whole.out" "$TMP/keep-less.out" >"$TMP/keep-diff" || { cat "$TMP/keep-diff" >&2; die "keep: the render differs from on in more than its two rules, its env and its policy objects"; }
-ok "keep: off (absent, false, null) renders the same bytes; on adds services and endpointslices rules and WARDYN_K8S_AGENT_SANDBOX_KEEP"
+diff "$TMP/on-whole.out" "$TMP/keep-less.out" >"$TMP/keep-diff" || { cat "$TMP/keep-diff" >&2; die "keep: the render differs from on in more than its env"; }
+ok "keep: off (absent, false, null) renders the same bytes; on adds only WARDYN_K8S_AGENT_SANDBOX_KEEP"
 
-# Keep's two admission policies: one per kind, each selected on wardynd's identity, Deny on the runs namespace.
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+# Keep's two admission policies render with k8s.enabled: one per kind, each selected on wardynd's identity, Deny on the runs namespace.
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/key-absent.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
   || die "keep: not exactly the policies r-wardyn-keep-service and r-wardyn-keep-endpoints"
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/keep.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and (.metadata.name | test("keep-"))) | .metadata.name' "$TMP/key-absent.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
   || die "keep: not exactly the bindings r-wardyn-keep-service and r-wardyn-keep-endpoints"
 for n in keep-service keep-endpoints; do
-  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\") | .spec.matchConditions[0].expression" "$TMP/keep.out")" == "request.userInfo.username == 'system:serviceaccount:default:wardyn-byo'" ]] \
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\") | .spec.matchConditions[0].expression" "$TMP/key-absent.out")" == "request.userInfo.username == 'system:serviceaccount:default:wardyn-byo'" ]] \
     || die "keep: the $n match condition is not wardynd's authenticated identity"
-  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\") | .spec.policyName + \" \" + (.spec.validationActions | join(\",\"))" "$TMP/keep.out")" == "r-wardyn-$n Deny" ]] \
+  [[ "$(y "select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\") | .spec.policyName + \" \" + (.spec.validationActions | join(\",\"))" "$TMP/key-absent.out")" == "r-wardyn-$n Deny" ]] \
     || die "keep: the $n binding is not Deny for its policy"
 done
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-service") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "services" ]] \
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-service") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/key-absent.out")" == "services" ]] \
   || die "keep: the keep-service policy does not match services only"
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-endpoints") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/keep.out")" == "endpointslices" ]] \
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-keep-endpoints") | .spec.matchConstraints.resourceRules[] | .resources | join(",")' "$TMP/key-absent.out")" == "endpointslices" ]] \
   || die "keep: the keep-endpoints policy does not match endpointslices only"
 # The whole-document compare above leaves these four documents out, so each is read field by field here: its
 # apiVersion, the number of keys at each level, and every value but the common labels.
 for n in keep-service keep-endpoints; do
   case "$n" in
     keep-service)
-      rule='{"apiGroups":[""],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["services"]}'
-      expr="object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
-      msg="wardynd may make only a run's own ClusterIP Service, with no selector and no external IPs" ;;
+      rule='{"apiGroups":[""],"apiVersions":["v1"],"operations":["CREATE","UPDATE","DELETE"],"resources":["services"]}'
+      expr="request.operation == 'DELETE' ? oldObject.metadata.name.startsWith('wardyn-proxy-svc-') : (object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0))"
+      msg="wardynd may make, change or delete only a run's own ClusterIP Service, with no selector and no external IPs" ;;
     keep-endpoints)
-      rule='{"apiGroups":["discovery.k8s.io"],"apiVersions":["v1"],"operations":["CREATE","UPDATE"],"resources":["endpointslices"]}'
-      expr="has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')"
-      msg="wardynd may write EndpointSlices only for a run's own Service" ;;
+      rule='{"apiGroups":["discovery.k8s.io"],"apiVersions":["v1"],"operations":["CREATE","UPDATE","DELETE"],"resources":["endpointslices"]}'
+      expr="request.operation == 'DELETE' ? (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')) : (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))"
+      msg="wardynd may write or delete EndpointSlices only for a run's own Service" ;;
   esac
   kp="select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\")"
   kb="select(.kind == \"ValidatingAdmissionPolicyBinding\" and .metadata.name == \"r-wardyn-$n\")"
-  [[ "$(y "$kp | [.apiVersion, (. | length), (.metadata | length), .spec.failurePolicy, (.spec | length), (.spec.matchConstraints | length), (.spec.matchConstraints.resourceRules | length), (.spec.matchConditions | length), (.spec.matchConditions[0] | length), .spec.matchConditions[0].name, (.spec.validations | length), (.spec.validations[0] | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2,Fail,4,1,1,1,2,requested-by-wardynd,1,2" ]] \
+  [[ "$(y "$kp | [.apiVersion, (. | length), (.metadata | length), .spec.failurePolicy, (.spec | length), (.spec.matchConstraints | length), (.spec.matchConstraints.resourceRules | length), (.spec.matchConditions | length), (.spec.matchConditions[0] | length), .spec.matchConditions[0].name, (.spec.validations | length), (.spec.validations[0] | length)] | join(\",\")" "$TMP/key-absent.out")" == "admissionregistration.k8s.io/v1,4,2,Fail,4,1,1,1,2,requested-by-wardynd,1,2" ]] \
     || die "keep: the $n policy is not v1, fail-closed, with exactly one resource rule, one match condition and one validation"
-  [[ "$(y -o=json -I=0 "$kp | .spec.matchConstraints.resourceRules[0]" "$TMP/keep.out")" == "$rule" ]] \
-    || die "keep: the $n policy's resource rule is not exactly v1 CREATE and UPDATE on its one resource"
-  [[ "$(y "$kp | .spec.validations[0].expression" "$TMP/keep.out")" == "$expr" ]] || die "keep: the $n validation is not the expected expression"
-  [[ "$(y "$kp | .spec.validations[0].message" "$TMP/keep.out")" == "$msg" ]] || die "keep: the $n validation message changed"
-  [[ "$(y "$kb | [.apiVersion, (. | length), (.metadata | length)] | join(\",\")" "$TMP/keep.out")" == "admissionregistration.k8s.io/v1,4,2" ]] \
+  [[ "$(y -o=json -I=0 "$kp | .spec.matchConstraints.resourceRules[0]" "$TMP/key-absent.out")" == "$rule" ]] \
+    || die "keep: the $n policy's resource rule is not exactly v1 CREATE, UPDATE and DELETE on its one resource"
+  [[ "$(y "$kp | .spec.validations[0].expression" "$TMP/key-absent.out")" == "$expr" ]] || die "keep: the $n validation is not the expected expression"
+  [[ "$(y "$kp | .spec.validations[0].message" "$TMP/key-absent.out")" == "$msg" ]] || die "keep: the $n validation message changed"
+  [[ "$(y "$kb | [.apiVersion, (. | length), (.metadata | length)] | join(\",\")" "$TMP/key-absent.out")" == "admissionregistration.k8s.io/v1,4,2" ]] \
     || die "keep: the $n binding is not v1 with only a name and labels"
-  [[ "$(y -o=json -I=0 "$kb | .spec" "$TMP/keep.out")" == "{\"policyName\":\"r-wardyn-$n\",\"validationActions\":[\"Deny\"],\"matchResources\":{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"wardyn-runs\"}}}}" ]] \
+  [[ "$(y -o=json -I=0 "$kb | .spec" "$TMP/key-absent.out")" == "{\"policyName\":\"r-wardyn-$n\",\"validationActions\":[\"Deny\"],\"matchResources\":{\"namespaceSelector\":{\"matchLabels\":{\"kubernetes.io/metadata.name\":\"wardyn-runs\"}}}}" ]] \
     || die "keep: the $n binding is not exactly Deny for its policy on the runs namespace"
 done
-for f in on keep-false keep-null; do
-  if grep -q 'keep-service\|keep-endpoints' "$TMP/$f.out"; then die "keep policy rendered with keep off ($f)"; fi
+keepdocs='select((.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") and (.metadata.name | test("-keep-(service|endpoints)$")))'
+y "$keepdocs" "$TMP/key-absent.out" >"$TMP/keepdocs-k8s"
+for f in on keep-false keep-null keep; do
+  y "$keepdocs" "$TMP/$f.out" | diff "$TMP/keepdocs-k8s" - >/dev/null || die "keep policies differ between the k8s-on render and $f"
 done
-ok "keep: two policies and two bindings, one kind each, on wardynd's identity; none with keep off"
+render "${BASAL[@]}" >"$TMP/k8s-off.out"
+if grep -q 'keep-service\|keep-endpoints' "$TMP/k8s-off.out"; then die "keep policy rendered with k8s.enabled=false"; fi
+ok "keep: two policies and two bindings, one kind each, on wardynd's identity, bounding deletes; the same whatever the backend; none with k8s off"
+
+# The render-time refusal: the keep policies need Kubernetes 1.30 (a k8s-off render is never refused).
+refused "k8s on for Kubernetes 1.29" "needs Kubernetes 1.30 or later" -f "$ALLON" --kube-version 1.29.0
+render -f "$ALLON" --kube-version 1.30.0 >"$TMP/k130.out" || die "k8s on for Kubernetes 1.30: refused, want a render"
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("-keep-(service|endpoints)$"))) | .metadata.name' "$TMP/k130.out" | sort | tr '\n' ' ')" == "r-wardyn-keep-endpoints r-wardyn-keep-service " ]] \
+  || die "k8s on for Kubernetes 1.30: not both keep policies"
+render "${BASAL[@]}" --kube-version 1.29.0 >/dev/null || die "k8s off for Kubernetes 1.29: refused, want a render"
+ok "k8s on: refused below Kubernetes 1.30, renders both policies at 1.30; k8s off renders at 1.29"
 
 # Nothing else changed: the added lines are the rule, the verb, the env and the two policy objects.
 diff "$TMP/key-absent.out" "$TMP/on.out" | grep '^<' | grep -v 'verbs: \["create", "get", "list", "watch", "delete", "deletecollection"\]' \
@@ -192,7 +215,7 @@ ok "on: the diff to off only adds lines (apart from the pods verb list)"
 #   denied:   controller identity, gate kept, spec.nodeName set
 #   denied:   controller identity, owner kept, gate removed
 #   not selected: any other identity (wardynd's proxy and canary pods, kubectl), whatever the pod holds
-[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$TMP/on.out" | sort | tr '\n' ' ')" == "r-wardyn-sandbox-pod-gate r-wardyn-sandbox-pod-ungate " ]] \
+[[ "$(y 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("-keep-(service|endpoints)$") | not)) | .metadata.name' "$TMP/on.out" | sort | tr '\n' ' ')" == "r-wardyn-sandbox-pod-gate r-wardyn-sandbox-pod-ungate " ]] \
   || die "on: no ValidatingAdmissionPolicy r-wardyn-sandbox-pod-gate"
 vap='select(.kind == "ValidatingAdmissionPolicy" and .metadata.name == "r-wardyn-sandbox-pod-gate")'
 [[ "$(y "$vap | .spec.failurePolicy" "$TMP/on.out")" == "Fail" ]] || die "on: the policy does not fail closed"
@@ -255,7 +278,7 @@ done
 [[ "$(y "$un | .spec.variables | length" "$TMP/on.out")" == 2 ]] || die "on: the ungate policy has other variables than gateHeld and unchanged"
 [[ "$(y 'select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.policyName == "r-wardyn-sandbox-pod-ungate") | .spec.validationActions[0] + " " + .spec.matchResources.namespaceSelector.matchLabels["kubernetes.io/metadata.name"]' "$TMP/on.out")" == "Deny wardyn-runs" ]] \
   || die "on: the ungate binding is not Deny on the runs namespace"
-[[ "$(grep -c '^kind: ValidatingAdmissionPolic' "$TMP/on.out")" == 4 ]] || die "on: not exactly two policies and two bindings"
+[[ "$(grep -c '^kind: ValidatingAdmissionPolic' "$TMP/on.out")" == 8 ]] || die "on: not exactly the backend's two policies and two bindings plus keep's"
 ok "on: ungate policy selects on the stored gate; only wardynd removes it; labels, annotations, owners, images, tolerations, nodeSelector, affinity, deadline, node, ephemeral containers unchanged"
 
 # The controller identity is a value, and may not be wardynd's own ServiceAccount.

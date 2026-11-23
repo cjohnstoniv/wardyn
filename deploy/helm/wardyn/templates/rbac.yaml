@@ -74,6 +74,11 @@ canary,driver}.go. In particular:
     the pod-only set on a 403 and logs once), precisely so an operator-managed
     Role under k8s.rbac.create=false that predates 0.7.4 keeps the 0.7.3
     reclaim instead of losing the sweep outright on upgrade day.
+  - services: create, get, delete; endpointslices (discovery.k8s.io): create,
+    get, update, deletecollection. Each run's own Service, with no selector,
+    and the one EndpointSlice Wardyn writes for it (run_service.go); no list or
+    watch. The chart's -keep-service and -keep-endpoints admission policies
+    hold these writes and deletes to a run's own ClusterIP Service.
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
@@ -97,7 +102,7 @@ canary,driver}.go. In particular:
 
 Namespaced (Role+RoleBinding, in runsNamespace|release namespace): every
 per-sandbox object the substrate creates/tears down (pods, ephemeral
-containers, exec, secrets, network policies).
+containers, exec, secrets, network policies, services, endpointslices).
 Cluster-scoped (ClusterRole+ClusterRoleBinding): RuntimeClass lookups
 (node.k8s.io — RuntimeClass is never namespaced) for the CC2/CC3 floor guard
 (Classes(), resolveRuntimeClassName()).
@@ -161,7 +166,7 @@ all) would be told about namespace hygiene instead of about the thing that stops
 it working. Fix what breaks the install, then what widens its blast radius.
 */}}
 {{- if and .Values.serviceAccount.automount .Values.k8s.proxyImage (not .Values.k8s.runsNamespace) (not .Values.k8s.allowRunsInReleaseNamespace) -}}
-{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, create or delete any Secret and NetworkPolicy there, and list every other workload's Events there (#807) — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
+{{- fail "wardyn: k8s.enabled is set with an empty k8s.runsNamespace, so every run's pods land in the CONTROL-PLANE namespace and the k8s-runner Role is created there. Its verbs then apply to every OTHER workload sharing that namespace: wardynd can exec into any pod there, delete any pod there, create or delete any Secret and NetworkPolicy there, create a Service there (the chart's admission policies hold it to a run's own selector-less ClusterIP Service) and delete a run's Service or EndpointSlices there, and list every other workload's Events there (#807) — not only the objects it created for a run. RBAC cannot narrow it: a run's object names are derived per-run from its UUID, so resourceNames cannot enumerate them, which makes the namespace itself the blast radius. Set k8s.runsNamespace to a dedicated, pre-existing namespace that holds nothing else and the chart moves the Role, the RoleBinding and the control-plane NetworkPolicy's callback peer there with it. Sharing the namespace deliberately (a laptop demo, or a cluster where wardynd is the only workload): set k8s.allowRunsInReleaseNamespace=true to render anyway and accept that." -}}
 {{- end -}}
 {{/*
 k8s.rbac.create=false skips the four objects below — for a platform team
@@ -214,7 +219,9 @@ break.
 # Every verb in it then applies to every OTHER workload that shares this
 # namespace — wardynd can exec into any pod here, delete any pod here, and
 # create or delete any Secret and NetworkPolicy here, not merely the ones it
-# made for a run. RBAC cannot narrow that: a run's object names are derived
+# made for a run; it can also create a Service here (the chart's admission
+# policies hold it to a run's own selector-less ClusterIP Service) and delete
+# a run's Service or EndpointSlices here. RBAC cannot narrow that: a run's object names are derived
 # per-run from its UUID, so `resourceNames` is not available to scope them.
 # The confinement is the NAMESPACE. Set k8s.runsNamespace to a dedicated,
 # pre-existing namespace that holds nothing else and this Role moves there with
@@ -247,17 +254,18 @@ rules:
     resourceNames: [{{ . | quote }}]
     verbs: ["get"]
 {{- end }}
-{{- if ($agentSandbox.keep | default dict).enabled }}
-  # Keep and revive (k8s.agentSandbox.keep): each run's Service with no selector, and the one EndpointSlice Wardyn writes
-  # for it, so a replaced proxy is reached at the same address. No list or watch on Services; no other discovery resource.
+{{- end }}
+  # Each run's Service, with no selector, and the one EndpointSlice Wardyn writes for it: the agent reaches its proxy at
+  # the Service's address, so its pod starts beside the proxy rather than after it. Exactly runAddressAccess
+  # (internal/runner/k8s/agentsandbox_keep.go; R-02c). No list or watch; no other discovery resource. The
+  # <fullname>-keep-service and -keep-endpoints admission policies hold what wardynd writes or deletes to a run's own
+  # ClusterIP Service and its EndpointSlices.
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["create", "get", "delete"]
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
-    verbs: ["create", "get", "update", "delete", "deletecollection"]
-{{- end }}
-{{- end }}
+    verbs: ["create", "get", "update", "deletecollection"]
   - apiGroups: [""]
     resources: ["pods/ephemeralcontainers"]
     verbs: ["update"]

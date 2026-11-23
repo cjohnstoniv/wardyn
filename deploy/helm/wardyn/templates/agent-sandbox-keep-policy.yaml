@@ -1,13 +1,15 @@
 {{- /*
-Keep and revive on the agent-sandbox backend (experimental). Rendered only when k8s.enabled,
-k8s.agentSandbox.enabled and k8s.agentSandbox.keep.enabled are all on.
-
-Keep gives wardynd create and update on Services and EndpointSlices in the runs namespace. These two policies hold
-those writes to what keep needs: a ClusterIP Service named for a run, with no selector and no external IPs, and
-EndpointSlices labelled for such a Service. Like the pod policies, they select on the authenticated requester. They
-do not limit deletes. One policy per kind, so each expression is type-checked against the one kind it reads.
+Every run's own Service on the server's cluster (rendered whenever k8s.enabled). wardynd holds create, get and
+delete on Services and create, get, update and deletecollection on EndpointSlices in the runs namespace. These two
+policies hold its writes and deletes to what a run needs: a ClusterIP Service named for a run, with no selector and
+no external IPs, and EndpointSlices labelled for such a Service. Like the pod policies, they select on the
+authenticated requester. One policy per kind, so each expression is type-checked against the one kind it reads.
+The names say "keep" because keep introduced them; scripts and CI select them by those names.
 */ -}}
-{{- if and .Values.k8s.enabled (.Values.k8s.agentSandbox | default dict).enabled ((.Values.k8s.agentSandbox | default dict).keep | default dict).enabled }}
+{{- if .Values.k8s.enabled }}
+{{- if or (semverCompare "<1.30-0" .Capabilities.KubeVersion.Version) (not (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1")) }}
+{{- fail "wardyn: k8s.enabled needs Kubernetes 1.30 or later serving admissionregistration.k8s.io/v1: the chart renders two admission policies that hold wardynd's per-run Service writes and deletes to a run's own selector-less ClusterIP Service, and without them its Service grant would be unbounded. Upgrade the cluster first. An offline render (helm template) passes --kube-version and --api-versions admissionregistration.k8s.io/v1." }}
+{{- end }}
 {{- $wardynUser := printf "system:serviceaccount:%s:%s" .Release.Namespace (include "wardyn.serviceAccountName" .) }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -21,14 +23,14 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["services"]
   matchConditions:
     - name: requested-by-wardynd
       expression: {{ printf "request.userInfo.username == '%s'" $wardynUser | quote }}
   validations:
-    - expression: "object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)"
-      message: "wardynd may make only a run's own ClusterIP Service, with no selector and no external IPs"
+    - expression: "request.operation == 'DELETE' ? oldObject.metadata.name.startsWith('wardyn-proxy-svc-') : (object.metadata.name.startsWith('wardyn-proxy-svc-') && object.spec.type == 'ClusterIP' && (!has(object.spec.selector) || size(object.spec.selector) == 0) && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0))"
+      message: "wardynd may make, change or delete only a run's own ClusterIP Service, with no selector and no external IPs"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -42,14 +44,14 @@ spec:
     resourceRules:
       - apiGroups: ["discovery.k8s.io"]
         apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
         resources: ["endpointslices"]
   matchConditions:
     - name: requested-by-wardynd
       expression: {{ printf "request.userInfo.username == '%s'" $wardynUser | quote }}
   validations:
-    - expression: "has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')"
-      message: "wardynd may write EndpointSlices only for a run's own Service"
+    - expression: "request.operation == 'DELETE' ? (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')) : (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))"
+      message: "wardynd may write or delete EndpointSlices only for a run's own Service"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

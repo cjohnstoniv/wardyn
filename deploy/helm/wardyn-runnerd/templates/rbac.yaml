@@ -1,8 +1,9 @@
 {{/*
 runnerd's RBAC. scripts/test-helm-runnerd.sh holds both halves to the control-plane chart's
 (deploy/helm/wardyn/templates/rbac.yaml): each runs-namespace Role is that chart's k8s-runner Role, rule
-for rule, plus the one `pods: patch` rule below; the ClusterRole is that chart's ClusterRole with
-k8s.readNodes on. Change a verb there and here together, or the test fails.
+for rule, less its `services` and `endpointslices` rules (runner mode makes no per-run Service, and this
+chart renders no admission policy to bound them), plus the one `pods: patch` rule below; the ClusterRole
+is that chart's ClusterRole with k8s.readNodes on. Change a verb there and here together, or the test fails.
 
 Order: Helm creates ClusterRole, ClusterRoleBinding, Role and RoleBinding before any Deployment, on install
 and upgrade alike, so the image never starts ahead of a verb it needs. With rbac.create=false the operator
