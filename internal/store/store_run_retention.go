@@ -26,7 +26,7 @@ var retentionTerminalStates = []string{
 // self-references on runner_pending_actions, where another run's action, or an asserted subject's with no
 // run, supersedes or settles one of this run's); the last name the run as live state (0250 kept machines and
 // 0253's unconfirmed fresh start, 0241 workloads, 0286 teardown holds, and 0189's containment pending: pods
-// deleted with no proof that the processes stopped).
+// deleted with no proof that the processes stopped, and 0244's owed end that waits for this run to be running).
 const runRetentionHeldSQL = `(
 	EXISTS (SELECT 1 FROM runner_output_watermarks x WHERE x.run_id = r.id) OR
 	EXISTS (SELECT 1 FROM runner_retirements x WHERE x.run_id = r.id) OR
@@ -40,7 +40,8 @@ const runRetentionHeldSQL = `(
 	EXISTS (SELECT 1 FROM kept_machines x WHERE x.reset_run_id = r.id) OR
 	EXISTS (SELECT 1 FROM workloads x WHERE x.current_run_id = r.id) OR
 	EXISTS (SELECT 1 FROM run_teardown_holds x WHERE x.run_id = r.id) OR
-	EXISTS (SELECT 1 FROM run_containment_pending x WHERE x.run_id = r.id))`
+	EXISTS (SELECT 1 FROM run_containment_pending x WHERE x.run_id = r.id) OR
+	EXISTS (SELECT 1 FROM workload_run_ends x WHERE x.after_run_id = r.id))`
 
 // runRetentionStatementTimeout bounds one batch statement, as the recording sweep bounds its delete: a batch
 // that cannot finish in it is cancelled, and the next tick tries again.

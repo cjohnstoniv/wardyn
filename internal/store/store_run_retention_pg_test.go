@@ -178,6 +178,11 @@ func TestDeleteExpiredRunsKeepsLiveAndHeldPG(t *testing.T) {
 	// A sandbox never confirmed gone: the terminal sandbox sweep still finds it by this row.
 	sandboxLeft := ended(types.RunCompleted)
 	retentionExec(t, pool, `UPDATE agent_runs SET sandbox_ref = $2 WHERE id = $1`, sandboxLeft.ID, sandboxLeft.SandboxRef)
+	// An owed end still waits for this run, the replacement, to be running (the row is dropped once processed).
+	replacement := ended(types.RunFailed)
+	ownedEnd := f.run(t)
+	retentionExec(t, pool, `INSERT INTO workload_run_ends (run_id, owner, name, generation, reason, after_run_id)
+		VALUES ($1, 'owner', 'workload-b', 1, 'workload_replaced', $2)`, ownedEnd.ID, replacement.ID)
 	containment := ended(types.RunKilled)
 	retentionExec(t, pool, `INSERT INTO run_containment_pending (run_id, runner_id, kind, since) VALUES ($1, $2, 'agent_only', now())`,
 		containment.ID, f.rn.ID)
