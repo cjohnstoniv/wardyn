@@ -165,8 +165,16 @@ function optionsFor(kind: AttachKind, src: ItemSources, macOS: boolean): PickOpt
     chips: d.team ? [NR_FILES.SOURCE_TEAM, d.writable ? NR_FILES.ACCESS_EDIT : NR_FILES.ACCESS_READ] : [...driveChips(d), ...(d.writable ? [] : [NR_FILES.ACCESS_READ])],
     shownPath: d.target, defaultPath: d.target, locked: !d.writable, reason: driveReason(d) ?? (macOS && noVolumeInMacOS(d) ? MAC_DRIVES.D03 : undefined), mounts: driveMountsLine(d), meta: driveMeta(d),
     kept: d.kept_from_run ? { line: d.kept_from_run_title ? NR_FILES.DRIVE_KEPT_FROM(d.kept_from_run_title) : NR_FILES.DRIVE_KEPT_FROM_UNTITLED, unenforced: d.enforcement === "none" } : undefined,
-    sharedWith: driveSharedWith(d), othersSee: d.team === true && d.writable ? (d.shared_with_unit ? NR_FILES.TEAM_OTHERS_SEE_UNIT : NR_FILES.TEAM_OTHERS_SEE) : undefined, unitTeam: d.shared_with_unit === true, own: d.owned === true, onMac: d.backend === "mac_disk",
+    sharedWith: driveSharedWith(d), othersSee: othersSeeNote(d), unitTeam: d.shared_with_unit === true, own: d.owned === true, onMac: d.backend === "mac_disk",
   }));
+}
+
+// The note under a writable team drive: who else sees what the run writes. A person's own team drive whose unit was
+// deleted reaches no one else, so it has none; a group's team drive is never a person's own.
+function othersSeeNote(d: MeDrive): string | undefined {
+  if (d.team !== true || !d.writable) return undefined;
+  if (d.shared_with_unit) return NR_FILES.TEAM_OTHERS_SEE_UNIT;
+  return d.owned ? undefined : NR_FILES.TEAM_OTHERS_SEE;
 }
 
 function initial(open: DialogOpen, intent: RunIntent): State {

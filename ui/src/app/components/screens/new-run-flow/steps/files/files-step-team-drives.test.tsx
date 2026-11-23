@@ -196,6 +196,22 @@ describe("a team drive a person made, shared with their unit (#3459)", () => {
   });
 });
 
+describe("a person's own team drive whose unit was deleted (#3459)", () => {
+  it("lists with user drives and says no one else sees what the run writes", async () => {
+    const ORPHAN: MeDrive = {
+      ...base, id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name: "old-templates", section: "user", backend: "docker_volume",
+      target: "/home/agent/shared/old-templates", writable: true, team: true, owned: true, shared_with_unit: false,
+    };
+    catalogue = { drives: [ORPHAN, WRITABLE], pool_checked: true };
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(dialog()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    const row = within(await option("old-templates"));
+    expect(row.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    expect(row.queryByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeNull();
+  });
+});
+
 // Where the Add dialog lists a drive: one row per value of the predicate.
 describe("driveKind", () => {
   const MANAGED: MeDrive = { ...PLAIN, id: "99999999-9999-4999-8999-999999999999", name: "scratch", section: "user", backend: "docker_volume", team: false };
