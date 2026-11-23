@@ -65,19 +65,23 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "raw", label: CHANGE_REVIEW.RAW_DIFF },
 ];
 
-const WIDE = "(min-width: 640px)";
+// The width, in px, from which the page lays out as tabs. It is the page's own width, not the screen's: the console's
+// sidebar takes room from the page at a tablet width.
+const WIDE_FROM = 640;
 
-// Whether the page is wide enough for tabs. jsdom has no matchMedia, and an answer that cannot be asked is wide.
-function useWide(): boolean {
-  const [wide, setWide] = React.useState(() => window.matchMedia?.(WIDE).matches ?? true);
-  React.useEffect(() => {
-    const mq = window.matchMedia?.(WIDE);
-    if (!mq) return;
-    const on = () => setWide(mq.matches);
-    on();
-    mq.addEventListener?.("change", on);
-    return () => mq.removeEventListener?.("change", on);
-  }, []);
+// Whether the element is wide enough for tabs. An element with no measured width (not laid out, or no layout engine)
+// is wide, since an answer that cannot be had is not a reason to stack.
+function useWide(el: HTMLElement | null): boolean {
+  const [wide, setWide] = React.useState(true);
+  React.useLayoutEffect(() => {
+    if (!el) return;
+    const measure = () => setWide(el.clientWidth === 0 || el.clientWidth >= WIDE_FROM);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
   return wide;
 }
 
@@ -104,7 +108,8 @@ export function ChangeReviewPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const principal = usePrincipal();
-  const wide = useWide();
+  const [root, setRoot] = React.useState<HTMLElement | null>(null);
+  const wide = useWide(root);
 
   const [change, setChange] = React.useState<GovernanceChange | null>(null);
   const [missing, setMissing] = React.useState(false);
@@ -385,7 +390,16 @@ export function ChangeReviewPage() {
       onTakeBack={() => void takeBack()}
     />
   ) : (
-    decidedNote && <Note>{decidedNote}</Note>
+    <>
+      {decidedNote && <Note>{decidedNote}</Note>}
+      {/* A refusal that moved the change out of waiting still says what the server said. */}
+      {refused && (
+        <Note tone="red" role="alert">
+          <b className="font-semibold">{CHANGES.DECIDE_REFUSED_TITLE}</b>
+          <Mono className="text-inherit">{refused}</Mono>
+        </Note>
+      )}
+    </>
   );
   const panel = deciding && <ChangeApprovalsPanel change={change} principal={principal} />;
 
@@ -415,79 +429,76 @@ export function ChangeReviewPage() {
   // The grid gains a column for the review assistant only while its mount point is turned on.
   const columns = REVIEW_ASSISTANT_COLUMN ? "grid-cols-[minmax(0,1fr)_320px_360px]" : "grid-cols-[minmax(0,1fr)_320px]";
 
-  if (!wide) {
-    return (
-      <div data-testid="change-review-page" data-layout="stacked" className={cn("space-y-4 p-4", pinned && "pb-24")}>
-        {header}
+  const stackedBody = request ? (
+    <>
+      {requestBody}
+      {panel}
+      {footer}
+    </>
+  ) : (
+    <>
+      {verdict}
+      {impactBlock}
+      <RiskSection change={change} />
+      {aside}
+      {panel}
+      {footer}
+      <RawDiffSection change={change} />
+    </>
+  );
+
+  const tabbedBody = (
+    <div data-testid="change-review-grid" className={cn("grid items-start gap-6", columns)}>
+      <div className="min-w-0 space-y-4">
         {request ? (
-          <>
-            {requestBody}
-            {panel}
-            {footer}
-          </>
+          requestBody
         ) : (
           <>
-            {verdict}
-            {aside}
-            {impactBlock}
-            <RiskSection change={change} />
-            {panel}
-            {footer}
-            <RawDiffSection change={change} />
+            <div role="tablist" aria-label={CHANGE_APPROVALS.TABS_LABEL} className="flex gap-1 border-b border-border">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  id={`change-tab-${t.id}`}
+                  aria-selected={tab === t.id}
+                  aria-controls={`change-panel-${t.id}`}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    "-mb-px border-b-2 px-3 py-2 text-body",
+                    tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div role="tabpanel" id={`change-panel-${tab}`} aria-labelledby={`change-tab-${tab}`} className="space-y-4">
+              {tab === "effect" && (
+                <>
+                  {verdict}
+                  {aside}
+                </>
+              )}
+              {tab === "impact" && impactBlock}
+              {tab === "risk" && <RiskSection change={change} />}
+              {tab === "raw" && <RawDiffSection change={change} open />}
+            </div>
           </>
         )}
       </div>
-    );
-  }
+      <div className="min-w-0 space-y-4">
+        {panel}
+        {footer}
+      </div>
+      {REVIEW_ASSISTANT_COLUMN && <ReviewAssistantColumn change={change} />}
+    </div>
+  );
 
   return (
-    <div data-testid="change-review-page" data-layout="tabs" className="space-y-4 p-6">
+    <div ref={setRoot} data-testid="change-review-page" data-layout={wide ? "tabs" : "stacked"} className={cn("space-y-4", wide ? "p-6" : "p-4")}>
       {header}
-      <div data-testid="change-review-grid" className={cn("grid items-start gap-6", columns)}>
-        <div className="min-w-0 space-y-4">
-          {request ? (
-            requestBody
-          ) : (
-            <>
-              <div role="tablist" aria-label={CHANGE_APPROVALS.TABS_LABEL} className="flex gap-1 border-b border-border">
-                {TABS.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="tab"
-                    id={`change-tab-${t.id}`}
-                    aria-selected={tab === t.id}
-                    aria-controls={`change-panel-${t.id}`}
-                    onClick={() => setTab(t.id)}
-                    className={cn(
-                      "-mb-px border-b-2 px-3 py-2 text-body",
-                      tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
-                    )}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-              <div role="tabpanel" id={`change-panel-${tab}`} aria-labelledby={`change-tab-${tab}`} className="space-y-4">
-                {tab === "effect" && (
-                  <>
-                    {verdict}
-                    {aside}
-                  </>
-                )}
-                {tab === "impact" && impactBlock}
-                {tab === "risk" && <RiskSection change={change} />}
-                {tab === "raw" && <RawDiffSection change={change} open />}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="min-w-0 space-y-4">
-          {panel}
-          {footer}
-        </div>
-        {REVIEW_ASSISTANT_COLUMN && <ReviewAssistantColumn change={change} />}
-      </div>
+      {wide ? tabbedBody : stackedBody}
     </div>
   );
 }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Changes tab (0.8.6 four-eyes, mock packet M3). Expected strings come from CHANGES, so these fail the moment a
+// The Changes tab. Expected strings come from CHANGES, so these fail the moment a
 // rendered string stops coming from the approved canon. Pinned here because they are decisions: a row opens the
 // change on its own page, and a 202 at a write site is "submitted", never "saved". The page itself is pinned in
 // change-review-page.test.tsx.

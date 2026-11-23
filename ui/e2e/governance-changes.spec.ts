@@ -97,7 +97,7 @@ test.describe("governance — a covered write waits for a second human", () => {
     await expect(page).toHaveURL(/\/admin\/governance\/changes\/[^/?#]+$/);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByText(NAME, { exact: true }).first()).toBeVisible();
-    // R1-0098: the approver sees the notes, under the existing heading.
+    // The approver sees the notes, under the existing heading.
     await expect(page.getByText(GOV.OMISSION_TITLE, { exact: true })).toBeVisible();
     for (const n of notes) await expect(page.getByText(n, { exact: true })).toBeVisible();
     // The proposer's note, and the way to change it.

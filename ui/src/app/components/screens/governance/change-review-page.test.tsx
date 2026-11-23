@@ -115,13 +115,12 @@ function Where() {
   return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
+// The page lays out on its own width, which jsdom does not measure: a page 800 px wide gets tabs, one 390 px wide is
+// stacked, whatever the window is.
+let widthSpy: ReturnType<typeof vi.spyOn> | undefined;
 function stubWidth(wide: boolean) {
-  vi.stubGlobal("matchMedia", (q: string) => ({
-    matches: wide,
-    media: q,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
+  widthSpy?.mockRestore();
+  widthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(wide ? 800 : 390);
 }
 
 function renderPage(c: GovernanceChange | Error, principal = "bo@example.com", path = `/admin/governance/changes/${(c as GovernanceChange).id}`) {
@@ -156,6 +155,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  widthSpy?.mockRestore();
+  widthSpy = undefined;
 });
 
 describe("the page at 1024 px", () => {
@@ -232,6 +233,16 @@ describe("the page at 1024 px", () => {
     expect(screen.queryByTestId("change-approvals")).toBeNull();
   });
 
+  it.each([
+    ["applied", CHANGE_APPROVALS.DECIDED.applied],
+    ["rejected", CHANGE_APPROVALS.DECIDED.rejected],
+    ["expired", CHANGE_APPROVALS.DECIDED.expired],
+  ] as const)("says a %s change is no longer waiting, in its own sentence", async (state, sentence) => {
+    renderPage(change({ state, approvals: undefined }));
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    expect(screen.getAllByText(/^This change (was|expired)/)).toHaveLength(1);
+  });
+
   it("shows the console's not-found page for an unknown id", async () => {
     renderPage(new HttpError(404, "no such change"), "bo@example.com", "/admin/governance/changes/nope");
     expect(await screen.findByText(PAGE_NOT_FOUND.TITLE)).toBeInTheDocument();
@@ -271,12 +282,20 @@ describe("the page at 390 px", () => {
     expect(follows(screen.getByTestId("change-approvals"), reason)).toBe(true);
   });
 
-  it("puts the notes between the verdict and the reason", async () => {
+  it("splits on the page's own width, so a window wide enough for tabs can still stack the page", async () => {
+    // A tablet window with the sidebar open: the page is 500 px wide inside it.
+    widthSpy?.mockReturnValue(500);
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    expect(screen.getByTestId("change-review-page")).toHaveAttribute("data-layout", "stacked");
+  });
+
+  it("puts the notes after Risk and before the reason", async () => {
     const notes = ["first note", "second note"];
     renderPage(change({ diff: { ...change().diff, notes } }));
     const heading = await screen.findByText(GOVERNANCE.OMISSION_TITLE);
     const reason = screen.getByLabelText(CHANGE_APPROVALS.REASON_REQUIRED_LABEL);
-    expect(follows(screen.getByTestId("change-verdict"), heading)).toBe(true);
+    expect(follows(screen.getByTestId("change-risk"), heading)).toBe(true);
     expect(follows(screen.getByText(notes[1]), reason)).toBe(true);
     expect(follows(screen.getByText(notes[0]), screen.getByText(notes[1]))).toBe(true);
   });
@@ -381,6 +400,19 @@ describe("deciding", () => {
     expect(within(alert).getByText("the change you reviewed is no longer current")).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
     expect(screen.queryByTestId("where")).toBeNull();
+  });
+
+  it("a 409 that finds the change decided already still shows the server's sentence", async () => {
+    approveMock.mockRejectedValue(new HttpError(409, "This change is no longer waiting for a decision.", "governance_change_not_pending"));
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    getChangeMock.mockResolvedValue(change({ state: "rejected", approvals: undefined }));
+    await userEvent.click(approveButton());
+    expect(await screen.findByText(CHANGE_APPROVALS.DECIDED.rejected)).toBeInTheDocument();
+    const alert = screen.getByRole("alert");
+    expect(within(alert).getByText(CHANGES.DECIDE_REFUSED_TITLE)).toBeInTheDocument();
+    expect(within(alert).getByText("This change is no longer waiting for a decision.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: CHANGES.APPROVE })).toBeNull();
   });
 
   it("a 409 reads the change again, since it moved", async () => {

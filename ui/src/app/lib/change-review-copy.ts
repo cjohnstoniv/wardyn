@@ -167,7 +167,8 @@ export const CHANGE_APPROVALS = {
   /** Shown over a change that is no longer waiting; not on the board. */
   DECIDED: { applied: "This change was applied.", rejected: "This change was rejected.", expired: "This change expired." } as Record<string, string>,
   /** The counts row under the verdict; not on the board. */
-  IMPACT_SUMMARY: (units: number, runs: number) => `${units} ${CHANGE_REVIEW.UNITS} · ${runs} ${CHANGE_REVIEW.LIVE_RUNS_WALLS}`,
+  IMPACT_SUMMARY: (units: number, runs: number) =>
+    `${units} ${plural(units, "unit", CHANGE_REVIEW.UNITS)} · ${runs} ${plural(runs, "live run", "live runs")} whose walls change`,
 
   TITLE: "Approvals",
   PROGRESS: (have: number, required: number) => `${have} of ${required} approved`,
@@ -209,10 +210,10 @@ export const CHANGE_APPROVALS = {
 
   CAN_APPROVE: "Can approve",
   ELIGIBLE: (who: string, tier: string) => `${who} · ${tier}`,
+  /** not on the board. A line that opens the list has no leading "and". */
+  UNCONFIRMED: (n: number, first: boolean) => `${first ? "" : "and "}${n} ${plural(n, "person", "people")} whose role can't be confirmed`,
   /** not on the board. */
-  UNCONFIRMED: (n: number) => `and ${n} ${plural(n, "person", "people")} whose role can't be confirmed`,
-  /** not on the board. */
-  TOO_MANY: "and more people than Wardyn counts",
+  TOO_MANY: (first: boolean) => (first ? "More people than Wardyn counts" : "and more people than Wardyn counts"),
   /** not on the board. */
   NEVER_SIGNED_IN: "People who have never signed in can't approve until they do.",
 

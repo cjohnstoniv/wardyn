@@ -121,9 +121,11 @@ function CanApprove({ approvals }: { approvals: GovernanceChangeApprovals }) {
             {CHANGE_APPROVALS.ELIGIBLE(p.email || p.principal, tierLabel(p.tier))}
           </li>
         ))}
-        {uncountable.map((u) => (
+        {uncountable.map((u, i) => (
           <li key={u.why} className="text-muted-foreground">
-            {u.why === "unconfirmed_people" ? CHANGE_APPROVALS.UNCONFIRMED(u.count ?? 0) : CHANGE_APPROVALS.TOO_MANY}
+            {u.why === "unconfirmed_people"
+              ? CHANGE_APPROVALS.UNCONFIRMED(u.count ?? 0, eligible.length === 0 && i === 0)
+              : CHANGE_APPROVALS.TOO_MANY(eligible.length === 0 && i === 0)}
           </li>
         ))}
       </ul>

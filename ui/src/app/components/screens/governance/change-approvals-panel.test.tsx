@@ -190,6 +190,18 @@ describe("Can approve", () => {
     expect(within(list).getByText("and more people than Wardyn counts")).toBeInTheDocument();
   });
 
+  it("opens the list with no leading and when no one is eligible", () => {
+    panel(change({}, approvals({ eligible: [], uncountable: [{ why: "unconfirmed_people", count: 1 }, { why: "too_many_people" }] })));
+    const list = screen.getByTestId("change-can-approve");
+    expect(within(list).getByText("1 person whose role can't be confirmed")).toBeInTheDocument();
+    expect(within(list).getByText("and more people than Wardyn counts")).toBeInTheDocument();
+  });
+
+  it("opens on the plain sentence for too many people when no one is eligible and nothing else is left out", () => {
+    panel(change({}, approvals({ eligible: [], uncountable: [{ why: "too_many_people" }] })));
+    expect(screen.getByText("More people than Wardyn counts")).toBeInTheDocument();
+  });
+
   it("draws nothing when the block has no eligible people and nothing uncountable", () => {
     panel(change({}, approvals()));
     expect(screen.queryByTestId("change-can-approve")).toBeNull();

@@ -8,7 +8,8 @@
 // server does not know to be ineligible (the admin token, or `not_eligible`) gets today's Approve and Reject, and the
 // server's own refusal is shown when it says no.
 //
-// Below 640 px the buttons pin to a bar at the bottom of the screen while the reason box stays in the flow, above it.
+// On a narrow page the buttons pin to a bar that sticks to the bottom of the page while the reason box stays in the
+// flow, above it. The footer's own box is dropped then, so the bar sticks within the whole page, not just the footer.
 //
 // Every string is from CHANGES (governance-copy.ts), CHANGE_NOTE (wardyn/copy/change-note.ts) or CHANGE_APPROVALS
 // (change-review-copy.ts); this file adds none.
@@ -39,7 +40,7 @@ export interface ChangeDecisionFooterProps {
   onReason: (reason: string) => void;
   /** The server's sentence for a decision it refused, shown as it came. */
   refused: string | null;
-  /** Below 640 px: the buttons pin to the bottom of the screen. */
+  /** A narrow page: the buttons stick to the bottom of the page. */
   pinned: boolean;
   hasNote: boolean;
   onEditNote: () => void;
@@ -78,15 +79,15 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
   if (approvals && viewer?.state === "can_approve") {
     status = viewer.last ? CHANGE_APPROVALS.STATUS_LAST : CHANGE_APPROVALS.STATUS_COUNTS(approvals.have + 1, approvals.required);
   } else if (approvals && approved) {
-    const still = approvals.still_needed ?? Math.max(0, approvals.required - approvals.have);
+    const still = approvals.still_needed ?? 0;
     status = CHANGE_APPROVALS.STATUS_APPROVED(viewer?.approved_at ? relativeTime(viewer.approved_at) : "", still);
   }
 
-  const showHint = !!approvals && !own && !approved;
-  const barClass = cn("flex flex-wrap items-center justify-end gap-2", pinned && "fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background px-4 pt-3");
+  const showHint = !!approvals && !own && !approved && viewer?.state !== "not_eligible";
+  const barClass = cn("flex flex-wrap items-center justify-end gap-2", pinned && "sticky bottom-0 z-20 -mx-4 border-t border-border bg-background px-4 pt-3");
 
   return (
-    <div data-testid="change-decision-footer" className="space-y-3">
+    <div data-testid="change-decision-footer" className={pinned ? "contents" : "space-y-3"}>
       {stale && (
         <Note tone="amber">
           <span data-testid="change-stale">{CHANGE_APPROVALS.STALE(changeTarget(change), change.proposed_by)}</span>
@@ -111,11 +112,6 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
           {!p.hasNote && <span className="text-xs text-muted-foreground">{CHANGE_NOTE.NO_NOTE_HINT}</span>}
         </div>
       )}
-      {status && (
-        <p data-testid="change-viewer-status" className="text-body text-foreground">
-          {status}
-        </p>
-      )}
       {!editing && !withdrawal && !approved && (
         <Field
           label={reasonRequired ? CHANGE_APPROVALS.REASON_REQUIRED_LABEL : CHANGES.REASON_LABEL}
@@ -131,6 +127,11 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
             autoComplete="off"
           />
         </Field>
+      )}
+      {status && (
+        <p data-testid="change-viewer-status" className="text-body text-foreground">
+          {status}
+        </p>
       )}
       {missing && (
         <p data-testid="change-reason-missing" role="alert" className="text-xs text-danger">

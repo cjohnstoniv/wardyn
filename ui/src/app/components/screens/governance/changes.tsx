@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Governance screen's Changes tab (0.8.6 four-eyes, mock packet M3 S2-S3): the covered governance writes held
+// The Governance screen's Changes tab: the covered governance writes held
 // for a second person, one row each. A row opens the change on its own page (change-review-page.tsx), where it is
 // read and decided; the helpers that read a request's person, unit and length out of the server's diff are shared
 // with that page from here.

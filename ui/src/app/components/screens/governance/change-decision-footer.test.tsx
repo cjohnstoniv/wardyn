@@ -79,6 +79,7 @@ describe("a viewer the server does not name", () => {
     expect(approve()).toBeEnabled();
     expect(reject()).toBeEnabled();
     expect(screen.queryByTestId("change-viewer-status")).toBeNull();
+    expect(screen.queryByTestId("change-reject-note")).toBeNull();
   });
 
   it("a change with no approvals block is today's footer: Approve and Reject, no status, no rejection note", () => {
@@ -257,11 +258,11 @@ describe("a request", () => {
 });
 
 describe("the layout", () => {
-  it("pins the buttons to a bar at the bottom below 640 px, and keeps the reason in the flow above it", () => {
+  it("pins the buttons to a bar that sticks to the bottom of a narrow page, and keeps the reason in the flow above it", () => {
     mount(withApprovals({ state: "can_approve" }), { pinned: true });
     const bar = screen.getByTestId("change-decision-bar");
     expect(bar).toHaveAttribute("data-pinned", "true");
-    expect(bar.className).toContain("fixed");
+    expect(bar.className).toContain("sticky");
     expect(bar).toContainElement(approve());
     expect(bar).toContainElement(reject());
     expect(bar).not.toContainElement(screen.getByLabelText(CHANGES.REASON_LABEL));
@@ -271,7 +272,7 @@ describe("the layout", () => {
     mount(withApprovals({ state: "can_approve" }));
     const bar = screen.getByTestId("change-decision-bar");
     expect(bar).not.toHaveAttribute("data-pinned");
-    expect(bar.className).not.toContain("fixed");
+    expect(bar.className).not.toContain("sticky");
   });
 
   it("gives way to the note form while it is open", () => {
