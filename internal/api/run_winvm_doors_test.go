@@ -174,8 +174,8 @@ func TestWindowsVMHTTPDoorsRefused(t *testing.T) {
 	e := winvmExecHarness(t)
 	for _, tc := range []struct{ method, suffix, door string }{
 		{http.MethodPost, "/attach-ticket", "terminal"},
-		{http.MethodGet, "/desktop/files", "desktop"},
-		{http.MethodPost, "/desktop/sign-ins/pause", "desktop"},
+		{http.MethodGet, "/desktop/files", "desktop files, sign-ins or pause"},
+		{http.MethodPost, "/desktop/sign-ins/pause", "desktop files, sign-ins or pause"},
 	} {
 		w := e.ownerDo(t, tc.method, tc.suffix, "")
 		if w.Code != http.StatusConflict || errorReasonOf(w.Body.String()) != reasonWindowsVMFeatureRefused ||

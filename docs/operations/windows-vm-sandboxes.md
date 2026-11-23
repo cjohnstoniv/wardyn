@@ -47,5 +47,5 @@ Two keys are needed, and both are off by default:
 - A run that ends frees its seat. A run marked lost keeps it until it is killed, so a VM that may still be running is never counted twice.
 - A Windows VM run is never recorded. A launch that would be recorded is refused, with `field` `recording`.
 - A Windows VM run needs recording off in the policy that launches it. On an install that keeps recordings and sets no level, a plain launch is refused until that policy says off.
-- An agent, a task, a workspace, a folder, a drive, web apps, exec, SSH and revive are refused `windows_vm_feature_refused`. A support session is refused `409` `support_run_ineligible`.
+- An agent, a task, a workspace, a folder, a drive, web apps, exec, SSH, revive, an egress edit, and desktop files, sign-ins or pause are refused `windows_vm_feature_refused`. A support session is refused `409` `support_run_ineligible`.
 - A refused launch writes a `run.create` row with status `denied` and the reason ([audit actions](../AUDIT-ACTIONS.md)). A race that only the seat trigger catches, such as two launches at once by one holder, answers its `409` or `403` without that row.

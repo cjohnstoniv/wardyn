@@ -68,6 +68,9 @@ func windowsVMDoorRefusal(run types.AgentRun, door string) *runRefusal {
 	if run.MachineKind != types.MachineWindowsVM || door == "web application gateway" {
 		return nil
 	}
+	if door == "desktop" { // the desktop files, sign-ins and pause routes; the desktop itself is the gateway's
+		door = "desktop files, sign-ins or pause"
+	}
 	return runError(http.StatusConflict, reasonWindowsVMFeatureRefused, windowsDeskOnlyMsg(door))
 }
 
