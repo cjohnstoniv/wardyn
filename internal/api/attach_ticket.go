@@ -219,7 +219,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		if s.refuseSupportTicket(w, r, run, purpose) {
 			return
 		}
-	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt); !ok {
+	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt, purpose); !ok {
 		return
 	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run

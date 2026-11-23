@@ -339,7 +339,7 @@ func (s *Server) refuseUITicket(w http.ResponseWriter, runID uuid.UUID, app stri
 // ticket (attach_ticket.go) and a "Needs you" take over (approvals_takeover.go) — moved here so the
 // two cannot drift. It loads the run, applies the owner rule (or the sponsor arm), and the
 // background-only door; ok=false means the refusal is written. asSponsor reports the sponsor arm.
-func (s *Server) admitRunEntry(w http.ResponseWriter, r *http.Request, id uuid.UUID, authorizedAt time.Time) (types.AgentRun, bool, bool) {
+func (s *Server) admitRunEntry(w http.ResponseWriter, r *http.Request, id uuid.UUID, authorizedAt time.Time, purpose string) (types.AgentRun, bool, bool) {
 	// The sponsor of a service identity's run passes this load too (sponsorsRun), so the entry check below
 	// can refuse them by capability instead of answering the foreign-run 404 for every refusal.
 	run, ok := s.getRunAuthorizedBy(w, r, id, func(r *http.Request, run types.AgentRun) bool {
@@ -382,7 +382,7 @@ func (s *Server) admitRunEntry(w http.ResponseWriter, r *http.Request, id uuid.U
 			return run, false, false
 		}
 	}
-	if s.refuseBackgroundOnly(w, r, run, "terminal") {
+	if s.refuseBackgroundOnly(w, r, run, ticketMintDoor(run, purpose)) {
 		return run, false, false
 	}
 	return run, asSponsor, true

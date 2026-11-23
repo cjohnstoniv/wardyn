@@ -74,6 +74,16 @@ func windowsVMDoorRefusal(run types.AgentRun, door string) *runRefusal {
 	return runError(http.StatusConflict, reasonWindowsVMFeatureRefused, windowsDeskOnlyMsg(door))
 }
 
+// ticketMintDoor is the door a ticket's mint asks: the terminal, but the web application gateway for a ui ticket
+// on a Windows VM run, whose desktop rides the gateway as its one door. The terminal's upgrade still asks the
+// terminal, so a ui ticket spent there is refused.
+func ticketMintDoor(run types.AgentRun, purpose string) string {
+	if purpose == "ui" && run.MachineKind == types.MachineWindowsVM {
+		return "web application gateway"
+	}
+	return "terminal"
+}
+
 // stepWindowsImage holds a windows_vm request to the switch, a person, a desktop-only shape and a registered
 // image whose pool the caller holds a free seat in. It runs after stepPolicy, before any folder, drive,
 // credential or image step. A refusal at create writes a run.create denied row.

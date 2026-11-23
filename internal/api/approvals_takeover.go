@@ -119,7 +119,7 @@ func (s *Server) loadTakeover(w http.ResponseWriter, r *http.Request) (types.App
 			OnRun(run.ID).AsIf(authz.Reason(reasonApprovalNotFound)))
 		return ap, types.AgentRun{}, false
 	}
-	run, asSponsor, ok := s.admitRunEntry(w, r, ap.RunID, authorizedAt)
+	run, asSponsor, ok := s.admitRunEntry(w, r, ap.RunID, authorizedAt, "")
 	if !ok {
 		return ap, run, false
 	}

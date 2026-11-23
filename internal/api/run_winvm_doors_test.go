@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -186,4 +187,45 @@ func TestWindowsVMHTTPDoorsRefused(t *testing.T) {
 	run := types.AgentRun{ID: e.id, MachineKind: types.MachineWindowsVM, Interactive: true, State: types.RunRunning}
 	rf := e.srv.backgroundWatchRefusal(context.Background(), run)
 	wantWinRefusal(t, "watch", rf, http.StatusConflict, reasonRunBackgroundWatchNotBackground, "")
+}
+
+// A Windows VM run's desktop ticket mints: ?purpose=ui asks the web application gateway's door, the run's one
+// door. A ticket with any other purpose is still refused at the terminal's door, and the ui ticket, spent on the
+// terminal's socket, is refused there.
+func TestWindowsVMUITicketMintsForTheDesktopOnly(t *testing.T) {
+	rig := newSupportTermRig(t)
+	rig.run.MachineKind, rig.run.Interactive = types.MachineWindowsVM, true
+	rig.st.putRun(rig.run)
+	w := rig.mint(rig.owner, "?purpose=ui")
+	if tk := rig.stored(w); tk.RunID != rig.run.ID || tk.Principal != supportOwnerSub {
+		t.Fatalf("ui ticket = %+v, want the owner's for the run", tk)
+	}
+	var out struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"", "?purpose=terminal"} {
+		w := rig.mint(rig.owner, query)
+		if w.Code != http.StatusConflict || errorReasonOf(w.Body.String()) != reasonWindowsVMFeatureRefused ||
+			!strings.Contains(w.Body.String(), windowsDeskOnlyMsg("terminal")) {
+			t.Errorf("mint %q = %d %s, want 409 %s naming the terminal", query, w.Code, w.Body, reasonWindowsVMFeatureRefused)
+		}
+	}
+	if c, status := rig.dial(out.Ticket); c != nil || status != http.StatusConflict {
+		t.Errorf("the ui ticket on the terminal's socket: upgraded %v, status %d; want 409", c != nil, status)
+	}
+}
+
+// The gateway takes a Windows VM run's ui ticket past its run-entry and background doors to the desktop arm,
+// which opens the desktop's session.
+func TestWindowsVMUITicketEntersTheDesktop(t *testing.T) {
+	h, _ := newDesktopHarness(t)
+	h.run.MachineKind, h.run.Interactive = types.MachineWindowsVM, true
+	h.store.putRun(h.run)
+	rec := h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser))
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != desktopPath(h, "/") {
+		t.Fatalf("enter = %d to %q: %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+	}
 }
