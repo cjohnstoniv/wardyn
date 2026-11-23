@@ -523,6 +523,14 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if !extra.noPosture {
 		reporter = posture.NewReporter()
 	}
+	// A Mac presents the MDM device identities its helper reads from the System keychain; with no helper
+	// beside this runner (no macOS VM support) it presents nothing.
+	var deviceCerts *posture.DeviceCertSender
+	if runtime.GOOS == "darwin" {
+		if helper, err := macVMHelperPath(); err == nil {
+			deviceCerts = posture.NewDeviceCertSender(helper, stateDir, identity.OrgURLSHA256)
+		}
+	}
 	if err := manager.SetOptions(extra.options); err != nil {
 		return runnerRuntime{}, err
 	}
@@ -584,6 +592,12 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 					slog.WarnContext(ctx, "runner posture report failed", "error", err)
 				}
 			}
+			// Like posture, a failed device certificate report must not keep the runner from READY.
+			if deviceCerts != nil {
+				if err := deviceCerts.Send(ctx, peer); err != nil {
+					slog.WarnContext(ctx, "runner device certificate report failed", "error", err)
+				}
+			}
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, resumed bool) {
@@ -594,6 +608,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			caps.afterOnline(ctx, peer, resumed)
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
+			}
+			if deviceCerts != nil {
+				go deviceCerts.Watch(peer)
 			}
 		},
 		LocalAttach: local.Set,

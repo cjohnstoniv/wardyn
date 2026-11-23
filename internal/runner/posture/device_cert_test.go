@@ -1,0 +1,178 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package posture
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+)
+
+var certNow = time.Unix(1795600000, 0).UTC()
+
+func deviceCertPeers(t *testing.T) (run *runnerwire.Peer, got chan runnerwire.DeviceCertReport) {
+	t.Helper()
+	got = make(chan runnerwire.DeviceCertReport, 8)
+	a, b := runnerwire.Loopback()
+	org := runnerwire.NewPeer(a, runnerwire.PeerConfig{Org: true, OnEventChecked: func(ev runnerwire.Event) error {
+		var r runnerwire.DeviceCertReport
+		if ev.Kind == runnerwire.EventDeviceCert && runnerwire.Unmarshal(ev.Data, &r) == nil {
+			got <- r
+		}
+		return nil
+	}})
+	run = runnerwire.NewPeer(b, runnerwire.PeerConfig{})
+	t.Cleanup(func() { org.Close(); run.Close() })
+	go org.Run(t.Context()) //nolint:errcheck // the test owns shutdown
+	go run.Run(t.Context()) //nolint:errcheck // the test owns shutdown
+	return run, got
+}
+
+func TestDeviceCertSender_SendsAtStartAndReconnect(t *testing.T) {
+	run, got := deviceCertPeers(t)
+	want := runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{{Chain: [][]byte{{1, 2}}, SignedAt: certNow, Signature: []byte{9}}}}
+	var seen struct {
+		dir, org string
+		at       time.Time
+	}
+	s := newDeviceCertSender(func(_ context.Context, dir, org string, at time.Time) (runnerwire.DeviceCertReport, error) {
+		seen.dir, seen.org, seen.at = dir, org, at
+		return want, nil
+	}, "/state", strings.Repeat("a", 64), func() time.Time { return certNow }, time.Hour)
+	if err := s.Send(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	r := <-got
+	if len(r.Proofs) != 1 || r.Proofs[0].Signature[0] != 9 || seen.dir != "/state" || seen.org != strings.Repeat("a", 64) || !seen.at.Equal(certNow) {
+		t.Fatalf("report %+v, helper saw %+v", r, seen)
+	}
+	// A reconnect is a new session: it presents again.
+	again, gotAgain := deviceCertPeers(t)
+	if err := s.Send(t.Context(), again); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-gotAgain; len(r.Proofs) != 1 {
+		t.Fatalf("reconnect report %+v", r)
+	}
+}
+
+func TestDeviceCert_AHelperFailureSendsNothing(t *testing.T) {
+	run, got := deviceCertPeers(t)
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		return runnerwire.DeviceCertReport{}, errors.New("no keychain")
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	if err := s.Send(t.Context(), run); err == nil {
+		t.Fatal("want the helper's error")
+	}
+	select {
+	case r := <-got:
+		t.Fatalf("sent %+v after a helper failure", r)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestDeviceCert_WatchPresentsAgainEveryInterval(t *testing.T) {
+	run, got := deviceCertPeers(t)
+	var n atomic.Int32
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		n.Add(1)
+		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, 5*time.Millisecond)
+	go s.Watch(run)
+	go s.Watch(run) // a second watcher of the same session does nothing
+	for i := 0; i < 3; i++ {
+		select {
+		case <-got:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("report %d never arrived", i)
+		}
+	}
+}
+
+func TestDeviceCertSender_NoHelperSendsNothing(t *testing.T) {
+	if s := NewDeviceCertSender(filepath.Join(t.TempDir(), "wardyn-macvm"), "/state", strings.Repeat("a", 64)); s != nil {
+		t.Fatal("a sender with no helper beside it")
+	}
+	if s := NewDeviceCertSender(t.TempDir(), "/state", strings.Repeat("a", 64)); s != nil {
+		t.Fatal("a sender whose helper is a directory")
+	}
+}
+
+func fakeHelper(t *testing.T, script string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("a shell script helper")
+	}
+	p := filepath.Join(t.TempDir(), "wardyn-macvm")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestDeviceCert_ExecHelperPassesTypedFieldsAndReadsTheReport(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "args")
+	p := fakeHelper(t, `echo "$@" > `+out+`
+echo '{"proofs":[{"chain":["AQI="],"signed_at":"`+certNow.Format(time.RFC3339)+`","signature":"CQ=="}]}'
+`)
+	rep, err := execHelper(p)(t.Context(), "/state", strings.Repeat("b", 64), certNow)
+	if err != nil || len(rep.Proofs) != 1 || rep.Proofs[0].Signature[0] != 9 {
+		t.Fatalf("report %+v, %v", rep, err)
+	}
+	args, _ := os.ReadFile(out)
+	if got, want := strings.TrimSpace(string(args)), "device-identity --state-dir /state --org-sha256 "+strings.Repeat("b", 64)+" --signed-at "+certNow.Format(time.RFC3339); got != want {
+		t.Fatalf("args %q, want %q", got, want)
+	}
+}
+
+func TestDeviceCert_ExecHelperRefusesABadRun(t *testing.T) {
+	for name, script := range map[string]string{
+		"an exit code":     "echo 'wardyn-macvm: no keychain' >&2\nexit 2\n",
+		"not json":         "echo hello\n",
+		"an unknown field": `echo '{"proofs":[],"extra":1}'` + "\n",
+		"too much output":  "head -c 2000000 /dev/zero\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := execHelper(fakeHelper(t, script))(t.Context(), "/state", strings.Repeat("b", 64), certNow); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+}
+
+// A refused ACK (an organisation that predates the event, or one that refuses it for good) ends the sending for
+// that session, and the next session asks again.
+func TestDeviceCertSender_RefusedAckStops(t *testing.T) {
+	var calls atomic.Int32
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		calls.Add(1)
+		return runnerwire.DeviceCertReport{}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	var acks atomic.Int32
+	s.ack = func(context.Context, *runnerwire.Peer, runnerwire.Event) error {
+		acks.Add(1)
+		return &runnerwire.EventRefusal{Code: runnerwire.RefusalUnsupportedKind, Err: errors.New("unknown kind")}
+	}
+	first, _ := deviceCertPeers(t)
+	for i := 0; i < 3; i++ {
+		if err := s.Send(t.Context(), first); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if acks.Load() != 1 || calls.Load() != 1 {
+		t.Fatalf("%d acks and %d helper runs on one refused session, want 1 and 1", acks.Load(), calls.Load())
+	}
+	second, _ := deviceCertPeers(t)
+	if err := s.Send(t.Context(), second); err != nil || acks.Load() != 2 {
+		t.Fatalf("the next session sent %d times (%v), want a second ask", acks.Load(), err)
+	}
+}

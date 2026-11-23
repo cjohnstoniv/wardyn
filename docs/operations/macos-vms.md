@@ -143,7 +143,7 @@ A run's VM is deleted when the run ends. With `macos_vm.allow_kept_machines` on 
 - Serve the CRL over https. Over http, a control plane that has just started takes any unexpired CRL signed by your CA as its first.
 - It fails closed. A CRL that cannot be fetched is used until its next-update time or 24 hours after the last good fetch, whichever comes first. Then every Mac is refused until a fetch succeeds.
 - After a failed fetch the control plane retries after 1 minute, doubling to 10 minutes. The refusal names the cause: `timeout`, `network`, `status`, `size`, `redirect`, `parse`, `signature`, `unsupported`, `expired` or `older`.
-- **The macOS runner in this release does not present a certificate yet, so while an MDM device CA is set every Mac runner is refused until a release whose runner presents one.**
+- The macOS runner presents the device identities your MDM installed in the System keychain when it connects and every 6 hours. This has not yet been tried on a real Mac.
 - The trust class is still set by a security operator; a valid certificate is a further requirement, never a way to become `managed_device`.
 - Limits: a running sandbox is not stopped when its certificate is later revoked, and the device proves it holds the key when it reports, not at each run.
 - The proof shows that a runner key was on a Mac holding the MDM identity when it reported. Root on a managed Mac that copies another runner's key there can present for that runner.
