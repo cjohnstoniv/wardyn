@@ -936,6 +936,7 @@ const (
 	reasonRunnerSessionRequired  = "runner_session_required"
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
+	reasonRunnerMDMDeviceInvalid = "runner_mdm_device_invalid" // PUT /runners/settings: an MDM CA or CRL URL that is not valid, or only one of the two
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
 	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
 )

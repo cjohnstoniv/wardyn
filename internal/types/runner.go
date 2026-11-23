@@ -48,6 +48,13 @@ const (
 	PostureEvidenceOSProbe = "os_probe"
 )
 
+// RunnerDeviceCert is what a runner presented as its MDM device certificates: each entry a chain, leaf
+// first, DER, whose device-key signature the control plane checked at ingest. Trust, validity and
+// revocation are judged when used, never stored.
+type RunnerDeviceCert struct {
+	Chains [][][]byte `json:"chains"`
+}
+
 // Runner is one registered wardyn-runnerd. Owner is a person's principal, so the
 // row is personal data.
 type Runner struct {
@@ -99,6 +106,10 @@ type Runner struct {
 	// RegistrationTokenID is the token the runner redeemed, nil on a runner registered before 0181. The org
 	// claim reads its minter from it.
 	RegistrationTokenID *uuid.UUID `json:"-"`
+	// DeviceCert and DeviceCertReportedAt are the MDM device certificate chains the runner last presented and
+	// when. Neither is on any view: the macOS placement gate's evidence is the only place they surface.
+	DeviceCert           *RunnerDeviceCert `json:"-"`
+	DeviceCertReportedAt *time.Time        `json:"-"`
 }
 
 // OwnerHeld reports whether the row names its owner the way its kind requires: a person's runner a

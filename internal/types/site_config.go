@@ -350,4 +350,12 @@ type RunnerSettings struct {
 	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
 	// Always on the wire, false included, so GET /runners/settings states it when it is off.
 	RequireManagedDevice bool `json:"require_managed_device"`
+	// MDMDeviceCAPEM is the organisation's MDM CA bundle (PEM, CA certificates only). It must hold the CA that
+	// issues the device certificates and signs the CRL. When set, a macOS sandbox needs a device certificate
+	// that chains to it and is not on MDMDeviceCRLURL's current CRL. Empty: no certificate check (the v0.10.2
+	// behaviour). Set only by PUT /runners/settings; not sent to runners.
+	MDMDeviceCAPEM string `json:"mdm_device_ca_pem,omitempty"`
+	// MDMDeviceCRLURL is where the control plane fetches that CA's full CRL (https recommended; http works,
+	// since the CRL is signature-checked). Required exactly when MDMDeviceCAPEM is set.
+	MDMDeviceCRLURL string `json:"mdm_device_crl_url,omitempty"`
 }

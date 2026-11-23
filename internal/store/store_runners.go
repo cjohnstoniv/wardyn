@@ -58,7 +58,7 @@ var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the 
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
 	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name, arch,
-	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id,
+	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id, device_cert, device_cert_reported_at,
 	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
@@ -67,12 +67,12 @@ var prefixedRunnerCols = "r." + strings.ReplaceAll(strings.Join(strings.Fields(r
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
-	var posture []byte
+	var posture, deviceCert []byte
 	var lim limitCols
 	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
 		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName, &r.Arch,
-		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID}, lim.targets()...)...)
+		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID, &deviceCert, &r.DeviceCertReportedAt}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -83,6 +83,13 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	r.Limits = lim.limits(&r.MaxRuns)
 	if err := json.Unmarshal(posture, &r.Posture); err != nil {
 		return types.Runner{}, fmt.Errorf("store: unmarshal runner posture: %w", err)
+	}
+	if deviceCert != nil {
+		var dc types.RunnerDeviceCert
+		if err := json.Unmarshal(deviceCert, &dc); err != nil {
+			return types.Runner{}, fmt.Errorf("store: unmarshal runner device certificate: %w", err)
+		}
+		r.DeviceCert = &dc
 	}
 	return r, nil
 }

@@ -17,10 +17,12 @@ const (
 	ActionRunnerActionApply       = "runner.action.apply"
 	ActionRunnerActionRefuse      = "runner.action.refuse"
 	ActionRunnerPostureRecord     = "runner.posture.record"
+	ActionRunnerDeviceCertRecord  = "runner.device_cert.record"
 	ActionRunnerResidentErase     = "runner.resident.erase"
 	ActionCredentialDeliveryWrite = "credential.delivery.write"
 	ActionSSHSyncTransfer         = "ssh.sync.transfer"
 	ActionRunnersEnabledSet       = "runners.enabled.set"
+	ActionRunnersMDMDeviceSet     = "runners.mdm_device.set"
 	ActionRunnerInventoryHold     = "runner.inventory.hold"
 	ActionRunnerUpdate            = "runner.update"
 	ActionRunnerTrustWrite        = "runner.trust.write"
@@ -40,4 +42,5 @@ var AuditActions = []string{
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
 	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest, ActionRunnerOfflineSummary,
+	ActionRunnerDeviceCertRecord, ActionRunnersMDMDeviceSet,
 }
