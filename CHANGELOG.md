@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- Publishing a patch release for an older release line no longer moves the `:latest` tag of the agent images (`agent-base`, `agent-codex-cli`, `agent-aws-sso`) back to it: `:latest` always names the newest final release across all lines.
+- `scripts/verify-release.sh` checks an older release only for the images and files that release shipped, and fails when the Latest release, or `:latest` on the agent images, names anything but the newest final release.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

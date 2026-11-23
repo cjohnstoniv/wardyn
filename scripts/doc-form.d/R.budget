@@ -27,7 +27,7 @@
 # RELEASING.md 6145 = ours 6124 + theirs 6026 - base 6005 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # RELEASING.md 6145, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
 # RELEASING.md 6155 = ours 6145 + theirs 6036 - base 6026 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-RELEASING.md=6293 share=35 # 6293 measured (+10: keep PRERELEASE=auto, as verify-release fails a wrong pick); earlier: 6283 measured (+19: the corrections from the release review)
+RELEASING.md=6334 share=35 # 6334 measured (+41: the float-latest job and its rerun); earlier: 6293 measured (+10: keep PRERELEASE=auto, as verify-release fails a wrong pick); earlier: 6283 measured (+19: the corrections from the release review)
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.
 # ROADMAP.md 6133 adds 33 over 6100: the v0.9.3-rc.1 Shipped row the release commit adds.

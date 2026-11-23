@@ -415,6 +415,9 @@ crash or a usage limit resumes with the same command:
 6. **Publish the GitHub Release** for the tag, with that version's CHANGELOG section as the body. `release-assets` already made a draft, so edit it.
    - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`). Keep `auto`: from 0.10.0 on, `verify-release` fails a wrong pick.
    - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
+   - `:latest` on the agent images is not yours to move. The float-latest job in release.yml points it at the highest published final across every line, so a patch to an older line leaves it on the newer line's final. `verify-release` fails when it, or the Latest label, names anything else.
+
+   A failed or cancelled float-latest job stops release-patch.sh at its run watch; rerun only that job. Run verify-release for an older line only after the newer line's Release is published.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.
