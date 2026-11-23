@@ -17,9 +17,11 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -34,8 +36,9 @@ const standaloneDiskInfo = `{"virtual-size": 68719476736, "format": "qcow2", "fo
 // converter's info and convert, the overlay), the swtpm sidecar's socket and QEMU's QMP and VNC sockets.
 type winRig struct {
 	*vmRig
-	info string // what the converter's info step writes as info.json
-	vnc  net.Listener
+	info     string // what the converter's info step writes as info.json
+	vnc      net.Listener
+	converts atomic.Int32 // the converter's convert steps started
 }
 
 func newWinRig(t *testing.T) *winRig {
@@ -52,6 +55,7 @@ func newWinRig(t *testing.T) *winRig {
 				_ = os.WriteFile(filepath.Join(out, "src.qcow2"), []byte("qcow2"), 0o600)
 				_ = os.WriteFile(filepath.Join(out, "info.json"), []byte(r.info), 0o600)
 			} else {
+				r.converts.Add(1)
 				_ = os.WriteFile(filepath.Join(out, qemu.WinDisk), []byte("qcow2"), 0o600)
 			}
 		case strings.HasSuffix(c.name, "-overlay") && c.cfg.Cmd[0] == "sh":
@@ -111,6 +115,9 @@ func TestCreateWinVMHostConfig(t *testing.T) {
 			t.Errorf("%s carries no run label: the teardown and the sweep cannot find it", name)
 		}
 	}
+	if !slices.Equal([]string(tpm.cfg.Cmd), qemu.SWTPMArgs()) {
+		t.Fatalf("swtpm runs %q, want %q", tpm.cfg.Cmd, qemu.SWTPMArgs())
+	}
 	if len(tpm.host.Mounts) != 1 || tpm.host.Mounts[0].Target != qemu.CtlDir || tpm.cfg.Labels[labelComponent] != componentVMTPM {
 		t.Fatalf("swtpm mounts %+v labels %v: the run's ctl/ only, labelled for the sweep", tpm.host.Mounts, tpm.cfg.Labels)
 	}
@@ -157,17 +164,19 @@ func TestRefuseWinVMSpec(t *testing.T) {
 		edit func(*runner.SandboxSpec)
 		want string
 	}{
-		"mount":       {func(s *runner.SandboxSpec) { s.Mounts = []runner.Mount{{Source: "/tmp", Target: "/w"}} }, "no folder"},
-		"drive":       {func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{Backend: types.DriveBackendHostPath}} }, "no drive"},
-		"record":      {func(*runner.SandboxSpec) {}, "never recorded"},
-		"secret env":  {func(s *runner.SandboxSpec) { s.SecretEnv = map[string]string{"TOKEN": "x"} }, "no secret env"},
-		"task":        {func(s *runner.SandboxSpec) { s.Interactive = false }, "desktop-only"},
-		"low memory":  {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 5118 }, "cap of at least 5119 MiB"},
-		"4096 cap":    {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 4096 }, "cap of at least 5119 MiB"},
-		"no memory":   {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 0 }, "cap of at least 5119 MiB"},
-		"hard disk":   {func(s *runner.SandboxSpec) { s.Resources.DiskMiB = 1024 }, "disk limit"},
-		"linux spec":  {func(s *runner.SandboxSpec) { s.MachineKind = types.MachineLinuxVM }, "unknown machine kind"},
-		"windows off": {nil, "does not offer Windows VM sandboxes"},
+		"mount":        {func(s *runner.SandboxSpec) { s.Mounts = []runner.Mount{{Source: "/tmp", Target: "/w"}} }, "no folder"},
+		"drive":        {func(s *runner.SandboxSpec) { s.Drives = []types.DriveMount{{Backend: types.DriveBackendHostPath}} }, "no drive"},
+		"record":       {func(*runner.SandboxSpec) {}, "never recorded"},
+		"secret env":   {func(s *runner.SandboxSpec) { s.SecretEnv = map[string]string{"TOKEN": "x"} }, "no secret env"},
+		"managed file": {func(s *runner.SandboxSpec) { s.ManagedFiles = []runner.ManagedFile{{Path: "/etc/x"}} }, "no managed file"},
+		"record asked": {func(s *runner.SandboxSpec) { s.Record = ptr(true) }, "never recorded"},
+		"task":         {func(s *runner.SandboxSpec) { s.Interactive = false }, "desktop-only"},
+		"low memory":   {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 5118 }, "cap of at least 5119 MiB"},
+		"4096 cap":     {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 4096 }, "cap of at least 5119 MiB"},
+		"no memory":    {func(s *runner.SandboxSpec) { s.Resources.MemoryMiB = 0 }, "cap of at least 5119 MiB"},
+		"hard disk":    {func(s *runner.SandboxSpec) { s.Resources.DiskMiB = 1024 }, "disk limit"},
+		"linux spec":   {func(s *runner.SandboxSpec) { s.MachineKind = types.MachineLinuxVM }, "unknown machine kind"},
+		"windows off":  {nil, "does not offer Windows VM sandboxes"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -206,6 +215,11 @@ func TestRefuseWinVMSpec(t *testing.T) {
 	if err := newWinRig(t).d.refuseWinVMSpec(edge); err != nil {
 		t.Fatalf("refuseWinVMSpec refused a 5119 MiB cap (4096 MiB guest): %v", err)
 	}
+	soft := winSpec()
+	soft.Resources.DiskMiB, soft.Resources.DiskMiBSoft = 1024, true
+	if err := newWinRig(t).d.refuseWinVMSpec(soft); err != nil {
+		t.Fatalf("refuseWinVMSpec refused a soft disk size: %v", err)
+	}
 	// A disk that names a backing file is refused before it is converted or booted.
 	r := newWinRig(t)
 	r.info = `{"virtual-size": 1073741824, "format": "qcow2", "backing-filename": "/etc/shadow"}`
@@ -214,6 +228,52 @@ func TestRefuseWinVMSpec(t *testing.T) {
 	}
 	if _, ok := r.f.containers[agentContainerName(winSpec().RunID)]; ok {
 		t.Fatal("a refused disk reached QEMU")
+	}
+	if n := r.converts.Load(); n != 0 {
+		t.Fatalf("a refused disk was converted %d times", n)
+	}
+}
+
+// A create that fails after the swtpm sidecar started removes it.
+func TestWinVMFailedCreateRemovesTheTPM(t *testing.T) {
+	r := newWinRig(t)
+	spec := winSpec()
+	r.f.failStartContainer = agentContainerName(spec.RunID)
+	if _, err := r.d.CreateSandbox(context.Background(), spec); err == nil {
+		t.Fatal("CreateSandbox succeeded with QEMU failing to start")
+	}
+	if c := r.container(t, vmtpmName(spec.RunID)); !c.removed {
+		t.Fatal("the swtpm sidecar outlived a failed create")
+	}
+}
+
+// The orphan sweep finds a Windows VM's swtpm sidecar by its component label and removes it.
+func TestWinVMSweepRemovesAnOrphanedTPM(t *testing.T) {
+	r := newWinRig(t)
+	rid := uuid.NewString()
+	r.d.cfg.RunnerID, r.d.cfg.DecisionSink, r.d.cfg.Evidence = rid, newFakeSink(), &memEvidence{m: map[uuid.UUID][]byte{}}
+	spec := winSpec()
+	spec.Labels = map[string]string{runner.LabelRunnerID: rid}
+	sb, err := r.d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The runner crashed: the swtpm sidecar is still there, the QEMU container is not.
+	past := time.Now().Add(-time.Hour)
+	name := vmtpmName(spec.RunID)
+	r.f.mu.Lock()
+	tpm := r.f.containers[name]
+	tpm.removed = false
+	r.f.containers[sb.Ref].removed = true
+	r.f.listItems = []container.Summary{{ID: name, Created: past.Unix(), Labels: tpm.cfg.Labels}}
+	r.f.mu.Unlock()
+	if n, err := r.d.SweepOrphanedSandboxes(context.Background(), 10*time.Minute, func(uuid.UUID) bool { return true }); err != nil || n != 1 {
+		t.Fatalf("sweep = %d, %v; want the one orphaned run", n, err)
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	if !r.f.containers[name].removed {
+		t.Fatal("the sweep left the orphaned swtpm sidecar")
 	}
 }
 
@@ -412,6 +472,9 @@ func callEveryAgentMethod(t *testing.T, how string, v *vmRun) {
 	t.Helper()
 	ctxT := reflect.TypeOf((*context.Context)(nil)).Elem()
 	rv := reflect.ValueOf(v.agent)
+	if rv.NumMethod() < 24 {
+		t.Fatalf("%s: the agent has %d methods, want the guest agent client's 24 or more", how, rv.NumMethod())
+	}
 	for i := 0; i < rv.NumMethod(); i++ {
 		m := rv.Type().Method(i)
 		if m.Name == "Close" {

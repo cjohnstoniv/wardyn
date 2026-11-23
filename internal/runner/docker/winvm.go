@@ -127,7 +127,9 @@ func (d *Driver) refuseWinVMSpec(spec runner.SandboxSpec) error {
 		return errors.New("docker: a Windows VM sandbox takes no folder: it has no guest agent to mount one")
 	case len(spec.Drives) > 0:
 		return errors.New("docker: a Windows VM sandbox takes no drive: it has no guest agent to mount one")
-	case spec.RecordWithin(d.cfg.Record):
+	case len(spec.ManagedFiles) > 0:
+		return errors.New("docker: a Windows VM sandbox takes no managed file: it has no guest agent to deliver one")
+	case spec.RecordWithin(d.cfg.Record), spec.Record != nil && *spec.Record:
 		return errors.New("docker: a Windows VM sandbox is never recorded; turn recording off for this run")
 	case len(spec.SecretEnv) > 0:
 		return errors.New("docker: a Windows VM sandbox takes no secret env: it has no guest agent to hand it to")
@@ -291,7 +293,8 @@ func (d *Driver) startWinTPM(ctx context.Context, spec runner.SandboxSpec, ctlDi
 }
 
 // ProbeWindowsVM checks that the QEMU image can run Windows VM sandboxes: in one container hardened
-// as a VM's and given /dev/kvm, the UEFI firmware files are there, swtpm runs, and /dev/kvm opens.
+// as a VM's and given /dev/kvm, the UEFI firmware files are readable, /dev/kvm is a character device,
+// and swtpm runs. QEMU opening /dev/kvm is checked by the Linux VM probe.
 // Linux VM sandboxes must be on (ProbeVM and EnableVM first).
 func (d *Driver) ProbeWindowsVM(ctx context.Context) (WinVMConfig, error) {
 	vc := d.vmConfig()

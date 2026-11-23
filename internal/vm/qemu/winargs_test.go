@@ -74,16 +74,13 @@ func TestWinArgsBannedTokens(t *testing.T) {
 }
 
 func TestWinPrepArgsNameOnlyFixedPaths(t *testing.T) {
-	ov := strings.Join(WinOverlayArgs(), " ")
-	for _, want := range []string{"-b /vm/base/disk.qcow2 /vm/disk/overlay.qcow2", "cp " + OVMFVars + " /vm/disk/efivars.fd"} {
-		if !strings.Contains(ov, want) {
-			t.Errorf("overlay step %q lacks %q", ov, want)
-		}
+	ov := []string{"sh", "-ec", "qemu-img create -q -f qcow2 -F qcow2 -b /vm/base/disk.qcow2 /vm/disk/overlay.qcow2; " +
+		"cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd /vm/disk/efivars.fd"}
+	if got := WinOverlayArgs(); !slices.Equal(got, ov) {
+		t.Errorf("overlay step %q, want %q", got, ov)
 	}
-	tpm := strings.Join(SWTPMArgs(), " ")
-	for _, want := range []string{"--tpm2", "dir=/vm/ctl/tpm", "path=/vm/ctl/tpm.sock", "--terminate"} {
-		if !strings.Contains(tpm, want) {
-			t.Errorf("swtpm %q lacks %q", tpm, want)
-		}
+	tpm := []string{"swtpm", "socket", "--tpm2", "--tpmstate", "dir=/vm/ctl/tpm", "--ctrl", "type=unixio,path=/vm/ctl/tpm.sock", "--terminate"}
+	if got := SWTPMArgs(); !slices.Equal(got, tpm) {
+		t.Errorf("swtpm %q, want %q", got, tpm)
 	}
 }
