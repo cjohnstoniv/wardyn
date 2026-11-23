@@ -4,6 +4,7 @@
 package vaultkv
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,11 @@ type fakeVault struct {
 	landThenFail int
 	createdSkew  time.Duration
 	noCreated    bool
+	// foreignFirst makes the next data write meet another writer: a version holding someone
+	// else's value (no write id) is made first, and the write's answer is lost (503) without
+	// applying it. failDataReads answers every data GET 503.
+	foreignFirst  int
+	failDataReads bool
 	// denyPath, when non-empty, refuses (403) every call whose path contains
 	// it — persistent, unlike force's one-shot queue, so it can target one
 	// owner's calls across a login/retry without also catching another's.
@@ -192,6 +198,10 @@ func (f *fakeVault) data(w http.ResponseWriter, method, p string, body map[strin
 	e := f.kv[p]
 	switch method {
 	case http.MethodGet:
+		if f.failDataReads {
+			fail(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
 		if e == nil || e.versions[e.current] == nil {
 			fail(w, http.StatusNotFound, "")
 			return
@@ -208,6 +218,18 @@ func (f *fakeVault) data(w http.ResponseWriter, method, p string, body map[strin
 		}
 		if (f.casRequired || hasCAS) && (!hasCAS || int(cas) != e.current) {
 			fail(w, http.StatusBadRequest, "check-and-set parameter did not match the current version")
+			return
+		}
+		if f.foreignFirst > 0 {
+			f.foreignFirst--
+			e.current++
+			e.versions[e.current] = map[string]string{"value": base64.StdEncoding.EncodeToString([]byte("theirs"))}
+			if e.created == nil {
+				e.created = map[int]time.Time{}
+			}
+			e.created[e.current] = time.Now()
+			f.kv[p] = e
+			fail(w, http.StatusServiceUnavailable, "the answer was lost")
 			return
 		}
 		d := map[string]string{}
