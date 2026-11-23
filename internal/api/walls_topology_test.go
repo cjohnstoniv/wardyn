@@ -701,6 +701,62 @@ func TestWallsTopologySnapshotKeepsNoRunRows(t *testing.T) {
 	}
 }
 
+// wallsTopoApprovals answers the attention read with the pending approvals of the runs asked for.
+type wallsTopoApprovals struct {
+	ApprovalService // only ListPendingApprovalsForRuns is asked
+	pending         []types.ApprovalRequest
+}
+
+func (a wallsTopoApprovals) ListPendingApprovalsForRuns(_ context.Context, ids []uuid.UUID) ([]types.ApprovalRequest, error) {
+	var out []types.ApprovalRequest
+	for _, ap := range a.pending {
+		if slices.Contains(ids, ap.RunID) {
+			out = append(out, ap)
+		}
+	}
+	return out, nil
+}
+
+// wallsTopoSponsorStore is a wallsTopoStore whose every service identity is sponsored by sponsor.
+type wallsTopoSponsorStore struct {
+	*wallsTopoStore
+	store.ServiceIdentityStore // only GetServiceIdentity is asked
+	sponsor                    string
+}
+
+func (s *wallsTopoSponsorStore) GetServiceIdentity(_ context.Context, name string) (types.ServiceIdentity, error) {
+	return types.ServiceIdentity{Name: name, Sponsor: s.sponsor}, nil
+}
+
+// TestWallsTopologySnapshotKeepsAttention: a continuation served from the snapshot gives a security caller the same
+// attention the whole run rows give. A lost run reads as lost (its lost time), and a service's run under the second
+// human switch is the caller's to decide (its recorded human author is someone else); without that author no
+// decider can be shown not to be the author, and the hold would read as an admin's.
+func TestWallsTopologySnapshotKeepsAttention(t *testing.T) {
+	t.Setenv(envEgressSecondHuman, "true")
+	clk := wallsTopoNewClock()
+	st := wallsTopoRunsStore(clk, 3)
+	lostAt := clk.now.Add(-time.Minute)
+	st.runs[1].LostAt = &lostAt
+	st.runs[2].CreatedBy, st.runs[2].HumanAuthor = types.ServicePrincipalPrefix+"ci", "sub-walls-author"
+	s := wallsTopoServer(&wallsTopoSponsorStore{wallsTopoStore: st, sponsor: "sub-walls-sponsor"}, clk)
+	s.cfg.Approvals = wallsTopoApprovals{pending: []types.ApprovalRequest{{ID: uuid.New(), RunID: st.runs[2].ID,
+		Kind: types.ApprovalEgressDomain, State: types.ApprovalPending, RequestedAt: clk.now,
+		RequestedScope: json.RawMessage(`{"host":"pypi.org","port":443,"mode":"wait_for_review"}`)}}}
+	cursor := wallsTopoOpen(t, s, "sub-walls-a", 1)
+	next := wallsTopoBody(t, wallsTopoGet(s, "sub-walls-a", oidc.RoleSecurityAdmin, "limit=2&cursor="+cursor))
+	got := map[uuid.UUID]*types.RunAttention{}
+	for _, it := range next.Runs.Items {
+		got[it.ID] = it.Attention
+	}
+	if a := got[st.runs[1].ID]; a == nil || a.Kind != types.AttentionLost {
+		t.Errorf("the lost run's attention is %+v, want lost", a)
+	}
+	if a := got[st.runs[2].ID]; a == nil || a.Kind != types.AttentionApproval || a.By != types.AttentionYou || a.Pending != 1 {
+		t.Errorf("the service run's attention is %+v, want an approval for you, 1 pending", a)
+	}
+}
+
 // TestWallsTopologyPartialOnlyWhenRowsRemain: reads that end exactly at the read cap leave partial unset, one row
 // more sets it, and a probe of one row is the only read past the cap.
 func TestWallsTopologyPartialOnlyWhenRowsRemain(t *testing.T) {

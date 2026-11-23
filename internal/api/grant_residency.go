@@ -48,9 +48,9 @@ func grantResidency(g types.GrantSpec, brokerOn bool, brokeredRepos []string, si
 	}
 }
 
-// grantResidencyAzureCLIScope is the part of an api_key grant's scope that names the Azure CLI
-// path (azureARMGrantSnapshot's mechanism) and the access its row grants.
-type grantResidencyAzureCLIScope struct {
+// grantResidencyCLIScope is the part of an api_key grant's scope that names its CLI path (the
+// mechanism of azureARMGrantSnapshot or kubectlGrantSnapshot) and the access its row grants.
+type grantResidencyCLIScope struct {
 	Snapshot struct {
 		Mechanism string `json:"mechanism"`
 		Access    string `json:"access"`
@@ -67,10 +67,15 @@ type grantResidencyAzureCLIScope struct {
 //   - The Azure CLI with write access: armscope.Scope.Write admits the POSTs that return keys
 //     (listKeys and the like), and the grant row does not say whether this run made one, so the
 //     answer is unknown. With read access every POST is refused.
+//   - kubectl with write access: the kube door admits a pod create and that pod's log read, so the
+//     run can start a pod that prints a service account token or a mounted Secret and read it back.
+//     The grant row does not say whether this run did, so the answer is unknown. Read and restart
+//     access admit no pod create.
 //
 // The other api_key paths keep the value at the proxy. Where a door fronts a service that could
-// mint a credential from it, the door refuses those calls: kubectl (kubeAPIDoor: Secrets, service
-// account token requests, exec) and the Azure DevOps sign-in (adoscope's token areas).
+// mint a credential from it, the door refuses those calls: kubectl with read or restart access
+// (kubeAPIDoor: Secrets, service account token requests, exec) and the Azure DevOps sign-in
+// (adoscope's token areas).
 func grantResidencyAPIKey(scope json.RawMessage, sigv4AtProxy bool) (inside, known bool) {
 	if apiKeyGrantScopeSecret(scope) == types.AWSSSOAccessTokenSecret {
 		if sigv4AtProxy {
@@ -78,9 +83,9 @@ func grantResidencyAPIKey(scope json.RawMessage, sigv4AtProxy bool) (inside, kno
 		}
 		return true, true
 	}
-	var az grantResidencyAzureCLIScope
-	if json.Unmarshal(scope, &az) == nil && az.Snapshot.Mechanism == azureCLIMechanism &&
-		az.Snapshot.Access == types.ComponentAccessWrite {
+	var cli grantResidencyCLIScope
+	if json.Unmarshal(scope, &cli) == nil && cli.Snapshot.Access == types.ComponentAccessWrite &&
+		(cli.Snapshot.Mechanism == azureCLIMechanism || cli.Snapshot.Mechanism == kubectlCLIMechanism) {
 		return false, false
 	}
 	return false, true

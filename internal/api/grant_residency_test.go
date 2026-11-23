@@ -140,11 +140,13 @@ func TestGrantResidencyAPIKeyPaths(t *testing.T) {
 			"snapshot":    azureARMGrantSnapshot{Mechanism: azureCLIMechanism, ComponentID: "az-1", Access: access},
 		})
 	}
-	kubectl := grantResidencyAPIKeyGrant(map[string]any{
-		"host": "kube.example.test", "header": "Authorization", "format": "Bearer %s",
-		"secret_name": kubectlTokenSecretName("kc-1"),
-		"snapshot":    kubectlGrantSnapshot{Mechanism: kubectlCLIMechanism, ComponentID: "kc-1", Access: types.ComponentAccessWrite},
-	})
+	kubectl := func(access string) types.GrantSpec {
+		return grantResidencyAPIKeyGrant(map[string]any{
+			"host": "kube.example.test", "header": "Authorization", "format": "Bearer %s",
+			"secret_name": kubectlTokenSecretName("kc-1"),
+			"snapshot":    kubectlGrantSnapshot{Mechanism: kubectlCLIMechanism, ComponentID: "kc-1", Access: access},
+		})
+	}
 	adoSignIn := grantResidencyAPIKeyGrant(map[string]any{
 		"host": "dev.azure.com", "header": adoEntraInjectHeader, "format": "Bearer %s",
 		"secret_name": types.ADOEntraAccessTokenSecret,
@@ -164,8 +166,12 @@ func TestGrantResidencyAPIKeyPaths(t *testing.T) {
 		{"azure cli write, re-signing on", azureCLI(types.ComponentAccessWrite), true, false, false},
 		{"azure cli read, re-signing off", azureCLI(types.ComponentAccessRead), false, false, true},
 		{"azure cli read, re-signing on", azureCLI(types.ComponentAccessRead), true, false, true},
-		{"kubectl, re-signing off", kubectl, false, false, true},
-		{"kubectl, re-signing on", kubectl, true, false, true},
+		{"kubectl write, re-signing off", kubectl(types.ComponentAccessWrite), false, false, false},
+		{"kubectl write, re-signing on", kubectl(types.ComponentAccessWrite), true, false, false},
+		{"kubectl read, re-signing off", kubectl(types.ComponentAccessRead), false, false, true},
+		{"kubectl read, re-signing on", kubectl(types.ComponentAccessRead), true, false, true},
+		{"kubectl restart, re-signing off", kubectl(types.ComponentAccessRestart), false, false, true},
+		{"kubectl restart, re-signing on", kubectl(types.ComponentAccessRestart), true, false, true},
 		{"azure devops sign-in, re-signing off", adoSignIn, false, false, true},
 		{"azure devops sign-in, re-signing on", adoSignIn, true, false, true},
 		{"proxy-side key, re-signing off", plain, false, false, true},

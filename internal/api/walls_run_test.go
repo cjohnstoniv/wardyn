@@ -360,3 +360,42 @@ func TestRunWallsCounterCapExactEnd(t *testing.T) {
 		}
 	}
 }
+
+// TestRunWallsGrantsFollowTheReSigningSwitch: the handler reads the server's re-signing switch, so flipping it
+// changes an AWS sign-in session's answer: off, it is inside the sandbox; on, its residency is unknown and the
+// grant carries no inside_sandbox key.
+func TestRunWallsGrantsFollowTheReSigningSwitch(t *testing.T) {
+	srv, st := runWallsFixture(t)
+	run := runWallsSeed(st, pvOwner, nil)
+	scope, err := json.Marshal(map[string]any{
+		"host": "portal.sso.us-east-1.amazonaws.com", "header": awsSSOInjectHeader, "format": "%s",
+		"secret_name": types.AWSSSOAccessTokenSecret, "pin_path": awsSSORoleCredentialsPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.grants = []types.CredentialGrant{{ID: uuid.New(), RunID: run.ID, Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: scope}}}
+	for _, on := range []bool{false, true} {
+		srv.cfg.AWSSigV4AtProxy, srv.cfg.AWSSSOProxyInject, srv.cfg.AWSSSOEndpointOverride = on, on, ""
+		if srv.gatewayBedrockSSOAvailable() != on {
+			t.Fatalf("re-signing %v: the switch reads %v", on, !on)
+		}
+		w, _ := runWallsGet(t, srv, pvMember(t, pvOwner).cookie, run.ID, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("re-signing %v: %d %s", on, w.Code, w.Body.String())
+		}
+		var top struct {
+			Grants []map[string]json.RawMessage `json:"grants"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &top); err != nil || len(top.Grants) != 1 {
+			t.Fatalf("re-signing %v: grants %s (%v), want one", on, w.Body.String(), err)
+		}
+		got, has := top.Grants[0]["inside_sandbox"]
+		switch {
+		case !on && (!has || string(got) != "true"):
+			t.Errorf("re-signing off: inside_sandbox %s (present %v), want true", got, has)
+		case on && has:
+			t.Errorf("re-signing on: inside_sandbox %s, want the key absent", got)
+		}
+	}
+}
