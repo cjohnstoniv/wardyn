@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The run's policy view, its Policy tab and `wardyn run policy` show each host-scoped secret that went in as its value, and why (#3741).
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

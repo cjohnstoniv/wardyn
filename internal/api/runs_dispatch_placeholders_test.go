@@ -268,3 +268,77 @@ func TestSecretPlaceholders_DuplicateFileUsesTheDeliveringGrant(t *testing.T) {
 		})
 	}
 }
+
+// The sentence of each cause is the one the audit row has always carried: AUDIT-ACTIONS.md paraphrases it, and
+// rows written before the cause existed keep it.
+func TestPlaceholderCause_SentencesUnchanged(t *testing.T) {
+	want := map[string]string{
+		placeholderCauseMultiline:   "the value spans more than one line, so it cannot ride a request header",
+		placeholderCauseNotAllowed:  "the host is not an exact entry of the run's allowlist",
+		placeholderCauseHostTaken:   "the host already carries another credential",
+		placeholderCauseUnrecorded:  "its injection grant could not be recorded",
+		placeholderCauseRuleInvalid: "its injection rule did not decode",
+	}
+	if len(placeholderCauseSentence) != len(want) {
+		t.Fatalf("%d causes, want %d", len(placeholderCauseSentence), len(want))
+	}
+	for cause, sentence := range want {
+		if got := placeholderCauseSentence[cause]; got != sentence {
+			t.Errorf("%s = %q, want %q", cause, got, sentence)
+		}
+	}
+	for cause, token := range map[string]string{
+		placeholderCauseMultiline: "value_multiline", placeholderCauseNotAllowed: "host_not_allowlisted",
+		placeholderCauseHostTaken: "host_taken", placeholderCauseUnrecorded: "grant_unrecorded", placeholderCauseRuleInvalid: "rule_invalid",
+	} {
+		if cause != token {
+			t.Errorf("cause %q, want the token %q", cause, token)
+		}
+	}
+}
+
+// A secret that went in as its value is recorded with its cause token beside the sentence.
+func TestSecretPlaceholders_RowCarriesTheCause(t *testing.T) {
+	for _, tc := range []struct {
+		name, cause, sentence string
+		value                 string
+		allowed               string
+		grants                func(*testing.T) []types.GrantSpec
+	}{
+		{"line break", placeholderCauseMultiline, placeholderCauseSentence[placeholderCauseMultiline], "two-line\nvalue-0001", placeholderHost,
+			func(t *testing.T) []types.GrantSpec {
+				return []types.GrantSpec{hostScoped(t, envSecretGrant("BREAK_TOKEN", "break-token"))}
+			}},
+		{"host not on the allowlist", placeholderCauseNotAllowed, placeholderCauseSentence[placeholderCauseNotAllowed], "one-line-value-0001", "other.corp.test",
+			func(t *testing.T) []types.GrantSpec {
+				return []types.GrantSpec{hostScoped(t, envSecretGrant("BREAK_TOKEN", "break-token"))}
+			}},
+		{"host already taken", placeholderCauseHostTaken, placeholderCauseSentence[placeholderCauseHostTaken], "one-line-value-0001", placeholderHost,
+			func(t *testing.T) []types.GrantSpec {
+				return []types.GrantSpec{hostScoped(t, envSecretGrant("FIRST_TOKEN", "break-token")), hostScoped(t, envSecretGrant("BREAK_TOKEN", "break-token"))}
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rn := &fakeRunner{}
+			srv, st, audit, run := dispatchTeardownFixture(t, rn, types.RunPending)
+			run.Task = ""
+			st.run = run
+			srv.cfg.Store, srv.cfg.MaskRegistry = &grantRecStore{dispatchTestStore: st}, secretmask.NewRegistry()
+			srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"break-token": []byte(tc.value)}}
+			srv.cfg.EnvSecretPlaceholders = true
+			dispatchOf(srv, run, types.RunPolicySpec{AllowedDomains: []string{tc.allowed}, EligibleGrants: tc.grants(t)})
+			events := audit.snapshot()
+			ev := findAudit(events, run.ID, "run.secret_placeholder.resolve", "failure")
+			if ev == nil {
+				t.Fatalf("no failure row; events: %s", auditDump(events, run.ID))
+			}
+			var d placeholderRowData
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				t.Fatal(err)
+			}
+			if d.Cause != tc.cause || d.Reason != tc.sentence || d.Kind != string(types.GrantEnvSecret) || d.SecretName != "break-token" || d.Host != placeholderHost {
+				t.Errorf("row %s, want cause %q and the sentence %q", ev.Data, tc.cause, tc.sentence)
+			}
+		})
+	}
+}

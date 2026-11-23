@@ -127,6 +127,10 @@ type runPolicyResponse struct {
 	// code_write: a git token in the sandbox can still push. It is the decision behind unstoppablePushWarning, read from the
 	// spec the walls and the preset have already narrowed.
 	PushesUnstoppable bool `json:"pushes_unstoppable,omitempty"`
+	// SecretsAsValue is each host-scoped secret that went into the sandbox, or to the runner, as its value although a
+	// placeholder switch was on, and why (#3741). SecretsAsValueTruncated is set when more than 50 did; the list holds the first 50.
+	SecretsAsValue          []runPolicySecretAsValue `json:"secrets_as_value,omitempty"`
+	SecretsAsValueTruncated bool                     `json:"secrets_as_value_truncated,omitempty"`
 }
 
 type runPolicyWallPreset struct {
@@ -285,6 +289,7 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	resp.StoredPolicyNow = s.storedPolicyNowOf(ctx, run, create, &resp.Source)
 
 	tier := s.specReadTierFor(ctx)
+	s.fillSecretsAsValue(ctx, run.ID, tier, &resp)
 	out := redactSpecForRead(served, tier)
 	if out.LLMInspection != nil {
 		li := *out.LLMInspection
