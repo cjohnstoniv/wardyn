@@ -15,6 +15,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
 - WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+- WARDYN_LOCK_POOL_MAX_CONNS (flag -lock-pool-max-conns, default 8, 1 to 64) sets how many connections each server holds for cross-replica locks at once, and how many guarded credential writes it dials at once. Each replica can use up to twice this number on top of its pool, so budget Postgres max_connections for it.
 
 ### Changed
 
@@ -24,6 +25,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once for as long as the run stays on its runner. Revocations still end a runner's session within one check (15 seconds).
 - After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
+- Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
+- At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
 
 ### Fixed
 
@@ -33,6 +36,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The `git_credential` probe in `examples/workspaces/probes.sh` passes only on the helper's exact answers; other error text is now a failure, not a pass.
 - A rare crash of the server when an issuer portal's relayed request reached its dispatch time just as its connection to the run opened.
 - An SSH sign-in refused because its key could not be looked up is now recorded in its `ssh.authenticate` row with reason `key lookup failed`. It used to say `unregistered key`, as for a key nobody registered (#3508).
+- When a replayed audit event was already stored, the audit sinks received it with empty chain hashes. They now receive the stored row's hashes.
 
 ### Security
 

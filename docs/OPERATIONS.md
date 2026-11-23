@@ -740,11 +740,15 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A request-path audit write that cannot get the lock within 5s **fails, and the event goes to the local spool** to
     be replayed when the lock clears.
   - That is the same degraded path a store outage uses, not a dropped event.
+  - At most four of a replica's own audit writes (those not made inside a larger transaction) wait for the lock at once (half the database pool when that is smaller).
+  - A write that finds every turn taken waits inside the same 5 seconds and then goes to the spool the same way.
+  - Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
   - The one exception is a **credential mint**, whose audit row shares the mint's transaction: there the timeout
     refuses the mint, because a credential that could not be audited is not one to issue.
   - The bound is `lock_timeout`, set `LOCAL` on the audit transaction, so it fires only while WAITING for the lock.
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
+  - The wait for a turn is not `lock_timeout`: a write queued behind four slow but progressing writes can go to the spool after 5 seconds with no lock stuck.
 
 - **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
   - With strict mode on, a covered change is refused if its audit intent row cannot be written first.

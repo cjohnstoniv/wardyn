@@ -156,6 +156,13 @@ func AuditChainLockTimeoutSQL() string {
 	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", AuditChainLockTimeout.Milliseconds())
 }
 
+// AuditChainLockWaitSQL bounds the chain lock's wait to d, at least 1ms: lock_timeout 0 would mean no bound at all.
+// It answers one statement text for every d, with the bound as its argument, so pgx's statement cache keeps one
+// entry and a contended append still goes in one batch. set_config(..., true) is SET LOCAL.
+func AuditChainLockWaitSQL(d time.Duration) (sql, arg string) {
+	return `SELECT set_config('lock_timeout', $1, true)`, fmt.Sprintf("%dms", max(1, d.Milliseconds()))
+}
+
 // TryAdvisoryLock takes session-level advisory lock key on a connection
 // borrowed from pool WITHOUT waiting, reporting ok=false if held elsewhere.
 // Call the returned release (deferred) or strand a pooled conn permanently.

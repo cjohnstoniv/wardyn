@@ -413,3 +413,57 @@ func TestPG_RunnerSpoolTransientRunnerReadIsNotARefusal(t *testing.T) {
 		}
 	}
 }
+
+// The prepare callback runs before the audit chain lock is taken: a second connection can still take the lock
+// inside every call.
+func TestPG_RunnerSpoolPreparesEveryEventBeforeTheChainLock(t *testing.T) {
+	pool, st, rn, _, row := spoolPGFixture(t)
+	ctx := context.Background()
+	// A scan pair is two audit rows: the second prepare runs after the first insert unless every event is prepared first.
+	row.Decision.Scan = &egress.ScanSummary{Action: "alert", Channel: "model", FindingsTotal: 101}
+	row = rehashSpoolRow(t, row)
+	var calls, free atomic.Int32
+	prepare := func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
+		calls.Add(1)
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return ev, err
+		}
+		defer conn.Release()
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return ev, err
+		}
+		defer tx.Rollback(ctx) //nolint:errcheck // best-effort
+		var got bool
+		if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, db.AuditChainLockKey).Scan(&got); err != nil {
+			return ev, err
+		}
+		if got {
+			free.Add(1)
+		}
+		return ev, nil
+	}
+	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepare); err != nil || !ok {
+		t.Fatalf("IngestRunnerDecision: %v %v", ok, err)
+	}
+	if calls.Load() != 2 || free.Load() != 2 {
+		t.Fatalf("the chain lock was free in %d of %d prepare calls, want 2 of 2", free.Load(), calls.Load())
+	}
+}
+
+// A prepare that fails writes nothing: no audit row, and the cursor and the receipt stay where they were.
+func TestPG_RunnerSpoolAPrepareFailureWritesNothing(t *testing.T) {
+	pool, st, rn, run, row := spoolPGFixture(t)
+	ctx := context.Background()
+	failure := errors.New("seal unavailable")
+	if _, err := st.IngestRunnerDecision(ctx, rn.ID, row, func(context.Context, types.AuditEvent) (types.AuditEvent, error) { return types.AuditEvent{}, failure }); !errors.Is(err, failure) {
+		t.Fatalf("IngestRunnerDecision = %v, want the prepare failure", err)
+	}
+	if c, a := spoolCounts(t, pool, run.ID); c != 0 || a != 0 {
+		t.Fatalf("a failed prepare left %d cursor and %d audit rows", c, a)
+	}
+	if ok, err := st.IngestRunnerDecision(ctx, rn.ID, row, prepareSpoolTest); err != nil || !ok {
+		t.Fatalf("the row was not accepted on its retry: %v %v", ok, err)
+	}
+}
