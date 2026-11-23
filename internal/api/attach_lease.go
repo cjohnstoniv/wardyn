@@ -20,7 +20,7 @@ package api
 //     is true only while this holder's id is the row's holder, re-checked against Postgres at
 //     least every attachLeaseFenceEvery. A holder whose lease was taken over, or that cannot reach
 //     the database to prove it still has it, writes nothing;
-//   - the keeper renews the leases this process holds, so a replica that dies lets its leases
+//   - the keeper renews the leases this process holds, in one statement per batch, so a replica that dies lets its leases
 //     lapse after attachLeaseTTL. It renews only a lease the holder has taken: a writer still
 //     taking one is not yet the keeper's to renew;
 //   - a renew or fence check that finds the row gone or lapsed is not yet a loss: a database
@@ -85,6 +85,18 @@ type attachLease struct {
 	// succeeded since, so a stalled database logs once, not on every tick.
 	recovering atomic.Bool
 	erring     atomic.Bool
+	// fmu orders check, the fence check in flight (live): a caller that needs the same answer in the same
+	// generation waits for it instead of asking the store again.
+	fmu   sync.Mutex
+	check *leaseCheck
+}
+
+// leaseCheck is one fence check in flight, shared only by the callers of its generation that arrive while it is
+// asked. It never stretches a confirmation: a caller still trusts only one younger than attachLeaseFenceEvery.
+type leaseCheck struct {
+	gen  uint64
+	done chan struct{}
+	ok   bool
 }
 
 // take records a lease this holder has just taken.
@@ -153,6 +165,8 @@ func (l *attachLease) fail(ctx context.Context, msg string, err error) {
 // confirmation is older than attachLeaseFenceEvery. It fails closed: a database that does not
 // answer is false for this call (logged once per run of failures), and a lease found gone is false
 // until the holder has taken it back (recoverAttachLease), which runs on its own goroutine.
+// Callers that need a fresh answer while one is being asked, in the same generation, share it (one store read at a
+// time per holder).
 func (l *attachLease) live() bool {
 	if l == nil {
 		return true
@@ -168,6 +182,29 @@ func (l *attachLease) live() bool {
 	if v := l.verified.Load(); v != nil && time.Since(*v) < attachLeaseFenceEvery {
 		return true
 	}
+	l.fmu.Lock()
+	if c := l.check; c != nil && c.gen == gen {
+		l.fmu.Unlock()
+		<-c.done
+		return c.ok && l.at(gen, func() {})
+	}
+	c := &leaseCheck{gen: gen, done: make(chan struct{})}
+	l.check = c
+	l.fmu.Unlock()
+	defer func() {
+		l.fmu.Lock()
+		if l.check == c {
+			l.check = nil
+		}
+		l.fmu.Unlock()
+		close(c.done)
+	}()
+	c.ok = l.ask(gen)
+	return c.ok
+}
+
+// ask is live's question to the store for generation gen: whether the holder's row is still its own, unlapsed.
+func (l *attachLease) ask(gen uint64) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), attachLeaseCallTimeout)
 	defer cancel()
 	ok, err := l.st.HoldsAttachLease(ctx, l.runID, l.h.id)
@@ -378,13 +415,18 @@ func (s *Server) attachLeaseKeeper(ctx context.Context) {
 	}
 }
 
+// attachLeaseRenewBatch bounds the leases one renew statement carries (a var so a test can lower it).
+var attachLeaseRenewBatch = 500
+
+// attachLeaseSlot is a writer's lease the keeper renews, taken in generation gen.
+type attachLeaseSlot struct {
+	run    uuid.UUID
+	writer *attachHolder
+	gen    uint64
+}
+
 func (s *Server) attachLeaseTick(ctx context.Context) {
-	type slot struct {
-		run    uuid.UUID
-		writer *attachHolder
-		gen    uint64
-	}
-	var held []slot
+	var held []attachLeaseSlot
 	var waiting []uuid.UUID
 	reg := s.attachRegistry()
 	reg.mu.Lock()
@@ -393,46 +435,58 @@ func (s *Server) attachLeaseTick(ctx context.Context) {
 		case ra.writer != nil && ra.writer.lease != nil:
 			// Only a lease the writer has taken: one still taking it has no row to renew yet.
 			if gen, ok := ra.writer.lease.state(); ok {
-				held = append(held, slot{run, ra.writer, gen})
+				held = append(held, attachLeaseSlot{run, ra.writer, gen})
 			}
 		case ra.writer == nil && firstWaiting(ra) != nil:
 			waiting = append(waiting, run)
 		}
 	}
 	reg.mu.Unlock()
-	for _, sl := range held {
-		s.renewAttachLease(ctx, sl.run, sl.writer, sl.gen)
-	}
+	s.renewAttachLeases(ctx, held)
 	for _, run := range waiting {
 		s.promoteFromLease(run)
 	}
 }
 
-// renewAttachLease renews w's lease, taken in generation gen. A writer already fenced, or one
-// whose renew finds the row gone or lapsed, takes it back instead (recoverAttachLease).
-func (s *Server) renewAttachLease(ctx context.Context, runID uuid.UUID, w *attachHolder, gen uint64) {
-	l := w.lease
-	if l.suspect.Load() || l.recovering.Load() {
-		if l.recovering.CompareAndSwap(false, true) {
-			defer l.recovering.Store(false)
-			s.recoverAttachLease(runID, w, gen)
+// renewAttachLeases renews held. A writer already fenced, or taking its lease back, recovers off the tick
+// (startAttachLeaseRecovery); the rest are renewed attachLeaseRenewBatch to a statement.
+func (s *Server) renewAttachLeases(ctx context.Context, held []attachLeaseSlot) {
+	var due []attachLeaseSlot
+	for _, sl := range held {
+		if l := sl.writer.lease; l.suspect.Load() || l.recovering.Load() {
+			s.startAttachLeaseRecovery(sl.run, sl.writer, sl.gen)
+			continue
 		}
-		return
+		due = append(due, sl)
+	}
+	for chunk := range slices.Chunk(due, attachLeaseRenewBatch) {
+		s.renewAttachLeaseBatch(ctx, chunk)
+	}
+}
+
+// renewAttachLeaseBatch renews chunk in one statement. A lease it did not extend was found gone or lapsed: its
+// writer is fenced and takes the lease back off the tick. An error confirms none and ends none.
+func (s *Server) renewAttachLeaseBatch(ctx context.Context, chunk []attachLeaseSlot) {
+	keys := make([]store.AttachLeaseKey, len(chunk))
+	for i, sl := range chunk {
+		keys[i] = store.AttachLeaseKey{RunID: sl.run, HolderID: sl.writer.id}
 	}
 	cctx, cancel := context.WithTimeout(ctx, attachLeaseCallTimeout)
-	ok, err := l.st.RenewAttachLease(cctx, runID, w.id, attachLeaseTTL)
+	renewed, err := chunk[0].writer.lease.st.RenewAttachLeases(cctx, keys, attachLeaseTTL)
 	cancel()
-	switch {
-	case err != nil:
-		l.fail(ctx, "wardynd: could not renew a run's attach lease; the client keeps it until the database answers", err)
-	case !ok:
-		l.erring.Store(false)
-		if l.at(gen, func() { l.suspect.Store(true) }) && l.recovering.CompareAndSwap(false, true) {
-			defer l.recovering.Store(false)
-			s.recoverAttachLease(runID, w, gen)
+	for i, sl := range chunk {
+		l := sl.writer.lease
+		switch {
+		case err != nil:
+			l.fail(ctx, "wardynd: could not renew a run's attach lease; the client keeps it until the database answers", err)
+		case !renewed[keys[i]]:
+			l.erring.Store(false)
+			if l.at(sl.gen, func() { l.suspect.Store(true) }) {
+				s.startAttachLeaseRecovery(sl.run, sl.writer, sl.gen)
+			}
+		case l.confirmed(sl.gen):
+			l.erring.Store(false)
 		}
-	case l.confirmed(gen):
-		l.erring.Store(false)
 	}
 }
 

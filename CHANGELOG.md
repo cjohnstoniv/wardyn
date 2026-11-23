@@ -21,6 +21,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
+- Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
+- Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke.
 
 ## [0.10.3] — 2026-11-23
 

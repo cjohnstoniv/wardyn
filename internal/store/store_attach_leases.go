@@ -46,8 +46,6 @@ type AttachLeaseStore interface {
 	// the row is gone, has lapsed or is still l.HolderID's, for ttl. It never takes a live row of
 	// another holder, a reservation for a take-over's taker included. It reports whether it did.
 	ReacquireAttachLease(ctx context.Context, l AttachLease, ttl time.Duration) (bool, error)
-	// RenewAttachLease extends holderID's lease by ttl, reporting whether holderID still held it.
-	RenewAttachLease(ctx context.Context, runID, holderID uuid.UUID, ttl time.Duration) (bool, error)
 	// RenewAttachLeases extends by ttl each lease in keys that its holder still holds, unlapsed, and reports the
 	// keys it extended. A key it leaves out was not extended: the row is gone, lapsed, or another holder's.
 	RenewAttachLeases(ctx context.Context, keys []AttachLeaseKey, ttl time.Duration) (map[AttachLeaseKey]bool, error)
