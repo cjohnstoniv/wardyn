@@ -677,8 +677,7 @@ func (s *Server) markUIReasserted(sess uiSession, now time.Time, gen uint64) {
 	}
 	if s.uiReassert == nil {
 		s.uiReassert = map[string]time.Time{}
-	} else if len(s.uiReassert) > 1024 {
-		clear(s.uiReassert)
 	}
+	pruneStale(s.uiReassert, stampTime, uiReassertInterval, now, &s.uiReassertSwept)
 	s.uiReassert[uiPassKey(sess)] = now
 }

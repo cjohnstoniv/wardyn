@@ -30,9 +30,8 @@ func decisionIsActivity(kind types.MachineKind, dl egress.DecisionLog) bool {
 }
 
 // shouldTouch reports whether dl, a decision on a run of this kind, restarts the idle clock and runID's last
-// touch is older than touchDebounce, recording now when it is. The map is pruned wholesale past a bound instead of
-// per-run bookkeeping — worst case is one extra UPDATE per live run after a
-// prune, which the debounce exists to make harmless.
+// touch is older than touchDebounce, recording now when it is. Past a bound the map drops the entries already older than
+// touchDebounce (pruneStale), which changes no answer.
 // ponytail: in-process only; per-replica debounce is fine because the singleton
 // control plane is a documented constraint (docs/OPERATIONS.md).
 //
@@ -56,9 +55,8 @@ func (s *Server) touchDue(runID uuid.UUID) bool {
 	}
 	if s.lastTouch == nil {
 		s.lastTouch = make(map[uuid.UUID]time.Time)
-	} else if len(s.lastTouch) > 4096 {
-		clear(s.lastTouch)
 	}
+	pruneStale(s.lastTouch, stampTime, touchDebounce, now, &s.lastTouchSwept)
 	s.lastTouch[runID] = now
 	return true
 }
