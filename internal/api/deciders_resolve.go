@@ -46,13 +46,15 @@ type deciderVerdict struct {
 	// host. The member path then answers its own capability refusal.
 	ownerCapDenied bool
 	// unreadable: the rules or the unit tree could not be read and a security caller decides anyway. No rule is
-	// known, so the narrowest binds: once at most (capScopeToRule).
+	// known, so the narrowest binds: once at most (capScopeToRule) and a second person (secondHuman).
 	unreadable bool
 }
 
 func (v deciderVerdict) decides() bool { return v.basis != "" }
 
-func (v deciderVerdict) secondHuman() bool { return v.rule != nil && v.rule.SecondHuman }
+func (v deciderVerdict) secondHuman() bool {
+	return v.unreadable || (v.rule != nil && v.rule.SecondHuman)
+}
 
 // ruleRef is the rule an approval.decide row names, nil with none.
 func (v deciderVerdict) ruleRef() *types.DeciderRuleRef {

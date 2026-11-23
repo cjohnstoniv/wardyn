@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -100,5 +101,38 @@ func TestDecidersUnreadableAuditSaysSo(t *testing.T) {
 		case !unreadable && has:
 			t.Errorf("rules readable: data %s carries deciders_unreadable", rows[0].Data)
 		}
+	}
+}
+
+// TestDecidersUnreadableNeedsASecondPerson: while the rules cannot be read, a security admin never decides a hold
+// on their own run, and mayDecide says so. Another security admin decides, and the admin token passes as the
+// audited break-glass, its bypass row naming the unreadable deciders.
+func TestDecidersUnreadableNeedsASecondPerson(t *testing.T) {
+	for name, broken := range dcUnreadable {
+		t.Run(name, func(t *testing.T) {
+			f := newDCFix(t, createdBy(dcSec))
+			f.st.setRules(f.team.ID, dcRule(types.DeciderKindEgressDomain, types.DeciderOwner))
+			broken(f.st)
+			ap := f.hold(types.DeciderKindEgressDomain)
+			if f.mayDecideAs(dcCtx(dcSec, oidc.RoleSecurityAdmin, nil, false), ap) {
+				t.Error("mayDecide = true for a security admin on their own run with the rules unreadable")
+			}
+			w := f.decide(dcSecurity(t, dcSec), ap, "deny", "")
+			f.wantStatus("security on their own run", w, http.StatusForbidden, "second_human_required", ap)
+			if !strings.Contains(w.Body.String(), "unit deciders (unreadable)") {
+				t.Errorf("refusal %s does not name the unreadable deciders", w.Body)
+			}
+			f.wantStatus("another security admin", f.decide(dcSecurity(t, dcSec2), ap, "deny", ""), http.StatusOK, "", ap)
+
+			tok := f.hold(types.DeciderKindEgressDomain)
+			f.wantStatus("admin token", f.decide(nil, tok, "deny", ""), http.StatusOK, "", tok)
+			bypass := f.actionRows("approval.second_human.bypass", tok.ID.String())
+			if len(bypass) != 1 || bypass[0].Outcome != "success" {
+				t.Fatalf("bypass rows = %+v, want one success row", bypass)
+			}
+			if sw, _ := auditData(t, bypass[0])["switch"].(string); sw != "unit deciders (unreadable)" {
+				t.Errorf("bypass switch = %q, want %q", sw, "unit deciders (unreadable)")
+			}
+		})
 	}
 }
