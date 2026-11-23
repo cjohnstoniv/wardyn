@@ -16,6 +16,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
 - WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
 - WARDYN_LOCK_POOL_MAX_CONNS (flag -lock-pool-max-conns, default 8, 1 to 64) sets how many connections each server holds for cross-replica locks at once, and how many guarded credential writes it dials at once. Each replica can use up to twice this number on top of its pool, so budget Postgres max_connections for it.
+- A UI app can be declared with `"kind": "desktop"`. The desktop's clipboard rules, its recording and `deny_interactive`
+  then bind that app whatever its name, as they bind the `novnc` app, and a support helper needs both the web apps and
+  the desktop door to open it. A ceiling whose entry for an app says `desktop` keeps the kind on every policy under it.
+  Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
+  than its ceiling; its runs still start, with the kind added.
 
 ### Changed
 
@@ -57,6 +62,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   `environment`.
 - Computer folders on Kubernetes in server mode: a **Both ways** folder no longer comes back from a run that ends while its agent is still running (a stop, an idle or maximum-age stop, a lease end). The run is stopped without its changes, and the run records that they were not brought back.
 - An owner's idle SSH connection now closes when the database stays unreachable for the session budget (30 seconds by default) after a check that got no answer; before, it stayed open. Raise `sessions.unconfirmed_budget_s` (up to 120) to give it longer.
+- A desktop declared under a name other than `novnc` is still relayed unfiltered until its `ui_apps` entry, or its
+  ceiling's, says `"kind": "desktop"`. Under a `data_out` rule of `review` or `blocked`, such an app is refused like
+  any other web app; only the `novnc` app is exempt.
+- Declare `kind: desktop` only once every wardynd runs this release.
+- Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
 
 ## [0.10.3] — 2026-11-23
 

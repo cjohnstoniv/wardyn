@@ -183,7 +183,8 @@ func sameJSON(a, b any) bool {
 // meetUIApps keeps the (name, port, path) apps both sides name, the same
 // identity Leq compares. A base without any stays without any. A kept app is inbound only if both sides
 // make it inbound, and its callers are the ones both sides name; an overlay that makes an app inbound, or
-// names a caller, beyond its base widens (refused at write, narrowed with a warning at resolve).
+// names a caller, beyond its base widens (refused at write, narrowed with a warning at resolve). A
+// kept app is a desktop when either side declares it one (meetUIAppKind); an overlay app of any other kind widens.
 //
 // An empty list is no opinion to Clamp, so it can never be the result over a base that names apps. An
 // overlay that sets ui_apps empty there means "no UI apps": the base's list is kept and the composed
@@ -196,6 +197,9 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 	}
 	var out []types.UIApp
 	for _, o := range ov {
+		if o.Kind != "" && o.Kind != types.UIAppKindDesktop {
+			m.widen("ui_apps", "%s:%d: invalid kind %q (want %q or none)", o.Name, o.Port, o.Kind, types.UIAppKindDesktop)
+		}
 		i := slices.IndexFunc(base, func(b types.UIApp) bool { return b.Name == o.Name && b.Port == o.Port })
 		if i < 0 {
 			m.widen("ui_apps", "%s:%d is not a UI app of the base", o.Name, o.Port)
@@ -205,7 +209,7 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 			m.widen("ui_apps", "%s:%d serves %s in the base, not %s", o.Name, o.Port, base[i].PathOrRoot(), o.PathOrRoot())
 			continue
 		}
-		app := types.UIApp{Name: o.Name, Port: o.Port, Path: base[i].Path, Inbound: base[i].Inbound && o.Inbound}
+		app := types.UIApp{Name: o.Name, Port: o.Port, Path: base[i].Path, Inbound: base[i].Inbound && o.Inbound, Kind: meetUIAppKind(base[i], o)}
 		if o.Inbound && !base[i].Inbound {
 			m.widen("ui_apps", "%s:%d is not inbound in the base", o.Name, o.Port)
 		}
@@ -226,6 +230,15 @@ func (m *meeter) meetUIApps(base, ov []types.UIApp) []types.UIApp {
 		m.fail(ReasonOverlayUnsatisfiable, "ui_apps", "none of the base's UI apps (%s) is in the overlay (%s); drop ui_apps from the overlay and set limits.deny_ui_apps", uiAppList(base), uiAppList(ov))
 	}
 	return out
+}
+
+// meetUIAppKind is the meet's kind for one app: the desktop kind when either side declares it, since the kind only
+// adds the desktop's rules to an app (types.UIAppKindDesktop), so keeping it never widens.
+func meetUIAppKind(a, b types.UIApp) string {
+	if a.Kind == types.UIAppKindDesktop || b.Kind == types.UIAppKindDesktop {
+		return types.UIAppKindDesktop
+	}
+	return ""
 }
 
 // uiAppList spells apps as name:port for a refusal.

@@ -245,7 +245,8 @@
       "port",
       "path",
       "inbound",
-      "callers"
+      "callers",
+      "kind"
     ],
     "WorkspaceMount": [
       "source",
