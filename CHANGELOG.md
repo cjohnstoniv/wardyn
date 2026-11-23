@@ -78,6 +78,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - `wardyn-runnerd doctor` and `status.json`: a start refused with no stage stays the reported failure when the computer's clock moved back between starts. An older refusal at a stage no longer replaces it.
 - On a desktop install, the launcher's refusal of a symlinked envelope file now says which check failed: the link's directory is owned by another account, or other accounts can write to it, with or without the sticky bit.
 - SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
+- Publishing a patch release for an older release line no longer moves the `:latest` tag of the agent images (`agent-base`, `agent-codex-cli`, `agent-aws-sso`) back to it: `:latest` always names the newest final release across all lines.
+- `scripts/verify-release.sh` checks an older release only for the images and files that release shipped, and fails when the Latest release, or `:latest` on the agent images, names anything but the newest final release.
 
 ### Security
 
