@@ -179,7 +179,6 @@ type GovernanceApprovalEligible struct {
 	Principal string `json:"principal"`
 	Email     string `json:"email,omitempty"`
 	Tier      string `json:"tier"`
-	UnitName  string `json:"unit_name,omitempty"`
 }
 
 // GovernanceApprovalUncountable is something the people count leaves out: Why is unconfirmed_people (Count of

@@ -47,7 +47,7 @@ const approvalsSample = `{
     {"approver": "lee", "tier": "unit_admin", "unit_name": "Payments", "approved_at": "2026-11-20T09:00:00Z", "counts": false,
      "dropped": "session_revoked", "dropped_at": "2026-11-20T09:30:00Z"}
   ],
-  "eligible": [{"principal": "kai", "email": "kai@example.com", "tier": "security_admin"}, {"principal": "sam", "tier": "unit_admin", "unit_name": "Payments"}],
+  "eligible": [{"principal": "kai", "email": "kai@example.com", "tier": "security_admin"}, {"principal": "sam", "tier": "unit_admin"}],
   "uncountable": [{"why": "unconfirmed_people", "count": 4}, {"why": "too_many_people"}],
   "reach": "cant_reach", "cant_reach_reason": "security", "still_needed": 1, "remaining_eligible": 3,
   "proposer_active": false, "reject_reason_required": true,
