@@ -410,7 +410,8 @@ func assistantPath(id uuid.UUID, tail string) string {
 }
 
 // A session's own binding holds only while its provider, UID, mark, model, grant and credential all hold, whatever
-// another provider answers: in every case below provider b stays ready, and availability says so.
+// another provider answers. Availability stays ready in every case where the binding stopped holding, and never on the
+// binding's own provider, UID and model; where only b is left a candidate (only), it is ready on b.
 func TestAssistantBindingHolds(t *testing.T) {
 	newState := func() (*types.AssistantSettings, []types.ModelProvider) {
 		set := &types.AssistantSettings{Compose: true, Providers: []types.AssistantProviderMark{
@@ -430,17 +431,18 @@ func TestAssistantBindingHolds(t *testing.T) {
 		allowed   []string
 		connected func(types.ModelProvider) bool
 		want      string
+		only      string // the one provider left a candidate, "" when the binding's provider may still serve a new session
 	}{
-		{"healthy", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, nil, all, ""},
-		{"purpose off", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Compose = false }, nil, nil, all, reasonAssistantOff},
-		{"mark removed", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers = s.Providers[1:] }, nil, nil, all, reasonAssistantSessionProviderChanged},
-		{"mark stops serving the purpose", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers[0].Compose = false }, nil, nil, all, reasonAssistantSessionProviderChanged},
-		{"unit denies the provider", func(*types.AssistantSettings, []types.ModelProvider) {}, []string{"uid-a"}, nil, all, reasonAssistantSessionProviderChanged},
-		{"model leaves the mark", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers[0].Models = []string{"m2"} }, nil, nil, all, reasonAssistantSessionProviderChanged},
-		{"model leaves the person's allowed models", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, []string{"m2"}, all, reasonAssistantSessionProviderChanged},
-		{"UID rotated", func(_ *types.AssistantSettings, ps []types.ModelProvider) { ps[0].UID = "uid-rotated" }, nil, nil, all, reasonAssistantSessionProviderChanged},
-		{"credential removed", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, nil, notA, reasonAssistantSessionProviderChanged},
-		{"provider disabled", func(_ *types.AssistantSettings, ps []types.ModelProvider) { ps[0].Disabled = true }, nil, nil, all, reasonAssistantSessionProviderChanged},
+		{"healthy", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, nil, all, "", ""},
+		{"purpose off", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Compose = false }, nil, nil, all, reasonAssistantOff, ""},
+		{"mark removed", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers = s.Providers[1:] }, nil, nil, all, reasonAssistantSessionProviderChanged, "b"},
+		{"mark stops serving the purpose", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers[0].Compose = false }, nil, nil, all, reasonAssistantSessionProviderChanged, "b"},
+		{"unit denies the provider", func(*types.AssistantSettings, []types.ModelProvider) {}, []string{"uid-a"}, nil, all, reasonAssistantSessionProviderChanged, "b"},
+		{"model leaves the mark", func(s *types.AssistantSettings, _ []types.ModelProvider) { s.Providers[0].Models = []string{"m2"} }, nil, nil, all, reasonAssistantSessionProviderChanged, ""},
+		{"model leaves the person's allowed models", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, []string{"m2"}, all, reasonAssistantSessionProviderChanged, ""},
+		{"UID rotated", func(_ *types.AssistantSettings, ps []types.ModelProvider) { ps[0].UID = "uid-rotated" }, nil, nil, all, reasonAssistantSessionProviderChanged, ""},
+		{"credential removed", func(*types.AssistantSettings, []types.ModelProvider) {}, nil, nil, notA, reasonAssistantSessionProviderChanged, "b"},
+		{"provider disabled", func(_ *types.AssistantSettings, ps []types.ModelProvider) { ps[0].Disabled = true }, nil, nil, all, reasonAssistantSessionProviderChanged, "b"},
 	}
 	for _, c := range cases {
 		set, ps := newState()
@@ -448,17 +450,28 @@ func TestAssistantBindingHolds(t *testing.T) {
 		if got := assistantBindingHolds(set, types.AssistantCompose, bind, ps, never, c.deny, c.allowed, c.connected); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
-		if c.want == reasonAssistantSessionProviderChanged {
-			if ans := assistantAvailability(set, types.AssistantCompose, ps, never, c.deny, c.allowed, c.connected); ans.State != types.AssistantReady || ans.ProviderID != "b" {
-				t.Errorf("%s: availability = %+v, want ready on b", c.name, ans)
-			}
+		if c.want != reasonAssistantSessionProviderChanged {
+			continue
+		}
+		ans := assistantAvailability(set, types.AssistantCompose, ps, never, c.deny, c.allowed, c.connected)
+		uid := ""
+		if i := slices.IndexFunc(ps, func(p types.ModelProvider) bool { return p.ID == ans.ProviderID }); i >= 0 {
+			uid = ps[i].UID
+		}
+		switch {
+		case ans.State != types.AssistantReady:
+			t.Errorf("%s: availability = %+v, want ready: the binding stopped holding, another candidate did not", c.name, ans)
+		case ans.ProviderID == bind.ProviderID && uid == bind.ProviderUID && ans.Model == bind.Model:
+			t.Errorf("%s: availability = %+v on %s, the binding's own provider, UID and model, which no longer hold", c.name, ans, uid)
+		case c.only != "" && ans.ProviderID != c.only:
+			t.Errorf("%s: availability = %+v, want ready on %s, the only provider left a candidate", c.name, ans, c.only)
 		}
 	}
 }
 
 // A live session's own binding is re-checked on every message and every edit: each change below answers 409 with
-// its reason and ends the session as turned_off, while GET /me/assistant answers ready on provider b in the same
-// state when only the session's provider stopped holding.
+// its reason and ends the session as turned_off, while GET /me/assistant, when only the session's provider stopped
+// holding, still answers ready, never on the binding's own provider, UID and model, and on b where only b is left.
 func TestAssistantMessageAndEditStillAvailable(t *testing.T) {
 	change := uuid.New()
 	cases := []struct {
@@ -466,13 +479,14 @@ func TestAssistantMessageAndEditStillAvailable(t *testing.T) {
 		alter  func(*types.SiteConfig)
 		review bool
 		reason string
-		bReady bool
+		ready  bool   // GET /me/assistant still answers ready, never on the binding
+		only   string // the one provider left a candidate, "" when the binding's provider may still serve a new session
 	}{
-		{"purpose off", func(sc *types.SiteConfig) { sc.Assistant.Compose = false }, false, reasonAssistantOff, false},
-		{"mark removed from a", func(sc *types.SiteConfig) { sc.Assistant.Providers = sc.Assistant.Providers[1:] }, false, reasonAssistantSessionProviderChanged, true},
-		{"model leaves a's mark", func(sc *types.SiteConfig) { sc.Assistant.Providers[0].Models = []string{"m2"} }, false, reasonAssistantSessionProviderChanged, true},
-		{"a's UID rotated", func(sc *types.SiteConfig) { sc.ModelProviders.Providers[0].UID = "uid-rotated" }, false, reasonAssistantSessionProviderChanged, true},
-		{"the change's kind becomes never sent", func(sc *types.SiteConfig) { sc.Assistant.NeverSentKinds = []string{govKindUnit} }, true, reasonAssistantKindNeverSent, false},
+		{"purpose off", func(sc *types.SiteConfig) { sc.Assistant.Compose = false }, false, reasonAssistantOff, false, ""},
+		{"mark removed from a", func(sc *types.SiteConfig) { sc.Assistant.Providers = sc.Assistant.Providers[1:] }, false, reasonAssistantSessionProviderChanged, true, "b"},
+		{"model leaves a's mark", func(sc *types.SiteConfig) { sc.Assistant.Providers[0].Models = []string{"m2"} }, false, reasonAssistantSessionProviderChanged, true, ""},
+		{"a's UID rotated", func(sc *types.SiteConfig) { sc.ModelProviders.Providers[0].UID = "uid-rotated" }, false, reasonAssistantSessionProviderChanged, true, ""},
+		{"the change's kind becomes never sent", func(sc *types.SiteConfig) { sc.Assistant.NeverSentKinds = []string{govKindUnit} }, true, reasonAssistantKindNeverSent, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -509,11 +523,18 @@ func TestAssistantMessageAndEditStillAvailable(t *testing.T) {
 					t.Errorf("%s: session = %s/%s, want ended as turned_off", route.path, got.State, got.EndReason)
 				}
 			}
-			if c.bReady {
+			if c.ready {
 				w := doSSO(t, srv, http.MethodGet, "/api/v1/me/assistant?purpose=compose", cookie, "")
 				var ans availabilityAnswer
-				if err := json.Unmarshal(w.Body.Bytes(), &ans); err != nil || ans.State != types.AssistantReady || ans.ProviderID != "b" {
-					t.Errorf("GET /me/assistant = %d %s, want ready on b: another provider's ready authorises nothing", w.Code, w.Body)
+				if err := json.Unmarshal(w.Body.Bytes(), &ans); err != nil || ans.State != types.AssistantReady {
+					t.Fatalf("GET /me/assistant = %d %s, want ready: the binding stopped holding, another candidate did not", w.Code, w.Body)
+				}
+				p, _ := modelProviderByID(f.site.ModelProviders, ans.ProviderID)
+				if ans.ProviderID == bind.ProviderID && p.UID == bind.ProviderUID && ans.Model == bind.Model {
+					t.Errorf("GET /me/assistant = %s on %s, the binding's own provider, UID and model, which no longer hold", w.Body, p.UID)
+				}
+				if c.only != "" && ans.ProviderID != c.only {
+					t.Errorf("GET /me/assistant = %s, want ready on %s, the only provider left a candidate", w.Body, c.only)
 				}
 			}
 		})
