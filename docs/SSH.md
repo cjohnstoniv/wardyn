@@ -221,7 +221,7 @@ Host wardyn-<run-id>
 `wardyn attach <run-id>` opens the same terminal with no key, no gateway and no ProxyCommand.
 
 - **The path.** One stderr line names it. It is `Attached on this computer (runner <name>)` when the run is on your
-  own runner here and the organisation allows local attach (`WARDYN_ATTACH_LOCAL`, off by default). Otherwise it is
+  own runner here and the organisation allows local attach (`WARDYN_ATTACH_LOCAL`, on by default). Otherwise it is
   `Attached through the organisation (<host>)`.
 - **One admission.** Both paths use the same ticket and the same checks. A refusal is shown as the server gives it,
   and the CLI never retries it the other way.

@@ -11,6 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- `WARDYN_ATTACH_LOCAL` is now `on` by default. A person's `wardyn attach` on their own runner's computer keeps the
+  terminal on that computer. The organisation still admits it exactly as an attach through the relay, holds the
+  writer lease and keeps the audit rows; the recording is made from the runner's copy of the output.
+
+### Before you upgrade
+
+- If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before
+  upgrading. An unset or empty value now takes the `on` default; an install that sets any other value keeps it.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
