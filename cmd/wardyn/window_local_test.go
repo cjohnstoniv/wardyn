@@ -262,7 +262,7 @@ func TestWindowLocalNoNonceAsksTheOrganisation(t *testing.T) {
 	}{
 		{"the organisation refuses first", refuse(http.StatusForbidden, "local_window_site_off", siteOff), siteOff},
 		{"the organisation needs the nonce", refuse(http.StatusBadRequest, "invalid_request_body", "The request needs local_nonce."),
-			"opens only on the computer its runner is on, and that runner handed out no window nonce here (no usable pointer file"},
+			"a window onto a Linux VM run opens only on the computer its runner is on, and that runner handed out no window nonce here (no usable pointer file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newWindowFixture(t, tc.grant, "")
