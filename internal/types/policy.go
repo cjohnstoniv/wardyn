@@ -627,6 +627,8 @@ type UIApp struct {
 	Path    string   `json:"path,omitempty"`
 	Inbound bool     `json:"inbound,omitempty"`
 	Callers []string `json:"callers,omitempty"`
+	// Kind is UIAppKindDesktop for an app that serves a desktop, "" for any other (IsDesktop).
+	Kind string `json:"kind,omitempty"`
 }
 
 // PathOrRoot is Path with the empty default applied.
@@ -636,6 +638,17 @@ func (a UIApp) PathOrRoot() string {
 	}
 	return a.Path
 }
+
+// UIAppKindDesktop is the one UIApp.Kind. The app serves a desktop, so the UI gateway relays it as it relays the
+// noVNC app, whatever its name: its WebSockets are RFB under the run's desktop rules or they close, it is recorded
+// as a desktop, and deny_interactive closes it (docs/UI-SANDBOXES.md). The kind only adds those rules to an app.
+const UIAppKindDesktop = "desktop"
+
+// UIAppDesktopName is the noVNC image's app (deploy/images/novnc): a desktop with or without the kind.
+const UIAppDesktopName = "novnc"
+
+// IsDesktop is whether a serves a desktop: declared with the desktop kind, or the noVNC image's app.
+func (a UIApp) IsDesktop() bool { return a.Kind == UIAppKindDesktop || a.Name == UIAppDesktopName }
 
 // ResourceLimits caps a sandbox's resource consumption. A ZERO field means "use
 // the platform default": the dispatch path fills conservative defaults (e.g.

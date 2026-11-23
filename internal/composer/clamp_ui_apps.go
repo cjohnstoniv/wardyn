@@ -19,13 +19,14 @@ import (
 // Matched on name AND port, since name alone would let a proposal point the ceiling's app at any
 // port in the sandbox; path is left as proposed. Inbound survives only where the ceiling's entry is
 // inbound too, and callers are cut to the ceiling's (a caller the ceiling does not name is dropped
-// with a warning). A ceiling that lists no apps has no opinion on either.
+// with a warning). A ceiling that lists no apps has no opinion on either. An app the ceiling's entry
+// declares a desktop (types.UIApp.IsDesktop) is kept as one, so a proposal cannot take the desktop's rules off it.
 func clampUIApps(proposed, ceiling []types.UIApp, warns *[]string) []types.UIApp {
 	if len(ceiling) == 0 || len(proposed) == 0 {
 		return proposed
 	}
 	var kept []types.UIApp
-	var dropped, uninbound, uncalled []string
+	var dropped, uninbound, uncalled, desktops []string
 	for _, a := range proposed {
 		name := fmt.Sprintf("%s:%d", a.Name, a.Port)
 		i := slices.IndexFunc(ceiling, func(c types.UIApp) bool { return c.Name == a.Name && c.Port == a.Port })
@@ -43,6 +44,10 @@ func clampUIApps(proposed, ceiling []types.UIApp, warns *[]string) []types.UIApp
 				uncalled = append(uncalled, name)
 			}
 		}
+		if ceiling[i].IsDesktop() && !a.IsDesktop() {
+			a.Kind = types.UIAppKindDesktop
+			desktops = append(desktops, name)
+		}
 		kept = append(kept, a)
 	}
 	if len(dropped) > 0 {
@@ -53,6 +58,9 @@ func clampUIApps(proposed, ceiling []types.UIApp, warns *[]string) []types.UIApp
 	}
 	if len(uncalled) > 0 {
 		*warns = append(*warns, fmt.Sprintf("dropped callers not in operator allowlist from %d ui_app(s): %s", len(uncalled), strings.Join(uncalled, ",")))
+	}
+	if len(desktops) > 0 {
+		*warns = append(*warns, fmt.Sprintf("marked %d ui_app(s) desktop, as the operator allowlist declares them: %s", len(desktops), strings.Join(desktops, ",")))
 	}
 	return kept
 }
