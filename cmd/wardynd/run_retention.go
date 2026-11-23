@@ -102,8 +102,10 @@ func runRetentionSweepTick(ctx context.Context, rs runRetentionStore, rec audit.
 		Outcome:   "success",
 		Data:      json.RawMessage(data),
 	}
-	if rerr := rec.Record(ctx, ev); rerr != nil {
-		audit.LogWriteFailure(ctx, ev, rerr)
+	// The runs are already gone: the row is written even when the leader term ended during the tick.
+	rctx := context.WithoutCancel(ctx)
+	if rerr := rec.Record(rctx, ev); rerr != nil {
+		audit.LogWriteFailure(rctx, ev, rerr)
 	}
 	return err
 }

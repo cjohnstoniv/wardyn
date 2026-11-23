@@ -47,17 +47,29 @@ func (a *alwaysFullRunRetentionStore) DeleteExpiredRuns(_ context.Context, _ tim
 	return limit, nil
 }
 
-// runRetentionRecorder keeps every audit row it is given.
+// runRetentionRecorder keeps every audit row it is given, and whether its context was already done.
 type runRetentionRecorder struct {
-	mu  sync.Mutex
-	evs []types.AuditEvent
+	mu       sync.Mutex
+	evs      []types.AuditEvent
+	doneCtxs int
 }
 
-func (r *runRetentionRecorder) Record(_ context.Context, ev types.AuditEvent) error {
+func (r *runRetentionRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.evs = append(r.evs, ev)
+	if ctx.Err() != nil {
+		r.doneCtxs++
+	}
 	return nil
+}
+
+// cancellingRunRetentionStore deletes one batch and then ends the tick's context, as a lost leader term does.
+type cancellingRunRetentionStore struct{ cancel context.CancelFunc }
+
+func (c cancellingRunRetentionStore) DeleteExpiredRuns(context.Context, time.Duration, int) (int, error) {
+	c.cancel()
+	return 7, nil
 }
 
 func TestValidateRunHistoryRetentionDays(t *testing.T) {
@@ -155,5 +167,19 @@ func TestRunHistoryRetentionFlagDefaultsToKeepForever(t *testing.T) {
 	os.Args = []string{"wardynd-test"}
 	if got := *parseBootFlags().runHistoryRetention; got != 0 {
 		t.Fatalf("default WARDYN_RUN_HISTORY_RETENTION_DAYS = %d, want 0 (keep forever)", got)
+	}
+}
+
+// The audit row of a tick whose context ended after its deletes is still recorded, on a context that is not done.
+func TestRunRetentionSweepTickAuditsAfterTheTermEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &runRetentionRecorder{}
+	if err := runRetentionSweepTick(ctx, cancellingRunRetentionStore{cancel: cancel}, rec, 30*24*time.Hour); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	assertRunRetentionRow(t, rec, 7, 30*24*time.Hour)
+	if rec.doneCtxs != 0 {
+		t.Fatal("the audit row was recorded on the cancelled tick context")
 	}
 }
