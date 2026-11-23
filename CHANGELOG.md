@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - The API tokens page now says that a provider token issued before a suspension stays refused after the person is reactivated: its exchange answers 400 `invalid_grant`, audited `session_revoked`.
+- An SSH helper whose shell was still opening when the run's owner joined now sees why the session closed, instead of a silent close (#4184).
 
 ## [0.10.2] — 2026-11-22
 
