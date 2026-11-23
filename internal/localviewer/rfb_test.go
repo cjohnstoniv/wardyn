@@ -141,8 +141,8 @@ func FuzzRFBServerMessages(f *testing.F) {
 		{msgBell},
 		update(1, rect(0, 0, 2, 2, encRaw), px(4)),
 		update(1, rect(62, 46, 2, 2, encRaw), px(4)),
-		update(1, rect(63, 0, 2, 1, encRaw), px(2)),
-		update(1, rect(0, 47, 1, 2, encRaw), px(2)),                   // one row past the bottom edge                   // one pixel past the right edge
+		update(1, rect(63, 0, 2, 1, encRaw), px(2)),                   // one pixel past the right edge
+		update(1, rect(0, 47, 1, 2, encRaw), px(2)),                   // one row past the bottom edge
 		update(1, rect(0, 0, 4, 4, encCopyRect), []byte{0, 61, 0, 0}), // a copy from past the edge
 		update(1, rect(10, 10, 8, 8, encCopyRect), []byte{0, 12, 0, 12}),
 		update(1, rect(0, 0, 0xffff, 0xffff, encRaw)),
