@@ -14,7 +14,6 @@ package db
 import (
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -51,41 +50,18 @@ func readMigration(t *testing.T, name string) string {
 	return string(data)
 }
 
-// TestMigrationPrefixesNoGapsOrDupes asserts the numeric prefixes form a
-// contiguous, duplicate-free sequence (1,2,3,4,...). A gap or duplicate means a
-// migration was renamed/dropped or two migrations collide, which breaks the
-// "filename is the immutable migration identity" assumption Migrate() relies on
-// for its schema_migrations tracking.
+// TestMigrationPrefixesNoGapsOrDupes asserts the numeric prefixes are duplicate-free and contiguous within the
+// pre-band sequence (from 0001) and within each band of migration_bands.tsv (from the band's first prefix). A gap
+// or duplicate means a migration was renamed or dropped, or two migrations collide, which breaks the "filename is
+// the immutable migration identity" assumption Migrate() relies on for its schema_migrations tracking. A gap
+// between two bands is how the bands work: each release line numbers its own.
 func TestMigrationPrefixesNoGapsOrDupes(t *testing.T) {
 	names := readMigrationNames(t)
-
-	seen := map[int]string{}
-	var prefixes []int
-	for _, name := range names {
-		m := migrationNameRe.FindStringSubmatch(name)
-		if m == nil {
-			t.Fatalf("migration %q does not match NNNN_slug.sql naming", name)
-		}
-		n, _ := strconv.Atoi(m[1])
-		if other, dup := seen[n]; dup {
-			t.Errorf("duplicate migration prefix %04d used by both %q and %q", n, other, name)
-		}
-		seen[n] = name
-		prefixes = append(prefixes, n)
-	}
-
-	sort.Ints(prefixes)
-	if len(prefixes) == 0 {
+	if len(names) == 0 {
 		t.Fatal("no migration prefixes found")
 	}
-	if prefixes[0] != 1 {
-		t.Errorf("first migration prefix = %04d, want 0001", prefixes[0])
-	}
-	for i := 1; i < len(prefixes); i++ {
-		if prefixes[i] != prefixes[i-1]+1 {
-			t.Errorf("gap in migration prefixes between %04d and %04d; "+
-				"prefixes must be contiguous", prefixes[i-1], prefixes[i])
-		}
+	for _, p := range checkMigrationPrefixes(names, readMigrationBands(t)) {
+		t.Error(p)
 	}
 }
 
