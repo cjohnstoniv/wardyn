@@ -6,10 +6,12 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -330,18 +332,17 @@ func TestMITMConnect_ManyStalledConnectsStayBounded(t *testing.T) {
 		t.Fatalf("%d answers 200 and %d answers 503, want %d and %d", len(open), len(refused), capN, total-capN)
 	}
 
-	closed := make(chan struct{}, len(open))
+	closed := make(chan bool, len(open))
 	for _, c := range open {
 		go func(c net.Conn) {
 			_ = c.SetReadDeadline(time.Now().Add(6 * time.Second))
-			_, _ = io.Copy(io.Discard, c)
-			closed <- struct{}{}
+			_, err := io.Copy(io.Discard, c)
+			var ne net.Error
+			closed <- !(errors.As(err, &ne) && ne.Timeout())
 		}(c)
 	}
 	for range open {
-		select {
-		case <-closed:
-		case <-time.After(6 * time.Second):
+		if !<-closed {
 			t.Fatalf("a stalled connection was not closed by the proxy within 6s")
 		}
 	}
@@ -405,5 +406,113 @@ func TestMITMConnect_RelayedFlowTakesNoSlot(t *testing.T) {
 				t.Errorf("open tunnels = %d, want 0: a relayed flow is not counted", got)
 			}
 		})
+	}
+}
+
+// TestMITMConnect_DeadlineEndsWithTheFirstPlaintextByte: on a plaintext origin the handshake
+// deadline is cleared once the client's first byte is in. An answer still streaming past the
+// deadline is served whole.
+func TestMITMConnect_DeadlineEndsWithTheFirstPlaintextByte(t *testing.T) {
+	shortenHandshakeTimeout(t, 1*time.Second)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "a")
+		w.(http.Flusher).Flush()
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = io.WriteString(w, "b")
+	}))
+	t.Cleanup(origin.Close)
+	certPEM, keyPEM := genTestCA(t)
+	ca, err := newCertAuthority(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("newCertAuthority: %v", err)
+	}
+	inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {
+		grantID: uuid.New(),
+		header:  injectedHeader{name: "x-amz-sso_bearer_token", value: "the-real-session-token"},
+	}}}
+	p := newProxy(Options{
+		RunID:     uuid.New(),
+		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{plainMITMHost}}),
+		Injector:  inj,
+		Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:  publicResolver{},
+		Dial:      redirectDial(upstreamAddr(origin)),
+		MITMHosts: []string{"http://" + plainMITMHost + ":8090"},
+		CA:        ca,
+	})
+	proxySrv := httptest.NewServer(p)
+	t.Cleanup(proxySrv.Close)
+
+	c, resp := rawCONNECT(t, proxySrv.Listener.Addr().String(), plainMITMHost+":8090")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT = %d, want 200", resp.StatusCode)
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+plainMITMHost+":8090/stream", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := req.Write(c); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	got, err := http.ReadResponse(bufio.NewReader(c), req)
+	if err != nil {
+		t.Fatalf("read the response: %v", err)
+	}
+	defer func() { _ = got.Body.Close() }()
+	body, err := io.ReadAll(got.Body)
+	if got.StatusCode != http.StatusOK || string(body) != "ab" || err != nil {
+		t.Fatalf("response = %d %q (%v), want 200 \"ab\": the handshake deadline must not outlive the client's first byte", got.StatusCode, body, err)
+	}
+}
+
+// TestTunnelCap_ResumedRelayFlowsToATerminatedHostLeaveTheSigninLane: handleConnect hands
+// mitmConnect the resumed flag on both of its terminated branches, so a relay flow to a host the
+// proxy terminates holds the relay's slot, not the proxy's, and a VM guest at the relay's bound
+// cannot starve the person's sign-in CONNECT.
+func TestTunnelCap_ResumedRelayFlowsToATerminatedHostLeaveTheSigninLane(t *testing.T) {
+	for _, c := range []struct{ name, host string }{
+		{"a token-injection host", "site.test"},
+		{"an inspected model host", anthropicHost},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newSigninLaneRigFor(t, true, func(o *Options) {
+				o.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test", anthropicHost}})
+				o.MITMLLM = true
+			})
+			for i := range maxOpenTunnels {
+				flow := fmt.Sprintf("%016x", i+1)
+				if st, _, _ := stagedConnect(t, rig.relayAddr, c.host+":443", flow, vmnetStageAsk); st != http.StatusNoContent {
+					t.Fatalf("relay ask %d = %d, want 204", i+1, st)
+				}
+				if st, _, _ := stagedConnect(t, rig.relayAddr, c.host+":443", flow, vmnetStageTunnel); st != http.StatusOK {
+					t.Fatalf("relay tunnel %d = %d, want 200", i+1, st)
+				}
+			}
+			if _, _, st := rig.connect(t, rig.signinAddr, "site.test:443", signinAuth(rig.goodCred)); st != http.StatusOK {
+				t.Fatalf("sign-in CONNECT beside %d terminated relay flows = %d, want 200", maxOpenTunnels, st)
+			}
+		})
+	}
+}
+
+// TestTunnelCap_ViaOrgConnectTakesASlot: a CONNECT to a destination the organisation serves is a
+// terminated tunnel like any other and takes a slot. Past the cap it is refused, and leaves no
+// decision row: the organisation owns its decisions.
+func TestTunnelCap_ViaOrgConnectTakesASlot(t *testing.T) {
+	f := newLaptopFixture(t)
+	f.p.maxTunnels = 1
+	srv := httptest.NewServer(f.p)
+	t.Cleanup(srv.Close)
+
+	first := viaOrgMITMConn(t, srv.URL, "api.corp.example", f.caPEM)
+	waitTunnels(t, f.p, 1)
+	_, resp := rawCONNECT(t, srv.Listener.Addr().String(), "api.corp.example:443")
+	wantTunnelLimit(t, resp, "api.corp.example")
+	_ = first.Close()
+	waitTunnels(t, f.p, 0)
+	_ = f.p.sink.close(context.Background())
+	if f.sink.Len() != 0 {
+		t.Fatalf("a via_org CONNECT refused at the cap wrote a decision: %s", f.sink.String())
 	}
 }
