@@ -293,3 +293,42 @@ func TestOrchestrator_CheckFit_DelegatesToTheSubstrateWithAFit(t *testing.T) {
 		t.Fatalf("got %+v err=%v asked=%+v, want the k8s answer for the size asked", got, err, k8s.asked)
 	}
 }
+
+// holdingSubstrate is a sweepingSubstrate that also holds.
+type holdingSubstrate struct {
+	*sweepingSubstrate
+	heldN  int
+	holdAt []string
+}
+
+func (s *holdingSubstrate) SweepOrphanedSandboxesHolding(_ context.Context, _ time.Duration, isOrphan, held func(uuid.UUID) bool) (int, int, error) {
+	s.holdAt = append(s.holdAt, s.name)
+	id := uuid.New()
+	_, _ = isOrphan(id), held(id) // proves both predicates were wired through
+	return s.n, s.heldN, s.err
+}
+
+// TestOrchestrator_SweepOrphanedSandboxesHolding_HoldsOnlyOnAHoldingSubstrate: a substrate with the holding
+// sweep gets the hold and its held count is summed; one with only the plain sweep gets the plain sweep, and a
+// substrate with neither is skipped.
+func TestOrchestrator_SweepOrphanedSandboxesHolding_HoldsOnlyOnAHoldingSubstrate(t *testing.T) {
+	docker := &holdingSubstrate{sweepingSubstrate: &sweepingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker"}, n: 2}, heldN: 3}
+	k8s := &sweepingSubstrate{fakeSubstrate: &fakeSubstrate{name: "k8s"}, n: 4}
+	vmm := &fakeSubstrate{name: "vmm"}
+	o := New(docker, k8s, vmm)
+
+	swept, heldN, err := o.SweepOrphanedSandboxesHolding(context.Background(), time.Hour,
+		func(uuid.UUID) bool { return true }, func(uuid.UUID) bool { return true })
+	if err != nil {
+		t.Fatalf("SweepOrphanedSandboxesHolding: %v", err)
+	}
+	if swept != 6 || heldN != 3 {
+		t.Fatalf("swept %d, held %d; want 6, 3", swept, heldN)
+	}
+	if len(docker.holdAt) != 1 || len(docker.sweptRefs) != 0 {
+		t.Errorf("the holding substrate must get the holding sweep only: holdAt=%v plain=%v", docker.holdAt, docker.sweptRefs)
+	}
+	if len(k8s.sweptRefs) != 1 {
+		t.Errorf("a substrate with no hold must get the plain sweep once: %v", k8s.sweptRefs)
+	}
+}
