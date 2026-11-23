@@ -57,17 +57,19 @@ replicas: 1
 ha:
   enabled: false
 
-# Readiness probe path. /readyz pings Postgres, so a dead DB takes the pod out
-# of the Service's endpoints; liveness and startup stay on /healthz either way.
+# Readiness probe path. /healthz (the default) answers while Postgres refuses
+# connections, so a database outage leaves the pod in its Service and the console
+# up to show its database banner, which polls /readyz itself. Liveness and startup
+# stay on /healthz either way.
 #
-# ONLY OVERRIDE THIS FOR AN OLD IMAGE. /readyz was added in 0.6, and the empty
+# /readyz adds a 3-second Postgres ping and takes the pod out of the Service while
+# it fails. It was added in 0.6, and the empty
 # image.tag above resolves to .Chart.AppVersion, which is 0.10.3 — so the default
-# install serves it. An image.tag PINNED at or below 0.5.0 does not: the probe
-# 404s forever, the pod never becomes Ready, and the rollout hangs with no other
-# symptom. Pin it back with `--set readinessProbe.path=/healthz` and accept
-# 0.5.0's ceiling: a dead Postgres then reads healthy again.
+# image serves it. An image.tag PINNED at or below 0.5.0 does not: a probe set to
+# /readyz there 404s forever and the rollout hangs. `helm upgrade --reuse-values`
+# keeps the previous release's path, /readyz for a release installed before 0.10.4.
 readinessProbe:
-  path: /readyz
+  path: /healthz
 
 # Sub-path the console, API, sign-in and health endpoints are served under
 # behind a reverse proxy (WARDYN_BASE_PATH), e.g. "/wardyn": a leading slash,

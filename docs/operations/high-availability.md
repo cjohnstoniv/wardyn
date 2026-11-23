@@ -56,17 +56,18 @@
 
 | Endpoint | Probe | Reports | Fails when |
 |---|---|---|---|
-| `/healthz` | Liveness and startup. Liveness checks every 10 seconds and restarts the container after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable Postgres only leaves out the sign-in help text | The process does not answer: it is down, or still starting ([`healthz.go`](../../internal/api/healthz.go)) |
-| `/readyz` | Readiness, every 10 seconds, not ready after 3 failures | A Postgres ping with a 3-second limit. `200` with `{"status":"ok"}`, or `503` with `{"status":"error","postgres":"unreachable"}` | Postgres does not answer. The pod leaves the Service, so with one replica the Service has no ready pod ([`security_headers.go`](../../internal/api/security_headers.go) `handleReadyz`) |
+| `/healthz` | Liveness, startup and, by default, readiness. Liveness checks every 10 seconds and restarts the container after 3 failures; readiness marks the pod not ready after 3 failures | `status: ok`, the version, the sign-in options, the runner, the confinement classes and the eBPF sensor's verdict. A signed-in caller also gets the substrates and the components. An unreadable Postgres only leaves out the sign-in help text | The process does not answer: it is down, or still starting ([`healthz.go`](../../internal/api/healthz.go)) |
+| `/readyz` | Readiness where `readinessProbe.path` is `/readyz`, every 10 seconds, not ready after 3 failures. The console polls it for its database banner | A Postgres ping with a 3-second limit. `200` with `{"status":"ok"}`, or `503` with `{"status":"error","postgres":"unreachable"}` | Postgres does not answer. Where readiness reads it, the pod leaves the Service, so with one replica the Service has no ready pod ([`security_headers.go`](../../internal/api/security_headers.go) `handleReadyz`) |
 
 - `/readyz` does not cover the sandbox runner. A runner fault shows on `wardyn_runner_up` and the `substrate_health` row of `/setup/status` instead ([Monitoring](monitoring.md#substrate-and-sweep-health)).
 - A Postgres outage does not restart the pod, because liveness reads `/healthz`.
+- With the chart's default readiness, a Postgres that refuses connections leaves the pod Ready, so the console stays reachable and shows its database banner.
 
 ### What to watch
 
 | Signal | Reads as |
 |---|---|
-| Pod restarts, and the pod's Ready state | A restart is the downtime in the first table. Not ready means `/readyz` is failing |
+| Pod restarts, and the pod's Ready state | A restart is the downtime in the first table. Not ready means the readiness path is failing: `/healthz` by default, `/readyz` where `readinessProbe.path` sets it |
 | `wardyn_store_up` | 0 means Postgres did not answer the same ping `/readyz` makes |
 | `wardyn_runner_up` and the `substrate_health` row | The control plane's own runner stopped answering, which `/readyz` does not show |
 | `wardyn_sweep_last_tick_seconds` | A background sweep that stopped ticking |

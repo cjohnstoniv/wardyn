@@ -40,6 +40,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A request to a UI app whose run cannot be read is answered 503, not 404, and so is a UI session check whose sponsor cannot be read (403 before). A UI session check whose run's profile composition nothing satisfies is answered 403 `governance_overlay_unsatisfiable`, not 503. (#4057)
 - An inbound caller that keeps calling a run already at its request limit now uses up its own limit as well. (#3766)
 - On a run that attaches a workspace, an inline policy or policy overlay mount that the server refuses on its own files is now refused when the workspace is seeded (422 `workspace_seed_policy_conflict`), no longer with the policy (400 `inline_policy_invalid` or `policy_overlay_invalid`). A run that attaches no workspace is refused as before.
+- Helm chart: the readiness probe now reads `/healthz` by default instead of `/readyz`. A Postgres outage that
+  refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
+  its database banner. `/readyz` still pings Postgres.
 
 ### Fixed
 
@@ -82,6 +85,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   any other web app; only the `novnc` app is exempt.
 - Declare `kind: desktop` only once every wardynd runs this release.
 - Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
+- Helm chart: to keep readiness on Postgres, set `readinessProbe.path: /readyz`. A values file or `--set` that names a
+  path keeps it, and `helm upgrade --reuse-values` keeps the previous release's `/readyz`. To see the path in use:
+  `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
 
 ## [0.10.3] — 2026-11-23
 

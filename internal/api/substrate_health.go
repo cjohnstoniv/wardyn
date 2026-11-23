@@ -17,8 +17,8 @@ import (
 
 // substrate_health.go reports a broken substrate or a stalled background sweep
 // on two surfaces, a gauge and a /setup/status row, and on neither of them
-// touches /readyz. /readyz stays store-only on purpose: the chart's
-// readinessProbe reads it, and teaching it about the substrate would pull every
+// touches /readyz. /readyz stays store-only on purpose: a chart whose readinessProbe.path
+// is /readyz reads it, and teaching it about the substrate would pull every
 // replica out of the Service on a substrate fault, and with them the console,
 // the one diagnostic surface the operator has.
 
