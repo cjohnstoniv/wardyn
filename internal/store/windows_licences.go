@@ -75,8 +75,9 @@ var (
 	ErrWindowsLicenceSeatsBelowHolders = errors.New("store: fewer seats than the Windows licence pool's holders")
 	ErrWindowsLicenceStale             = errors.New("store: the Windows licence pool or image revision is stale")
 	ErrWindowsLicenceSeatLive          = errors.New("store: a run holds a seat in the Windows licence pool")
-	// ErrWindowsVMFenced is a write a windows_vm run's fence refused: a run inserted already ended, or an update
-	// of its kind, creator or image, or one that brings it back from an end. No route should reach it.
+	// ErrWindowsVMFenced is a write a windows_vm run's fence refused: a run inserted already ended, or SetRunImage
+	// changing its image. The fence's other update refusals reach the caller as the database error. No route
+	// should reach it.
 	ErrWindowsVMFenced = errors.New("store: the Windows VM run's licence fence refused the write")
 )
 

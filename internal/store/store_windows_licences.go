@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,8 +16,8 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// windowsInsertErr maps a take-trigger refusal, named by its constraint, to the fence's error. runInsertErr asks
-// it for every 23514 whose constraint starts windows_.
+// windowsInsertErr maps a take or fence refusal, named by its constraint, to the fence's error. runInsertErr asks
+// it for every 23514 whose constraint starts windows_, and windowsFenceErr for SetRunImage's.
 func windowsInsertErr(constraint string) error {
 	var err error
 	switch constraint {
@@ -34,6 +35,16 @@ func windowsInsertErr(constraint string) error {
 		err = ErrWindowsVMFenced
 	}
 	return fmt.Errorf("%w (%s)", err, constraint)
+}
+
+// windowsFenceErr maps an update the fence refused, a 23514 whose constraint starts windows_, through
+// windowsInsertErr; any other error passes through unchanged.
+func windowsFenceErr(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23514" && strings.HasPrefix(pe.ConstraintName, "windows_") {
+		return windowsInsertErr(pe.ConstraintName)
+	}
+	return err
 }
 
 const windowsPoolCols = `id, name, seats, state, revision, created_by, created_at, updated_at`

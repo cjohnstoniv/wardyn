@@ -396,8 +396,8 @@ func (s PG) SetSandboxRef(ctx context.Context, id uuid.UUID, ref string) error {
 // SetRunImage scoped-writes ONLY the resolved-image provenance column, once
 // the image resolves after the row is inserted.
 func (s PG) SetRunImage(ctx context.Context, id uuid.UUID, image string) error {
-	return s.execRun(ctx, "set run image",
-		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id)
+	return windowsFenceErr(s.execRun(ctx, "set run image",
+		`UPDATE agent_runs SET image=$1, updated_at=now() WHERE id=$2`, image, id))
 }
 
 // SetRunImageArches scoped-writes ONLY the architectures the run's prewrapped image was checked on, once

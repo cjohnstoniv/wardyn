@@ -45,6 +45,7 @@ func TestMachineKind(t *testing.T) {
 func TestRunsMemberImage(t *testing.T) {
 	for kind, want := range map[MachineKind]bool{
 		"": true, MachineContainer: true, MachineLinuxVM: true, MachineMacOSVM: false, MachineWindowsVM: false,
+		"plan9_vm": true,
 	} {
 		if got := kind.RunsMemberImage(); got != want {
 			t.Errorf("%q: RunsMemberImage = %v, want %v", kind, got, want)
@@ -56,6 +57,7 @@ func TestRunsMemberImage(t *testing.T) {
 func TestHasDiskOverlay(t *testing.T) {
 	for kind, want := range map[MachineKind]bool{
 		"": false, MachineContainer: false, MachineLinuxVM: true, MachineMacOSVM: false, MachineWindowsVM: true,
+		"plan9_vm": false,
 	} {
 		if got := kind.HasDiskOverlay(); got != want {
 			t.Errorf("%q: HasDiskOverlay = %v, want %v", kind, got, want)

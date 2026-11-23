@@ -514,6 +514,10 @@ func TestPG_WindowsFence_ImageChangeRefused(t *testing.T) {
 	if got := refusedBy(err); got != "23514 windows_vm_image_fixed" {
 		t.Fatalf("a change of image = %q, want windows_vm_image_fixed", got)
 	}
+	err = f.pg.SetRunImage(f.ctx, r.ID, other.Ref)
+	if !errors.Is(err, store.ErrWindowsVMFenced) || !strings.Contains(err.Error(), "windows_vm_image_fixed") {
+		t.Fatalf("SetRunImage to another image = %v, want windows_vm_image_fixed", err)
+	}
 	if err := f.pg.SetRunImage(f.ctx, r.ID, img.Ref); err != nil {
 		t.Fatalf("a provenance write of the same ref: %v", err)
 	}
@@ -522,20 +526,26 @@ func TestPG_WindowsFence_ImageChangeRefused(t *testing.T) {
 func TestPG_WindowsFence_EndedRunCannotReturn(t *testing.T) {
 	f := newWinFix(t)
 	_, img := f.setup(1, "ana@example.com")
-	r := f.mustLaunch(img, "ana@example.com")
-	if err := f.setState(r.ID, types.RunKilled); err != nil {
-		t.Fatal(err)
-	}
-	for _, live := range []types.RunState{types.RunRunning, types.RunPending, types.RunQueued} {
-		if got := refusedBy(f.setState(r.ID, live)); got != "23514 windows_vm_ended" {
-			t.Errorf("KILLED to %s = %q, want windows_vm_ended", live, got)
+	for _, end := range []types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived} {
+		r := f.mustLaunch(img, "ana@example.com")
+		if err := f.setState(r.ID, end); err != nil {
+			t.Fatal(err)
 		}
-	}
-	if err := f.setState(r.ID, types.RunArchived); err != nil {
-		t.Fatalf("an ended run to another end state: %v", err)
-	}
-	if f.leaseOf(r.ID) {
-		t.Fatal("an ended run holds a seat")
+		for _, live := range []types.RunState{types.RunQueued, types.RunPending, types.RunStarting, types.RunRunning, types.RunWaiting} {
+			if got := refusedBy(f.setState(r.ID, live)); got != "23514 windows_vm_ended" {
+				t.Errorf("%s to %s = %q, want windows_vm_ended", end, live, got)
+			}
+		}
+		other := types.RunArchived
+		if end == types.RunArchived {
+			other = types.RunKilled
+		}
+		if err := f.setState(r.ID, other); err != nil {
+			t.Fatalf("%s to %s, another end state: %v", end, other, err)
+		}
+		if f.leaseOf(r.ID) {
+			t.Fatalf("a run ended %s holds a seat", end)
+		}
 	}
 }
 
@@ -559,13 +569,15 @@ func TestPG_WindowsFence_DeleteWithLiveSeatRefused(t *testing.T) {
 func TestPG_WindowsFence_InsertedEndedRefused(t *testing.T) {
 	f := newWinFix(t)
 	_, img := f.setup(1, "ana@example.com")
-	r := winRun(img, "ana@example.com", types.RunKilled)
-	_, err := f.pg.CreateRun(f.ctx, r)
-	if !errors.Is(err, store.ErrWindowsVMFenced) || !strings.Contains(err.Error(), "windows_vm_inserted_ended") {
-		t.Fatalf("a run inserted already ended = %v, want windows_vm_inserted_ended", err)
-	}
-	if f.runExists(r.ID) || f.leases() != 0 {
-		t.Fatal("the refused insert left a run or a seat")
+	for _, end := range []types.RunState{types.RunCompleted, types.RunFailed, types.RunKilled, types.RunStopped, types.RunArchived} {
+		r := winRun(img, "ana@example.com", end)
+		_, err := f.pg.CreateRun(f.ctx, r)
+		if !errors.Is(err, store.ErrWindowsVMFenced) || !strings.Contains(err.Error(), "windows_vm_inserted_ended") {
+			t.Errorf("a run inserted %s = %v, want windows_vm_inserted_ended", end, err)
+		}
+		if f.runExists(r.ID) || f.leases() != 0 {
+			t.Fatalf("the refused %s insert left a run or a seat", end)
+		}
 	}
 }
 
