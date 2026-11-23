@@ -228,9 +228,17 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
+	// A kept run takes no ticket, except its owner's own terminal ticket into a run its Kubernetes runner keeps
+	// with its agent running (keptCopyOutRefusal): never a UI app's, a support helper's or a sponsor's.
 	if runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
-		return
+		by := ""
+		if purpose == "" && !asSupport && !asSponsor {
+			by = principalFromRequest(r)
+		}
+		if msg := s.keptCopyOutRefusal(r.Context(), run, by, "run has ended; cannot attach"); msg != "" {
+			writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
+			return
+		}
 	}
 	// The session caps (per run, and per principal on a run more than one principal can attach to) are
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them

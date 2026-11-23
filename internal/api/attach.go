@@ -254,10 +254,18 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
-	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	// A kept run is RUNNING with nothing to attach to, except for its owner's own ticket into a run its Kubernetes
+	// runner keeps with its agent running (keptCopyOutRefusal). A support helper's or an issuer portal's ticket is
+	// refused as on any kept run.
 	if runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
-		return
+		by := ""
+		if ta, ok := ticketActorFromContext(ctx); admit.admitBy.IsZero() && (!ok || ta.support == uuid.Nil) {
+			_, by = actorFromRequest(r)
+		}
+		if msg := s.keptCopyOutRefusal(actx, run, by, "run has ended; cannot attach"); msg != "" {
+			writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
+			return
+		}
 	}
 	if run.SandboxRef == "" {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
