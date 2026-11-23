@@ -61,10 +61,10 @@ func (s PG) DeleteExpiredRuns(ctx context.Context, olderThan time.Duration, limi
 		FOR UPDATE OF r SKIP LOCKED
 	), gone AS (
 		DELETE FROM agent_runs r USING doomed d WHERE r.id = d.id
-		RETURNING r.id, r.unit_id, r.created_at, ` + runEndTimeR + ` AS ended_at
+		RETURNING r.id, r.unit_id, r.created_by, r.created_at, ` + runEndTimeR + ` AS ended_at
 	)
-	INSERT INTO run_history_tombstones (run_id, unit_id, created_at, ended_at)
-	SELECT id, unit_id, created_at, ended_at FROM gone`
+	INSERT INTO run_history_tombstones (run_id, unit_id, created_by, created_at, ended_at)
+	SELECT id, unit_id, created_by, created_at, ended_at FROM gone`
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return 0, fmt.Errorf("store: delete expired runs: %w", err)

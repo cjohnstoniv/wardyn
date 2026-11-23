@@ -414,3 +414,46 @@ func TestDeleteExpiredRunsDeletesARunWhoseOwnActionsChainPG(t *testing.T) {
 		t.Fatalf("%d of the run's actions are left", left)
 	}
 }
+
+// A deleted run's tombstone keeps its creator, so erasing that person still finds the run (its recording outlives
+// it): PersonRunIDs lists it as deleted beside the person's kept runs, and blanking its creator keeps its unit and
+// drops it from the next list.
+func TestPersonRunIDsReadsDeletedRunsUntilBlankedPG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	unit := uuid.New()
+	mk := func(by string, daysAgo int) uuid.UUID {
+		r := newRun(types.RunRunning)
+		r.CreatedBy, r.UnitID = by, &unit
+		id := persistRun(t, ctx, pool, r).ID
+		endRun(t, pool, id, types.RunCompleted, daysAgo)
+		return id
+	}
+	gone, kept, other := mk("erase-me@example.com", 40), mk("erase-me@example.com", 1), mk("someone@example.com", 40)
+	if n := deleteExpired(t, st, 100); n != 2 {
+		t.Fatalf("deleted %d runs, want 2", n)
+	}
+	var by string
+	if err := pool.QueryRow(ctx, `SELECT created_by FROM run_history_tombstones WHERE run_id = $1`, gone).Scan(&by); err != nil || by != "erase-me@example.com" {
+		t.Fatalf("tombstone creator = %q, %v; want the run's creator", by, err)
+	}
+	k, d, err := st.PersonRunIDs(ctx, "erase-me@example.com")
+	if err != nil || !slices.Equal(k, []uuid.UUID{kept}) || !slices.Equal(d, []uuid.UUID{gone}) {
+		t.Fatalf("PersonRunIDs = kept %v, deleted %v, %v; want [%s] and [%s]", k, d, err, kept, gone)
+	}
+	if n, err := st.BlankRunTombstoneCreators(ctx, "erase-me@example.com", []uuid.UUID{gone, other}); err != nil || n != 1 {
+		t.Fatalf("BlankRunTombstoneCreators = %d, %v; want 1 (another person's tombstone is not theirs)", n, err)
+	}
+	var gotUnit *uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT created_by, unit_id FROM run_history_tombstones WHERE run_id = $1`, gone).Scan(&by, &gotUnit); err != nil ||
+		by != "" || gotUnit == nil || *gotUnit != unit {
+		t.Fatalf("blanked tombstone = %q, unit %v, %v; want no creator and the unit kept", by, gotUnit, err)
+	}
+	if _, d, err := st.PersonRunIDs(ctx, "erase-me@example.com"); err != nil || len(d) != 0 {
+		t.Fatalf("after the blank, deleted runs = %v, %v; want none", d, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT created_by FROM run_history_tombstones WHERE run_id = $1`, other).Scan(&by); err != nil || by != "someone@example.com" {
+		t.Fatalf("another person's tombstone creator = %q, %v", by, err)
+	}
+}

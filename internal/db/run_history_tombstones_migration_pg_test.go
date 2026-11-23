@@ -10,8 +10,9 @@ import (
 
 const runHistoryTombstonesMigration = "0400"
 
-// TestMigration_RunHistoryTombstones_PG: the migration grants SELECT and INSERT on the tombstone table to the role
-// that already writes agent_runs, found from the catalog, and nothing more; a role that only reads agent_runs gets
+// TestMigration_RunHistoryTombstones_PG: the migration grants SELECT, INSERT and UPDATE (person erasure blanks a
+// tombstone's creator) on the tombstone table to the role that already writes agent_runs, found from the catalog,
+// and nothing more; a role that only reads agent_runs gets
 // nothing, and the grants on agent_runs itself are unchanged (DELETE on it stays the operator's grant).
 func TestMigration_RunHistoryTombstones_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, runHistoryTombstonesMigration)
@@ -27,7 +28,7 @@ func TestMigration_RunHistoryTombstones_PG(t *testing.T) {
 
 	migrateBefore(t, pool, "0401")
 
-	for priv, want := range map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": false, "DELETE": false, "TRUNCATE": false} {
+	for priv, want := range map[string]bool{"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": false, "TRUNCATE": false} {
 		if got := pgScalar[bool](t, pool, `SELECT has_table_privilege($1, 'run_history_tombstones', $2)`, app, priv); got != want {
 			t.Errorf("app role %s on run_history_tombstones = %v, want %v", priv, got, want)
 		}

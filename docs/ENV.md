@@ -689,7 +689,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - A run dispatched to an enrolled runner since 0.9.3 is kept: its output watermark holds it. On an install whose runs go to runners, the sweep deletes only server-local runs.
 - Also kept: a run another run's pending action names (an action with no run holds it while it exists), a kept machine's run or fresh start, a workload's current run, a teardown hold's run.
 - The leader sweeps hourly, at most 10,000 runs an hour. A sweep that deleted anything writes a `run.retention.sweep` audit row.
-- A deleted run's recordings are not deleted with it; `WARDYN_RECORDING_RETENTION_DAYS` governs them. Set it no longer than this window, or a recording outlives the run page it plays on.
+- A deleted run's recordings are not deleted with it; `WARDYN_RECORDING_RETENTION_DAYS` governs them. Erasing the run's creator still deletes them: the run's tombstone keeps its creator until then. Set it no longer than this window, or a recording outlives the run page it plays on.
 - A unit's model usage report and its opaque tunnel count (`llm.scan.bypass` rows) count only the runs still kept: a period that reaches before the window reads part of its data.
 - An audit query by a deleted run's id (`run_id`) answers empty, for its owner and a unit admin alike. The unit admin's audit feed still shows the run's rows.
 
