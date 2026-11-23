@@ -11,6 +11,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The Runs board reads ended runs through a new index on their end time, live and ended runs as two ordered reads, and a member's list that includes sponsored service runs through the creator index, so reading a page of the board no longer walks the caller's whole run history.
+- The attention badge and the "Needs you" filter read only runs that can need attention.
+- `/healthz` reuses its runner, network-policy and sensor reads for up to 2 seconds, one read at a time. A stalled database still fails it.
+- The audit screen re-reads the kernel sensor's health every 30 seconds instead of on every refresh.
+- The Runs board reads its hidden-run counts on load and once a minute instead of on every poll. `GET /api/v1/runs` takes `counts=skip` to leave the two hidden-count headers out.
+- The terminal-sandbox retry sweep pages by run creation time and id, so runs created between sweeps no longer hold it on its newest page.
+- Debounce and ready caches drop only expired entries when they grow large, instead of forgetting every entry.
+
+### Before you upgrade
+
+- Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
