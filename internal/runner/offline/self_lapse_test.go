@@ -5,10 +5,7 @@ package offline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -238,27 +235,7 @@ func restartSelfLapsing(t *testing.T, m *Manager, sub *localSub, elapsed *time.D
 		t.Fatal(err)
 	}
 	if dropLapseBy {
-		path := filepath.Join(m.dir, "offline", "state.json")
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var st struct {
-			Runs map[string]map[string]json.RawMessage `json:"runs"`
-		}
-		var top map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &top); err != nil || json.Unmarshal(raw, &st) != nil {
-			t.Fatal("state file does not parse")
-		}
-		if _, ok := st.Runs[id.String()]["lapse_by"]; !ok {
-			t.Fatal("state file has no lapse_by to drop")
-		}
-		delete(st.Runs[id.String()], "lapse_by")
-		top["runs"], _ = json.Marshal(st.Runs)
-		older, _ := json.Marshal(top)
-		if err := os.WriteFile(path, older, 0600); err != nil {
-			t.Fatal(err)
-		}
+		dropStateLapseBy(t, m.dir, id)
 	}
 	restarted, err := New(m.dir, m.runnerID, sub, uuid.UUID.String, noOutput, noErase)
 	if err != nil {

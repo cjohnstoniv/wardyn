@@ -550,6 +550,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	// A restart keeps each run it can vouch for until its saved lapse time, then contains the rest. The k8s
+	// runner gave its runs theirs in started, after listing its proxies; this call adds none there.
+	manager.ProvisionalDeadlines()
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
 	if extra.netPolWatch != nil {
