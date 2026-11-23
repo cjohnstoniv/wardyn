@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A macOS sandbox can require the Mac's MDM device certificate: set the MDM CA and its CRL URL in the runner settings; a missing, expired or revoked certificate, or one whose revocation cannot be checked, refuses the sandbox. Off until set. The macOS runner in this release does not present a certificate yet, so while an MDM device CA is set every Mac runner is refused until a release whose runner presents one. Migration `0400_runner_device_cert` adds the columns `device_cert` and `device_cert_reported_at` to `runners`. (#2975)
+
+### Before you upgrade
+
+- Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
