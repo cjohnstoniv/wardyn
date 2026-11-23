@@ -1110,8 +1110,9 @@ jobs:
   # `:latest` on each float-latest row names the highest FINAL release across every line. Every
   # :latest write is here, under one concurrency group that every tag's run shares, so two releases' writes
   # never overlap. GitHub keeps one running and one pending job per group and a newer arrival replaces the
-  # pending one. That is safe because a run points :latest at the highest published final it finds when it
-  # writes, never just at its own tag, so whichever run writes last leaves the same answer.
+  # pending one. A run points :latest at the highest published final it finds when it writes, never just at its own
+  # tag, so :latest never moves down. A replaced job (an RC or a dry run can replace one) leaves its run cancelled:
+  # rerun that job (RELEASING.md step 6).
   # scripts/float-latest.sh holds the rule; scripts/test-release-image-tag.sh tests it.
   float-latest:
     name: Float latest to the highest final release

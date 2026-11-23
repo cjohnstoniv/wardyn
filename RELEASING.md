@@ -417,7 +417,7 @@ crash or a usage limit resumes with the same command:
    - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
    - `:latest` on the agent images is not yours to move. The float-latest job in release.yml points it at the highest published final across every line, so a patch to an older line leaves it on the newer line's final. `verify-release` fails when it, or the Latest label, names anything else.
 
-   A failed or cancelled float-latest job stops release-patch.sh at its run watch; rerun only that job. Run verify-release for an older line only after the newer line's Release is published.
+   A failed or cancelled float-latest job stops release-patch.sh at its run watch; rerun only that job. Run verify-release for an older line only after the newer line's Release is published. Never rerun or dispatch release.yml on a tag before v0.10.4: its images and promote jobs still move `:latest` to that tag.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.
