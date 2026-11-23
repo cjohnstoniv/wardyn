@@ -12,6 +12,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -25,6 +26,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -286,7 +289,7 @@ func (e *apEnv) seedPeople() {
 // TestPG_Approvals_RequireSecurity: the `require_security` table. The rule is judged on the last approval only;
 // a unit admin and then a unit admin is refused 409 and writes nothing; a unit admin and then a security admin
 // applies; a security admin who was since mapped to the user role but keeps a unit-admin grant counts as a unit
-// admin (H3); a caller whose record now says user is refused 403 whatever their older session says; a record
+// admin; a caller whose record now says user is refused 403 whatever their older session says; a record
 // that says security admin cannot raise a unit-admin request or a CLI token above the unit-admin tier.
 func TestPG_Approvals_RequireSecurity(t *testing.T) {
 	e := newApEnv(t, 1)
@@ -318,7 +321,7 @@ func TestPG_Approvals_RequireSecurity(t *testing.T) {
 		t.Errorf("unit admin then security admin: state %q, want applied", got)
 	}
 
-	// H3: a security admin approved, is since mapped to the user role, and keeps a unit-admin grant. Their row
+	// A security admin approved, is since mapped to the user role, and keeps a unit-admin grant. Their row
 	// counts as unit admin, so the rule refuses.
 	e.grant(e.a, types.CapabilitySubjectUser, govSubBob)
 	ch = e.heldOn(e.a2)
@@ -962,4 +965,437 @@ func TestPG_Approvals_PortalKindsRecordThenApply(t *testing.T) {
 			t.Fatalf("after the second approval bound = %v (%v), want the binding retired", bound, err)
 		}
 	})
+}
+
+// ── what an earlier approval is dropped for, and what it is not ──────────────────────────────────────────────────
+
+// deactivate marks a person inactive in the people directory.
+func (e *apEnv) deactivate(sub string) {
+	e.t.Helper()
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO people (principal, created_by, deactivated_at) VALUES ($1, 'seed', now())
+		ON CONFLICT (principal) DO UPDATE SET deactivated_at = now()`, sub); err != nil {
+		e.t.Fatalf("deactivate %s: %v", sub, err)
+	}
+}
+
+// newUnitAdmin is a new person who is a unit admin of unit a: a session, a sign-in record in the user group and
+// the grant, which is returned so a test can take it away.
+func (e *apEnv) newUnitAdmin(sub string) (*http.Cookie, types.GovernanceUnitAdmin) {
+	e.t.Helper()
+	email := sub + "@corp.example"
+	e.record(sub, email, []string{apGroupUsers}, nil, false)
+	return e.sessionOf(sub, email), e.grant(e.a, types.CapabilitySubjectUser, sub)
+}
+
+// eligibleOf is the principals the approvals block of a decoded change lists as able to approve.
+func eligibleOf(m map[string]any) []string {
+	var out []string
+	list, _ := approvalsOf(m)["eligible"].([]any)
+	for _, p := range list {
+		if row, ok := p.(map[string]any); ok {
+			who, _ := row["principal"].(string)
+			out = append(out, who)
+		}
+	}
+	return out
+}
+
+// TestPG_Approvals_DeactivatedAndGrantRemovedApproversAreDropped: an approver deactivated between the approvals
+// is dropped as deactivated, and one whose unit-admin grant was taken away is dropped as grant_removed; either
+// way the last approval is recorded, the change stays pending, and the page counts one.
+func TestPG_Approvals_DeactivatedAndGrantRemovedApproversAreDropped(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+
+	first, _ := e.newUnitAdmin("sub-ap-leaver")
+	ch := e.heldOn(e.a2)
+	e.approve(first, ch.ID, http.StatusOK)
+	e.deactivate("sub-ap-leaver")
+	e.approve(e.peerA, ch.ID, http.StatusOK)
+	if got, why := e.changeState(ch.ID), e.droppedOf(ch.ID, "sub-ap-leaver"); got != types.GovernanceChangePending || why != droppedDeactivated {
+		t.Errorf("an approver deactivated in between: state %q dropped %q, want pending and %s", got, why, droppedDeactivated)
+	}
+	if have := approvalsOf(e.read(ch.ID))["have"]; have != float64(1) {
+		t.Errorf("have = %v, want 1: only the second approval counts", have)
+	}
+
+	second, grant := e.newUnitAdmin("sub-ap-moved")
+	ch = e.heldOn(e.a2)
+	e.approve(second, ch.ID, http.StatusOK)
+	if _, err := store.RevokeUnitAdminQ(context.Background(), e.pool, e.a.ID, grant.ID); err != nil {
+		t.Fatalf("take the grant away: %v", err)
+	}
+	e.approve(e.peerA, ch.ID, http.StatusOK)
+	if got, why := e.changeState(ch.ID), e.droppedOf(ch.ID, "sub-ap-moved"); got != types.GovernanceChangePending || why != droppedGrantRemoved {
+		t.Errorf("an approver whose grant was removed: state %q dropped %q, want pending and %s", got, why, droppedGrantRemoved)
+	}
+	if have := approvalsOf(e.read(ch.ID))["have"]; have != float64(1) {
+		t.Errorf("have = %v, want 1: only the second approval counts", have)
+	}
+}
+
+// TestPG_Approvals_StaleAtANonFinalApproval: a write to the target after the proposal makes the change stale at
+// the first approval of two, not only at the last; the stale answer is the same 409, the state is stale, and
+// no approval row is written.
+func TestPG_Approvals_StaleAtANonFinalApproval(t *testing.T) {
+	e := newGovEnv(t, minApprovals(2))
+	e.signIn(govSubBob, "bob@corp.example")
+	p := e.seedProfile("stale-first", "pypi.org")
+	ch := e.pending(e.call(e.alice, http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("stale-first", "pypi.org", "github.com")))
+	if w := e.admin(http.MethodPut, "/api/v1/governance/units/"+p.ID.String(), profileBody("stale-first", "github.com")); w.Code != http.StatusOK {
+		t.Fatalf("the admin-token write = %d %s, want 200", w.Code, w.Body)
+	}
+	w := e.call(e.bob, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeStale {
+		t.Fatalf("the first of two approvals of a stale change = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeStale)
+	}
+	if got := e.changeState(ch.ID); got != types.GovernanceChangeStale {
+		t.Errorf("state = %q, want stale", got)
+	}
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM governance_change_approvals WHERE change_id = $1`, ch.ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("approval rows = %d (%v), want none", n, err)
+	}
+}
+
+// TestPG_Approvals_RunNodeRecordNeedsOneApproval: a run node record has one decider whatever the deployment's
+// minimum is. With a minimum of 3 it is held needing one approval and applies on it, with today's two-person
+// record, and no approval row is read or written.
+func TestPG_Approvals_RunNodeRecordNeedsOneApproval(t *testing.T) {
+	e := newContainmentEnv(t, false)
+	e.cfg.GovernanceMinApprovals = 3
+	e.srv = New(e.cfg)
+	reuse := runner.NodeSample{Name: "n1", UID: "uid-n1-new", MachineID: "m7", SystemUUID: "s7"}
+	e.mustPage(&runnerwire.ContainmentPending{Kind: runner.ContainmentPendingDelete, Since: time.Now().Add(-time.Hour), NameReused: true, Tuple: e.tuple(reuse)}, nil)
+	tuple := e.containment(e.alice).Pending.Tuple
+	ch := e.pending(e.recordW(e.alice, types.NodeRecordPoweredOff, tuple))
+	var required int
+	if err := e.pool.QueryRow(context.Background(), `SELECT required_approvals FROM governance_changes WHERE id = $1`, ch.ID).Scan(&required); err != nil || required != 1 {
+		t.Fatalf("required approvals = %d (%v), want 1", required, err)
+	}
+	e.approve(ch.ID)
+	if got := e.changeState(ch.ID); got != types.GovernanceChangeApplied {
+		t.Fatalf("state after one approval = %q, want applied", got)
+	}
+	actions := e.recordActions()
+	if len(actions) != 1 || len(actions[0].NodeRecord.Approvers) != 2 || actions[0].NodeRecord.Approvers[0] == actions[0].NodeRecord.Approvers[1] {
+		t.Fatalf("PENDING after the approval = %+v, want one record by two people", actions)
+	}
+	var rows int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM governance_change_approvals WHERE change_id = $1`, ch.ID).Scan(&rows); err != nil || rows != 0 {
+		t.Errorf("approval rows = %d (%v), want none", rows, err)
+	}
+}
+
+// TestPG_Approvals_SignOutStillCountsAndARevocationDoesNot: with the revocation store the server really uses,
+// an approver who signs out afterwards (a cut of their browser sessions) still counts at the last approval,
+// and one whose sessions are revoked afterwards is dropped as session_revoked.
+func TestPG_Approvals_SignOutStillCountsAndARevocationDoesNot(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	rev := &pgTestRevocations{pool: e.pool, st: e.pg}
+	srv := e.otherServer(func(c *Config) { c.SessionRevocations = rev })
+	decide := func(c *http.Cookie, id uuid.UUID) {
+		t.Helper()
+		if w := doSSO(t, srv, http.MethodPost, approvePath(id), c, ""); w.Code != http.StatusOK {
+			t.Fatalf("approve %s = %d %s, want 200", id, w.Code, w.Body)
+		}
+	}
+
+	ch := e.heldOn(e.a2)
+	decide(e.adminA, ch.ID)
+	if err := rev.CutSessions(context.Background(), uaSubAdminA); err != nil {
+		t.Fatal(err)
+	}
+	decide(e.peerA, ch.ID)
+	if got := e.changeState(ch.ID); got != types.GovernanceChangeApplied {
+		t.Errorf("after the first approver signed out: state %q, want applied (a sign-out leaves the approval counting)", got)
+	}
+
+	ch = e.heldOn(e.a2)
+	decide(e.alice, ch.ID)
+	if err := rev.RevokeSub(context.Background(), govSubAlice); err != nil {
+		t.Fatal(err)
+	}
+	decide(e.bob, ch.ID)
+	if got, why := e.changeState(ch.ID), e.droppedOf(ch.ID, govSubAlice); got != types.GovernanceChangePending || why != droppedSessionRevoked {
+		t.Errorf("after the first approver's sessions were revoked: state %q dropped %q, want pending and %s", got, why, droppedSessionRevoked)
+	}
+}
+
+// TestPG_Approvals_ACLITokenApprovalSurvivesARefreshAndASignOut: an approval made with a CLI access token still
+// counts after the session refreshes (the old token is revoked at the first refresh and deleted at a later
+// one) and after the person signs out of the CLI (the token is revoked); it is dropped as session_revoked when
+// the person's identity is revoked.
+func TestPG_Approvals_ACLITokenApprovalSurvivesARefreshAndASignOut(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	rev := &pgTestRevocations{pool: e.pool, st: e.pg}
+	srv := e.otherServer(func(c *Config) { c.SessionRevocations = rev })
+	const sub = "sub-ap-cli"
+	_, _ = e.newUnitAdmin(sub)
+	mint := func() (uuid.UUID, string) {
+		t.Helper()
+		raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+		notTruncated := false
+		tok, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: oidc.RoleUser, UserType: types.UserTypeStandard,
+			Kind: types.APITokenKindCLIAccess, Name: "cli", GroupsTruncated: &notTruncated,
+		}, raw)
+		if err != nil {
+			t.Fatalf("mint the CLI token: %v", err)
+		}
+		return tok.ID, raw
+	}
+	// approvedWith is a held change that sub approved with a new CLI token, then what happens to that token,
+	// then the second approval by peerA.
+	approvedWith := func(after func(token uuid.UUID)) uuid.UUID {
+		t.Helper()
+		token, raw := mint()
+		ch := e.heldOn(e.a2)
+		if w := do(t, srv, http.MethodPost, approvePath(ch.ID), raw, ""); w.Code != http.StatusOK {
+			t.Fatalf("approve with the CLI token = %d %s, want 200", w.Code, w.Body)
+		}
+		var kind string
+		if err := e.pool.QueryRow(context.Background(), `SELECT api_token_kind FROM governance_change_approvals WHERE change_id = $1 AND approver = $2`, ch.ID, sub).Scan(&kind); err != nil || kind != types.APITokenKindCLIAccess {
+			t.Fatalf("the approval's token kind = %q (%v), want %s", kind, err, types.APITokenKindCLIAccess)
+		}
+		after(token)
+		if w := doSSO(t, srv, http.MethodPost, approvePath(ch.ID), e.peerA, ""); w.Code != http.StatusOK {
+			t.Fatalf("second approval = %d %s, want 200", w.Code, w.Body)
+		}
+		return ch.ID
+	}
+	exec := func(sql string, id uuid.UUID) {
+		t.Helper()
+		if _, err := e.pool.Exec(context.Background(), sql, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name, after := range map[string]func(uuid.UUID){
+		"a refresh at generation 1 revokes the old token": func(id uuid.UUID) {
+			exec(`UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE id = $1`, id)
+		},
+		"a refresh past generation 1 deletes the old token": func(id uuid.UUID) { exec(`DELETE FROM api_tokens WHERE id = $1`, id) },
+		"a sign-out of the CLI stamps revoked_at": func(id uuid.UUID) {
+			exec(`UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE id = $1`, id)
+		},
+	} {
+		id := approvedWith(after)
+		if got := e.changeState(id); got != types.GovernanceChangeApplied {
+			t.Errorf("%s: state %q, want applied (the approval still counts)", name, got)
+		}
+	}
+
+	id := approvedWith(func(uuid.UUID) {
+		if err := rev.RevokeSub(context.Background(), sub); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if got, why := e.changeState(id), e.droppedOf(id, sub); got != types.GovernanceChangePending || why != droppedSessionRevoked {
+		t.Errorf("after the person's identity was revoked: state %q dropped %q, want pending and %s", got, why, droppedSessionRevoked)
+	}
+}
+
+// TestPG_Approvals_EmptyPrincipalIsRefusedWithNoRow: a caller with an empty principal, who is not the admin token,
+// is refused as an approver is and writes no row, and no predicate is asked about them: an empty principal
+// reads as the admin token.
+func TestPG_Approvals_EmptyPrincipalIsRefusedWithNoRow(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	kind := governanceChangeKinds[ch.TargetKind].forChange(ch)
+	ctx := context.Background()
+	r := httptest.NewRequest(http.MethodPost, approvePath(ch.ID), nil)
+	_, err := e.pg.DecideGovernanceChange(ctx, ch.ID, store.GovernanceDecision{To: types.GovernanceChangeApplied}, func(q store.Querier, locked types.GovernanceChange) error {
+		return e.srv.decideMulti(ctx, r, q, kind, locked, &approvalRun{caller: approvalCaller{email: "nobody@corp.example"}}, &govApplied{})
+	})
+	var refusal *govRefusal
+	if !errors.As(err, &refusal) || refusal.why != "approver tier" {
+		t.Fatalf("an approval with an empty principal = %v, want the approver refusal", err)
+	}
+	var n int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM governance_change_approvals WHERE change_id = $1`, ch.ID).Scan(&n); err != nil || n != 0 {
+		t.Errorf("approval rows = %d (%v), want none", n, err)
+	}
+	if got := e.changeState(ch.ID); got != types.GovernanceChangePending {
+		t.Errorf("state = %q, want pending", got)
+	}
+}
+
+// TestPG_Approvals_UnsetAuditRowsAreToday: with the minimum unset the propose and approve rows carry exactly the
+// keys they always did, none of the keys the approval rules add, and no approval or retract row is written.
+func TestPG_Approvals_UnsetAuditRowsAreToday(t *testing.T) {
+	e := newGovEnv(t)
+	ch := e.held()
+	e.approveBy(e.bob, ch.ID)
+	keysOf := func(action string, ignore ...string) []string {
+		t.Helper()
+		rows := e.audits(action)
+		if len(rows) == 0 {
+			t.Fatalf("no %s row", action)
+		}
+		var out []string
+		for k := range auditData(t, rows[len(rows)-1]) {
+			if !slices.Contains(ignore, k) {
+				out = append(out, k)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	if got, want := keysOf("governance.change.propose", "units"), []string{"changed", "expires_at", "op", "target_key", "target_kind"}; !slices.Equal(got, want) {
+		t.Errorf("propose row keys = %v, want %v", got, want)
+	}
+	if got, want := keysOf("governance.change.approve"), []string{"proposed_by", "target_key", "target_kind"}; !slices.Equal(got, want) {
+		t.Errorf("approve row keys = %v, want %v", got, want)
+	}
+	for _, action := range []string{"governance.change.approval", "governance.change.retract"} {
+		if rows := e.audits(action); len(rows) != 0 {
+			t.Errorf("%d %s rows with the minimum unset, want none", len(rows), action)
+		}
+	}
+}
+
+// TestPG_Approvals_AnApproversOldEmailStaysWithTheApproval: an approver whose email changed after approving is
+// still known by the email stored on the approval: another principal who now has that old email is left out of
+// the pool and refused as a duplicate.
+func TestPG_Approvals_AnApproversOldEmailStaysWithTheApproval(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	oldEmail := uaSubAdminA + "@corp.example"
+	e.record(uaSubAdminA, "new@corp.example", []string{apGroupUsers}, nil, false)
+
+	const heir = "sub-ap-heir"
+	e.grant(e.a, types.CapabilitySubjectUser, heir)
+	e.record(heir, oldEmail, []string{apGroupUsers}, nil, false)
+	if listed := eligibleOf(e.read(ch.ID)); slices.Contains(listed, heir) || slices.Contains(listed, uaSubAdminA) {
+		t.Errorf("eligible = %v, want neither the counted approver nor the principal at their stored email", listed)
+	}
+	w := e.call(e.sessionOf(heir, oldEmail), http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeAlreadyApproved {
+		t.Errorf("a principal at the approver's stored email = %d %s, want 409 %s", w.Code, w.Body, reasonGovernanceChangeAlreadyApproved)
+	}
+	if got := e.changeState(ch.ID); got != types.GovernanceChangePending {
+		t.Errorf("state = %q, want pending", got)
+	}
+}
+
+// TestPG_Approvals_TwoApproversWhoNowShareAnEmailBothCount: two approvals recorded under different emails keep
+// counting when both people later sign in with one email, so have does not change; a third principal at that
+// email is not a duplicate of either, because it matches no stored email, and its approval applies the change.
+func TestPG_Approvals_TwoApproversWhoNowShareAnEmailBothCount(t *testing.T) {
+	e := newApEnv(t, 3)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	e.approve(e.peerA, ch.ID, http.StatusOK)
+	const shared = "shared@corp.example"
+	e.record(uaSubAdminA, shared, []string{apGroupUsers}, nil, false)
+	e.record(uaSubPeerA, shared, []string{apGroupUsers}, nil, false)
+	if have := approvalsOf(e.read(ch.ID))["have"]; have != float64(2) {
+		t.Fatalf("have = %v after both approvers now share one email, want 2", have)
+	}
+
+	const third = "sub-ap-third"
+	e.grant(e.a, types.CapabilitySubjectUser, third)
+	e.record(third, shared, []string{apGroupUsers}, nil, false)
+	e.approve(e.sessionOf(third, shared), ch.ID, http.StatusOK)
+	if got := e.changeState(ch.ID); got != types.GovernanceChangeApplied {
+		t.Errorf("state = %q, want applied: the third principal matches no stored email", got)
+	}
+}
+
+// TestPG_Approvals_ScimRemovalAfterAnApproval: a SCIM group removal clears the recorded roles claim, so a record
+// the removal touched reads like one written before the approvals migration. A removal with a blank external id
+// truncates the record: the role claim is gone and the approval reads cant_confirm, never role_removed. A removal
+// with an external id leaves the record whole, and the role derives from the narrowed groups alone. A record
+// truncated at sign-in, whose role lived only in roles, loses it at any removal, a named group included.
+func TestPG_Approvals_ScimRemovalAfterAnApproval(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.seedPeople()
+	ctx := context.Background()
+	now := time.Now()
+	remove := func(sub, externalID string) {
+		t.Helper()
+		var identity uuid.UUID
+		if err := e.pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ($1, 'https://idp.example', $2) RETURNING id`,
+			sub, strings.TrimPrefix(sub, "sub-")+"@corp.example").Scan(&identity); err != nil {
+			t.Fatal(err)
+		}
+		g, err := e.pg.CreateScimGroup(ctx, externalID, "group "+sub, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.pg.AddScimGroupMembers(ctx, g.ID, []uuid.UUID{identity}, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.pg.StartGroupRemoval(ctx, g.ID, identity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// held is a change the person approves, then the removal runs, then alice makes the second approval.
+	held := func(approver *http.Cookie, removal func()) uuid.UUID {
+		t.Helper()
+		ch := e.heldOn(e.a2)
+		e.approve(approver, ch.ID, http.StatusOK)
+		removal()
+		e.approve(e.alice, ch.ID, http.StatusOK)
+		return ch.ID
+	}
+
+	// A blank external id: the record is truncated and the roles are gone.
+	e.record(govSubBob, "bob@corp.example", nil, []string{apGroupRoot}, false)
+	id := held(e.bob, func() { remove(govSubBob, " ") })
+	if got, why := e.changeState(id), e.droppedOf(id, govSubBob); got != types.GovernanceChangePending || why != droppedCannotConfirmed {
+		t.Errorf("a removal with a blank external id: state %q dropped %q, want pending and %s", got, why, droppedCannotConfirmed)
+	}
+
+	// A named group: the record stays whole and the role still derives from the groups.
+	e.record(govSubCarol, "carol@corp.example", []string{"eng-two", apGroupRoot}, []string{apGroupRoot}, false)
+	id = held(e.carol, func() { remove(govSubCarol, "eng-two") })
+	if got, why := e.changeState(id), e.droppedOf(id, govSubCarol); got != types.GovernanceChangeApplied || why != "" {
+		t.Errorf("a removal with a named group: state %q dropped %q, want applied and counted", got, why)
+	}
+
+	// Truncated at sign-in, the role only in roles: any removal takes it.
+	const late = "sub-ap-scim-late"
+	e.record(late, late+"@corp.example", nil, []string{apGroupRoot}, true)
+	id = held(ssoSession(t, late, late+"@corp.example", oidc.RoleSecurityAdmin), func() { remove(late, "eng-three") })
+	if got, why := e.changeState(id), e.droppedOf(id, late); got != types.GovernanceChangePending || why != droppedCannotConfirmed {
+		t.Errorf("a record truncated at sign-in, after a named removal: state %q dropped %q, want pending and %s", got, why, droppedCannotConfirmed)
+	}
+}
+
+// TestPG_Approvals_TheViewerCannotBeLast: when the change needs a security admin and the next approval would be
+// the last, a unit admin sees cannot_be_last, a security admin sees can_approve, and the first approver sees
+// that their approval counts.
+func TestPG_Approvals_TheViewerCannotBeLast(t *testing.T) {
+	e := newApEnv(t, 2)
+	e.requireCounts(govKindMembership, 2, true)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	viewer := func(c *http.Cookie) map[string]any {
+		t.Helper()
+		var m map[string]any
+		w := e.call(c, http.MethodGet, "/api/v1/governance/changes/"+ch.ID.String(), "")
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &m) != nil {
+			t.Fatalf("GET = %d %s", w.Code, w.Body)
+		}
+		v, _ := approvalsOf(m)["viewer"].(map[string]any)
+		return v
+	}
+	if v := viewer(e.peerA); v["state"] != viewerCannotBeLast || v["last"] != true {
+		t.Errorf("a unit admin as the last seat = %v, want %s and last", v, viewerCannotBeLast)
+	}
+	if v := viewer(e.alice); v["state"] != viewerCanApprove || v["last"] != true {
+		t.Errorf("a security admin as the last seat = %v, want %s and last", v, viewerCanApprove)
+	}
+	if v := viewer(e.adminA); v["state"] != viewerApproved {
+		t.Errorf("the first approver = %v, want %s", v, viewerApproved)
+	}
 }
