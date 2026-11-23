@@ -335,6 +335,11 @@ func (s *Server) settleOwnApproval(ctx context.Context, q store.Querier, in *rec
 	rows []store.GovernanceChangeApproval, c approvalCaller) ([]store.GovernanceChangeApproval, []approvalDrop, error) {
 	var counting []store.GovernanceChangeApproval
 	var drops []approvalDrop
+	// own is whether any counting row is the caller's own, not only the first of the same human's rows: an
+	// earlier row held only by a shared email must not hide the caller's own approval from the refusal.
+	own := slices.ContainsFunc(rows, func(row store.GovernanceChangeApproval) bool {
+		return row.Counts() && s.holdsApproval(c.principal, c.email, row)
+	})
 	for _, row := range rows {
 		if !row.Counts() {
 			continue
@@ -348,7 +353,7 @@ func (s *Server) settleOwnApproval(ctx context.Context, q store.Querier, in *rec
 			return nil, nil, err
 		}
 		if v.counts {
-			return nil, nil, s.alreadyApproved(s.holdsApproval(c.principal, c.email, row))
+			return nil, nil, s.alreadyApproved(own)
 		}
 		drops = append(drops, approvalDrop{row: row, why: v.why, at: v.at, replace: true})
 	}

@@ -467,3 +467,25 @@ func TestPG_ApprovalCounts_ApprovalDoesNotCountPeopleAgain(t *testing.T) {
 		t.Errorf("state %s with %d rows, want applied with 2", s, e.countRows())
 	}
 }
+
+// TestPG_Approvals_OwnRowOutranksAnEarlierEmailMatch: a person holding their own counting approval who also
+// shares an earlier counting approval's email, which sign-in does not vouch for, is told the approval is their
+// own and offered the take-back, whichever row comes first.
+func TestPG_Approvals_OwnRowOutranksAnEarlierEmailMatch(t *testing.T) {
+	e := newApEnv(t, 3)
+	e.seedPeople()
+	ch := e.heldOn(e.a2)
+	e.approve(e.adminA, ch.ID, http.StatusOK)
+	const alias = "sub-ap-earlier"
+	adminEmail := uaSubAdminA + "@corp.example"
+	e.grant(e.a, types.CapabilitySubjectUser, alias)
+	e.record(alias, adminEmail, []string{apGroupUsers}, nil, false)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO governance_change_approvals (change_id, approver, approver_email, tier, approved_at)
+		VALUES ($1, $2, $3, 'unit_admin', now() - interval '1 hour')`, ch.ID, alias, adminEmail); err != nil {
+		t.Fatal(err)
+	}
+	w := e.call(e.adminA, http.MethodPost, approvePath(ch.ID), "")
+	if w.Code != http.StatusConflict || wireReason(t, w) != reasonGovernanceChangeAlreadyApproved || !strings.Contains(w.Body.String(), "take your approval back") {
+		t.Errorf("the approver's second approval = %d %s, want 409 offering the take-back", w.Code, w.Body)
+	}
+}
