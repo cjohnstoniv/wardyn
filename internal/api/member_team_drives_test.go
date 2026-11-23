@@ -337,6 +337,24 @@ func TestMemberTeamDriveReach_TeamSwitchOffOwnerOnly(t *testing.T) {
 	}
 }
 
+// TestMemberTeamDriveCatalogue_DeletedUnitNotSharedWithUnit: a team drive whose unit was deleted is its owner's alone,
+// so the owner's row is still a team drive but not shared with a unit; with its unit it is.
+func TestMemberTeamDriveCatalogue_DeletedUnitNotSharedWithUnit(t *testing.T) {
+	st, tr := newTeamDriveStore()
+	srv, _, _ := teamDriveServer(st, "docker")
+	d := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
+	if row := teamCatalogueRow(t, srv, aliceSub, d.ID); row == nil || !row.Team || !row.SharedWithUnit {
+		t.Fatalf("alice's row with its unit = %+v, want a team drive shared with the unit", row)
+	}
+	st.team[d.ID].unit = nil
+	if row := teamCatalogueRow(t, srv, aliceSub, d.ID); row == nil || !row.Team || row.SharedWithUnit {
+		t.Errorf("alice's row after the unit's delete = %+v, want a team drive not shared with a unit", row)
+	}
+	if row := teamCatalogueRow(t, srv, carolSub, d.ID); row != nil {
+		t.Errorf("carol reaches it after the unit's delete: %+v", row)
+	}
+}
+
 // TestMemberTeamDriveReach_PlainMemberDriveStaysOwnerOnly: a member drive without team reaches its owner only, even
 // for a person in the owner's unit.
 func TestMemberTeamDriveReach_PlainMemberDriveStaysOwnerOnly(t *testing.T) {

@@ -203,6 +203,7 @@ describe("driveKind", () => {
     ["a group's team drive is shared", READ_ONLY, "sharedDrive"],
     ["a unit's team drive is a user drive", { ...READ_ONLY, shared_with: undefined, shared_with_unit: true }, "userDrive"],
     ["a managed drive that is not a team drive is a user drive", MANAGED, "userDrive"],
+    ["the owner's team drive whose unit was deleted is a user drive", { ...READ_ONLY, shared_with: undefined, owned: true, writable: true }, "userDrive"],
     ["a drive in the shared section is shared", PLAIN, "sharedDrive"],
   ])("%s", (_, d, kind) => {
     expect(driveKind(d)).toBe(kind);

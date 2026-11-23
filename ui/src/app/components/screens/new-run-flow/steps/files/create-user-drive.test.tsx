@@ -596,6 +596,15 @@ describe("a team drive of the person's own (#3459)", () => {
     expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(DRIVE_OWNED.name))).toBeInTheDocument();
   });
 
+  it("deleting your own team drive whose unit was deleted keeps the plain sentence", async () => {
+    const ORPHAN: MeDrive = { ...DRIVE_OWNED, id: "d-team-orphan", name: "Old templates", team: true, shared_with_unit: false };
+    drives = [DRIVE_LEGACY, ORPHAN, DRIVE_LOCKED];
+    await openChoose();
+    await userEvent.click(ownDeletes().find((b) => b.dataset.ownDelete === ORPHAN.id)!);
+    expect(within(top()).getByText(NR_FILES.DELETE_CONFIRM(ORPHAN.name))).toBeInTheDocument();
+    expect(within(top()).queryByText(NR_FILES.DELETE_CONFIRM_TEAM(ORPHAN.name))).toBeNull();
+  });
+
   it("the create card has no one-host line", async () => {
     create = TEAM_ON;
     await openChoose();

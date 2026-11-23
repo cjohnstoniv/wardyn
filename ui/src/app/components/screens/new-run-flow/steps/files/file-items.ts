@@ -110,8 +110,10 @@ export const driveChips = (d: MeDrive): string[] =>
   // A disk drive names its Mac; with no name to give (the row is gone) it says only where it comes from.
   d.backend === "mac_disk" ? [SOURCE[d.source], ...(d.mac ? [MAC_DRIVES.D01(d.mac)] : [])] : [SOURCE[d.source], BACKEND[d.backend]];
 // A group's team drive is shared whatever its backend: a Docker volume is a managed (user) section for one person, and one folder for a
-// group here. A team drive a person made, shared with their unit, lists with user drives, where its owner can delete it (#3459).
-export const driveKind = (d: MeDrive): FileKind => (d.section === "shared" || (d.team && !d.shared_with_unit) ? "sharedDrive" : "userDrive");
+// group here. A team drive a person made lists with user drives, where its owner can delete it: shared with their unit, or their
+// own alone once that unit is deleted (#3459).
+export const driveKind = (d: MeDrive): FileKind =>
+  d.section === "shared" || (d.team && !d.shared_with_unit && !d.owned) ? "sharedDrive" : "userDrive";
 /** "Shared with" for a team drive: the caller's groups it is allocated to; undefined for every other drive. */
 export const driveSharedWith = (d: MeDrive | undefined): string | undefined =>
   d?.team && d.shared_with?.length ? NR_FILES.SHARED_WITH(d.shared_with.join(", ")) : undefined;

@@ -145,6 +145,12 @@ func (s *Server) memberTeamReachableDrives(ctx context.Context, out []reachableD
 	return out, nil
 }
 
+// memberTeamSharedWithUnit is whether a catalogue row is a person's team drive that its unit reaches: false for one
+// whose unit was deleted, which memberTeamReachableDrives allocates to its owner alone.
+func memberTeamSharedWithUnit(w store.UserDriveWinner) bool {
+	return w.Grant.SubjectType == types.DriveSubjectUnit && w.Grant.Subject != w.Drive.OwnerSubject
+}
+
 // memberTeamDriveStillThere is dispatch's re-read of another person's team drive under the run's frozen unit: true
 // only while it is a live team drive, not being deleted and not legacy-held, team drives are on, and its unit is the
 // run's unit or one above it.

@@ -171,7 +171,7 @@ func (s *Server) meDrives(ctx context.Context, poolID string) ([]client.MeDrive,
 			if row.Team = d.resolved.Team; row.Team {
 				// drive.enabled mounts a team drive under /home/agent/shared, never as the person's own.
 				row.SharedWith, row.Legacy = sharedWith[drive.ID], false
-				row.SharedWithUnit = d.winner.Grant.SubjectType == types.DriveSubjectUnit
+				row.SharedWithUnit = memberTeamSharedWithUnit(d.winner)
 			}
 		}
 		row.UnavailableReason = s.driveUnavailableHere(ctx, d, pool, checked, remoteDenied)
