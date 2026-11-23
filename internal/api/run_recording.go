@@ -120,11 +120,11 @@ func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchC
 // floor read in. Walls that cannot be read refuse the run (false, the run failed): it is never recorded
 // at a lower level than they ask.
 func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) bool {
-	floor, err := s.wallsRecordingFloor(ctx, *run)
+	floor, err := s.wallsRecordingFloor(ctx, *run, nil)
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: read the run owner's walls for the recording floor; the run is refused",
+		slog.ErrorContext(ctx, "wardynd: read the run owner's walls and the agent rules for the recording floor; the run is refused",
 			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls could not be read, so the run's recording level cannot be set; walls that cannot be read refuse the run")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls or the rules of the run's agents could not be read, so the run's recording level cannot be set; rules that cannot be read refuse the run")
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
 		return false
@@ -391,7 +391,7 @@ func macOSVMRecordingNotice(level types.RecordingLevel, noAgentOutput bool) stri
 // organisation's or the pool's requirement, and the caller's walls' floor (wallsRecordingFloor). A read
 // that fails is a server error.
 func (s *Server) createRecordingChoice(ctx context.Context, r *http.Request, policy types.RecordingLevel, place runPlacement,
-	ceiling governanceCeiling, memberAuthored bool) (types.RecordingChoice, *runRefusal) {
+	ceiling governanceCeiling, memberAuthored bool, harnesses []string) (types.RecordingChoice, *runRefusal) {
 	choice := types.RecordingChoice{Policy: policy}
 	if s.cfg.Store == nil {
 		return choice, nil
@@ -413,7 +413,7 @@ func (s *Server) createRecordingChoice(ctx context.Context, r *http.Request, pol
 		choice.Ceiling = ceiling.Spec.Recording
 	}
 	_, principal := actorFromRequest(r)
-	if choice.WallsFloor, err = s.wallsRecordingFloor(ctx, types.AgentRun{CreatedBy: principal}); err != nil {
+	if choice.WallsFloor, err = s.wallsRecordingFloor(ctx, types.AgentRun{CreatedBy: principal}, harnesses); err != nil {
 		return choice, runServerError("read your walls", err)
 	}
 	return choice, nil

@@ -219,6 +219,7 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
 	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
+	govKindAgentRules:          {approver: securityApprover, apply: applyAgentRulesChange},
 	// An elevation's approver is its unit's rule (forChange, requestApprover).
 	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
 	// An image request's approver is the met image rule at its unit (forChange, requestApprover).

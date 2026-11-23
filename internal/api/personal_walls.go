@@ -748,7 +748,7 @@ func (s *Server) wallsGitHubCLICapabilities(ctx context.Context, run types.Agent
 //     as hold, which tightens every tool the person did not name on a run whose lane lets them run.
 //   - recording: a policy that names no level reads as the organisation's, so a floor met into it would
 //     replace that default with the lower floor. It is left naming none, and the floor is applied at
-//     dispatch (wallsRecordingFloor), after the organisation's default is known. A policy that names a
+//     dispatch (wallsRecordingFloor, which also takes the rules of the run's agents), after the organisation's default is known. A policy that names a
 //     level keeps the meet's: the higher of the two.
 func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolicySpec, walls types.PersonalWallsSpec) {
 	if walls.ToolRules != nil {
@@ -759,16 +759,25 @@ func (s *Server) wallsBeyondMeet(met *types.RunPolicySpec, before types.RunPolic
 	}
 }
 
-// wallsRecordingFloor is the recording level the run owner's walls and the run's wall preset ask for,
-// the higher of the two, read at dispatch; empty when neither names one. An error means the walls cannot
-// be read: the caller refuses the run, as the create does.
-func (s *Server) wallsRecordingFloor(ctx context.Context, run types.AgentRun) (types.RecordingLevel, error) {
+// wallsRecordingFloor is the recording level the run owner's walls, the run's wall preset and the rules of
+// the run's agents (harnesses, nil to read the run's own) ask for, the highest of them, read at dispatch;
+// empty when none names one. An error means the walls or the rules cannot be read: the caller refuses the
+// run, as the create does.
+func (s *Server) wallsRecordingFloor(ctx context.Context, run types.AgentRun, harnesses []string) (types.RecordingLevel, error) {
 	walls, err := s.personalWalls(ctx, run.CreatedBy)
 	if err != nil {
 		return "", err
 	}
+	agent, err := s.agentRulesRecordingFloor(ctx, run, harnesses)
+	if err != nil {
+		return "", err
+	}
 	var floor types.RecordingLevel
-	for _, r := range []*types.RecordingLevel{walls.Recording, wallPresetRecording(run.WallPreset)} {
+	rules := []*types.RecordingLevel{walls.Recording, wallPresetRecording(run.WallPreset)}
+	if agent != "" {
+		rules = append(rules, &agent)
+	}
+	for _, r := range rules {
 		if r != nil && r.Rank() > floor.Rank() {
 			floor = *r
 		}

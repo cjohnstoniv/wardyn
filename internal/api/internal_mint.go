@@ -301,6 +301,12 @@ func (s *Server) liveWithholding(ctx context.Context, run types.AgentRun) (withh
 	if _, err := s.personalWalls(ctx, run.CreatedBy); err != nil {
 		return withholding{}, err
 	}
+	// The agent rules the same way (agentRulesSealLayers would seal instead).
+	if ids, err := s.runHarnessIDs(ctx, run); err != nil {
+		return withholding{}, err
+	} else if _, err := s.agentRulesFor(ctx, ids); err != nil {
+		return withholding{}, err
+	}
 	w := withholding{layers: s.outerLayers(ctx, run)}
 	if p != nil {
 		w.deny = p.Ceiling.DeniedDomains

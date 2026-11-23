@@ -65,7 +65,7 @@ type sealDecision struct {
 // outerLayers is the ordered outer layers a run is sealed against, outermost
 // first: the Wardyn boundary, then the restrictions the run captured (restrictionSealLayers),
 // then the run owner's own walls (personalWallsSealLayer), then the run's wall preset
-// (wallPresetSealLayer).
+// (wallPresetSealLayer), then the rules of each agent the run includes (agentRulesSealLayers).
 // Unit walls are inner layers, applied at resolve, never here. In no_limits there
 // is no layer, so the seal is the identity. A boundary that cannot be read seals
 // the run to no egress, no credential and no desktop direction at all: an unread
@@ -90,7 +90,8 @@ func (s *Server) outerLayers(ctx context.Context, run types.AgentRun) []sealLaye
 	}
 	layers = append(layers, s.restrictionSealLayers(ctx, run)...)
 	layers = append(layers, s.personalWallsSealLayer(ctx, run)...)
-	return append(layers, wallPresetSealLayer(run)...)
+	layers = append(layers, wallPresetSealLayer(run)...)
+	return append(layers, s.agentRulesSealLayers(ctx, run)...)
 }
 
 // dataOutBlocks reports whether rule is blocked, which refuses every push too.

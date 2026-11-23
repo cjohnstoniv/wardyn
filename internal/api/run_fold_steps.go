@@ -399,7 +399,7 @@ func (s *Server) stepPlacementCapability(f *runFold, rec *foldRecorder) bool {
 	if s.cfg.RecordingStore == nil || s.cfg.Store == nil {
 		return true
 	}
-	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	choice, refusal := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil, includedHarnessIDs(*f.req))
 	if refusal.write(s, f.w, f.r) {
 		return false
 	}
@@ -576,7 +576,7 @@ func (s *Server) stepToolPolicy(f *runFold, rec *foldRecorder) bool {
 		return false
 	}
 	var refusal *runRefusal
-	f.innerWalls, refusal = innerWallsFor(*f.req, f.spec, f.harnesses, f.enforced)
+	f.innerWalls, refusal = agentRulesInnerWallsFor(*f.req, f.spec, f.harnesses, f.enforced, f.source)
 	return !refusal.write(s, f.w, f.r)
 }
 

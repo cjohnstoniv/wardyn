@@ -863,6 +863,7 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Get("/governance/recording", s.handleGetRecording)
 	securityOps.Put("/governance/recording", s.handlePutRecording)
 	s.mountGovernanceRestrictionRoutes(securityOps)
+	s.mountAgentRulesRoutes(securityOps) // an organisation's rules for each agent harness (agent_rules.go)
 	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
 	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
 	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)
