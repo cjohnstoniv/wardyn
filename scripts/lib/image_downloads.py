@@ -545,6 +545,22 @@ def key_check(path):
             + FINGERPRINT_ASSERT)
 
 
+def executed(body):
+    """body up to its shell comment: the part tokenize reads, so a check sequence in a comment is not counted."""
+    index = 0
+    while index < len(body):
+        operator = re.match(r"&&|\|\||;;|>>|<<|>&|<&|[;&|()<>]", body[index:])
+        if body[index].isspace():
+            index += 1
+        elif body[index] == "#":
+            return body[:index]
+        elif operator:
+            index += len(operator[0])
+        else:
+            index = word_end(body, index)
+    return body
+
+
 def wget_key_file(words):
     for word in words[1:]:
         plain_word(word)
@@ -595,6 +611,7 @@ def check_wget(body):
             raise ValueError("wget in command substitution is unverified; download to a checked file")
     tree = Parser(tokens).sequence()
     paths = wget_downloads(tree)
+    body = executed(body)
     if paths and not re.match(r"set -e(u|o errexit)?;", body):
         raise ValueError("a wget key fetch must fail closed: start the RUN with set -eu")
     for path in paths:
@@ -608,6 +625,8 @@ def check_wget(body):
                              "[ \"$(printf '%s\\n' \"$keys\" | grep -c '^pub:')\" = 1 ] || { ...; exit 1; }; "
                              "fpr=\"$(printf '%s\\n' \"$keys\" | awk -F: '$1 == \"fpr\" { print $10; exit }')\"; "
                              "[ \"$fpr\" = \"<40 hex>\" ] || { ...; exit 1; }")
+        if not re.search(r"\bwget\s[^;|&]*\s" + re.escape(path) + r"(?=[\s;|&]|$)", body[:at]):
+            raise ValueError(f"wget download {path} is fetched after its fingerprint is asserted; fetch it, then assert it, then use it")
         if body[:check.end()].count(path) != 2:
             raise ValueError(f"wget download {path} is used before its fingerprint is asserted")
 
