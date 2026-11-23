@@ -293,7 +293,8 @@ func (s *Server) readRecordingOutput(ctx context.Context, runID uuid.UUID) (stor
 	}, ""
 }
 
-// repairRecordingOutput is reachable only after recordingReader. A cooldown
+// repairRecordingOutput runs only for a caller that may read recovered command output: a
+// recordingReader, or an issuer portal's grant for its own person's non-interactive run. A cooldown
 // bounds rereads of unchanged gaps, including a lost upload receipt on restart.
 func (s *Server) repairRecordingOutput(ctx context.Context, run types.AgentRun, row store.RunOutput, found bool) (store.RunOutput, bool, error) {
 	if !run.State.IsTerminal() || found && row.CapturedAt != nil && !row.CaptureGap {
