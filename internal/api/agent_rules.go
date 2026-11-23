@@ -75,7 +75,7 @@ func validateAgentRulesWrite(harness string, w types.AgentRulesWrite) *runRefusa
 	return nil
 }
 
-// agentRulesStateView is a harness's rules as a held change's reviewer reads them and its approval compares.
+// agentRulesStateView is a harness's rules as a held change's approver reads them and its approval compares.
 type agentRulesStateView struct {
 	Harness    string                   `json:"harness"`
 	Spec       types.PersonalWallsSpec  `json:"spec"`
