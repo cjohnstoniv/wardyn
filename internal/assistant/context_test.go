@@ -32,7 +32,7 @@ func TestFirstPayloadOrderAndUntrusted(t *testing.T) {
 		t.Fatalf("labels = %v, want %v", got, want)
 	}
 	for _, s := range p.Sections {
-		wantUntrusted := s.Label == LabelChange || s.Label == LabelBuild
+		wantUntrusted := s.Label == LabelTemplates || s.Label == LabelChange || s.Label == LabelBuild
 		if s.Untrusted != wantUntrusted {
 			t.Errorf("%s untrusted = %v", s.Label, s.Untrusted)
 		}

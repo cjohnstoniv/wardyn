@@ -52,7 +52,8 @@ type Inputs struct {
 	UnitRecord string
 	// RunRecord is a run target's policy, cut the same way. A run's free-text task is never sent.
 	RunRecord string
-	// Templates are one record each: the target template, or for a new draft names and summaries.
+	// Templates are one record each: the target template, or for a new draft names and summaries. Untrusted:
+	// a template's name and description are text people wrote, other people's included.
 	Templates []string
 	// UnitAdmins, ChangeProposer and RunOwners are the people the records name, in the order their letters
 	// are handed out.
@@ -103,7 +104,7 @@ func FirstPayload(in Inputs) Payload {
 	}
 	add(LabelUnit, in.UnitRecord, false)
 	add(LabelRun, in.RunRecord, false)
-	add(LabelTemplates, strings.Join(in.Templates, "\n"), false)
+	add(LabelTemplates, strings.Join(in.Templates, "\n"), true)
 	add(LabelAdmins, adminLine(in.UnitAdmins, l), false)
 	add(LabelGrants, strings.Join(in.Grants, "\n"), false)
 	if in.RunHistoryOn {
