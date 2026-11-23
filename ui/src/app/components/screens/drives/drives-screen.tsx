@@ -471,7 +471,7 @@ export function DrivesScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={deleteCount > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();

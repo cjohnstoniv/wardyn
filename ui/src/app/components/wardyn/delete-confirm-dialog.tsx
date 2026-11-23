@@ -107,7 +107,7 @@ export function DeleteConfirmDialog({
             }}
             disabled={!canConfirm || deleting}
             aria-describedby={canConfirm ? undefined : "delete-confirm-operator-reason"}
-            className="bg-danger text-danger-foreground hover:bg-danger/90"
+            variant="destructive"
           >
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
             {wording ? wording.verb : `Delete ${entity}`}

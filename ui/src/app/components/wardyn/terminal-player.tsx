@@ -9,6 +9,7 @@ import * as AsciinemaPlayer from "asciinema-player";
 import "asciinema-player/dist/bundle/asciinema-player.css";
 import type { Recording } from "../../lib/types";
 import { useRovingRadio } from "./use-roving-radio";
+import { TerminalTitleBar } from "./terminal-title-bar";
 
 // TerminalPlayer renders a recorded PTY session through the real asciinema
 // player, which embeds a terminal emulator. That is what makes escape
@@ -98,14 +99,8 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
   };
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-[#0d1117]">
-      <div className="flex items-center gap-1.5 border-b border-border bg-black/20 px-3 py-2">
-        <span className="size-3 rounded-full bg-[#ff5f56]" />
-        <span className="size-3 rounded-full bg-[#ffbd2e]" />
-        <span className="size-3 rounded-full bg-[#28c840]" />
-        {recording.header.title ? (
-          <span className="ml-3 font-mono text-xs text-white/60">{recording.header.title}</span>
-        ) : null}
+    <div className="overflow-hidden rounded-lg border border-border bg-terminal">
+      <TerminalTitleBar title={recording.header.title || undefined}>
         <span className="ml-auto font-mono text-meta text-white/60">
           {recording.events.length} events
         </span>
@@ -138,7 +133,7 @@ export function TerminalPlayer({ recording }: { recording: Recording }) {
         >
           <Download className="size-3.5" aria-hidden />
         </button>
-      </div>
+      </TerminalTitleBar>
       <div ref={ref} />
     </div>
   );

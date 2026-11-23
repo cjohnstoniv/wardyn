@@ -238,7 +238,7 @@ export function MemberDrives() {
               <>
                 <AlertDialogCancel disabled={busy}>{PEOPLE.CANCEL}</AlertDialogCancel>
                 <AlertDialogAction
-                  className="bg-danger text-danger-foreground hover:bg-danger/90"
+                  variant="destructive"
                   disabled={busy}
                   onClick={(e) => {
                     e.preventDefault();

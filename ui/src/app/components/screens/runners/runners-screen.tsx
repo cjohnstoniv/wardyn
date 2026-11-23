@@ -12,7 +12,7 @@
 // pool live in the address, so a runner's pool link and a pool's member link land on the right sheet.
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
-import { AlertTriangle, Laptop } from "lucide-react";
+import { Laptop } from "lucide-react";
 import { remoteRunners } from "../../../lib/api/runner-pools";
 import type { RunnerKind } from "../../../lib/types/runner-pools";
 import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -29,7 +29,7 @@ import { PageHeader } from "../../wardyn/page-header";
 import { PageContainer } from "../../wardyn/page-container";
 import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { HowItWorks } from "../../wardyn/how-it-works";
-import { EmptyState, STATES, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
 import { MintTokenPanel } from "./mint-token-panel";
 import { PoolsTab } from "./pools/pools-tab";
 import { RemoteRunnerDrawer } from "./remote-runner-drawer";
@@ -54,24 +54,6 @@ const FILTERS: { id: Filter; label: string }[] = [
  * once in a polite status ("3 runners") but freezes no string for it.
  */
 const COUNT = (n: number) => `${n} ${n === 1 ? "runner" : "runners"}`;
-
-// ErrorState's title is fixed ("Something went wrong"); the packet's read-failed frame has its own.
-function LoadFailed({ onRetry }: { onRetry: () => void }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
-      <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
-        <AlertTriangle className="size-5" />
-      </div>
-      <div className="space-y-1">
-        <h2 className="text-foreground">{RUNNERS.FETCH_FAILED_TITLE}</h2>
-        <p className="max-w-sm text-sm text-muted-foreground">{RUNNERS.FETCH_FAILED_BODY}</p>
-      </div>
-      <Button variant="outline" size="sm" onClick={onRetry}>
-        {STATES.RETRY}
-      </Button>
-    </div>
-  );
-}
 
 function FilterGroup({ filter, onChange }: { filter: Filter; onChange: (f: Filter) => void }) {
   const group = useRovingRadio(FILTERS.length, FILTERS.findIndex((f) => f.id === filter), (i) => onChange(FILTERS[i].id));
@@ -199,7 +181,7 @@ export function RunnersScreen() {
   let body: React.ReactNode;
   if (status === "loading") body = <Framed><TableSkeleton rows={5} cols={6} /></Framed>;
   else if (status === "forbidden") body = <Framed><p className="p-4 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p></Framed>;
-  else if (status === "error") body = <Framed><LoadFailed onRetry={reload} /></Framed>;
+  else if (status === "error") body = <Framed><ErrorState title={RUNNERS.FETCH_FAILED_TITLE} message={RUNNERS.FETCH_FAILED_BODY} onRetry={reload} /></Framed>;
   else if (tab === "bindings") body = <WorkloadBindingsTab />;
   else if (tab === "pools") body = <PoolsTab runners={rows} remote={remote} openPoolId={openPoolId} onOpenPool={(id) => go("pools", id ?? undefined)} onOpenRunner={openRunner} />;
   else if (empty) {

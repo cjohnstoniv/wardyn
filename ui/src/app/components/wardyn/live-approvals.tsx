@@ -753,7 +753,7 @@ export function LiveApprovals({
                 e.preventDefault();
                 void confirmDeny();
               }}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
             >
               <X className="size-3.5" /> Deny
             </AlertDialogAction>

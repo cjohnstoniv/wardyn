@@ -61,6 +61,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   version that wrapped its key is available.
 - A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).
 - A `write:` requirement on a path inside a workspace folder that is on a person's runner is now checked by its text, like one on the folder itself. Before, the server checked a path inside such a folder against its own files ([#3913](https://github.com/cjohnstoniv/wardyn/issues/3913)).
+- In the light theme, the title bar of a live terminal is now dark like the terminal under it, so its text is readable.
 
 ### Security
 
