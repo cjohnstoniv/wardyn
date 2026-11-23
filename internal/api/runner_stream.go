@@ -276,6 +276,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 	s.runnerStreams.once.Do(func() {
 		cfg := s.cfg.RunnerHub
 		cfg.OrgURL, cfg.Lookup = s.cfg.RunnerOrgURL, st.GetRunner
+		if br, ok := st.(store.RunnerBatchReader); ok && cfg.LookupMany == nil {
+			cfg.LookupMany = br.GetRunnersByID
+		}
 		cfg.Verified = func(ctx context.Context, id uuid.UUID) error {
 			admission, _ := ctx.Value(runnerAdmissionKey{}).(runnerAdmission)
 			if admission.release != nil {
