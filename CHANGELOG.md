@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
