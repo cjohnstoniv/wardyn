@@ -140,7 +140,8 @@ func (s *decisionSink) postBatches(first queuedDecision) {
 
 // postBatch fills a batch led by first, posts it, and returns the queued record that starts the next batch, or
 // nil. The summary of decisions dropped since the last one rides first in a batch that is not relayed (a single
-// post never marks it relayed).
+// post never marks it relayed) and that first fits in beside it; otherwise first goes without it, so a record
+// near the cap is never held back by a summary, and the summary rides a later batch.
 func (s *decisionSink) postBatch(first batchRecord) *queuedDecision {
 	var recs []batchRecord
 	size := batchWrapper
@@ -163,10 +164,11 @@ func (s *decisionSink) postBatch(first batchRecord) *queuedDecision {
 		recs, size = append(recs, r), size+extra
 		return true
 	}
-	var next *queuedDecision
-	if !add(first) { // the summary and first do not fit together: first starts the next batch
-		next = &first.q
+	if !add(first) { // the summary and first do not fit together: first goes alone
+		recs, size, summaryAt = nil, batchWrapper, 0
+		add(first)
 	}
+	var next *queuedDecision
 	for next == nil {
 		var q queuedDecision
 		ok := false
@@ -194,8 +196,9 @@ func (s *decisionSink) postBatch(first batchRecord) *queuedDecision {
 // answer without DecisionBatchHeader, whatever its status, means the control plane did not read a batch: the
 // mode goes single and each record is posted alone. With the header, a 2xx landed; a 429 or 5xx, like no
 // answer, is tried again and counted dropped after the last attempt; any other status is counted dropped at
-// once, and a 400 (a malformed batch, never an older control plane) also logs one line. recs[0] is the drop
-// summary when summaryAt is not 0; it is not a decision, so it is never counted dropped.
+// once, and a 400 (a malformed batch, never an older control plane) also logs one line; when the batch carried
+// the drop summary, the worker then waits the first retry's backoff. recs[0] is the drop summary when summaryAt
+// is not 0; it is not a decision, so it is never counted dropped.
 func (s *decisionSink) sendBatch(recs []batchRecord, relayed bool, summaryAt uint64) {
 	var body bytes.Buffer
 	body.WriteString(`{"records":[`)
@@ -240,6 +243,10 @@ func (s *decisionSink) sendBatch(recs []batchRecord, relayed bool, summaryAt uin
 					slog.Int("status", code), slog.Uint64("records", decisions))
 			}
 			s.dropped.Add(decisions)
+			if summaryAt > 0 {
+				// The next batch carries the summary again: wait as a retry does, never post it again at once.
+				time.Sleep(decisionBatchBackoff[0])
+			}
 			return
 		}
 		if final {

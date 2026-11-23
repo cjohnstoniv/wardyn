@@ -646,3 +646,70 @@ func TestDecisionSink_DropsUnderLoad(t *testing.T) {
 		t.Fatalf("batching dropped %d, more than single posts' %d", batched, single)
 	}
 }
+
+// TestDecisionSinkBatch_SummaryNeverHoldsBackARecord: a record that fits the cap alone but not beside the pending
+// drop summary goes first, by itself, and the summary rides later; a 4xx on a batch that carried the summary is
+// followed by a wait, never by an immediate post.
+func TestDecisionSinkBatch_SummaryNeverHoldsBackARecord(t *testing.T) {
+	c := newStubCP(t, nil)
+	s, start := pausedSink(c, 16, "tok")
+	s.batchMax.Store(MaxDecisionBatch)
+	s.dropped.Store(3)
+	big := hostLog(1)
+	base, err := encodeBatchRecord(queuedDecision{log: big, id: uuid.New(), at: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	big.RuleSource = strings.Repeat("a", maxBatchBody-batchWrapper-len(base.body)-10) // fits alone by 10 bytes
+	s.emit(big)
+	start()
+	closeSink(t, s)
+	posts := c.got()
+	if len(posts) == 0 || !posts[0].batch || len(posts[0].records) != 1 || posts[0].records[0].Decision.Request.Host != "h1.test" {
+		t.Fatalf("posts %q: want the record alone in the first batch", shape(posts))
+	}
+	if len(posts[0].body) > maxBatchBody {
+		t.Fatalf("the first batch is %d bytes, over the cap", len(posts[0].body))
+	}
+	summaries := 0
+	for _, p := range posts {
+		for _, r := range p.records {
+			if strings.HasPrefix(r.Decision.RuleSource, "egress:dropped-decisions-3") {
+				summaries++
+			}
+		}
+		if strings.HasPrefix(p.single.RuleSource, "egress:dropped-decisions-3") {
+			summaries++
+		}
+	}
+	if summaries != 1 || s.reported != 3 {
+		t.Fatalf("summary posted %d times, reported %d: want it once, later, and reported 3", summaries, s.reported)
+	}
+
+	prev := decisionBatchBackoff
+	decisionBatchBackoff = []time.Duration{100 * time.Millisecond, time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { decisionBatchBackoff = prev })
+	var mu sync.Mutex
+	var at []time.Time
+	refusing := newStubCP(t, func(_ int, p cpPost) (int, bool) {
+		mu.Lock()
+		at = append(at, time.Now())
+		mu.Unlock()
+		if p.batch {
+			return http.StatusForbidden, true
+		}
+		return http.StatusAccepted, true
+	})
+	s, start = pausedSink(refusing, 16, "tok")
+	s.batchMax.Store(MaxDecisionBatch)
+	s.dropped.Store(2)
+	s.emit(hostLog(2))
+	start()
+	closeSink(t, s)
+	if got := shape(refusing.got()); got != "b2 s" {
+		t.Fatalf("posts %q, want the refused batch with the summary, then close's summary", got)
+	}
+	if gap := at[1].Sub(at[0]); gap < 100*time.Millisecond {
+		t.Fatalf("the next post came %v after a refused summary batch, want a wait of the first backoff", gap)
+	}
+}
