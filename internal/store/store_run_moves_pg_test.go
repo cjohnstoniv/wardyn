@@ -353,8 +353,9 @@ func TestPG_RunnerStateIntake_IgnoresMovedRunRows(t *testing.T) {
 	wantRefused("the revoked source", g.src, row)
 }
 
-// A run's sealed sandbox spec goes with its proxy config when the run goes terminal: in the delete, and in the purge
-// behind it, which also finds a terminal run that has a spec and no proxy config. A live run's spec is kept.
+// A run's sealed sandbox spec goes after its proxy config when the run goes terminal: in the delete, and in the purge
+// behind it, which also finds a terminal run that has a spec and no proxy config. A live run's spec is kept, and a
+// spec delete that fails never keeps the proxy config.
 func TestPG_RunSandboxSpecs_PurgedAtTerminal(t *testing.T) {
 	g := newMoveRig(t)
 	ctx := t.Context()
@@ -398,5 +399,33 @@ func TestPG_RunSandboxSpecs_PurgedAtTerminal(t *testing.T) {
 	}
 	if specs(live) != 1 {
 		t.Error("the purge removed a live run's spec")
+	}
+
+	// A spec delete the database refuses, as on a split-role install whose app role has no DELETE on
+	// run_sandbox_specs yet, is returned on its own and never keeps the proxy config. The refusal is a trigger
+	// raising the permission error, since the fixture connects as a role no grant binds; the database is this
+	// test's own.
+	refused := run(types.RunKilled)
+	g.exec(`CREATE FUNCTION refuse_spec_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'permission denied for table run_sandbox_specs' USING ERRCODE = '42501'; END $$`)
+	g.exec(`CREATE TRIGGER refuse_spec_delete BEFORE DELETE ON run_sandbox_specs FOR EACH ROW EXECUTE FUNCTION refuse_spec_delete()`)
+	configs := func(id uuid.UUID) int { return g.count(`SELECT count(*) FROM run_proxy_configs WHERE run_id = $1`, id) }
+	if err := g.st.PutRunProxyConfig(ctx, refused, []byte("proxy")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.st.DeleteRunProxyConfig(ctx, refused); err == nil {
+		t.Error("DeleteRunProxyConfig hid a refused spec delete")
+	}
+	if configs(refused) != 0 || specs(refused) != 1 {
+		t.Errorf("a refused spec delete: %d proxy configs and %d specs left, want 0 and 1", configs(refused), specs(refused))
+	}
+	if err := g.st.PutRunProxyConfig(ctx, refused, []byte("proxy")); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := g.st.PurgeTerminalRunProxyConfigs(ctx); err == nil || n < 1 {
+		t.Errorf("PurgeTerminalRunProxyConfigs = %d, %v; want this run's proxy config and the refused spec purge's error", n, err)
+	}
+	if configs(refused) != 0 || specs(refused) != 1 {
+		t.Errorf("a refused spec purge: %d proxy configs and %d specs left, want 0 and 1", configs(refused), specs(refused))
 	}
 }

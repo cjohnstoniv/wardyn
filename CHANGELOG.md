@@ -25,7 +25,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `DELETE` on the attach leases table (run_attach_leases), other than that table's owner. If the app
   role is not one of those roles or a member of one, grant it the same on each table as soon as the migration has run.
   The `ALTER DEFAULT PRIVILEGES` step in Operations does not cover these three tables: the migration takes every other
-  privilege on them away from every role but their owner.
+  privilege on them away from every role but their owner. Until the app role is granted `DELETE` on
+  `run_sandbox_specs`, a terminal run's sealed spec is not deleted; its proxy config still is.
 
 ## [0.10.2] — 2026-11-22
 

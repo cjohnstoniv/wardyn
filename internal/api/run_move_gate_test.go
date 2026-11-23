@@ -290,7 +290,8 @@ const (
 func isMoveSeam(name string) bool { return name == "moveGateOpen" || moveSeamPort.MatchString(name) }
 
 // moveSeamOpaque reports a file go/parser cannot read that a package can still link: assembly, a system object or
-// cgo C source. The module has none.
+// cgo C source. The module has none. Outside this guard's scope: darwin Objective-C (.m) files and the C in a cgo
+// preamble, which go/parser reads as a comment.
 func moveSeamOpaque(rel string) bool {
 	for _, ext := range []string{".s", ".S", ".syso", ".c", ".h"} {
 		if strings.HasSuffix(rel, ext) {
