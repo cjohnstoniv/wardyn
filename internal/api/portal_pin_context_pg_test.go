@@ -227,7 +227,7 @@ func (e *authorityEnv) strictFixture(t *testing.T) strictFixture {
 		t.Fatal(err)
 	}
 	c, err := e.st.CreateComponent(ctx, types.Component{ID: uuid.New(), Name: "pinned-" + uuid.NewString()[:8], CreatedBy: "admin",
-		Definition: types.ComponentDefinition{Hosts: []string{"api.anthropic.com"}}})
+		Definition: types.ComponentDefinition{Hosts: []string{"org-api.example"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
