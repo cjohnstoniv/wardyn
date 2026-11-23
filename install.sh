@@ -233,6 +233,9 @@ IMG="ghcr.io/${REPO%/*}/wardynd:${SEMVER}"
 # The agent images this release publishes, as `<catalog name>:<image name>` —
 # the fresh .env seeds the map below from these, and the upgrade merges into
 # whatever map the box already has, row by row.
+# claude-code names agent-base, which ships no coding agent: Wardyn publishes no
+# Claude Code image (deploy/images/THIRD-PARTY-TERMS.md). Setup reports that pin as
+# unable to sign in; docs/operations/build-images.md "Claude sign-in image" builds one.
 AGENT_IMAGE_ROWS="claude-code:agent-base codex-cli:agent-codex-cli aws-sso:agent-aws-sso"
 say "Installing Wardyn ${VERSION} into ${HOME_DIR}"
 

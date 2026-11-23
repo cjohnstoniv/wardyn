@@ -594,7 +594,7 @@ is not the deployment described above.**
 | | GitHub's endpoint takes no audience or resource indicator, so this credential is not audience-bound (the RFC 8707 discipline in Wardyn is the per-run IDENTITY token's, `internal/identity`, which is a different credential). | |
 | | Kill-switch cascade on run end **[shipped]**; bot-branch-only push confinement **[shipped, default-on]** ([`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)). Endpoint deny, lane exclusivity and the `VerifyRefRuleset` gate: asset #4. Token-side confinement is read-verifiable and gateable, never created by Wardyn. | |
 | Confused-deputy against the token broker | Callers authenticated by their run's identity token; egress allowlist and injection-rule registration are separate capabilities. | B4 |
-| Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
+| Insider hiding behind agent identity | The run identity token carries `sub` (the person), `act` (the run's SPIFFE ID) and `sponsor`; the agent never replaces the human in the chain — it is added to it. An audit row names one actor and its run (`run_id`), so who is behind an agent's row is that run's `created_by` ([ARCHITECTURE.md](../ARCHITECTURE.md#security-invariants), item 4). A run's commits name that creator as author and the run as committer by default; code in the sandbox can change both. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. | B5, ID |
 | | PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. | |
 | | Above that line nothing separates duties — residual #14. | |
@@ -2474,7 +2474,7 @@ These risks are **not closed by v1 Wardyn**.
       - (a) holds unchanged: a restored row opens until its wrapping-key version is disabled in Key Vault.
     - (e) **Crypto-erasure (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for the rows it covers, and for no others.
       - A person's credential written with it on has its data key under that person's own `cred` principal key.
-      - And an erase destroys that key, so the row cannot be read on any replica at its next use, whatever a backup holds of the row.
+      - And an erase destroys that key, so this database cannot read the row on any replica at its next use, nor a copy of the row restored into it from a backup.
       - **The scope is exactly the v3 rows.**
         - A v1 row, a row written while the setting was off, an external-store pointer (the value lives in the organisation's store), the operator namespace and the boot keys are only deleted.
         - And `credential.erase` reports the two apart (`crypto_erased`, `deleted`).

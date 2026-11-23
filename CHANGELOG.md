@@ -54,6 +54,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
 
+### Fixed
+
+- Docs: the threat model and the architecture guide now agree on what an audit row records: one actor and the run it
+  belongs to. The person behind an agent's row is that run's `created_by`, and the guide shows the lookup.
+- Docs: the audit actions reference now says that a field withheld below the super-admin tier can still be confirmed
+  by a reader who guesses its value, and that an interactive run of a BYOI image on a registered runner skips the image selftest.
+- Docs: the one-line installer's `claude-code` entry names the agent base image, which cannot sign in to Claude; the
+  image build guide says so and how to build one.
+- Docs: the credential erase reference no longer says a crypto-erased credential stays unreadable after any backup
+  restore. Restoring a full backup taken before the erase makes it readable again while the key-encryption-key
+  version that wrapped its key is available.
+
 ### Before you upgrade
 
 - If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before

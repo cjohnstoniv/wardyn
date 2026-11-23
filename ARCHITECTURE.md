@@ -335,9 +335,11 @@ The layers of the code, and the interface each extension implements, are mapped 
      (agent-run SPIFFE ID), and `sponsor`.
    - `AuditEvent`, however, has a single
      `Actor` field (`actor_type` + one string — human sub, agent SPIFFE ID, or
-     component name);
-     - today's mint/egress audit events record only `act` (the
-       agent's SPIFFE ID) there, not a separate `sub`/`sponsor` pair per event.
+     component name) and names the run it belongs to when it belongs to one (`run_id`).
+     - A row an agent's action writes, such as `credential.mint` or an egress decision, names the run's SPIFFE ID as its actor.
+       A row a registered runner forwards for the run names `runner:<id>`. Neither carries `sub` or `sponsor`.
+     - The person is found through the run: `GET /api/v1/runs/<run-id>` returns its `created_by`, who started it: a person, a service identity (below), or `admin-token` when the operator's admin token did.
+       For example, `{"run_id":"<run-id>","actor_type":"agent","actor":"spiffe://wardyn.local/agent-run/<run-id>","action":"credential.mint"}` leads to run `<run-id>`, and that run's `created_by` names the person.
    - No impersonation; delegation is recorded as delegation: a registered portal
      acting for a signed-in person is never the actor — the person is, and every
      row the request writes names the portal as `data.via` (#1142).
