@@ -16,13 +16,16 @@ import (
 
 // operatorNamespaceWriters are the only functions that call a secret store's Put outside
 // putOwned: the daemon's own boot keys, written into the operator namespace, which no erase
-// reaches. A person's credential is never written from here. Keys are "file:function".
+// reaches. A person's credential is never written from here. Keys are "file:function". One
+// entry writes no secret at all: its Put is a sync.Pool's, which the AST cannot tell apart.
 var operatorNamespaceWriters = map[string]bool{
 	"cmd/wardynd/boot_keys.go:loadOrCreateSecret":                      true,
 	"cmd/wardynd/boot_hybrid.go:bootHybrid":                            true,
 	"cmd/wardynd/rotate_gateway_identity_key.go:rotateGatewayIdentity": true,
 	"cmd/wardynd/rotate_gateway_identity_key.go:rotateGatewayClientCA": true,
 	"cmd/wardynd/rotate_audit_receipt_key.go:rotateAuditReceipt":       true,
+	// Not a secret store: WriteFrame returns a DATA frame's encode buffer to its sync.Pool.
+	"internal/runnerwire/websocket.go:WriteFrame": true,
 }
 
 // TestCredentialWritersRouteThroughPutOwned pins the one-path rule of #1511:
