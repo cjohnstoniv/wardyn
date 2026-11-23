@@ -1560,6 +1560,7 @@ So an entry a pattern matches is judged one of two ways:
   - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
   - The forge's own branch policy is what protects that file.
   - With `WARDYN_PUSH_HOLD_REMOVALS` on, a push to GitHub or Azure DevOps that removes such a file from a branch it updates is held, or refused on an unattended run. That includes a GitHub force-push that rewinds the branch. A branch the push creates has no tip to compare with, so nothing is removed from it.
+  - A `git_pat` remote the broker cannot read is held, or refused on an unattended run, as a push whose paths could not be worked out. That is an Azure DevOps remote not spelled `<project>/_git/<repository>`, such as a `_git/_full/` form, or any Azure DevOps Server remote.
   - Turn it on only when every runner is 0.10.4 or later: an older runner is refused each run (`runner_proxy_setting_unsupported`).
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.

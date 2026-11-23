@@ -26,7 +26,8 @@ package proxy
 // with. A removal is no match, as everywhere in these rules, unless the review
 // rules ask for removals (Options.PushHoldRemovals): then each entry the tip
 // holds at a path a pattern claims must still be in the new tree
-// (removedFromTip). A tag or any
+// (removedFromTip). With no reader for the remote, where a removal could pass
+// unseen, the whole tree is left (noReaderFor). A tag or any
 // other ref outside refs/heads/ is judged as before: deleting it and creating
 // it again on any commit would pass anyway. A push that carries no object
 // moves a branch to a commit the forge already holds (forgeRepo.held), so that
@@ -40,6 +41,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"path"
@@ -56,6 +58,9 @@ const (
 	whyNoTip         = "this push moves a branch the forge does not show at the tip the push states, so nothing shows what that branch held at these paths"
 	whyTipUnread     = "the broker could not compare what this push leaves on a branch it updates with that branch's tip: "
 	whyBranchDeleted = "this push deletes a branch, and a branch created again under that name is not compared with what this one held"
+	// The reasons a push that may remove a claimed path is not compared when the broker has no reader for its remote.
+	whyNoReaderSpelling = "the broker cannot name this remote's repository to read what the branch holds, so what the push removes from it cannot be told"
+	whyNoReaderServer   = "the broker has no reader for an Azure DevOps Server, so what the push removes from a branch it updates cannot be told"
 )
 
 // packTips is gitpack.Result.Tips. A var so a test can make a walk run past its bounds.
@@ -72,6 +77,13 @@ func tipRemedy(why string) string {
 		return "fetch the branch and push again, or push to a new branch"
 	case why == whyBranchDeleted:
 		return "leave the branch in place, or delete it on the forge"
+	case why == whyNoReaderSpelling:
+		return "push to the repository's standard remote, https://github.com/<owner>/<repository> or https://dev.azure.com/<org>/<project>/_git/<repository>, " +
+			"or ask an operator to turn off WARDYN_PUSH_HOLD_REMOVALS; trying the same remote again will not help"
+	case why == whyNoReaderServer:
+		return "ask an operator to give this run an Azure DevOps grant for this server, or to turn off WARDYN_PUSH_HOLD_REMOVALS; trying again will not help"
+	case strings.Contains(why, fmt.Sprintf("needs more than %d reads", maxForgeReads)):
+		return "split the push into smaller ones, or push to a new branch; trying the same push again will not help"
 	case strings.HasPrefix(why, whyTipUnread):
 		return "try the push again; if it keeps failing, ask an operator"
 	}
@@ -82,6 +94,11 @@ func tipRemedy(why string) string {
 // forgeReadWait, and records a forge read as claimedEntries does.
 func (p *Proxy) tipChanges(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo, removals bool) ([]gitpack.Change, string, error) {
 	if forge == nil {
+		if removals && movesBranch(res.Commands) {
+			if why := noReaderFor(r); why != "" {
+				return []gitpack.Change{{Mode: gitpack.ModeUncarried}}, why, nil
+			}
+		}
 		return nil, "", nil
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), forgeReadWait)
@@ -93,6 +110,32 @@ func (p *Proxy) tipChanges(r *http.Request, pats [][]string, res gitpack.Result,
 			Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
 	}
 	return left, why, err
+}
+
+// movesBranch reports whether any command moves an existing branch, the pushes
+// beyondTips compares.
+func movesBranch(cmds []gitpack.Command) bool {
+	return slices.ContainsFunc(cmds, func(c gitpack.Command) bool {
+		return strings.Trim(c.Old, "0") != "" && c.New != c.Old && strings.HasPrefix(c.Ref, "refs/heads/")
+	})
+}
+
+// noReaderFor is why the git_pat lane has no reader for the remote r names,
+// where a removal could pass unseen: GitHub or Azure DevOps Services at a path
+// patForge cannot name a repository from (an Azure DevOps "_git/_full/" form
+// among them), or an Azure DevOps Server remote, which has none. "" for any
+// other remote: a host with no reader stays as the forward rules read it.
+func noReaderFor(r *http.Request) string {
+	host, rest, ok := parsePATBrokerPath(r.URL.Path)
+	switch {
+	case !ok:
+		return ""
+	case host == githubHost || adoHostedHost(host):
+		return whyNoReaderSpelling
+	case slices.ContainsFunc(strings.Split(rest, "/"), func(s string) bool { return strings.EqualFold(s, "_git") }):
+		return whyNoReaderServer
+	}
+	return ""
 }
 
 // beyondTips returns every entry pats claim that a command moving an existing

@@ -6,7 +6,10 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -265,5 +268,63 @@ func TestPushHoldRemovals_HeldForAnAdmin(t *testing.T) {
 			raises[0].PathsDigest != types.PushPathsDigest(want) {
 			t.Fatalf("raised %+v, want one approval naming %v", raises, want)
 		}
+	}
+}
+
+// TestPushHoldRemovals_RemoteWithNoReader: on a git_pat remote the broker cannot read, a removal
+// is not forwarded unseen. An Azure DevOps Services remote in a "_git/_full/" spelling, and an
+// Azure DevOps Server remote, are held or refused as unreadable, with a remedy that is not "try
+// again"; off, and for a host the broker never reads, the push is judged as before.
+func TestPushHoldRemovals_RemoteWithNoReader(t *testing.T) {
+	for _, tc := range []struct {
+		name, host, path string
+		held             bool
+		fix              string
+	}{
+		{"Azure DevOps Services, the _git _full spelling", "dev.azure.com", "/acme/proj/_git/_full/app.git", true, "standard remote"},
+		{"Azure DevOps Server", "tfs.corp.example", "/tfs/DefaultCollection/proj/_git/app.git", true, "Azure DevOps grant"},
+		{"a host with no reader and no _git path", "git.corp.example", "/acme/app.git", false, ""},
+	} {
+		for _, on := range []bool{false, true} {
+			t.Run(tc.name+"/"+onOff(on), func(t *testing.T) {
+				r, _ := removalRun(t, tc.host, on, map[string]string{"README.md": "hello\n"}, ".github/workflows/**")
+				at := filepath.Join(r.forge.root, filepath.FromSlash(strings.TrimPrefix(tc.path, "/")))
+				if err := os.MkdirAll(filepath.Dir(at), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(r.bare, at); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, r.work, "remote", "set-url", "origin", r.brokerURL+"/wardyn/git/"+tc.host+tc.path)
+				removalCases[0].remove(t, r.work)
+				r.commit(t, "remove")
+				out, err := r.push()
+				if !on || !tc.held {
+					r.wantAllowed(t, out, err)
+					return
+				}
+				wantRejectedRef(t, r, out, err, "WARDYN_PUSH_HOLD_REMOVALS", ruleSourceGitPushHeldUnattended)
+				for _, want := range []string{tc.fix, "will not help"} {
+					if !strings.Contains(out, want) {
+						t.Errorf("git output does not say %q:\n%s", want, out)
+					}
+				}
+				if strings.Contains(out, "try the push again") {
+					t.Errorf("git output tells the person to try again:\n%s", out)
+				}
+			})
+		}
+	}
+}
+
+// TestTipRemedy_ReadCapSaysSplit: a comparison that needs more reads than one push may make is not
+// cured by a retry.
+func TestTipRemedy_ReadCapSaysSplit(t *testing.T) {
+	why := whyTipUnread + fmt.Sprintf("the comparison needs more than %d reads of the forge", maxForgeReads)
+	if got := tipRemedy(why); !strings.Contains(got, "split the push") || strings.Contains(got, "try the push again") {
+		t.Errorf("tipRemedy(%q) = %q, want a remedy that splits the push", why, got)
+	}
+	if got := tipRemedy(whyTipUnread + "a read failed"); !strings.Contains(got, "try the push again") {
+		t.Errorf("tipRemedy of another unread cause = %q, want the retry remedy kept", got)
 	}
 }

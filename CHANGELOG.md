@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- New switch `WARDYN_PUSH_HOLD_REMOVALS`, off by default. On, a push to GitHub or Azure DevOps that removes a file matching `require_review_paths` from a branch it updates, by deleting it, renaming it out or replacing a directory above it with a file, is held for review like one that changes it, or refused on an unattended run. On GitHub that includes a force-push that rewinds the branch.
+- New switch `WARDYN_PUSH_HOLD_REMOVALS`, off by default. On, a push to GitHub or Azure DevOps that removes a file matching `require_review_paths` from a branch it updates, by deleting it, renaming it out or replacing a directory above it with a file, is held for review like one that changes it, or refused on an unattended run. On GitHub that includes a force-push that rewinds the branch. A push that may remove such a file through a `git_pat` remote the broker cannot read, an Azure DevOps remote in a `_git/_full/` spelling or any Azure DevOps Server remote, is held or refused as unreadable instead of forwarded.
 
 ## [0.10.3] — 2026-11-23
 
