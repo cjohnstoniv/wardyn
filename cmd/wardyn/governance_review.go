@@ -26,6 +26,9 @@ const maxImpactListed = 10
 // nothing about changes already pending: each keeps the requirement it was proposed with.
 const noMinimumSentence = "Deploy-time minimum not set. New changes need one approval. Pending changes keep their existing approval requirements."
 
+// impactPendingOnly is what `changes show --impact` says of a change that is no longer pending.
+const impactPendingOnly = "Impact is shown for pending changes only."
+
 // changeShowCmd prints one change: what it is, what the server read of it, who has approved it and who
 // still can, and with --impact whom approving it would reach.
 func changeShowCmd(client clientFn) *cobra.Command {
@@ -45,7 +48,9 @@ func changeShowCmd(client clientFn) *cobra.Command {
 				return err
 			}
 			var im *sdk.GovernanceChangeImpact
-			if impact {
+			// The server answers an impact for a pending change only, so a decided one is shown without it.
+			skipped := impact && ch.State != "pending"
+			if impact && !skipped {
 				got, err := c.GetGovernanceChangeImpact(cmd.Context(), id)
 				if err != nil {
 					return err
@@ -53,6 +58,9 @@ func changeShowCmd(client clientFn) *cobra.Command {
 				im = &got
 			}
 			if asJSON {
+				if skipped {
+					fmt.Fprintln(cmd.ErrOrStderr(), impactPendingOnly)
+				}
 				return emitJSON(cmd.OutOrStdout(), struct {
 					sdk.GovernanceChange
 					Impact *sdk.GovernanceChangeImpact `json:"impact,omitempty"`
@@ -62,6 +70,9 @@ func changeShowCmd(client clientFn) *cobra.Command {
 			printChange(w, ch)
 			if im != nil {
 				printImpact(w, *im)
+			}
+			if skipped {
+				fmt.Fprintln(w, impactPendingOnly)
 			}
 			return nil
 		},

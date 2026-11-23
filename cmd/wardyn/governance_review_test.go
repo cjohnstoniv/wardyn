@@ -410,3 +410,25 @@ func TestApprovalsNeeded_AServerWithoutTheRouteSaysSo(t *testing.T) {
 		}
 	}
 }
+
+func TestChangesShow_ImpactOnADecidedChangeShowsTheChangeAndSaysWhy(t *testing.T) {
+	id := uuid.New()
+	f, url := newReviewServer(t, map[string]reviewAnswer{
+		"GET /api/v1/governance/changes/" + id.String(): {body: changeBody(id, "applied", "", "")},
+	})
+	out, _, err := runGovernance(t, url, "changes", "show", id.String(), "--impact")
+	if err != nil {
+		t.Fatalf("changes show --impact on a decided change: %v", err)
+	}
+	if !strings.Contains(out, "State:    applied") || !strings.HasSuffix(out, "Impact is shown for pending changes only.\n") {
+		t.Errorf("output:\n%s", out)
+	}
+	if len(f.calls) != 1 {
+		t.Errorf("requests = %v, want the read of the change only", f.calls)
+	}
+	jsonOut, errOut, err := runGovernance(t, url, "changes", "show", id.String(), "--impact", "--json")
+	var got map[string]any
+	if err != nil || json.Unmarshal([]byte(jsonOut), &got) != nil || got["id"] != id.String() || !strings.Contains(errOut, "Impact is shown for pending changes only.") {
+		t.Errorf("--json: %q / %q, %v", jsonOut, errOut, err)
+	}
+}
