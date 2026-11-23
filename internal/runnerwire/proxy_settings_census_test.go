@@ -4,12 +4,15 @@
 package runnerwire
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -234,5 +237,63 @@ func TestProxySettingsSet_HostRules(t *testing.T) {
 	pc.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Effect: types.HostRuleAllow}}}}
 	if got := ProxySettingsSet(pc); !slices.Equal(got, []string{ProxySettingHostRules}) {
 		t.Errorf("a rule set names %v, want [%s]", got, ProxySettingHostRules)
+	}
+}
+
+// A revive reads its runner's caps against runner.ProxySettingsOf of the config it stored. Each run proxy
+// setting, set alone, must come back from that config as the same setting, so a setting the revive check
+// cannot see is a setting a runner that dropped it would not be refused for.
+func TestProxySettingsSurviveTheStoredConfig(t *testing.T) {
+	fixtures := map[string]runner.ProxyConfig{}
+	for field, setting := range proxySettingOfField {
+		var pc runner.ProxyConfig
+		if field == "ModelLimit" {
+			// A nil list marshals as null and reads back as no limit.
+			pc.ModelLimit = &runner.ModelLimit{Models: []string{"m"}}
+		} else {
+			v := reflect.ValueOf(&pc).Elem().FieldByName(field)
+			v.Set(nonZero(v.Type()))
+		}
+		fixtures[setting] = pc
+	}
+	fixtures[ProxySettingAWSSigV4Gateways] = runner.ProxyConfig{AWSSigV4: &proxy.AWSSigV4Config{Gateways: make([]proxy.AWSSigV4Gateway, 1)}}
+	fixtures[ProxySettingMCPSendOnce] = runner.ProxyConfig{MCPApproveEach: &proxy.MCPApproveEachConfig{SendOnce: true}}
+	fixtures[ProxySettingRefuseIPLiterals] = runner.ProxyConfig{Policy: types.RunPolicySpec{AllowAllEgress: true, RefuseIPLiterals: true}}
+	var rules runner.ProxyConfig
+	hostRules := reflect.ValueOf(&rules.Policy).Elem().FieldByName("HostRules")
+	hostRules.Set(nonZero(hostRules.Type()))
+	fixtures[ProxySettingHostRules] = rules
+	fixtures[ProxySettingLocalModelRelay] = runner.ProxyConfig{LocalModels: map[string]types.LocalModelSettings{
+		"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: true},
+	}}
+
+	want := slices.Sorted(slices.Values(append(slices.Clone(ProxySettings), ProxySettingLocalModelRelay)))
+	if got := slices.Sorted(maps.Keys(fixtures)); !slices.Equal(got, want) {
+		t.Fatalf("fixtures cover %v, want every ProxySettings entry and local_model_relay: %v", got, want)
+	}
+	for name, pc := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			raw, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stored proxy.Config
+			if err := json.Unmarshal(raw, &stored); err != nil {
+				t.Fatal(err)
+			}
+			back := runner.ProxySettingsOf(stored)
+			if name == ProxySettingLocalModelRelay {
+				if !LocalModelRelayNeeded(back) {
+					t.Errorf("the stored config no longer needs the local model relay")
+				}
+				return
+			}
+			if !slices.Contains(ProxySettingsSet(pc), name) {
+				t.Fatalf("fixture sets %v, want it to set %s", ProxySettingsSet(pc), name)
+			}
+			if got, want := ProxySettingsSet(back), ProxySettingsSet(pc); !slices.Equal(got, want) {
+				t.Errorf("the stored config reads back %v, want %v", got, want)
+			}
+		})
 	}
 }

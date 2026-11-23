@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A revive of a run on a registered runner is now refused when the runner's wardyn-runnerd no longer carries a proxy setting the run uses, such as host rules, no network or forge hosts, as a new run on that runner is refused. Before, only a model list was checked, so a runner that had been replaced by an older build could restart the run's proxy without the other settings.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

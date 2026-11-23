@@ -346,6 +346,96 @@ func TestAllowedModelsNeedARunnerThatCarriesThem(t *testing.T) {
 	}
 }
 
+// A revive's replacement config is checked against the runner's caps for every run proxy setting, as a create is:
+// a runner that restarted as an older build would otherwise rebuild the proxy without a setting it does not know.
+func TestReplaceProxyRefusesAProxySettingAnOldRunnerDropsUnread(t *testing.T) {
+	for name, set := range proxySettingCases {
+		t.Run(name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			sb, _ := create(t, rig, nil)
+			publishCaps(t, rig, oldCapsJSON)
+			var pc runner.ProxyConfig
+			set(&pc)
+			cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg)
+			var pe *remote.ProxySettingError
+			if !errors.As(err, &pe) || pe.Setting != proxySettingsOf(name)[0] {
+				t.Fatalf("replace = %v, want a ProxySettingError naming %s", err, proxySettingsOf(name)[0])
+			}
+			if rig.Fake.Called("replace_proxy "+string(cfg), strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")) {
+				t.Fatal("the refused replace reached the runner")
+			}
+		})
+	}
+}
+
+// The same configs go through to a runner that carries every setting.
+func TestReplaceProxyAdmitsAProxySettingTheRunnerCarries(t *testing.T) {
+	for name, set := range proxySettingCases {
+		t.Run(name, func(t *testing.T) {
+			rig := runnertest.NewRig(t, rid)
+			sb, _ := create(t, rig, nil)
+			var pc runner.ProxyConfig
+			set(&pc)
+			cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); err != nil {
+				t.Fatalf("replace = %v, want it admitted", err)
+			}
+			if !rig.Fake.Called("replace_proxy "+string(cfg), strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")) {
+				t.Fatal("the admitted replace never reached the runner")
+			}
+		})
+	}
+}
+
+// A revive of a laptop local model meets the same relay and port checks a create does: the relay setting first,
+// then the port the person has allowed on their own runner.
+func TestReplaceProxyRefusesALaptopModelPortThePersonHasNotAllowed(t *testing.T) {
+	pc := runner.ProxyConfig{LocalModels: map[string]types.LocalModelSettings{
+		"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: true}}}
+	cfg, err := runner.BuildProxyConfig(uuid.New(), pc, 8080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := json.Marshal(append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := func(version, ports string) string {
+		return `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"` + version + `","proxy_settings":` + string(named) + ports + `}`
+	}
+	rig := runnertest.NewRig(t, rid)
+	sb, _ := create(t, rig, nil)
+	local := strings.TrimPrefix(sb.Ref, "runner:"+rid+"/")
+
+	// The rig's own caps carry every ProxySettings entry and not the relay.
+	var se *remote.ProxySettingError
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); !errors.As(err, &se) || se.Setting != runnerwire.ProxySettingLocalModelRelay {
+		t.Fatalf("replace without the relay = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingLocalModelRelay)
+	}
+	publishCaps(t, rig, caps("other port", `,"local_model_ports":[8080]`))
+	var pe *remote.LocalModelPortError
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); !errors.As(err, &pe) || pe.Port != 11434 {
+		t.Fatalf("replace = %v, want a LocalModelPortError naming port 11434", err)
+	}
+	if rig.Fake.Called("replace_proxy "+string(cfg), local) {
+		t.Fatal("a refused replace reached the runner")
+	}
+	publishCaps(t, rig, caps("allowed", `,"local_model_ports":[8080,11434]`))
+	if err := rig.Sub.ReplaceProxy(ctxT(t), sb.Ref, cfg); err != nil {
+		t.Fatalf("a runner allowing port 11434 refused the replace: %v", err)
+	}
+	if !rig.Fake.Called("replace_proxy "+string(cfg), local) {
+		t.Fatal("the admitted replace never reached the runner")
+	}
+}
+
 // A runner that signs AWS requests at its proxy but predates gateways (it reports aws_sigv4 and not
 // aws_sigv4_gateways) would drop the gateway entry unread, so a run with one is refused there before
 // anything is sent; a runner that names it is sent the run with the entry.

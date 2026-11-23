@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
@@ -346,10 +347,10 @@ func (e *ProxySettingError) Error() string {
 	return "this runner's wardyn-runnerd is too old for " + e.Setting + "; upgrade it"
 }
 
-// checkProxySettings refuses, before anything is sent, a spec that sets a run
-// proxy setting the runner did not advertise. An unset setting is never checked.
-func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
-	c, _ := s.Caps()
+// CheckProxySettings refuses a proxy config that sets a run proxy setting caps c does not name, or a laptop
+// local model on a port c does not allow. An unset setting is never checked. A create (the spec) and a revive
+// (runner.ProxySettingsOf of its stored config) both run it, and so does the org before a revive's claim.
+func CheckProxySettings(c runnerwire.Caps, pc runner.ProxyConfig) error {
 	for _, setting := range runnerwire.ProxySettingsSet(pc) {
 		if !slices.Contains(c.ProxySettings, setting) {
 			return &ProxySettingError{Setting: setting}
@@ -370,6 +371,12 @@ func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
 		}
 	}
 	return nil
+}
+
+// checkProxySettings is CheckProxySettings against this runner's current caps, before anything is sent.
+func (s *Substrate) checkProxySettings(pc runner.ProxyConfig) error {
+	c, _ := s.Caps()
+	return CheckProxySettings(c, pc)
 }
 
 // LocalModelPortError refuses a CreateSandbox whose laptop local model is on a port the person has not
@@ -629,28 +636,16 @@ func (s *Substrate) replaceProxyAt(ctx context.Context, ref string, cfgJSON []by
 	if err := s.own(ref); err != nil {
 		return "", err
 	}
-	if err := s.checkRevivedModelList(cfgJSON); err != nil {
+	var cfg proxy.Config
+	if err := json.Unmarshal(cfgJSON, &cfg); err != nil {
+		return "", fmt.Errorf("remote: read the revived proxy config: %w", err)
+	}
+	if err := s.checkProxySettings(runner.ProxySettingsOf(cfg)); err != nil {
 		return "", err
 	}
 	var res runnerwire.ReplaceProxyResult
 	err := s.call(ctx, runnerwire.MethodReplaceProxy, runnerwire.ReplaceProxyArgs{Ref: ref, CfgJSON: cfgJSON, PolicyGeneration: gen}, &res)
 	return res.ConfigSHA256, err
-}
-
-// checkRevivedModelList refuses, before anything is sent, a revived config that limits the run's
-// models on a runner that did not advertise the list: an older runner would start the replacement
-// proxy without it, admitting every model.
-func (s *Substrate) checkRevivedModelList(cfgJSON []byte) error {
-	var head struct {
-		AllowedModels *[]string `json:"allowed_models"`
-	}
-	if err := json.Unmarshal(cfgJSON, &head); err != nil {
-		return fmt.Errorf("remote: read the revived proxy config: %w", err)
-	}
-	if c, _ := s.Caps(); head.AllowedModels != nil && !slices.Contains(c.ProxySettings, runnerwire.ProxySettingAllowedModels) {
-		return &ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}
-	}
-	return nil
 }
 
 func (s *Substrate) EnsureProxyImage(ctx context.Context) error {
