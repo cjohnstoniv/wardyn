@@ -40,26 +40,50 @@ const bootedMarker = agentImageHome + "/.wardyn/booted"
 // ExportState reads set's roots out of ref, a stopped container, through the daemon's archive API. The
 // daemon archives a root that is a symlink as the link itself, and never follows a link inside one; the
 // stream refuses the first and carries the rest as their text. A root the container lacks is carried as
-// nothing. The driver keeps no spool, so the export answers SpoolDrained.
+// nothing, but only once the container is shown still there: the daemon answers a missing container and a
+// missing path alike. The driver keeps no spool, so the export answers SpoolDrained.
 func (d *Driver) ExportState(ctx context.Context, ref string, set runner.CarriedSet) (runner.StateExport, error) {
+	id, err := d.exportable(ctx, ref)
+	if err != nil {
+		return runner.StateExport{}, err
+	}
+	pr, pw := io.Pipe()
+	go func() { pw.CloseWithError(d.exportTo(ctx, ref, id, set, pw)) }()
+	return runner.StateExport{Stream: pr, SpoolDrained: true}, nil
+}
+
+// exportable inspects ref and answers its container id when it is a stopped container whose files a move
+// carries.
+func (d *Driver) exportable(ctx context.Context, ref string) (string, error) {
 	insp, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if err != nil {
-		return runner.StateExport{}, fmt.Errorf("docker: export %s: %w", ref, err)
+		return "", fmt.Errorf("docker: export %s: %w", ref, err)
 	}
 	c := insp.Container
 	switch {
 	case c.Config != nil && c.Config.Labels[labelMachineKind] != "":
-		return runner.StateExport{}, fmt.Errorf("docker: export %s: a %s run's files are not carried", ref, c.Config.Labels[labelMachineKind])
+		return "", fmt.Errorf("docker: export %s: a %s run's files are not carried", ref, c.Config.Labels[labelMachineKind])
 	case c.State != nil && (c.State.Running || c.State.Paused || c.State.Restarting):
-		return runner.StateExport{}, fmt.Errorf("docker: export %s: the sandbox is not stopped", ref)
+		return "", fmt.Errorf("docker: export %s: the sandbox is not stopped", ref)
 	}
-	pr, pw := io.Pipe()
-	go func() { pw.CloseWithError(d.exportTo(ctx, ref, set, pw)) }()
-	return runner.StateExport{Stream: pr, SpoolDrained: true}, nil
+	return c.ID, nil
 }
 
-// exportTo writes ref's carried files to out as a movepack stream, its roots in the stream's order.
-func (d *Driver) exportTo(ctx context.Context, ref string, set runner.CarriedSet, out io.Writer) error {
+// stillExportable fails an export whose container is gone, replaced, or no longer stopped since its start.
+func (d *Driver) stillExportable(ctx context.Context, ref, id string) error {
+	now, err := d.exportable(ctx, ref)
+	switch {
+	case err != nil:
+		return fmt.Errorf("docker: export %s: the sandbox changed during the export: %w", ref, err)
+	case now != id:
+		return fmt.Errorf("docker: export %s: the sandbox was replaced during the export", ref)
+	}
+	return nil
+}
+
+// exportTo writes ref's carried files to out as a movepack stream, its roots in the stream's order. id is
+// the container the export started on; it is inspected again on every missing root and at the end.
+func (d *Driver) exportTo(ctx context.Context, ref, id string, set runner.CarriedSet, out io.Writer) error {
 	w, err := movepack.NewWriter(out, set)
 	if err != nil {
 		return err
@@ -73,6 +97,9 @@ func (d *Driver) exportTo(ctx context.Context, ref string, set runner.CarriedSet
 	for _, root := range roots {
 		res, err := d.cli.CopyFromContainer(ctx, ref, client.CopyFromContainerOptions{SourcePath: root})
 		if isNotFound(err) {
+			if err := d.stillExportable(ctx, ref, id); err != nil {
+				return err
+			}
 			continue
 		}
 		if err != nil {
@@ -85,6 +112,10 @@ func (d *Driver) exportTo(ctx context.Context, ref string, set runner.CarriedSet
 		if err != nil {
 			return err
 		}
+	}
+	// Before the manifest: a stream is never ended short by a container that went away under it.
+	if err := d.stillExportable(ctx, ref, id); err != nil {
+		return err
 	}
 	_, err = w.Close()
 	return err
