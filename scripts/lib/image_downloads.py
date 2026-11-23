@@ -534,6 +534,17 @@ def check_run(body):
 FINGERPRINT_ASSERT = r'\[ "\$\{?fpr\}?" = "[0-9A-F]{40}" \] \|\| \{[^}]*exit 1; \}'
 
 
+def key_check(path):
+    """The one key-fetch sequence the guard accepts, as a regex anchored at its first step: show path's keys,
+    require exactly one primary key, take that key's fingerprint from the same output, then assert it. Two keys in
+    one file would both be trusted by gpg --dearmor while awk reads only the first, so the count is part of it."""
+    sep = r";\s*"
+    return (re.escape(f'keys="$(gpg --show-keys --with-colons {path})"') + sep
+            + re.escape("[ \"$(printf '%s\\n' \"$keys\" | grep -c '^pub:')\" = 1 ] || {") + r"[^}]*exit 1; \}" + sep
+            + re.escape("fpr=\"$(printf '%s\\n' \"$keys\" | awk -F: '$1 == \"fpr\" { print $10; exit }')\"") + sep
+            + FINGERPRINT_ASSERT)
+
+
 def wget_key_file(words):
     for word in words[1:]:
         plain_word(word)
@@ -587,12 +598,17 @@ def check_wget(body):
     if paths and not re.match(r"set -e(u|o errexit)?;", body):
         raise ValueError("a wget key fetch must fail closed: start the RUN with set -eu")
     for path in paths:
-        show = f"gpg --show-keys --with-colons {path}"
-        check = re.search(FINGERPRINT_ASSERT, body[body.find(show):]) if show in body else None
+        if paths.count(path) != 1:
+            raise ValueError(f"wget download {path} is fetched more than once in one RUN; fetch each key file once, then assert it before use")
+        show = f'keys="$(gpg --show-keys --with-colons {path})"'
+        at = body.find(show)
+        check = re.compile(key_check(path)).match(body, at) if at >= 0 else None
         if not check:
-            raise ValueError(f"wget download {path} needs its key fingerprint asserted: {show}, then [ \"$fpr\" = \"<40 hex>\" ] || {{ ...; exit 1; }}")
-        before = body[:body.find(show) + check.end()]
-        if before.count(path) != 2:
+            raise ValueError(f"wget download {path} needs its key fingerprint asserted as one sequence: {show}; "
+                             "[ \"$(printf '%s\\n' \"$keys\" | grep -c '^pub:')\" = 1 ] || { ...; exit 1; }; "
+                             "fpr=\"$(printf '%s\\n' \"$keys\" | awk -F: '$1 == \"fpr\" { print $10; exit }')\"; "
+                             "[ \"$fpr\" = \"<40 hex>\" ] || { ...; exit 1; }")
+        if body[:check.end()].count(path) != 2:
             raise ValueError(f"wget download {path} is used before its fingerprint is asserted")
 
 
