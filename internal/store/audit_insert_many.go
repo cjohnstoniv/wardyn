@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -31,6 +33,47 @@ const auditBatchReadBackSQL = `
 	JOIN unnest($1::uuid[], $2::timestamptz[], $3::uuid[]) AS k(id, t, run_id)
 	  ON e.time = k.t AND e.id = k.id AND e.run_id IS NOT DISTINCT FROM k.run_id
 	ORDER BY e.seq`
+
+var _ audit.BatchRecorder = Recorder{}
+
+// RecordBatch appends evs under one lock (InsertAuditEvents). Every outcome is checked first, as Record checks
+// one, and one the table cannot store refuses the whole batch, so a spool that keeps the refused batch never
+// holds half of one that also landed.
+func (rec Recorder) RecordBatch(ctx context.Context, evs []types.AuditEvent) error {
+	var bad error
+	for _, ev := range evs {
+		switch ev.Outcome {
+		case "success", "failure", "denied":
+		default:
+			refusedAuditOutcomes.Add(1)
+			slog.ErrorContext(ctx, "store: audit row refused: its outcome is not one the audit table stores",
+				slog.String("action", ev.Action), slog.String("outcome", ev.Outcome))
+			if bad == nil {
+				bad = fmt.Errorf("%w: action %q outcome %q", ErrAuditOutcome, ev.Action, ev.Outcome)
+			}
+		}
+	}
+	if bad != nil {
+		return bad
+	}
+	cp := append([]types.AuditEvent(nil), evs...)
+	ptrs := make([]*types.AuditEvent, len(cp))
+	for i := range cp {
+		ptrs[i] = &cp[i]
+	}
+	held, err := InsertAuditEvents(ctx, rec.Pool, ptrs)
+	if err != nil {
+		return err
+	}
+	for i, ev := range cp {
+		if held[i] {
+			audit.NoteBatch(ctx, ev.ID, audit.BatchHeld)
+		} else {
+			audit.NoteBatch(ctx, ev.ID, audit.BatchAppended)
+		}
+	}
+	return nil
+}
 
 // auditBatchKey matches a read-back row to its event: the id and the time at the database's precision.
 type auditBatchKey struct {

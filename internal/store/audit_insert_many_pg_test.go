@@ -8,8 +8,12 @@ package store_test
 // Guarded by WARDYN_TEST_PG (runsPGPoolIsolated skips without it).
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -323,5 +328,39 @@ func TestVerify_TamperedBatchRowFails_PG(t *testing.T) {
 	st, err := store.NewPG(pool).VerifyAuditChain(ctx)
 	if err != nil || st.OK || st.BrokenSeq != mid {
 		t.Fatalf("VerifyAuditChain = %+v, %v; want broken at the edited batch row %d", st, err, mid)
+	}
+}
+
+// TestRecorderRecordBatch_RefusesWholeBatchOnBadOutcome: one outcome the table cannot store refuses the whole
+// batch before anything is sent, counted and logged once per refused row, so nothing of it is stored or noted
+// and the spool above keeps it whole. Needs no database.
+func TestRecorderRecordBatch_RefusesWholeBatchOnBadOutcome(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	run := uuid.New()
+	evs := batchEvents(&run, 4, "outcome")
+	evs[1].Outcome, evs[3].Outcome = "maybe", "pending"
+	batch := make([]types.AuditEvent, len(evs))
+	for i, ev := range evs {
+		batch[i] = *ev
+	}
+	before := store.RefusedAuditOutcomes()
+	ctx, out := audit.WithBatchOutcome(context.Background())
+	err := store.Recorder{}.RecordBatch(ctx, batch) // a nil pool: any write would panic
+	if !errors.Is(err, store.ErrAuditOutcome) {
+		t.Fatalf("RecordBatch = %v, want ErrAuditOutcome", err)
+	}
+	if got := store.RefusedAuditOutcomes() - before; got != 2 {
+		t.Fatalf("refused counter moved by %d, want 2", got)
+	}
+	if n := strings.Count(logs.String(), "audit row refused"); n != 2 {
+		t.Fatalf("%d refusal lines, want one per refused row: %s", n, logs.String())
+	}
+	for _, ev := range batch {
+		if st := out.Status(ev.ID); st != audit.BatchUnsettled {
+			t.Fatalf("event %s noted %d, want nothing noted", ev.ID, st)
+		}
 	}
 }
