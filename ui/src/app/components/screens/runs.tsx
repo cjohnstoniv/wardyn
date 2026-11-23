@@ -28,6 +28,7 @@ import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
 import { EmptyState, ErrorState, failureSentence } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
+import { SchedulesLink } from "./schedules-link";
 import { PageContainer } from "../wardyn/page-container";
 import { useRequestIdentity, useRole } from "../wardyn/operator-context";
 import { useConsoleMode } from "../wardyn/console-view";
@@ -326,7 +327,7 @@ export function RunsScreen() {
   return (
     <WorkspaceNamesContext.Provider value={workspaceNames}>
     <PageContainer width="list">
-      <PageHeader title="Runs" description={description} />
+      <PageHeader title="Runs" description={description} actions={<SchedulesLink admin={adminView} />} />
 
       {adminView && <AdminOlderLimitsCard />}
       {adminView && <FleetCapacityCard />}

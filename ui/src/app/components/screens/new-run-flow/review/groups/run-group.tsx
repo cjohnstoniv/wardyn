@@ -9,7 +9,8 @@ import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
 import { scheduledRuns, startInstant, whenText } from "../../../../../lib/schedule";
-import { launchStart, startHeld, startHeldText, type LaunchStart, type StartHeld } from "../../draft/launch-start";
+import { RUN_SCHEDULE } from "../../../../wardyn/copy/run-schedules";
+import { launchStart, repeatLine, startHeld, startHeldText, type LaunchStart, type StartHeld } from "../../draft/launch-start";
 import type { RunIntent } from "../../draft/run-intent";
 import { appsOf, hasPorts, isServer } from "../../lenses/apps-lens";
 import { mayKeepRunning } from "../../lenses/service-lens";
@@ -23,6 +24,10 @@ const VALUE = { agent_task: NR_REVIEW.VALUE_AGENT, application: NR_REVIEW.VALUE_
 function timing(intent: RunIntent, start?: LaunchStart, held?: StartHeld | null): string | undefined {
   if (isServer(intent)) return NR_REVIEW.TIMING_APPLICATION_SERVER;
   if (intent.shape === "application") return NR_REVIEW.TIMING_APPLICATION;
+  if (start?.choice.repeat) {
+    const line = start.problem ? null : repeatLine(start.choice, Date.now());
+    return line === null ? NR_REVIEW.TIMING_CHOOSE : NR_SHARED.JOIN(NR_SHARED.JOIN(NR_RUN.MODE_AUTONOMOUS, line), RUN_SCHEDULE.CHECKED_EVERY);
+  }
   if (start) {
     const at = start.problem ? null : startInstant(start.choice);
     return at === null ? NR_REVIEW.TIMING_CHOOSE : NR_SHARED.JOIN(NR_REVIEW.TIMING_STARTS(whenText(at, start.choice.zone)), NR_REVIEW.TIMING_CHECKED);

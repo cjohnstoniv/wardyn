@@ -8,6 +8,7 @@ import { getErrorMessage } from "../../../../lib/format";
 import { scheduleDaysAhead } from "../../../../lib/schedule";
 import { isScheduleReason, SCHEDULE_REFUSAL, type ScheduleReason } from "../../../../lib/schedule-refusals";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { RUN_SCHEDULE_REFUSAL } from "../../../wardyn/copy/run-schedules";
 
 /** The words for each start-time refusal when the server sent none. Past and too far name no time: the server's sentence does. */
 const SCHEDULE_TEXT: Record<ScheduleReason, string> = {
@@ -29,5 +30,11 @@ export function refusalText(e: unknown): string {
   // "" fallback: a blank message must reach the code-alone check below, not become the generic sentence.
   const message = getErrorMessage(e, "");
   if (e instanceof HttpError && isScheduleReason(e.reason) && !/\s/.test(message.trim())) return SCHEDULE_TEXT[e.reason];
+  // A schedule's own refusals (internal/api/reasons_run_schedules.go), the same way.
+  if (e instanceof HttpError && e.reason in RUN_SCHEDULE_REFUSAL && !/\s/.test(message.trim())) return RUN_SCHEDULE_REFUSAL[e.reason];
   return message;
 }
+
+/** A refusal reason's words, for a sentence that names only the reason (a schedule paused by a refused start). */
+export const refusalSentence = (reason: string): string | undefined =>
+  isScheduleReason(reason) ? SCHEDULE_TEXT[reason] : RUN_SCHEDULE_REFUSAL[reason];

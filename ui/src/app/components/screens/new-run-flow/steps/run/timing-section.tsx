@@ -10,14 +10,25 @@ import { Label } from "../../../../ui/label";
 import { RadioCard, RadioCardGroup } from "../../../../wardyn/radio-card";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
 import { useShellSetupStatus } from "../../../../wardyn/model-access-context";
-import { emptyStart, scheduleDaysAhead, scheduledRuns, startInstant, startProblem, todayDate, whenText, zoneOptions, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
-import { heldStart, startHeldText } from "../../draft/launch-start";
+import { RUN_SCHEDULE } from "../../../../wardyn/copy/run-schedules";
+import { emptyStart, firstRepeatStart, repeatProblem, scheduleDaysAhead, scheduledRuns, startInstant, startProblem, todayDate, weekdayName, whenText, zoneOptions, zoneWeekday, type ScheduleEvery, type StartChoice, type StartProblem } from "../../../../../lib/schedule";
+import { heldStart, repeatLine, startHeldText } from "../../draft/launch-start";
 import { QuestionBlock } from "./question-block";
 
 const SELECT_CLASS =
   "border-input bg-input-background dark:bg-input/30 focus-visible:border-ring focus-visible:ring-ring h-9 w-full rounded-md border px-3 text-base outline-none focus-visible:ring-[3px] md:text-sm";
 
 const PROBLEM_TEXT = (): Record<StartProblem, string> => ({ missing: NR_RUN.START_MISSING, clock: NR_RUN.START_CLOCK, past: NR_RUN.START_PAST, far: NR_RUN.START_FAR(scheduleDaysAhead()) });
+
+// The Repeat select's value for a one-time start.
+const NO_REPEAT = "none";
+
+// The weekly option's weekday: the first start's, as the server takes it, or today's in the zone before a time is typed.
+function weeklyWeekday(choice: StartChoice): string {
+  const now = Date.now();
+  const first = firstRepeatStart({ ...choice, repeat: "weekly" }, now);
+  return weekdayName(zoneWeekday(first ?? now, choice.zone));
+}
 
 /**
  * When an Autonomous run starts: now, or at a date and time the person picks. Later is offered only while the
@@ -31,13 +42,15 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
   const on = switchOn === true;
   const held = heldStart(schedule, switchOn);
   const later = on && schedule !== undefined;
-  const problem = later ? startProblem(schedule, Date.now()) : null;
-  const at = later && !problem ? startInstant(schedule) : null;
+  const repeat = later ? schedule.repeat : undefined;
+  const problem = later ? (repeat ? repeatProblem(schedule) : startProblem(schedule, Date.now())) : null;
+  const at = later && !problem && !repeat ? startInstant(schedule) : null;
+  const repeats = later && !problem && repeat ? repeatLine(schedule, Date.now()) : null;
   const zones = React.useMemo(() => zoneOptions(schedule?.zone), [schedule?.zone]);
   // A problem is told once the person has typed in the picker (or came back to values already typed), not at the
   // moment it opens empty: an alert nobody caused is read out over what they are doing.
   const [touched, setTouched] = React.useState(false);
-  const told = problem !== null && (touched || !!schedule?.date || !!schedule?.time);
+  const told = problem !== null && (touched || (!repeat && !!schedule?.date) || !!schedule?.time);
   const set = (patch: Partial<StartChoice>) => {
     setTouched(true);
     if (schedule) onSchedule({ ...schedule, ...patch });
@@ -106,28 +119,64 @@ export function TimingSection({ schedule, onSchedule }: { schedule: StartChoice 
       </RadioCardGroup>
       {later && (
         <div className="mt-4 flex flex-col gap-2.5" data-testid="nr-run-start">
-          <div className="grid gap-3 sm:grid-cols-[1fr_140px_1.3fr]">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="nr-start-date">{NR_RUN.START_DATE}</Label>
-              <Input id="nr-start-date" type="date" min={todayDate(schedule.zone)} value={schedule.date} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ date: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="nr-start-time">{NR_RUN.START_TIME}</Label>
-              <Input id="nr-start-time" type="time" value={schedule.time} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ time: e.target.value })} />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="nr-start-zone">{NR_RUN.START_ZONE}</Label>
-              <select id="nr-start-zone" className={SELECT_CLASS} value={schedule.zone} aria-describedby={helpId} onChange={(e) => set({ zone: e.target.value })}>
-                {zones.map((z) => <option key={z} value={z}>{z}</option>)}
+          <div className={repeat ? "grid gap-3 sm:grid-cols-[1fr_140px_1.3fr]" : "grid gap-3"}>
+            <div className={repeat ? "flex flex-col gap-2" : "flex flex-col gap-2 sm:max-w-xs"}>
+              <Label htmlFor="nr-start-repeat">{RUN_SCHEDULE.REPEAT}</Label>
+              <select
+                id="nr-start-repeat"
+                className={SELECT_CLASS}
+                value={repeat ?? NO_REPEAT}
+                onChange={(e) => set({ repeat: e.target.value === NO_REPEAT ? undefined : (e.target.value as ScheduleEvery) })}
+              >
+                <option value={NO_REPEAT}>{RUN_SCHEDULE.REPEAT_NONE}</option>
+                <option value="daily">{RUN_SCHEDULE.REPEAT_DAILY}</option>
+                <option value="weekdays">{RUN_SCHEDULE.REPEAT_WEEKDAYS}</option>
+                <option value="weekly">{RUN_SCHEDULE.REPEAT_WEEKLY(weeklyWeekday(schedule))}</option>
               </select>
             </div>
+            {repeat && <TimeAndZone schedule={schedule} told={told} describedBy={describedBy} helpId={helpId} zones={zones} set={set} />}
           </div>
+          {!repeat && (
+            <div className="grid gap-3 sm:grid-cols-[1fr_140px_1.3fr]">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="nr-start-date">{NR_RUN.START_DATE}</Label>
+                <Input id="nr-start-date" type="date" min={todayDate(schedule.zone)} value={schedule.date} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ date: e.target.value })} />
+              </div>
+              <TimeAndZone schedule={schedule} told={told} describedBy={describedBy} helpId={helpId} zones={zones} set={set} />
+            </div>
+          )}
           {/* An alert only after the person typed; values they come back to are told politely. */}
-          {told && problem && <p id={errorId} role={touched ? "alert" : "status"} className="text-sm text-danger">{PROBLEM_TEXT()[problem]}</p>}
+          {told && problem && <p id={errorId} role={touched ? "alert" : "status"} className="text-sm text-danger">{repeat ? RUN_SCHEDULE.REPEAT_MISSING : PROBLEM_TEXT()[problem]}</p>}
           {at !== null && <p role="status" className="text-sm"><strong>{NR_RUN.STARTS(whenText(at, schedule.zone))}</strong></p>}
-          <p id={helpId} className="text-xs text-muted-foreground">{NR_RUN.START_HELP(scheduleDaysAhead())}</p>
+          {repeats !== null && <p role="status" className="text-sm"><strong>{repeats}</strong></p>}
+          <p id={helpId} className="text-xs text-muted-foreground">{repeat ? RUN_SCHEDULE.REPEAT_HELP : NR_RUN.START_HELP(scheduleDaysAhead())}</p>
         </div>
       )}
     </QuestionBlock>
+  );
+}
+
+// The Time and Time zone fields, beside the date for a one-time start and beside Repeat for a repeating one.
+function TimeAndZone({ schedule, told, describedBy, helpId, zones, set }: {
+  schedule: StartChoice;
+  told: boolean;
+  describedBy: string;
+  helpId: string;
+  zones: string[];
+  set: (patch: Partial<StartChoice>) => void;
+}) {
+  return (
+    <>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="nr-start-time">{NR_RUN.START_TIME}</Label>
+        <Input id="nr-start-time" type="time" value={schedule.time} aria-invalid={told} aria-describedby={describedBy} onChange={(e) => set({ time: e.target.value })} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="nr-start-zone">{NR_RUN.START_ZONE}</Label>
+        <select id="nr-start-zone" className={SELECT_CLASS} value={schedule.zone} aria-describedby={helpId} onChange={(e) => set({ zone: e.target.value })}>
+          {zones.map((z) => <option key={z} value={z}>{z}</option>)}
+        </select>
+      </div>
+    </>
   );
 }

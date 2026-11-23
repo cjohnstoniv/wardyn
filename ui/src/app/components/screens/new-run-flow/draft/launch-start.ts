@@ -9,9 +9,10 @@
 // Review and the Name dialog say why it is held (startHeldText), and the dialog holds Launch until the person
 // chooses Run now.
 
-import { startProblem, type StartChoice, type StartProblem } from "../../../../lib/schedule";
+import { dayText, firstRepeatStart, repeatProblem, startProblem, weekdayName, zoneWeekday, type StartChoice, type StartProblem } from "../../../../lib/schedule";
 import { SCHEDULE_REFUSAL } from "../../../../lib/schedule-refusals";
 import { NR_RUN } from "../../../wardyn/copy/new-run/run";
+import { RUN_SCHEDULE } from "../../../wardyn/copy/run-schedules";
 import type { NewRunDraft } from "./run-intent";
 
 export interface LaunchStart {
@@ -28,7 +29,17 @@ const laterStart = ({ intent, schedule }: Draft): StartChoice | undefined =>
 /** The start the draft asks for, or undefined when it starts now. `on` is scheduledRuns(setup status). */
 export function launchStart(draft: Draft, on: boolean | undefined, now: number): LaunchStart | undefined {
   const choice = on === true ? laterStart(draft) : undefined;
-  return choice && { choice, problem: startProblem(choice, now) };
+  return choice && { choice, problem: choice.repeat ? repeatProblem(choice) : startProblem(choice, now) };
+}
+
+/**
+ * The line a repeating start reads as: "Repeats every weekday at 09:00 Europe/London; first start Mon 30 Nov". null
+ * for a one-time start, or until a time is typed.
+ */
+export function repeatLine(choice: StartChoice, now: number): string | null {
+  const first = choice.repeat ? firstRepeatStart(choice, now) : null;
+  if (!choice.repeat || first === null) return null;
+  return RUN_SCHEDULE.REPEATS(choice.repeat, choice.time, weekdayName(zoneWeekday(first, choice.zone)), choice.zone, dayText(first, choice.zone));
 }
 
 /** Why a Later start is held: the switch is off, or the server has not said whether it is on. */

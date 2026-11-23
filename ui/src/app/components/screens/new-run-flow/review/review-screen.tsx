@@ -32,7 +32,8 @@ import type { Template, TemplateKind, TemplatePublish } from "../../../../lib/ty
 import { harnessIds } from "../lenses/lens-keys";
 import { intentToWire } from "../draft/intent-to-wire";
 import { launchGateOpen } from "../draft/launch-gate";
-import { startHeld } from "../draft/launch-start";
+import { launchStart, startHeld } from "../draft/launch-start";
+import { RUN_SCHEDULE } from "../../../wardyn/copy/run-schedules";
 import type { NewRunLocation } from "../draft/new-run-url";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { isServer } from "../lenses/apps-lens";
@@ -190,6 +191,8 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
   const open = gate(hard.length);
   // A held start marks its row as needing attention (RunGroup), so the section says so too, never Complete.
   const held = startHeld(draft, scheduledRuns(shell.status)) !== null;
+  // A repeating start makes a schedule, so the button says so.
+  const repeating = !!launchStart(draft, scheduledRuns(shell.status), Date.now())?.choice.repeat;
   // Only age holds Launch: pressing it asks the server again instead of doing nothing.
   const recheckOnLaunch = !open && !hard.length && !issues.length && expired && !checks.preflighting;
 
@@ -234,7 +237,7 @@ export function ReviewScreen({ location, go, onLaunch, ownDriveIds }: ReviewScre
       eyebrow={NR_REVIEW.EYEBROW}
       title={NR_REVIEW.TITLE}
       lede={NR_REVIEW.LEDE}
-      primary={{ label: NR_REVIEW.LAUNCH_RUN, onActivate: () => (open ? onLaunch?.() : checkAgain()), disabled: !open && !recheckOnLaunch, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
+      primary={{ label: repeating ? RUN_SCHEDULE.CREATE : NR_REVIEW.LAUNCH_RUN, onActivate: () => (open ? onLaunch?.() : checkAgain()), disabled: !open && !recheckOnLaunch, describedBy: BLOCKERS_ID, arrow: false, className: cn(DISABLED_FILL, "max-sm:order-3 max-sm:col-span-2 max-sm:h-11") }}
       phoneBar
       headingAside={
         <div role="group" aria-label={NR_REVIEW.VIEW_ARIA}>

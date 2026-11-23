@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import type { CreateRunResult } from "../../../../lib/types/run-create";
 import { useRequestIdentity } from "../../../wardyn/operator-context";
 import { newRunHref } from "../draft/new-run-url";
-import { useNewRunDraft, useNewRunPendingLaunch, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
+import { useNewRunDispatch, useNewRunDraft, useNewRunPendingLaunch, type LaunchedState, type NewRunScreenProps } from "../new-run-route";
 import { useDriveCatalogue } from "../steps/files/file-sources";
 import { ReviewScreen } from "../review/review-screen";
 import { NameRunDialog } from "./name-run-dialog";
@@ -21,17 +21,24 @@ export function ReviewWithLaunch(props: NewRunScreenProps) {
   const navigate = useNavigate();
   const pending = useNewRunPendingLaunch();
   const { principal } = useRequestIdentity();
-  const { catalogue } = useDriveCatalogue(useNewRunDraft().intent.runner_pool_id);
+  const draft = useNewRunDraft();
+  const dispatch = useNewRunDispatch();
+  const { catalogue } = useDriveCatalogue(draft.intent.runner_pool_id);
   // A catalogue still loading, or that failed, is unknown, not "no drives": pass nothing then.
   const ownDriveIds = React.useMemo(() => (catalogue ? new Set(catalogue.drives.filter((d) => d.owned).map((d) => d.id)) : undefined), [catalogue]);
   const created = (result: CreateRunResult) => {
     const state: LaunchedState = { created: result, owner: principal };
     void navigate(newRunHref({ screen: "launched", runId: result.id }), { state });
   };
+  // A schedule is done with the draft, as a launch is: what was typed does not come back.
+  const scheduled = () => {
+    dispatch({ type: "reset", owner: draft.owner });
+    void navigate("/runs/schedules");
+  };
   return (
     <>
       <ReviewScreen {...props} ownDriveIds={ownDriveIds} onLaunch={() => setNaming(true)} />
-      {naming && <NameRunDialog open onOpenChange={setNaming} onCreated={created} pending={pending} />}
+      {naming && <NameRunDialog open onOpenChange={setNaming} onCreated={created} onScheduled={scheduled} pending={pending} />}
     </>
   );
 }

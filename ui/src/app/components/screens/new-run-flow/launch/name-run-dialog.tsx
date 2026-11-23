@@ -34,7 +34,8 @@ import { PolicyRemedy } from "../../../wardyn/policy-remedy";
 import { useAdoLaunchDoor } from "../checks/use-ado-launch-door";
 import { rememberedPreset } from "../steps/tools/use-wall-presets";
 import { intentToWire } from "../draft/intent-to-wire";
-import { launchStart, startHeld, startHeldText } from "../draft/launch-start";
+import { launchStart, repeatLine, startHeld, startHeldText } from "../draft/launch-start";
+import { RUN_SCHEDULE } from "../../../wardyn/copy/run-schedules";
 import type { RunIntent } from "../draft/run-intent";
 import { useDraftIdentity, useIntentChecks } from "../draft/use-intent-checks";
 import { useNewRunDispatch, useNewRunDraft } from "../new-run-route";
@@ -70,11 +71,13 @@ export interface NameRunDialogProps {
   onOpenChange: (open: boolean) => void;
   /** The create answered 2xx: the caller moves to the Launched screen. */
   onCreated: (created: CreateRunResult) => void;
+  /** A repeating start made its schedule: the caller moves to the Schedules screen. */
+  onScheduled?: () => void;
   /** The create in flight, held by the dialog's owner so that closing and reopening cannot start a second. */
   pending?: PendingLaunch;
 }
 
-export function NameRunDialog({ open, onOpenChange, onCreated, pending }: NameRunDialogProps) {
+export function NameRunDialog({ open, onOpenChange, onCreated, onScheduled, pending }: NameRunDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -84,13 +87,13 @@ export function NameRunDialog({ open, onOpenChange, onCreated, pending }: NameRu
           (e.currentTarget as HTMLElement).querySelector<HTMLInputElement>("#name-run-title")?.focus();
         }}
       >
-        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} pending={pending} />
+        <NameRunForm onOpenChange={onOpenChange} onCreated={onCreated} onScheduled={onScheduled} pending={pending} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated" | "pending">) {
+function NameRunForm({ onOpenChange, onCreated, onScheduled, pending }: Pick<NameRunDialogProps, "onOpenChange" | "onCreated" | "onScheduled" | "pending">) {
   const draft = useNewRunDraft();
   const dispatch = useNewRunDispatch();
   const identity = useDraftIdentity();
@@ -129,7 +132,9 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
   // A Later start the switch, off or not known, does not keep: Launch is held, never turned into a launch now,
   // until the person chooses Run now (or the server says the switch is on).
   const held = startHeld(draft, on);
-  const startAt = start && !start.problem ? startInstant(start.choice) : null;
+  const repeat = start?.choice.repeat;
+  const startAt = start && !start.problem && !repeat ? startInstant(start.choice) : null;
+  const repeats = start && !start.problem && repeat ? repeatLine(start.choice, Date.now()) : null;
   const ownRows = useOwnTokenRows(status);
   const adoAccess = status?.unreachable ? undefined : (status?.scm_access as SCMAccessPAT | undefined);
 
@@ -178,7 +183,14 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         aria-busy={create.creating}
         onSubmit={(e) => {
           e.preventDefault();
-          if (canLaunch) void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim(), start: start && startWire(start.choice) }).body);
+          if (!canLaunch) return;
+          if (start && repeat) {
+            // A repeating start is a schedule: the create request goes in it, with no start time of its own.
+            const request = intentToWire(draft.intent, { title: title.trim(), description: description.trim() }).body;
+            void create.schedule({ name: title.trim(), every: repeat, time: start.choice.time, time_zone: start.choice.zone, request }, () => onScheduled?.());
+            return;
+          }
+          void create.launch(intentToWire(draft.intent, { title: title.trim(), description: description.trim(), start: start && startWire(start.choice) }).body);
         }}
       >
         <DialogTitle>{NR_LAUNCH.TITLE}</DialogTitle>
@@ -214,7 +226,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
         {/* The dialog has no start fields, so its start line and held row appear unasked: polite, never an alert. */}
         {start && (
           <p id="name-run-start" role="status" className={start.problem ? "text-sm text-danger" : "text-sm"}>
-            {start.problem ? startProblemText()[start.problem] : <strong>{NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
+            {start.problem ? (repeat ? RUN_SCHEDULE.REPEAT_MISSING : startProblemText()[start.problem]) : <strong>{repeats ?? NR_RUN.STARTS(whenText(startAt ?? 0, start.choice.zone))}</strong>}
           </p>
         )}
         {held && (
@@ -286,7 +298,7 @@ function NameRunForm({ onOpenChange, onCreated, pending }: Pick<NameRunDialogPro
           </Button>
           <Button ref={launchButton} type="submit" disabled={!canLaunch} aria-describedby={heldBy}>
             <Loader2 className={create.spinning ? "size-4 animate-spin" : "hidden"} />
-            {NR_LAUNCH.LAUNCH}
+            {repeat ? RUN_SCHEDULE.CREATE : NR_LAUNCH.LAUNCH}
           </Button>
         </DialogFooter>
       </form>
