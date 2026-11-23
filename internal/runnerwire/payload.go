@@ -177,6 +177,11 @@ type Caps struct {
 	// gives them. Present only when its operator turned VMs on and its start-up probe passed; an older
 	// runner never sends it, and the org asks no runner without it for a VM.
 	LinuxVM *VMCaps `json:"linux_vm,omitempty"`
+	// WindowsVM says the runner starts Windows VM sandboxes (create_vm with machine_kind windows_vm), and
+	// opens their display when Desktop is set. Present only when its operator turned them on beside
+	// Linux VMs and its start-up probe passed; an older runner never sends it, and the org asks no
+	// runner without it for a Windows VM. An older org ignores it.
+	WindowsVM *VMCaps `json:"windows_vm,omitempty"`
 	// MacOSVM says the runner starts macOS VM sandboxes (create_vm with machine_kind macos_vm) and what
 	// its Mac can serve now. Present only when its operator turned them on and the Mac passed its probe;
 	// it is resent when it changes, as Relay is. An older runner never sends it and the org never sends
