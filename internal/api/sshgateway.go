@@ -377,12 +377,14 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	rec, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
 	if err != nil {
+		reason := "unregistered key"
 		if !errors.Is(err, store.ErrNotFound) {
-			// The audit row below keeps its reason, actor and bucket; the log says it was
-			// the store, not a stranger's key (#2782).
+			// A store fault is not a stranger's key: the row says so, and the log carries the error (#2782). The actor
+			// and bucket stay the unknown key's, since no key was read.
 			slog.ErrorContext(ctx, "api: ssh key lookup failed; refusing the connection", slog.String("run_id", runID.String()), slog.Any("err", err))
+			reason = "key lookup failed"
 		}
-		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unregistered key")
+		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, reason)
 		return nil, errors.New("ssh: unknown key")
 	}
 	// Defense in depth: re-verify byte-equality against the STORED key

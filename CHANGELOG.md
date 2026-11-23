@@ -24,6 +24,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - wardynd's 30-second limit for reading its boot keys now starts after the secret store is open. A slow first open, such as a one-time conversion of stored rows, no longer leaves the boot-key reads without time and fails the start.
 - The `git_credential` probe in `examples/workspaces/probes.sh` passes only on the helper's exact answers; other error text is now a failure, not a pass.
 - A rare crash of the server when an issuer portal's relayed request reached its dispatch time just as its connection to the run opened.
+- An SSH sign-in refused because its key could not be looked up is now recorded in its `ssh.authenticate` row with reason `key lookup failed`. It used to say `unregistered key`, as for a key nobody registered (#3508).
+
+### Security
+
+- A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
 
 ### Before you upgrade
 

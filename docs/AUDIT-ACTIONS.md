@@ -1159,6 +1159,7 @@ A [service identity](operations/api-tokens.md#service-identities) is its own act
   - Their `session.attach` rows and every UI-gateway row of the session (`ui.authorize` on success, `ui.start`, `ui.open`, `ui.close` and a re-check's `ui.authorize` denial) keep the sponsor as the `human` actor and add `service_identity` and `entry` `sponsor`.
   - A `ui.authorize` denial of a refused redemption is written before the session exists, so it names the refused principal and the reason only.
   - A refused ticket mint is the foreign-run `404` with an `authz.denied` row: reason `capability_feature` without the grant, or `sponsor_not_entitled` when the caller's sponsorship is not, or no longer, in effect.
+  - A change of sponsor ends the previous sponsor's outstanding tickets on the identity's runs. A ticket minted before the change is then refused at redemption as an invalid ticket, a row that names no principal, even if the person is the sponsor again. A mint that loses the sponsorship between its check and its write is refused like the other sponsor refusals above, with reason `sponsor_not_entitled`.
   - SSH never admits a sponsor: the failure row carries only `reason` `run_owner_only`.
 
 ## Delegation (portals)

@@ -489,7 +489,6 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	// Sponsor change A to B and back to A: the person is the sponsor again, but not the one the ticket was
 	// admitted under, so the redemption is refused. The authority time is the ticket's.
 	roundTrip := ticketOf(t, e.mintTicket(t, e.sponsor, run))
-	time.Sleep(20 * time.Millisecond)
 	for _, to := range []string{svcSponsor2, svcSponsor} {
 		if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+to+`"}`); w.Code != http.StatusOK {
 			t.Fatalf("sponsor change to %s: %d %s", to, w.Code, w.Body.String())
@@ -505,7 +504,6 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 
 	// Sponsor change.
 	changed := ticketOf(t, e.mintTicket(t, e.sponsor, run))
-	time.Sleep(20 * time.Millisecond)
 	if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+svcSponsor2+`"}`); w.Code != http.StatusOK {
 		t.Fatalf("sponsor change: %d %s", w.Code, w.Body.String())
 	}
@@ -532,6 +530,96 @@ func TestServiceIdentity_SponsorEntryEndsWithSponsorship(t *testing.T) {
 	// Reading and stopping do not need the identity active: the sponsor can still stop its live runs.
 	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/kill", e.sponsor2, ""); w.Code != http.StatusAccepted {
 		t.Errorf("the current sponsor's kill under a suspended identity: %d %s, want 202", w.Code, w.Body.String())
+	}
+}
+
+// patchSponsor moves the service identity to sponsor and fails the test unless the change answers 200.
+func (e sponsorEnv) patchSponsor(t *testing.T, to string) {
+	t.Helper()
+	if w := doSSO(t, e.h.srv, http.MethodPatch, "/api/v1/service-identities/"+svcName, e.sec, `{"sponsor":"`+to+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("sponsor change to %s: %d %s", to, w.Code, w.Body.String())
+	}
+}
+
+// TestServiceIdentity_SponsorRoundTripEndsTheTicketWhateverTheClock: a ticket minted while the app clock runs
+// ahead of the database's is still refused after the sponsor goes away and comes back, because the change
+// deletes it. So is a ticket the second sponsor minted, once the sponsorship moves on again.
+func TestServiceIdentity_SponsorRoundTripEndsTheTicketWhateverTheClock(t *testing.T) {
+	e := newSponsorEnv(t)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
+	run := e.seedRun(t, svcPrin, nil)
+	attach := func(tok string) int {
+		return do(t, e.h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/attach?ticket="+tok, "", "").Code
+	}
+	now := e.h.srv.cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	e.h.srv.cfg.Now = func() time.Time { return now().Add(10 * time.Second) }
+	tok := ticketOf(t, e.mintTicket(t, e.sponsor, run))
+	e.h.srv.cfg.Now = now
+
+	e.patchSponsor(t, svcSponsor2)
+	e.grant(t, "user", svcSponsor2, "allow", featureServiceAttach)
+	ageSponsorships(t, e.pool)
+	tok2 := ticketOf(t, e.mintTicket(t, e.sponsor2, run))
+	e.patchSponsor(t, svcSponsor)
+	// Counted before any redemption: redeeming a ticket deletes its row whatever the answer.
+	var left int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM attach_tickets WHERE principal = $1`, svcSponsor2).Scan(&left); err != nil || left != 0 {
+		t.Errorf("tickets still held by the second sponsor after the move back = %d, %v; want 0", left, err)
+	}
+	if got := attach(tok); got != http.StatusForbidden {
+		t.Errorf("a skewed-clock ticket redeemed after A to B to A: %d, want 403", got)
+	}
+	if got := attach(tok2); got != http.StatusForbidden {
+		t.Errorf("the second sponsor's ticket redeemed after the sponsorship moved on: %d, want 403", got)
+	}
+}
+
+// mintSeenStore records the ticket a mint asked for and, when it names a sponsored service, answers that the
+// sponsorship ended between the entry check and the insert.
+type mintSeenStore struct {
+	store.PG
+	got *store.AttachTicket
+}
+
+func (s mintSeenStore) MintAttachTicket(ctx context.Context, token string, t store.AttachTicket, now, expiresAt time.Time) error {
+	*s.got = t
+	if t.SponsorService != "" {
+		return store.ErrServiceIdentityInactive
+	}
+	return s.PG.MintAttachTicket(ctx, token, t, now, expiresAt)
+}
+
+// TestServiceIdentity_SponsorMintThatLosesTheSponsorshipIsRefusedAsForeign: a sponsor's mint carries the
+// identity it was admitted under, and a store that refuses it for the ended sponsorship gets the foreign-run
+// 404 with a sponsor_not_entitled row. A person's own run carries no such name.
+func TestServiceIdentity_SponsorMintThatLosesTheSponsorshipIsRefusedAsForeign(t *testing.T) {
+	e := newSponsorEnv(t)
+	e.grant(t, "user", svcSponsor, "allow", featureServiceAttach)
+	run := e.seedRun(t, svcPrin, nil)
+	var got store.AttachTicket
+	e.h.srv.cfg.Store = mintSeenStore{PG: e.st, got: &got}
+
+	w := e.mintTicket(t, e.sponsor, run)
+	if !refusedAsForeign(w) {
+		t.Fatalf("a mint that lost the sponsorship: %d %s, want the foreign-run 404", w.Code, w.Body.String())
+	}
+	if reasons := e.denialReasons(run.ID); len(reasons) != 1 || reasons[0] != string(authz.ReasonSponsorNotEntitled) {
+		t.Errorf("denial reasons = %v, want [%s]", reasons, authz.ReasonSponsorNotEntitled)
+	}
+	if got.SponsorService != svcName {
+		t.Errorf("SponsorService = %q, want %q", got.SponsorService, svcName)
+	}
+
+	own := e.seedRun(t, svcSponsor, nil)
+	got = store.AttachTicket{}
+	if w := e.mintTicket(t, e.sponsor, own); w.Code != http.StatusOK {
+		t.Fatalf("the sponsor's mint on their own run: %d %s, want 200", w.Code, w.Body.String())
+	}
+	if got.SponsorService != "" {
+		t.Errorf("SponsorService on a person's own run = %q, want empty", got.SponsorService)
 	}
 }
 
