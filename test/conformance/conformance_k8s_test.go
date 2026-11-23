@@ -166,6 +166,10 @@ func TestConformanceK8s(t *testing.T) {
 		testClosedOffAfterTeardown(t, r, cs, ns, agentImage)
 	})
 
+	t.Run("RunService", func(t *testing.T) {
+		testRunService(t, r, agentImage)
+	})
+
 	t.Run("LiveProxyNarrow", func(t *testing.T) {
 		liveProxyNarrow(t, r, cs, ns, agentImage)
 	})
