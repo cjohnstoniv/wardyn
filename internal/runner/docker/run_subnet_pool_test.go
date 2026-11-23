@@ -162,6 +162,54 @@ func TestRunSubnetPool_ConcurrentCreatesAreSerialised(t *testing.T) {
 	}
 }
 
+// TestDaemonRunNetwork_ConcurrentCreatesAreSerialised: with no pool, this driver's creates never probe and create at
+// once, so none of them reads back a subnet another create is about to take; run under -race.
+func TestDaemonRunNetwork_ConcurrentCreatesAreSerialised(t *testing.T) {
+	f := newFakeDocker()
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	var inFlight, most atomic.Int32
+	f.onNetworkCreate = func(string, client.NetworkCreateOptions) {
+		n := inFlight.Add(1)
+		for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+		}
+		time.Sleep(2 * time.Millisecond)
+		inFlight.Add(-1)
+	}
+	const runs = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, runs)
+	for range runs {
+		wg.Go(func() {
+			if _, _, err := poolNet(t, f, d); err != nil {
+				errs <- err
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent create: %v", err)
+	}
+	if m := most.Load(); m != 1 {
+		t.Errorf("%d network creates ran at once; want them serialised", m)
+	}
+	seen := map[netip.Prefix]bool{}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.networks) != runs {
+		t.Errorf("%d networks left, want %d (a probe was not removed)", len(f.networks), runs)
+	}
+	for _, s := range f.subnets {
+		if seen[s] {
+			t.Errorf("subnet %s handed to two run networks", s)
+		}
+		seen[s] = true
+	}
+	if len(seen) != runs {
+		t.Errorf("%d distinct subnets, want %d", len(seen), runs)
+	}
+}
+
 // TestCreateSandbox_PassesPoolIPAMOnlyWhenSet: with the pool set, the run network is created once,
 // asking for a pool subnet, with no daemon-picked probe network.
 func TestCreateSandbox_PassesPoolIPAMOnlyWhenSet(t *testing.T) {
@@ -220,6 +268,42 @@ func TestSweepOrphanedSandboxes_ReleasesOrphanRunNetworks(t *testing.T) {
 		}
 	}
 	wantSubnets(t, f, d, "10.200.0.0/28")
+}
+
+// TestSweepOrphanedSandboxes_RemovesOrphanRunNetworksWithoutAPool: with no pool the network pass still runs: an
+// orphaned run's old network is removed; a live run's, a young one and another deployment's stay.
+func TestSweepOrphanedSandboxes_RemovesOrphanRunNetworksWithoutAPool(t *testing.T) {
+	f := newFakeDocker()
+	d := newWithClient(f, Config{ProxyImage: "wardyn-proxy:dev"})
+	orphan, live, young, other := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	ctx := context.Background()
+	for _, id := range []uuid.UUID{orphan, live, young} {
+		if _, err := d.createRunNetwork(ctx, id, d.labels(id, componentNetwork, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherLabels := d.labels(other, componentNetwork, nil)
+	otherLabels[labelDeployment] = "wardyn-internal-other"
+	if _, err := d.createRunNetwork(ctx, other, otherLabels); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	for _, id := range []uuid.UUID{orphan, live, other} {
+		f.netCreated[internalNetName(id)] = time.Now().Add(-time.Hour)
+	}
+	f.mu.Unlock()
+	n, err := d.SweepOrphanedSandboxes(ctx, 10*time.Minute, func(id uuid.UUID) bool { return id != live })
+	if err != nil || n != 1 {
+		t.Fatalf("sweep = %d, %v; want 1 network swept", n, err)
+	}
+	if _, ok := f.networks[internalNetName(orphan)]; ok {
+		t.Error("the orphaned run's network is still there")
+	}
+	for _, id := range []uuid.UUID{live, young, other} {
+		if _, ok := f.networks[internalNetName(id)]; !ok {
+			t.Errorf("network %s was swept; want it kept", internalNetName(id))
+		}
+	}
 }
 
 func TestRunSubnetPoolFromEnv(t *testing.T) {

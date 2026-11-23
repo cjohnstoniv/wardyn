@@ -992,7 +992,7 @@ boot_seed_wait_for_prep() {
     # in a TERM-aware wait loop as PID 1, same pid); WARDYN_IDLE_PID is the exact one
     # start_wardyn_session handed over.
     local idle_pid="${WARDYN_IDLE_PID:-1}"
-    while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done
+    while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done
     [[ -f "$HOME/.wardyn/prep-done" ]] || printf '%s\n' "$BOOT_SEED_PREP_GONE" >&2
 }
 

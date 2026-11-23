@@ -346,6 +346,23 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 	deadline := time.Now().Add(timeout)
 	waitCtx, cancel := context.WithDeadlineCause(ctx, deadline, errWaitTimeout)
 	defer cancel()
+	// The run's event stream wakes the poll below at each state change, so a start or an end is read when the
+	// server announces it, not up to waitPollInterval later. The poll stays the only source of truth: a server
+	// without the stream, a refused stream or a dropped one leaves the poll's own cadence.
+	wake := make(chan struct{}, 1)
+	feedCtx, stopFeed := context.WithCancel(waitCtx)
+	feedDone := make(chan struct{})
+	go func() {
+		defer close(feedDone)
+		_ = c.RunEvents(feedCtx, runID, 0, func(sdk.RunEvent) error {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+			return nil
+		})
+	}()
+	defer func() { stopFeed(); <-feedDone }()
 	consecutiveErrs := 0
 	var lastState types.RunState
 	lastAhead := -1
@@ -419,6 +436,7 @@ func waitForRun(ctx context.Context, errW io.Writer, c *sdk.Client, runID uuid.U
 				return &exitError{code: 124, err: fmt.Errorf("timed out after %s waiting for run %s (last state %s)", timeout, runID, lastState)}
 			}
 			return ctx.Err()
+		case <-wake:
 		case <-time.After(waitPollInterval):
 		}
 	}

@@ -377,7 +377,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("docker: wait: no agent exec tracked for ref %q (Exec not called?)", ref)
 	}
-	return d.pollExecExit(ctx, execID)
+	return d.pollExecExit(ctx, execID, pollIntervalIdle)
 }
 
 // pollExecExit polls execID's inspect until it has exited and returns its
@@ -392,9 +392,15 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 // yet. Returning then reported exit 0 for a process that had yet to run. That
 // state is polled past, for the same budget as a daemon blip; an exec that
 // still has not started by then is an error, never a silent 0.
-func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
+//
+// idle is the cadence once the exec has run for waitFastFor: the agent's Wait slows to pollIntervalIdle, while a
+// streamed exec's Wait, which a person waits on, passes pollInterval. A failed probe or an exec not started yet keeps
+// pollInterval, so both budgets stay about a minute.
+func (d *Driver) pollExecExit(ctx context.Context, execID string, idle time.Duration) (int, error) {
 	errs, unstarted := 0, 0
+	start := time.Now()
 	for {
+		running := false
 		insp, err := d.cli.ExecInspectRaw(ctx, execID)
 		switch {
 		case err == nil:
@@ -406,6 +412,8 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 				if unstarted++; unstarted >= waitMaxProbeErrors {
 					return 0, fmt.Errorf("docker: exec wait: exec %s was never started (%d polls)", execID, unstarted)
 				}
+			} else {
+				running = true
 			}
 		case isNotFound(err):
 			// The daemon drops a container's execs with it: the sandbox is gone.
@@ -415,10 +423,14 @@ func (d *Driver) pollExecExit(ctx context.Context, execID string) (int, error) {
 				return 0, fmt.Errorf("docker: exec wait: exec inspect (%d consecutive errors): %w", errs, err)
 			}
 		}
+		delay := pollInterval
+		if running && time.Since(start) >= waitFastFor {
+			delay = idle
+		}
 		select {
 		case <-ctx.Done():
 			return 0, fmt.Errorf("docker: exec wait: %w", ctx.Err())
-		case <-time.After(pollInterval):
+		case <-time.After(delay):
 		}
 	}
 }

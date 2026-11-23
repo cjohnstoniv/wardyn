@@ -360,6 +360,11 @@ func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels m
 
 // createDaemonRunNetwork creates network name as base asks, on a subnet the daemon picks.
 func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base client.NetworkCreateOptions) (string, error) {
+	// The subnet the probe reads back is free only until another create takes it. The lock keeps this driver's own
+	// creates out of that window; a create another process makes on the daemon can still take it, and the pick is
+	// then retried below.
+	d.subnetMu.Lock()
+	defer d.subnetMu.Unlock()
 	var err error
 	for range 3 {
 		opts := base
@@ -382,6 +387,9 @@ func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base c
 	return "", fmt.Errorf("docker: create internal network: %w", err)
 }
 
+// probeRemoveBound bounds the removal of a subnet probe network.
+const probeRemoveBound = 30 * time.Second
+
 // daemonSubnet creates network name as opts asks, with no subnet, reads back
 // the IPv4 subnet the daemon gave it and removes it again.
 func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.NetworkCreateOptions) (netip.Prefix, error) {
@@ -390,9 +398,12 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 		return netip.Prefix{}, err
 	}
 	insp, ierr := d.cli.NetworkInspect(ctx, res.ID, client.NetworkInspectOptions{})
-	// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand the probe
-	// network holding a pool subnet.
-	if _, err := d.cli.NetworkRemove(context.Background(), res.ID, client.NetworkRemoveOptions{}); err != nil {
+	// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand the probe network holding a
+	// pool subnet. Bounded, because the caller holds subnetMu: a removal the daemon never answers must not hold
+	// every other start.
+	rmCtx, cancel := context.WithTimeout(context.Background(), probeRemoveBound)
+	defer cancel()
+	if _, err := d.cli.NetworkRemove(rmCtx, res.ID, client.NetworkRemoveOptions{}); err != nil {
 		return netip.Prefix{}, fmt.Errorf("remove the subnet probe: %w", err)
 	}
 	if ierr != nil {
@@ -771,8 +782,7 @@ var _ containerListerAPI = (*client.Client)(nil)
 // after the proxy started and before the agent existed (or a rollback whose proxy removal the daemon
 // refused) leaves a proxy holding the run's config, an exec-less sandbox has no agent until its
 // first Exec, and a teardown cut short after the proxy went leaves only the hold. A crash between network-create and proxy-start leaves a network with no container to
-// key on; with Config.RunSubnetPool set, sweepRunNetworks removes it, otherwise that edge is left
-// to `docker network prune`.
+// key on; sweepRunNetworks removes it, with or without Config.RunSubnetPool.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	n, _, err := d.sweepOrphans(ctx, minAge, isOrphan, nil)
 	return n, err
@@ -829,11 +839,9 @@ func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrpha
 		}
 		swept++
 	}
-	if d.cfg.RunSubnetPool.IsValid() {
-		nets, nerr := d.sweepRunNetworks(ctx, cutoff, sweepable)
-		swept += nets
-		errs = append(errs, nerr)
-	}
+	nets, nerr := d.sweepRunNetworks(ctx, cutoff, sweepable)
+	swept += nets
+	errs = append(errs, nerr)
 	return swept, heldN, errors.Join(errs...)
 }
 

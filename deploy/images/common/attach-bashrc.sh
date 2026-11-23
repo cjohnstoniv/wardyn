@@ -28,7 +28,7 @@ _prep_gone=
 if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}${WARDYN_START_FOLDER:-}" ] || [ -f "$HOME/.wardyn/workdir" ]; then
   if [ ! -f "$HOME/.wardyn/prep-done" ]; then
     printf '\033[36m⏳ Preparing workspace (cloning the repo)… one moment.\033[0m\n'
-    while [ ! -f "$HOME/.wardyn/prep-done" ] && kill -0 "${WARDYN_IDLE_PID:-1}" 2>/dev/null; do sleep 1; done
+    while [ ! -f "$HOME/.wardyn/prep-done" ] && kill -0 "${WARDYN_IDLE_PID:-1}" 2>/dev/null; do sleep 0.2 2>/dev/null || sleep 1; done
     [ -f "$HOME/.wardyn/prep-done" ] || {
       _prep_gone=1
       printf '\033[33mwardyn: workspace preparation ended without finishing; not starting the agent. Check the run for a failed clone.\033[0m\n'

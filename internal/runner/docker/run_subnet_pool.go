@@ -123,9 +123,10 @@ func (d *Driver) poolRunSubnet(ctx context.Context, lost []netip.Prefix) (netip.
 	return subnet, nil
 }
 
-// sweepRunNetworks removes the per-run networks, older than cutoff, of runs isOrphan says are gone,
-// handing their subnets back to the pool. It catches the network a crash between network create and
-// proxy start leaves with no container for SweepOrphanedSandboxes to key on.
+// sweepRunNetworks removes the per-run networks, older than cutoff, of runs isOrphan says are gone, handing their
+// subnets back: to Config.RunSubnetPool when it is set, else to the daemon's own pools. It catches the network a crash
+// between network create and proxy start leaves with no container for SweepOrphanedSandboxes to key on, and a subnet
+// probe whose removal failed (createDaemonRunNetwork).
 func (d *Driver) sweepRunNetworks(ctx context.Context, cutoff time.Time, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	res, err := d.cli.NetworkList(ctx, client.NetworkListOptions{Filters: client.Filters{}.Add("label", labelComponent+"="+componentNetwork)})
 	if err != nil {

@@ -60,6 +60,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Runs board reads its hidden-run counts on load and once a minute instead of on every poll. `GET /api/v1/runs` takes `counts=skip` to leave the two hidden-count headers out.
 - The terminal-sandbox retry sweep pages by run creation time and id, so runs created between sweeps no longer hold it on its newest page.
 - Debounce and ready caches drop only expired entries when they grow large, instead of forgetting every entry.
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, run starts no longer race each other for one subnet, and the orphan sweep now removes a run network whose run has ended or is gone. Before, only a host with the pool set swept them.
+- When a run's sandbox is removed, Wardyn removes the image tag it built for that run alone (a custom image or a dev container image). After an idle stop that happens at the next server start. Tags left by earlier releases stay. A wrapped image a workspace keeps for its later runs stays.
+- `wardyn run --wait` reads the run again as soon as the server reports a state change on the run's event stream, and still polls every 2 seconds.
 
 ### Fixed
 
@@ -130,6 +133,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
 - The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 - Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, the first orphan sweep after the upgrade removes Wardyn's leftover run networks of runs that ended or are gone. A network another container still uses is kept, and the sweep logs it.
 
 ## [0.10.3] — 2026-11-23
 
