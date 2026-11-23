@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `POST /runs/preflight` says when the blast-radius floor raised a run's class to CC3: `confinement_raise_cause: blast_radius_floor`, with a warning line. `GET /setup/status` adds an info row, `default_barrier_unset`, shown to an operator while no organization default barrier is set and a runner offers CC2 or CC3, naming the strongest class a launch that names no barrier gets. Neither changes what any run gets.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

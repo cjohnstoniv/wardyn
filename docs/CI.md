@@ -334,7 +334,7 @@ wardyn run grants <id>         # what the run was ELIGIBLE for (not a service to
 wardyn audit <id> --json       # a service token reads only its own runs' rows
 ```
 
-- `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced.
+- `--dry-run` posts the same body to `POST /api/v1/runs/preflight`, a dry-run of launch resolution that mints nothing and prints the `setup_items` blockers plus the confinement class that would be enforced. A class raised to CC3 by the blast-radius floor also carries `confinement_raise_cause: blast_radius_floor` and a warning.
 - `--placement remote|local` chooses where the sandbox lives. A local run goes to your own runners through `--pool <id>` or your default pool, else is refused `runner_pool_required`. `--runner <id>` pins one of your runners in that pool; unset, the pool picks an online one with room. Other refusals include `runner_offline` and `runner_at_capacity`.
 - `ci-run.sh` calls the same endpoint before launching.
 - A command that must stay up is a [service](SERVICES.md).

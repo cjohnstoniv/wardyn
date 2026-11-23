@@ -83,6 +83,7 @@ type runFold struct {
 	enforced           types.ConfinementClass
 	placed             backendPlacement                // the barriers the placement enforces, as stepConfinement read them (Review's backend row)
 	confinementDefault runnerpool.BarrierDefaultSource // who chose enforced when the request named no class
+	confinementRaised  bool                            // the blast-radius floor lifted enforced to CC3 (dry doors only)
 	mpChoice           runProviderChoice
 	modelCred          modelCredentialFacts
 	autonomy           types.AutonomyResolution

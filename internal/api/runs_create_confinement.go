@@ -47,9 +47,16 @@ import (
 // source says who chose a defaulted class (the organisation or the server) and is empty when the
 // request named one. The blast-radius floor raising a defaulted class to CC3 makes it the server's.
 func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass, org types.ConfinementClass, baseline composer.Baseline) (enforced types.ConfinementClass, source runnerpool.BarrierDefaultSource, err error) {
+	enforced, source, _, err = resolveConfinement(spec, reqCC, advertised, org, baseline)
+	return enforced, source, err
+}
+
+// resolveConfinement is enforcedConfinement's body; raised says the blast-radius floor lifted the class
+// to CC3, which Review reports (confinement_raise_cause).
+func resolveConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass, org types.ConfinementClass, baseline composer.Baseline) (enforced types.ConfinementClass, source runnerpool.BarrierDefaultSource, raised bool, err error) {
 	if reqCC != "" {
 		if !confinementGE(reqCC, spec.MinConfinementClass) {
-			return "", "", fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
+			return "", "", false, fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
 				reqCC, spec.MinConfinementClass)
 		}
 		enforced = reqCC
@@ -57,12 +64,12 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 		enforced, source = defaultBarrier(advertised, spec.MinConfinementClass, org)
 	}
 	if composer.RequiredConfinementFloor(spec, baseline) == types.CC3 && !confinementGE(enforced, types.CC3) {
-		enforced = types.CC3
+		enforced, raised = types.CC3, true
 		if source != "" {
 			source = runnerpool.BarrierDefaultServer
 		}
 	}
-	return enforced, source, nil
+	return enforced, source, raised, nil
 }
 
 // stampConfinementDefault records on run.create who chose the class of a launch that named none: the

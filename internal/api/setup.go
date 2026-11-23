@@ -379,6 +379,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			// private_ip_refusals: hosts a run's proxy refused for resolving into liftable private space. Never Blocking.
 			checks = append(checks, s.privateIPRefusalsRows(ctx, siteCfg)...)
 		}
+		// default_barrier_unset: no organisation default barrier while a stronger class is offered. Never Blocking.
+		if chk, ok := s.defaultBarrierUnsetRow(ctx, rnr); ok {
+			checks = append(checks, chk)
+		}
 		// High availability rows: present only while WARDYN_HA is on, and read
 		// Postgres, so they share this operator-only gate.
 		if s.cfg.HA {
