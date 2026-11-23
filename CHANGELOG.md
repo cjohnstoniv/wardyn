@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A rare crash of the server when an issuer portal's relayed request reached its dispatch time just as its connection to the run opened.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
