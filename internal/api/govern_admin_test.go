@@ -189,6 +189,10 @@ func governSites() []governSite {
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				return s.scheduleDoorRefusal(ctx, walled(types.GovernanceLimits{DenyScheduledRuns: true})) != nil
 			}},
+		{"run_schedule_repeat.go scheduleResumeDoorRefusal", capSrv(&capStore{}),
+			func(t *testing.T, s *Server, ctx context.Context) bool {
+				return s.scheduleResumeDoorRefusal(ctx, walled(types.GovernanceLimits{DenyScheduledRuns: true})) != nil
+			}},
 		{"user_drives_run.go driveDoorProfile", plain,
 			func(t *testing.T, s *Server, ctx context.Context) bool {
 				_, shut := s.driveDoorProfile(ctx, walled(types.GovernanceLimits{DenyUserDrive: true}))
