@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
 
+### Fixed
+
+- An SSH sign-in refused because its key could not be looked up is now recorded in its `ssh.authenticate` row with reason `key lookup failed`. It used to say `unregistered key`, as for a key nobody registered (#3508).
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
