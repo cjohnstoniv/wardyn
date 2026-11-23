@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -102,24 +103,43 @@ const auditAppendSQL = `
 		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
 		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
 
+// auditReadBackSQL reads the first stored row of a replayed event (audit_events has no unique id, so an
+// at-least-once duplicate gives two rows; the sinks always get the first stored row's hashes). The time index
+// finds it; under the chain lock, every earlier writer has committed.
+const auditReadBackSQL = `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') FROM audit_events WHERE time = $1 AND id = $2 ORDER BY seq LIMIT 1`
+
 // insertReplayedAuditEvent is InsertAuditEvent's body for a replayed event (WithAuditReplay): an event the
-// table already holds is not appended again.
+// table already holds is not appended again, and ev carries the stored row's hashes. The lock wait bound, the
+// chain lock and the read-back go to the database together.
 func insertReplayedAuditEvent(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent, dataJSON []byte) error {
-	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+	b := &pgx.Batch{}
+	b.Queue(db.AuditChainLockTimeoutSQL())
+	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
+	b.Queue(auditReadBackSQL, ev.Time, ev.ID)
+	br := tx.SendBatch(ctx, b)
+	defer br.Close() //nolint:errcheck // closes the pipeline on every error path; a second Close is a no-op
+	if _, err := br.Exec(); err != nil {
 		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
 	}
-	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+	if _, err := br.Exec(); err != nil {
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	var held bool
-	// audit_events_time_idx finds it; under the chain lock, every earlier writer has committed.
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_events WHERE time = $1 AND id = $2)`, ev.Time, ev.ID).Scan(&held); err != nil {
+	err := br.QueryRow().Scan(&ev.PrevHash, &ev.RowHash)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("store: look up a replayed audit event: %w", err)
 	}
-	if held {
-		return nil // already recorded: nothing to append, and ev keeps no chain hashes
+	if cerr := br.Close(); cerr != nil {
+		return fmt.Errorf("store: look up a replayed audit event: %w", cerr)
 	}
+	if err == nil {
+		// Already recorded: ev carries the stored row's hashes. Nothing was written, so the commit is read-only.
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("store: commit audit event: %w", err)
+		}
+		return nil
+	}
+	// A new event: the append, on the same transaction, with the chain lock already held.
 	if err := tx.QueryRow(ctx, auditAppendSQL,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,

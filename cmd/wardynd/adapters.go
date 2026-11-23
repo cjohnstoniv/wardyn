@@ -363,13 +363,14 @@ var _ audit.Recorder = fanoutRecorder{}
 func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	// store.InsertAuditEvent is called directly rather than through
 	// f.primary.Record for ONE reason: it takes ev by POINTER and fills in the
-	// hash chain Postgres computed (migration 0047), so what fans out to the
+	// hash chain Postgres computed (audit_append, migration 0111), so what fans out to the
 	// sinks below carries prev_hash and this row's own row_hash — the CURRENT
 	// CHAIN HEAD at the moment of the write. That is what lets an external SIEM
 	// detect a later truncation: it holds head hashes off-box, and a chain that
 	// no longer contains one it saw has been rewritten. audit.Recorder takes ev
 	// by value, so Recorder.Record structurally cannot hand them back.
 	// A failed store write leaves both empty and the event still fans out.
+	// A replay of an event the table already holds carries that row's stored hashes.
 	err := store.InsertAuditEvent(ctx, f.primary.Pool, &ev)
 	if f.fanout != nil {
 		// Best-effort: log a total fanout failure, but do not propagate it.
@@ -386,9 +387,9 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 }
 
 // landedRecorder writes an event to the store and emits it to the sink fanout only once the store took it,
-// with the chain hashes the database computed. The spool drain uses it for a row that never reached the
-// sinks while it waited under the pending key; a failed write emits nothing, so the drain's retry cannot
-// send it twice.
+// with the chain hashes the database computed — a replay the table already held included. The spool drain
+// uses it for a row that never reached the sinks while it waited under the pending key; a failed write emits
+// nothing, so the drain's retry cannot send it twice.
 type landedRecorder struct {
 	primary store.Recorder
 	fanout  *sinks.Fanout

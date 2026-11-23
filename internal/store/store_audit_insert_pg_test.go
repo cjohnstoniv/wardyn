@@ -79,3 +79,51 @@ func TestPG_AuditReplayAppendsOneRowPerEvent(t *testing.T) {
 		t.Fatalf("eight writers replaying one event at once left %d rows, want 1", n)
 	}
 }
+
+// A replay of an event the table already holds adds no row and hands the caller the stored row's hashes, so a
+// sink that gets the event carries the chain position the database gave it.
+func TestPG_AuditReplayOfAHeldEventCarriesTheStoredHashes(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	first := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorSystem, Actor: "test",
+		Action: "test.replay.held", Outcome: "success"}
+	if err := store.InsertAuditEvent(ctx, pool, &first); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if first.RowHash == "" {
+		t.Fatal("the first write carries no row hash")
+	}
+
+	again := first
+	again.PrevHash, again.RowHash = "", ""
+	if err := store.InsertAuditEvent(store.WithAuditReplay(ctx), pool, &again); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if n := auditRowsWithID(t, pool, first.ID); n != 1 {
+		t.Fatalf("%d rows carry the event's id after a replay, want 1", n)
+	}
+	if again.PrevHash != first.PrevHash || again.RowHash != first.RowHash {
+		t.Errorf("replay hashes %q/%q, want the stored %q/%q", again.PrevHash, again.RowHash, first.PrevHash, first.RowHash)
+	}
+}
+
+// A replay of an event the table does not hold appends it and carries the hashes it was given.
+func TestPG_AuditReplayOfANewEventAppendsAndCarriesItsHashes(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorSystem, Actor: "test",
+		Action: "test.replay.new", Outcome: "success"}
+	if err := store.InsertAuditEvent(store.WithAuditReplay(ctx), pool, &ev); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if n := auditRowsWithID(t, pool, ev.ID); n != 1 {
+		t.Fatalf("%d rows carry the event's id, want 1", n)
+	}
+	var prev, hash string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') FROM audit_events WHERE id = $1`, ev.ID).Scan(&prev, &hash); err != nil {
+		t.Fatal(err)
+	}
+	if hash == "" || ev.RowHash != hash || ev.PrevHash != prev {
+		t.Errorf("event hashes %q/%q, want the stored %q/%q", ev.PrevHash, ev.RowHash, prev, hash)
+	}
+}

@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Audit writes from the server's requests and its spool replay hold the audit log's chain lock for less time: the lock and the append go to the database together.
 
+### Fixed
+
+- When a replayed audit event was already stored, the audit sinks received it with empty chain hashes. They now receive the stored row's hashes.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
