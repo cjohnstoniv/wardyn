@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- On a desktop install, the launcher's refusal of a symlinked envelope file now says which check failed: the link's directory is owned by another account, or other accounts can write to it, with or without the sticky bit.
+
+### Security
+
+- `WARDYN_RELAY_ALLOWED_SOURCES` now reads an IPv4-mapped IPv6 prefix, such as `::ffff:10.1.0.0/112`, as the IPv4 prefix it maps, so the sources it names are admitted instead of none. A value that names no prefix or address, such as `,` or only spaces, now stops `wardyn-runnerd serve` at start instead of admitting every source.
+- A runner registration whose owner is suspended after the registration token is spent, and before the runner is created, is now refused (`403`, `identity_deactivated`) and creates no runner.
+
+### Before you upgrade
+
+- If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
