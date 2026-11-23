@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -487,9 +488,12 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 	// another runner, and a runner that answers with a stream of another kind.
 	t.Run("caps without MoveState", func(t *testing.T) {
 		quiet := &movingFake{Fake: runnertest.NewFake()}
+		var notices atomic.Int32
 		qd, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: quiet,
 			BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
-			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+			Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+			// The runner would record a notice, so only the org's client gate refuses one.
+			MoveUnbound: func(context.Context, uuid.UUID, string) error { notices.Add(1); return nil }})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -505,8 +509,8 @@ func TestDispatch_MoveMethodsRoute(t *testing.T) {
 		if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: ref}); err == nil {
 			t.Error("notice to a runner without MoveState was sent")
 		}
-		if len(quiet.exported)+len(quiet.imported) != 0 {
-			t.Errorf("calls reached the substrate: %v %v", quiet.exported, quiet.imported)
+		if len(quiet.exported)+len(quiet.imported) != 0 || notices.Load() != 0 {
+			t.Errorf("calls reached the runner: exports %v, imports %v, %d notices", quiet.exported, quiet.imported, notices.Load())
 		}
 	})
 	t.Run("a ref of another runner", func(t *testing.T) {
