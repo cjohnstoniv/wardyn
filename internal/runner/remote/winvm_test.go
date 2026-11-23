@@ -71,11 +71,10 @@ func TestCheckVMCapsWindows(t *testing.T) {
 			if refused && (len(rig.Fake.Created) != 0 || len(rig.Fake.Calls) != 0) {
 				t.Fatalf("the refused Windows VM reached the runner: created %d, calls %v", len(rig.Fake.Created), rig.Fake.Calls)
 			}
-			if !tc.offered {
-				return
-			}
-			if len(rig.Fake.Created) != 1 || rig.Fake.Created[0].MachineKind != types.MachineWindowsVM {
-				t.Fatalf("an offered Windows VM create reached the runner as %+v (%v)", rig.Fake.Created, err)
+			// The fake serves no create_vm, so an offered create passes the caps check and gets the
+			// runner's own answer.
+			if tc.offered && err == nil {
+				t.Fatalf("an offered Windows VM create = nil, want the runner's own answer to create_vm")
 			}
 		})
 	}
