@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -98,6 +99,48 @@ func TestGovernanceApprovalsKeepEveryKey(t *testing.T) {
 	}
 }
 
+// A zero the server sent on the read of one change is an answer, not an absence: it must come back out.
+func TestGovernanceApprovalsKeepZeroes(t *testing.T) {
+	const zeroes = `{"required":2,"require_security":false,"have":2,"entries":[],"eligible":[],"uncountable":[],` +
+		`"reach":"ok","still_needed":0,"remaining_eligible":0,"proposer_active":false,"reject_reason_required":false}`
+	var a client.GovernanceChangeApprovals
+	if err := json.Unmarshal([]byte(zeroes), &a); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if a.StillNeeded == nil || a.RemainingEligible == nil {
+		t.Fatalf("zero counts were read as absent: %+v", a)
+	}
+	out, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"still_needed", "remaining_eligible", "proposer_active", "reject_reason_required"} {
+		if !strings.Contains(string(out), `"`+key+`":`) {
+			t.Errorf("%s was dropped from %s", key, out)
+		}
+	}
+	var row client.GovernanceChangeApprovals
+	if err := json.Unmarshal([]byte(`{"required":2,"require_security":false,"have":1}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = json.Marshal(row)
+	if strings.Contains(string(out), "still_needed") || strings.Contains(string(out), "remaining_eligible") {
+		t.Errorf("a list row must stay without the one-change fields: %s", out)
+	}
+}
+
+func TestGetGovernanceChangeImpact_ZeroLiveRunsStay(t *testing.T) {
+	var got seen
+	c := reviewFake(t, http.StatusOK, `{"computed":"tree","as_of":"2026-11-20T10:00:00Z","people":[],"live_runs_total":0}`, &got)
+	out, err := c.GetGovernanceChangeImpact(context.Background(), uuid.New())
+	if err != nil || out.LiveRunsTotal == nil {
+		t.Fatalf("live_runs_total 0 was read as absent: %+v, %v", out, err)
+	}
+	if b, _ := json.Marshal(out); !strings.Contains(string(b), `"live_runs_total":0`) {
+		t.Errorf("live_runs_total was dropped from %s", b)
+	}
+}
+
 func TestApprovalCountsKeepEveryKey(t *testing.T) {
 	var c client.ApprovalCounts
 	if err := json.Unmarshal([]byte(countsSample), &c); err != nil {
@@ -157,7 +200,7 @@ func TestGetGovernanceChangeImpact(t *testing.T) {
 		t.Errorf("request = %+v", got)
 	}
 	if out.Computed != "tree" || len(out.People) != 1 || out.People[0].Subject != "bob" || out.People[0].Changes[0].Knob != "cpu" ||
-		out.LiveRuns[0].ID != run || out.LiveRunsTotal != 3 || out.Activates[0].UnitName != "Data" || out.AsOf.IsZero() {
+		out.LiveRuns[0].ID != run || out.LiveRunsTotal == nil || *out.LiveRunsTotal != 3 || out.Activates[0].UnitName != "Data" || out.AsOf.IsZero() {
 		t.Errorf("impact = %+v", out)
 	}
 }
@@ -239,6 +282,18 @@ func TestPutApprovalCounts(t *testing.T) {
 	want := `{"default":{"required":2,"require_security":false},"kinds":[{"kind":"governance_unit","required":3,"require_security":true}]}`
 	if got.method != http.MethodPut || got.path != "/api/v1/governance/approval-counts" || got.body != want || out.Highest != 3 {
 		t.Errorf("request = %+v, counts = %+v", got, out)
+	}
+}
+
+// The write replaces every row, so a caller with no kinds sends an empty list and never null.
+func TestPutApprovalCounts_NoKindsIsAnEmptyList(t *testing.T) {
+	var got seen
+	c := reviewFake(t, http.StatusOK, countsSample, &got)
+	if _, err := c.PutApprovalCounts(context.Background(), client.ApprovalCountsWrite{Default: client.ApprovalCountsRule{Required: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"default":{"required":2,"require_security":false},"kinds":[]}`; got.body != want {
+		t.Errorf("body = %s, want %s", got.body, want)
 	}
 }
 

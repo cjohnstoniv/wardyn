@@ -61,7 +61,7 @@ type GovernanceChangeImpact struct {
 	AsOf          time.Time                 `json:"as_of"`
 	People        []GovernanceImpactPerson  `json:"people,omitempty"`
 	LiveRuns      []GovernanceImpactRun     `json:"live_runs,omitempty"`
-	LiveRunsTotal int                       `json:"live_runs_total,omitempty"`
+	LiveRunsTotal *int                      `json:"live_runs_total,omitempty"`
 	Activates     []GovernanceUnitRef       `json:"activates,omitempty"`
 	Vacates       []GovernanceUnitRef       `json:"vacates,omitempty"`
 	Boundary      *GovernanceImpactBoundary `json:"boundary,omitempty"`
@@ -148,11 +148,12 @@ type GovernanceChangeApprovals struct {
 	Eligible    []GovernanceApprovalEligible    `json:"eligible,omitempty"`
 	Uncountable []GovernanceApprovalUncountable `json:"uncountable,omitempty"`
 	// Reach is ok, cant_reach or cant_confirm. CantReachReason (count or security) is set only with cant_reach.
-	Reach             string `json:"reach,omitempty"`
-	CantReachReason   string `json:"cant_reach_reason,omitempty"`
-	StillNeeded       int    `json:"still_needed,omitempty"`
-	RemainingEligible int    `json:"remaining_eligible,omitempty"`
-	// ProposerActive and RejectReasonRequired are pointers so a false the server sent stays in the output.
+	Reach           string `json:"reach,omitempty"`
+	CantReachReason string `json:"cant_reach_reason,omitempty"`
+	// The four fields below are on the read of one change only, and a zero or false is a real answer there,
+	// so they are pointers: a value the server sent stays in the output, and a list row's absence stays absent.
+	StillNeeded          *int                      `json:"still_needed,omitempty"`
+	RemainingEligible    *int                      `json:"remaining_eligible,omitempty"`
 	ProposerActive       *bool                     `json:"proposer_active,omitempty"`
 	RejectReasonRequired *bool                     `json:"reject_reason_required,omitempty"`
 	Viewer               *GovernanceApprovalViewer `json:"viewer,omitempty"`
@@ -282,8 +283,12 @@ func (c *Client) GetApprovalCounts(ctx context.Context) (ApprovalCounts, error) 
 }
 
 // PutApprovalCounts replaces the approval counts. Every caller but the admin token has the edit held for a
-// second approver, which comes back as *PendingApprovalError. PUT /api/v1/governance/approval-counts.
+// second approver, which comes back as *PendingApprovalError. The write replaces every row, so no kinds is
+// sent as an empty list, never as null. PUT /api/v1/governance/approval-counts.
 func (c *Client) PutApprovalCounts(ctx context.Context, w ApprovalCountsWrite) (ApprovalCounts, error) {
+	if w.Kinds == nil {
+		w.Kinds = []ApprovalCountsWriteKind{}
+	}
 	var out ApprovalCounts
 	err := c.do(ctx, http.MethodPut, "/api/v1/governance/approval-counts", w, &out)
 	return out, err

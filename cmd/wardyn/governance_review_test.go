@@ -350,3 +350,17 @@ func TestApprovalsNeededSet_SendsTheFileAndReportsAHeldEdit(t *testing.T) {
 		t.Errorf("a body with an unknown key must be refused before any request")
 	}
 }
+
+func TestChangesShow_JSONKeepsZeroApprovalCounts(t *testing.T) {
+	id := uuid.New()
+	_, url := newReviewServer(t, map[string]reviewAnswer{
+		"GET /api/v1/governance/changes/" + id.String(): {body: changeBody(id, "pending", "", approvalsBody("cant_reach", "count", ""))},
+	})
+	out, _, err := runGovernance(t, url, "changes", "show", id.String(), "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"remaining_eligible": 0`) || !strings.Contains(out, `"still_needed": 1`) {
+		t.Errorf("--json dropped a zero count:\n%s", out)
+	}
+}

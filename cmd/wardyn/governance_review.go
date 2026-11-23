@@ -251,9 +251,17 @@ func reachLine(a *sdk.GovernanceChangeApprovals) string {
 		if a.CantReachReason == "security" {
 			return "Reach:    no one who can still approve is a security admin"
 		}
-		return fmt.Sprintf("Reach:    not enough people can still approve (approvals still needed: %d, people who can still give one: %d)", a.StillNeeded, a.RemainingEligible)
+		return fmt.Sprintf("Reach:    not enough people can still approve (approvals still needed: %d, people who can still give one: %d)", valueOr0(a.StillNeeded), valueOr0(a.RemainingEligible))
 	}
 	return "Reach:    not reported"
+}
+
+// valueOr0 is what n points at, or 0 when the server sent nothing.
+func valueOr0(n *int) int {
+	if n == nil {
+		return 0
+	}
+	return *n
 }
 
 // printImpact writes what approving a change would reach.
@@ -261,9 +269,9 @@ func printImpact(w io.Writer, im sdk.GovernanceChangeImpact) {
 	switch im.Computed {
 	case "tree":
 		fmt.Fprintf(w, "Impact (as of %s): %d people, %d live runs, %d units may become a context, %d may stop\n",
-			im.AsOf.UTC().Format(time.RFC3339), len(im.People), im.LiveRunsTotal, len(im.Activates), len(im.Vacates))
+			im.AsOf.UTC().Format(time.RFC3339), len(im.People), valueOr0(im.LiveRunsTotal), len(im.Activates), len(im.Vacates))
 		printImpactPeople(w, im.People)
-		printImpactRuns(w, im.LiveRuns, im.LiveRunsTotal)
+		printImpactRuns(w, im.LiveRuns, valueOr0(im.LiveRunsTotal))
 	case "boundary":
 		b := im.Boundary
 		if b == nil {
