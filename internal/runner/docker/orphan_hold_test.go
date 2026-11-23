@@ -148,7 +148,7 @@ func TestSweepOrphanedSandboxesHolding_TheNetworkSweepLeavesAHeldRunsNetwork(t *
 	d := newPoolDriver(f, "10.200.0.0/24")
 	held := uuid.New()
 	ctx := context.Background()
-	if _, err := d.createRunNetwork(ctx, held, d.labels(held, componentNetwork, nil)); err != nil {
+	if _, err := d.createRunNetwork(ctx, held, d.labels(held, componentNetwork, nil), engineVersionOf(t, d)); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
@@ -173,7 +173,7 @@ func TestSweepOrphanedSandboxesHolding_TheNetworkSweepLeavesAHeldRunsNetworkWith
 	d := newTestDriver(f)
 	held := uuid.New()
 	ctx := context.Background()
-	if _, err := d.createRunNetwork(ctx, held, d.labels(held, componentNetwork, nil)); err != nil {
+	if _, err := d.createRunNetwork(ctx, held, d.labels(held, componentNetwork, nil), engineVersionOf(t, d)); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()
