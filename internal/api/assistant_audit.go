@@ -9,6 +9,14 @@ import "github.com/cjohnstoniv/wardyn/internal/types"
 // PUT /assistant/settings when the change only narrows and by the approval when it was held.
 const assistantSettingsWriteAction = "assistant.settings.write"
 
+// The audit rows of an assistant session: its start, its end, and one suggestion for each completed turn. No row
+// carries prompt or output text.
+const (
+	assistantSessionStartAction = "assistant.session.start"
+	assistantSessionEndAction   = "assistant.session.end"
+	assistantSuggestionAction   = "assistant.suggestion"
+)
+
 // assistantTargetKey is the audit target of the assistant block and the target key of its held change: the
 // block is a singleton.
 const assistantTargetKey = "assistant"

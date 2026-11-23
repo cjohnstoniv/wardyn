@@ -527,8 +527,18 @@ func gatewayRouteOf(p types.ModelProvider) (_ proxy.GatewayIdentityRoute, ok boo
 		ProviderID: p.ID, ProviderUID: p.UID, Audience: p.GatewayIdentity.Audience,
 		// Only the exact value defers; anything else leaves Wardyn inspecting. A Bedrock
 		// call is scanned by the generic forward check, which a route never defers.
-		InspectionDeferred: p.GatewayIdentity.Inspection == types.GatewayInspectionGateway && !p.Kind.IsBedrock(),
+		InspectionDeferred: inspectionDeferredFor(p),
 	}, true
+}
+
+// refuseAssistantDeferral is the refusal of a provider that leaves prompt inspection to its gateway: the
+// assistant's records must be inspected by Wardyn, so such a provider can never serve an assistant run. nil
+// when p is inspected here.
+func refuseAssistantDeferral(p types.ModelProvider) *assistantRefusal {
+	if !inspectionDeferredFor(p) {
+		return nil
+	}
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantDefersInspection, "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.")
 }
 
 // gatewayBindingHolds is the one predicate a mint and a revive share: the live
@@ -620,6 +630,12 @@ func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRu
 	}
 	if other := prov.gatewayRouteClash(p); other != "" {
 		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayClash, p.ID, other)}, nil)
+		return false
+	}
+	// The seal site: an assistant run's gateway route is sealed here, so a provider edited to defer
+	// inspection after the session began is refused once more, at dispatch.
+	if inspectionDeferredFor(p) && s.runIsAssistant(ctx, run.ID) {
+		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf("model_providers: %q: this provider leaves prompt inspection to its gateway, so it cannot serve the assistant", p.ID)}, nil)
 		return false
 	}
 	if !prov.addGatewayRoute(p) {

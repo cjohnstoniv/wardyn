@@ -176,6 +176,7 @@ type AssistantTurn struct {
 	Seq       int64              `json:"seq"`
 	Kind      string             `json:"kind"`
 	SessionID uuid.UUID          `json:"session_id"`
+	Model     string             `json:"model,omitempty"`
 	Text      string             `json:"text,omitempty"`
 	System    string             `json:"system,omitempty"`
 	Records   []AssistantSection `json:"records,omitempty"`

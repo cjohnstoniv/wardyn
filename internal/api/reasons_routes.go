@@ -860,3 +860,15 @@ const (
 	reasonAssistantDefersInspection    = "assistant_provider_defers_inspection"
 	reasonAssistantSettingsViaOwnRoute = "assistant_settings_via_own_route" // a changed assistant block was named inline instead of through PUT /assistant/settings
 )
+
+// The assistant's sessions (assistant_session.go, assistant_run.go).
+const (
+	reasonAssistantAtRunLimit             = "assistant_at_run_limit"             // the person's max_concurrent_runs is spent
+	reasonAssistantKindNeverSent          = "assistant_kind_never_sent"          // the target's kind is on the never-sent list
+	reasonAssistantSessionNotFound        = "assistant_session_not_found"        // no such session for this person, or the call names another session than the live one
+	reasonAssistantPurposeTargetMismatch  = "assistant_purpose_target_mismatch"  // the purpose does not take that kind of target
+	reasonAssistantPreviewStale           = "assistant_preview_stale"            // the records or the serving binding changed since the preview
+	reasonAssistantRateLimited            = "assistant_rate_limited"             // too many assistant messages from this person
+	reasonAssistantRoleDenied             = "assistant_role_denied"              // the person's role no longer allows the session, or the caller is no person
+	reasonAssistantSessionProviderChanged = "assistant_session_provider_changed" // the session's provider or model no longer holds
+)

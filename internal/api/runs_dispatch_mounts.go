@@ -407,6 +407,10 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if (run.WorkspaceID != nil || run.SourceID != nil) && !p.Interactive {
 		sandboxEnv["WARDYN_SCAN_ONLY"] = "1"
 	}
+	// An assistant run: agent-run starts the relay that carries the session's turns, never the agent's own task loop.
+	if run.Task == assistantRunTask && run.WorkspaceID == nil && run.SourceID == nil {
+		sandboxEnv["WARDYN_ASSISTANT"] = "1"
+	}
 	// exec task mode (BYOA/CI lane): agent-run runs the task as a plain shell
 	// command instead of the agent harness. Only the discriminator rides env —
 	// everything above/below (clone, grants, egress, recording) is identical.

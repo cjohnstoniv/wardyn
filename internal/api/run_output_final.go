@@ -696,6 +696,9 @@ func (s *Server) SweepRunOutputs(ctx context.Context) error {
 		if err := s.deleteEndedRunOutputChunks(ctx, retention); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		if err := s.sweepAssistantSessions(ctx); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := s.sweepAgentCasts(ctx); err != nil && firstErr == nil {
 		firstErr = err

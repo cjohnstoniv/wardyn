@@ -546,6 +546,13 @@ func (s *Server) eraseAuditSealKeys(ctx context.Context, person string, want *er
 		}
 		detail["approvals"] = n
 	}
+	if ae, ok := s.cfg.Store.(assistantSessionEraser); ok {
+		n, err := s.eraseAssistantSessions(ctx, ae, names)
+		if err != nil {
+			return nil, err
+		}
+		detail["assistant_sessions"] = n
+	}
 	return detail, nil
 }
 
