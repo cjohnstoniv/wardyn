@@ -11,8 +11,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -76,14 +74,14 @@ func reuseServer(t *testing.T, b *reusingBuilder, createdBy string) (*Server, *h
 	return New(cfg), h, run
 }
 
-func byoiRequest() createRunRequest {
-	return createRunRequest{Agent: "claude-code", Image: "ubuntu:24.04"}
+func byoiRequest(run types.AgentRun) createRunRequest {
+	return createRunRequest{Agent: run.Agent, Image: "ubuntu:24.04"}
 }
 
 func TestRunImageReuse_BYOIAsksTheReusingBuilderWithTheCreator(t *testing.T) {
 	b := &reusingBuilder{}
 	srv, _, run := reuseServer(t, b, "sub-a")
-	image, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(), run, nil)
+	image, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(run), run, nil)
 	if failed {
 		t.Fatal("the BYOI wrap failed")
 	}
@@ -101,7 +99,7 @@ func TestRunImageReuse_BYOIAsksTheReusingBuilderWithTheCreator(t *testing.T) {
 func TestRunImageReuse_RunWithNoCreatorBuildsUnderItsOwnTag(t *testing.T) {
 	b := &reusingBuilder{}
 	srv, _, run := reuseServer(t, b, "")
-	if _, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(), run, nil); failed {
+	if _, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(run), run, nil); failed {
 		t.Fatal("the BYOI wrap failed")
 	}
 	if want := "wardyn-byoi/" + run.ID.String() + ":latest"; len(b.plainTags) != 1 || b.plainTags[0] != want {
@@ -117,7 +115,7 @@ func TestRunImageReuse_DevcontainerStillBuildsUnderItsOwnTag(t *testing.T) {
 		t.Run("ref "+ref, func(t *testing.T) {
 			b := &reusingBuilder{reuse: true}
 			srv, h, run := reuseServer(t, b, "sub-a")
-			req := createRunRequest{Agent: "claude-code", DevcontainerRepo: "acme/widgets", DevcontainerRef: ref}
+			req := createRunRequest{Agent: run.Agent, DevcontainerRepo: "acme/widgets", DevcontainerRef: ref}
 			if _, _, failed := srv.resolveCreateRunImage(t.Context(), req, run, nil); failed {
 				t.Fatal("the devcontainer build failed")
 			}
@@ -143,7 +141,7 @@ func TestRunImageReuse_ReusedBuildIsAuditedAsACacheHit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &reusingBuilder{reuse: tc.reused}
 			srv, h, run := reuseServer(t, b, "sub-a")
-			if _, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(), run, nil); failed {
+			if _, _, failed := srv.resolveCreateRunImage(t.Context(), byoiRequest(run), run, nil); failed {
 				t.Fatal("the BYOI wrap failed")
 			}
 			ev := waitForRecAudit(t, h.audit, run.ID, "run.build", "success")
@@ -166,7 +164,7 @@ func TestRunImageReuse_ThePinIsTheReusedBase(t *testing.T) {
 	srv, _, _, run := pinFixture(t, pinnedVerdict(admitPinned))
 	b := &reusingBuilder{}
 	srv.cfg.ImageBuilder = b
-	if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: "claude-code", Image: admitTagRef}, run, nil); failed {
+	if _, _, failed := srv.resolveCreateRunImage(t.Context(), createRunRequest{Agent: run.Agent, Image: admitTagRef}, run, nil); failed {
 		t.Fatal("the pinned BYOI wrap failed")
 	}
 	if len(b.reusedBases) != 1 || b.reusedBases[0] != admitPinned {
@@ -179,7 +177,7 @@ func TestRunImageReuse_HoldIsTheLaunchHold(t *testing.T) {
 	b := &reusingBuilder{holdRef: ref, reuse: true}
 	srv, _, run := reuseServer(t, b, "sub-a")
 	ctx, release := runner.HoldImages(context.Background())
-	if _, _, failed := srv.resolveCreateRunImage(ctx, byoiRequest(), run, nil); failed {
+	if _, _, failed := srv.resolveCreateRunImage(ctx, byoiRequest(run), run, nil); failed {
 		t.Fatal("the BYOI wrap failed")
 	}
 	removed := 0
@@ -202,8 +200,9 @@ func TestRunImageReuse_AnnouncesOnlyWhenItBuilds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, log := buildAnnounceServer(t)
 			srv.cfg.ImageBuilder = &reusingBuilder{reuse: tc.reused, announce: true}
-			run := types.AgentRun{ID: uuid.New(), CreatedBy: "sub-a"}
-			if _, _, failed := srv.resolveCreateRunImage(context.Background(), byoiRequest(), run, nil); failed {
+			run := newFinalizeRun()
+			run.CreatedBy = "sub-a"
+			if _, _, failed := srv.resolveCreateRunImage(context.Background(), byoiRequest(run), run, nil); failed {
 				t.Fatal("the BYOI wrap failed")
 			}
 			if got := log.events(); strings.Join(got, "|") != strings.Join(tc.want, "|") {
