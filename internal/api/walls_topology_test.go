@@ -708,11 +708,15 @@ func TestWallsTopologySnapshotKeepsNoRunRows(t *testing.T) {
 	}
 }
 
-// wallsTopoApprovals answers the attention read with the pending approvals of the runs asked for.
+// wallsTopoApprovals answers the attention read with the pending approvals of the runs asked for. It is a
+// store.ApprovalsForRunsPager, the capability projectAttention asserts.
 type wallsTopoApprovals struct {
-	ApprovalService // only ListPendingApprovalsForRuns is asked
-	pending         []types.ApprovalRequest
+	ApprovalService             // never called
+	store.ApprovalsForRunsPager // only ListPendingApprovalsForRuns is asked
+	pending                     []types.ApprovalRequest
 }
+
+var _ store.ApprovalsForRunsPager = wallsTopoApprovals{}
 
 func (a wallsTopoApprovals) ListPendingApprovalsForRuns(_ context.Context, ids []uuid.UUID) ([]types.ApprovalRequest, error) {
 	var out []types.ApprovalRequest
