@@ -215,15 +215,23 @@ func (r *Reader) check(th *tar.Header) (Header, error) {
 	case Excluded(h.Path, r.o.Set.Exclude):
 		return Header{}, at("a path the move leaves out")
 	}
-	if r.lastLink != "" && under(h.Path, r.lastLink) {
-		return Header{}, at("passes through the symlink entry %q", r.lastLink)
-	}
-	// Every entry below a root sits in a directory the stream declared, so nothing already at the destination
-	// decides where it lands.
-	if parent := path.Dir(h.Path); !isRoot(h.Path, r.roots) && !isRoot(parent, r.roots) && !slices.Contains(r.dirs, parent) {
-		return Header{}, at("its directory %q is not an earlier entry of the stream", parent)
+	if why := r.misplaced(h.Path); why != "" {
+		return Header{}, at("%s", why)
 	}
 	return h, nil
+}
+
+// misplaced says why p cannot follow the entries before it, or "" when it can: it may not pass through the
+// symlink just read, and every entry below a root sits in a directory the stream declared, so nothing
+// already at the destination decides where it lands.
+func (r *Reader) misplaced(p string) string {
+	if r.lastLink != "" && under(p, r.lastLink) {
+		return fmt.Sprintf("passes through the symlink entry %q", r.lastLink)
+	}
+	if parent := path.Dir(p); !isRoot(p, r.roots) && !isRoot(parent, r.roots) && !slices.Contains(r.dirs, parent) {
+		return fmt.Sprintf("its directory %q is not an earlier entry of the stream", parent)
+	}
+	return ""
 }
 
 // trackDirs leaves the directory entries h is not inside, and opens h when it is one.
