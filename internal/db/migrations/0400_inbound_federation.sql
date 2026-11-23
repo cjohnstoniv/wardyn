@@ -21,7 +21,7 @@ INSERT INTO inbound_federation (id) VALUES (TRUE) ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS inbound_trusts (
     id                    UUID PRIMARY KEY,
     name                  TEXT NOT NULL UNIQUE CHECK (name ~ '^[a-z][a-z0-9-]{2,62}$'),
-    issuer                TEXT NOT NULL CHECK (issuer <> '' AND char_length(issuer) <= 2048),
+    issuer                TEXT NOT NULL CHECK (issuer <> '' AND char_length(issuer) <= 1024),
     internal_issuer       TEXT NOT NULL DEFAULT '',
     audience              TEXT NOT NULL CHECK (audience <> '' AND char_length(audience) <= 512),
     subject               TEXT NOT NULL CHECK (subject <> '' AND char_length(subject) <= 512),
@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS inbound_trusts (
     confirmed_seq         BIGINT NOT NULL DEFAULT 0 CHECK (confirmed_seq >= 0),
     confirmed_by          TEXT NOT NULL,
     UNIQUE (issuer, audience, subject),
-    CHECK ((required_claim = '') = (required_claim_value = ''))
+    CHECK ((required_claim = '') = (required_claim_value = '')),
+    CHECK (octet_length(issuer) + octet_length(audience) + octet_length(subject) <= 2048)
 );
 CREATE INDEX IF NOT EXISTS inbound_trusts_service ON inbound_trusts (service_name);
 
@@ -51,7 +52,7 @@ CREATE INDEX IF NOT EXISTS inbound_trust_tokens_trust_exp ON inbound_trust_token
 -- The app role is granted the new tables here, found from the catalog and never by name: every role but the owner
 -- that holds UPDATE on api_tokens, which every token revoke uses. The exchange's FOR SHARE on the switch and a trust,
 -- and the switch write's FOR UPDATE on the switch and on every trust, a sponsor change's and a delete's FOR UPDATE,
--- need UPDATE on the table they lock; a confirm and an erasure update a trust; trusts and links are deleted.
+-- need UPDATE on the table they lock; a confirm and an erasure update a trust; trusts are deleted, and a link goes by cascade, which runs as the table's owner.
 DO $mig$
 DECLARE
     r record;
@@ -66,7 +67,7 @@ BEGIN
     LOOP
         EXECUTE format('GRANT SELECT, UPDATE ON inbound_federation TO %I', r.rolname);
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON inbound_trusts TO %I', r.rolname);
-        EXECUTE format('GRANT SELECT, INSERT, DELETE ON inbound_trust_tokens TO %I', r.rolname);
+        EXECUTE format('GRANT SELECT, INSERT ON inbound_trust_tokens TO %I', r.rolname);
     END LOOP;
 END
 $mig$;

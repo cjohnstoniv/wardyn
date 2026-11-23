@@ -56,6 +56,7 @@ var namespaceCensusColumns = []censusColumn{
 	{"governance_restrictions", "created_by", false, ""},
 	{"governance_unit_admins", "subject", false, "subject_type = 'user'"},
 	{"governance_units", "created_by", false, ""},
+	{"inbound_trusts", "created_by", false, ""},
 	{"kept_machines", "owner_subject", false, ""},
 	{"key_domain_assignments", "subject", false, "subject_type = 'user'"},
 	{"key_domain_login_groups", "principal", false, ""},
@@ -133,7 +134,6 @@ var namespaceCensusColumns = []censusColumn{
 // rows are exempt as a table, except the two policy actions of a running run, which the census reads with its
 // own query (the UI gateway reads a run's UI-app callers from them).
 var namespaceCensusExempt = map[string]string{
-	"inbound_trusts.created_by":                 "the admin who added the trust; it confers nothing, the trust's identity does",
 	"inbound_trusts.subject":                    "an outside provider's sub claim, matched as bytes; never a Wardyn principal",
 	"portal_issuers.created_by":                 "the admin who bound the issuer; this table is the registry the census consults",
 	"run_support_grants.owner_email":            "an email address; a principal is never stored in it",

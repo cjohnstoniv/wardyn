@@ -219,6 +219,8 @@ func TestPG_InboundFederationOff_RevokesEveryExchangedToken(t *testing.T) {
 	t1, t2 := f.trust(t, "trust-one", "bot-one", nil), f.trust(t, "trust-two", "bot-two", nil)
 	f.on(t)
 	ids := []uuid.UUID{f.mustExchange(t, t1).ID, f.mustExchange(t, t1).ID, f.mustExchange(t, t2).ID}
+	expired := f.mustExchange(t, t1).ID
+	f.age(t, time.Hour, expired)
 	exp := time.Now().UTC().Add(time.Hour)
 	minted, err := f.st.CreateServiceToken(f.ctx, "bot-one", f.a, 20, types.APIToken{
 		ID: uuid.New(), Principal: "service:bot-one", Role: "user", UserType: types.UserTypeStandard, Name: "ci", ExpiresAt: &exp,
@@ -237,6 +239,9 @@ func TestPG_InboundFederationOff_RevokesEveryExchangedToken(t *testing.T) {
 	}
 	if _, revoked := f.tokenRow(t, minted.ID); revoked {
 		t.Error("the sponsor's own token was revoked by the switch-off")
+	}
+	if exists, revoked := f.tokenRow(t, expired); !exists || revoked {
+		t.Errorf("an expired exchanged token: exists %v, revoked %v; want a kept row with revoked_at NULL", exists, revoked)
 	}
 	if set, err = f.st.SetInboundFederation(f.ctx, true, "admin"); err != nil || set.TokensRevoked != 0 || !set.State.Enabled {
 		t.Fatalf("turn on again = %+v, %v; want on with nothing revoked", set, err)
@@ -465,6 +470,12 @@ func TestPG_InboundTrustDelete_RevokesItsTokens(t *testing.T) {
 	live := []uuid.UUID{f.mustExchange(t, trA).ID, f.mustExchange(t, trA).ID}
 	expired := f.mustExchange(t, trA).ID
 	f.age(t, time.Hour, expired)
+	// A moved token survives the delete's removal of expired rows, so its revoked_at can be read afterwards.
+	expiredMoved := f.mustExchange(t, trA).ID
+	f.age(t, time.Hour, expiredMoved)
+	if _, err := f.pool.Exec(f.ctx, `INSERT INTO api_token_moves (token_id, service_identity, linked_by) VALUES ($1, 'ci-bot', 'admin')`, expiredMoved); err != nil {
+		t.Fatal(err)
+	}
 	other := f.mustExchange(t, trB).ID
 	_, n, err := f.st.DeleteInboundTrust(f.ctx, store.InboundTrustDelete{ID: trA.ID})
 	if err != nil || n != 2 {
@@ -477,6 +488,9 @@ func TestPG_InboundTrustDelete_RevokesItsTokens(t *testing.T) {
 	}
 	if exists, _ := f.tokenRow(t, expired); exists {
 		t.Error("A's expired token row is still there")
+	}
+	if exists, revoked := f.tokenRow(t, expiredMoved); !exists || revoked {
+		t.Errorf("A's expired moved token: exists %v, revoked %v; want a kept row with revoked_at NULL", exists, revoked)
 	}
 	if _, revoked := f.tokenRow(t, other); revoked {
 		t.Error("B's token was revoked by A's delete")
@@ -547,6 +561,57 @@ func TestPG_InboundExchange_TokenAfterSponsorSince(t *testing.T) {
 	}
 	if n := rowCount(t, f.pool, `SELECT count(*) FROM api_tokens WHERE principal = 'service:ci-bot'`); n != 0 {
 		t.Errorf("%d rows written; want 0", n)
+	}
+}
+
+func TestPG_InboundExchange_RefusesExpiryPastTrustTTL(t *testing.T) {
+	f := newInboundFix(t)
+	f.identity(t, "ci-bot", "")
+	tr := f.trust(t, "ci-trust", "ci-bot", nil)
+	f.on(t)
+	// The door reads the stored ttl, so a caller's stale copy of the trust cannot widen it.
+	tr.TokenTTLSeconds = types.InboundTrustTTLMaxSeconds
+	exp := time.Now().UTC().Add(time.Duration(types.InboundTrustTTLDefaultSeconds)*time.Second + time.Minute)
+	_, err := f.st.CreateExchangedToken(f.ctx, tr, types.APIToken{
+		ID: uuid.New(), Principal: "service:ci-bot", Role: "user", UserType: types.UserTypeStandard, Name: "long",
+		ExpiresAt: &exp, Kind: types.APITokenKindInbound,
+	}, "wdn_"+uuid.NewString())
+	if err == nil {
+		t.Fatal("a token expiring a minute past its trust's ttl was stored")
+	}
+	if n := rowCount(t, f.pool, `SELECT count(*) FROM api_tokens WHERE principal = 'service:ci-bot'`); n != 0 {
+		t.Errorf("%d rows written; want 0", n)
+	}
+	if _, err := exchange(t, f.st, tr); err == nil {
+		t.Fatal("exchange with the caller's widened ttl was stored")
+	}
+	tr.TokenTTLSeconds = types.InboundTrustTTLDefaultSeconds
+	if _, err := exchange(t, f.st, tr); err != nil {
+		t.Fatalf("a token expiring at the trust's ttl = %v; want stored", err)
+	}
+}
+
+func TestPG_InboundTrust_RefusesOversizeTriple(t *testing.T) {
+	f := newInboundFix(t)
+	f.identity(t, "ci-bot", "")
+	for name, edit := range map[string]func(*types.InboundTrust){
+		"issuer":  func(in *types.InboundTrust) { in.Issuer = "https://" + strings.Repeat("a", 1020) },
+		"subject": func(in *types.InboundTrust) { in.Subject = strings.Repeat("s", 513) },
+		// 512 four-byte characters each: inside every character bound, over the byte bound the unique index needs.
+		"bytes": func(in *types.InboundTrust) {
+			in.Audience, in.Subject = strings.Repeat("\U0001F600", 512), strings.Repeat("\U0001F601", 512)
+		},
+	} {
+		in := f.newTrust(t, "big-"+name, "ci-bot", "admin")
+		edit(&in)
+		if _, _, err := f.st.CreateInboundTrust(f.ctx, in); !errors.Is(err, store.ErrInboundTrustInvalid) {
+			t.Errorf("oversize %s = %v; want ErrInboundTrustInvalid", name, err)
+		}
+	}
+	ok := f.newTrust(t, "big-ok", "ci-bot", "admin")
+	ok.Issuer, ok.Audience, ok.Subject = "https://"+strings.Repeat("a", 1016), strings.Repeat("u", 512), strings.Repeat("s", 512)
+	if _, _, err := f.st.CreateInboundTrust(f.ctx, ok); err != nil {
+		t.Errorf("a triple at every bound = %v; want stored", err)
 	}
 }
 

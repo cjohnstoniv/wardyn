@@ -22,6 +22,7 @@ var (
 	ErrInboundTrustExists           = errors.New("store: an inbound trust with that name, or with that issuer, audience and subject, exists")
 	ErrInboundTrustAudienceReserved = errors.New("store: the audience is a live portal's client id or audience")
 	ErrInboundTrustCap              = errors.New("store: the inbound trust holds the most live exchanged tokens")
+	ErrInboundTrustInvalid          = errors.New("store: an inbound trust field is out of its bounds")
 )
 
 // InboundTrustStore holds inbound federation: the switch, the trusts, and the tokens exchanged under them.
@@ -160,7 +161,7 @@ func SetInboundFederationQ(ctx context.Context, q Querier, enabled bool, by stri
 	}
 	// An exchange in flight holds the switch row shared, so the lock above waited for it to commit; this later
 	// statement's snapshot sees its token.
-	tag, err := q.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE revoked_at IS NULL AND id IN (SELECT token_id FROM inbound_trust_tokens)`)
+	tag, err := q.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) AND id IN (SELECT token_id FROM inbound_trust_tokens)`)
 	if err != nil {
 		return InboundFederationSet{}, fmt.Errorf("store: revoke exchanged tokens: %w", err)
 	}
@@ -189,6 +190,9 @@ func CreateInboundTrustQ(ctx context.Context, q Querier, t types.InboundTrust) (
 	if t.ConfirmedAt.IsZero() || t.ConfirmedBy == "" {
 		return types.InboundTrust{}, "", errors.New("store: an inbound trust records where it was confirmed")
 	}
+	if t.CreatedBy == "" {
+		return types.InboundTrust{}, "", errors.New("store: an inbound trust names who added it")
+	}
 	si, err := lockServiceIdentity(ctx, q, t.ServiceIdentity)
 	if err != nil {
 		return types.InboundTrust{}, "", err
@@ -214,9 +218,6 @@ func CreateInboundTrustQ(ctx context.Context, q Querier, t types.InboundTrust) (
 	if taken {
 		return types.InboundTrust{}, "", ErrInboundTrustExists
 	}
-	if t.CreatedBy == "" {
-		return types.InboundTrust{}, "", errors.New("store: an inbound trust names who added it")
-	}
 	if t.ID == uuid.Nil {
 		t.ID = uuid.New()
 	}
@@ -229,6 +230,9 @@ func CreateInboundTrustQ(ctx context.Context, q Querier, t types.InboundTrust) (
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.InboundTrust{}, "", ErrInboundTrustExists
+	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return types.InboundTrust{}, "", ErrInboundTrustInvalid
 	}
 	if err != nil {
 		return types.InboundTrust{}, "", fmt.Errorf("store: create inbound trust: %w", err)
@@ -306,7 +310,7 @@ func (s PG) DeleteInboundTrust(ctx context.Context, d InboundTrustDelete) (types
 	if err != nil {
 		return types.InboundTrust{}, 0, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE revoked_at IS NULL AND id IN (SELECT token_id FROM inbound_trust_tokens WHERE trust_id = $1)`,
+	tag, err := tx.Exec(ctx, `UPDATE api_tokens SET revoked_at = clock_timestamp() WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) AND id IN (SELECT token_id FROM inbound_trust_tokens WHERE trust_id = $1)`,
 		trust.ID)
 	if err != nil {
 		return types.InboundTrust{}, 0, fmt.Errorf("store: revoke inbound trust tokens: %w", err)
@@ -384,13 +388,17 @@ func (s PG) CreateExchangedToken(ctx context.Context, trust types.InboundTrust, 
 	}
 	// No row: the trust was deleted, or its identity's sponsor changed, since the API matched it.
 	var maxLive int
-	err = tx.QueryRow(ctx, `SELECT max_live FROM inbound_trusts WHERE id = $1 AND service_name = $2 FOR SHARE`,
-		trust.ID, trust.ServiceIdentity).Scan(&maxLive)
+	var tooLong bool
+	err = tx.QueryRow(ctx, `SELECT max_live, $3::timestamptz > now() + token_ttl_seconds * interval '1 second' FROM inbound_trusts WHERE id = $1 AND service_name = $2 FOR SHARE`,
+		trust.ID, trust.ServiceIdentity, *t.ExpiresAt).Scan(&maxLive, &tooLong)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound
 	}
 	if err != nil {
 		return types.APIToken{}, fmt.Errorf("store: read inbound trust: %w", err)
+	}
+	if tooLong {
+		return types.APIToken{}, errors.New("store: an exchanged token lives no longer than its trust's token_ttl_seconds")
 	}
 	// The identity's row lock above makes this count exact for this transaction.
 	var live int
