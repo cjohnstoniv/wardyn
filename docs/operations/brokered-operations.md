@@ -78,13 +78,13 @@
 ## kubectl: restart, and approve each change
 
 - A kubectl component row reaches a registered cluster's namespaces through the proxy with a 10-minute service-account token the sandbox never holds. Turn the kind on with `WARDYN_KUBECTL_CLI` ([details](../ENV.md#wardyn_kubectl_cli)).
-- The door does not allowlist verbs or resources. The service account's RBAC does, so write one Role per component row.
+- The door does not allowlist verbs or resources, with one exception for `write`: it reads the body of a pod or workload write ([details](../ENV.md#wardyn_kubectl_cli)). The service account's RBAC does the rest, so write one Role per component row.
 
 | `access` | The door admits | Grant the account (per listed namespace) |
 |---|---|---|
 | `read` | `GET` | `get`, `list`, `watch` on the resources the run may read |
 | `restart` | `GET`, and the one patch `kubectl rollout restart` sends to a named deployment | The same reads, plus `get`, `patch` on `deployments` in `apps` |
-| `write` | Any write method on a namespaced resource | The verbs and resources the run needs, and no more |
+| `write` | Any write method on a namespaced resource; a pod or workload must set `automountServiceAccountToken: false`, mount only plain volumes, use no host access, and is replaced, not patched, to change its pod spec | The verbs and resources the run needs, and no more |
 
 - The door refuses Secrets, `exec`, `attach`, `port-forward`, token requests and impersonation whatever the Role says. Do not grant them.
 - The account also needs `create` on `serviceaccounts/token` for itself ([setup](../ENV.md#wardyn_kubectl_cli)).
