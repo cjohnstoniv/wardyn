@@ -237,12 +237,10 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 const macOSVMsOff = "macOS virtual machines are turned off in this organisation."
 
 // machineKindRefusal is why kind cannot be created, or "" when it can. With WARDYN_MACOS_VMS off the
-// closed set is today's two kinds, and a refusal reads as it did before macos_vm existed, except that
-// macos_vm itself says the switch is off.
+// closed set is the kinds before macos_vm and windows_vm, and a refusal reads as it did before macos_vm
+// existed, except that macos_vm itself says the switch is off. windows_vm is admitted here whatever
+// WARDYN_MACOS_VMS says: the fold refuses it while features.windows_vm is off (stepWindowsImage).
 func machineKindRefusal(kind types.MachineKind) string {
-	if kind == types.MachineWindowsVM { // a kind, but no create accepts it yet, whatever WARDYN_MACOS_VMS says
-		return "Windows VM sandboxes are not available yet."
-	}
 	if envEnabled(envMacOSVMs) {
 		if err := kind.Validate(); err != nil {
 			return err.Error()
@@ -250,7 +248,7 @@ func machineKindRefusal(kind types.MachineKind) string {
 		return ""
 	}
 	switch kind {
-	case "", types.MachineContainer, types.MachineLinuxVM:
+	case "", types.MachineContainer, types.MachineLinuxVM, types.MachineWindowsVM:
 		return ""
 	case types.MachineMacOSVM:
 		return macOSVMsOff
@@ -351,7 +349,8 @@ func effectiveToolApprovals(req createRunRequest, ceiling governanceCeiling) str
 // request names no agent when it includes no harness: its image comes from the
 // harness set (harnessSetImage), the agent base image for none.
 func agentRequirementError(req createRunRequest) string {
-	if req.Agent != "" || req.UsesRunMode() {
+	// A Windows VM run is desktop-only and starts no agent (stepWindowsImage refuses one).
+	if req.Agent != "" || req.UsesRunMode() || types.MachineKind(req.MachineKind) == types.MachineWindowsVM {
 		return ""
 	}
 	if req.TaskMode != "exec" {

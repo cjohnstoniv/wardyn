@@ -12,23 +12,25 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// windows_vm is a valid kind, but no create accepts it yet, whatever WARDYN_MACOS_VMS says: with the macOS
-// switch on, the kind's own Validate would pass it.
+// windows_vm is admitted by the request check whatever WARDYN_MACOS_VMS says, and needs no agent; the fold
+// refuses it while features.windows_vm is off.
 func TestMachineKindRefusalWindowsUntilRegistered(t *testing.T) {
-	const want = "Windows VM sandboxes are not available yet."
-	if err := types.MachineWindowsVM.Validate(); err != nil {
-		t.Fatalf("windows_vm is not a kind: %v", err)
-	}
 	for _, env := range []string{"", "1"} {
 		t.Setenv(envMacOSVMs, env)
-		if got := machineKindRefusal(types.MachineWindowsVM); got != want {
-			t.Errorf("WARDYN_MACOS_VMS=%q: refusal %q, want %q", env, got, want)
+		if got := machineKindRefusal(types.MachineWindowsVM); got != "" {
+			t.Errorf("WARDYN_MACOS_VMS=%q: refusal %q, want windows_vm admitted", env, got)
 		}
 		h := newHarness(t)
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","machine_kind":"windows_vm"}`))
-		if _, _, _, _, ok := h.srv.decodeAndValidateCreateRun(rec, req); ok || rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), want) {
-			t.Errorf("WARDYN_MACOS_VMS=%q: create answered %d %s, want 400 and the refusal", env, rec.Code, rec.Body.String())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"machine_kind":"windows_vm","windows_image":"Server"}`))
+		// Later checks may still answer this bare request; neither the kind nor a missing agent is what refuses it.
+		if _, _, _, _, ok := h.srv.decodeAndValidateCreateRun(rec, req); !ok {
+			if got := errorReasonOf(rec.Body.String()); got == reasonMachineKindUnknown || got == reasonAgentRequired {
+				t.Errorf("WARDYN_MACOS_VMS=%q: create answered %d %s, want windows_vm admitted with no agent", env, rec.Code, rec.Body.String())
+			}
 		}
 	}
+	srv, _, _ := winvmServer(t, false)
+	_, rf := srv.windowsImageDecision(winvmHTTP(memberContext()), winvmReq(), types.RunPolicySpec{})
+	wantWinRefusal(t, "switch off", rf, http.StatusForbidden, reasonWindowsVMsOff, "")
 }
