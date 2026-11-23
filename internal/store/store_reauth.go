@@ -86,19 +86,25 @@ func InsertAuditEventTx(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent) er
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)
 	}
-	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
+	// The lock wait bound, the chain lock and the append go to the database together, read in order; the first
+	// error returns before the caller's own commit, and a failed statement aborts the transaction.
+	b := &pgx.Batch{}
+	b.Queue(db.AuditChainLockTimeoutSQL())
+	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
+	b.Queue(auditAppendSQL, ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
+		ev.Target, ev.Outcome, ev.SourceIP, dataJSON)
+	br := tx.SendBatch(ctx, b)
+	defer br.Close() //nolint:errcheck // closes the pipeline on every error path; a second Close is a no-op
+	if _, err := br.Exec(); err != nil {
 		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
 	}
-	if _, err := tx.Exec(ctx, lockAuditChainSQL, db.AuditChainLockKey); err != nil {
+	if _, err := br.Exec(); err != nil {
 		return fmt.Errorf("store: lock audit chain (waited up to %s): %w", db.AuditChainLockTimeout, err)
 	}
-	const q = `
-		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
-		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if err := tx.QueryRow(ctx, q,
-		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
-		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
-	).Scan(&ev.PrevHash, &ev.RowHash); err != nil {
+	if err := br.QueryRow().Scan(&ev.PrevHash, &ev.RowHash); err != nil {
+		return fmt.Errorf("store: insert audit event: %w", err)
+	}
+	if err := br.Close(); err != nil {
 		return fmt.Errorf("store: insert audit event: %w", err)
 	}
 	return nil

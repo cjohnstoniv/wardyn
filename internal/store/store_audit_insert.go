@@ -59,10 +59,52 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: begin audit tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
-	// Bound the wait BEFORE asking for the lock, since any open transaction that
-	// touched audit_events holds it and this call is on the request path. A
-	// timeout is not a lost event: the error reaches spoolingRecorder, which
-	// fsyncs it to the local spool for the drain to replay.
+	if replay, _ := ctx.Value(auditReplayKey{}).(bool); replay && ev.ID != uuid.Nil {
+		return insertReplayedAuditEvent(ctx, tx, ev, dataJSON)
+	}
+	// The lock wait bound, the chain lock and the append go to the database together: the lock is held for one
+	// round trip less. Results are read strictly in order and the first error returns before Commit: a failed
+	// statement aborts the transaction, so the statements queued behind it fail too, and the deferred Rollback
+	// stays. Bound the wait BEFORE asking for the lock, since any open transaction that touched audit_events
+	// holds it and this call is on the request path. A timeout is not a lost event: the error reaches
+	// spoolingRecorder, which fsyncs it to the local spool for the drain to replay.
+	b := &pgx.Batch{}
+	b.Queue(db.AuditChainLockTimeoutSQL())
+	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
+	b.Queue(auditAppendSQL, ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
+		ev.Target, ev.Outcome, ev.SourceIP, dataJSON)
+	br := tx.SendBatch(ctx, b)
+	defer br.Close() //nolint:errcheck // closes the pipeline on every error path; a second Close is a no-op
+	if _, err := br.Exec(); err != nil {
+		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
+	}
+	if _, err := br.Exec(); err != nil {
+		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
+			db.AuditChainLockTimeout, err)
+	}
+	if err := br.QueryRow().Scan(&ev.PrevHash, &ev.RowHash); err != nil {
+		return fmt.Errorf("store: insert audit event: %w", err)
+	}
+	if err := br.Close(); err != nil {
+		return fmt.Errorf("store: insert audit event: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: commit audit event: %w", err)
+	}
+	return nil
+}
+
+// auditAppendSQL is the one statement that enters a row into audit_events: audit_append allocates seq and
+// recorded_at under the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the
+// genesis row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
+// "nothing before this row".
+const auditAppendSQL = `
+		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
+		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
+
+// insertReplayedAuditEvent is InsertAuditEvent's body for a replayed event (WithAuditReplay): an event the
+// table already holds is not appended again.
+func insertReplayedAuditEvent(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent, dataJSON []byte) error {
 	if _, err := tx.Exec(ctx, db.AuditChainLockTimeoutSQL()); err != nil {
 		return fmt.Errorf("store: bound audit chain lock wait: %w", err)
 	}
@@ -70,24 +112,15 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 		return fmt.Errorf("store: lock audit chain (waited up to %s; another transaction that inserted into audit_events may still be open): %w",
 			db.AuditChainLockTimeout, err)
 	}
-	if replay, _ := ctx.Value(auditReplayKey{}).(bool); replay && ev.ID != uuid.Nil {
-		var held bool
-		// audit_events_time_idx finds it; under the chain lock, every earlier writer has committed.
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_events WHERE time = $1 AND id = $2)`, ev.Time, ev.ID).Scan(&held); err != nil {
-			return fmt.Errorf("store: look up a replayed audit event: %w", err)
-		}
-		if held {
-			return nil // already recorded: nothing to append, and ev keeps no chain hashes
-		}
+	var held bool
+	// audit_events_time_idx finds it; under the chain lock, every earlier writer has committed.
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM audit_events WHERE time = $1 AND id = $2)`, ev.Time, ev.ID).Scan(&held); err != nil {
+		return fmt.Errorf("store: look up a replayed audit event: %w", err)
 	}
-	// audit_append is the only way a row enters audit_events: it allocates seq and recorded_at under
-	// the chain lock and the chain trigger refuses a row it did not allocate. COALESCE: the genesis
-	// row's prev_hash is SQL NULL, which won't scan into a string; empty string and NULL both mean
-	// "nothing before this row".
-	const q = `
-		SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'')
-		FROM audit_append($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
-	if err := tx.QueryRow(ctx, q,
+	if held {
+		return nil // already recorded: nothing to append, and ev keeps no chain hashes
+	}
+	if err := tx.QueryRow(ctx, auditAppendSQL,
 		ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON,
 	).Scan(&ev.PrevHash, &ev.RowHash); err != nil {

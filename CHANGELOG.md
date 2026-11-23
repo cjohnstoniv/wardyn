@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Audit writes from the server's requests and its spool replay hold the audit log's chain lock for less time: the lock and the append go to the database together.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
