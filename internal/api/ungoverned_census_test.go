@@ -68,6 +68,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance.go:resolveChainCeiling":                        {1, "R: the operator arm; boundaryCeiling meets whatever it returns"},
 	"governance_dry_run.go:applyUnitWriteQ":                    {1, "authz-only: the writer's mount-source tier; the profile meets the boundary at resolve"},
 	"governance_change_kinds.go:applyUnitChange":               {1, "authz-only: the approver's mount-source tier; the profile meets the boundary at resolve"},
+	"governance_change_pool.go:tierOf":                         {2, "authz-only: the tier an approval of a held change is given at; it admits no run policy"},
+	"governance_change_pool.go:judgeRecord":                    {1, "authz-only: whether a candidate approver is security-tier, so a scoped predicate is asked only of grant holders"},
 	"governance_envelope_gates.go:envelopeRootApprover":        {1, "authz-only: who decides a held change of an envelope's unit"},
 	"governance_requests.go:requestApprover":                   {1, "authz-only: who decides a held request; the security tier decides it as it decides every held change (securityApprover), the rule's deciders are the other arm"},
 	"governance_unit_write.go:writeGovernanceUnit":             {1, "authz-only: the writer's mount-source tier; the profile meets the boundary at resolve"},

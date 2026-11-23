@@ -58,3 +58,39 @@ func TestParseBootFlagsGovernanceSettings(t *testing.T) {
 		t.Errorf("an unparsable TTL exits %d, want 2 naming the variable:\n%s", code, out)
 	}
 }
+
+// TestParseBootFlagsGovernanceMinApprovals pins WARDYN_GOVERNANCE_MIN_APPROVALS: unset and 1 to 9 boot, and a
+// count of 10, -1 or text is an exit 2 naming the variable. The refusal runs in a re-exec'd child, as the
+// change TTL's does.
+func TestParseBootFlagsGovernanceMinApprovals(t *testing.T) {
+	if os.Getenv("GOVERNANCE_MIN_APPROVALS_CHILD") == "1" {
+		resetFlags(t)
+		os.Args = []string{"wardynd-test"}
+		parseBootFlags()
+		return // not refused: the child exits 0
+	}
+	run := func(value string) (int, string) {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestParseBootFlagsGovernanceMinApprovals$", "-test.timeout=60s")
+		cmd.Env = append(os.Environ(), "GOVERNANCE_MIN_APPROVALS_CHILD=1", "WARDYN_GOVERNANCE_CHANGE_TTL=", "WARDYN_GOVERNANCE_MIN_APPROVALS="+value)
+		out, err := cmd.CombinedOutput()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode(), string(out)
+		}
+		if err != nil {
+			t.Fatalf("run child: %v\n%s", err, out)
+		}
+		return 0, string(out)
+	}
+	for _, v := range []string{"", "0", "1", "2", "9"} {
+		if code, out := run(v); code != 0 {
+			t.Errorf("WARDYN_GOVERNANCE_MIN_APPROVALS=%q exits %d, want 0:\n%s", v, code, out)
+		}
+	}
+	for _, v := range []string{"10", "-1", "many"} {
+		code, out := run(v)
+		if code != 2 || !strings.Contains(out, "WARDYN_GOVERNANCE_MIN_APPROVALS") {
+			t.Errorf("WARDYN_GOVERNANCE_MIN_APPROVALS=%s exits %d, want 2 naming the variable:\n%s", v, code, out)
+		}
+	}
+}

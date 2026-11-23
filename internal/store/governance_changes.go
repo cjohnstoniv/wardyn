@@ -25,14 +25,14 @@ import (
 )
 
 const governanceChangeCols = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket`
+	proposed_by, proposed_by_email, proposed_at, expires_at, state, decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security`
 
 // governanceChangeColsRead is governanceChangeCols with an expired-but-unswept pending row reported as
 // expired: a read computes expiry from expires_at, so no sweeper is needed for correctness.
 const governanceChangeColsRead = `id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
 	proposed_by, proposed_by_email, proposed_at, expires_at,
 	CASE WHEN state = 'pending' AND expires_at <= now() THEN 'expired' ELSE state END,
-	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket`
+	decided_by, decided_by_email, decided_at, reason, note_reason, note_ticket, required_approvals, require_security`
 
 // MaxGovernanceChangeList bounds one list read; the newest changes come first. The store reads one
 // row past it, so a caller can tell a list that was cut from one that ends exactly at the bound. The
@@ -64,6 +64,12 @@ func (e *ErrGovernanceChangeNotPending) Error() string {
 // this error.
 var ErrGovernanceChangeStale = errors.New("store: the governance change is stale")
 
+// ErrGovernanceApprovalRecorded is what a decision's function returns after it wrote an approval row and
+// the change is to stay pending: DecideGovernanceChange commits the transaction without touching the change
+// row and returns the change as it was locked with this error. The function's own writes (the approval row)
+// are committed with it.
+var ErrGovernanceApprovalRecorded = errors.New("store: an approval was recorded and the governance change stays pending")
+
 // GovernanceDecision is what a decision records on the change row.
 type GovernanceDecision struct {
 	// To is types.GovernanceChangeApplied or types.GovernanceChangeRejected.
@@ -74,8 +80,9 @@ type GovernanceDecision struct {
 }
 
 // GovernanceDecideFunc runs inside the decision transaction with the change as it was locked. A nil
-// error commits the decision; ErrGovernanceChangeStale commits the change as stale; any other error
-// rolls everything back, the change still pending.
+// error commits the decision; ErrGovernanceChangeStale commits the change as stale;
+// ErrGovernanceApprovalRecorded commits what the function wrote and leaves the change pending; any other
+// error rolls everything back, the change still pending.
 type GovernanceDecideFunc func(q Querier, ch types.GovernanceChange) error
 
 // ExpiredGovernanceChange is a lapsed change a proposal moved to expired: its id and its own target
@@ -121,11 +128,11 @@ func (s PG) ProposeGovernanceChange(ctx context.Context, ch types.GovernanceChan
 	}
 	out, err := scanGovernanceChange(tx.QueryRow(ctx, `
 		INSERT INTO governance_changes (id, target_kind, op, target_key, payload, diff, base_hash, deployment_hash,
-			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13)
+			proposed_by, proposed_by_email, expires_at, note_reason, note_ticket, required_approvals, require_security)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + $11::bigint * interval '1 microsecond', $12, $13, $14, $15)
 		RETURNING `+governanceChangeCols,
 		ch.ID, ch.TargetKind, ch.Op, ch.TargetKey, ch.Payload, ch.Diff, ch.BaseHash, ch.DeploymentHash,
-		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket))
+		ch.ProposedBy, ch.ProposedByEmail, ttl.Microseconds(), note.Reason, note.Ticket, max(ch.RequiredApprovals, 1), ch.RequireSecurity))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -303,6 +310,13 @@ func (s PG) DecideGovernanceChange(ctx context.Context, id uuid.UUID, d Governan
 	}
 	if fn != nil {
 		if ferr := fn(tx, cur); ferr != nil {
+			if errors.Is(ferr, ErrGovernanceApprovalRecorded) {
+				// The approval row is written and the change row is left as it is.
+				if err := tx.Commit(ctx); err != nil {
+					return cur, err
+				}
+				return cur, ferr
+			}
 			if !errors.Is(ferr, ErrGovernanceChangeStale) {
 				return cur, ferr
 			}
@@ -347,7 +361,8 @@ func (s PG) DryRunGovernance(ctx context.Context, fn func(q Querier) error) erro
 // EraseGovernanceChangePersonalFields clears the proposer and decider (their emails too, the reason a
 // decider typed, and the reason a proposer typed into a runner trust change's payload) of every change
 // whose recorded principal is one of principals or whose recorded email is one of emails (case
-// folded), and returns how many rows it touched. A principal is
+// folded), and returns how many change rows it touched. It also deletes their approval rows (the same
+// match), on every change. A principal is
 // never matched against the email column: that column holds the claim the proposer signed in with,
 // which can spell another person's principal. A pending change whose proposer is erased leaves
 // pending in the same statement (to expired), so a change with no recorded proposer can never be
@@ -356,7 +371,9 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals,
 	if len(principals)+len(emails) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `
+	var touched int
+	err := s.inTx(ctx, func(q Querier) error {
+		tag, err := q.Exec(ctx, `
 		UPDATE governance_changes SET
 			state = CASE WHEN state = 'pending' AND (proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2))
 			             THEN 'expired' ELSE state END,
@@ -373,11 +390,21 @@ func (s PG) EraseGovernanceChangePersonalFields(ctx context.Context, principals,
 			                         THEN jsonb_set(payload, '{reason}', '""'::jsonb) ELSE payload END
 		WHERE proposed_by = ANY($1) OR lower(proposed_by_email) = ANY($2)
 		   OR decided_by = ANY($1) OR lower(decided_by_email) = ANY($2)`,
-		principals, lowerAll(emails), types.GovernanceTargetRunnerTrust)
+			principals, lowerAll(emails), types.GovernanceTargetRunnerTrust)
+		if err != nil {
+			return err
+		}
+		touched = int(tag.RowsAffected())
+		// An erased person's approval rows go on every change, pending or decided: blanking one would leave an
+		// empty approver, which reads as the admin token. A decided change keeps its history in its audit rows.
+		_, err = q.Exec(ctx, `DELETE FROM governance_change_approvals WHERE approver = ANY($1) OR lower(approver_email) = ANY($2)`,
+			principals, lowerAll(emails))
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("store: erase governance change personal fields: %w", err)
 	}
-	return int(tag.RowsAffected()), nil
+	return touched, nil
 }
 
 func lowerAll(in []string) []string {
@@ -398,7 +425,8 @@ func scanGovernanceChangeInto(row pgx.Row, extra *bool) (types.GovernanceChange,
 	var noteReason, noteTicket string
 	dest := []any{&c.ID, &c.TargetKind, &c.Op, &c.TargetKey, &c.Payload, &c.Diff, &c.BaseHash, &c.DeploymentHash,
 		&c.ProposedBy, &c.ProposedByEmail, &c.ProposedAt, &c.ExpiresAt, &c.State,
-		&c.DecidedBy, &c.DecidedByEmail, &c.DecidedAt, &c.Reason, &noteReason, &noteTicket}
+		&c.DecidedBy, &c.DecidedByEmail, &c.DecidedAt, &c.Reason, &noteReason, &noteTicket,
+		&c.RequiredApprovals, &c.RequireSecurity}
 	if extra != nil {
 		dest = append(dest, extra)
 	}

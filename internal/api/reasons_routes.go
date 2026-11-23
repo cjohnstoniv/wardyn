@@ -718,6 +718,12 @@ const (
 	reasonGovernanceChangeNotPending     = "governance_change_not_pending"      // the change was already applied, rejected, expired or marked stale
 	reasonGovernanceChangeNotFound       = "governance_change_not_found"        // a /governance/changes route named no change, or one of a kind the caller may not see
 	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
+	// A change that needs the approval of several people (governance_change_approvals.go).
+	reasonGovernanceChangeAlreadyApproved  = "governance_change_already_approved"           // the same person, by principal or email, already holds an approval that counts
+	reasonGovernanceChangeSecurityApprover = "governance_change_security_approver_required" // the last approval would leave no security admin among those counted
+	reasonGovernanceChangeProposerInactive = "governance_change_proposer_inactive"          // the last approval, while the proposer is deactivated
+	reasonGovernanceChangeReasonRequired   = "governance_change_reason_required"            // a reject by someone other than the proposer needs a reason
+	reasonGovernanceChangeApprovalNotFound = "governance_change_approval_not_found"         // take back, when the caller holds no approval that counts
 )
 
 // reasonIdentityDeactivated: a run, API token, SSH key, stored credential or runner registration

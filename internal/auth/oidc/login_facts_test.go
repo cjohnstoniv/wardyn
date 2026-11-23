@@ -5,7 +5,9 @@ package oidc_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	writoidc "github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
@@ -49,5 +51,62 @@ func TestCallbackLoginFacts(t *testing.T) {
 				t.Errorf("tenant/object = %q/%q, want %q/%q", f.TenantID, f.ObjectID, c.wantTenant, c.wantO)
 			}
 		})
+	}
+}
+
+// loginFactsRoles signs a sign-in whose token carries the given roles and groups claims and returns what
+// OnLogin was told.
+func loginFactsRoles(t *testing.T, roles, groups []string) writoidc.LoginFacts {
+	t.Helper()
+	env := newIdPEnv(t)
+	var got []writoidc.LoginFacts
+	auth := env.newRoleMappingAuth(t, nil, "", nil, nil, func(cfg *writoidc.Config) {
+		cfg.OnLogin = func(_ context.Context, f writoidc.LoginFacts) { got = append(got, f) }
+	})
+	env.buildIDTokenWithRoles(t, "sub-roles", "pat@corp.example", roles, groups, roleCallbackNonce, time.Now().Add(time.Hour))
+	if _, sess := doCallbackVia(t, auth, auth.CallbackHandler); sess.Sub != "sub-roles" {
+		t.Fatalf("session sub = %q, want sub-roles", sess.Sub)
+	}
+	if len(got) != 1 {
+		t.Fatalf("OnLogin ran %d times, want 1", len(got))
+	}
+	return got[0]
+}
+
+// TestCallbackLoginFactsCarryTheRolesClaim pins the roles claim handed to OnLogin: on its own, trimmed,
+// lowercased, deduplicated and sorted as the groups are, and empty when the token carries none.
+func TestCallbackLoginFactsCarryTheRolesClaim(t *testing.T) {
+	f := loginFactsRoles(t, []string{" Wardyn.Admin ", "wardyn.admin", "Auditor"}, []string{"eng"})
+	if want := []string{"auditor", "wardyn.admin"}; fmt.Sprint(f.Roles) != fmt.Sprint(want) {
+		t.Errorf("Roles = %v, want %v", f.Roles, want)
+	}
+	if want := []string{"auditor", "eng", "wardyn.admin"}; fmt.Sprint(f.Groups) != fmt.Sprint(want) {
+		t.Errorf("Groups = %v, want the roles folded in with the groups: %v", f.Groups, want)
+	}
+	if none := loginFactsRoles(t, nil, []string{"eng"}); len(none.Roles) != 0 {
+		t.Errorf("Roles = %v with no roles claim, want none", none.Roles)
+	}
+}
+
+// TestCallbackLoginFactsCapTheRolesClaim pins that a roles claim past the groups byte budget is cut as the
+// groups are, and that the snapshot is then marked partial.
+func TestCallbackLoginFactsCapTheRolesClaim(t *testing.T) {
+	var roles []string
+	for i := 0; i < 400; i++ {
+		roles = append(roles, fmt.Sprintf("role-%04d-padding-padding-padding", i))
+	}
+	f := loginFactsRoles(t, roles, nil)
+	if len(f.Roles) == 0 || len(f.Roles) >= len(roles) {
+		t.Fatalf("kept %d of %d roles, want a cut list", len(f.Roles), len(roles))
+	}
+	if !f.GroupsTruncated {
+		t.Error("GroupsTruncated = false, want true: the roles were cut")
+	}
+	var used int
+	for _, r := range f.Roles {
+		used += len(r) + 3
+	}
+	if used > writoidc.MaxSessionGroupsBytesForTest {
+		t.Errorf("kept roles cost %d bytes, over the %d budget", used, writoidc.MaxSessionGroupsBytesForTest)
 	}
 }

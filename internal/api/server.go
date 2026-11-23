@@ -706,6 +706,10 @@ type Config struct {
 	// second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits before it expires. Zero means the 72h
 	// default.
 	GovernanceChangeTTL time.Duration
+	// GovernanceMinApprovals is WARDYN_GOVERNANCE_MIN_APPROVALS: the fewest distinct people who must approve
+	// a held governance change (1 to 9). Zero, the default, is unset: a change needs one approval, as
+	// before. It is independent of WARDYN_GOVERNANCE_SECOND_HUMAN.
+	GovernanceMinApprovals int
 	// UIListenAddr is WARDYN_UI_SANDBOX_LISTEN: the address the UI-sandbox
 	// gateway binds (e.g. ":8081"). Empty = off = no listener, no new surface,
 	// mirroring SSHListenAddr. It MUST NOT equal the console's -listen: relayed

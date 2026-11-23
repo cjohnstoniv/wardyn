@@ -37,6 +37,13 @@ type principalGroupsWriter interface {
 	PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error
 }
 
+// principalSignInWriter is the store that also keeps the roles claim of an SSO sign-in on its own
+// (store.PG.PutPrincipalSignIn): the sign-in gate prefers it to principalGroupsWriter, and a store without
+// it records the sign-in as before.
+type principalSignInWriter interface {
+	PutPrincipalSignIn(ctx context.Context, principal, email string, groups, roles []string, truncated bool) error
+}
+
 // principalGroupsNarrower is the store that can narrow an existing record of a person's last token
 // exchange through a portal (store.PG.NarrowPrincipalGroups) for an exchange the portal refused.
 type principalGroupsNarrower interface {
@@ -47,6 +54,7 @@ type principalGroupsNarrower interface {
 // writing it.
 var (
 	_ principalGroupsWriter   = store.PG{}
+	_ principalSignInWriter   = store.PG{}
 	_ principalGroupsNarrower = store.PG{}
 )
 
@@ -79,12 +87,22 @@ func (g storeIdentityGate) Issue(ctx context.Context, f oidc.LoginFacts) (int64,
 	// failed write refuses the sign-in: no session is issued with groups the record lacks, and the record
 	// is what a running run's owner is judged by where no session of theirs is at hand. No issue time is
 	// passed, so the record is stamped with the database's time, one clock for every server.
-	if pw, ok := g.st.(principalGroupsWriter); ok {
-		if err := pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, time.Time{}); err != nil {
-			return 0, err
-		}
+	if err := g.putSignIn(ctx, f); err != nil {
+		return 0, err
 	}
 	return epoch, nil
+}
+
+// putSignIn writes the sign-in's record: through PutPrincipalSignIn when the store has it, which also keeps
+// the roles claim, else through PutPrincipalGroups as before. A store with neither keeps no record.
+func (g storeIdentityGate) putSignIn(ctx context.Context, f oidc.LoginFacts) error {
+	if sw, ok := g.st.(principalSignInWriter); ok {
+		return sw.PutPrincipalSignIn(ctx, f.Sub, f.Email, f.Groups, f.Roles, f.GroupsTruncated)
+	}
+	if pw, ok := g.st.(principalGroupsWriter); ok {
+		return pw.PutPrincipalGroups(ctx, f.Sub, "", f.Email, f.Groups, f.GroupsTruncated, time.Time{})
+	}
+	return nil
 }
 
 func (g storeIdentityGate) Bound(ctx context.Context, ref oidc.IdentityRef) (string, error) {

@@ -32,6 +32,20 @@ type PrincipalGroups struct {
 // groups. A nil groups is recorded as none. The sign-in gate and the portal token exchange call it
 // before they issue a session or token and refuse on an error.
 func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email string, groups []string, truncated bool, issuedAt time.Time) error {
+	return s.putPrincipalRecord(ctx, principal, portal, email, groups, nil, false, truncated, issuedAt)
+}
+
+// PutPrincipalSignIn is the sign-in gate's record: PutPrincipalGroups for the door "" with a zero issue time,
+// plus the roles claim of the token kept on its own (a nil roles is recorded as none). The groups cap can
+// push a role out of the group list, so the claim is kept beside it. Only this write sets roles; a record
+// from before the roles column keeps NULL until the person signs in again.
+func (s PG) PutPrincipalSignIn(ctx context.Context, principal, email string, groups, roles []string, truncated bool) error {
+	return s.putPrincipalRecord(ctx, principal, "", email, groups, roles, true, truncated, time.Time{})
+}
+
+// putPrincipalRecord is the one upsert both writers share; writeRoles says whether roles is stored, so a
+// portal exchange or a plain PutPrincipalGroups leaves a record's roles as it was.
+func (s PG) putPrincipalRecord(ctx context.Context, principal, portal, email string, groups, roles []string, writeRoles, truncated bool, issuedAt time.Time) error {
 	if groups == nil {
 		groups = []string{}
 	}
@@ -39,16 +53,26 @@ func (s PG) PutPrincipalGroups(ctx context.Context, principal, portal, email str
 	if err != nil {
 		return fmt.Errorf("store: encode sign-in groups: %w", err)
 	}
+	var rolesJSON []byte
+	if writeRoles {
+		if roles == nil {
+			roles = []string{}
+		}
+		if rolesJSON, err = json.Marshal(roles); err != nil {
+			return fmt.Errorf("store: encode sign-in roles: %w", err)
+		}
+	}
 	var at any
 	if !issuedAt.IsZero() {
 		at = issuedAt
 	}
-	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated, issued_at)
-		VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()))
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO principal_groups (principal, portal, email, groups, truncated, issued_at, roles)
+		VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, now()), $7)
 		ON CONFLICT (principal, portal) DO UPDATE SET email = EXCLUDED.email, groups = EXCLUDED.groups,
-			truncated = EXCLUDED.truncated, issued_at = EXCLUDED.issued_at, signed_in_at = now()
+			truncated = EXCLUDED.truncated, issued_at = EXCLUDED.issued_at, signed_in_at = now(),
+			roles = CASE WHEN $8 THEN EXCLUDED.roles ELSE principal_groups.roles END
 		WHERE $6::timestamptz IS NULL OR principal_groups.issued_at IS NULL OR principal_groups.issued_at <= EXCLUDED.issued_at`,
-		principal, portal, email, b, truncated, at); err != nil {
+		principal, portal, email, b, truncated, at, rolesJSON, writeRoles); err != nil {
 		return fmt.Errorf("store: record sign-in groups: %w", err)
 	}
 	return nil
