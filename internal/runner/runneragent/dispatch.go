@@ -82,6 +82,12 @@ type Config struct {
 	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
 	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
 	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
+	// SpoolDrained reports whether a local ref's run has no spooled decision the org has not taken (move.go);
+	// nil answers an export SpoolDrained false.
+	SpoolDrained func(ctx context.Context, localRef string) (bool, error)
+	// MoveUnbound records the org's notice that a run was moved away from a local ref (move.go); nil refuses
+	// the notice.
+	MoveUnbound func(ctx context.Context, runID uuid.UUID, localRef string) error
 }
 
 // errUnobservable is Status's and AgentStatus's answer for a sandbox Covered says this runner cannot
@@ -169,6 +175,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.reclaimDrive(ctx, args)
 	case runnerwire.MethodKeptMachine:
 		return d.keptMachine(ctx, args)
+	case runnerwire.MethodMoveExport, runnerwire.MethodMoveImport, runnerwire.MethodMoveUnbound:
+		return d.move(ctx, peer, id, method, args)
 	}
 	return d.refCall(ctx, method, args)
 }

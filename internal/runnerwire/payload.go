@@ -164,6 +164,13 @@ type Caps struct {
 	// ProxyNarrow says the runner serves narrow_proxy: its substrate narrows a sandbox's proxy in place
 	// (runner.ProxyNarrower; a Kubernetes runner, 0.10.1 on). Absent, a live egress edit takes the revive path.
 	ProxyNarrow bool `json:"proxy_narrow,omitempty"`
+	// MoveState says the runner serves move_export, move_import and move_unbound. Absent (an older runner),
+	// the org moves no run from it or to it.
+	MoveState bool `json:"move_state,omitempty"`
+	// MoveImportPresent says the runner's substrate reads an imported, unstarted sandbox as present
+	// (runner.MoveImportPresenter), so a run moved to it is never read as gone before it starts. Absent, the
+	// org moves no run to it.
+	MoveImportPresent bool `json:"move_import_present,omitempty"`
 	// LocalAttach says the runner serves MethodLocalAttach, MethodLocalAttachMode and
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
@@ -717,6 +724,12 @@ const (
 	// first the runner writes one MacWindowEnd line and half-closes it; the org ends the window by
 	// resetting or closing it.
 	KindMacWindow = "mac_window"
+	// KindMoveExport carries a paused run's files, a movepack stream, from the runner to the org. It is opened
+	// only by the runner, only as the reply stream of a move_export call.
+	KindMoveExport = "move_export"
+	// KindMoveImport is the reply stream of a move_import call: the org writes the carried files and
+	// half-closes, then the runner writes one MoveImportEnd line and half-closes.
+	KindMoveImport = "move_import"
 )
 
 // MacWindowUnexpected is the mac_window_unexpected event's data: Grant is the grant id the helper's window
@@ -767,7 +780,8 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow,
+		KindMoveExport, KindMoveImport:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)

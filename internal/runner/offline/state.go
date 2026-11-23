@@ -40,6 +40,9 @@ type localRun struct {
 	ProxyStoppedAt *time.Time            `json:"proxy_stopped_at,omitempty"`
 	Exit           *runnerwire.AgentExit `json:"exit,omitempty"`
 	ExitAcked      bool                  `json:"exit_acked,omitempty"`
+	// MovedAway is the sandbox the organisation said this run was moved away from (MoveUnbound): while it
+	// is still Ref, the run is left out of the run state this runner reports.
+	MovedAway string `json:"moved_away,omitempty"`
 	// Substrate is the k8s runner's per-run evidence record (internal/runner/k8s), opaque here and
 	// written only by this file's atomic save.
 	Substrate json.RawMessage `json:"substrate,omitempty"`

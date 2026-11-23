@@ -479,7 +479,7 @@ func (p *Peer) handleStream(f Frame) error {
 			p.returnCredit(int64(len(f.Payload)))
 			return nil
 		}
-		if runnerToOrgOnly(s.kind) && !p.cfg.Org { // the org never writes the tee or a window
+		if runnerToOrgOnly(s.kind) && !p.cfg.Org { // the org never writes the tee, a window or an export
 			p.returnCredit(int64(len(f.Payload)))
 			return s.resetQueued(ResetRefused)
 		}
@@ -808,8 +808,9 @@ func (p *Peer) onOpen(f Frame) error {
 		p.mu.Unlock()
 		return fmt.Errorf("%w: stream %d already open", ErrBadFrame, f.Stream)
 	}
-	// A pty_tee stream exists only as a runner's reply to the org's local_attach call, and a mac_window
-	// stream only as its reply to a mac_window call.
+	// A pty_tee stream exists only as a runner's reply to the org's local_attach call, a mac_window
+	// stream only as its reply to a mac_window call, and a move_export stream only as its reply to a
+	// move_export call.
 	if method, ok := callStreamKinds[o.Kind]; ok && (!p.cfg.Org || o.Call == 0 || p.calls[o.Call] == nil || p.calls[o.Call].method != method) {
 		p.mu.Unlock()
 		return p.answer(Frame{Type: TypeReset, Stream: f.Stream, Payload: EncodeReset(ResetRefused)})
@@ -861,7 +862,7 @@ func (p *Peer) answer(f Frame) error {
 
 // callStreamKinds are the stream kinds that exist only as a runner's reply to one org call, each with
 // that call's method.
-var callStreamKinds = map[string]string{KindPTYTee: MethodLocalAttach, KindMacWindow: MethodMacWindow}
+var callStreamKinds = map[string]string{KindPTYTee: MethodLocalAttach, KindMacWindow: MethodMacWindow, KindMoveExport: MethodMoveExport}
 
 // runnerToOrgOnly reports a stream kind that flows from the runner to the org only.
 func runnerToOrgOnly(kind string) bool { _, ok := callStreamKinds[kind]; return ok }

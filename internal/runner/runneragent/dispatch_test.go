@@ -5,9 +5,12 @@ package runneragent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,9 +18,11 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/runner/remote"
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire/runnertest"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func TestDispatcherChecksRunnerAndDurableGuardBeforeCreate(t *testing.T) {
@@ -336,4 +341,127 @@ func TestDispatch_NarrowProxyRoutes(t *testing.T) {
 	if _, err := callRefArgs(t, d, runnerwire.MethodNarrowProxy, runnerwire.NarrowProxyArgs{Ref: ref, Deny: []string{"a.example"}}); !errors.Is(err, runner.ErrNarrowNotSent) {
 		t.Errorf("a substrate's ErrNarrowNotSent came back as %v", err)
 	}
+}
+
+// movingFake is runnertest's fake with a substrate's export and import, recording what reached them.
+type movingFake struct {
+	*runnertest.Fake
+	mu       sync.Mutex
+	exported []string
+	imported []string
+}
+
+func (m *movingFake) ExportState(_ context.Context, ref string, _ runner.CarriedSet) (runner.StateExport, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exported = append(m.exported, ref)
+	return runner.StateExport{Stream: io.NopCloser(strings.NewReader("exported files")), SpoolDrained: true}, nil
+}
+
+func (m *movingFake) ImportSandbox(_ context.Context, spec runner.SandboxSpec, _ runner.CarriedSet, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
+	b, err := io.ReadAll(carried)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.imported = append(m.imported, spec.RunID.String()+":"+string(b))
+	return runner.Sandbox{Ref: "imported-ref", Driver: "fake"}, runner.CarriedManifest{Entries: 1, Digest: "d"}, err
+}
+
+// TestDispatch_MoveMethodsRoute: each of the three move methods reaches its handler through Call's move
+// case (the substrate's export and import, and the unbound notice), end to end from the org's client. Without
+// the case they fall to refCall and none does. A substrate without an export or import is refused.
+func TestDispatch_MoveMethodsRoute(t *testing.T) {
+	runnerID := uuid.NewString()
+	sub := &movingFake{Fake: runnertest.NewFake()}
+	var unbound []string
+	var mu sync.Mutex
+	d, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: sub,
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil },
+		SpoolDrained: func(context.Context, string) (bool, error) { return true, nil },
+		MoveUnbound: func(_ context.Context, id uuid.UUID, ref string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			unbound = append(unbound, id.String()+":"+ref)
+			return nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := movingOrg(t, runnerID, d)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	set := runner.CarriedSet{Roots: []string{"/home/agent/work"}}
+	ref := placement.RunnerRefPrefix(runnerID) + "fake-ref"
+
+	out, err := org.ExportState(ctx, ref, set)
+	if err != nil {
+		t.Fatalf("move_export = %v; want the substrate's export", err)
+	}
+	got, err := io.ReadAll(out.Stream)
+	_ = out.Stream.Close()
+	if err != nil || string(got) != "exported files" || !out.SpoolDrained {
+		t.Errorf("export stream = %q, %v, drained %v; want the substrate's bytes, drained", got, err, out.SpoolDrained)
+	}
+
+	runID := uuid.New()
+	sb, m, err := org.ImportSandbox(ctx, runner.SandboxSpec{RunID: runID, RunnerID: runnerID, Image: "agent:1"}, set, strings.NewReader("carried files"))
+	if err != nil {
+		t.Fatalf("move_import = %v; want the substrate's import", err)
+	}
+	if sb.Ref != placement.RunnerRefPrefix(runnerID)+"imported-ref" || m.Digest != "d" {
+		t.Errorf("import answered %+v, %+v; want the runner's ref and the importer's manifest", sb, m)
+	}
+
+	if err := org.MoveUnbound(ctx, runner.MoveUnbound{RunID: runID, Ref: ref}); err != nil {
+		t.Fatalf("move_unbound = %v; want nil", err)
+	}
+
+	sub.mu.Lock()
+	exported, imported := sub.exported, sub.imported
+	sub.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(exported) != 1 || exported[0] != "fake-ref" {
+		t.Errorf("exports reaching the substrate = %v; want [fake-ref]", exported)
+	}
+	if len(imported) != 1 || imported[0] != runID.String()+":carried files" {
+		t.Errorf("imports reaching the substrate = %v; want the run's carried files", imported)
+	}
+	if len(unbound) != 1 || unbound[0] != runID.String()+":fake-ref" {
+		t.Errorf("notices reaching the runner = %v; want the run's local ref", unbound)
+	}
+
+	// A substrate that can neither export nor import refuses both, and touches nothing.
+	bare, err := newTestDispatcher(Config{RunnerID: runnerID, Substrate: struct{ substrate.Substrate }{runnertest.NewFake()},
+		BeforeCreate: func(context.Context, runner.SandboxSpec) error { return nil },
+		Created:      func(context.Context, runner.SandboxSpec, string) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	borg := movingOrg(t, runnerID, bare)
+	var refusal *runnerwire.Error
+	if _, err := borg.ExportState(ctx, ref, set); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+		t.Errorf("export on a substrate without one = %v; want a refusal", err)
+	}
+	if _, _, err := borg.ImportSandbox(ctx, runner.SandboxSpec{RunID: uuid.New(), RunnerID: runnerID}, set, strings.NewReader("x")); !errors.As(err, &refusal) || refusal.Code != runnerwire.CodeRefused {
+		t.Errorf("import on a substrate without one = %v; want a refusal", err)
+	}
+}
+
+// movingOrg is the org's client of d over a loopback link, with caps that say the runner serves moves.
+func movingOrg(t *testing.T, runnerID string, d *Dispatcher) *remote.Substrate {
+	t.Helper()
+	link := &remote.Link{}
+	org := remote.New(runnerID, link, remote.Options{})
+	caps, _ := json.Marshal(runnerwire.Caps{MoveState: true, Support: substrate.ClassSupport{Classes: []types.ConfinementClass{types.CC1}}})
+	org.HandleEvent(runnerwire.Event{Kind: runnerwire.EventCaps, Data: caps})
+	orgEnd, runEnd := runnerwire.Loopback()
+	op := link.Attach(t.Context(), orgEnd)
+	var rp *runnerwire.Peer
+	rp = runnerwire.NewPeer(runEnd, runnerwire.PeerConfig{OnCall: func(ctx context.Context, call uint32, method string, raw json.RawMessage) (any, error) {
+		return d.Call(ctx, rp, call, method, raw)
+	}})
+	go rp.Run(t.Context())
+	t.Cleanup(func() { rp.Close(); op.Close() })
+	return org
 }
