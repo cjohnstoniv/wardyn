@@ -642,21 +642,16 @@ type approvalsRead struct {
 	Viewer               *approvalViewer `json:"viewer,omitempty"`
 }
 
-// changeView is the change in the shape GET answers it. A pending change under the approval rules carries the
-// approvals block, built from one rolled-back read transaction; every other change is exactly as it was.
-func (s *Server) changeView(r *http.Request, ch types.GovernanceChange) (governanceChangeView, error) {
-	v := governanceChangeView{governanceChangeRead: governanceChangeRead{GovernanceChange: s.changeForRead(r, ch), Approvers: s.changeApprovers(r.Context(), ch)}}
-	if ch.State != types.GovernanceChangePending || !s.multi(ch) {
-		return v, nil
-	}
-	var err error
-	v.Approvals, err = s.approvalsRead(r, ch)
-	return v, err
-}
-
-// writeChangeView answers 200 with the change in GET's shape.
+// writeChangeView answers 200 with the change in GET's shape: its diff as the reader may see it
+// (changeForRead), redacted here on the one path every read and decision answer takes. A pending change under
+// the approval rules carries the approvals block, built from one rolled-back read transaction over the stored
+// change; every other change is exactly as it was.
 func (s *Server) writeChangeView(w http.ResponseWriter, r *http.Request, ch types.GovernanceChange) {
-	v, err := s.changeView(r, ch)
+	v := governanceChangeView{governanceChangeRead: governanceChangeRead{GovernanceChange: s.changeForRead(r, ch), Approvers: s.changeApprovers(r.Context(), ch)}}
+	var err error
+	if ch.State == types.GovernanceChangePending && s.multi(ch) {
+		v.Approvals, err = s.approvalsRead(r, ch)
+	}
 	var refusal *govRefusal
 	switch {
 	case errors.As(err, &refusal):

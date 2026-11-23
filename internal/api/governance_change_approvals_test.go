@@ -4,8 +4,15 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -113,6 +120,47 @@ func TestReachOf(t *testing.T) {
 		reach, why := reachOf(&c.blk, c.kept, c.pool)
 		if reach != c.reach || why != c.whyIs {
 			t.Errorf("%s: reach = %q, %q; want %q, %q", c.name, reach, why, c.reach, c.whyIs)
+		}
+	}
+}
+
+// TestChangeViewRedactsForTheReader: every read and decision answer of a held change goes through
+// writeChangeView, so a pending change under the approval rules is served with its diff as the reader may see
+// it. A unit admin reads no host path and no belongs_by, a security admin no host path, and a super admin the
+// stored diff whole.
+func TestChangeViewRedactsForTheReader(t *testing.T) {
+	const planted = "/srv/planted-host-path"
+	s, _ := govCovServer(t, &govCovStore{})
+	ch := types.GovernanceChange{ID: uuid.New(), State: types.GovernanceChangePending, RequiredApprovals: 2,
+		Diff: json.RawMessage(`{"belongs_by":["unit-a"],"after":{"ceiling":{"workspace_mounts":[{"source":"` + planted + `","target":"/home/agent/data"}]}}}`)}
+	if !s.multi(ch) {
+		t.Fatal("the fixture is not under the approval rules, so the approvals path is not read")
+	}
+	for _, c := range []struct {
+		role                string
+		hostPath, belongsBy bool
+	}{
+		{oidc.RoleUser, false, false},
+		{oidc.RoleSecurityAdmin, false, true},
+		{oidc.RoleAdmin, true, true},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(withOIDCRole(withOIDCHuman(r.Context(), "sub-reader"), c.role))
+		w := httptest.NewRecorder()
+		s.writeChangeView(w, r, ch)
+		var got types.GovernanceChange
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatalf("%s: answer = %d %s, want 200 and a change", c.role, w.Code, w.Body)
+		}
+		diff := string(got.Diff)
+		if diff == "null" || diff == "" {
+			t.Fatalf("%s: the diff is not served", c.role)
+		}
+		if strings.Contains(diff, planted) != c.hostPath {
+			t.Errorf("%s: the host path is served = %v, want %v: %s", c.role, !c.hostPath, c.hostPath, diff)
+		}
+		if strings.Contains(diff, "belongs_by") != c.belongsBy {
+			t.Errorf("%s: belongs_by is served = %v, want %v: %s", c.role, !c.belongsBy, c.belongsBy, diff)
 		}
 	}
 }
