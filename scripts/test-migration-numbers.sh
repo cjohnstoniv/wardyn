@@ -340,6 +340,12 @@ echo "ok  a closed 0400 band's late files still meet a new 0600 file"
 drop "$R11" 0602_k.sql
 git -C "$R11" checkout --quiet -- "$TSV"
 
+# 31. an edit to a migration the base already has fails: Migrate never re-runs a recorded name.
+echo "-- edited" >>"$WORK/$MIG/0001_seed.sql"
+expect_fail "$WORK" -- 'is never edited'
+git -C "$WORK" checkout --quiet -- "$MIG/0001_seed.sql"
+echo "ok  an edited migration the base already has fails"
+
 # 23. a push build of a branch other than main has no base to compare against and skips.
 expect_pass "$WORK" GITHUB_REF_NAME=release/0.10 -- 'skipping'
 echo "ok  push build of a non-main branch skips"

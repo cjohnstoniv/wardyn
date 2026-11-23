@@ -141,8 +141,13 @@ band_new=()
 while IFS= read -r -d '' f; do
   name=$(basename "$f")
   [[ "$name" =~ ^([0-9]{4})_ ]] || continue
-  # Already on the base (an unchanged pre-existing file): not a migration this branch adds.
-  if git cat-file -e "$ref:$f" 2>/dev/null; then
+  # Already on the base: not a migration this branch adds. It must still be the base's file byte for byte:
+  # Migrate never re-runs a recorded name, so an edit would reach fresh installs only.
+  if base_blob=$(git rev-parse -q --verify "$ref:$f" 2>/dev/null); then
+    if [ "$base_blob" != "$(git hash-object -- "$f")" ]; then
+      printf 'check-migration-numbers: %s differs from the copy on origin/%s. A migration the base has is never edited; add a new one.\n' "$f" "$base" >&2
+      status=1
+    fi
     continue
   fi
   digits=${BASH_REMATCH[1]}
