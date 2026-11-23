@@ -161,3 +161,29 @@ func TestPG_QueuedWindowsRunEndedByItsStart(t *testing.T) {
 		t.Errorf("run.queue.start failure rows = %d, want 1; audit: %s", got, auditDump(e.h.audit.snapshot(), queued.ID))
 	}
 }
+
+// A queued Windows VM run, its switch still on, is started by the queue's own start: the start's fold passes
+// the person, token and seat checks (the seat its insert took is its own), and dispatch hands the runner the
+// registered ref.
+func TestPG_QueuedWindowsRunStartsThroughItsStart(t *testing.T) {
+	e, pool, org, img := newWinvmEnv(t, 1)
+	occupant := e.occupy(pool)
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", winvmCreateBody(pool))
+	queued := decodeJSON[queuedLaunchAnswer](t, w)
+	if w.Code != http.StatusCreated || queued.State != types.RunQueued {
+		t.Fatalf("launch into a full pool = %d %s; want 201 QUEUED", w.Code, w.Body)
+	}
+	e.free(occupant)
+	started := e.waitStarted(queued.ID)
+	if started.State == types.RunFailed || started.Image != img.Ref || started.RunnerID == nil || *started.RunnerID != org {
+		t.Fatalf("started = state %s image %q runner %v, want %s on %s; audit: %s", started.State, started.Image, started.RunnerID,
+			img.Ref, org, auditDump(e.h.audit.snapshot(), queued.ID))
+	}
+	if n := windowsLeaseCount(t, e.pool, queued.ID); n != 1 {
+		t.Errorf("the started run holds %d seats, want 1", n)
+	}
+	spec := e.dispatchedSpec(queued.ID)
+	if spec.Image != img.Ref || spec.MachineKind != types.MachineWindowsVM || spec.RunnerID != org.String() {
+		t.Errorf("dispatched image %q kind %q runner %q, want %s windows_vm on %s", spec.Image, spec.MachineKind, spec.RunnerID, img.Ref, org)
+	}
+}
