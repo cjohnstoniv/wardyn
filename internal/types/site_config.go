@@ -134,6 +134,9 @@ type SiteConfig struct {
 	// MacOSVM is the organisation's macOS VM sandbox settings. A POINTER for the same byte-identical-GET
 	// reason as the provider blocks; nil, or a zero max, sets no maximum.
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
+	// DesktopWatermark is whether every desktop view must show the viewer's name and the run id. A POINTER for the same
+	// byte-identical-GET reason as the provider blocks; nil is not required.
+	DesktopWatermark *SiteDesktopWatermark `json:"desktop_watermark,omitempty"`
 	// Images is the org's image rules. Absent reads as every rule off.
 	Images *SiteImages `json:"images,omitempty"`
 	// FeatureSwitches is the features block (site_features.go): the features new in 0.11, each off until an admin
@@ -186,6 +189,11 @@ type SiteMacOSVM struct {
 	// MaxKeptMachinesPerPerson caps how many machines one person keeps. 1 to 4; 0 or absent reads
 	// MaxKeptMachinesPerPersonDefault.
 	MaxKeptMachinesPerPerson int `json:"max_kept_machines_per_person,omitempty"`
+}
+
+// SiteDesktopWatermark is the organisation's desktop watermark rule.
+type SiteDesktopWatermark struct {
+	Required bool `json:"required,omitempty"`
 }
 
 // The kept-machine limits' defaults and bounds (macos_vm.kept_machine_idle_days and
