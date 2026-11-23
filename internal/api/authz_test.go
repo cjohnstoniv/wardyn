@@ -958,6 +958,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// The ticket to watch a background macOS run's desktop, view only (run_background_watch.go).
 	"POST /api/v1/runs/{id}/desktop/watch-ticket": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	"POST /api/v1/runs/{id}/desktop/window":       {class: classOwner, entity: entityRun, ownerTier: tierEntry},
+	"POST /api/v1/runs/{id}/desktop/local-window": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
 	// Moving a run's end keeps a sandbox and its credentials alive: a write,
 	// so not the security tier's inspect-or-stop.
 	"PATCH /api/v1/runs/{id}": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
@@ -1230,8 +1231,20 @@ func authzMatrixSiteConfig() types.SiteConfig {
 		Runners: &types.RunnerSettings{Enabled: true}, AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
 			ID: "claude-code",
 		}}},
-		MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on},
+		MacOSVM:         &types.SiteMacOSVM{AllowAttendedWindow: &on},
+		FeatureSwitches: &types.SiteFeatureSwitches{LocalWindow: &types.LocalWindowFeature{Enabled: &on}},
 	}
+}
+
+// authzMatrixFeatureHooks makes each key a lane registers unavailable read as it will once served, so the
+// matrix probes its handler. Each lane deletes its own line in its flip commit. Callers never t.Parallel().
+func authzMatrixFeatureHooks(t *testing.T) {
+	h := map[siteFeatureKey]siteFeatureHook{}
+	for k, v := range siteFeatureHooks {
+		h[k] = v
+	}
+	h[featureLocalWindow] = siteFeatureHook{available: func() bool { return true }}
+	withSiteFeatureHooks(t, h)
 }
 
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
@@ -1285,6 +1298,7 @@ func matrixSCIMConfig() *SCIMConfig {
 
 func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
+	authzMatrixFeatureHooks(t)
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
 	cfg := baseTestConfig(newHarness(t), ast)
@@ -1329,6 +1343,7 @@ func matrixServer(cfg Config) *Server {
 // ship.
 func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	t.Helper()
+	authzMatrixFeatureHooks(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1937,8 +1952,9 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
 		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// 56 since 0.11 added POST /runs/{id}/desktop/local-window (tierEntry).
+		if probed != 56 {
+			t.Errorf("probed %d classOwner routes, want 56 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})

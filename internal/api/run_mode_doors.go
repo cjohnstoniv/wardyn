@@ -109,10 +109,11 @@ var backgroundDoors = []backgroundDoor{
 	// out of the graphical desktop (desktopRun), and the person's sign-in inside it
 	// (#2972): signinRun is the one read every sign-in route makes before it acts.
 	// A VM desktop's pause and resume (#2972) refuse in mayPauseDesktopAgent.
-	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins)", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent"},
+	{Door: "desktop", Owner: "CTL-A (desktop Files panel), CTL-C (desktop sign-ins), local window", Symbols: []string{"desktopRun", "signinRun", "mayPauseDesktopAgent", "localWindowCheck"},
 		// POST .../desktop/watch-ticket is the contract's first exception, asked in uiEnterCommon and uiSessionStillAuthorized.
 		// POST .../desktop/window is the contract's second exception, asked in macWindowRefusal.
-		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
+		// POST .../desktop/local-window is no exception: localWindowCheck refuses a background run.
+		Routes: []string{"POST /runs/{id}/desktop/watch-ticket", "POST /runs/{id}/desktop/window", "POST /runs/{id}/desktop/local-window", "GET /runs/{id}/desktop/files", "PUT /runs/{id}/desktop/files/{name}", "GET /runs/{id}/desktop/files/{name}",
 			"POST /runs/{id}/desktop/files/{name}/review", "POST /runs/{id}/desktop-signin", "POST /runs/{id}/desktop-signin/shares", "POST /runs/{id}/desktop-signin/end",
 			"POST /runs/{id}/desktop/sign-ins/pause", "POST /runs/{id}/desktop/sign-ins/resume"}, Enforced: true},
 }

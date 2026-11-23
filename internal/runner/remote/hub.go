@@ -74,6 +74,9 @@ type HubConfig struct {
 	// LocalAttach, when set, says whether AUTH_OK tells a claimed runner the organisation allows local
 	// attach (runnerwire.AuthOK.LocalAttach). Nil says false.
 	LocalAttach func(types.Runner) bool
+	// LocalWindow, when set, says whether AUTH_OK tells a claimed runner the organisation allows a local window
+	// onto a Linux VM run (runnerwire.AuthOK.LocalWindow). Nil says false.
+	LocalWindow func(context.Context, types.Runner) bool
 }
 
 type hubSession struct {
@@ -364,7 +367,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 		}
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
-	h.orgChoices(&ok, current)
+	h.orgChoices(ctx, &ok, current)
 	s.perRun.Store(&perRunLimits{ok.PerRunCPUMillis, ok.PerRunMemoryMiB})
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
@@ -605,12 +608,15 @@ func (h *Hub) Close() {
 }
 
 // orgChoices fills the fields of AUTH_OK the organisation chooses for the claimed runner current.
-func (h *Hub) orgChoices(ok *runnerwire.AuthOK, current types.Runner) {
+func (h *Hub) orgChoices(ctx context.Context, ok *runnerwire.AuthOK, current types.Runner) {
 	if h.cfg.ProxyImage != nil {
 		ok.ProxyImage = h.cfg.ProxyImage(current)
 	}
 	if h.cfg.LocalAttach != nil {
 		ok.LocalAttach = h.cfg.LocalAttach(current)
+	}
+	if h.cfg.LocalWindow != nil {
+		ok.LocalWindow = h.cfg.LocalWindow(ctx, current)
 	}
 	p := perRunOf(current)
 	ok.PerRunCPUMillis, ok.PerRunMemoryMiB = p.cpuMillis, p.memoryMiB

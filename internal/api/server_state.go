@@ -72,6 +72,7 @@ type Server struct {
 	localCovered    func(runID uuid.UUID) bool
 	queueRace       func(point string)
 	macWindowHost   // this replica's open attended windows and the tests' seams for them (run_mac_window.go)
+	localWindowHost // this replica's open local windows and the tests' seams for them (run_local_window.go)
 	// pauseLimit overrides attachWriteTimeout as the bound on an unresumed output pause for THIS server only (tests).
 	pauseLimit time.Duration
 	// attachPrepare overrides attachPrepareTimeout for THIS server only (tests):

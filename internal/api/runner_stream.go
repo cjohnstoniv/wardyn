@@ -270,6 +270,17 @@ func (s *Server) runnerLocalAttach(rn types.Runner) bool {
 	return s.cfg.AttachLocal && rn.OwnerKind == types.RunnerOwnerPerson
 }
 
+// runnerLocalWindow is AUTH_OK's local_window for rn: rn is a person's runner, the server is in no local mode,
+// and the features.local_window switch is on now. A site config that cannot be read says false, so the runner
+// opens no socket for a window. A switch change reaches a connected runner at its next connect.
+func (s *Server) runnerLocalWindow(ctx context.Context, rn types.Runner) bool {
+	if s.cfg.LocalMode || rn.OwnerKind != types.RunnerOwnerPerson {
+		return false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	return err == nil && localWindowOn(sc)
+}
+
 // runnerHub builds the one Hub lazily. Callbacks not injected are the durable
 // org composition: admitRunner and the asynchronous offline sweep.
 func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
@@ -306,6 +317,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 		}
 		if cfg.LocalAttach == nil {
 			cfg.LocalAttach = s.runnerLocalAttach
+		}
+		if cfg.LocalWindow == nil {
+			cfg.LocalWindow = s.runnerLocalWindow
 		}
 		// The Hub reports Disconnected only for a session it reported Connected,
 		// and calls both under the runner's session slot, Disconnected even inside
