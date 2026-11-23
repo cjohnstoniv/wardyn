@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -739,5 +740,30 @@ func TestRunScheduleSweep_UnreadableRowPauses(t *testing.T) {
 				t.Errorf("due after the pause = %d, want 0", len(due))
 			}
 		})
+	}
+}
+
+// Each arm of scheduleOwnerAuthority refuses on its own: a person's session carrying only that one marker is a
+// 422 run_schedule_owner_unsupported, while the same session without it keeps a schedule. Removing any one arm
+// fails its case.
+func TestScheduleOwnerAuthority_EachArmRefusesAlone(t *testing.T) {
+	person := func() context.Context { return memberCtxFor("sub-person") }
+	for name, ctx := range map[string]context.Context{
+		"delegate":             audit.WithDelegation(person(), types.DelegationVia{Delegate: uuid.New(), Grant: uuid.New()}),
+		"device":               context.WithValue(person(), deviceCtxKey{}, types.Device{ID: uuid.New()}),
+		"break glass":          context.WithValue(person(), breakGlassKey{}, "outage"),
+		"binding":              withLaunchBinding(person(), uuid.New()),
+		"workload":             withLaunchWorkload(person(), store.Workload{Owner: "sub-person", Name: "nightly"}),
+		"portal person launch": memberCtxFor(types.PortalPersonPrefix + uuid.NewString()),
+	} {
+		w := httptest.NewRecorder()
+		if _, ok := scheduleOwnerAuthority(w, scheduleRequest(ctx, http.MethodPost, "/api/v1/run-schedules", "", "")); ok ||
+			w.Code != http.StatusUnprocessableEntity || errorReason(w) != reasonRunScheduleOwnerUnsupported {
+			t.Errorf("%s: owner authority = %v, %d %s; want refused 422 %s", name, ok, w.Code, w.Body, reasonRunScheduleOwnerUnsupported)
+		}
+	}
+	w := httptest.NewRecorder()
+	if a, ok := scheduleOwnerAuthority(w, scheduleRequest(person(), http.MethodPost, "/api/v1/run-schedules", "", "")); !ok || a.Sub != "sub-person" {
+		t.Errorf("a plain person's session = %+v, %v (%d %s); want it kept", a, ok, w.Code, w.Body)
 	}
 }
