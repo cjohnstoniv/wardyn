@@ -207,6 +207,7 @@ func (w *podWatch) run(ns string, nw *nsPodWatch) {
 	for {
 		timeout := podWatchTimeoutSeconds
 		opened := time.Now()
+		asked := rv
 		wi, err := w.cs.CoreV1().Pods(ns).Watch(w.ctx, metav1.ListOptions{LabelSelector: labelManaged + "=true", ResourceVersion: rv, TimeoutSeconds: &timeout, AllowWatchBookmarks: true})
 		if err == nil {
 			nw.live.Store(true)
@@ -239,7 +240,7 @@ func (w *podWatch) run(ns string, nw *nsPodWatch) {
 			}
 			pause = podWatchForbiddenRetry
 		case apierrors.IsResourceExpired(err) || apierrors.IsGone(err):
-			if rv == "" {
+			if asked == "" { // a 410 to a watch that asked for no resourceVersion is never free
 				pause, backoff = backoff, min(backoff*2, podWatchBackoffMax)
 			}
 			rv = ""

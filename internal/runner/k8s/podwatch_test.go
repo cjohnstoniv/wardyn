@@ -182,7 +182,7 @@ func TestPodWatchForbiddenPollsOnTheFallbackInterval(t *testing.T) {
 	if took := sleepTook(t, b, 20*time.Millisecond, time.Hour); took > 500*time.Millisecond {
 		t.Errorf("sleep with the watch refused took %s, want the 20ms fallback", took)
 	}
-	time.Sleep(time.Until(begin.Add(time.Second)))
+	time.Sleep(time.Until(begin.Add(1500 * time.Millisecond)))
 	if n := len(podActions(cs, "watch")); n != 1 {
 		t.Errorf("pod Watch calls within 1s of a refusal = %d, want 1 (the retry is %s)", n, podWatchForbiddenRetry)
 	}
@@ -221,10 +221,55 @@ func TestPodWatchExpiredResourceVersionRestartsFromNow(t *testing.T) {
 	pod := managedPod("a")
 	pod.ResourceVersion = "7"
 	fw.Modify(pod)
-	fw.Error(&metav1.Status{Status: metav1.StatusFailure, Code: 410, Reason: metav1.StatusReasonExpired})
-	acts := awaitPodActions(t, cs, "watch", 2, 500*time.Millisecond)
-	if rv := watchRestrictions(t, acts[1]).ResourceVersion; rv != "" {
+	fw.Stop()
+	// The 410 answers a resumed watch: the at-once end above backs off 1 s, then the watch resumes at "7".
+	fw2 := nextWatcher(t, watchers, 3*time.Second)
+	acts := awaitPodActions(t, cs, "watch", 2, time.Second)
+	if rv := watchRestrictions(t, acts[1]).ResourceVersion; rv != "7" {
+		t.Fatalf("resumed watch resourceVersion = %q, want \"7\"", rv)
+	}
+	fw2.Error(&metav1.Status{Status: metav1.StatusFailure, Code: 410, Reason: metav1.StatusReasonExpired})
+	acts = awaitPodActions(t, cs, "watch", 3, 500*time.Millisecond)
+	if rv := watchRestrictions(t, acts[2]).ResourceVersion; rv != "" {
 		t.Errorf("watch after 410 Expired resourceVersion = %q, want \"\" (restart from now)", rv)
+	}
+}
+
+func TestPodWatchExpiredWithNoResourceVersionBacksOff(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	w := withPodWatch(t, d, cs)
+	cs.PrependWatchReactor("pods", func(clienttesting.Action) (bool, watch.Interface, error) {
+		return true, nil, apierrors.NewResourceExpired("too old resource version")
+	})
+	begin := time.Now()
+	w.start(testNamespace)
+	awaitPodActions(t, cs, "watch", 1, time.Second)
+	time.Sleep(time.Until(begin.Add(700 * time.Millisecond)))
+	if n := len(podActions(cs, "watch")); n > 2 {
+		t.Errorf("pod Watch calls in 700ms of 410 answers to an empty resourceVersion = %d, want at most 2 (backed off)", n)
+	}
+}
+
+func TestPodWatchBookmarkMovesResourceVersionAndRingsNothing(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	w := withPodWatch(t, d, cs)
+	watchers := fakeWatches(cs)
+	b := d.podBell(testNamespace, "a")
+	defer b.stop()
+	w.start(testNamespace)
+	fw := nextWatcher(t, watchers, time.Second)
+	mark := managedPod("a")
+	mark.ResourceVersion = "9"
+	fw.Action(watch.Bookmark, mark)
+	select {
+	case <-b.ring:
+		t.Fatal("a BOOKMARK rang a wait")
+	case <-time.After(300 * time.Millisecond):
+	}
+	fw.Stop()
+	acts := awaitPodActions(t, cs, "watch", 2, 3*time.Second)
+	if rv := watchRestrictions(t, acts[1]).ResourceVersion; rv != "9" {
+		t.Errorf("watch after a BOOKMARK resourceVersion = %q, want \"9\"", rv)
 	}
 }
 
@@ -401,7 +446,7 @@ func TestExecWaitSeesExitOnTheWatchEvent(t *testing.T) {
 	if err != nil || code != 3 {
 		t.Fatalf("Wait = %d, %v; want 3, nil", code, err)
 	}
-	if took > 2*time.Second {
+	if took >= execWaitPollInterval {
 		t.Errorf("Wait took %s, want the exit seen on the watch event (resync is %s)", took, podWatchLongResync)
 	}
 	if gets := len(podActions(cs, "get")) - getsBefore; gets > 4 {

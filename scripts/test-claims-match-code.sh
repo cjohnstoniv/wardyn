@@ -445,7 +445,7 @@ for f in ${rbacs}; do
   # one-line template directive, or one field written as a one-line flow list of double-quoted items.
   _odd="$(awk '/^rules:$/ { r = 1; next } r' "${WORK}/rbac-role" \
     | grep -vE '^[[:space:]]*#|^\{\{-? ?(if|else|end|with|range)[^}]*\}\}$' \
-    | sed -E 's/^[[:space:]]*\{\{[^}]*\}\}[[:space:]]*$/<a template action alone on its line>/; s/\{\{[^}]*\}\}//g' \
+    | sed -E 's/\{\{-? ?(if|else|end)( [^}]*)?\}\}//g; /^    resourceNames: /s/\{\{[^}]*\}\}//g' \
     | grep -vE '^(  - apiGroups|    (resources|resourceNames|verbs)): \[("[^"]*"|, )*\]$' || true)"
   [ -z "${_odd}" ] || fail "${rel}'s runs Role has a rule line outside the one shape R-02 reads (apiGroups first; one-line flow lists of double-quoted items): ${_odd} (R-02)"
   rules "${WORK}/rbac-role" > "${WORK}/rbac-rules"

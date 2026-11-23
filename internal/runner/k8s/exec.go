@@ -324,9 +324,21 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				return 0, fmt.Errorf("k8s: exec wait: get pod (%d consecutive errors): %w", errs, err)
 			}
 		}
+		if errs > 0 { // an error is retried on the 1 s budget execWaitMaxProbeErrors counts; a ring must not spend it faster
+			t := time.NewTimer(execWaitPollInterval)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return 0, fmt.Errorf("k8s: exec wait: %w", ctx.Err())
+			case <-t.C:
+			}
+			continue
+		}
 		resync := podWatchLongResync
-		if errs > 0 {
-			resync = execWaitPollInterval // an error is retried on the 1 s budget execWaitMaxProbeErrors counts
+		if d.cfg.AgentSandbox {
+			// With the agent-sandbox backend the verdict also rests on the Sandbox (agentPodReplaced), and a
+			// Sandbox change rings no pod bell.
+			resync = execWaitPollInterval
 		}
 		if err := b.sleep(ctx, execWaitPollInterval, resync); err != nil {
 			return 0, fmt.Errorf("k8s: exec wait: %w", err)
