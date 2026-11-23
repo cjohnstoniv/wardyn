@@ -82,7 +82,7 @@ func TestPutMemberTeamDrive_SuperOnlyAndAudited_PG(t *testing.T) {
 	if !item.Team || !item.MembersCanWrite || item.TeamUnitID == nil || *item.TeamUnitID != e.unit || item.TeamUnitName != "Platform" {
 		t.Errorf("answer = %+v, want the team row, writable by members, unit Platform", item)
 	}
-	if data := driveAuditData(t, e.h.audit, "drive.member.team"); data["members_can_write"] != true || data["was"] != false ||
+	if data := driveAuditData(t, e.h.audit, "drive.member.team.change"); data["members_can_write"] != true || data["was"] != false ||
 		data["owner"] != aliceSub || data["unit_id"] != e.unit.String() || data["drive_id"] != d.ID.String() {
 		t.Errorf("audit = %v", data)
 	}
