@@ -256,6 +256,8 @@ func (s *Server) Call(ctx context.Context, peer *runnerwire.Peer, id uint32, met
 		return nil, s.localMode(peer, args)
 	case runnerwire.MethodLocalAttachTeeAck:
 		return nil, s.localTeeAck(peer, args)
+	case runnerwire.MethodLocalWindow:
+		return s.localWindow(ctx, peer, id, args)
 	default:
 		return nil, fmt.Errorf("runnerio: unsupported method %q", method)
 	}
