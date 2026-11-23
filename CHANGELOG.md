@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
+- With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
