@@ -44,14 +44,15 @@ func newInput(x *xgb.Conn) *input {
 const (
 	keysymNumLock = 0xff7f
 	keysymKPFirst = 0xff80 // KP_Space
-	keysymKPLast  = 0xffbd // KP_9
+	keysymKPLast  = 0xffbd // KP_Equal
+	firstModSlot  = 3      // Mod1: X names the Num Lock modifier among Mod1 to Mod5
 	modifierSlots = 8      // Shift, Lock, Control, Mod1 to Mod5
 )
 
-// numLockMask is the state bit of the modifier whose keycodes (the modifier mapping's, perMod a slot)
-// include one that types Num_Lock.
+// numLockMask is the state bit of the modifier among Mod1 to Mod5 whose keycodes (the modifier mapping's,
+// perMod a slot) include one that types Num_Lock.
 func (in *input) numLockMask(mods []xproto.Keycode, perMod int) uint16 {
-	for slot := range modifierSlots {
+	for slot := firstModSlot; slot < modifierSlots; slot++ {
 		for j := range perMod {
 			k := slot*perMod + j
 			if k >= len(mods) || mods[k] == 0 {
@@ -81,9 +82,6 @@ func isKeypad(ks uint32) bool { return ks >= keysymKPFirst && ks <= keysymKPLast
 // rather than KP_Home), and Shift then gives the plain column, as X itself decides.
 func (in *input) keysym(kc xproto.Keycode, state uint16) uint32 {
 	plain, shifted := in.column(kc, 0), in.column(kc, 1)
-	if plain == 0 {
-		return 0
-	}
 	if shifted == 0 {
 		shifted = plain
 	}

@@ -20,8 +20,8 @@ const (
 	numLock  = 1 << 4 // Mod2, where testKeyboard's Num_Lock key sits
 )
 
-// testKeyboard is a keyboard mapping from keycode 8, two columns each: a, 1, the keypad's 7, Num_Lock and
-// b (no shifted column).
+// testKeyboard is a keyboard mapping from keycode 8, two columns each: a, 1, the keypad's 7, Num_Lock, b
+// (no shifted column), x (no plain column) and c with Num_Lock shifted.
 func testKeyboard(numLockBit uint16) *input {
 	return &input{min: 8, per: 2, numLock: numLockBit, down: map[xproto.Keycode]uint32{}, keysyms: []xproto.Keysym{
 		'a', 'A', // 8
@@ -29,6 +29,8 @@ func testKeyboard(numLockBit uint16) *input {
 		ksKPHome, ksKP7, // 10
 		keysymNumLock, 0, // 11
 		'b', 0, // 12
+		0, 'x', // 13: nothing in the plain column
+		'c', keysymNumLock, // 14: Num_Lock in the shifted column
 	}}
 }
 
@@ -50,7 +52,9 @@ func TestKeysym(t *testing.T) {
 		{"digit with Caps Lock and Shift", 0, 9, lockMask | shiftMask, '!'},
 		{"no shifted column", 0, 12, shiftMask, 'b'},
 		{"keycode below the table", 0, 7, 0, 0},
-		{"keycode past the table", 0, 13, 0, 0},
+		{"keycode past the table", 0, 15, 0, 0},
+		{"no plain column", 0, 13, 0, 0},
+		{"no plain column with Shift", 0, 13, shiftMask, 'x'},
 		{"keypad, Num Lock off", numLock, 10, 0, ksKPHome},
 		{"keypad, Num Lock on", numLock, 10, numLock, ksKP7},
 		{"keypad, Num Lock on with Shift", numLock, 10, numLock | shiftMask, ksKPHome},
@@ -78,6 +82,19 @@ func TestNumLockMask(t *testing.T) {
 	}
 	if got := in.numLockMask(make([]xproto.Keycode, 16), 2); got != 0 {
 		t.Errorf("no Num_Lock key: mask %#x, want 0", got)
+	}
+	// X names the Num Lock modifier among Mod1 to Mod5 only.
+	for slot, name := range []string{"Shift", "Lock", "Control"} {
+		below := make([]xproto.Keycode, 16)
+		below[slot*2] = 11
+		if got := in.numLockMask(below, 2); got != 0 {
+			t.Errorf("Num_Lock under %s: mask %#x, want 0", name, got)
+		}
+	}
+	col1 := make([]xproto.Keycode, 16)
+	col1[5*2] = 14 // Mod3's first keycode has Num_Lock in its shifted column
+	if got := in.numLockMask(col1, 2); got != 1<<5 {
+		t.Errorf("Num_Lock in column 1 under Mod3: mask %#x, want %#x", got, 1<<5)
 	}
 }
 
