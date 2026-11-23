@@ -225,8 +225,8 @@ func (f failingSweeps) SweepRunSecrets(context.Context) (int, error)         { r
 func (f failingSweeps) SweepExpiredCredentials(context.Context) (int, error) { return 0, f.err }
 func (f failingSweeps) RenewAWSSSOCredentials(context.Context) (int, error)  { return 0, f.err }
 func (f failingSweeps) Sweep(time.Duration) (int, error)                     { return 0, f.err }
-func (f failingSweeps) SweepTerminalSandboxesPage(context.Context, store.Page) (int, int, error) {
-	return 0, 0, f.err
+func (f failingSweeps) SweepTerminalSandboxesAfter(context.Context, store.RunCursor, int) (int, int, store.RunCursor, error) {
+	return 0, 0, store.RunCursor{}, f.err
 }
 
 // An erroring tick moves the attempt and never the success, for each sweep in
