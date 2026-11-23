@@ -910,7 +910,9 @@ func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, r
 		slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("schedule", sc.ID.String()),
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
-	if sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason) {
+	// A gone schedule has no row to advance, so its fire row cannot wait on the advance; only the sweep that got
+	// the fresh 201 reaches here, so two sweeps still write one row.
+	if reason == scheduleCancelGone || sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason) {
 		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt})
 	}
 	return scheduleTickNone

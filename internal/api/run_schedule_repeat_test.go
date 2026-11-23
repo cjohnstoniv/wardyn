@@ -549,8 +549,10 @@ func booking201(runID uuid.UUID, replayed bool, before func()) http.HandlerFunc 
 	}
 }
 
-// A fresh booking whose schedule is paused or unreadable once the 201 is in is cancelled with that cause, never
-// session_revoked, and the slot moves on recorded cancelled, so no later replay of its key is recorded booked.
+// A fresh booking whose schedule is paused, unreadable or gone once the 201 is in is cancelled with that cause, never
+// session_revoked, and writes one run.schedule.fire row naming it. A paused or unreadable slot moves on recorded
+// cancelled, so no later replay of its key is recorded booked; a gone one has no row to advance and still writes its
+// fire row.
 func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
 	t.Setenv(envScheduledRuns, "1")
 	for _, tc := range []struct {
@@ -561,13 +563,15 @@ func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
 			_, _ = st.PauseRunSchedule(context.Background(), id, schedulePausedByOwner, time.Now())
 		}},
 		{scheduleCancelUnread, func(st *fakeScheduleStore, _ uuid.UUID) { st.getErr = errors.New("fake: read failed") }},
+		{scheduleCancelGone, func(st *fakeScheduleStore, id uuid.UUID) { _, _ = st.DeleteRunSchedule(context.Background(), id) }},
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			now := time.Now()
 			st := newFakeScheduleStore()
 			sc := st.seed(now.Add(time.Minute), false)
 			runID := uuid.New()
-			sw, _ := testSweep(scheduleTestServer(st), st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
+			srv := scheduleTestServer(st)
+			sw, _ := testSweep(srv, st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
 			var cancelled []string
 			sw.cancel = func(_ context.Context, id uuid.UUID, reason string) error {
 				if id == runID {
@@ -580,6 +584,19 @@ func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
 			}
 			if len(cancelled) != 1 || cancelled[0] != tc.reason {
 				t.Errorf("cancel reasons = %v, want [%s]", cancelled, tc.reason)
+			}
+			fires := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				var data map[string]any
+				if ev.Action == "run.schedule.fire" && json.Unmarshal(ev.Data, &data) == nil && data["reason"] == tc.reason {
+					fires++
+				}
+			}
+			if fires != 1 {
+				t.Errorf("run.schedule.fire rows naming %s = %d, want 1", tc.reason, fires)
+			}
+			if tc.reason == scheduleCancelGone {
+				return
 			}
 			st.getErr = nil
 			got := st.row(t, sc.ID)
