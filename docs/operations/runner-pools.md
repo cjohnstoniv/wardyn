@@ -137,7 +137,7 @@ A launch waits, stored `QUEUED`, when its pool is running its Runs at once or wh
 
 ### Scheduled runs
 
-With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later. Repeating schedules are not built.
+With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can be scheduled to start once, later, or [repeat](#repeating-schedules).
 
 - `start_at` and `start_time_zone` on `POST /api/v1/runs` (`wardyn run --start-at 2026-10-21T02:00 --time-zone Europe/London`): a date and time in an IANA zone, or an RFC 3339 time.
 - It must be in the future and leave the run its wait before the 7-day cap: at most 6 days ahead for a background task, 6 days 23 hours for an interactive environment. Else `start_at_past`, or `start_at_too_far` naming the latest start; switched off, `scheduled_runs_off`.
@@ -148,6 +148,25 @@ With [`WARDYN_SCHEDULED_RUNS`](../ENV.md#wardyn_scheduled_runs) set, a run can b
 - Two cases end the run at the start instead: a renewal the provider did not answer (`model_provider_unavailable`), and a stored sign-in Wardyn knows is spent (`model_credential`). For the second, sign in again and book a new run.
 - Cancel it like any waiting run. Switching scheduled runs off also binds runs already booked: at its time such a run ends `FAILED` `scheduled_runs_off`.
 - A profile's [`deny_scheduled_runs`](../POLICIES.md#deny_scheduled_runs) refuses a start time with `scheduled_runs_denied`, and ends a booked run with it at its time.
+
+### Repeating schedules
+
+With `WARDYN_SCHEDULED_RUNS` set, a person signed in with single sign-on keeps up to 20 repeating schedules (`/api/v1/run-schedules`, [API](../sdk.md#repeating-schedules)), on the Runs board's Schedules page.
+
+- A schedule repeats daily, on weekdays (Monday to Friday) or weekly, at a local time in an IANA zone. A weekly one repeats on the weekday of its first start.
+- Each start is booked as one scheduled run 2 minutes ahead, and shows on the Runs board from then. It starts like any scheduled run, after the same checks.
+- A booking acts with the owner's stored groups, less any the latest sign-in dropped. A group gained since instead pauses the schedule.
+- A schedule pauses when its owner or an admin pauses it, or a refused booking does (`refused:<reason>`). It also pauses when its owner is deactivated or signed out everywhere (`identity_inactive`), has not signed in for 30 days (`owner_idle`), or gained a group since the last create or resume (`groups_changed`).
+- A schedule whose owner loses the group that allowed the run pauses before its next start.
+- Without SCIM, a group removed at the identity provider is seen at the owner's next sign-in, or else at the 30-day idle pause.
+- A group added at the identity provider is seen at the owner's next sign-in, which pauses the schedule until they resume it.
+- A deployment-wide session revoke pauses every schedule, and each owner resumes their own.
+- A resume runs the create's checks again as you and stores your session's groups, so sign in again before resuming a schedule paused because its groups changed.
+- Pausing or deleting a schedule leaves a start already booked in place; cancel it like any waiting run.
+- A start refused for a reason not about the owner, such as a full queue, is skipped, and the schedule stays active.
+- A start missed while no server ran is skipped, never started late.
+- One server books at most 50 schedules every 30 seconds, and a start it cannot book by its time is skipped and logged, never started late.
+- An API token, a service or a delegate cannot make or resume a schedule (`run_schedule_owner_unsupported`), and nor can an admin in the Admin view.
 
 ## Your own pools
 

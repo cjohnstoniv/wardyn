@@ -348,7 +348,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_HA` | bool | `false` | multi-replica mode (flag `-ha`): skip the single-instance lock so several wardynd replicas can serve one database; refused at boot unless the runner is the Kubernetes substrate. [Details](#wardyn_ha) |
 | `WARDYN_GOVERN_ADMIN_RUNS` | bool | (unset) | constrained-admin mode: govern every run an SSO admin or an admin-role personal API token launches, like a member's (flag `-govern-admin-runs`). **With OIDC unset the switch binds nobody**, and boot WARNs it (`warnGovernAdminRunsUnbound`, [`cmd/wardynd/boot_posture.go`](../cmd/wardynd/boot_posture.go)). [Details](#wardyn_govern_admin_runs) |
 | `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` | CSV | (unset) | the lanes left ungoverned under `WARDYN_GOVERN_ADMIN_RUNS`; the only value is `recording` (flag `-govern-admin-runs-exempt`). [Details](#wardyn_govern_admin_runs_exempt) |
-| `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
+| `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait), or repeat daily, on weekdays or weekly (`POST /run-schedules`); unset refuses both with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
 | `WARDYN_START_AFTER_READBACK` | enum | `off` | `on` starts a run's agent only after its proxy first confirms its policy; the run stays `STARTING` until then and fails if it does not confirm (flag `-start-after-readback`). [Details](#wardyn_start_after_readback) |
@@ -1793,7 +1793,10 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Lets a run be scheduled to start once, later: `start_at` and `start_time_zone` on `POST /runs` (`wardyn run --start-at`) ([Scheduled runs](operations/runner-pools.md#scheduled-runs)).
 - The start is at most 6 days ahead for a background task, 6 days 23 hours for an interactive one, so the run keeps its wait before the 7-day cap.
 - The run waits in its pool's queue and starts through the queue's own start, which checks its owner, profile, policy and doors again.
-- Unset (the default) refuses `start_at` with `422` `scheduled_runs_off`. Turning it off later also ends each run already booked at its start time, `FAILED` `scheduled_runs_off`.
+- It also lets a person signed in with single sign-on keep repeating schedules: daily, on weekdays or weekly at a local time (`POST /run-schedules`, [Repeating schedules](operations/runner-pools.md#repeating-schedules)). Each start is booked as one such run 2 minutes ahead.
+- A schedule whose owner has not signed in with single sign-on for 30 days pauses, `owner_idle`, until the owner resumes it.
+- A booked start waits for its owner's model sign-in as any scheduled run does (`owner_sign_in`).
+- Unset (the default) refuses `start_at` and a new or resumed schedule with `422` `scheduled_runs_off`, and books no start. Turning it off later also ends each run already booked at its start time, `FAILED` `scheduled_runs_off`.
 - A deployment with no runner wired places no runs, so `start_at` is refused there with `scheduled_runs_unavailable`.
 - A value that is not a bool exits 2 at boot.
 
