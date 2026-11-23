@@ -821,6 +821,7 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newMacWindowRig(t)
+			r.h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a re-check that can't read ends the window at once
 			w := r.mustOpen()
 			r.tick() // nothing changed: the window stays
 			time.Sleep(20 * time.Millisecond)
@@ -841,6 +842,76 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 				t.Errorf("close rows = %d, want one", got)
 			}
 		})
+	}
+}
+
+// A re-check that cannot read rides the budget: the window stays, and a later answer closes the window with one
+// rode_through row and no takeover.close.
+func TestMacWindowRecheck_RidesAnUnreadCheck(t *testing.T) {
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(500*time.Millisecond), 10*time.Millisecond
+	w := r.mustOpen()
+	r.rev.set(false, errors.New("conn closed by peer"))
+	r.tick()
+	time.Sleep(60 * time.Millisecond)
+	r.rev.set(false, nil)
+	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+	if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceWindow {
+		t.Fatalf("row %v, want rode_through on the window", data[0])
+	}
+	if len(r.rows("takeover.close")) != 0 || r.h.srv.macWindows.open(r.h.run.ID) != w {
+		t.Fatal("the window ended on a credential read that failed once")
+	}
+}
+
+// Past the budget the window ends as refused_on_recheck with the unread reason, the same rows as at budget 0.
+func TestMacWindowRecheck_BudgetEndsAsRefusedOnRecheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(r *macWindowRig)
+		by     string
+	}{
+		{"the credential can't be read", func(r *macWindowRig) { r.rev.set(false, errors.New("conn closed by peer")) }, uiDeniedReasonRevocationUnavailable},
+		{"the run can't be read", func(r *macWindowRig) { r.st.failRunRead(errors.New("conn closed by peer")) }, reasonRunUnreadable},
+		{"the site config can't be read", func(r *macWindowRig) {
+			on := true
+			r.st.setSite(types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on}}, errors.New("conn closed by peer"))
+		}, reasonRunUnreadable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMacWindowRig(t)
+			r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(50*time.Millisecond), 10*time.Millisecond
+			r.mustOpen()
+			tc.change(r)
+			r.tick()
+			c := r.closeRow()
+			if c["reason"] != macWindowRefusedRecheck || c["refused_by"] != tc.by {
+				t.Errorf("close = reason %v refused_by %v, want %q %q", c["reason"], c["refused_by"], macWindowRefusedRecheck, tc.by)
+			}
+			_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+			if data[0]["result"] != "ended" {
+				t.Errorf("row %v, want ended", data[0])
+			}
+		})
+	}
+}
+
+// A person revoked while a window is riding an unread credential check ends it with the revoke's reason, and the
+// window's one row is refused.
+func TestMacWindowRecheck_RefusalAfterUnreadWritesRefusedRow(t *testing.T) {
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
+	r.mustOpen()
+	r.rev.set(false, errors.New("conn closed by peer"))
+	r.tick()
+	time.Sleep(60 * time.Millisecond)
+	r.rev.set(true, nil)
+	if c := r.closeRow(); c["reason"] != macWindowRevoked {
+		t.Fatalf("close reason = %v, want %s", c["reason"], macWindowRevoked)
+	}
+	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+	if data[0]["result"] != "refused" || data[0]["surface"] != sessionSurfaceWindow {
+		t.Fatalf("row %v, want refused on the window", data[0])
 	}
 }
 

@@ -702,6 +702,40 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 	}
 }
 
+// uiDialRunFailStore fails the run read, as a database that stopped answering does.
+type uiDialRunFailStore struct{ *uiMemStore }
+
+func (uiDialRunFailStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("conn closed by peer")
+}
+
+// uiDial answers a run read that fails with 503 run_unreadable (the person retries), and a run the store no longer
+// has with 404 run_not_found.
+func TestUIDial_RunReadFailureIs503AndMissingRunIs404(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	now := time.Now()
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner,
+		Expires: now.Add(time.Hour).Unix(), IssuedAt: 1, AuthorizedAt: now.Unix()}
+	ctx := context.WithValue(context.Background(), uiSessionCtxKey{}, sess)
+	addr := h.run.ID.String() + ":" + fmt.Sprint(uiTestPort)
+	for _, tc := range []struct {
+		name   string
+		arm    func()
+		status int
+		reason string
+	}{
+		{"the run read fails", func() { h.srv.cfg.Store = uiDialRunFailStore{h.store} }, http.StatusServiceUnavailable, reasonRunUnreadable},
+		{"the run is gone", func() { h.srv.cfg.Store = h.store; h.store.dropRun(h.run.ID) }, http.StatusNotFound, reasonRunNotFound},
+	} {
+		tc.arm()
+		_, err := h.srv.uiDial(ctx, "tcp", addr)
+		var de *uiDialError
+		if !errors.As(err, &de) || de.status != tc.status || de.reason != tc.reason {
+			t.Errorf("%s: uiDial = %v, want %d %s", tc.name, err, tc.status, tc.reason)
+		}
+	}
+}
+
 // walledRun puts h's run under a profile that denies nothing yet, and returns what sets its limits.
 func walledRun(h *uiHarness) func(types.GovernanceLimits) {
 	unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
@@ -752,11 +786,11 @@ func TestUIGateway_ProfileEditEndsAnOpenSession(t *testing.T) {
 		now := h.clock.now().Unix()
 		sess := uiSession{Run: h.run.ID, App: uiDesktopAppName, Principal: h.owner, Role: oidc.RoleUser, Desktop: true,
 			IssuedAt: now, AuthorizedAt: now}
-		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != 0 {
+		if _, code, why, _ := h.srv.desktopRunCheck(context.Background(), sess); code != 0 {
 			t.Fatalf("checked under a profile that denies nothing: %d %s, want open", code, why)
 		}
 		set(types.GovernanceLimits{DenyInteractive: true})
-		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
+		if _, code, why, _ := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
 			t.Fatalf("checked under a profile that now denies interactive sessions: %d %s, want %d", code, why, desktopCloseNotAuthorized)
 		}
 		if !h.audit.hasDataValue("reason", governanceUnit) {

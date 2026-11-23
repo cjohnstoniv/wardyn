@@ -81,23 +81,38 @@ func setSSHKeepaliveEvery(d time.Duration) (prev time.Duration) {
 // frees the attach slots they hold. It returns when ctx ends.
 //
 // recheck, when set, runs first on every tick and returns why the connection may no longer stand ("" if
-// it may): an idle connection opens no channel, so without it a deleted key or a revoked session would
-// keep the connection, and its slots, until the client left. A reason for which sshReasonTransient is
-// true (a failed store read) does not close it: a store blip must not drop every idle connection at once.
-func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
+// it may) and whether that is a read that failed: an idle connection opens no channel, so without it a deleted
+// key or a revoked session would keep the connection, and its slots, until the client left. A reason that is a
+// failed store read does not close it at once: the connection rides the site's session budget
+// (session_budget.go), then closes; a key that is gone closes it at the next tick.
+func sshProbeConn(ctx context.Context, conn ssh.Conn, b *sessionBudget, recheck func() (reason string, unread bool)) {
 	every := sshKeepaliveEvery()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	defer b.leave()
 	for {
+		retry := b.retryC()
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		case <-retry:
+			// A retry asks the recheck alone: the tick's probe keeps its own clock.
+			reason, unread := recheck()
+			if ctx.Err() != nil {
+				return // the connection ended on its own meanwhile
+			}
+			if sshProbeEnds(conn, b, reason, unread) {
+				return
+			}
+			continue
 		}
 		if recheck != nil {
-			if reason := recheck(); reason != "" && !sshReasonTransient(reason) {
-				slog.Info("ssh gateway: closing an idle connection whose key is no longer authorized", slog.String("reason", reason))
-				_ = conn.Close()
+			reason, unread := recheck()
+			if ctx.Err() != nil {
+				return // the connection ended on its own meanwhile
+			}
+			if sshProbeEnds(conn, b, reason, unread) {
 				return
 			}
 		}
@@ -119,6 +134,21 @@ func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
 			return
 		}
 	}
+}
+
+// sshProbeEnds folds one recheck into the connection's budget and closes it when it must end: a key that is gone at
+// once, a read that failed once no recheck has answered for the session budget.
+func sshProbeEnds(conn ssh.Conn, b *sessionBudget, reason string, unread bool) bool {
+	v := b.step("key", reason != "", unread)
+	if !v.ends() {
+		return false
+	}
+	if v == budgetSpent {
+		b.end()
+	}
+	slog.Info("ssh gateway: closing a connection whose key is no longer authorized or could not be confirmed", slog.String("reason", reason))
+	_ = conn.Close()
+	return true
 }
 
 const (
@@ -637,9 +667,11 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	// closes the connection, so its doors end with it and the stop's wait (sshGoTracked) does not wait on the client.
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)); _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
+	b := s.newSessionBudget(connCtx, sessionWatchID{Run: runID, Actor: types.ActorHuman, Principal: principal, Surface: sessionSurfaceSSH})
 	sshGo(func() {
-		sshProbeConn(connCtx, sconn, func() string {
-			return sshSupportStrict(sconn.Permissions, s.sshCurrentKey(connCtx, sconn.Permissions))
+		sshProbeConn(connCtx, sconn, b, func() (string, bool) {
+			reason := s.sshCurrentKey(connCtx, sconn.Permissions)
+			return reason, sshRecheckUnread(sconn.Permissions, reason)
 		})
 	})
 
@@ -708,8 +740,13 @@ const (
 	sshReasonCutoffLookup = "SSH session cutoff lookup failed"
 )
 
+// The reason sshCurrentKey gives when the connection's run no longer exists, or its run_id
+// extension does not parse: an answer, not a failed read, so the connection closes at the next tick.
+const sshReasonRunGone = "SSH key's run no longer exists"
+
 // sshReasonTransient reports whether reason says a store read failed rather than that the key is gone.
-// A new channel is refused on either; the keepalive recheck closes an idle connection only on the latter.
+// A new channel is refused on either; the keepalive recheck closes a connection at once on the latter, and on
+// the former once the session budget runs out.
 func sshReasonTransient(reason string) bool {
 	switch reason {
 	case sshReasonKeyLookup, sshReasonRunLookup, sshReasonCutoffLookup:
@@ -754,9 +791,12 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		// from the run: an open connection must not outlive that.
 		runID, err := uuid.Parse(permissions.Extensions["run_id"])
 		if err != nil {
-			return sshReasonRunLookup
+			return sshReasonRunGone
 		}
 		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return sshReasonRunGone
+		}
 		if err != nil {
 			return sshReasonRunLookup
 		}

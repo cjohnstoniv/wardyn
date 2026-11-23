@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,8 +17,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -593,6 +596,7 @@ func TestDesktopStreamOnAnotherReplicaEndsAfterAClose(t *testing.T) {
 // is, and an open stream ends as one does. A Close that cannot be stored is not reported done.
 func TestDesktopClosedSetFailureRefuses(t *testing.T) {
 	h, dr := newDesktopHarness(t)
+	h.srv.sessionBudgets.test = ptr(time.Duration(0)) // an unread Closed set ends an open stream at its first check
 	h.srv.uiDesktopClosedEvery = 50 * time.Millisecond
 	fake := h.srv.cfg.Store.(*desktopClosedStore)
 	srv := httptest.NewServer(h.gateway)
@@ -610,8 +614,8 @@ func TestDesktopClosedSetFailureRefuses(t *testing.T) {
 	}
 	_, _, err := v.ws.Read(ctx)
 	var ce websocket.CloseError
-	if !errors.As(err, &ce) || ce.Code != desktopCloseSessionEnded {
-		t.Fatalf("the open stream with the Closed set unreadable = %v, want close %d", err, desktopCloseSessionEnded)
+	if !errors.As(err, &ce) || ce.Code != desktopCloseUnreachable || ce.Reason != desktopUnconfirmedMsg {
+		t.Fatalf("the open stream with the Closed set unreadable = %v, want close %d %q", err, desktopCloseUnreachable, desktopUnconfirmedMsg)
 	}
 
 	fake.fail(nil, errors.New("database unreachable"))
@@ -1035,5 +1039,108 @@ func TestDesktopWithControlIsToldAWindowOpened(t *testing.T) {
 			t.Fatalf("stream = %v, want close %d %q", err, desktopCloseWindowOpen, desktopWindowOpenMsg)
 		}
 		return
+	}
+}
+
+// desktopFlakyRunStore fails the run read while failRun is set, as a store blip would.
+type desktopFlakyRunStore struct {
+	*desktopClosedStore
+	failRun atomic.Bool
+}
+
+func (s *desktopFlakyRunStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	if s.failRun.Load() {
+		return types.AgentRun{}, errors.New("runs unavailable")
+	}
+	return s.desktopClosedStore.GetRun(ctx, id)
+}
+
+// desktopBudgetRig is a desktop harness whose stream rechecks every 20 ms, with the budget n and retry 10 ms.
+func desktopBudgetRig(t *testing.T, n time.Duration) (*uiHarness, *desktopFakeRunner, *desktopClosedStore, *desktopFlakyRunStore) {
+	t.Helper()
+	h, dr := newDesktopHarness(t)
+	fake := h.srv.cfg.Store.(*desktopClosedStore)
+	flaky := &desktopFlakyRunStore{desktopClosedStore: fake}
+	h.srv.cfg.Store = flaky
+	h.srv.sessionBudgets.test, h.srv.sessionBudgets.retry = ptr(n), 10*time.Millisecond
+	h.srv.uiDesktopClosedEvery, h.srv.uiDesktop.recheckEvery = 20*time.Millisecond, 20*time.Millisecond
+	return h, dr, fake, flaky
+}
+
+// An open stream rides a Closed set read and a run read that each fail once: it stays open, relays the display's
+// next frame, and writes one rode_through row naming both checks.
+func TestDesktopStream_RidesAnUnreadClosedSetAndRun(t *testing.T) {
+	h, dr, fake, flaky := desktopBudgetRig(t, 500*time.Millisecond)
+	release := make(chan struct{})
+	dr.after = func(b net.Conn) {
+		<-release
+		_, _ = b.Write(rfbClientFrame)
+		_, _ = io.Copy(io.Discard, b)
+	}
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+
+	fake.fail(errors.New("database unreachable"), nil)
+	flaky.failRun.Store(true)
+	time.Sleep(120 * time.Millisecond)
+	fake.fail(nil, nil)
+	flaky.failRun.Store(false)
+	_, data := wantUnconfirmedRows(t, h.audit, 1)
+	if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceDesktop || !slices.Equal(auditCheckNames(data[0]["checks"]), []string{"closed", "run"}) {
+		t.Fatalf("row %v, want rode_through on the desktop over [closed run]", data[0])
+	}
+	close(release)
+	if got := v.read(len(rfbClientFrame)); !bytes.Equal(got, rfbClientFrame) {
+		t.Fatalf("the viewer got %v after the window, want the display's frame", got)
+	}
+}
+
+// With reads that keep failing, the budget runs out: the stream closes 4004 with the unconfirmed words, which the
+// viewer retries, and one ended row is written.
+func TestDesktopStream_BudgetEndsWith4004(t *testing.T) {
+	h, dr, fake, _ := desktopBudgetRig(t, 50*time.Millisecond)
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+	fake.fail(errors.New("database unreachable"), nil)
+	_, _, err := v.ws.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != desktopCloseUnreachable || ce.Reason != desktopUnconfirmedMsg {
+		t.Fatalf("the stream with its reads failing past the budget = %v, want close %d %q", err, desktopCloseUnreachable, desktopUnconfirmedMsg)
+	}
+	_, data := wantUnconfirmedRows(t, h.audit, 1)
+	if data[0]["result"] != "ended" {
+		t.Fatalf("row %v, want ended", data[0])
+	}
+}
+
+// A run the store no longer has is an answer: the stream ends as an ended run at the next run check (4002), where
+// it closed 4004 before.
+func TestDesktopStream_MissingRunEndsAsRunEnded(t *testing.T) {
+	h, dr, _, _ := desktopBudgetRig(t, time.Hour)
+	srv := httptest.NewServer(h.gateway)
+	t.Cleanup(srv.Close)
+	c := desktopCookie(t, h.enterDesktop(h.ticket(h.run.ID, h.owner, oidc.RoleUser)))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	v := dialDesktop(t, ctx, h, srv.URL, c)
+	<-dr.dialled
+	v.handshake()
+	h.store.dropRun(h.run.ID)
+	_, _, err := v.ws.Read(ctx)
+	var ce websocket.CloseError
+	if !errors.As(err, &ce) || ce.Code != desktopCloseRunEnded {
+		t.Fatalf("the stream after its run was deleted = %v, want close %d", err, desktopCloseRunEnded)
 	}
 }

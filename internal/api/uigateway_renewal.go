@@ -321,7 +321,10 @@ func (s *Server) desktopIssuerCut(r *http.Request, w http.ResponseWriter, sess u
 	every := cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck)
 	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceDesktop))
 	cut.watch(ctx, checkStart.Add(every), every, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait), b, func(lctx context.Context) error {
-		if _, code, _ := s.desktopRunCheck(lctx, sess); code != 0 {
+		if _, code, _, unread := s.desktopRunCheck(lctx, sess); code != 0 {
+			if unread {
+				return unconfirmed(errRelayAuthorityEnded)
+			}
 			return errRelayAuthorityEnded
 		}
 		return nil

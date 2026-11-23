@@ -507,6 +507,7 @@ func TestSupportUI_WatchEndsRelayedStreams(t *testing.T) {
 			t.Run(kind+"/"+cut.name, func(t *testing.T) {
 				setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
 				rig := newSupportUIRig(t, "web_apps", "desktop")
+				rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // an unreadable grant ends the stream at its first check
 				app := map[string]string{"socket": "code", "novnc": "novnc", "events": "code"}[kind]
 				ended := rig.openStream(kind, rig.helperSession(app))
 				requireStreamOpen(t, ended)
@@ -524,6 +525,56 @@ func TestSupportUI_WatchEndsRelayedStreams(t *testing.T) {
 		requireStreamOpen(t, ended)
 		rig.store.dropRun(rig.run.ID)
 		_ = wantStreamEnded(t, ended)
+	})
+}
+
+// A helper's stream rides a grant read that fails for a while inside the budget, and a stream whose grant is then
+// found revoked ends with the revoke; past the budget a read that keeps failing ends it.
+func TestSupportUI_WatchRidesTheBudget(t *testing.T) {
+	t.Run("a grant read that fails once is ridden", func(t *testing.T) {
+		setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
+		rig := newSupportUIRig(t, "web_apps")
+		rig.srv.sessionBudgets.test, rig.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
+		ended := rig.openStream("events", rig.helperSession("code"))
+		requireStreamOpen(t, ended)
+		rig.grants.failOn("SupportGrantLive", errors.New("db down"))
+		time.Sleep(100 * time.Millisecond)
+		rig.grants.failOn("SupportGrantLive", nil)
+		time.Sleep(100 * time.Millisecond)
+		requireStreamOpen(t, ended)
+		_, data := wantUnconfirmedRows(t, rig.audit, 1)
+		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceUIApp {
+			t.Fatalf("row %v, want rode_through on ui_app", data[0])
+		}
+	})
+	t.Run("a revoke found after the ride ends the stream", func(t *testing.T) {
+		setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
+		rig := newSupportUIRig(t, "web_apps")
+		rig.srv.sessionBudgets.test, rig.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
+		ended := rig.openStream("events", rig.helperSession("code"))
+		requireStreamOpen(t, ended)
+		rig.grants.failOn("SupportGrantLive", errors.New("db down"))
+		time.Sleep(100 * time.Millisecond)
+		rig.grants.failOn("SupportGrantLive", nil)
+		rig.endGrant("revoked")
+		_ = wantStreamEnded(t, ended)
+		_, data := wantUnconfirmedRows(t, rig.audit, 1)
+		if data[0]["result"] != "refused" {
+			t.Fatalf("row %v, want refused", data[0])
+		}
+	})
+	t.Run("a grant read that keeps failing ends the stream past the budget", func(t *testing.T) {
+		setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
+		rig := newSupportUIRig(t, "web_apps")
+		rig.srv.sessionBudgets.test, rig.srv.sessionBudgets.retry = ptr(80*time.Millisecond), 10*time.Millisecond
+		ended := rig.openStream("events", rig.helperSession("code"))
+		requireStreamOpen(t, ended)
+		rig.grants.failOn("SupportGrantLive", errors.New("db down"))
+		_ = wantStreamEnded(t, ended)
+		_, data := wantUnconfirmedRows(t, rig.audit, 1)
+		if data[0]["result"] != "ended" {
+			t.Fatalf("row %v, want ended", data[0])
+		}
 	})
 }
 
@@ -634,12 +685,12 @@ func TestSupportUI_VMDesktopClosesThroughItsRecheck(t *testing.T) {
 			now := rig.clock.now().Unix()
 			sess := uiSession{Run: rig.run.ID, App: uiDesktopAppName, Principal: supportHelperSub, Role: oidc.RoleUser, Desktop: true,
 				IssuedAt: now, AuthorizedAt: now, SupportGrant: rig.grant.ID}
-			_, code, why := rig.srv.desktopRunCheck(context.Background(), sess)
+			_, code, why, _ := rig.srv.desktopRunCheck(context.Background(), sess)
 			if (tc.name == "the desktop door is not ticked") != (code == desktopCloseNotAuthorized) {
 				t.Fatalf("before the cut: %d %s", code, why)
 			}
 			tc.cut(rig)
-			if _, code, why = rig.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
+			if _, code, why, _ = rig.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
 				t.Fatalf("after the cut: %d %s, want %d", code, why, desktopCloseNotAuthorized)
 			}
 		})

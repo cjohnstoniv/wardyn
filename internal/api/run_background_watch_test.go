@@ -507,7 +507,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 	}
 	t.Run("while nothing changed it goes on", func(t *testing.T) {
 		h, _ := bgWatchHarness(t)
-		if _, code, why := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != 0 {
+		if _, code, why, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != 0 {
 			t.Fatalf("checked = %d %s, want open", code, why)
 		}
 	})
@@ -515,7 +515,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h, st := bgWatchHarness(t)
 			c.arm(h, st)
-			_, code, why := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h))
+			_, code, why, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h))
 			if code != desktopCloseWatchEnded || why != backgroundWatchEndedMsg {
 				t.Fatalf("checked = %d %q, want %d %q", code, why, desktopCloseWatchEnded, backgroundWatchEndedMsg)
 			}
@@ -525,7 +525,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 		h, _ := bgWatchHarness(t)
 		h.run.CreatedBy = "someone-else"
 		h.store.putRun(h.run)
-		if _, code, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
+		if _, code, _, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
 			t.Fatalf("checked = %d, want %d", code, desktopCloseWatchEnded)
 		}
 	})
@@ -533,7 +533,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 		h, _ := bgWatchHarness(t)
 		h.run.Experience = types.ExperienceInteractive
 		h.store.putRun(h.run)
-		if _, code, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
+		if _, code, _, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
 			t.Fatalf("checked = %d, want %d", code, desktopCloseWatchEnded)
 		}
 	})
@@ -541,7 +541,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 		h, _ := bgWatchHarness(t)
 		sess := bgWatchSession(h)
 		sess.ViewOnly = false
-		if _, code, _ := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
+		if _, code, _, _ := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
 			t.Fatalf("checked = %d, want %d", code, desktopCloseNotAuthorized)
 		}
 	})
@@ -552,7 +552,7 @@ func TestBgWatchRecheckEndsItWithItsOwnCode(t *testing.T) {
 		if rf := h.srv.backgroundWatchRefusal(context.Background(), h.run); rf == nil || rf.err == nil {
 			t.Fatalf("refusal = %+v, want a read failure that refuses", rf)
 		}
-		if _, code, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
+		if _, code, _, _ := h.srv.desktopRunCheck(context.Background(), bgWatchSession(h)); code != desktopCloseWatchEnded {
 			t.Fatalf("checked = %d, want %d", code, desktopCloseWatchEnded)
 		}
 	})
@@ -837,11 +837,12 @@ func TestBgWatchHungReadEndsAnOpenStream(t *testing.T) {
 		{"a watch, the run", "run", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
 		{"a watch, the site config", "site", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
 		{"a watch, the Closed set", "closed", bgWatchRig, desktopCloseWatchEnded, backgroundWatchEndedMsg},
-		{"an interactive session, the run", "run", bgWatchInteractiveRig, desktopCloseUnreachable, "run not found"},
-		{"an interactive session, the Closed set", "closed", bgWatchInteractiveRig, desktopCloseSessionEnded, "this desktop session ended"},
+		{"an interactive session, the run", "run", bgWatchInteractiveRig, desktopCloseUnreachable, desktopUnconfirmedMsg},
+		{"an interactive session, the Closed set", "closed", bgWatchInteractiveRig, desktopCloseUnreachable, desktopUnconfirmedMsg},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := c.rig(t)
+			r.h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a read that hangs ends the stream at its first check
 			hung := &bgWatchHungStore{desktopSiteStore: r.h.srv.cfg.Store.(*desktopSiteStore)}
 			r.h.srv.cfg.Store = hung
 			r.h.srv.uiDesktop.recheckWait = 50 * time.Millisecond
@@ -870,6 +871,46 @@ func TestBgWatchHungReadEndsAnOpenStream(t *testing.T) {
 			// The display's own end closes with desktopCloseUnreachable and other words, so the words say it lived.
 			if !errors.As(err, &ce) || ce.Code != c.wantCode || ce.Reason != c.wantWhy {
 				t.Fatalf("the open stream with a hung %s read = %v, want close %d %q", c.read, err, c.wantCode, c.wantWhy)
+			}
+		})
+	}
+}
+
+// A watch rides a run read that hangs once, and past the session budget closes with its own code and words.
+func TestBgWatchUnreadRidesThenEndsWithItsOwnCode(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		rides  bool
+	}{{"an hour's budget", time.Hour, true}, {"a short budget", 100 * time.Millisecond, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := bgWatchRig(t)
+			r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(tc.budget), 10*time.Millisecond
+			hung := &bgWatchHungStore{desktopSiteStore: r.h.srv.cfg.Store.(*desktopSiteStore)}
+			r.h.srv.cfg.Store = hung
+			r.h.srv.uiDesktop.recheckWait = 30 * time.Millisecond
+			r.h.srv.uiDesktop.recheckEvery, r.h.srv.uiDesktopClosedEvery = 10*time.Millisecond, time.Hour
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			v, d := r.open(ctx, t)
+			if got := v.read(len(rfbClientFrame)); !bytes.Equal(got, rfbClientFrame) {
+				t.Fatalf("the client got %v, want the display's frame", got)
+			}
+			hung.armed.Store("run")
+			if tc.rides {
+				time.Sleep(150 * time.Millisecond)
+				hung.armed.Store("")
+				select {
+				case <-d.ended:
+					t.Fatal("a watch that rode one unread run read was ended")
+				case <-time.After(200 * time.Millisecond):
+				}
+				return
+			}
+			_, _, err := v.ws.Read(ctx)
+			var ce websocket.CloseError
+			if !errors.As(err, &ce) || ce.Code != desktopCloseWatchEnded || ce.Reason != backgroundWatchEndedMsg {
+				t.Fatalf("the watch past the budget = %v, want close %d %q", err, desktopCloseWatchEnded, backgroundWatchEndedMsg)
 			}
 		})
 	}
