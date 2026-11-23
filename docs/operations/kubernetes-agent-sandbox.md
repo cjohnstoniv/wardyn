@@ -103,7 +103,7 @@
 | 1 | The controller becomes a trusted actor. Its ClusterRole can create, delete, patch and watch pods, services and PVCs in every namespace. | It can create any pod, with any ServiceAccount. Pod Security Admission still applies. | Trust it, or leave this off. Install the core controller only. |
 | 2 | wardynd gains `patch` on `pods` in the runs namespace, to remove the gate. | Small. wardynd already creates and deletes pods and NetworkPolicies there. | The patch carries the pod's UID and resourceVersion. |
 | 3 | A second way to take a pod out of its NetworkPolicy: edit the Sandbox's template labels. The controller copies label edits onto the live pod. | The same power as `patch` on pods, but a different verb on a different resource. An existing RBAC review may not cover it. | Nobody else may write `sandboxes` in the runs namespace. Keep the admission policies on. |
-| 4 | With keep on, wardynd gains `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `delete`, `deletecollection` on `endpointslices.discovery.k8s.io` in the runs namespace. | The chart's admission policy holds what wardynd creates or changes to ClusterIP Services with no selector or external IPs, named for a run, and to EndpointSlices of those Services. It does not limit deletes: wardynd can delete any Service or EndpointSlice in the runs namespace. | Keep the admission policies on. Keep other Services out of the runs namespace. |
+| 4 | wardynd holds `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `deletecollection` on `endpointslices.discovery.k8s.io` in the runs namespace on every Kubernetes install, because every run reaches its proxy through its own Service. | The chart's two admission policies hold creates, updates and deletes to a run's own selector-less ClusterIP Service, named for the run, and its EndpointSlices. | Keep the admission policies on. Keep other Services out of the runs namespace. |
 
 - Widening 1 in plain words: a pod that runs outside any NetworkPolicy is not confined. The controller can make one.
 - Wardyn's own verbs on Sandboxes are create, get, list and delete. It holds no update, patch, watch or deletecollection on them.
@@ -166,7 +166,7 @@
 
 | Step | What happens |
 | --- | --- |
-| A run that can be kept starts | It is interactive, with its work folder on a kept drive. It gets a Service with no selector and an EndpointSlice that points at its proxy pod, and its agent reaches the proxy at the Service's address. |
+| A run that can be kept starts | It is interactive, with its work folder on a kept drive. Every run gets a Service with no selector and an EndpointSlice that points at its proxy pod, and its agent reaches the proxy at the Service's address; a run that can be kept also has its agent owned by that Service. |
 | Its time runs out | If its agent is `claude-code` or `codex-cli`, Wardyn stops the proxy, then deletes the agent pod. The controller makes it again behind the gate, with no node and no compute. The work folder and the run's Secret stay. A run of any other agent ends as with keep off, and its `run.ended` audit row says why. |
 | Extend, then revive | A new proxy pod with a fresh run token and the current limits, then the same check before start on the held pod, then the gate comes off. The task is not run again. |
 | Restart with current limits, on a live run that can be kept | A new proxy pod. The agent keeps running and reaches it at the same address. |
@@ -182,6 +182,7 @@
 - Revive checks the held pod against its `Sandbox`'s stored template. It refuses a `Sandbox` whose spec was edited, and one deleted and made again under the same name: Wardyn records the UID of the `Sandbox` it made on the run's EndpointSlice and checks it at each end, status read and revive. Anyone who can both create `sandboxes` and write `endpointslices` in the runs namespace can defeat that record, so keep those rights to wardynd.
 - The pool's keep chip and the ending-soon notice say files are kept on every interactive run of such an install. Only runs with a kept work folder and a `claude-code` or `codex-cli` agent are kept.
 - An EndpointSlice pointed anywhere else does not reach the agent. Its NetworkPolicy allows only its own proxy pod, matched after Service translation; Wardyn's conformance suite checks this on Calico.
+- A run's agent pod starts moments after its NetworkPolicy is made. That the policy holds from the pod's first packet is the CNI's property: an opt-in conformance check (`WARDYN_TEST_K8S_FIRST_PACKET=1`) measured it on Calico; check it on any other CNI before relying on it.
 - Pause in place, which freezes a running run with its memory, is Docker-only. Kubernetes has no safe way to freeze a pod without a privileged program on every node.
 
 ## Switching it off with live runs
@@ -192,9 +193,9 @@
 3. Or delete the survivors: `kubectl delete sandboxes -l wardyn.managed=true`.
 
 - A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the controller makes the replacement from the template, which carries the gate, so it stays held and never starts.
-- Switching off also removes the two admission policies with the chart. After that, a replacement stays held only because the controller copies the template; no policy checks it.
+- The two admission policies stay: they render whenever `k8s.enabled`. After switching off, a replacement stays held only because the controller copies the template.
 
-- Turning keep off tears kept runs down at the next lease pass, about a minute later. A run started with keep on that is still running keeps using its Service, and the Service owns its agent: deleting the Service ends that run. Once those runs have ended, their Services are left and route nowhere. Delete them then with `kubectl delete services -l wardyn.managed=true,wardyn.component=proxy` in the runs namespace; each Service's EndpointSlice goes with it.
+- Turning keep off tears kept runs down at the next lease pass, about a minute later. A run started with keep on that is still running keeps using its Service, and the Service owns its agent: deleting the Service ends that run. Teardown deletes each run's Service whether keep is on or off. Services left by a run of an older release route nowhere; delete them with `kubectl delete services -l wardyn.managed=true,wardyn.component=proxy` in the runs namespace once no run of that release is live.
 
 - Stop and kill delete the Sandbox before the pods, so the controller does not recreate the agent pod. A failed Sandbox delete returns an error and keeps the NetworkPolicies. The orphan sweep also lists Sandboxes.
 

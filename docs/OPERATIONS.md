@@ -3345,7 +3345,7 @@ kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Event
 - It then asserts that the console says the start is SLOW, and never that Wardyn cannot read the sandbox, with the pane's own 2-second poll answering 200 throughout.
 - That is the live twin of the Go characterization test, and it is the datum that tells an operator whether an "unreadable" they saw was estate-side.
 - The 65 seconds are not arbitrary and neither is what they hold up.
-- A sandbox creates its PROXY pod first and waits for that pod's IP before the agent pod exists at all, so under a taint it is the proxy pod that sits `Pending`.
+- On the server's cluster a sandbox creates its proxy and agent pods together, and the proxy's wait reports first, so under a taint the console reads the proxy pod as `Pending`.
 - Since 0.8.6 an unschedulable pod waits under `WARDYN_SANDBOX_CAPACITY_WAIT` instead of failing at 90 seconds, so the run survives the hold.
 - The hold is five seconds past the 60 at which the slow-start sentence appears, and the taint comes off the moment the assertion is made.
 - A walk that is killed mid-case would leave the node unschedulable, so the walk script clears that taint before its own restarts and again on exit.

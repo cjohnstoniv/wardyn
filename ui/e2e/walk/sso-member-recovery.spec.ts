@@ -717,13 +717,12 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   // The live twin of the Go characterization test, and the datum that tells an
   // operator whether an UNREADABLE they saw was estate-side.
   //
-  // THE HOLD IS MANUFACTURED BY A NODE TAINT, and the pod it parks is the
-  // PROXY's, not the agent's. CreateSandbox creates `wardyn-proxy-<run id>`
-  // FIRST and waits for its pod IP before the agent pod exists at all
-  // (internal/runner/k8s's sandbox creation, startwait.go), so under a
-  // taint nothing schedules, the proxy pod sits Pending and `wardyn-agent-<id>`
-  // is never created. An earlier draft of this case watched for the AGENT pod
-  // and would have polled a name that cannot exist.
+  // THE HOLD IS MANUFACTURED BY A NODE TAINT, and the pod this case watches
+  // is the PROXY's. On the server's cluster CreateSandbox creates
+  // `wardyn-proxy-<run id>` and `wardyn-agent-<id>` together, then waits on the
+  // proxy pod (internal/runner/k8s's sandbox creation, startwait.go), so under
+  // a taint nothing schedules, both pods sit Pending, and the console's waiting
+  // reason is the proxy pod's.
   //
   // AN UNSCHEDULABLE TAINT NOW WAITS under WARDYN_SANDBOX_CAPACITY_WAIT
   // (internal/runner/start_deadlines.go) instead of failing at 90 s, so the run

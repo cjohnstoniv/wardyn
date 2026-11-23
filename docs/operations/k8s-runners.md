@@ -146,7 +146,7 @@
 | Object | Rule |
 |---|---|
 | Deployment | One replica, `Recreate`. Never raise the replicas: `serve.lock` keeps one writer |
-| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). `watch` on pods only, for the pod waits; no `services` |
+| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). `watch` on pods only, for the pod waits. No `services` or `endpointslices`: runner mode makes no per-run Service. |
 | RBAC, each workload namespace | `wardynworkloads` `get`, `list` and `watch`, and `wardynworkloads/status` `patch`. No Secret, nothing cluster-wide |
 | RBAC, runner namespace | `secrets: create, get, delete, deletecollection` |
 | RBAC, cluster | `runtimeclasses: get` and `nodes: list` only |

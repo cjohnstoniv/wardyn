@@ -855,7 +855,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_K8S_AGENT_SANDBOX_KEEP`
 
 - Experimental, off by default (`-tags k8s`). Needs `WARDYN_K8S_AGENT_SANDBOX`. Boot refuses it alone, under `wardyn-runnerd`, and when wardynd lacks a verb on `services` or `endpointslices.discovery.k8s.io` in a runs namespace.
-- A run that can be kept (interactive, with its work folder on a kept drive) gets a ClusterIP Service with no selector and an EndpointSlice Wardyn writes. Its agent's `wardyn-proxy` address and nameserver are the Service's, so a replaced proxy is reached without changing the agent pod.
+- Every run on the server's cluster reaches its proxy through its own ClusterIP Service with no selector and an EndpointSlice Wardyn writes. Its agent's `wardyn-proxy` address and nameserver are the Service's. DNS lookups sent before that EndpointSlice names the proxy are neither answered nor recorded as `run.dns.query`.
+- Keep makes a run that can be kept (interactive, with its work folder on a kept drive) own its agent by that Service, so a replaced proxy is reached without changing the agent pod.
 - Every other run is built as with the switch off.
 - Keep, revive and what turning keep on widens: [Kubernetes: the agent-sandbox backend](operations/kubernetes-agent-sandbox.md#keep-and-revive).
 ### `WARDYN_K8S_AGENT_SANDBOX_TEMPLATE`
@@ -2944,7 +2945,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CODEX_BIN_URL` 🔒 | string (URL) | (unset) | `scripts/stage-agent-binary.sh codex-cli` only, build-time: the native `codex` binary to stage for `CODEX_INSTALL=native`. Codex has no Wardyn-verified public download contract, so this one is staged-only and refuses to guess a URL. [Details](#wardyn_codex_bin_url) |
 | `WARDYN_IDLE_PID` | int (pid) | (unset = falls back to pid 1) | [`deploy/images/common/agent-run-lib.sh`](../deploy/images/common/agent-run-lib.sh)'s `start_wardyn_session`: **exported** to the boot pane so `boot_seed_wait_for_prep` can bound its wait on the exact `--idle` process. Handed over via `tmux set-environment` on the respawn path since the tmux server differs from the one that created the session |
 | `WARDYN_NOVNC_GEOMETRY` | string (`WxHxDEPTH`) | `1280x800x24` | the `novnc` image's X display geometry (`deploy/images/novnc/wardyn-ui-novnc`) |
-| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line; shell-only; no run sets it |
+| `WARDYN_PROXY_WAIT_SECS` | int | `10` | how many seconds an agent image's `agent-run` waits for `WARDYN_PROXY_URL` to accept a connection before it carries on with one stderr line. The Kubernetes server sets it to an interactive run's start budget, unless the run sets it |
 | `WARDYN_REC_WRAP` | internal (bash array) | empty | `boot_seed_rec_wrap` (`agent-run-lib.sh`) fills this **same-process, never-exported** array with the `wardyn-rec` prefix a boot-seed pane's argv runs under when `WARDYN_RECORDING=1`; both agent images' `--boot-seed` branches share the one function rather than each keeping their own copy |
 | `WARDYN_SESSION_START` | internal (shell var) | empty | `start_wardyn_session`'s own return signal (`created` / `respawned`), read back by the same `agent-run` invocation that set it — never exported, never read by another process |
 | `WARDYN_SSH_AGENT_DIR` | internal (path) | per `ssh` | `wardyn-git-helper ssh-exec` ([`cmd/wardyn-git-helper/sshagent.go`](../cmd/wardyn-git-helper/sshagent.go)) sets it for its `ssh`: the `0700` directory of the agent sockets `agent-run`'s ssh config names; removed when `ssh` exits |
