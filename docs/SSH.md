@@ -318,7 +318,7 @@ ssh -L 8080:127.0.0.1:3000 <run-id>@<advertise-host> -p <port>
   not reached this way.
 - Bind `127.0.0.1` (or `0.0.0.0`) for anything you want
   to reach over `-L`.
-- With the gateway off and `WARDYN_ATTACH_FORWARD` on, `wardyn run forward` reaches the same relay with the same bounds through the organisation, one attach ticket per connection.
+- With the gateway off and `WARDYN_ATTACH_FORWARD` on, `wardyn run forward` reaches the same relay through the organisation, one attach ticket per connection. It keeps the gateway's bounds, so a service identity's run takes no forward, its sponsor's included.
 
 ## 5. VS Code Remote-SSH
 

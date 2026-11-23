@@ -127,6 +127,9 @@ func startForward(t *testing.T, f *forwardOrgFixture, args ...string) (stderr *s
 func startForwardFree(t *testing.T, f *forwardOrgFixture, remote string) (port int, stderr *syncBuffer, cancel context.CancelFunc, done <-chan error) {
 	t.Helper()
 	for try := 1; ; try++ {
+		// The pre-check and the mint of the failed try must not count toward the one that listens.
+		f.mints.Store(0)
+		f.checks.Store(0)
 		port = freePort(t)
 		stderr, cancel, done = startForward(t, f, strconv.Itoa(port)+":"+remote)
 		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(stderr.String(), "(Ctrl-C to stop)") && len(done) == 0 && time.Now().Before(deadline); {

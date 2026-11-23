@@ -5,7 +5,8 @@ package api
 
 // Port forwarding over the organisation: GET /api/v1/runs/{id}/attach/forward?port=<n>&ticket=<t>.
 //
-// The route reaches no further than an SSH -L channel does: one TCP connection to a port on the sandbox's own
+// The route reaches no further than an SSH -L channel does, and takes no run the gateway refuses (a service
+// identity's run, its sponsor's ticket included): one TCP connection to a port on the sandbox's own
 // loopback, through the same in-sandbox relay (sshRelayArgv) and the same bridge (sshBridgeExecSession), under the
 // same per-run channel cap, WARDYN_SSH_CHANNELS, data_out rule and deny_interactive door. It is for a deployment
 // whose SSH gateway is off, and it is off itself unless the operator sets WARDYN_ATTACH_FORWARD. Every forward
@@ -97,6 +98,13 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	}
 	run, ok := s.getRunOr404(w, r, id)
 	if !ok {
+		return
+	}
+	// A service identity's run takes no forward at all, its sponsor's ticket included: the SSH gateway refuses it
+	// the same way (sponsor attach is the terminal and UI app only).
+	if _, isService := serviceOfRun(run); isService {
+		s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
+		s.refuseRunOwnerOnly(w, r, run)
 		return
 	}
 	// A helper's, a portal's and an issuer portal's ticket do not open a forward; refuseAttachEntry refuses an

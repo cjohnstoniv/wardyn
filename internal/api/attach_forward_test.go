@@ -642,6 +642,27 @@ func (fr *forwardRig) forwardAs(t *testing.T, ta ticketActor) *httptest.Response
 	return w
 }
 
+func TestAttachForward_ServiceIdentityRunRefused(t *testing.T) {
+	fr := newForwardRig(t, true, nil)
+	run := fr.addRun(types.ServicePrincipalPrefix+"bot", nil)
+	for name, principal := range map[string]string{"sponsor": forwardOwner, "service": types.ServicePrincipalPrefix + "bot"} {
+		t.Run(name, func(t *testing.T) {
+			ta := ticketActor{actorType: types.ActorHuman, principal: principal, role: oidc.RoleUser, authorizedAt: time.Now()}
+			rc := chi.NewRouteContext()
+			rc.URLParams.Add("id", run.String())
+			req := httptest.NewRequest(http.MethodGet, forwardPath(run)+"?port=3000", nil)
+			req = req.WithContext(withTicketActor(context.WithValue(req.Context(), chi.RouteCtxKey, rc), ta))
+			w := httptest.NewRecorder()
+			fr.srv.handleAttachForward(w, req)
+			fr.wantReason(t, w, http.StatusForbidden, runOwnerOnlyReason)
+		})
+	}
+	fr.wantNoExec(t)
+	if rows := fr.forwardRows(); len(rows) != 0 {
+		t.Errorf("run.port.forward rows = %d, want 0", len(rows))
+	}
+}
+
 func TestAttachForward_TicketKinds(t *testing.T) {
 	fr := newForwardRig(t, true, nil)
 	base := ticketActor{actorType: types.ActorHuman, principal: forwardOwner, role: oidc.RoleUser, authorizedAt: time.Now()}

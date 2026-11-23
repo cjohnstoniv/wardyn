@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds, is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
 
 ### Changed
 

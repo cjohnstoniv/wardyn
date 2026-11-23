@@ -343,6 +343,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 
 - The route is `GET /api/v1/runs/{id}/attach/forward?port=<n>&ticket=<t>`, a WebSocket of binary frames carrying one TCP connection to the sandbox's `127.0.0.1:<n>`.
 - Every forward needs a ticket from `POST /runs/{id}/attach/ticket`, one per connection. A request with no ticket answers `400 run_forward_ticket_required`.
+- A service identity's run takes no forward from anyone, its sponsor included, as the SSH gateway takes no entry to it: `403 run_owner_only`.
 - The ticket mint counts the run's terminal sessions, so a run with 8 open terminals refuses the mint with `503 attach_session_cap_reached` even though a forward holds no terminal.
 - A helper's, a portal's or an issuer portal's ticket is refused with `403 attach_ticket_not_your_run`.
 - The route is off unless the operator turns it on (`WARDYN_ATTACH_FORWARD`); `WARDYN_SSH_CHANNELS` without `forward` also turns it off (`409 run_forward_off`).
