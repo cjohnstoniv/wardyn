@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
+
+### Before you upgrade
+
+- If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

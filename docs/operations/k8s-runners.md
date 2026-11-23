@@ -146,7 +146,7 @@
 | Object | Rule |
 |---|---|
 | Deployment | One replica, `Recreate`. Never raise the replicas: `serve.lock` keeps one writer |
-| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). No `services`, no `watch` |
+| RBAC, each runs namespace | The control-plane chart's sandbox Role plus `pods: patch` (for the stop-proof finalizer). `watch` on pods only, for the pod waits; no `services` |
 | RBAC, each workload namespace | `wardynworkloads` `get`, `list` and `watch`, and `wardynworkloads/status` `patch`. No Secret, nothing cluster-wide |
 | RBAC, runner namespace | `secrets: create, get, delete, deletecollection` |
 | RBAC, cluster | `runtimeclasses: get` and `nodes: list` only |
@@ -166,7 +166,7 @@
 1. Helm applies RBAC kinds before the Deployment on install and upgrade, so a default install needs nothing.
 2. With `rbac.create=false`, apply the ClusterRole, ClusterRoleBinding and every Role and RoleBinding before the image starts, and again before any upgrade that adds a verb. The Roles are one per runs namespace, one in runnerd's own namespace and one per `workloads.namespaces` entry.
 3. Render what the chart would apply: `helm template wardyn-runner deploy/helm/wardyn-runnerd -n wardyn-runner -f values.yaml --set rbac.create=true --show-only templates/rbac.yaml`.
-4. Runnerd's boot access review refuses to start while any verb is missing, and names the missing verbs.
+4. Runnerd's boot access review refuses to start while any verb is missing, and names the missing verbs. `pods: watch` is not asked: without it the pod waits poll.
 
 ## Mixed architectures
 
