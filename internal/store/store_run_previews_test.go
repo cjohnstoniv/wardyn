@@ -320,11 +320,11 @@ func TestStoreRunPreviewsRevokeAbove(t *testing.T) {
 	}
 }
 
-// TestStoreRunPreviewsFirstRowClashRetried pins UpsertRunPreview's one retry: a write that inserts a port's first
+// TestPG_StoreRunPreviews_FirstRowClashRetried pins UpsertRunPreview's one retry: a write that inserts a port's first
 // row while another write's first row on that port is still uncommitted waits on run_previews_one_live, gets its
 // violation once the other commits, and runs once more, which sees the committed row. The same visibility keeps
 // that row, so the caller gets it back, not the violation.
-func TestStoreRunPreviewsFirstRowClashRetried(t *testing.T) {
+func TestPG_StoreRunPreviews_FirstRowClashRetried(t *testing.T) {
 	f := newPreviewFixture(t)
 	r := f.run()
 	tx, err := f.pool.Begin(f.ctx)
