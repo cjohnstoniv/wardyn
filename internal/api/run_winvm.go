@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -27,6 +28,7 @@ const (
 	windowsVMsOffMsg          = "Windows VM sandboxes are turned off. An admin turns them on with features.windows_vm.enabled in the site config."
 	windowsImageRequiredMsg   = "A Windows VM run starts from a registered Windows image: name it in windows_image."
 	windowsNotAPersonMsg      = "A Windows VM run is started by a person signed in to Wardyn, not by a service identity, a schedule or a token."
+	windowsTokenMsg           = "A Windows VM run is started by a person signed in interactively, not with an API token, the CLI's sign-in token or a token delegated to a portal."
 	windowsRecordingMsg       = "Your organisation or this pool requires recording, and a Windows VM run cannot be recorded."
 	windowsRecordedLevelMsg   = "This run would be recorded at %s, and a Windows VM run cannot be recorded. Choose recording off in the run's policy."
 	windowsNotOrgRunnerMsg    = "A Windows VM runs only on an organisation runner that offers Windows VM sandboxes, never on the deployment's own executor or a runner a person registered."
@@ -97,6 +99,9 @@ func (s *Server) windowsImageDecision(r *http.Request, req createRunRequest, spe
 	if s.cfg.LocalMode || at != types.ActorHuman || principal == "" || oidcHumanFromContext(ctx) == "" || service ||
 		req.Service != nil || req.StartAt != "" {
 		return store.WindowsLaunch{}, runError(http.StatusForbidden, reasonWindowsVMFeatureRefused, windowsNotAPersonMsg)
+	}
+	if _, delegated := audit.DelegationFrom(ctx); delegated || apiTokenIDFromContext(ctx) != uuid.Nil {
+		return store.WindowsLaunch{}, runError(http.StatusForbidden, reasonWindowsVMFeatureRefused, windowsTokenMsg)
 	}
 	if rf := windowsShapeRefusal(req, spec); rf != nil {
 		return store.WindowsLaunch{}, rf
