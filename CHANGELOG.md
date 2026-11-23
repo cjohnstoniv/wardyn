@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `org_sites`, `org_site_pools` and `org_site_drives` to every role that was granted `DELETE` on `runner_pools`, other than that table's owner.
 
 ### Before you upgrade
 

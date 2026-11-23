@@ -28,7 +28,7 @@ export type RemoteRunnerPeoplePools = "off" | "everyone" | "listed";
 export type RunnerPoolState = "active" | "disabled" | "deleted";
 
 /** How a run's pool was chosen. */
-export type RunnerPoolSelection = "explicit" | "personal_default" | "organisation_default";
+export type RunnerPoolSelection = "explicit" | "personal_default" | "organisation_default" | "site_default";
 
 /** Whether a permitted pool can take a run right now; `unknown` is never read as available. */
 export type RunnerPoolAvailability = "available" | "unavailable" | "unknown";
@@ -195,6 +195,8 @@ export interface ResolvedRunnerPool {
   scope: RunnerPoolScope;
   revision: number;
   selection: RunnerPoolSelection;
+  site_id?: string;
+  site_name?: string;
 }
 
 /** Go: types.RunnerPoolSubject (a role is a user_type; an identity provider's roles arrive as groups; a unit row names a unit by id and admits runs in it or below it). */

@@ -124,7 +124,7 @@ describe("runner pool carriers", () => {
     expect(subjectTypes.size).toBe(4);
     expect(union("RunnerPoolScope").size).toBe(2);
     expect(union("RunnerPoolState").size).toBe(3);
-    expect(union("RunnerPoolSelection").size).toBe(3);
+    expect(union("RunnerPoolSelection").size).toBe(4);
     expect(union("RunnerPoolAvailability").size).toBe(3);
     expect(union("MainDriveEnforcement")).toEqual(consts(clientGo, '\\bMainDrive\\w+\\s+MainDriveEnforcement = "([a-z_]+)"'));
     expect(union("MainDriveCoverage")).toEqual(consts(clientGo, '\\bMainDriveCoverage\\w+\\s+MainDriveCoverage = "([a-z_]+)"'));

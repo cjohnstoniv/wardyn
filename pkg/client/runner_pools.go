@@ -68,6 +68,7 @@ const (
 	RunnerPoolSelectedExplicit = types.RunnerPoolSelectedExplicit
 	RunnerPoolSelectedPersonal = types.RunnerPoolSelectedPersonal
 	RunnerPoolSelectedOrg      = types.RunnerPoolSelectedOrg
+	RunnerPoolSelectedSite     = types.RunnerPoolSelectedSite
 
 	RunnerPoolRunBackground  = types.RunnerPoolRunBackground
 	RunnerPoolRunInteractive = types.RunnerPoolRunInteractive
