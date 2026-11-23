@@ -107,7 +107,7 @@ func ValidateOrgSiteStorage(label, rawURL string) error {
 		return fmt.Errorf("a storage link is one printable line of at most %d characters", OrgSiteStorageURLMax)
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Opaque != "" || u.Host == "" {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Opaque != "" || u.Hostname() == "" {
 		return errors.New("a storage link is an http or https URL, such as https://files.example.com/share")
 	}
 	if u.User != nil {

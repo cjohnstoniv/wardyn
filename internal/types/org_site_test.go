@@ -37,6 +37,8 @@ func TestOrgSiteStorageURLRefusesUserinfoAndQuery(t *testing.T) {
 		"https://files.example.com/share#token=abc",
 		"https://files.example.com/share#",
 		"https:///share",
+		"http://:8080/x",
+		"https://[]:443/share",
 		"smb://nas.office.example/designs",
 		"s3://designs-bucket/prefix",
 		"file:///mnt/designs",
