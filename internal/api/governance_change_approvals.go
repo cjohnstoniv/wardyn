@@ -41,11 +41,11 @@ const (
 
 // The reach of a change's remaining approvals.
 const (
-	reachReachable   = "ok"
-	reachCantReach   = "cant_reach"
-	reachCantConfirm = "cant_confirm"
-	reasonCount      = "count"
-	reasonSecurity   = "security"
+	reachReachable      = "ok"
+	reachCantReach      = "cant_reach"
+	reachCantConfirm    = "cant_confirm"
+	cantReachByCount    = "count"
+	cantReachBySecurity = "security"
 )
 
 // What the caller of a change can do, in the read model's viewer.
@@ -866,9 +866,9 @@ func reachOf(blk *approvalsRead, kept []keptApproval, pool poolResult) (reach, w
 	case len(pool.Uncountable) > 0:
 		return reachCantConfirm, ""
 	case short:
-		return reachCantReach, reasonCount
+		return reachCantReach, cantReachByCount
 	}
-	return reachCantReach, reasonSecurity
+	return reachCantReach, cantReachBySecurity
 }
 
 // viewerOf is what the caller can do with the change, in the order the page reads it: the proposer, someone

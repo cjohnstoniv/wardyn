@@ -102,11 +102,11 @@ func TestReachOf(t *testing.T) {
 		reach, whyIs string
 	}{
 		{"enough", approvalsRead{StillNeeded: 1, RemainingEligible: 2}, nil, poolResult{Eligible: two}, reachReachable, ""},
-		{"too few", approvalsRead{StillNeeded: 2, RemainingEligible: 1}, nil, poolResult{Eligible: two[:1]}, reachCantReach, reasonCount},
+		{"too few", approvalsRead{StillNeeded: 2, RemainingEligible: 1}, nil, poolResult{Eligible: two[:1]}, reachCantReach, cantReachByCount},
 		{"too few, some uncountable", approvalsRead{StillNeeded: 2, RemainingEligible: 1}, nil,
 			poolResult{Eligible: two[:1], Uncountable: []poolSource{{Why: uncountableUnconfirmed, Count: 1}}}, reachCantConfirm, ""},
 		{"security wanted, none left", approvalsRead{RequireSecurity: true, StillNeeded: 1, RemainingEligible: 1}, nil,
-			poolResult{Eligible: two[:1]}, reachCantReach, reasonSecurity},
+			poolResult{Eligible: two[:1]}, reachCantReach, cantReachBySecurity},
 		{"security wanted, one counted", approvalsRead{RequireSecurity: true, StillNeeded: 1, RemainingEligible: 1},
 			[]keptApproval{{tier: tierSecurityAdmin}}, poolResult{Eligible: two[:1]}, reachReachable, ""},
 	} {
