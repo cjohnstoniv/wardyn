@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- Machine kinds by runner trust class (#2950): a super admin can deny a machine kind (container, Linux VM, macOS VM) on runners of one trust class (personal, company-managed, organisation cluster) with PUT /runners/settings. A new run is never placed on a denied pair; a pool places it on a class that admits it. A macOS VM still runs only on a company-managed Mac.
 - A macOS sandbox can require the Mac's MDM device certificate: set the MDM CA and its CRL URL in the runner settings; a missing, expired or revoked certificate, or one whose revocation cannot be checked, refuses the sandbox. Off until set. The macOS runner presents the Mac's MDM device certificate. Not yet tried on a real Mac. Migration `0400_runner_device_cert` adds the columns `device_cert` and `device_cert_reported_at` to `runners`. (#2975)
 
 ### Before you upgrade
