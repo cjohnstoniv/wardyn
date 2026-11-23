@@ -565,7 +565,7 @@ func (s *Server) inboundSessionFor(ctx context.Context, runID uuid.UUID, app str
 		SandboxRef: run.SandboxRef, Run: run.ID, App: declared.Name, Port: declared.Port,
 		Principal: v.Principal, Email: v.Email, Expires: now.Add(inboundResolveTTL).Unix(), IssuedAt: now.Unix(),
 		AuthorizedAt: v.CreatedAt.Unix(), AuthorizedNs: int64(v.CreatedAt.Nanosecond()), RevSeq: v.RevSeq,
-		Inbound: true, Caller: caller, tokenID: v.ID,
+		Inbound: true, Caller: caller, tokenID: v.ID, DesktopKind: declared.Kind == types.UIAppKindDesktop,
 	}
 	// The sponsor arm of the owner rule: a person calling their service identity's run.
 	if caller == "" && v.Principal != run.CreatedBy {

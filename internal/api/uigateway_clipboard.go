@@ -53,10 +53,65 @@ func (s *Server) runDesktopPolicy(ctx context.Context, runID uuid.UUID) ([]types
 	return envelope.UIApps, types.WithDataOut(envelope.Desktop, dataOut), dataOut.DataOut(), nil
 }
 
-// uiDesktopApp is whether app is a desktop the run's desktop rules govern: the noVNC image's
-// app, declared as "novnc" (docs/UI-SANDBOXES.md), and the person's sign-in display inside it
-// (desktopSigninApp). Every other app's sockets relay unfiltered.
-func uiDesktopApp(app string) bool { return app == "novnc" || app == desktopSigninApp }
+// uiDesktopApp is whether app, by name alone, is a desktop the run's desktop rules govern: the noVNC image's
+// app (types.UIAppDesktopName, docs/UI-SANDBOXES.md) and the person's sign-in display inside it
+// (desktopSigninApp). A declared app of kind desktop is one too, whatever its name; its session says so
+// (uiSession.DesktopKind). Every other app's sockets relay unfiltered.
+func uiDesktopApp(app string) bool { return app == types.UIAppDesktopName || app == desktopSigninApp }
+
+// desktopApp is uiDesktopApp for an open session: a desktop by name, or a declared app of kind desktop.
+func (sess uiSession) desktopApp() bool { return sess.DesktopKind || uiDesktopApp(sess.App) }
+
+// desktopSession is uiAppIsDesktopSession for an open session, a declared app of kind desktop included.
+func (sess uiSession) desktopSession() bool {
+	return sess.DesktopKind || uiAppIsDesktopSession(sess.App)
+}
+
+// supportDoor is uiSupportDoor for an open session, a declared app of kind desktop included.
+func (sess uiSession) supportDoor() supportDoor {
+	if sess.desktopSession() {
+		return supportDoorDesktop
+	}
+	return supportDoorWebApps
+}
+
+// newDeclaredUISession is newUISession for a declared app. One of kind desktop opens as a desktop's session
+// does: its ticket's renewal chain is dropped first, so the session ends with its portal grant
+// (ticketActor.sessionExpiry), and DesktopKind is set, so the filter, the recording and the desktop door bind it.
+func (s *Server) newDeclaredUISession(run types.AgentRun, ta ticketActor, declared types.UIApp) uiSession {
+	desktop := declared.Kind == types.UIAppKindDesktop
+	if desktop {
+		ta.renewChain = uuid.Nil
+	}
+	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	sess.DesktopKind = desktop
+	return sess
+}
+
+// refuseDesktopKindApp is uiEnterCommon's desktop doors for a declared app of kind desktop under a name
+// uiDesktopApp does not know, asked once the run's policy has named it: deny_interactive, with the doors'
+// super-admin exemption, and for a support helper the desktop door on top of the web_apps door
+// uiTicketMayEnter asked. A helper without it gets the refusal uiTicketMayEnter gives one without a door.
+// True when it has answered.
+func (s *Server) refuseDesktopKindApp(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor, declared types.UIApp, superAdmin bool) bool {
+	if declared.Kind != types.UIAppKindDesktop || uiDesktopApp(declared.Name) {
+		return false
+	}
+	rt := r.WithContext(withTicketActor(r.Context(), ta))
+	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, rt, run) {
+		return true
+	}
+	if ta.caller != "" || ta.support == uuid.Nil {
+		return false
+	}
+	if _, v := s.supportMayEnter(r.Context(), run, ta.principal, ta.support, supportDoorDesktop); v == supportOK {
+		return false
+	}
+	s.auditUI(&run.ID, types.ActorHuman, ta.principal, "ui.authorize", declared.Name, "denied",
+		ta.withVia(map[string]any{"reason": "not the run owner"}))
+	writeErrorReason(w, http.StatusForbidden, reasonUIGatewayTicketRunMismatch, "attach ticket does not authorize this run")
+	return true
+}
 
 // uiFilterUpgrade puts the clipboard filter on a desktop's relayed WebSocket. That socket is RFB
 // or it closes (rfbfilter): a desktop whose server does not speak RFB is closed and audited. A 101
@@ -68,7 +123,7 @@ func uiDesktopApp(app string) bool { return app == "novnc" || app == desktopSign
 // and it checks them up to the browser's close frame; what net/http buffered past the upgrade request is
 // not relayed at all. Other apps' sockets pass untouched.
 func (s *Server) uiFilterUpgrade(resp *http.Response, sess uiSession) error {
-	if !uiDesktopApp(sess.App) {
+	if !sess.desktopApp() {
 		return nil
 	}
 	if resp.Header.Get("Sec-WebSocket-Extensions") != "" {
