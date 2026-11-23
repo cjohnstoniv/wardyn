@@ -17,7 +17,7 @@ const outageWindowsMigration = "0400"
 // it and prunes it. A role that may only read agent_runs gets nothing.
 func TestMigration0400_AppRoleOpensAndClosesAWindow_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, outageWindowsMigration)
-	app, _ := auditRole(t, pgPool(t), "wardyn_ow_app")
+	app, appPass := auditRole(t, pgPool(t), "wardyn_ow_app")
 	reader, _ := auditRole(t, pgPool(t), "wardyn_ow_reader")
 	for _, role := range []string{app, reader} {
 		pgExec(t, pool, fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role))
@@ -45,19 +45,11 @@ func TestMigration0400_AppRoleOpensAndClosesAWindow_PG(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Release()
-	tx, err := conn.Begin(ctx)
+	tx, err := poolAs(t, schema, app, appPass).Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // nothing is kept
-	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+app); err != nil {
-		t.Fatalf("set role: %v", err)
-	}
 	for _, step := range []struct{ what, sql string }{
 		{"lock the heartbeat", `SELECT beat_at FROM cp_heartbeat WHERE singleton FOR UPDATE`},
 		{"beat", `UPDATE cp_heartbeat SET beat_at = clock_timestamp() WHERE singleton`},

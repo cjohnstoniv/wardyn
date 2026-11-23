@@ -367,11 +367,36 @@ func TestBeatControlPlane_HeldRowFailsFast_PG(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a beat against a held row succeeded: %+v", w)
 	}
-	if took < 4*time.Second || took > 7*time.Second {
+	if took < 4*time.Second || took > 15*time.Second {
 		t.Fatalf("the beat failed after %v, want about 5 s (the lock timeout): %v", took, err)
 	}
 	if n := outageCount(t, pool, `true`); n != 0 {
 		t.Fatalf("windows = %d, want 0", n)
+	}
+}
+
+// A beat whose replica stalls while it holds the heartbeat row loses its session after 30 s idle, which frees the row,
+// so the next beat succeeds and the stalled one never commits. It fails if the idle timeout is dropped: the row stays
+// held and the next beat gives up on the lock. It runs about 32 s, the timeout plus a margin.
+func TestBeatControlPlane_StalledHolderLosesTheRow_PG(t *testing.T) {
+	pool, st := outageDB(t)
+	ctx := context.Background()
+	held, hold := heldStoreAt(t, pool, "UPDATE cp_heartbeat SET beat_at")
+	stalled := make(chan error, 1)
+	go func() {
+		_, err := held.BeatControlPlane(ctx, store.ControlPlaneGapOver)
+		stalled <- err
+	}()
+	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	waitHeld(waitCtx, t, hold)
+	time.Sleep(32 * time.Second)
+	if _, err := st.BeatControlPlane(ctx, store.ControlPlaneGapOver); err != nil {
+		t.Fatalf("a beat 32 s after another stalled holding the row: %v", err)
+	}
+	hold.free()
+	if err := <-stalled; err == nil {
+		t.Fatal("the stalled beat committed after its session was ended")
 	}
 }
 

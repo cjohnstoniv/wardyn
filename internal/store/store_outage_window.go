@@ -83,8 +83,9 @@ func (s PG) BeatControlPlane(ctx context.Context, gapOver time.Duration) (*Outag
 		return nil, fmt.Errorf("store: begin heartbeat tx: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // a committed transaction is closed
-	// A replica that stalls while it holds the row must not stop every other replica's beat and so write one false
-	// window over the time it held it: a beat waits at most 5 s for the row, and a stalled holder loses it after 30 s.
+	// A replica that stalls while it holds the row must not stop every other replica's beat for long: a beat waits at
+	// most 5 s for the row, and a stalled holder loses it after 30 s idle. The false cp_outage window it can still
+	// cause is at most about 40 s, which covers no expiry, since a window must begin 15 min before one.
 	if _, err := tx.Exec(ctx, `SET LOCAL lock_timeout = '5s'`); err != nil {
 		return nil, fmt.Errorf("store: heartbeat lock timeout: %w", err)
 	}
