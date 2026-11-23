@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - Audit writes from the server's requests and its spool replay hold the audit log's chain lock for less time: the lock and the append go to the database together.
+- A runner's spooled decision row is sealed and masked before the audit log's chain lock is taken, so a slow seal no longer holds up every audit write.
 
 ### Fixed
 
