@@ -122,3 +122,31 @@ func TestRunCloneStatus_ListSkipsRecorded_PG(t *testing.T) {
 		}
 	}
 }
+
+// A revive that starts the agent again forgets the run's clone status: the row is gone and the run is listed again.
+func TestRunCloneStatus_Delete_PG(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	s := store.NewPG(pool)
+	r := newRun(types.RunRunning)
+	r.SandboxRef = "ctr-delete"
+	run := persistRun(t, ctx, pool, r)
+	if _, err := s.PutRunCloneStatus(ctx, cloneStatus(run.ID, store.CloneStateReported, `[{"dest":"/w/a","outcome":"failed"}]`)); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(cloneStatusRunIDs(t, s), run.ID) {
+		t.Fatal("a run with a final row is listed")
+	}
+	if err := s.DeleteRunCloneStatus(ctx, run.ID); err != nil {
+		t.Fatalf("DeleteRunCloneStatus: %v", err)
+	}
+	if _, err := s.GetRunCloneStatus(ctx, run.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("after the delete: err %v, want ErrNotFound", err)
+	}
+	if !slices.Contains(cloneStatusRunIDs(t, s), run.ID) {
+		t.Error("the run is not listed again after the delete")
+	}
+	if err := s.DeleteRunCloneStatus(ctx, run.ID); err != nil {
+		t.Errorf("deleting a run with no row: %v", err)
+	}
+}

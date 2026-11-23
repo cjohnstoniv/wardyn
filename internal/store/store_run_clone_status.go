@@ -40,6 +40,7 @@ type RunCloneStatusStore interface {
 	PutRunCloneStatus(ctx context.Context, st RunCloneStatus) (bool, error)
 	GetRunCloneStatus(ctx context.Context, runID uuid.UUID) (RunCloneStatus, error)
 	ListCloneStatusRuns(ctx context.Context) ([]types.AgentRun, error)
+	DeleteRunCloneStatus(ctx context.Context, runID uuid.UUID) error
 }
 
 var _ RunCloneStatusStore = PG{}
@@ -77,6 +78,15 @@ func (s PG) GetRunCloneStatus(ctx context.Context, runID uuid.UUID) (RunCloneSta
 	}
 	st.Repos = repos
 	return st, nil
+}
+
+// DeleteRunCloneStatus forgets a run's clone status, final or not, so the next read of its launcher is stored afresh.
+// It is a revive that started the agent again, whose launcher clones again.
+func (s PG) DeleteRunCloneStatus(ctx context.Context, runID uuid.UUID) error {
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM run_clone_status WHERE run_id = $1`, runID); err != nil {
+		return fmt.Errorf("store: delete run clone status: %w", err)
+	}
+	return nil
 }
 
 // ListCloneStatusRuns reads the runs whose launcher may still say something about its clones: RUNNING with a

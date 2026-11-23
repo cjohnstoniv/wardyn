@@ -88,5 +88,13 @@ if [[ "$(cat "$tmp/marker.json")" == '{"v":1,"done":false,"repos":[]}' ]]; then 
 run_clones none ""
 if [[ "$(cat "$tmp/none.json")" == '{"v":1,"done":true,"repos":[]}' ]]; then ok "nothing to clone writes done with no repos"; else bad "none: $(cat "$tmp/none.json" 2>/dev/null)"; fi
 
+# 6: a revive puts the marker back over the first start's final file.
+if repos_are three "[[\"$held\",\"skipped\",\"not_a_checkout\"],[\"$missing\",\"failed\",\"clone_failed\"],[\"$good\",\"ok\",\"\"]]"; then
+    (WARDYN_CLONE_STATE_FILE="$tmp/three.json"; export WARDYN_CLONE_STATE_FILE; . "$LIB"; revive_markers)
+    if [[ "$(cat "$tmp/three.json")" == '{"v":1,"done":false,"repos":[]}' ]]; then ok "revive_markers replaces the final file with the marker"; else bad "revive: $(cat "$tmp/three.json")"; fi
+else
+    bad "revive: the first start's final file was not there to replace"
+fi
+
 echo "--- test-clone-state: $([[ $fail -eq 0 ]] && echo PASS || echo FAIL) ---"
 exit "$fail"

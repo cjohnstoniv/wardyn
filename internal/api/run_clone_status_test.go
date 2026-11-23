@@ -69,6 +69,13 @@ func (s *cloneStatusStore) GetRunCloneStatus(_ context.Context, id uuid.UUID) (s
 	return store.RunCloneStatus{}, store.ErrNotFound
 }
 
+func (s *cloneStatusStore) DeleteRunCloneStatus(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rows, id)
+	return nil
+}
+
 func (s *cloneStatusStore) ListCloneStatusRuns(context.Context) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

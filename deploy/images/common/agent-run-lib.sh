@@ -980,6 +980,8 @@ booted_before() {
 # An image that does continue its harness writes agent-started back itself.
 revive_markers() {
     rm -f "${HOME:-/home/agent}/.wardyn/prep-done" "${HOME:-/home/agent}/.wardyn/agent-started"
+    # The clones run again too: the first start's final outcome is replaced by the in-progress marker at once (#3159).
+    _clone_results=(); _clone_state_write false
 }
 
 # DRAFT (M2 canon pending) — the only two lines a human reads in a boot pane

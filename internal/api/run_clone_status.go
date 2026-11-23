@@ -482,6 +482,18 @@ func (s *Server) readCloneRun(ctx context.Context, st store.RunCloneStatusStore,
 	}
 }
 
+// clearRunCloneStatus forgets the stored outcome of a run whose agent started again: its launcher clones again, so
+// the sweep reads this start's. A failure only warns: the view is a hint, and the revive has already succeeded.
+func (s *Server) clearRunCloneStatus(ctx context.Context, runID uuid.UUID) {
+	cs, ok := s.cfg.Store.(store.RunCloneStatusStore)
+	if !ok {
+		return
+	}
+	if err := cs.DeleteRunCloneStatus(context.WithoutCancel(ctx), runID); err != nil {
+		slog.WarnContext(ctx, "wardynd: clearing a revived run's clone status failed", slog.String("run_id", runID.String()), slog.Any("err", err))
+	}
+}
+
 // runClonesResponse is GET /api/v1/runs/{id}/clones: State is reported, not_reported, pending or none. None, and
 // pending, carry no repositories.
 type runClonesResponse struct {

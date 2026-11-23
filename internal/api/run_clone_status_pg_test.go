@@ -7,14 +7,20 @@ package api
 // Guarded by WARDYN_TEST_PG (throwawayPGPool); skipped cleanly when unset.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -152,4 +158,120 @@ func TestRunClones_EndedWhileCloningIsNotReported_PG(t *testing.T) {
 	repoless := c.run(t, types.RunKilled, nil)
 	c.put(t, repoless, store.CloneStateCloning, `[]`)
 	c.want(t, repoless, clonesStateNone)
+}
+
+// cloneReviveRunner is a runner that replaces a proxy, starts a sandbox and answers the launcher's state file.
+type cloneReviveRunner struct {
+	*pgReviveRunner
+	file    string
+	started atomic.Int32
+}
+
+func (r *cloneReviveRunner) StartSandbox(context.Context, string) error {
+	r.started.Add(1)
+	return nil
+}
+
+func (r *cloneReviveRunner) ExecStream(_ context.Context, _ string, _ runner.ExecSpec) (*runner.ExecSession, error) {
+	return textPane(r.file, 0)(runner.ExecSpec{})
+}
+
+// reviveWithCloneRow stores a lost run that asked for two repositories, with a final clone row in which the first
+// failed, and revives it as its owner.
+func reviveWithCloneRow(t *testing.T, lost types.LostReason, launcherFile string) (*harness, types.AgentRun, *cloneReviveRunner) {
+	t.Helper()
+	h, _ := newRunOwnerPGHarness(t)
+	ctx := t.Context()
+	pg := h.srv.cfg.Store.(store.PG)
+	h.srv.cfg.Audit = store.Recorder{Pool: pg.Pool} // the revive reads the run's policy from the audit table
+	const owner = "sub-pg-clones-revive"
+	run, err := pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunRunning, RunnerTarget: "docker", Task: "t"})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := pg.SetSandboxRef(ctx, run.ID, "wardyn-agent-"+run.ID.String()); err != nil {
+		t.Fatalf("SetSandboxRef: %v", err)
+	}
+	if ok, err := pg.MarkRunLost(ctx, run.ID, lost, time.Now(), 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost: %v %v", ok, err)
+	}
+	h.srv.recordAudit(ctx, h.srv.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve", run.ID.String(), "success",
+		mustJSON(effectivePolicyDatum{RunPolicySpec: types.RunPolicySpec{WorkspaceRepos: clonesAsked}})))
+	raw, _ := json.Marshal([]runRepoClone{{Repo: "acme/alpha", Dest: "/home/agent/work/alpha", Outcome: "failed", Cause: "clone_failed"},
+		{Repo: "acme/beta", Dest: "/home/agent/work/beta", Outcome: "ok"}})
+	if _, err := pg.PutRunCloneStatus(ctx, store.RunCloneStatus{RunID: run.ID, State: store.CloneStateReported, Repos: raw, ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := runner.BuildProxyConfig(run.ID, runner.ProxyConfig{
+		RunToken: "old", ControlPlaneURL: "http://127.0.0.1:8081", Policy: types.RunPolicySpec{AllowedDomains: []string{"api.example.com"}},
+	}, runner.ProxyListenPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.srv.cfg.RunConfigKey = make([]byte, 32)
+	if err := h.srv.storeRunProxyConfig(ctx, run.ID, cfg); err != nil {
+		t.Fatalf("store the run's proxy config: %v", err)
+	}
+	rn := &cloneReviveRunner{pgReviveRunner: &pgReviveRunner{fakeRunner: &fakeRunner{}}, file: launcherFile}
+	h.srv.cfg.Runner = rn
+	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
+	w := doSSO(t, h.srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/revive", ssoSession(t, owner, ownerEmail, oidc.RoleUser), "")
+	if w.Code != http.StatusOK || rn.replaced != 1 || strings.Contains(w.Body.String(), `"ok":false`) {
+		t.Fatalf("revive = %d %s (replaced %d); want 200 and one new proxy", w.Code, w.Body.String(), rn.replaced)
+	}
+	return h, run, rn
+}
+
+// A revive that starts the agent again re-runs the launcher's clones, so the first start's outcome is forgotten and
+// the run reads pending until this start's file is read. It fails if the clear is removed: the first start's
+// "failed" would still be the answer after the repository cloned. A proxy-only revive starts no launcher, so it
+// keeps the row.
+func TestRunClones_ReviveClearsTheRowAndRereads_PG(t *testing.T) {
+	t.Run("the agent starts again", func(t *testing.T) {
+		file := cloneFile(true, cloneEntry("/home/agent/work/alpha", "ok", ""), cloneEntry("/home/agent/work/beta", "ok", ""))
+		h, run, rn := reviveWithCloneRow(t, types.LostReboot, file)
+		if rn.started.Load() != 1 {
+			t.Fatalf("the agent was started %d times, want 1", rn.started.Load())
+		}
+		cs := h.srv.cfg.Store.(store.RunCloneStatusStore)
+		if _, err := cs.GetRunCloneStatus(t.Context(), run.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("after the revive: err %v, want the row gone", err)
+		}
+		owner := ssoSession(t, "sub-pg-clones-revive", ownerEmail, oidc.RoleUser)
+		get := func() runClonesResponse {
+			w := doSSO(t, h.srv, http.MethodGet, "/api/v1/runs/"+run.ID.String()+"/clones", owner, "")
+			var resp runClonesResponse
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+				t.Fatalf("GET clones = %d %s", w.Code, w.Body.String())
+			}
+			return resp
+		}
+		if got := get(); got.State != clonesStatePending {
+			t.Fatalf("GET clones = %+v, want pending", got)
+		}
+		listed, err := cs.ListCloneStatusRuns(t.Context())
+		if err != nil || !slices.ContainsFunc(listed, func(r types.AgentRun) bool { return r.ID == run.ID }) {
+			t.Fatalf("the revived run is not listed for the sweep: %v, %v", listed, err)
+		}
+		fresh, err := h.srv.cfg.Store.GetRun(t.Context(), run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.srv.readCloneRuns(cs, h.srv.cloneSweepMemory(), []cloneRead{{ctx: t.Context(), run: fresh}}, 0)
+		got := get()
+		if got.State != clonesStateReported || len(got.Repos) != 2 || got.Repos[0].Outcome != "ok" {
+			t.Errorf("GET clones = %+v, want reported with the first repository ok", got)
+		}
+	})
+	t.Run("a proxy-only revive", func(t *testing.T) {
+		h, run, rn := reviveWithCloneRow(t, types.LostOutage, cloneFile(true))
+		if rn.started.Load() != 0 {
+			t.Fatalf("the agent was started %d times, want none", rn.started.Load())
+		}
+		row, err := h.srv.cfg.Store.(store.RunCloneStatusStore).GetRunCloneStatus(t.Context(), run.ID)
+		if err != nil || row.State != store.CloneStateReported {
+			t.Errorf("row %+v, err %v; want the reported row kept", row, err)
+		}
+	})
 }
