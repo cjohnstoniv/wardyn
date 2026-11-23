@@ -703,3 +703,41 @@ func TestRunScheduleSweep_BookingTakesTheLiveEmail(t *testing.T) {
 		}
 	}
 }
+
+// A due row whose rule or authority cannot be read is paused refused:unreadable with a run.schedule.pause row,
+// books nothing, and leaves the due list, so it cannot starve the schedules behind it.
+func TestRunScheduleSweep_UnreadableRowPauses(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for name, spoil := range map[string]func(*store.RunSchedule){
+		"rule":      func(sc *store.RunSchedule) { sc.TimeZone = "Nowhere/Unknown" },
+		"authority": func(sc *store.RunSchedule) { sc.Authority = json.RawMessage(`"not an authority"`) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			spoil(&sc)
+			st.rows[sc.ID] = sc
+			srv := scheduleTestServer(st)
+			sw, creates := testSweep(srv, st, now, answers(http.StatusUnprocessableEntity), true)
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.PausedAt == nil || got.PausedReason != schedulePausedUnreadable || *creates != 0 {
+				t.Errorf("after the tick the schedule is %+v with %d creates; want it paused %s, nothing booked", got, *creates, schedulePausedUnreadable)
+			}
+			pauses := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action == "run.schedule.pause" && strings.Contains(string(ev.Data), schedulePausedUnreadable) {
+					pauses++
+				}
+			}
+			if pauses != 1 {
+				t.Errorf("run.schedule.pause rows naming %s = %d, want 1", schedulePausedUnreadable, pauses)
+			}
+			if due, _ := st.DueRunSchedules(context.Background(), now.Add(time.Hour), 50); len(due) != 0 {
+				t.Errorf("due after the pause = %d, want 0", len(due))
+			}
+		})
+	}
+}

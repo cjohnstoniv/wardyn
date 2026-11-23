@@ -51,6 +51,7 @@ const (
 	schedulePausedIdentity       = "identity_inactive"
 	schedulePausedGroupsChanged  = "groups_changed"
 	scheduleRefusedPrefix        = "refused:"
+	schedulePausedUnreadable     = scheduleRefusedPrefix + "unreadable" // a stored rule or authority the sweep cannot read
 	scheduleOutcomeBooked        = "booked"
 	scheduleOutcomeMissed        = "missed"
 	scheduleOutcomeRefused       = "refused"
@@ -670,14 +671,17 @@ func (sw *scheduleSweep) run(ctx context.Context) error {
 // one is a due schedule's turn: the owner's standing, then their groups and email from the latest sign-in, a
 // missed slot or a fresh booking, then the booking's outcome.
 func (sw *scheduleSweep) one(ctx context.Context, sc store.RunSchedule) scheduleTick {
+	// A row it cannot read pauses, so it never stays at the head of the due list starving every other schedule.
 	rule, err := scheduleRuleOf(sc)
 	if err != nil {
-		slog.WarnContext(ctx, "wardynd: run schedule skipped", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
+		slog.WarnContext(ctx, "wardynd: run schedule rule unreadable", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
+		sw.pause(ctx, sc, schedulePausedUnreadable)
 		return scheduleTickNone
 	}
 	var a queueAuthority
 	if err := json.Unmarshal(sc.Authority, &a); err != nil {
 		slog.WarnContext(ctx, "wardynd: run schedule authority unreadable", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
+		sw.pause(ctx, sc, schedulePausedUnreadable)
 		return scheduleTickNone
 	}
 	if !sw.standing(ctx, sc, a) {

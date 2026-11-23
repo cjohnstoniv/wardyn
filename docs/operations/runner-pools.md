@@ -158,6 +158,7 @@ With `WARDYN_SCHEDULED_RUNS` set, a person signed in with single sign-on keeps u
 - A booking acts with the owner's stored groups, less any the latest sign-in dropped. A group gained since instead pauses the schedule.
 - A schedule pauses when its owner or an admin pauses it, or a refused booking does (`refused:<reason>`). It also pauses when its owner is deactivated or signed out everywhere (`identity_inactive`), has not signed in for 30 days (`owner_idle`), or gained a group since the last create or resume (`groups_changed`).
 - A schedule whose owner loses the group that allowed the run pauses before its next start.
+- A schedule whose stored rule or owner this server cannot read, such as a time zone its time zone data lacks, pauses `refused:unreadable`.
 - Without SCIM, a group removed at the identity provider is seen at the owner's next sign-in, or else at the 30-day idle pause.
 - A group added at the identity provider is seen at the owner's next sign-in, which pauses the schedule until they resume it.
 - A deployment-wide session revoke pauses every schedule, and each owner resumes their own.
