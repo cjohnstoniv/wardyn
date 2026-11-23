@@ -59,9 +59,10 @@ export const policies = {
   },
 
   // POST /api/v1/policies  { name, spec } -> 201 created policy.
-  // The server validates the spec; a 400 surfaces as an HttpError.
-  async createPolicy(name: string, spec: RunPolicySpec): Promise<PolicySaved> {
-    const res = await wfetch("/policies", {
+  // The server validates the spec; a 400 surfaces as an HttpError. restricted: the server restricts the new policy
+  // ("Available to: Only these") before writing it, so it is never available to everyone; its list comes after.
+  async createPolicy(name: string, spec: RunPolicySpec, opts: { restricted?: boolean } = {}): Promise<PolicySaved> {
+    const res = await wfetch(opts.restricted ? "/policies?restricted=true" : "/policies", {
       method: "POST",
       asPerson: true,
       body: JSON.stringify({ name, spec }),

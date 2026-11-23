@@ -61,3 +61,25 @@ describe("modelProviders.getModelProviders() — connected_people", () => {
     expect(snap.providers).toEqual({});
   });
 });
+
+// A save asks the server to restrict the providers it adds only when told to.
+describe("modelProviders.putModelProviders() — restricted", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json", ETag: '"e2"' } }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const doc = { providers: [{ id: "bloomberg-gateway", kind: "custom_endpoint" }] } as Parameters<typeof modelProviders.putModelProviders>[0];
+
+  it("adds ?restricted=true when asked", async () => {
+    await modelProviders.putModelProviders(doc, null, { restricted: true });
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/v1\/model-providers\?restricted=true$/);
+  });
+
+  it("sends no query without options", async () => {
+    await modelProviders.putModelProviders(doc, null);
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/v1\/model-providers$/);
+  });
+});

@@ -620,9 +620,9 @@ function PolicyEditor({
       } else {
         // Sent: from here no setup status may replace the person's spec, answered or refused.
         landed.current = true;
-        const created = await api.createPolicy(name.trim(), spec);
+        const created = await api.createPolicy(name.trim(), spec, { restricted: audience.restricted });
         try {
-          await writeAvailability("policy", created.id, audience, person);
+          await writeAvailability("policy", created.id, audience, person, audience.restricted);
         } catch (e) {
           initial.current = { name, specText };
           setPartial({ policy: created, message: getErrorMessage(e) });
@@ -700,7 +700,7 @@ function PolicyEditor({
             <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
               <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
               <span>{partial.message}</span>
-              <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
+              <span>{audience.restricted ? AVAILABILITY.CREATE_PARTIAL_RESTRICTED : AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
             </div>
           )}
           {/* ui-secretsPolicies-3: required Name/Spec, marked via the shared

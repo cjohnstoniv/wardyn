@@ -503,6 +503,28 @@ describe("AvailabilityDraft + writeAvailability — a creation form (decision 4)
     expect(upsertGrantMock).toHaveBeenCalledTimes(1);
     expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
+
+  it("writes only the list when the create already restricted the value", async () => {
+    upsertGrantMock.mockResolvedValue(undefined);
+    const draft = { restricted: true, audiences: [{ subject_type: "user" as const, subject: "alice@corp.com" }] };
+    await writeAvailability("policy", "p1", draft, "a@example.com", true);
+    expect(upsertGrantMock).toHaveBeenCalledTimes(1);
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
+  });
+
+  it("still restricts after the list when the create did not", async () => {
+    upsertGrantMock.mockResolvedValue(undefined);
+    putAvailabilityMock.mockResolvedValue(undefined);
+    const draft = { restricted: true, audiences: [{ subject_type: "user" as const, subject: "alice@corp.com" }] };
+    for (const args of [[false], []] as [boolean?][]) {
+      upsertGrantMock.mockClear();
+      putAvailabilityMock.mockClear();
+      await writeAvailability("policy", "p1", draft, "a@example.com", ...args);
+      expect(upsertGrantMock).toHaveBeenCalledTimes(1);
+      expect(putAvailabilityMock).toHaveBeenCalledTimes(1);
+      expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "p1", true, "a@example.com");
+    }
+  });
 });
 
 // 0.8.6 four-eyes: a change the server holds for a second person (202) is "submitted", never applied.
