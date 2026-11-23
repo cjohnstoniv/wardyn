@@ -73,6 +73,18 @@ var (
 // switch goes through here, so its backing (a deployment variable today) can change in one place.
 func (s *Server) attachForwardOn(_ context.Context) bool { return envEnabled(envAttachForward) }
 
+// refuseServiceRunForward answers 403 run_owner_only for a service identity's run and reports whether it did. Such a
+// run takes no forward at all, its sponsor's ticket included: the SSH gateway refuses it the same way (sponsor
+// attach is the terminal and UI app only).
+func (s *Server) refuseServiceRunForward(w http.ResponseWriter, r *http.Request, run types.AgentRun, ta ticketActor) bool {
+	if _, isService := serviceOfRun(run); !isService {
+		return false
+	}
+	s.auditAttachRefused(r, run.ID, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
+	s.refuseRunOwnerOnly(w, r, run)
+	return true
+}
+
 // handleAttachForward is GET /api/v1/runs/{id}/attach/forward: it relays one TCP connection, as binary WebSocket
 // frames, to the port on the sandbox's own loopback, by an attach ticket only.
 func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +112,7 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// A service identity's run takes no forward at all, its sponsor's ticket included: the SSH gateway refuses it
-	// the same way (sponsor attach is the terminal and UI app only).
-	if _, isService := serviceOfRun(run); isService {
-		s.auditAttachRefused(r, id, ta.principal, "ticket", runOwnerOnlyReason, ta.via)
-		s.refuseRunOwnerOnly(w, r, run)
+	if s.refuseServiceRunForward(w, r, run, ta) {
 		return
 	}
 	// A helper's, a portal's and an issuer portal's ticket do not open a forward; refuseAttachEntry refuses an
