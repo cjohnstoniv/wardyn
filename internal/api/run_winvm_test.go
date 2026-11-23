@@ -42,6 +42,7 @@ type winvmStore struct {
 	images   []types.WindowsImage
 	checkErr error
 	checks   []string
+	removed  []string
 }
 
 var _ store.WindowsLicenceStore = (*winvmStore)(nil)
@@ -78,6 +79,9 @@ func (s *winvmStore) AddWindowsLicenceHolder(_ context.Context, pool uuid.UUID, 
 }
 
 func (s *winvmStore) RemoveWindowsLicenceHolder(_ context.Context, pool uuid.UUID, subject string) (types.WindowsLicenceHolder, error) {
+	s.wmu.Lock()
+	s.removed = append(s.removed, subject)
+	s.wmu.Unlock()
 	return types.WindowsLicenceHolder{PoolID: pool, Subject: subject}, nil
 }
 
@@ -732,5 +736,19 @@ func TestWindowsRunInsertDoorsCensus(t *testing.T) {
 	}
 	if len(found) != len(folded)+len(container) {
 		t.Errorf("found %d insert doors, want %d", len(found), len(folded)+len(container))
+	}
+}
+
+// A holder's subject is read decoded: a client that percent-encodes the email removes the same holder.
+func TestWindowsHolderRemoveDecodesSubject(t *testing.T) {
+	srv, ws, _ := winvmServer(t, true)
+	for _, path := range []string{"ana%40example.com", "ana@example.com"} {
+		w := do(t, srv, http.MethodDelete, "/api/v1/windows-licence-pools/"+ws.pool.ID.String()+"/holders/"+path, adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("remove %s = %d %s", path, w.Code, w.Body)
+		}
+	}
+	if want := []string{"ana@example.com", "ana@example.com"}; !slices.Equal(ws.removed, want) {
+		t.Errorf("subjects removed = %v, want %v", ws.removed, want)
 	}
 }

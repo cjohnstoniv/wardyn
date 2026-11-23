@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -312,6 +313,9 @@ func (s *Server) handleRemoveWindowsHolder(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	subject := chi.URLParam(r, "subject")
+	if u, err := url.PathUnescape(subject); r.URL.RawPath != "" && err == nil {
+		subject = u // a client that percent-encoded the subject, as principalParam reads it
+	}
 	h, err := ws.RemoveWindowsLicenceHolder(r.Context(), id, subject)
 	if err != nil {
 		writeWindowsLicenceErr(w, r, "remove Windows licence holder", "The seat "+types.NormalizeWindowsLicenceSubject(subject)+" holds", err)
