@@ -136,6 +136,9 @@ type SiteConfig struct {
 	MacOSVM *SiteMacOSVM `json:"macos_vm,omitempty"`
 	// Images is the org's image rules. Absent reads as every rule off.
 	Images *SiteImages `json:"images,omitempty"`
+	// FeatureSwitches is the features block (site_features.go): the features new in 0.11, each off until an admin
+	// turns it on. Read it only through internal/api's siteFeatureOn and siteFeatureSettings.
+	FeatureSwitches *SiteFeatureSwitches `json:"features,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under
