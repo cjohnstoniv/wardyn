@@ -83,6 +83,7 @@ No container holds the proxy's rendered configuration at rest: its per-run TLS-M
 - Kept for a revive instead is one database row per run (`run_proxy_configs`), sealed with AES-256-GCM under the `wardyn-run-config-key` boot key.
 - The secret store holds that key under its own key-encryption key like every boot key (a `-rewrap` or `-rotate-age-key` moves it with the rest).
 - The row is deleted when the run goes terminal, with a purge at boot and on the orphan sweep's cadence behind it (threat model residual 59).
+- The run's sealed sandbox spec (`run_sandbox_specs`), kept so a paused run can be moved, is deleted in the same statement and by the same purge.
 - The kept agent container still holds whatever the agent wrote to its own writable layer for the whole grace window. Nothing on the run's page or in the admin runs list reports how much that is today.
 
 - A run with no stored proxy config (one started before the row existed) can't be revived: `409`, start a new run. It runs, ends and is torn down as before.

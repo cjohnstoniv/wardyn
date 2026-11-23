@@ -24,10 +24,12 @@ type RunProxyConfigs interface {
 	PutRunProxyConfig(ctx context.Context, id uuid.UUID, sealed []byte) error
 	// GetRunProxyConfig reads it; ErrNotFound when there is none.
 	GetRunProxyConfig(ctx context.Context, id uuid.UUID) ([]byte, error)
-	// DeleteRunProxyConfig removes it. Idempotent.
+	// DeleteRunProxyConfig removes it, and the run's sealed sandbox spec (run_sandbox_specs) in the same
+	// statement. Idempotent.
 	DeleteRunProxyConfig(ctx context.Context, id uuid.UUID) error
 	// PurgeTerminalRunProxyConfigs removes every row whose run is terminal,
 	// the backstop for a delete that failed, and returns how many it removed.
+	// It removes a terminal run's sealed sandbox spec with it.
 	PurgeTerminalRunProxyConfigs(ctx context.Context) (int64, error)
 }
 
@@ -58,7 +60,8 @@ func (s PG) GetRunProxyConfig(ctx context.Context, id uuid.UUID) ([]byte, error)
 
 // DeleteRunProxyConfig — see RunProxyConfigs.
 func (s PG) DeleteRunProxyConfig(ctx context.Context, id uuid.UUID) error {
-	if _, err := s.Pool.Exec(ctx, `DELETE FROM run_proxy_configs WHERE run_id=$1`, id); err != nil {
+	if _, err := s.Pool.Exec(ctx, `WITH spec AS (DELETE FROM run_sandbox_specs WHERE run_id=$1)
+		DELETE FROM run_proxy_configs WHERE run_id=$1`, id); err != nil {
 		return fmt.Errorf("store: delete run proxy config: %w", err)
 	}
 	return nil
@@ -67,7 +70,8 @@ func (s PG) DeleteRunProxyConfig(ctx context.Context, id uuid.UUID) error {
 // PurgeTerminalRunProxyConfigs — see RunProxyConfigs. The terminal test is
 // types.RunState.IsTerminal itself, not a copy of its set in SQL.
 func (s PG) PurgeTerminalRunProxyConfigs(ctx context.Context) (int64, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT c.run_id, r.state FROM run_proxy_configs c JOIN agent_runs r ON r.id = c.run_id`)
+	rows, err := s.Pool.Query(ctx, `SELECT r.id, r.state FROM agent_runs r
+		WHERE r.id IN (SELECT run_id FROM run_proxy_configs UNION SELECT run_id FROM run_sandbox_specs)`)
 	if err != nil {
 		return 0, fmt.Errorf("store: list run proxy configs: %w", err)
 	}
@@ -90,7 +94,8 @@ func (s PG) PurgeTerminalRunProxyConfigs(ctx context.Context) (int64, error) {
 	if len(terminal) == 0 {
 		return 0, nil
 	}
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM run_proxy_configs WHERE run_id = ANY($1)`, terminal)
+	tag, err := s.Pool.Exec(ctx, `WITH spec AS (DELETE FROM run_sandbox_specs WHERE run_id = ANY($1))
+		DELETE FROM run_proxy_configs WHERE run_id = ANY($1)`, terminal)
 	if err != nil {
 		return 0, fmt.Errorf("store: purge terminal run proxy configs: %w", err)
 	}

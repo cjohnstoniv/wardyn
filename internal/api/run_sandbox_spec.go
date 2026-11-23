@@ -29,7 +29,8 @@ import (
 // say what the record could not carry: Resident, when dispatch placed a credential the sandbox holds, and MCPToken,
 // when it minted a per-run MCP token. A run with either is never moved (moveRefusal). The record is sealed under
 // the run config key, bound to its run, as the run's proxy config is, because an organisation component's config
-// in Env may itself be a value the organisation never meant to send.
+// in Env may itself be a value the organisation never meant to send. It is deleted with the run's proxy config when
+// the run goes terminal, and by the same purge behind that delete (store.PG.DeleteRunProxyConfig).
 
 // runSandboxSpecAADLabel is the domain label of the record's associated data, so a sealed record opens only as the
 // record of the run it was sealed for.

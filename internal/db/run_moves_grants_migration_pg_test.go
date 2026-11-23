@@ -41,7 +41,7 @@ func TestRunMovesMigration_GrantsTheAppRole(t *testing.T) {
 	granted := map[string][]string{
 		"run_moves":         {"SELECT", "INSERT", "UPDATE"},
 		"run_placements":    {"SELECT", "INSERT"},
-		"run_sandbox_specs": {"SELECT", "INSERT"},
+		"run_sandbox_specs": {"SELECT", "INSERT", "DELETE"},
 	}
 	verbs := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"}
 	check := func(when string) {

@@ -352,3 +352,51 @@ func TestPG_RunnerStateIntake_IgnoresMovedRunRows(t *testing.T) {
 	g.exec(`UPDATE runners SET state = 'revoked', revoked_at = now() WHERE id = $1`, g.src.ID)
 	wantRefused("the revoked source", g.src, row)
 }
+
+// A run's sealed sandbox spec goes with its proxy config when the run goes terminal: in the delete, and in the purge
+// behind it, which also finds a terminal run that has a spec and no proxy config. A live run's spec is kept.
+func TestPG_RunSandboxSpecs_PurgedAtTerminal(t *testing.T) {
+	g := newMoveRig(t)
+	ctx := t.Context()
+	run := func(state types.RunState) uuid.UUID {
+		t.Helper()
+		r := newRun(types.RunRunning)
+		r.CreatedBy = g.run.CreatedBy
+		r, err := g.st.CreateRun(ctx, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := g.st.PutRunSandboxSpec(ctx, r.ID, []byte("sealed")); err != nil {
+			t.Fatal(err)
+		}
+		if state != types.RunRunning {
+			if ok, err := g.st.UpdateRunStateIf(ctx, r.ID, types.RunRunning, state); err != nil || !ok {
+				t.Fatalf("UpdateRunStateIf: %v %v", ok, err)
+			}
+		}
+		return r.ID
+	}
+	specs := func(id uuid.UUID) int { return g.count(`SELECT count(*) FROM run_sandbox_specs WHERE run_id = $1`, id) }
+
+	deleted := run(types.RunKilled)
+	if err := g.st.PutRunProxyConfig(ctx, deleted, []byte("proxy")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.st.DeleteRunProxyConfig(ctx, deleted); err != nil {
+		t.Fatal(err)
+	}
+	if specs(deleted) != 0 || g.count(`SELECT count(*) FROM run_proxy_configs WHERE run_id = $1`, deleted) != 0 {
+		t.Error("the terminal delete left the run's spec or proxy config")
+	}
+
+	specOnly, live := run(types.RunKilled), run(types.RunRunning)
+	if _, err := g.st.PurgeTerminalRunProxyConfigs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if specs(specOnly) != 0 {
+		t.Error("the purge left a terminal run's spec")
+	}
+	if specs(live) != 1 {
+		t.Error("the purge removed a live run's spec")
+	}
+}

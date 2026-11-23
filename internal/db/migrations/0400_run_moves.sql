@@ -13,7 +13,8 @@
 --
 -- No credential value is stored in any of the three: run_moves and run_placements hold ids, placements and
 -- reason words, and the sealed spec is recorded without the run's secret environment, its delivered secret files,
--- its proxy config and its per-run MCP token. Each table cascades with the run row, which is the audit record.
+-- its proxy config and its per-run MCP token. Each table cascades with the run row, which is the audit record, and a
+-- run's sealed spec is also deleted when the run goes terminal, with its proxy config.
 
 CREATE TABLE IF NOT EXISTS run_moves (
     id                  UUID        PRIMARY KEY,
@@ -107,7 +108,7 @@ BEGIN
     LOOP
         EXECUTE format('GRANT SELECT, INSERT, UPDATE ON run_moves TO %I', r.rolname);
         EXECUTE format('GRANT SELECT, INSERT ON run_placements TO %I', r.rolname);
-        EXECUTE format('GRANT SELECT, INSERT ON run_sandbox_specs TO %I', r.rolname);
+        EXECUTE format('GRANT SELECT, INSERT, DELETE ON run_sandbox_specs TO %I', r.rolname);
     END LOOP;
 END
 $mig$;
