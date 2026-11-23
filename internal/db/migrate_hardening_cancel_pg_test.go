@@ -114,7 +114,7 @@ func TestPG_MigrateKeepsAnAlwaysTriggerWhenTheBootContextIsCancelled(t *testing.
 	defer cancel()
 	ex := &cancelAtMigration{migrationExecutor: pool, at: cancelAt, last: chain[len(chain)-1], cancel: cancel}
 
-	err := migrateOn(runCtx, ex, false)
+	err := migrateOn(runCtx, ex, false, migrationFS)
 	if err == nil {
 		t.Fatalf("migrateOn returned nil; the probe did not reproduce a cancelled run and so cannot test that exit")
 	}
