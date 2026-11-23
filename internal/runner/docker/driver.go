@@ -200,7 +200,8 @@ type Driver struct {
 	// proxyReadyWait. Tests shorten it.
 	proxyReady time.Duration
 
-	// subnetMu serialises this driver's run network creates from RunSubnetPool (createPoolRunNetwork).
+	// subnetMu serialises this driver's run network creates: from RunSubnetPool (createPoolRunNetwork) and from the
+	// daemon's own pools (createDaemonRunNetwork).
 	subnetMu sync.Mutex
 
 	// mu guards agentExecs, pending, mainProc, and creating — the driver's

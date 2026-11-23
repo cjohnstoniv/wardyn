@@ -165,3 +165,31 @@ func TestSweepOrphanedSandboxesHolding_TheNetworkSweepLeavesAHeldRunsNetwork(t *
 		t.Fatalf("sweep with the hold over = %d, %v; want the network swept", n, err)
 	}
 }
+
+// The same, with no run subnet pool: the network sweep runs on every host, and still leaves a held run's network
+// alone until the hold no longer names the run.
+func TestSweepOrphanedSandboxesHolding_TheNetworkSweepLeavesAHeldRunsNetworkWithoutAPool(t *testing.T) {
+	f := newFakeDocker()
+	d := newTestDriver(f)
+	held := uuid.New()
+	ctx := context.Background()
+	if _, err := d.createRunNetwork(ctx, held, d.labels(held, componentNetwork, nil)); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.netCreated[internalNetName(held)] = time.Now().Add(-time.Hour)
+	f.mu.Unlock()
+	all := func(uuid.UUID) bool { return true }
+	if n, h, err := d.SweepOrphanedSandboxesHolding(ctx, 10*time.Minute, all, all); err != nil || n != 0 || h != 0 {
+		t.Fatalf("sweep = %d swept, %d held, %v; want 0, 0: the hold names the run", n, h, err)
+	}
+	if _, ok := f.networks[internalNetName(held)]; !ok {
+		t.Fatal("a held run's network was swept")
+	}
+	if n, _, err := d.SweepOrphanedSandboxesHolding(ctx, 10*time.Minute, all, func(uuid.UUID) bool { return false }); err != nil || n != 1 {
+		t.Fatalf("sweep with the hold over = %d, %v; want the network swept", n, err)
+	}
+	if _, ok := f.networks[internalNetName(held)]; ok {
+		t.Error("the network is still there once the hold is over")
+	}
+}

@@ -3206,7 +3206,7 @@ Or leave `daemon.json` alone and give Wardyn its own range:
 - Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
 - Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
 - A full range refuses the run with a sentence naming the setting.
-- The orphan sweep removes the network of a run that is gone, which hands its subnet back.
+- The orphan sweep removes the network of a run that is gone, which hands its subnet back. It does so with or without this range.
 
 ### The start deadlines
 

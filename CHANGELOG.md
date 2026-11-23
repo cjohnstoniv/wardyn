@@ -20,6 +20,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, run starts no longer race each other for one subnet, and the orphan sweep now removes a run network whose run has ended or is gone. Before, only a host with the pool set swept them.
+
+### Before you upgrade
+
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, the first orphan sweep after the upgrade removes Wardyn's leftover run networks of runs that ended or are gone. A network another container still uses is kept, and the sweep logs it.
 
 ## [0.10.2] — 2026-11-22
 

@@ -36,7 +36,7 @@ var unsetPoolGolden = []string{
 }
 
 // TestRunSubnetPool_UnsetIsUnchanged: with the pool unset a sandbox's network calls match the golden,
-// and neither the create nor the orphan sweep lists the daemon's networks.
+// and the create does not list the daemon's networks; the orphan sweep lists them once and leaves a young network alone.
 func TestRunSubnetPool_UnsetIsUnchanged(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
@@ -55,11 +55,17 @@ func TestRunSubnetPool_UnsetIsUnchanged(t *testing.T) {
 	if !slices.Equal(creates, unsetPoolGolden) {
 		t.Fatalf("network creates with the pool unset:\n got %q\nwant %q", creates, unsetPoolGolden)
 	}
+	if f.networkLists != 0 {
+		t.Errorf("the create listed networks with the pool unset (%d NetworkList calls)", f.networkLists)
+	}
 	if _, err := d.SweepOrphanedSandboxes(context.Background(), time.Minute, func(uuid.UUID) bool { return true }); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
-	if f.networkLists != 0 {
-		t.Errorf("%d NetworkList calls with the pool unset; want none", f.networkLists)
+	if f.networkLists != 1 {
+		t.Errorf("%d NetworkList calls in the sweep; want 1", f.networkLists)
+	}
+	if _, ok := f.networks[internalNetName(testSpec().RunID)]; !ok {
+		t.Error("the sweep removed a network younger than its age gate")
 	}
 }
 
