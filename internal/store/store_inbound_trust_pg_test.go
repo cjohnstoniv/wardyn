@@ -373,6 +373,81 @@ func TestPG_SwitchOffAndTrustDeleteRace(t *testing.T) {
 	}
 }
 
+// bothWithin is both with a watchdog: a race that wedges fails the test instead of hanging it.
+func bothWithin(t *testing.T, x, y func() error) (ex, ey error) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); ex, ey = both(x, y) }()
+	select {
+	case <-done:
+		return ex, ey
+	case <-time.After(time.Minute):
+		t.Fatal("the race did not finish in a minute")
+		return nil, nil
+	}
+}
+
+func TestPG_ExchangeAndSwitchOffRace(t *testing.T) {
+	f := newInboundFix(t)
+	for round := 0; round < 20; round++ {
+		name, tr := f.raceRound(t, false)
+		var tok types.APIToken
+		ex, off := bothWithin(t, func() (err error) {
+			tok, err = exchange(t, f.st, tr)
+			return err
+		}, func() error {
+			_, err := f.st.SetInboundFederation(f.ctx, false, "admin")
+			return err
+		})
+		if off != nil || isDeadlock(ex) {
+			t.Fatalf("round %d: exchange %v, switch-off %v", round, ex, off)
+		}
+		switch {
+		case ex == nil:
+			if _, revoked := f.tokenRow(t, tok.ID); !revoked {
+				t.Fatalf("round %d: the exchanged token outlived the switch-off", round)
+			}
+		case errors.Is(ex, store.ErrInboundFederationOff):
+		default:
+			t.Fatalf("round %d: exchange: %v", round, ex)
+		}
+		if n := f.liveOf(t, name); n != 0 {
+			t.Fatalf("round %d: %d live tokens after the switch-off; want 0", round, n)
+		}
+	}
+}
+
+func TestPG_ExchangeAndTrustDeleteRace(t *testing.T) {
+	f := newInboundFix(t)
+	for round := 0; round < 20; round++ {
+		name, tr := f.raceRound(t, false)
+		var tok types.APIToken
+		ex, del := bothWithin(t, func() (err error) {
+			tok, err = exchange(t, f.st, tr)
+			return err
+		}, func() error {
+			_, _, err := f.st.DeleteInboundTrust(f.ctx, store.InboundTrustDelete{ID: tr.ID})
+			return err
+		})
+		if del != nil || isDeadlock(ex) {
+			t.Fatalf("round %d: exchange %v, delete %v", round, ex, del)
+		}
+		switch {
+		case ex == nil:
+			if _, revoked := f.tokenRow(t, tok.ID); !revoked {
+				t.Fatalf("round %d: the exchanged token outlived the trust's delete", round)
+			}
+		case errors.Is(ex, store.ErrNotFound):
+		default:
+			t.Fatalf("round %d: exchange: %v", round, ex)
+		}
+		f.wantTrustGone(t, tr.ID)
+		if n := f.liveOf(t, name); n != 0 {
+			t.Fatalf("round %d: %d live tokens after the trust's delete; want 0", round, n)
+		}
+	}
+}
+
 func TestPG_EraseAttributionClearsInboundPeople(t *testing.T) {
 	f := newInboundFix(t)
 	const p = "sub-inbound-erased"
@@ -603,8 +678,15 @@ func TestPG_InboundTrust_RefusesOversizeTriple(t *testing.T) {
 	f := newInboundFix(t)
 	f.identity(t, "ci-bot", "")
 	for name, edit := range map[string]func(*types.InboundTrust){
-		"issuer":  func(in *types.InboundTrust) { in.Issuer = "https://" + strings.Repeat("a", 1020) },
-		"subject": func(in *types.InboundTrust) { in.Subject = strings.Repeat("s", 513) },
+		"issuer":          func(in *types.InboundTrust) { in.Issuer = "https://" + strings.Repeat("a", 1020) },
+		"subject":         func(in *types.InboundTrust) { in.Subject = strings.Repeat("s", 513) },
+		"internal_issuer": func(in *types.InboundTrust) { in.InternalIssuer = strings.Repeat("i", 1025) },
+		"required_claim": func(in *types.InboundTrust) {
+			in.RequiredClaim, in.RequiredClaimValue = strings.Repeat("c", 257), "v"
+		},
+		"required_claim_value": func(in *types.InboundTrust) {
+			in.RequiredClaim, in.RequiredClaimValue = "c", strings.Repeat("v", 513)
+		},
 		// 512 four-byte characters each: inside every character bound, over the byte bound the unique index needs.
 		"bytes": func(in *types.InboundTrust) {
 			in.Audience, in.Subject = strings.Repeat("\U0001F600", 512), strings.Repeat("\U0001F601", 512)
@@ -618,6 +700,7 @@ func TestPG_InboundTrust_RefusesOversizeTriple(t *testing.T) {
 	}
 	ok := f.newTrust(t, "big-ok", "ci-bot", "admin")
 	ok.Issuer, ok.Audience, ok.Subject = "https://"+strings.Repeat("a", 1016), strings.Repeat("u", 512), strings.Repeat("s", 512)
+	ok.InternalIssuer, ok.RequiredClaim, ok.RequiredClaimValue = strings.Repeat("i", 1024), strings.Repeat("c", 256), strings.Repeat("v", 512)
 	if _, _, err := f.st.CreateInboundTrust(f.ctx, ok); err != nil {
 		t.Errorf("a triple at every bound = %v; want stored", err)
 	}
