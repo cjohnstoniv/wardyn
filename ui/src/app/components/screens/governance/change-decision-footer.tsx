@@ -84,10 +84,10 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
   }
 
   const showHint = !!approvals && !own && !approved && viewer?.state !== "not_eligible";
-  const barClass = cn("flex flex-wrap items-center justify-end gap-2", pinned && "sticky bottom-0 z-20 -mx-4 border-t border-border bg-background px-4 pt-3");
+  const barClass = cn("flex flex-wrap items-center justify-end gap-2", pinned && "sticky bottom-0 z-20 -mx-4 mt-3 border-t border-border bg-background px-4 pt-3");
 
-  return (
-    <div data-testid="change-decision-footer" className={pinned ? "contents" : "space-y-3"}>
+  const top = (
+    <>
       {stale && (
         <Note tone="amber">
           <span data-testid="change-stale">{CHANGE_APPROVALS.STALE(changeTarget(change), change.proposed_by)}</span>
@@ -144,7 +144,11 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
           <Mono className="text-inherit">{refused}</Mono>
         </Note>
       )}
-      {!editing && (
+    </>
+  );
+
+  const bar = (
+    !editing && (
         <div
           data-testid="change-decision-bar"
           data-pinned={pinned ? "true" : undefined}
@@ -168,12 +172,22 @@ export function ChangeDecisionFooter(p: ChangeDecisionFooterProps) {
             </>
           )}
         </div>
-      )}
-      {showHint && !editing && (
-        <p data-testid="change-reject-note" className="text-xs text-muted-foreground">
-          {CHANGE_APPROVALS.REJECT_NOTE}
-        </p>
-      )}
+    )
+  );
+
+  const hint = showHint && !editing && (
+    <p data-testid="change-reject-note" className={cn("text-xs text-muted-foreground", pinned && "mt-3")}>
+      {CHANGE_APPROVALS.REJECT_NOTE}
+    </p>
+  );
+
+  // Pinned, the root has no box of its own, so the page's spacing no longer reaches what is inside it: everything
+  // above the bar goes in a block that carries its own top margin and gaps.
+  return (
+    <div data-testid="change-decision-footer" className={pinned ? "contents" : "space-y-3"}>
+      {pinned ? <div data-testid="change-decision-body" className="mt-4 space-y-3">{top}</div> : top}
+      {bar}
+      {hint}
     </div>
   );
 }

@@ -263,6 +263,13 @@ describe("the layout", () => {
     const bar = screen.getByTestId("change-decision-bar");
     expect(bar).toHaveAttribute("data-pinned", "true");
     expect(bar.className).toContain("sticky");
+    // The root has no box of its own when pinned, so what sits above the bar keeps its gaps in a block of its own.
+    expect(screen.getByTestId("change-decision-footer").className).toBe("contents");
+    const body = screen.getByTestId("change-decision-body");
+    expect(body.className).toContain("space-y-3");
+    expect(body.className).toContain("mt-4");
+    expect(body).toContainElement(screen.getByLabelText(CHANGES.REASON_LABEL));
+    expect(body).not.toContainElement(bar);
     expect(bar).toContainElement(approve());
     expect(bar).toContainElement(reject());
     expect(bar).not.toContainElement(screen.getByLabelText(CHANGES.REASON_LABEL));
@@ -273,6 +280,8 @@ describe("the layout", () => {
     const bar = screen.getByTestId("change-decision-bar");
     expect(bar).not.toHaveAttribute("data-pinned");
     expect(bar.className).not.toContain("sticky");
+    expect(screen.getByTestId("change-decision-footer").className).toContain("space-y-3");
+    expect(screen.queryByTestId("change-decision-body")).toBeNull();
   });
 
   it("gives way to the note form while it is open", () => {
