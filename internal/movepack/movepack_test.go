@@ -322,3 +322,20 @@ func TestMovePack_DigestMismatchFailsClosed(t *testing.T) {
 		t.Fatalf("destination = %+v, %v; want digest %s", dm, err, m.Digest)
 	}
 }
+
+// TestMoveSet_RefusesMalformedExclude: a reader and a writer refuse a set whose exclude pattern is empty or one
+// path.Match cannot read, instead of excluding nothing with it.
+func TestMoveSet_RefusesMalformedExclude(t *testing.T) {
+	for _, pat := range []string{"**/[", "/home/agent/work/a[", "", "**/"} {
+		bad := movepack.Set{Roots: set.Roots, Exclude: []string{pat}}
+		if _, err := movepack.NewReader(bytes.NewReader(nil), movepack.Options{Set: bad}); !errors.Is(err, movepack.ErrArchiveRefused) {
+			t.Errorf("reader with exclude %q = %v; want ErrArchiveRefused", pat, err)
+		}
+		if _, err := movepack.NewWriter(io.Discard, bad); !errors.Is(err, movepack.ErrArchiveRefused) {
+			t.Errorf("writer with exclude %q = %v; want ErrArchiveRefused", pat, err)
+		}
+	}
+	if _, err := movepack.NewWriter(io.Discard, set); err != nil {
+		t.Fatalf("the well-formed set = %v; want nil", err)
+	}
+}

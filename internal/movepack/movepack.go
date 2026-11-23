@@ -176,7 +176,8 @@ func (d *digest) manifest(skipped []string) Manifest {
 }
 
 // roots turns a Set's roots into the stream's relative form, refusing a root that is not absolute and
-// clean, is the sandbox's root, or holds or sits under another root.
+// clean, is the sandbox's root, or holds or sits under another root, and an exclude pattern that is empty
+// or malformed.
 func (s Set) roots() ([]string, error) {
 	if len(s.Roots) == 0 {
 		return nil, fmt.Errorf("%w: a carried set names no root", ErrArchiveRefused)
@@ -196,6 +197,13 @@ func (s Set) roots() ([]string, error) {
 			}
 		}
 		out = append(out, rel)
+	}
+	// A pattern path.Match cannot read would exclude nothing, and its files would be carried.
+	for _, pat := range s.Exclude {
+		rest := strings.TrimPrefix(strings.TrimPrefix(pat, "**/"), "/")
+		if _, err := path.Match(rest, ""); rest == "" || err != nil {
+			return nil, fmt.Errorf("%w: exclude pattern %q is malformed", ErrArchiveRefused, pat)
+		}
 	}
 	return out, nil
 }
