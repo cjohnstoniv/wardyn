@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -36,8 +37,10 @@ type siteStore struct {
 	poolSites map[uuid.UUID]uuid.UUID
 	sc        types.SiteConfig
 
-	configErr, homesErr, poolSiteErr error
-	siteReads                        int
+	configErr, homesErr, siteErr, poolSiteErr error
+	// deletedOnRead: GetOrgSite answers the site deleted, as when it is deleted between the two reads.
+	deletedOnRead bool
+	siteReads     int
 }
 
 var (
@@ -86,9 +89,15 @@ func (s *siteStore) DriveHomeSites(_ context.Context, ids []uuid.UUID) (map[uuid
 
 func (s *siteStore) GetOrgSite(_ context.Context, id uuid.UUID) (types.OrgSite, error) {
 	s.siteReads++
+	if s.siteErr != nil {
+		return types.OrgSite{}, s.siteErr
+	}
 	site, ok := s.sites[id]
 	if !ok {
 		return types.OrgSite{}, store.ErrNotFound
+	}
+	if s.deletedOnRead {
+		site.State = types.OrgSiteDeleted
 	}
 	return site, nil
 }
@@ -223,9 +232,21 @@ func TestOrgSitesOffIsUnchanged(t *testing.T) {
 			if run.SiteID != nil {
 				t.Errorf("a run placed in a pool at a site records site %s with sites off", run.SiteID)
 			}
-			want := runPlacement{pooled: true, pool: golden}.auditFields(run, "")
-			if got := slices.Sorted(maps.Keys(audit)); !slices.Equal(got, slices.Sorted(maps.Keys(want))) {
-				t.Errorf("run.create keys = %v, want today's %v", got, slices.Sorted(maps.Keys(want)))
+			// Today's run.create keys for a pooled run bound to a runner, and none about sites.
+			wantKeys := []string{"evidence_source", "placement", "placement_filled", "reserved", "resources_applied", "runner_id",
+				"runner_pool_id", "runner_pool_name", "runner_pool_revision", "runner_pool_selection"}
+			if got := slices.Sorted(maps.Keys(audit)); !slices.Equal(got, wantKeys) {
+				t.Errorf("run.create keys = %v, want today's %v", got, wantKeys)
+			}
+			if keys := siteKeys(audit); len(keys) != 0 {
+				t.Errorf("run.create carries %v with sites off", keys)
+			}
+			want := map[string]any{"runner_pool_id": f.mine.ID, "runner_pool_name": f.mine.Name, "runner_pool_revision": f.mine.Revision,
+				"runner_pool_selection": types.RunnerPoolSelectedPersonal, "runner_id": run.RunnerID}
+			for k, v := range want {
+				if audit[k] != v {
+					t.Errorf("run.create %s = %v, want %v", k, audit[k], v)
+				}
 			}
 			if f.st.siteReads != 0 {
 				t.Errorf("%d site reads with sites off", f.st.siteReads)
@@ -374,8 +395,11 @@ func TestSiteDefaultNoEligibleTargetAnswersLikeAChosenPool(t *testing.T) {
 		}
 	}
 	boom := runServerError("list runner pool members", errors.New("connection reset"))
-	if siteDefaultRefusal(pool, boom) != boom {
-		t.Error("a server error was reworded")
+	unavailable := runError(http.StatusServiceUnavailable, reasonRunnerCapabilitiesUnavailable, "runner capabilities unavailable")
+	for _, r := range []*runRefusal{boom, unavailable} {
+		if got := siteDefaultRefusal(pool, r); got != r || got.body.Error != r.body.Error {
+			t.Errorf("a server error was reworded: %+v", got)
+		}
 	}
 }
 
@@ -388,6 +412,7 @@ func TestSiteStepStoreErrorRefuses(t *testing.T) {
 		fail func(*siteStore)
 	}{
 		{"drive homes", func(s *siteStore) { s.homesErr = boom }},
+		{"the drives' site", func(s *siteStore) { s.siteErr = boom }},
 		{"pool site", func(s *siteStore) { s.poolSiteErr = boom }},
 		{"site config", func(s *siteStore) { s.configErr = boom }},
 	} {
@@ -398,6 +423,31 @@ func TestSiteStepStoreErrorRefuses(t *testing.T) {
 			_, _, refusal := f.place(t, f.driveRun())
 			if refusal == nil || !errors.Is(refusal.err, boom) || refusal.status != 0 {
 				t.Fatalf("refusal = %+v, want a server error carrying the read's", refusal)
+			}
+		})
+	}
+}
+
+// A site that cannot be met is passed over to the person's default with site_preference unusable: one with
+// no default pool, and one deleted between the drives' read and the site's.
+func TestSiteStepUnusableSiteFallsThrough(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shape func(*siteFixture)
+	}{
+		{"no default pool", func(f *siteFixture) {
+			f.office.DefaultPoolID = nil
+			f.st.sites[f.office.ID] = f.office
+		}},
+		{"deleted when read", func(f *siteFixture) { f.st.deletedOnRead = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSiteFixture(t)
+			sitesOn(t, f)
+			tc.shape(f)
+			run, audit := mustPlace(t, f, f.driveRun())
+			if *run.RunnerPoolID != f.mine.ID || run.RunnerPoolSelection != types.RunnerPoolSelectedPersonal || audit["site_preference"] != runnerpool.SiteUnusable {
+				t.Errorf("pool %s via %s, site_preference %v; want the person's default, unusable", *run.RunnerPoolID, run.RunnerPoolSelection, audit["site_preference"])
 			}
 		})
 	}

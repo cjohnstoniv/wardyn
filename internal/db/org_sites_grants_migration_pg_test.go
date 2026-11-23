@@ -26,7 +26,11 @@ func TestPG_Migration0400_GrantsTheAppRole(t *testing.T) {
 	}
 	// The grants a hand-granting install made from the 0.9 note: runner_pools without DELETE.
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE ON runner_pools TO `+app)
-	pgExec(t, pool, `GRANT SELECT, INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER ON runner_pools TO `+reader)
+	readerVerbs := "SELECT, INSERT, DELETE, TRUNCATE, REFERENCES, TRIGGER"
+	if pgScalar[bool](t, pool, `SELECT current_setting('server_version_num')::int >= 170000`) {
+		readerVerbs += ", MAINTAIN" // a table privilege from PostgreSQL 17
+	}
+	pgExec(t, pool, `GRANT `+readerVerbs+` ON runner_pools TO `+reader)
 	// runner_pools owned by a role other than the migrator: as the owner it holds UPDATE through its own
 	// acl entry, and the migration must not grant it the new tables.
 	migrator := pgScalar[string](t, pool, `SELECT current_user::text`)
