@@ -1258,3 +1258,9 @@ func TestMDMDevice_LogsAndAuditCarryNoSubject(t *testing.T) {
 		t.Fatalf("the cases wrote no audit row or no failed-fetch log line to check: rows %d, log %q", rows.Len(), h.text())
 	}
 }
+
+func TestMDMDeviceSetActionIsThePlacementOne(t *testing.T) {
+	if auditRunnersMDMDeviceSet != placement.ActionRunnersMDMDeviceSet {
+		t.Fatalf("%q is not placement's %q", auditRunnersMDMDeviceSet, placement.ActionRunnersMDMDeviceSet)
+	}
+}

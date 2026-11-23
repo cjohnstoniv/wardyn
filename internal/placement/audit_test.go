@@ -44,6 +44,6 @@ func TestAuditActionsUseTheClosedVerbList(t *testing.T) {
 		}
 	}
 	if len(AuditActions) != 23 {
-		t.Errorf("%d actions, design §12.2 lists 14, minus egress.baseline.write (B-P1's, as governance.egress_baseline.write), plus runners.enabled.set, runner.inventory.hold, runner.update, runner.action.refuse, runner.trust.write, runner.recovery.request, runner.offline_summary.record, runner.event.refuse, runner.device_cert.record and runners.mdm_device.set", len(AuditActions))
+		t.Errorf("%d actions, design section 12.2 lists 14, minus egress.baseline.write (B-P1's, as governance.egress_baseline.write), plus runners.enabled.set, runner.inventory.hold, runner.update, runner.action.refuse, runner.trust.write, runner.recovery.request, runner.offline_summary.record, runner.event.refuse, runner.device_cert.record and runners.mdm_device.set", len(AuditActions))
 	}
 }

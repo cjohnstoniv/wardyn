@@ -43,12 +43,16 @@ func applyRunnerSettingsRequest(st *types.RunnerSettings, req types.RunnerSettin
 	}
 }
 
+// auditRunnersMDMDeviceSet is placement.ActionRunnersMDMDeviceSet as a literal in this package, which is where
+// TestAuditHostViewsMatchTheirEmits reads an emit's action from (TestMDMDeviceSetActionIsThePlacementOne pins them equal).
+const auditRunnersMDMDeviceSet = "runners.mdm_device.set"
+
 // auditMDMDeviceSettings records each MDM field req names. The CA is audited as the sorted SHA-256
 // fingerprints of its certificates, never the PEM; the URL as itself.
 func (s *Server) auditMDMDeviceSettings(r *http.Request, req types.RunnerSettingsRequest, before, after types.RunnerSettings) {
 	audit := func(target string, was, now any) {
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			placement.ActionRunnersMDMDeviceSet, target, "success", mustJSON(map[string]any{"before": was, "after": now})))
+			auditRunnersMDMDeviceSet, target, "success", mustJSON(map[string]any{"before": was, "after": now})))
 	}
 	if req.MDMDeviceCAPEM != nil {
 		audit("runners.mdm_device_ca_pem", mdmBundleFingerprints(before.MDMDeviceCAPEM), mdmBundleFingerprints(after.MDMDeviceCAPEM))
