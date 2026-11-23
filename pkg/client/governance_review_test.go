@@ -310,3 +310,52 @@ func TestPutApprovalCounts_HeldIsPendingApprovalError(t *testing.T) {
 		t.Errorf("a held edit must not decode as counts: %+v", out)
 	}
 }
+
+// An empty list the server sent is an answer: it comes back out, and a list the server left out stays out.
+func TestGovernanceApprovalsKeepEmptyLists(t *testing.T) {
+	const sent = `{"required":2,"require_security":false,"have":0,"entries":[],"eligible":[],"uncountable":[],"reach":"ok"}`
+	var a client.GovernanceChangeApprovals
+	if err := json.Unmarshal([]byte(sent), &a); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"entries", "eligible", "uncountable"} {
+		if !strings.Contains(string(out), `"`+key+`":[]`) {
+			t.Errorf("%s was dropped from %s", key, out)
+		}
+	}
+	var row client.GovernanceChangeApprovals
+	if err := json.Unmarshal([]byte(`{"required":2,"require_security":false,"have":1}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = json.Marshal(row)
+	for _, key := range []string{"entries", "eligible", "uncountable"} {
+		if strings.Contains(string(out), key) {
+			t.Errorf("an absent %s appeared in %s", key, out)
+		}
+	}
+}
+
+func TestGovernanceImpactKeepEmptyLists(t *testing.T) {
+	var im client.GovernanceChangeImpact
+	if err := json.Unmarshal([]byte(`{"computed":"tree","as_of":"2026-11-20T10:00:00Z","people":[],"live_runs":[],"live_runs_total":0}`), &im); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := json.Marshal(im)
+	for _, key := range []string{`"people":[]`, `"live_runs":[]`} {
+		if !strings.Contains(string(out), key) {
+			t.Errorf("%s was dropped from %s", key, out)
+		}
+	}
+	var none client.GovernanceChangeImpact
+	if err := json.Unmarshal([]byte(`{"computed":"none","not_computed":"kind","as_of":"2026-11-20T10:00:00Z"}`), &none); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = json.Marshal(none)
+	if strings.Contains(string(out), "people") || strings.Contains(string(out), "live_runs") {
+		t.Errorf("an absent list appeared in %s", out)
+	}
+}

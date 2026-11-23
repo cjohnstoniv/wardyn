@@ -27,7 +27,7 @@ type GovernanceChangeReview struct {
 // vcs or owning_unit.
 type GovernanceChangeWidening struct {
 	Field   string   `json:"field"`
-	Entries []string `json:"entries,omitempty"`
+	Entries []string `json:"entries,omitzero"`
 }
 
 // GovernanceChangeRisk is the deterministic risk grade of a change, before and after. Before is nil for a
@@ -59,8 +59,8 @@ type GovernanceChangeImpact struct {
 	Computed      string                    `json:"computed"`
 	NotComputed   string                    `json:"not_computed,omitempty"`
 	AsOf          time.Time                 `json:"as_of"`
-	People        []GovernanceImpactPerson  `json:"people,omitempty"`
-	LiveRuns      []GovernanceImpactRun     `json:"live_runs,omitempty"`
+	People        []GovernanceImpactPerson  `json:"people,omitzero"`
+	LiveRuns      []GovernanceImpactRun     `json:"live_runs,omitzero"`
 	LiveRunsTotal *int                      `json:"live_runs_total,omitempty"`
 	Activates     []GovernanceUnitRef       `json:"activates,omitempty"`
 	Vacates       []GovernanceUnitRef       `json:"vacates,omitempty"`
@@ -142,11 +142,12 @@ type GovernanceChangeApprovals struct {
 	Required        int  `json:"required"`
 	RequireSecurity bool `json:"require_security"`
 	Have            int  `json:"have"`
-	// Entries are the approvals given so far, a dropped one included.
-	Entries []GovernanceApprovalEntry `json:"entries,omitempty"`
+	// Entries are the approvals given so far, a dropped one included. The slices that follow use omitzero, so an
+	// empty list the server sent stays in the output and an absent one stays absent.
+	Entries []GovernanceApprovalEntry `json:"entries,omitzero"`
 	// Eligible are the people who can still approve; Uncountable says what the count leaves out.
-	Eligible    []GovernanceApprovalEligible    `json:"eligible,omitempty"`
-	Uncountable []GovernanceApprovalUncountable `json:"uncountable,omitempty"`
+	Eligible    []GovernanceApprovalEligible    `json:"eligible,omitzero"`
+	Uncountable []GovernanceApprovalUncountable `json:"uncountable,omitzero"`
 	// Reach is ok, cant_reach or cant_confirm. CantReachReason (count or security) is set only with cant_reach.
 	Reach           string `json:"reach,omitempty"`
 	CantReachReason string `json:"cant_reach_reason,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func printChange(w io.Writer, ch sdk.GovernanceChange) {
 	if r := ch.Diff.Review; r != nil && r.Risk != nil {
 		fmt.Fprintf(w, "Risk:     %s\n", riskLine(*r.Risk))
 	}
-	printApprovals(w, ch.Approvals)
+	printApprovals(w, ch)
 }
 
 // reviewVerdictLine is the one-line verdict of a change's review; no review reads as not checked.
@@ -200,10 +201,14 @@ func droppedWords(why string) string {
 	return why
 }
 
-// printApprovals writes where a change's approvals stand; a change without them is decided by one person.
-func printApprovals(w io.Writer, a *sdk.GovernanceChangeApprovals) {
+// printApprovals writes where a change's approvals stand; a pending change without them is decided by one person.
+func printApprovals(w io.Writer, ch sdk.GovernanceChange) {
+	a := ch.Approvals
 	if a == nil {
-		fmt.Fprintln(w, "One person decides.")
+		// The server sends the block for a pending change only, so a decided change says nothing here.
+		if ch.State == "pending" {
+			fmt.Fprintln(w, "One person decides.")
+		}
 		return
 	}
 	head := fmt.Sprintf("Approvals: %d of %d approved", a.Have, a.Required)
@@ -228,6 +233,12 @@ func printApprovals(w io.Writer, a *sdk.GovernanceChangeApprovals) {
 		people = append(people, firstNonEmpty(p.Email, p.Principal))
 	}
 	fmt.Fprintf(w, "Can approve: %s\n", firstNonEmpty(strings.Join(people, ", "), "no one"))
+	if a.ProposerActive != nil && !*a.ProposerActive {
+		fmt.Fprintln(w, "Proposer: no longer active, so the last approval will be refused")
+		if a.Reach == "ok" {
+			return
+		}
+	}
 	fmt.Fprintln(w, reachLine(a))
 }
 
@@ -339,7 +350,7 @@ func governanceApprovalsNeededCmd(client clientFn) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			counts, err := client().GetApprovalCounts(cmd.Context())
 			if err != nil {
-				return err
+				return noApprovalCounts(err)
 			}
 			if asJSON {
 				return emitJSON(cmd.OutOrStdout(), counts)
@@ -387,9 +398,18 @@ func setApprovalCounts(cmd *cobra.Command, c *sdk.Client, file string) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return noApprovalCounts(err)
 	}
 	return printApprovalCounts(cmd.OutOrStdout(), counts)
+}
+
+// noApprovalCounts words the 404 of a server that has no approval counts route; any other error is unchanged.
+func noApprovalCounts(err error) error {
+	var api *sdk.APIError
+	if errors.As(err, &api) && api.Status == http.StatusNotFound {
+		return errors.New("This server does not offer approval counts yet.")
+	}
+	return err
 }
 
 // approverWords is who may approve a kind, in plain words.

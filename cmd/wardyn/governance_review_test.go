@@ -364,3 +364,49 @@ func TestChangesShow_JSONKeepsZeroApprovalCounts(t *testing.T) {
 		t.Errorf("--json dropped a zero count:\n%s", out)
 	}
 }
+
+func TestChangesShow_DecidedChangeWithoutApprovalsSaysNothingAboutThem(t *testing.T) {
+	id := uuid.New()
+	_, url := newReviewServer(t, map[string]reviewAnswer{
+		"GET /api/v1/governance/changes/" + id.String(): {body: changeBody(id, "applied", "", "")},
+	})
+	out, _, err := runGovernance(t, url, "changes", "show", id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "One person decides") || strings.Contains(out, "Approvals") {
+		t.Errorf("a decided change must not claim how it was approved:\n%s", out)
+	}
+	if !strings.Contains(out, "State:    applied") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestChangesShow_InactiveProposerRefusesTheLastApproval(t *testing.T) {
+	id := uuid.New()
+	body := strings.Replace(approvalsBody("ok", "", `{"principal":"kai-sub","tier":"security_admin"}`), `"still_needed":1`, `"still_needed":1,"proposer_active":false`, 1)
+	_, url := newReviewServer(t, map[string]reviewAnswer{
+		"GET /api/v1/governance/changes/" + id.String(): {body: changeBody(id, "pending", "", body)},
+	})
+	out, _, err := runGovernance(t, url, "changes", "show", id.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Proposer: no longer active, so the last approval will be refused") || strings.Contains(out, "enough people can still approve") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestApprovalsNeeded_AServerWithoutTheRouteSaysSo(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "counts.json")
+	if err := os.WriteFile(file, []byte(`{"default":{"required":2,"require_security":false},"kinds":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, url := newReviewServer(t, map[string]reviewAnswer{})
+	for _, args := range [][]string{{"approvals-needed", "get"}, {"approvals-needed", "set", "--file", file}} {
+		_, _, err := runGovernance(t, url, args...)
+		if err == nil || err.Error() != "This server does not offer approval counts yet." || exitCodeFor(err) != 1 {
+			t.Errorf("%v: err = %v (exit %d), want the plain message and exit 1", args, err, exitCodeFor(err))
+		}
+	}
+}
