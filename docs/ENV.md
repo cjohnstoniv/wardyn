@@ -114,6 +114,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_LISTEN` | string | `:8080` | HTTP listen address (flag `-listen`) |
 | `WARDYN_ADMIN_TOKEN` 🔒 | string | **binary: empty**; compose: `demo-admin-token` | admin bearer gating the public API (flag `-admin-token`), at least 32 bytes unless the bind is loopback-only. An empty token with no OIDC issuer on a loopback bind turns the gate off. [Details](#wardyn_admin_token) |
 | `WARDYN_PG_DSN` 🔒 | string | (unset, required) | Postgres DSN (flag `-dsn`). Operators who set it should size it **at least 4**; the section gives the lock and listener connections to budget per replica. [Details](#wardyn_pg_dsn) |
+| `WARDYN_LOCK_POOL_MAX_CONNS` | int | `8` | connections each replica holds for cross-replica locks, and its guarded credential-write dials, at once; 1 to 64 (flag `-lock-pool-max-conns`). [Details](#wardyn_lock_pool_max_conns) |
 | `WARDYN_PG_MIGRATE_DSN` 🔒 | string | (unset) | optional owner/migrator DSN; splits migrate vs runtime pool (flag `-migrate-dsn`). A migrator that owns nothing cannot run an upgrade's migrations, and wardynd fails closed rather than half-migrating. [Details](#wardyn_pg_migrate_dsn) |
 | `WARDYN_REHEARSE_PG_DSN` 🔒 | string | (unset) | the scratch database `wardynd -recovery-rehearse` reads; an environment variable only, so a password never shows in the process list. The rehearsal refuses the live database and the one the set was taken from. [Recovery set and restore rehearsal](operations/recovery-rehearsal.md) |
 | `WARDYN_MIGRATE_TIMEOUT` | duration | `5m` | how long `db.Migrate` may run before boot fails closed — separate from the fixed 30s connect budget, so a slow migration (e.g. an index build on a large table) doesn't crash-loop the upgrade (flag `-migrate-timeout`) |
@@ -445,19 +446,30 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Each unserialized pass writes an `auth.signin_unserialized` audit row.
 - So give it at least 6 to serialize them through a tick.
 - The guarded write that stores a credential under a person's identity (`WithIdentityShared`; a sign-in's capture is one) dials its own connection as well, for the length of that write.
-- Up to 8 at once per replica (`db.LockPoolMaxConns`), separate from the 8 lock connections below.
-- And a write that finds all 8 in use waits two seconds and is then refused with `503` `lock_unavailable` (retry).
+- Up to `WARDYN_LOCK_POOL_MAX_CONNS` (default 8) at once per replica, separate from the lock connections below.
+- And a write that finds all of them in use waits two seconds and is then refused with `503` `lock_unavailable` (retry).
 - An organisation that enrols laptops (hybrid enrolment) should add headroom for them.
 - Each enrolled device's audit push holds one connection while its claimed hashes are recomputed, a device has at most one push in flight (a second concurrent push is answered 429 with `Retry-After`).
 - So budget one connection per device you expect to push at the same moment.
 - **Lock connections, on top of `pool_max_conns`:** the cross-replica locks (the per-run operation lock, the site-configuration and capability-enforcement writers, the audit chain verify sweep, and the AWS SSO and Azure DevOps sign-in refresh single-flights; [`internal/db/locks.go`](../internal/db/locks.go)).
 - They each hold a connection of their own, dialled from the same DSN and kept out of the request pool.
 - So a slow guarded operation can never starve the queries it guards.
-- A process holds at most **8** at once (`db.LockPoolMaxConns`, fixed, not configurable).
-- Nested locks share their caller's connection, and a lock that finds all 8 in use waits two seconds and is then refused with `503` `lock_unavailable` (retry), never skipped.
+- A process holds at most **8** at once (`WARDYN_LOCK_POOL_MAX_CONNS`, default 8).
+- Nested locks share their caller's connection, and a lock that finds all of them in use waits two seconds and is then refused with `503` `lock_unavailable` (retry), never skipped.
 - Budget Postgres `max_connections` for `pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 listener connections per replica, and up to 8 more for guarded credential writes.
-- So at worst `pool_max_conns` plus 21 per replica (every wardynd dials `LISTEN wardyn_live` and `LISTEN wardyn_mask` outside the pool, with `WARDYN_HA` or not).
+- That is at the default. With `WARDYN_LOCK_POOL_MAX_CONNS` set, count that number twice in place of the two 8s.
+- So at worst `pool_max_conns` plus 21 per replica at the default, or 5 plus twice `WARDYN_LOCK_POOL_MAX_CONNS` otherwise (every wardynd dials `LISTEN wardyn_live` and `LISTEN wardyn_mask` outside the pool, with `WARDYN_HA` or not).
 - The sign-in supersede lock is the one exception, and keeps its documented behaviour on a pooled connection (see above).
+
+### `WARDYN_LOCK_POOL_MAX_CONNS`
+
+- How many connections each replica holds for cross-replica locks at once (flag `-lock-pool-max-conns`; default 8, 1 to 64).
+- Each guarded operation that takes a lock holds one connection, and nested locks share it.
+- A lock that finds every connection in use waits two seconds and is then refused with `503` `lock_unavailable` (retry), never skipped.
+- A guarded credential write dials a connection of its own, and at most this many run at once.
+- Raising it adds the same number of dials, so each replica can use up to twice this number on top of its pool.
+- It is read once at boot. Changing it needs a restart.
+- 64 is the ceiling: three replicas at it already pass Postgres's default of 100 connections.
 
 ### `WARDYN_PG_MIGRATE_DSN`
 
