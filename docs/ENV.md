@@ -701,7 +701,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 ### `WARDYN_EXEC_OUTPUT_TAIL`
 
 - Keep the last `WARDYN_RUN_OUTPUT_TAIL_BYTES` of every non-interactive run's combined stdout/stderr, in wardynd's memory while the run lives and, with `WARDYN_RUN_OUTPUT_PERSIST` on, in Postgres once it ends (the managed-harness sign-in run keeps none.
-- On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`.
+- On Kubernetes with recordings on there is no direct stdout to keep: once such a run ends, with `WARDYN_RUN_OUTPUT_PERSIST` on, the available recording is recovered into a masked tail marked `source` `recording` and always `incomplete`. An issuer portal's grant also reads that tail of its own person's non-interactive run.
 - Or a `capture_gap` when the recording is missing, invalid or cannot be proven masked, and only the run's owner or an operator is served it.
 - A read while the run is live, with persistence off, or by a caller who may see the run but is neither, answers `409` (`run_output_not_captured`)).
 - With persistence off, the owner or an operator reading an ended run whose recording never arrived gets `409` (`run_output_not_kept`).
