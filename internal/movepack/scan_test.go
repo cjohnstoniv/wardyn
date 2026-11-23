@@ -254,3 +254,29 @@ func mustPack(t *testing.T, files ...file) []byte {
 	stream, _ := pack(t, files...)
 	return stream
 }
+
+// TestMoveScan_PackEndsAtItsChecksum: a pack's last object is followed by its checksum, 20 or 32 bytes, and
+// nothing else; bytes past it, or a pack cut before it, cannot be scanned and are refused.
+func TestMoveScan_PackEndsAtItsChecksum(t *testing.T) {
+	const o = "home/agent/work/.git/objects"
+	whole := packFile(t, 1, packObj{kind: 3, body: []byte("a")})
+	for _, row := range []struct {
+		name string
+		pack string
+		ok   bool
+	}{
+		{"a SHA-1 checksum", whole, true},
+		{"a SHA-256 checksum", whole + strings.Repeat("\x00", 12), true},
+		{"bytes past the checksum", whole + strings.Repeat("x", 50), false},
+		{"one byte past the checksum", whole + "x", false},
+		{"no checksum", whole[:len(whole)-20], false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			stream := gitTree(t, dir(o+"/pack"), reg(o+"/pack/pack-1.pack", row.pack))
+			_, err := readAll(bytes.NewReader(stream), scanning(movepack.Limits{}))
+			if row.ok != (err == nil) || (!row.ok && !errors.Is(err, movepack.ErrScanUnreadable)) {
+				t.Fatalf("read = %v; want ok %v, else ErrScanUnreadable", err, row.ok)
+			}
+		})
+	}
+}

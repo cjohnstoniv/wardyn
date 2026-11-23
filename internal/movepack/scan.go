@@ -252,6 +252,14 @@ func (r *Reader) pack(p string, src io.Reader) error {
 			return err
 		}
 	}
+	// What follows the last object is the pack's checksum, SHA-1 or SHA-256, and nothing else.
+	tail, err := io.ReadAll(io.LimitReader(br, 33))
+	if err != nil {
+		return r.unreadable(err, "pack %q checksum", p)
+	}
+	if len(tail) != 20 && len(tail) != 32 {
+		return fmt.Errorf("%w: pack %q ends with %d bytes after its last object, not a checksum", ErrScanUnreadable, p, len(tail))
+	}
 	return nil
 }
 
