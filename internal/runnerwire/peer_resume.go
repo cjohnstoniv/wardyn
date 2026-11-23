@@ -65,7 +65,7 @@ func unanswerable(carried []uint32, replayed []Frame) []uint32 {
 
 // streamCalls are the calls whose answer is a byte stream the runner opens to the waiting caller.
 var streamCalls = map[string]bool{MethodAttach: true, MethodDialDesktop: true, MethodExecStream: true, MethodRecoverOutput: true,
-	MethodMacWindow: true, MethodLocalAttach: true, MethodSyncFolder: true}
+	MethodMacWindow: true, MethodLocalAttach: true, MethodLocalWindow: true, MethodSyncFolder: true}
 
 // ReplaysStreamCall reports whether replay, the frames a resume would send, holds a CALL whose answer is
 // a byte stream (streamCalls), or a CALL it cannot read. A link drop answers every waiting caller with

@@ -45,7 +45,8 @@ type RunnerHooks struct {
 	// ProxyImage, when set, is told the proxy image the organisation named in AUTH_OK (never "").
 	ProxyImage func(string)
 	// LocalAttach, when set, is told on every connect whether the organisation's AUTH_OK allows local
-	// attach (false from an organisation that does not say).
+	// attach or a local window, either of which needs the local socket (false from an organisation that
+	// says neither).
 	LocalAttach func(bool)
 	// PerRunLimits, when set, is told on every connect the per-run CPU (milli-CPU) and memory (MiB) the
 	// organisation's AUTH_OK names for this runner (0, 0 from an organisation that names none).
@@ -292,7 +293,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}
 	if c.cfg.Hooks.LocalAttach != nil {
-		c.cfg.Hooks.LocalAttach(ok.LocalAttach)
+		c.cfg.Hooks.LocalAttach(ok.LocalAttach || ok.LocalWindow)
 	}
 	if c.cfg.Hooks.PerRunLimits != nil {
 		c.cfg.Hooks.PerRunLimits(ok.PerRunCPUMillis, ok.PerRunMemoryMiB)

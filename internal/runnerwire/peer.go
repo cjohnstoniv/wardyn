@@ -861,7 +861,8 @@ func (p *Peer) answer(f Frame) error {
 
 // callStreamKinds are the stream kinds that exist only as a runner's reply to one org call, each with
 // that call's method.
-var callStreamKinds = map[string]string{KindPTYTee: MethodLocalAttach, KindMacWindow: MethodMacWindow}
+var callStreamKinds = map[string]string{KindPTYTee: MethodLocalAttach, KindMacWindow: MethodMacWindow,
+	KindLocalWindow: MethodLocalWindow}
 
 // runnerToOrgOnly reports a stream kind that flows from the runner to the org only.
 func runnerToOrgOnly(kind string) bool { _, ok := callStreamKinds[kind]; return ok }

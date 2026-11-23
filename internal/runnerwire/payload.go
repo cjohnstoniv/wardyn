@@ -49,6 +49,9 @@ type (
 		// to a run over the runner's local socket. Absent (an older organisation) or false: the runner
 		// opens no socket; an older runner ignores the field.
 		LocalAttach bool `json:"local_attach,omitempty"`
+		// LocalWindow says the organisation allows a window onto a Linux VM run over the local socket;
+		// true only while its site switch is on. An older runner ignores it.
+		LocalWindow bool `json:"local_window,omitempty"`
 		// PerRunCPUMillis and PerRunMemoryMiB are the most CPU (milli-CPU) and memory (MiB) one run may
 		// take on this runner, from the limits its owner or administrator declared (wardyn runner set), so
 		// a runner can size what it builds for one run (a macOS VM). Re-sent on every connect; 0 or absent
@@ -168,6 +171,9 @@ type Caps struct {
 	// MethodLocalAttachTeeAck. The org sends them only to a runner that says so; an older runner
 	// reads as absent and the org refuses a local attach before any call.
 	LocalAttach bool `json:"local_attach,omitempty"`
+	// LocalWindow says the runner serves MethodLocalWindow: it shows a Linux VM run's display to a CLI
+	// on its local socket. The org sends it only to a runner that says so.
+	LocalWindow bool `json:"local_window,omitempty"`
 	// BoundFolders says the runner binds a member's workspace folder bound to it (runner.Mount.BoundRunner):
 	// it binds such a folder only when it is bound to this runner, holds it to its owner's --drive-root,
 	// and binds a writable one only under a writable ceiling. The org places a run with such a folder only
@@ -717,6 +723,11 @@ const (
 	// first the runner writes one MacWindowEnd line and half-closes it; the org ends the window by
 	// resetting or closing it.
 	KindMacWindow = "mac_window"
+	// KindLocalWindow is the stream of one local window onto a Linux VM run. It is opened only by the
+	// runner, only as the reply stream of a local_window call, and lives as long as the window. It
+	// carries no display bytes: when the window ends first the runner writes one LocalWindowEnd line and
+	// half-closes it; the org ends the window by resetting or closing it.
+	KindLocalWindow = "local_window"
 )
 
 // MacWindowUnexpected is the mac_window_unexpected event's data: Grant is the grant id the helper's window
@@ -732,6 +743,27 @@ type MacWindowUnexpected struct {
 type MacWindowEnd struct {
 	Reason string `json:"reason"`
 }
+
+// LocalWindowEnd is the one line a local_window stream carries, written by the runner when the window
+// ends before the org ended it. Reason is LocalWindowEnd*. RefusalKind is what the display filter
+// refused, in its fixed words, or LocalWindowNotRFB; it never quotes the stream. CutTextDropped counts
+// the cut-text messages the filter dropped.
+type LocalWindowEnd struct {
+	Reason         string `json:"reason"`
+	RefusalKind    string `json:"refusal_kind,omitempty"`
+	CutTextDropped int    `json:"cut_text_dropped,omitempty"`
+}
+
+// The reasons a LocalWindowEnd carries. An organisation reads any other reason as the link lost.
+const (
+	LocalWindowEndPerson       = "person"        // the person closed the window
+	LocalWindowEndRunEnded     = "run_ended"     // the VM's display closed
+	LocalWindowEndRefused      = "refused"       // the display filter refused the stream (RefusalKind)
+	LocalWindowEndHelperFailed = "helper_failed" // the viewer broke the local socket's protocol
+)
+
+// LocalWindowNotRFB is the RefusalKind of a display that never spoke RFB.
+const LocalWindowNotRFB = "not_rfb"
 
 // MacWindowOpenSentence is the refusal for a second window on a run that has one open: the helper, the
 // runner and the organisation use these words (macvm.WindowAlreadyOpenSentence), so a person reads the
@@ -767,7 +799,7 @@ type Open struct {
 // Validate refuses a kind outside the closed list.
 func (o Open) Validate() error {
 	switch o.Kind {
-	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow:
+	case KindPTY, KindExec, KindExecStderr, KindRelay, KindOutput, KindFolder, KindDesktop, KindPTYTee, KindMacWindow, KindLocalWindow:
 		return nil
 	}
 	return fmt.Errorf("%w: unknown stream kind %q", ErrBadFrame, o.Kind)
