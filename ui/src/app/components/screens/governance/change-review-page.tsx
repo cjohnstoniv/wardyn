@@ -186,11 +186,11 @@ export function ChangeReviewPage() {
         if (out.state === "pending") {
           setReason("");
           await reload();
-        } else navigate(QUEUE);
+        } else void navigate(QUEUE);
       } else {
         await api.rejectChange(change.id, reason.trim());
         toast.success(CHANGES.TOAST_REJECTED);
-        navigate(QUEUE);
+        void navigate(QUEUE);
       }
     } catch (e) {
       setRefused(e instanceof HttpError ? e.message : getErrorMessage(e));
@@ -283,7 +283,7 @@ export function ChangeReviewPage() {
             }}
             onCancel={() => setEditing(false)}
             onGone={(status) => {
-              if (status === 404) navigate(QUEUE);
+              if (status === 404) void navigate(QUEUE);
               else void reload();
             }}
           />
