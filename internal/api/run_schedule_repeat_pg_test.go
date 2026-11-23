@@ -23,6 +23,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -925,4 +926,64 @@ func TestRunScheduleResume_DeniedIsRefusedWithItsOwnSentence(t *testing.T) {
 		e.setPinnedDeny(pinned, true)
 		check(t, e, v.ID)
 	})
+}
+
+// seedScheduleRow stores one schedule for owner holding a task and an identity snapshot, as a create would.
+func seedScheduleRow(t *testing.T, q keydomain.Querier, owner string) {
+	t.Helper()
+	if _, err := q.Exec(t.Context(), `INSERT INTO run_schedules (id, owner, every, local_time, time_zone, request, authority, authority_at, next_at)
+		VALUES ($1, $2, 'daily', '09:00', 'UTC', '{"task":"nightly report"}',
+			jsonb_build_object('sub', $2::text, 'email', 'person@corp.example', 'groups', '["eng"]'::jsonb), now(), now() + interval '1 day')`,
+		uuid.New(), owner); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func scheduleRowsOf(t *testing.T, q keydomain.Querier, owner string) (n int) {
+	t.Helper()
+	if err := q.QueryRow(t.Context(), `SELECT count(*) FROM run_schedules WHERE owner = $1`, owner).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// Erasing a person's credentials deletes their schedules, which hold their email and group snapshot, and leaves
+// another person's alone.
+func TestPG_PersonErasure_CredentialsDeletesTheirSchedules(t *testing.T) {
+	l := newMaskLab(t)
+	fail := false
+	a := erasureReplica(l, &fail)
+	const alice, bob = "alice-sub", "bob-sub"
+	seedScheduleRow(t, l.pool, alice)
+	seedScheduleRow(t, l.pool, bob)
+	if err := a.sec.For(alice).Put(t.Context(), "anthropic-api-key", []byte("alice-credential-value-0000")); err != nil {
+		t.Fatal(err)
+	}
+	sec := ssoSession(t, "sec-sub", "sec@corp.example", oidc.RoleSecurityAdmin)
+	if w := doSSO(t, a.srv, http.MethodPost, "/api/v1/people/"+alice+"/erasure", sec, erasureBody("credentials")); w.Code != http.StatusOK {
+		t.Fatalf("erase credentials = %d %s, want 200", w.Code, w.Body)
+	}
+	if n := scheduleRowsOf(t, l.pool, alice); n != 0 {
+		t.Errorf("alice keeps %d schedules after the credentials erasure, want 0", n)
+	}
+	if n := scheduleRowsOf(t, l.pool, bob); n != 1 {
+		t.Errorf("bob's schedules = %d, want 1 untouched", n)
+	}
+}
+
+// A leaver purge, which runs the credentials scope, deletes the leaver's schedules and no one else's.
+func TestSCIMPurgeDeletesTheLeaversSchedules(t *testing.T) {
+	e := newSCIMEnv(t)
+	f := e.seedPurgeSubject(purgeSub, purgeEmail, purgeOID)
+	seedScheduleRow(t, e.pool, purgeSub)
+	seedScheduleRow(t, e.pool, "sub-bystander-schedules")
+	if w := e.del(e.b, f.id); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body)
+	}
+	if n := scheduleRowsOf(t, e.pool, purgeSub); n != 0 {
+		t.Errorf("the leaver keeps %d schedules after the purge, want 0", n)
+	}
+	if n := scheduleRowsOf(t, e.pool, "sub-bystander-schedules"); n != 1 {
+		t.Errorf("the bystander's schedules = %d, want 1 untouched", n)
+	}
 }

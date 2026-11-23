@@ -83,6 +83,9 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 				err = s.eraseLoginGroups(ctx, person, want)
 			}
 			if err == nil {
+				err = s.eraseRunSchedulesOf(ctx, person)
+			}
+			if err == nil {
 				var kept []string
 				if kept, err = s.eraseTokenHistory(ctx, person, want, history); left != nil {
 					*left = kept
@@ -301,10 +304,8 @@ func (s *Server) eraseRunTasks(ctx context.Context, person string) (any, error) 
 	}
 	// A repeating schedule's stored request holds task text too, and a schedule left in place would book a new
 	// queued run after the cancel below.
-	if se, ok := s.cfg.Store.(runScheduleEraser); ok {
-		if _, err := se.DeleteRunSchedulesOf(ctx, person); err != nil {
-			return nil, err
-		}
+	if err := s.eraseRunSchedulesOf(ctx, person); err != nil {
+		return nil, err
 	}
 	cancelled, err := s.cancelQueuedRunsOf(ctx, person, "person_erased")
 	if err != nil {

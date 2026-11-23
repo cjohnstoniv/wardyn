@@ -163,6 +163,7 @@ With `WARDYN_SCHEDULED_RUNS` set, a person signed in with single sign-on keeps u
 - A deployment-wide session revoke pauses every schedule, and each owner resumes their own.
 - A resume runs the create's checks again as you and stores your session's groups, so sign in again before resuming a schedule paused because its groups changed.
 - Pausing or deleting a schedule leaves a start already booked in place; cancel it like any waiting run.
+- Erasing a person's `run_tasks` or `credentials`, or a leaver purge, deletes their schedules.
 - A start refused for a reason not about the owner, such as a full queue, is skipped, and the schedule stays active.
 - A start missed while no server ran is skipped, never started late.
 - One server books at most 50 schedules every 30 seconds, and a start it cannot book by its time is skipped and logged, never started late.

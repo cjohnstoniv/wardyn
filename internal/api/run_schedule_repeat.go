@@ -80,7 +80,7 @@ type runScheduleStore interface {
 	BlankRunTaskByID(ctx context.Context, runID uuid.UUID) error
 }
 
-// runScheduleEraser deletes a person's schedules: the run tasks erasure (eraseRunTasks).
+// runScheduleEraser deletes a person's schedules (eraseRunSchedulesOf).
 type runScheduleEraser interface {
 	DeleteRunSchedulesOf(ctx context.Context, owner string) (int, error)
 }
@@ -89,6 +89,18 @@ var (
 	_ runScheduleStore  = store.PG{}
 	_ runScheduleEraser = store.PG{}
 )
+
+// eraseRunSchedulesOf deletes every schedule the person owns. A schedule holds their task text and their identity
+// snapshot (email and IdP groups), so the run tasks erasure deletes it, and so does the credentials erasure beside
+// the login group snapshot, which a leaver purge runs.
+func (s *Server) eraseRunSchedulesOf(ctx context.Context, person string) error {
+	se, ok := s.cfg.Store.(runScheduleEraser)
+	if !ok {
+		return nil
+	}
+	_, err := se.DeleteRunSchedulesOf(ctx, person)
+	return err
+}
 
 type scheduleRule struct {
 	Every     string       // "daily" | "weekdays" | "weekly"
