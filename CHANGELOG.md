@@ -25,6 +25,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   by a reader who guesses its value, and that an interactive run of a BYOI image on a registered runner skips the image selftest.
 - Docs: the one-line installer's `claude-code` entry names the agent base image, which cannot sign in to Claude; the
   image build guide says so and how to build one.
+- Docs: the credential erase reference no longer says a crypto-erased credential stays unreadable after any backup
+  restore. Restoring a full backup taken before the erase makes it readable again while the key-encryption-key
+  version that wrapped its key is available.
 
 ### Before you upgrade
 

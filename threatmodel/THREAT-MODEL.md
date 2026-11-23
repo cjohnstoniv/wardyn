@@ -2474,7 +2474,7 @@ These risks are **not closed by v1 Wardyn**.
       - (a) holds unchanged: a restored row opens until its wrapping-key version is disabled in Key Vault.
     - (e) **Crypto-erasure (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for the rows it covers, and for no others.
       - A person's credential written with it on has its data key under that person's own `cred` principal key.
-      - And an erase destroys that key, so the row cannot be read on any replica at its next use, whatever a backup holds of the row.
+      - And an erase destroys that key, so this database cannot read the row on any replica at its next use, nor a copy of the row restored into it from a backup.
       - **The scope is exactly the v3 rows.**
         - A v1 row, a row written while the setting was off, an external-store pointer (the value lives in the organisation's store), the operator namespace and the boot keys are only deleted.
         - And `credential.erase` reports the two apart (`crypto_erased`, `deleted`).
