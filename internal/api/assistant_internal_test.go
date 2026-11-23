@@ -175,7 +175,7 @@ func TestAssistantFreshFirstTurnCarriesThePreviewsRecords(t *testing.T) {
 	}
 }
 
-// A turn_end writes one assistant.suggestion row: the person as actor, the session as target, the purpose,
+// A turn_end writes one assistant.suggestion.create row: the person as actor, the session as target, the purpose,
 // binding, target and digests, the server's tool names, and no prompt or output text.
 func TestAssistantSuggestionRowFields(t *testing.T) {
 	site, bind := assistantTwoProviders()
