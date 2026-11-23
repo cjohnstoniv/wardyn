@@ -416,6 +416,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := tlsCookiePostureCheck(oidcConfigured, s.cfg.OIDCRedirectURL, s.cfg.OIDCSecureCookies); ok {
 		checks = append(checks, chk)
 	}
+	checks = appendSSODiscoveryCheck(checks, s.cfg.OIDC)
 	if chk, ok := governAdminRunsCheck(s.cfg.GovernAdminRuns, s.governAdminRunsExempts("recording"), oidcConfigured); ok {
 		checks = append(checks, chk)
 	}

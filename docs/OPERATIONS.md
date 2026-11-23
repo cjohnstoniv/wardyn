@@ -2111,8 +2111,16 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
    docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex wardynd
    ```
 
-   - Not a soft gate: wardynd runs synchronous OIDC discovery against the issuer at boot and **exits nonzero if it fails** ([`cmd/wardynd/boot_deps.go`](../cmd/wardynd/boot_deps.go)) — an unreachable Dex refuses the whole boot, not just SSO.
-   - Compose's `depends_on: dex: condition: service_healthy` sequences this for the command above; it only bites if you later restart wardynd alone while Dex is down.
+   - On the first boot with an issuer, wardynd exits nonzero if discovery fails. A deployment upgraded from 0.10.1 or older counts as a first boot, because the record of issuers began in 0.10.2.
+   - Once wardynd has booted with that issuer, a provider that does not answer (no connection, a timeout, or a 5xx) no longer stops boot. wardynd starts with sign-in closed (`/auth/login` answers 503), retries in the background, and `/healthz` shows `sso_pending: true`.
+   - Any other discovery failure still refuses boot: a 4xx, a bad discovery document, or an extra scope the provider does not advertise.
+   - While sign-in is closed, people already signed in keep their sessions, and API tokens and runs keep working.
+   - Back-channel logouts are held, up to 256, and applied once the provider and its signing keys answer. Each one writes a `session.revoke.hold` audit row with a `token_sha256`; the applied `session.revoke` row carries the same value.
+   - A held logout that fails verification, or one refused because the queue was full or the route was rate limited, is not applied. Setup status shows `sso_discovery`. The `sub` in those rows is not verified: check each person at the identity provider before revoking their sessions by hand.
+   - Held logouts live in memory. Restarting wardynd while sign-in is closed loses them, and a crash leaves no record of the loss. To find them, look for `session.revoke.hold` rows in state `queued` whose `token_sha256` has no later successful `session.revoke` row and no `unverifiable` or `refused_reserved` row.
+   - An anonymous caller can fill the 256 places with well-formed tokens early in an outage. Genuine logouts that arrive after that are refused and recorded as `refused_queue_full`, not held: check those people too.
+   - A mistyped `WARDYN_OIDC_INTERNAL_ISSUER` on an established deployment looks like an unanswering provider: check the logged `discovery_url`.
+   - Compose's `depends_on: dex: condition: service_healthy` sequences the first boot only: after that, wardynd starts with sign-in closed if Dex is down, and retries.
 
 3. **Give a third person their own login** (0.7.4 already ships `demo@wardyn.local` and `member@wardyn.local` below — this recipe adds a third identity).
    - For the bundled Dex, `staticPasswords` in [`deploy/compose/dex.yaml`](../deploy/compose/dex.yaml) is the authentication list — `enablePasswordDB: true` with no external connector means an email absent from it has no password to authenticate with, full stop.

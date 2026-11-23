@@ -238,7 +238,7 @@ Three more the tier inherits rather than introduces:
 - At boot, with no device credential stored yet, `wardynd` posts the token to `WARDYN_ORG_URL` and stores the device credential the organisation returns in the laptop's age-encrypted secret store under the reserved name `wardyn-org-device-credential`
   - the same store `age.key` protects, never an MDM-delivered file.
 - No credential and no token, or an enrolment call that fails (the organisation unreachable included), **refuses the boot**.
-- The service manager and the 300s converge tick retry it, the way an unreachable IdP already does for m′'s OIDC discovery.
+- The service manager and the 300s converge tick retry it.
 - A retry helps only while the token is unspent and unexpired.
 - The organisation spends a token when it accepts it.
 - So an enrolment whose answer never reached the laptop, or that failed on the organisation's side after that, leaves every later retry refused `401` until an admin mints a new token.
@@ -522,7 +522,7 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 | Site | Offline behaviour |
 |---|---|
 | The converge job's image pull | **Fine.** It runs `--pull missing`, so an image already on the box is used as-is. (It used to be `--pull always` under `set -euo pipefail`, which killed the launcher and left the stack **down even though every image was local**.) |
-| OIDC discovery at boot (m′ only) | **Fails boot, loudly, inside a 30s budget — and that is correct.** See below. |
+| OIDC discovery at boot (m′ only) | Fails boot on first enrolment; afterwards starts with sign-in closed and retries. See below. |
 | First-device enrolment (`install.sh`) | **Needs the network, once.** It mints `age.key` by running `wardynd -gen-age-key`, so it needs that image — `ghcr.io/cjohnstoniv/wardynd:latest` unless `WARDYN_INSTALL_IMAGE` names another (see "The install lane"). This is inherent: enrolment cannot complete offline. Pre-seed that exact ref, or enrol on-network. |
 | Audit fanout to the SIEM | **Drops past the buffer.** At-most-once beyond 4096 events; see the ceiling above. This is the one that loses evidence rather than recovering. |
 | Hybrid enrolment to the org control plane (m′ only, `WARDYN_ORG_URL` set) | **Needs the network, once.** See [below](#hybrid-enrolment-to-the-org-control-plane). |
@@ -531,10 +531,10 @@ curl -fsS -X POST -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" \
 
 **Why the IdP case is not a bug.**
 
-- On m′, OIDC is the only authentication, so a daemon that came up *without* a working authenticator would be serving authenticated routes with nothing behind them.
-- `wardynd` therefore fails boot rather than degrading.
-- It is not stranded: `wardynd`'s container carries `restart: unless-stopped`, and the converge job re-asserts every 300s, so the retry loop already exists **one layer up**.
-- It is fail-closed by construction, because a daemon that never finishes booting cannot serve anything.
+- On m′, OIDC is the only authentication, so a daemon must never serve authenticated routes with nothing behind them.
+- On the first boot with an issuer, `wardynd` therefore fails boot rather than degrading, inside a 30s budget: a daemon that never finishes booting cannot serve anything.
+- Once it has booted with that issuer, a provider that does not answer no longer stops boot. `wardynd` starts with sign-in closed (no new sign-in without the provider) and retries in the background; people already signed in keep their sessions.
+- It is not stranded: `wardynd`'s container carries `restart: unless-stopped`, and the converge job re-asserts every 300s.
 - It recovers on its own when the network returns.
 - What was missing was not retry but **diagnosability**: the launcher said only *"wardynd did not become healthy"*.
 - It now prints the daemon's last lines and names this cause first.

@@ -232,6 +232,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// whose answer it lost. One bit; false only on a store that keeps no keys.
 		"idempotent_run_create": s.keepsRunCreateKeys(),
 	}
+	if s.cfg.OIDC != nil && s.cfg.OIDC.Pending() {
+		// sso_pending: the provider has not been reached since this server started, so sign-in is closed. Present
+		// only then, so the body of every other install is unchanged.
+		body["sso_pending"] = true
+	}
 	// network_policy is k8sNetpolVerdict's "enforced"/"acknowledged"/"unenforced"/
 	// "refused"/"not_proven" grade, present ONLY on a k8s substrate — omitted from the map entirely
 	// (not even a JSON null) on Docker and every other driver, so a Docker

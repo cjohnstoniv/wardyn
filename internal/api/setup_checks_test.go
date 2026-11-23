@@ -798,7 +798,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"env_builder": true, "k8s_egress_containment": true, "age_key": true, "store_external": true, "platform_split": true,
 	"key_domains": true, "key_domain_assignments": true, "principal_keys": true, "key_domain_changes": true,
 	"kek_service": true, "kek_service_static_key": true, "kek_local": true, "kek_local_rows": true,
-	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true,
+	"site_config": true, "site_config_seed": true, "internal_hosts": true, "tls_cookie_posture": true, "approval_notify": true, "sso_discovery": true,
 	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true, "audit_partitions": true,
 	"agent_image":         true,
@@ -860,6 +860,17 @@ func TestSetupCheckBlocking(t *testing.T) {
 		assertSetupCheckBlocking(t, chk)
 	} else {
 		t.Fatal("confinementFloorCheck absent, want a floor-mismatch row")
+	}
+
+	for _, c := range []struct {
+		pending bool
+		st      oidc.LogoutQueueStats
+	}{{true, oidc.LogoutQueueStats{Held: 2}}, {false, oidc.LogoutQueueStats{Unverifiable: 1}}} {
+		if chk, ok := ssoDiscoveryCheck(c.pending, c.st); ok {
+			assertSetupCheckBlocking(t, chk)
+		} else {
+			t.Fatalf("ssoDiscoveryCheck(%v, %+v) absent", c.pending, c.st)
+		}
 	}
 
 	if chk, ok := ssoRBACCheck(true, false, false, false, false); ok {

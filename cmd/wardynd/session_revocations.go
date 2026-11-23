@@ -25,7 +25,8 @@ var (
 )
 
 // sessionRevocationsFor returns the D16 pg-backed revocations store when OIDC
-// is actually configured (authn != nil), else nil — mirrors "OIDC:
+// is actually configured (authn != nil; a pending authenticator, whose
+// provider has not been reached yet, counts as configured), else nil — mirrors "OIDC:
 // feats.authn" on api.Config being nil exactly when OIDC is unconfigured, so
 // the admin revoke-sessions surface never mounts with no session mechanism
 // for it to act on. A second, independent *pgSessionRevocations instance from

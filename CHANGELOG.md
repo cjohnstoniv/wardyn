@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
