@@ -11,6 +11,14 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS VMs: on a Mac that also runs Docker Desktop, the slot of a finished base preparation, tools update or base edit is no longer held while Docker's Linux VM, started after the job ended, keeps running. The runner now notes when the job's helper exited, and a Virtualization process created after that is not counted as the job's VM. Not yet run on a real Mac ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+- macOS VMs: the runner package's ledger setup no longer stops at a ledger entry file that carries the user immutable flag (`uchg`) when it rebuilds the entries directory in place. It clears the flag and carries the entry across. An entry file with the system immutable flag (`schg`), or with another name, still stops setup, which now names the file and the `chflags` command that clears it. Not yet run on a real Mac ([#3695](https://github.com/cjohnstoniv/wardyn/issues/3695)).
+- macOS VMs: when Apple's framework refuses a base preparation's install VM because this Mac already runs the most macOS VMs it allows, the runner records the slot it cannot account for, as it already did for the preparation's other VM starts. Not yet run on a real Mac ([#3696](https://github.com/cjohnstoniv/wardyn/issues/3696)).
+- VM runs: a guest's repeat of a connection attempt Wardyn just refused (a retransmitted SYN) is refused again at once, without asking the proxy a second time. Before, it briefly held a tunnel slot, which at the run's tunnel limit could refuse a real connection with a false tunnel-limit report ([#3932](https://github.com/cjohnstoniv/wardyn/issues/3932)).
+- `wardyn-runnerd doctor` and `status.json`: a start refused with no stage stays the reported failure when the computer's clock moved back between starts. An older refusal at a stage no longer replaces it.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
