@@ -39,6 +39,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A terminal or desktop that ends because access could not be confirmed now closes in a way the console reconnects on. (#4057)
 - A request to a UI app whose run cannot be read is answered 503, not 404, and so is a UI session check whose sponsor cannot be read (403 before). A UI session check whose run's profile composition nothing satisfies is answered 403 `governance_overlay_unsatisfiable`, not 503. (#4057)
 - An inbound caller that keeps calling a run already at its request limit now uses up its own limit as well. (#3766)
+- On a run that attaches a workspace, an inline policy or policy overlay mount that the server refuses on its own files is now refused when the workspace is seeded (422 `workspace_seed_policy_conflict`), no longer with the policy (400 `inline_policy_invalid` or `policy_overlay_invalid`). A run that attaches no workspace is refused as before.
 
 ### Fixed
 
@@ -58,6 +59,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Docs: the credential erase reference no longer says a crypto-erased credential stays unreadable after any backup
   restore. Restoring a full backup taken before the erase makes it readable again while the key-encryption-key
   version that wrapped its key is available.
+- A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).
+- A `write:` requirement on a path inside a workspace folder that is on a person's runner is now checked by its text, like one on the folder itself. Before, the server checked a path inside such a folder against its own files ([#3913](https://github.com/cjohnstoniv/wardyn/issues/3913)).
 
 ### Security
 
