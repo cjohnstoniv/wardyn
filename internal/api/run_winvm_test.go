@@ -43,6 +43,7 @@ type winvmStore struct {
 	checkErr error
 	checks   []string
 	removed  []string
+	holders  []types.WindowsLicenceHolder
 }
 
 var _ store.WindowsLicenceStore = (*winvmStore)(nil)
@@ -71,7 +72,7 @@ func (s *winvmStore) DeleteWindowsLicencePool(context.Context, uuid.UUID) (types
 }
 
 func (s *winvmStore) ListWindowsLicenceHolders(context.Context, uuid.UUID) ([]types.WindowsLicenceHolder, error) {
-	return nil, nil
+	return s.holders, nil
 }
 
 func (s *winvmStore) AddWindowsLicenceHolder(_ context.Context, pool uuid.UUID, subject, by string) (types.WindowsLicenceHolder, error) {

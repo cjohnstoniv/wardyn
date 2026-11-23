@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -211,6 +212,12 @@ func (s *Server) handleUpdateWindowsPool(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Seats != nil {
 		if err := types.ValidateWindowsLicenceSeats(*req.Seats); err != nil {
+			writeWindowsLicenceInvalid(w, err)
+			return
+		}
+	}
+	if req.Name != nil { // checked as create checks it; one seat stands in, always valid
+		if err := (types.WindowsLicencePool{Name: *req.Name, Seats: 1}).Validate(); err != nil {
 			writeWindowsLicenceInvalid(w, err)
 			return
 		}
@@ -442,7 +449,17 @@ func (s *Server) handleUpdateWindowsImage(w http.ResponseWriter, r *http.Request
 			"Send the image's revision, and a name or licence_pool_id to change. A ref is never changed: register a new image.")
 		return
 	}
-	name := s.windowsImageName(r.Context(), ws, id)
+	name := ""
+	if cur, err := ws.GetWindowsImage(r.Context(), id); err == nil {
+		name = "The Windows image " + cur.Name
+		if req.Name != nil { // the stored row, renamed, checked as create checks it
+			cur.Name = *req.Name
+			if err := cur.Validate(); err != nil {
+				writeWindowsLicenceInvalid(w, err)
+				return
+			}
+		}
+	}
 	img, err := ws.UpdateWindowsImage(r.Context(), id, req.Revision, req.Name, req.LicencePoolID)
 	if err != nil {
 		writeWindowsLicenceErr(w, r, "update Windows image", name, err)
@@ -502,13 +519,10 @@ func (s *Server) handleListMyWindowsImages(w http.ResponseWriter, r *http.Reques
 		}
 		in, seen := held[img.LicencePoolID]
 		if !seen {
-			holders, err := ws.ListWindowsLicenceHolders(ctx, img.LicencePoolID)
+			in, err = holdsWindowsSeat(ctx, ws, img.LicencePoolID, me)
 			if err != nil {
 				writeServerError(w, r, "list Windows licence holders", err)
 				return
-			}
-			for _, h := range holders {
-				in = in || h.Subject == me
 			}
 			held[img.LicencePoolID] = in
 		}
@@ -525,4 +539,21 @@ func nonNil[T any](xs []T) []T {
 		return []T{}
 	}
 	return xs
+}
+
+// holdsWindowsSeat reports whether me holds a seat in the pool, false when the pool is deleted: its image
+// cannot launch.
+func holdsWindowsSeat(ctx context.Context, ws store.WindowsLicenceStore, pool uuid.UUID, me string) (bool, error) {
+	p, err := ws.GetWindowsLicencePool(ctx, pool)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && p.State != types.WindowsLicencePoolActive) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	holders, err := ws.ListWindowsLicenceHolders(ctx, pool)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(holders, func(h types.WindowsLicenceHolder) bool { return h.Subject == me }), nil
 }
