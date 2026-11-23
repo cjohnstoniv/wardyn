@@ -303,6 +303,7 @@ const (
 	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonInvalidServiceParam       = "invalid_service_param"        // ?service= is present and not "0" or "1"
+	reasonInvalidCountsParam        = "invalid_counts_param"         // ?counts= is not "" or "skip"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
