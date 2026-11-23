@@ -142,6 +142,7 @@
 - **Under a governance ceiling that sets no positive maximum of its own, the composer clamp leaves this field exactly as authored**.
   - So a run there is never idle-reaped whether the field is absent, `0`, or negative: the reaper skips every policy value `<= 0`, which makes those three the same run.
 - A ceiling that wants member runs reaped states a positive maximum, which the clamp then binds them to.
+- An outage does not count as idleness: no run is idle-stopped while the database recovers, or while its registered runner cannot reach the server, and its idle time starts again after each ([Run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run)).
 
 ### `git_push_any_branch`
 

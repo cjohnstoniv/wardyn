@@ -38,3 +38,32 @@ func TestIdleReaperIsWiredToTheEndHold(t *testing.T) {
 			"an idle or max-age stop then stops its sandbox past its end hold")
 	}
 }
+
+// TestIdleReaperIsWiredToTheOutageHooks pins the wiring no other test can see: boot hands the reaper the store
+// health tracker, the runner sessions and the idle clock stamp. Every field is nil-safe, so without a line the
+// reaper would idle-stop through a database recovery, or a run whose runner the server cannot reach, with no
+// other test failing. Spacing is ignored, so gofmt's alignment of the literal does not matter.
+func TestIdleReaperIsWiredToTheOutageHooks(t *testing.T) {
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(repoRoot(t), "cmd", "wardynd", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return strings.Join(strings.Fields(string(b)), " ")
+	}
+	boot := read("boot_serve.go")
+	for _, c := range []struct{ want, consequence string }{
+		{"StoreRecovering: health.Recovering,", "idle stops are no longer held while the database recovers"},
+		{"StoreHealthyFor: health.HealthyFor,", "a database that goes away again inside the grace no longer restarts the idle clocks"},
+		{"RunnerOnline: srv.RunnerOnline,", "a run on a runner the server cannot reach is idle-stopped"},
+		{"StampIdle: lifecycleStore{pool: pool}.StampIdleClocks,", "idle clocks are never restarted after an outage"},
+	} {
+		if !strings.Contains(boot, c.want) {
+			t.Errorf("startBackgroundWorkers no longer sets %q: %s", c.want, c.consequence)
+		}
+	}
+	if !strings.Contains(read("main.go"), "ticks, health, gtWrite)") {
+		t.Error("main.go no longer passes the store health tracker to startBackgroundWorkers: the reaper gets a nil tracker and idle stops are never held")
+	}
+}

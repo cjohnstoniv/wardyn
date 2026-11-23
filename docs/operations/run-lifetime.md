@@ -264,6 +264,9 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - Every attached surface resets the clock when it opens and every 30 seconds while it is held. The surfaces are the browser terminal, an SSH shell, an SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
 - So a run someone is attached to is not idle-stopped, as long as those writes succeed. They are best effort and a failed one is dropped, so a database that refuses them for long enough lets an attached run look idle.
 - A run nobody is attached to is idle like any other, which is why a run can end an hour after its owner last looked at it.
+- An outage does not count as idleness. For 25 minutes after the database is reachable again, and after every start of the server ([`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace); `0` turns this off), no run is idle-stopped. Each run's idle time starts again at the start of that window (with several replicas, once for each).
+- A run on a registered runner that the server has no connection to is not idle-stopped, and its idle time starts again when the runner reconnects. With several replicas, only the replica that holds the runner's connection idle-stops its runs.
+- The run's end and `WARDYN_RUN_MAX_AGE` still apply in both cases.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
 - A pool's Interactive idle stop bounds it: its default applies when the policy sets none, and its maximum is never exceeded.
 - A member under a positive ceiling already holds that ceiling's maximum by then (next bullet), so for a member only the pool's maximum bites; an administrator gets the pool's default.

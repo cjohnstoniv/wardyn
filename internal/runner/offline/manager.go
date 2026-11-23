@@ -94,6 +94,10 @@ type deadline struct {
 	tokenAt, endsAt     time.Time
 	receipt             time.Time
 	tokenLeft, endsLeft time.Duration
+	// cleanupOnly marks a Docker restart's provisional deadline (ProvisionalDeadlines): it defers
+	// containment until the saved LapseBy and nothing else. Every other check reads the run as lapsed
+	// (expired) until the org's next lease replaces it.
+	cleanupOnly bool
 }
 
 // by is when d lapses: its receipt plus the sooner of its legs.
@@ -105,9 +109,9 @@ func (d deadline) by() time.Time {
 	return d.receipt.Add(left)
 }
 
-// New recovers local state. Run must start before connecting: a restart cannot
-// reconstruct a monotonic deadline, so existing proxies are contained until
-// an authenticated fresh lease establishes one.
+// New recovers local state. Run must start before connecting. A restart cannot reconstruct a monotonic
+// deadline, so a run's proxy is contained until ProvisionalDeadlines gives it one or an authenticated
+// fresh lease does.
 // eraseOutput deletes one run's retained output; the manager calls it only for
 // an org-erased (asserted) run's quarantined evidence at its retention ceiling.
 func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedRef func(uuid.UUID) string, outputSettled func(context.Context, uuid.UUID, string) (int64, bool, error), eraseOutput func(uuid.UUID) error) (*Manager, error) {
@@ -408,16 +412,27 @@ func (m *Manager) Created(ctx context.Context, spec runner.SandboxSpec, localRef
 	// create captured output says so here, before its sandbox is used.
 	r.OutputCapture = spec.ExecOutput != nil
 	r.MachineKind = spec.MachineKind.Normalize()
+	r.CreateDone = true
 	m.state.Runs[spec.RunID] = r
 	m.publishActivity()
 	return m.save()
 }
 
+// expired is every check but containment's: no deadline, a Docker restart's cleanup-only deadline, or one
+// that has passed.
 func (m *Manager) expired(id uuid.UUID) bool {
 	d, ok := m.deadlines[id]
-	if !ok {
-		return true
-	}
+	return !ok || d.cleanupOnly || m.past(d)
+}
+
+// lapsed is CheckLapses' read: like expired, but a cleanup-only deadline holds until it passes.
+func (m *Manager) lapsed(id uuid.UUID) bool {
+	d, ok := m.deadlines[id]
+	return !ok || m.past(d)
+}
+
+// past reports d over, timed on the monotonic clock from its receipt.
+func (m *Manager) past(d deadline) bool {
 	elapsed := m.since(d.receipt)
 	return elapsed < 0 || elapsed >= d.tokenLeft || (!d.endsAt.IsZero() && elapsed >= d.endsLeft)
 }
@@ -432,7 +447,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.expired(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.lapsed(id)
 		selectedBy := ""
 		if expired {
 			selectedBy = m.selectedBy(id, r)
@@ -623,18 +638,27 @@ func (m *Manager) SetOptions(o Options) error {
 	return nil
 }
 
-// ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional cleanup
-// deadline: the sooner of restart + RunTokenTTL and its last lease's LapseBy, but never before restart
-// + restartReadyGrace. The org's next lease replaces it.
+// ProvisionalDeadlines gives each held run with no deadline and no obligation a provisional deadline after a
+// restart. The org's next lease replaces it.
+//   - Self-lapsing proxies (k8s): a cleanup bound, the sooner of restart + RunTokenTTL and the last lease's
+//     LapseBy, but never before restart + restartReadyGrace.
+//   - Otherwise (Docker): exactly the last lease's LapseBy, never more than RunTokenLapseAfter after the
+//     restart and with no grace, so a runnerd restarting in a loop still stops each proxy at its LapseBy. It
+//     defers containment only (cleanupOnly), and only for a run whose create finished and that carries no
+//     containment, failure or hold; any other run, and one with no LapseBy or past it, gets none and is
+//     contained at once.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.selfLapse {
-		return
-	}
 	now := m.now()
 	for id, r := range m.state.Runs {
 		if _, ok := m.deadlines[id]; ok || r.Retired || r.Ref == "" || r.ProxyExited != nil || r.ProxyStoppedAt != nil {
+			continue
+		}
+		if !m.selfLapse {
+			if left := min(r.LapseBy.Sub(now), identity.RunTokenLapseAfter); restartKeepable(r) && left > 0 {
+				m.deadlines[id] = deadline{receipt: now, tokenLeft: left, cleanupOnly: true}
+			}
 			continue
 		}
 		left := identity.RunTokenTTL
@@ -643,6 +667,15 @@ func (m *Manager) ProvisionalDeadlines() {
 		}
 		m.deadlines[id] = deadline{receipt: now, tokenLeft: left}
 	}
+}
+
+// restartKeepable reports whether a Docker restart may keep r's proxy until its LapseBy: a finished create
+// with a saved lapse time, a lease no containment superseded, and no marker that asks for containment.
+func restartKeepable(r localRun) bool {
+	superseded := !r.LeaseAfter.IsZero() && !r.Lease.TokenRenewedAt.After(r.LeaseAfter)
+	return r.CreateDone && !r.LapseBy.IsZero() && !superseded && !r.ContainmentOnly && !r.FailedCreation &&
+		r.Quarantine == nil && r.Containment == nil && r.MutationFailure == nil && r.ContainmentPending == nil &&
+		r.TeardownUnconfirmed == nil
 }
 
 // proxyObserveInterval is the k8s runner's pod-list cadence (design K1 §6.2 P1).
