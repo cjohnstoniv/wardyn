@@ -82,6 +82,7 @@ var RedactableActions = map[string]bool{
 	"workload.apply": true, "workload.policy_pin.set": true, "workload.launch_refused": true, "workload.delete": true,
 	"model_provider.service_grant.mint": true, "model_provider.service_grant.secret_write": true,
 	"model_provider.service_grant.secret_delete": true,
+	"runners.mdm_device.set":                     true,
 }
 
 // Failure is one failed check: the bundle's checkpoint index, the seq it concerns, and why.
