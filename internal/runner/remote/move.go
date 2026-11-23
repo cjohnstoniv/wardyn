@@ -71,6 +71,12 @@ func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, 
 	fail := func(stage, err error) (runner.Sandbox, runner.CarriedManifest, error) {
 		return runner.Sandbox{}, runner.CarriedManifest{}, fmt.Errorf("%w: %w", stage, err)
 	}
+	// An import creates a sandbox, so it reads the Dispatch gate and refuses a resident value as a create does.
+	if s.opts.Dispatch != nil {
+		if err := s.opts.Dispatch(ctx); err != nil {
+			return fail(runner.ErrMoveCreate, err)
+		}
+	}
 	if err := s.moveCalls(); err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}
@@ -78,6 +84,9 @@ func (s *Substrate) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, 
 		return fail(runner.ErrMoveCreate, err)
 	}
 	if err := runner.CheckCarriedLimit(maxBytes); err != nil {
+		return fail(runner.ErrMoveCreate, err)
+	}
+	if err := s.refuseResident(spec.RunID, spec); err != nil {
 		return fail(runner.ErrMoveCreate, err)
 	}
 	if err := s.checkClass(ctx, spec.ConfinementClass); err != nil {
