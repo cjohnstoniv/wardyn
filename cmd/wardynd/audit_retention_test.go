@@ -113,7 +113,7 @@ func TestLeaderGo_AuditEnsureRunsOnOneReplica(t *testing.T) {
 			runAuditRetentionSweeper(c, r.c, false, 20*time.Millisecond)
 		})
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(45 * time.Second) // two replicas booting together: a family gets its leader after the spreading wait
 	for a.ensures.Load()+b.ensures.Load() < 8 {
 		if time.Now().After(deadline) {
 			t.Fatalf("no replica ensured the partitions: a=%d b=%d", a.ensures.Load(), b.ensures.Load())
