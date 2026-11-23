@@ -38,6 +38,9 @@ const PLAIN: MemberDriveAdminItem = { ...base, id: "m5", name: "Notes" };
 
 const rowOf = (name: string) => screen.getByText(name, { selector: "td *, td" }).closest("tr")!;
 const switchOf = (name: string) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(name) });
+// The row's switch while the confirm is open: the page behind an open AlertDialog is aria-hidden, so it is read with
+// hidden: true, as the person sees it on the page.
+const switchBehind = (name: string) => screen.getByRole("switch", { name: T.TEAM_WRITE_SWITCH(name), hidden: true });
 const show = async (rows: MemberDriveAdminItem[]) => {
   listMemberDrives.mockResolvedValue({ drives: rows, total: rows.length });
   render(<MemberDrives />);
@@ -97,7 +100,7 @@ describe("MemberDrives: a person's own team drive", () => {
     await userEvent.click(switchOf(TEAM.name));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.TEAM_WRITE_ALLOW }));
     expect(setMemberTeamDriveWrite).toHaveBeenCalledWith(TEAM.id, true);
-    expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    expect(switchBehind(TEAM.name)).toHaveAttribute("aria-checked", "false");
     await act(async () => answer({ ...TEAM, members_can_write: true }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "true");
@@ -122,7 +125,7 @@ describe("MemberDrives: a person's own team drive", () => {
     await userEvent.click(dlg.getByRole("button", { name: T.TEAM_WRITE_ALLOW }));
     expect(await dlg.findByRole("alert")).toHaveTextContent("This drive is already being deleted.");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(switchOf(TEAM.name)).toHaveAttribute("aria-checked", "false");
+    expect(switchBehind(TEAM.name)).toHaveAttribute("aria-checked", "false");
   });
 
   it("another failure shows the alert line", async () => {
@@ -132,7 +135,7 @@ describe("MemberDrives: a person's own team drive", () => {
     const dlg = within(await screen.findByRole("alertdialog"));
     await userEvent.click(dlg.getByRole("button", { name: T.TEAM_WRITE_STOP }));
     expect(await dlg.findByRole("alert")).toHaveTextContent("The server could not save this change.");
-    expect(switchOf(TEAM_ON.name)).toHaveAttribute("aria-checked", "true");
+    expect(switchBehind(TEAM_ON.name)).toHaveAttribute("aria-checked", "true");
   });
 
   it("the write switch shows its state in words", async () => {
