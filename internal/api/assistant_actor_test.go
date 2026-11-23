@@ -5,6 +5,10 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -140,8 +144,10 @@ func TestAssistantToolCtxCarriesTypeAndEmail(t *testing.T) {
 	sources := map[string]context.Context{
 		// the SSO branch publishes the verified session's values
 		"sso": withHumanIdentity(context.Background(), "sub-pat", email, oidc.RoleUser, "contractor", []string{"g1"}, false),
-		// the api-token branch publishes the token's stamp after the cli_access clamp
-		"api token": withHumanIdentity(context.Background(), "sub-pat", email, oidc.RoleUser, "contractor", []string{"g1"}, false),
+		// the api-token branch publishes the token's stamp after the cli_access clamp, with the token's own keys
+		"api token": context.WithValue(withAPITokenID(oidc.WithRevocationSeq(
+			withHumanIdentity(context.Background(), "sub-pat", email, oidc.RoleUser, "contractor", []string{"g1"}, false), "sub-pat", 3),
+			uuid.New()), apiTokenKindCtxKey{}, types.APITokenKindCLIAccess),
 	}
 	for name, reqCtx := range sources {
 		r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(reqCtx)
@@ -164,16 +170,20 @@ func TestAssistantToolCtxCarriesTypeAndEmail(t *testing.T) {
 	}
 }
 
-// A tool call answers as the person's own request does: the unit a group membership selects, and the unit a
-// user-type membership selects, are the same through the tool context as through the direct one. The fixture's
-// stored groups equal the snapshot's, so the intersection is the whole snapshot and the two contexts differ in
-// nothing but their base. Skips without WARDYN_TEST_PG.
+// A tool call answers as the person's own request does, from both sources a person's request comes through: the
+// signed-in session as the session middleware reads it back, and an API token as the token middleware publishes
+// it. Row 1: the unit a user-type membership selects is the same through the tool context as through the direct
+// one. Row 2: a deny written against the person's e-mail address, and an allow written against a group, decide the
+// same through the tool context. The stored groups equal the snapshot's, so the two contexts differ in nothing but
+// their base. Skips without WARDYN_TEST_PG.
 func TestAssistantToolCtxAnswersAsThePerson_PG(t *testing.T) {
 	const principal, email = "sub-pat", "pat@corp.example"
 	h := newHarness(t)
 	pool := throwawayPGPool(t)
 	pg := store.NewPG(pool)
-	h.srv.cfg.Store = pg
+	cfg := baseTestConfig(h, pg)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
 	ctx := context.Background()
 	if _, err := pg.CreateUserType(ctx, types.UserType{ID: "contractor", Name: "Contractor"}); err != nil {
 		t.Fatal(err)
@@ -187,34 +197,94 @@ func TestAssistantToolCtxAnswersAsThePerson_PG(t *testing.T) {
 		Subject: "contractor", UnitID: unit.ID, CreatedBy: "seed"}); err != nil {
 		t.Fatal(err)
 	}
+	for _, g := range []types.CapabilityGrant{
+		{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: email, Capability: capModelProvider, Value: "denied-p",
+			Effect: types.CapabilityDeny, CreatedBy: "seed"},
+		{ID: uuid.New(), SubjectType: types.CapabilitySubjectGroup, Subject: "g2", Capability: capModelProvider, Value: "allowed-p",
+			Effect: types.CapabilityAllow, CreatedBy: "seed"},
+	} {
+		if _, err := pg.UpsertCapabilityGrant(ctx, g); err != nil {
+			t.Fatal(err)
+		}
+	}
 	groups := []string{"g1", "g2"}
 	if err := pg.PutPrincipalGroups(ctx, principal, "", email, groups, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	direct := withHumanIdentity(context.Background(), principal, email, oidc.RoleUser, "contractor", groups, false)
-	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(direct)
-	tctx, release, err := h.srv.assistantToolCtx(r, assistantSnapshotOf(direct))
+	const raw = apiTokenPrefix + "assistant-actor"
+	if _, err := pg.CreateAPIToken(ctx, types.APIToken{ID: uuid.New(), Principal: principal, Email: email, Role: oidc.RoleUser,
+		UserType: "contractor", Groups: groups, GroupsTruncated: new(bool), Name: "ci"}, raw); err != nil {
+		t.Fatal(err)
+	}
+	capture := func(serve func(http.Handler) http.Handler, r *http.Request) context.Context {
+		var got context.Context
+		serve(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r.Context() })).ServeHTTP(httptest.NewRecorder(), r)
+		if got == nil {
+			t.Fatalf("%s never reached the handler", r.URL.Path)
+		}
+		return got
+	}
+	sessReq := httptest.NewRequest(http.MethodGet, "/session", nil)
+	sessReq.AddCookie(personSessionCookie(t, principal, email, "contractor", groups))
+	tokReq := httptest.NewRequest(http.MethodGet, "/token", nil)
+	tokReq.Header.Set("Authorization", "Bearer "+raw)
+	sources := map[string]context.Context{
+		"signed-in session": capture(srv.humanOrAdminAuth, sessReq),
+		"api token": capture(func(next http.Handler) http.Handler {
+			return srv.apiTokenAuth(next, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("the token fell through") }))
+		}, tokReq),
+	}
+	for name, direct := range sources {
+		if oidcHumanFromContext(direct) != principal || oidcEmailFromContext(direct) != email {
+			t.Fatalf("%s: the source published %q %q", name, oidcHumanFromContext(direct), oidcEmailFromContext(direct))
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(direct)
+		tctx, release, err := srv.assistantToolCtx(r, assistantSnapshotOf(direct))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		wu, wg, ws := capabilitySubjects(direct)
+		gu, gg, gs := capabilitySubjects(tctx)
+		if !slices.Equal(wu, gu) || !slices.Equal(wg, gg) || ws != gs {
+			t.Errorf("%s: capability subjects on the tool context = %v %v %v, want %v %v %v", name, gu, gg, gs, wu, wg, ws)
+		}
+		want, err := srv.effectiveCeiling(direct)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := srv.effectiveCeiling(tctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want.Unit == nil || want.Unit.ID != unit.ID {
+			t.Fatalf("%s: the direct request resolved %+v, want the user-type unit %s", name, want.Unit, unit.ID)
+		}
+		if got.Unit == nil || got.Unit.ID != want.Unit.ID || got.Operator != want.Operator {
+			t.Errorf("%s: the tool context resolved %+v operator=%v, want unit %s operator=%v", name, got.Unit, got.Operator, want.Unit.ID, want.Operator)
+		}
+		for value, allowed := range map[string]bool{"denied-p": false, "allowed-p": true} {
+			d, derr := srv.capSeamAllowed(direct, capModelProvider, value)
+			g, gerr := srv.capSeamAllowed(tctx, capModelProvider, value)
+			if derr != nil || gerr != nil || d != allowed || g != allowed {
+				t.Errorf("%s: %s = direct %v (%v), tool context %v (%v), want %v", name, value, d, derr, g, gerr, allowed)
+			}
+		}
+		release()
+	}
+}
+
+// personSessionCookie is a signed-in session of a member with a user type and groups, signed as the test
+// authenticator verifies it.
+func personSessionCookie(t *testing.T, sub, email, userType string, groups []string) *http.Cookie {
+	t.Helper()
+	c := govSession(t, sub, groups, false)
+	payload, err := json.Marshal(oidc.Session{V: oidc.SessionCodecVersion, Sub: sub, Email: email, Role: oidc.RoleUser,
+		Expiry: time.Now().UTC().Add(time.Hour), UserType: userType, Groups: groups})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
-	wu, wg, ws := capabilitySubjects(direct)
-	gu, gg, gs := capabilitySubjects(tctx)
-	if !slices.Equal(wu, gu) || !slices.Equal(wg, gg) || ws != gs {
-		t.Errorf("capability subjects on the tool context = %v %v %v, want %v %v %v", gu, gg, gs, wu, wg, ws)
-	}
-	want, err := h.srv.effectiveCeiling(direct)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := h.srv.effectiveCeiling(tctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want.Unit == nil || want.Unit.ID != unit.ID {
-		t.Fatalf("the direct request resolved %+v, want the user-type unit %s", want.Unit, unit.ID)
-	}
-	if got.Unit == nil || got.Unit.ID != want.Unit.ID || got.Operator != want.Operator {
-		t.Errorf("the tool context resolved %+v operator=%v, want unit %s operator=%v", got.Unit, got.Operator, want.Unit.ID, want.Operator)
-	}
+	mac := hmac.New(sha256.New, nil)
+	mac.Write(payload)
+	c.Value = base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return c
 }
