@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
+- An outage no longer makes runs look idle. For 25 minutes after the database is reachable again, and after every start of the server (`WARDYN_LAPSE_RECOVERY_GRACE`), no run is idle-stopped, and each run's idle time starts again from that moment. A run on a registered runner that the server cannot reach is not idle-stopped either, and its idle time starts again when the runner reconnects. A run's end and `WARDYN_RUN_MAX_AGE` still apply.
 
 ### Fixed
 
