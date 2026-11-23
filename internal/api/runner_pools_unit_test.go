@@ -88,7 +88,7 @@ func (f *unitPools) admits(t *testing.T, frozen *uuid.UUID) map[string]bool {
 	ctx := govMemberCtx([]string{"eng"}, false)
 	out := map[string]bool{}
 
-	_, _, _, refusal := f.srv.resolveRunPool(ctx, f.st, f.pool.String())
+	_, _, _, _, refusal := f.srv.resolveRunPool(ctx, f.st, placementInput{req: &createRunRequest{RunnerPoolID: f.pool.String()}})
 	if refusal != nil && refusal.err != nil {
 		t.Fatalf("create: %v", refusal.err)
 	}

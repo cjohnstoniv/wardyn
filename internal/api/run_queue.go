@@ -111,9 +111,10 @@ type queuedLaunch struct {
 	// keep. A launch queued before they existed is held to neither.
 	Barrier types.ConfinementClass `json:"barrier,omitempty"`
 	Drives  bool                   `json:"drives,omitempty"`
-	// DriveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none: the
-	// verdict then keeps that runner of the person's own, as the start's fold does.
-	DriveRunner *uuid.UUID `json:"drive_runner,omitempty"`
+	// DriveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none: the verdict then keeps
+	// that runner of the person's own, as the start's fold does. DriveIDs are the drives, never their sites.
+	DriveRunner *uuid.UUID  `json:"drive_runner,omitempty"`
+	DriveIDs    []uuid.UUID `json:"drive_ids,omitempty"`
 	// MountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
 	// none: the verdict then keeps that runner alone, as the start's fold does.
 	MountRunner *uuid.UUID `json:"mount_runner,omitempty"`
@@ -510,7 +511,7 @@ func (q queuedCreate) entry(s *Server, ctx context.Context, waitSec int) (store.
 		Request: q.original, ProviderID: q.f.mpChoice.provider.ID, MaxWaitSec: waitSec, ConfinementDefault: q.f.confinementDefault,
 		Repos: runRepos(types.AgentRun{Repo: q.req.Repo}, nil), LifetimeCapSec: q.f.end.capSec,
 		Resources: s.runFitSpec(q.f.spec, q.f.mainDrive).Resources, Unbound: q.f.place.unbound,
-		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner,
+		Barrier: q.f.enforced, NoLocal: q.f.place.noLocal, MountRunner: q.f.place.mountRunner, DriveIDs: driveIDsOf(q.f.drives),
 	}
 	// The promotion holds a resume to its machine's Mac as the fold's placement did (keptPlacementPin).
 	launch.Drives, launch.DriveRunner = keptPlacementPin(mountsDrives(q.f.drives, q.f.keep), drivesBoundRunner(q.f.drives, q.f.keep), q.f.keptPin)

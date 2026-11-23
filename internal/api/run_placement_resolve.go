@@ -68,6 +68,9 @@ type runPlacement struct {
 	// noLocal: the run waits on the pool's remote-hosted runners and the local-eligibility step refuses
 	// it on the person's own (stepLocalEligibility records it on a launch that waits).
 	noLocal bool
+	// sitePref is what the site step made of the run's drives' site (runnerpool.SitePreference), empty
+	// when it did not run; run.create records it.
+	sitePref runnerpool.SitePreference
 	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
 	// none; a launch that waits keeps it for the queue's verdict.
 	mountRunner *uuid.UUID
@@ -94,6 +97,8 @@ type placementInput struct {
 	// it; driveRunner is the one runner every drive is bound to (drivesBoundRunner), nil for none.
 	drives      bool
 	driveRunner *uuid.UUID
+	// driveIDs are the run's drives (driveIDsOf): the site step reads where they are homed.
+	driveIDs []uuid.UUID
 	// mountRunner is the one runner the run's workspace folders are bound to (boundMountsRunner), nil for
 	// none: the run goes to that runner or nowhere.
 	mountRunner *uuid.UUID
@@ -112,7 +117,7 @@ func (s *Server) poolsPlaceRuns() bool {
 	return ok && s.cfg.Runner != nil
 }
 
-func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPlacement, *runRefusal) {
+func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (_ runPlacement, refusal *runRefusal) {
 	f := in
 	// A deployment with no runner wired is headless: runs are recorded and never placed, so there is no
 	// target to choose. A pool named there is refused rather than ignored.
@@ -128,10 +133,13 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 		return runPlacement{limits: limits, applied: applied}, refusal
 	}
 	ps := s.cfg.Store.(store.RunnerPoolStore)
-	rows, org, pool, refusal := s.resolveRunPool(ctx, ps, f.req.RunnerPoolID)
+	rows, org, pool, sitePref, refusal := s.resolveRunPool(ctx, ps, f)
 	if refusal != nil {
 		return runPlacement{}, refusal
 	}
+	// A pool chosen as the drives' site's default is refused as that pool chosen as the person's default
+	// would be, and the sentence says why it was chosen; it never falls through to another pool.
+	defer func() { refusal = siteDefaultRefusal(pool, refusal) }()
 	row, _ := catalogueRow(rows, pool.ID)
 	targets, refusal := s.poolTargets(ctx, f.req, ps, row)
 	if refusal != nil {
@@ -194,29 +202,39 @@ func (s *Server) resolvePlacement(ctx context.Context, in placementInput) (runPl
 	remoteOffered := decision.Filled && decision.Placement == types.PlacementLocal && len(offers[types.PlacementRemote].Targets) > 0
 	return runPlacement{pooled: true, pool: pool, row: row.Pool, placement: decision.Placement, filled: decision.Filled, remoteOffered: remoteOffered,
 		eligible: picked, targets: chosen.targets, orgBarrier: org.Barrier, choices: choices, limits: chosen.limits, applied: chosen.applied,
-		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full })}, nil
+		waitsForRoom: waits, runnersFull: (capped || waits) && len(picked) > 0 && !slices.ContainsFunc(picked, func(t poolTarget) bool { return !t.full }), sitePref: sitePref}, nil
 }
 
 // resolveRunPool picks the run's pool from the caller's catalogue: the pool the request names, else the
-// person's default, else the organisation's (runnerpool.Resolve). It answers the catalogue and the
-// organisation's defaults too, which the rest of placement reads.
-func (s *Server) resolveRunPool(ctx context.Context, ps store.RunnerPoolStore, named string) ([]store.RunnerPoolCatalogueRow, types.RunnerPoolDefaults, types.ResolvedRunnerPool, *runRefusal) {
+// default pool of the site the run's drives are at (siteStep), else the person's default, else the
+// organisation's (runnerpool.ResolveSite). It answers the catalogue, the organisation's defaults and what
+// the site step made of the run too, which the rest of placement reads. The site config is read once here,
+// for the site step and the pool's site; a read that fails refuses the run.
+func (s *Server) resolveRunPool(ctx context.Context, ps store.RunnerPoolStore, in placementInput) ([]store.RunnerPoolCatalogueRow, types.RunnerPoolDefaults, types.ResolvedRunnerPool, runnerpool.SitePreference, *runRefusal) {
 	rows, refusal := s.permittedPools(ctx, ps, true)
 	if refusal != nil {
-		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, refusal
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", refusal
 	}
 	personal, refusal := s.personalPoolDefaults(ctx)
 	if refusal != nil {
-		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, refusal
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", refusal
 	}
 	org, err := ps.GetRunnerPoolOrgDefaults(ctx)
 	if err != nil {
-		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, runServerError("read runner pool defaults", err)
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", runServerError("read runner pool defaults", err)
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", runServerError("read site config", err)
+	}
+	site, err := s.siteStep(ctx, in, sc)
+	if err != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", runServerError("read the run's site", err)
 	}
 	// The request's placement no longer chooses a pool: it narrows the pool's runners to one kind
 	// (kindTargets), after the pool is resolved.
-	var choice runnerpool.Choice
-	if named != "" {
+	choice := site.choice
+	if named := in.req.RunnerPoolID; named != "" {
 		id, _ := uuid.Parse(named) // the contract step already refused a malformed id
 		choice.PoolID = &id
 	}
@@ -224,11 +242,18 @@ func (s *Server) resolveRunPool(ctx context.Context, ps store.RunnerPoolStore, n
 	for i, row := range rows {
 		permitted[i] = row.Pool
 	}
-	pool, ref := runnerpool.Resolve(permitted, choice, personal, org)
+	pool, pref, ref := runnerpool.ResolveSite(permitted, choice, personal, org)
 	if ref != nil {
-		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, poolRefusal(ref)
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", poolRefusal(ref)
 	}
-	return rows, org, pool, nil
+	if pref == "" {
+		pref = site.pref
+	}
+	// A pinned run records its pool's site too: only the site step is skipped for a pin.
+	if pool, err = s.poolSiteOf(ctx, sc, pool); err != nil {
+		return nil, types.RunnerPoolDefaults{}, types.ResolvedRunnerPool{}, "", runServerError("read the run's site", err)
+	}
+	return rows, org, pool, pref, nil
 }
 
 // probeFailure is the first probe error among the run's candidates: a configured executor whose facts
@@ -712,6 +737,7 @@ func (p runPlacement) apply(run *types.AgentRun, enforced types.ConfinementClass
 	run.Placement, run.PlacementFilled, run.EvidenceSource = p.placement, p.filled, placement.EvidenceFor(p.placement)
 	run.RunnerID, run.RunnerPoolExecutor = b.runnerID, b.executor
 	run.RunnerPoolID, run.RunnerPoolRevision, run.RunnerPoolSelection = &id, p.pool.Revision, p.pool.Selection
+	run.SiteID = p.pool.SiteID
 	return nil
 }
 
@@ -743,6 +769,12 @@ func (p runPlacement) auditFields(run types.AgentRun, runnerName string) map[str
 			"runner_pool_id": p.pool.ID, "runner_pool_name": p.pool.Name, "runner_pool_revision": run.RunnerPoolRevision,
 			"runner_pool_selection": run.RunnerPoolSelection, "reserved": run.Reserved,
 		})
+		if p.pool.SiteID != nil {
+			data["site_id"], data["site_name"] = p.pool.SiteID, p.pool.SiteName
+		}
+		if p.sitePref != "" {
+			data["site_preference"] = p.sitePref
+		}
 	}
 	if run.RunnerID != nil {
 		data["runner_id"] = run.RunnerID
