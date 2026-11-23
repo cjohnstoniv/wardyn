@@ -758,6 +758,9 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// HealthzProbeTTL is how long /healthz reuses its runner, NetworkPolicy and sensor reads (healthz_cache.go).
+	// Zero (the default, and every test's) reads them on every request; cmd/wardynd sets two seconds.
+	HealthzProbeTTL time.Duration
 	// CLIArtifactBase is WARDYN_CLI_ARTIFACT_BASE, validated at boot by
 	// ValidateCLIArtifactBase: an internal mirror that holds the release's
 	// assets under <base>/v<version>/. /healthz publishes it as

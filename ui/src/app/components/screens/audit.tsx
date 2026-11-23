@@ -66,6 +66,9 @@ import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-vie
 // Audit is append-only, so live-tailing is meaningful (unlike a poll on mutable
 // state). Kept modest — this is a background refresh, not a chat stream.
 const AUDIT_POLL_MS = 5000;
+// The sensor's state turns degraded only once its heartbeat is two minutes old, so the screen reads it on load and
+// then at most every 30 s, not on every 5 s refresh.
+const SENSOR_HEALTH_EVERY_MS = 30_000;
 
 // The four /healthz ebpf_groundtruth states. "unavailable" is the DEFAULT for
 // nearly every install (the ground-truth tier is an opt-in compose profile), so
@@ -279,15 +282,21 @@ export function AuditScreen() {
   // filter would otherwise land after the new filter's read and show the wrong run's trail, status, error,
   // liveness or sensor state under it. A superseded read resolves null, success or failure alike.
   const eventsRequestId = React.useRef(0);
-  const fetchEvents = React.useCallback(() => {
+  const healthReadAt = React.useRef(0);
+  const healthRequestId = React.useRef(0);
+  const fetchEvents = React.useCallback((withHealth = true) => {
     const requestId = ++eventsRequestId.current;
-    // The kernel sensor's health rides along with every audit refresh (initial
-    // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
-    // events, so an event list structurally cannot show them — a dead sensor
-    // reads exactly like a quiet one. health() never rejects.
-    void healthApi.health().then((h) => {
-      if (eventsRequestId.current === requestId) setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined);
-    });
+    // The kernel sensor's health rides along with the audit refresh: "unavailable" and "degraded" are the ABSENCE
+    // of events, so an event list structurally cannot show them — a dead sensor reads exactly like a quiet one.
+    // A load reads it at once; a poll tick only when the last read is SENSOR_HEALTH_EVERY_MS old. Its own request
+    // id, since a tick that skips it must not drop a read still in flight. health() never rejects.
+    if (withHealth || Date.now() - healthReadAt.current >= SENSOR_HEALTH_EVERY_MS) {
+      healthReadAt.current = Date.now();
+      const healthId = ++healthRequestId.current;
+      void healthApi.health().then((h) => {
+        if (healthRequestId.current === healthId) setGroundTruth(h.ebpf_groundtruth?.state ? h.ebpf_groundtruth : undefined);
+      });
+    }
     // A run's trail is served oldest-first, so a long one is cut off at its END, the part an operator is
     // investigating: ask for its newest page.
     // Resolves with the list it set, or null when a newer read superseded it.
@@ -307,6 +316,7 @@ export function AuditScreen() {
   React.useEffect(
     () => () => {
       eventsRequestId.current++;
+      healthRequestId.current++;
     },
     [],
   );
@@ -348,7 +358,7 @@ export function AuditScreen() {
   // Returned, so usePoll's in-flight guard holds the next tick until this read answers: a read slower than the
   // interval would otherwise be overtaken by the next tick and dropped by the request-id guard above, every time.
   const tick = React.useCallback(() => {
-    return fetchEvents()
+    return fetchEvents(false)
       .then((list) => {
         if (!list) return;
         setPollStale(false);
