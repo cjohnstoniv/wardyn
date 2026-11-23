@@ -25,8 +25,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   ceiling's, says `"kind": "desktop"`. Under a `data_out` rule of `review` or `blocked`, such an app is refused like
   any other web app; only the `novnc` app is exempt.
 - Declare `kind: desktop` only once every wardynd runs this release.
-
-Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
+- Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
 
 ## [0.10.2] — 2026-11-22
 

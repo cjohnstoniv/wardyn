@@ -224,3 +224,18 @@ func TestDesktopKind_RecordedAndInbound(t *testing.T) {
 		}
 	}
 }
+
+// The kind adds no data_out exemption: only the novnc name is exempt, so a desktop kind app under another name is
+// refused like any other web app.
+func TestDesktopKind_NoDataOutExemption(t *testing.T) {
+	h, _ := inboundHarness(t)
+	token := verifiedAPIToken{APIToken: types.APIToken{ID: uuid.New(), Principal: h.owner, Email: h.owner + "@example.com",
+		Kind: types.APITokenKindInbound, CreatedAt: time.Now().Add(-time.Hour)}}
+	for _, rule := range []types.TransferRule{types.TransferReview, types.TransferBlocked} {
+		h.store.putEffectivePolicy(h.run.ID, types.RunPolicySpec{MinConfinementClass: types.CC2, DataOut: rule,
+			UIApps: []types.UIApp{{Name: "desk", Port: uiTestPort, Inbound: true, Kind: types.UIAppKindDesktop}}})
+		if _, deny, got := h.srv.inboundSessionFor(context.Background(), h.run.ID, "desk", token); deny != inboundDenyDataOut || got != rule {
+			t.Errorf("inbound desk under %s: deny %q, rule %q, want %q", rule, deny, got, inboundDenyDataOut)
+		}
+	}
+}
