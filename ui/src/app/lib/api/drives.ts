@@ -423,6 +423,12 @@ export const drives = {
     return asJson<MemberDriveDeleteResult>(res);
   },
 
+  // PUT /api/v1/drives/member/{id}/team: a person's team drive's write bit (super admin), answered with its row.
+  async setMemberTeamDriveWrite(id: string, on: boolean): Promise<MemberDriveAdminItem> {
+    const res = await wfetch(`/drives/member/${encodeURIComponent(id)}/team`, { method: "PUT", body: JSON.stringify({ members_can_write: on }) });
+    return asJson<MemberDriveAdminItem>(res);
+  },
+
   // DELETE /api/v1/drives/{id} -> 204.
   //
   // The 409 MUST reach the caller: it is the ON DELETE RESTRICT refusal and it

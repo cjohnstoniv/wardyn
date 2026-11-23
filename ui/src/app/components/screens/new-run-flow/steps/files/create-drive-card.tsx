@@ -5,50 +5,67 @@
 
 // "+ Create user drive": a card inside the Choose step, as the Files prototype draws it. One field, the
 // name; the server assigns the mount path. A refusal (a name already in use, the person's limit) shows
-// under the field as the server wrote it. Enter creates, Escape closes this card only.
+// under the field as the server wrote it; a team refusal shows under the team checkbox instead, where the
+// catalogue offers one. Enter creates, Escape closes this card only.
 
 import * as React from "react";
 import { Button } from "../../../../ui/button";
+import { Checkbox } from "../../../../ui/checkbox";
 import { Input } from "../../../../ui/input";
 import { Label } from "../../../../ui/label";
 import { Chip } from "../../../../wardyn/primitives";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { getErrorMessage } from "../../../../../lib/format";
+import { HttpError } from "../../../../../lib/api/core";
 import type { MeDrive } from "../../../../../lib/api/me-drives";
 import { useEscapeClosesThis } from "./nested-escape";
 
 const NAME_ID = "nr-create-drive-name";
+const TEAM_ID = "nr-create-drive-team";
 
-export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO, hint }: {
-  create: (name: string) => Promise<MeDrive>;
+// The three team refusals (POST /me/drives with team) are about the checkbox, not the name.
+const TEAM_REFUSALS = ["member_team_drives_disabled", "member_team_drive_unsupported", "member_team_drive_no_unit"];
+
+export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.CREATE_INTRO, hint, teamOffered }: {
+  create: (name: string, team: boolean) => Promise<MeDrive>;
   onCreated: (drive: MeDrive) => void;
   onClose: () => void;
   /** The sentence above the field; a disk kept on a Mac says so. */
   intro?: string;
   /** Under the field: how many drives the person has of how many (board J4, a macOS run). */
   hint?: string;
+  /** Offer the team checkbox: the catalogue's team_drives_allowed, and never on a Mac card. */
+  teamOffered?: boolean;
 }) {
   const [name, setName] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  const [failure, setFailure] = React.useState("");
+  const [team, setTeam] = React.useState(false);
+  // team: whether the refusal is about the checkbox rather than the name.
+  const [failure, setFailure] = React.useState<{ text: string; team: boolean } | null>(null);
   const card = React.useRef<HTMLFormElement>(null);
   const errorId = React.useId();
   const hintId = React.useId();
+  const teamHintId = React.useId();
   // The create cannot be recalled once sent, so nothing here pretends to cancel it: the key is taken and ignored.
   useEscapeClosesThis(React.useCallback(() => !busy && onClose(), [busy, onClose]), card);
+  // A team refusal moves focus to the checkbox it is about, once the checkbox is enabled again.
+  React.useEffect(() => {
+    if (failure?.team && !busy) document.getElementById(TEAM_ID)?.focus();
+  }, [failure, busy]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || busy) return;
     setBusy(true);
-    setFailure("");
+    setFailure(null);
     // The buttons are disabled while it runs; focus stays on the field so a key press still lands in the card.
     document.getElementById(NAME_ID)?.focus();
     try {
-      onCreated(await create(name.trim()));
+      onCreated(await create(name.trim(), teamOffered === true && team));
     } catch (error) {
-      setFailure(getErrorMessage(error));
+      const onTeam = error instanceof HttpError && TEAM_REFUSALS.includes(error.reason);
+      setFailure({ text: getErrorMessage(error), team: onTeam });
       setBusy(false);
     }
   };
@@ -67,13 +84,30 @@ export function CreateDriveCard({ create, onCreated, onClose, intro = NR_FILES.C
           value={name}
           placeholder={NR_FILES.DRIVE_NAME_PLACEHOLDER}
           aria-required="true"
-          aria-invalid={failure ? true : undefined}
-          aria-describedby={[hint && hintId, failure && errorId].filter(Boolean).join(" ") || undefined}
+          aria-invalid={failure && !failure.team ? true : undefined}
+          aria-describedby={[hint && hintId, failure && !failure.team && errorId].filter(Boolean).join(" ") || undefined}
           onChange={(e) => setName(e.target.value)}
         />
         {hint && <p id={hintId} className="text-xs text-muted-foreground">{hint}</p>}
-        {failure && <p id={errorId} role="alert" className="text-sm text-danger">{failure}</p>}
+        {failure && !failure.team && <p id={errorId} role="alert" className="text-sm text-danger">{failure.text}</p>}
       </div>
+      {teamOffered && (
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={TEAM_ID}
+              checked={team}
+              disabled={busy}
+              onCheckedChange={(on) => setTeam(on === true)}
+              aria-invalid={failure?.team ? true : undefined}
+              aria-describedby={[teamHintId, failure?.team && errorId].filter(Boolean).join(" ")}
+            />
+            <Label htmlFor={TEAM_ID}>{NR_FILES.CREATE_TEAM}</Label>
+          </div>
+          <p id={teamHintId} className="text-xs text-muted-foreground">{NR_FILES.CREATE_TEAM_HINT}</p>
+          {failure?.team && <p id={errorId} role="alert" className="text-sm text-danger">{failure.text}</p>}
+        </div>
+      )}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" disabled={busy} onClick={onClose}>{NR_SHARED.CANCEL}</Button>
         <Button type="submit" disabled={!name.trim() || busy}>{NR_FILES.CREATE_CONFIRM}</Button>

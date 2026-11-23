@@ -99,6 +99,9 @@ export const NR_FILES = {
   DELETE_DRIVE: "Delete drive",
   /** pending W-17: the recommended text until the owner answers. */
   DELETE_CONFIRM: (name: string | number) => `Delete ${name}? Its files are deleted and can't be recovered.`,
+  /** Deleting a team drive a person made: everyone it is shared with loses the folder too (#3459). */
+  DELETE_CONFIRM_TEAM: (name: string) =>
+    `Delete ${name}? Its files are deleted and can't be recovered. Everyone in its governance unit, and in the units below it, loses the folder too.`,
   /** pending W-17: the recommended text until the owner answers. */
   DRIVE_DELETED: (name: string | number) => `${name} deleted.`,
   CREATE_TITLE: "Create user drive",
@@ -106,6 +109,11 @@ export const NR_FILES = {
   DRIVE_NAME: "Drive name",
   DRIVE_NAME_PLACEHOLDER: "e.g. Investigation files",
   CREATE_CONFIRM: "Create drive",
+  /** The create card's team checkbox (#3459); shown only when the catalogue's team_drives_allowed is true. */
+  CREATE_TEAM: "Share with my governance unit",
+  /** Under the team checkbox: who sees it, and who writes. */
+  CREATE_TEAM_HINT:
+    "Everyone in your governance unit, and in the units below it, sees one shared folder. Only you can write to it until a super admin allows writing.",
   DRIVE_CREATED: (name: string | number) => `${name} created and added to this run.`,
   COMPUTER_TITLE: "Your computer",
   COMPUTER_BODY: "Folders on your laptop, desktop or VDI.",
@@ -216,6 +224,8 @@ export const NR_FILES = {
   SHARED_WITH: (groups: string) => `Shared with: ${groups}`,
   /** Under a writable team drive: what the others in the group will see. */
   TEAM_OTHERS_SEE: "Others in this group see what your runs write here.",
+  /** Under a writable team drive a person made: what the others in the governance unit will see. */
+  TEAM_OTHERS_SEE_UNIT: "Others in this unit, and in the units below it, see what your runs write here.",
   ADD_SHARED_DRIVE_TITLE: "Add shared drive",
   ADD_FOLDER_TITLE: "Add folder",
   STEPS_ARIA: "Steps",

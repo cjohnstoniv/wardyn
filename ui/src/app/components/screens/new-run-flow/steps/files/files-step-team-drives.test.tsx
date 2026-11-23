@@ -165,3 +165,29 @@ describe("a team drive in the Add shared drive dialog", () => {
     expect(within(dialog()).queryByRole("radio", { name: /^platform-ref/ })).toBeNull();
   });
 });
+
+describe("a team drive a person made, shared with their unit (#3459)", () => {
+  const UNIT_RW: MeDrive = {
+    ...base, id: "77777777-7777-4777-8777-777777777777", name: "design-assets", section: "user", backend: "docker_volume",
+    target: "/home/agent/shared/design-assets", writable: true, team: true, shared_with_unit: true,
+  };
+  const UNIT_RO: MeDrive = { ...UNIT_RW, id: "88888888-8888-4888-8888-888888888888", name: "old-templates", target: "/home/agent/shared/old-templates", writable: false };
+
+  it("a writable drive shared with a unit says unit, not group", async () => {
+    catalogue = { drives: [UNIT_RW, UNIT_RO, WRITABLE], pool_checked: true };
+    show();
+    await openShared();
+    const rw = within(await option("design-assets"));
+    expect(rw.getByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeInTheDocument();
+    expect(rw.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    // A group's team drive keeps the group sentence.
+    expect(within(await option("team-scratch")).getByText(NR_FILES.TEAM_OTHERS_SEE)).toBeInTheDocument();
+    // A read-only unit drive says neither, and reads Team and Read-only.
+    const ro = within(await option("old-templates"));
+    expect(ro.queryByText(NR_FILES.TEAM_OTHERS_SEE_UNIT)).toBeNull();
+    expect(ro.queryByText(NR_FILES.TEAM_OTHERS_SEE)).toBeNull();
+    expect(ro.getByText(NR_FILES.SOURCE_TEAM)).toBeInTheDocument();
+    expect(ro.getByText(NR_FILES.ACCESS_READ)).toBeInTheDocument();
+  });
+});
+

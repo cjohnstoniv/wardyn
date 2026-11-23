@@ -8,6 +8,8 @@
 // Docker/Cluster volume are read from the modules that already hold them. What is here has no sheet id: the section
 // title, the two states and the dash are on the approved board; the paging lines are new.
 
+import { DRIVES } from "../../../lib/user-drives-copy";
+
 export const MEMBER_DRIVES = {
   /** NEW, no sheet id: the section's title */
   TITLE: "People's drives",
@@ -27,4 +29,18 @@ export const MEMBER_DRIVES = {
   /** NEW, no sheet id: after a delete that removed only the record, when the runner list no longer names the Mac */
   RECORD_ONLY_UNNAMED:
     "This drive's Mac is no longer registered, so its disk stays on that Mac. Deleting removes only the record.",
+  /** The per-row write switch's name: the column name, then the drive. */
+  TEAM_WRITE_SWITCH: (drive: string) => `${DRIVES.FIELD_TEAM_WRITE}: ${drive}`,
+  TEAM_WRITE_ALLOW_TITLE: (drive: string) => `Let members write to ${drive}?`,
+  TEAM_WRITE_ALLOW_BODY: (unit: string) =>
+    `Once it's on, any run started by someone in ${unit}, or in a unit below it, can change what the others' runs read and run. Runs that were created before this keep the access they had.`,
+  TEAM_WRITE_ALLOW: "Allow writing",
+  TEAM_WRITE_STOP: "Make read-only",
+  /** The word beside the write switch, as the board draws it. Hidden from assistive tech: the switch says it. */
+  TEAM_WRITE_ON: "On",
+  TEAM_WRITE_OFF: "Off",
+  /** The write-bit confirm, turning members' writing off. The maker's own runs keep writing (#3459). */
+  TEAM_WRITE_STOP_TITLE: (drive: string) => `Make ${drive} read-only for members?`,
+  TEAM_WRITE_STOP_BODY: (owner: string) =>
+    `Runs that others start after this can read the drive and never change it. ${owner}'s runs can still write. Runs that were created before this keep the access they had.`,
 } as const;

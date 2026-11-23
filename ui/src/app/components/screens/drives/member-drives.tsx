@@ -13,6 +13,10 @@
 // person gets for their own drive, since the row is gone and its disk is not, even when that was the last drive. A
 // disk on a Mac gets a confirm that says both cases before the click. While the delete is in flight the
 // confirm cannot be closed, and an answer for a confirm that was closed since never touches a newer one.
+//
+// A person's own team drive (#3459) shows its chips, its unit and a "Members can write" switch. The switch opens a
+// confirm (on Cancel when it widens access, on its button when it narrows), keeps its state until the PUT answers 200,
+// and a refusal stays in the confirm with the server's sentence.
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import {
@@ -39,10 +43,12 @@ import {
 import { Button } from "../../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../ui/table";
 import { Mono } from "../../wardyn/code-block";
+import { Switch } from "../../wardyn/form-primitives";
 import { MAC_DRIVES } from "../../wardyn/copy/mac-drives";
 import { MEMBER_DRIVES as T } from "../../wardyn/copy/member-drives";
 import { NR_FILES } from "../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../wardyn/copy/new-run/shared";
+import { POOL_UNIT } from "../../wardyn/copy/pool-unit";
 import { POOLS } from "../../wardyn/copy/runner-pools";
 import { Chip } from "../../wardyn/primitives";
 import { Note } from "./display";
@@ -73,6 +79,14 @@ export function MemberDrives() {
   const [recordOnly, setRecordOnly] = React.useState<string | null>(null);
   // Counts every open and close of the confirm, so a delete's answer acts only on the confirm it was sent from.
   const openCount = React.useRef(0);
+  // The write-bit confirm: the drive, the value asked for and the switch that opened it.
+  const [toWrite, setToWrite] = React.useState<{ drive: MemberDriveAdminItem; on: boolean; opener: HTMLElement | null } | null>(null);
+  const [writeBusy, setWriteBusy] = React.useState(false);
+  const [writeError, setWriteError] = React.useState<string | null>(null);
+  const writeCancel = React.useRef<HTMLButtonElement>(null);
+  const writeAction = React.useRef<HTMLButtonElement>(null);
+  // The opener again, for the close: the dialog closes on the render where toWrite is already null.
+  const writeOpener = React.useRef<HTMLElement | null>(null);
 
   // The first page replaces what is shown (after a delete the list is read again from the top); a later page adds to it.
   const load = React.useCallback((offset: number) => {
@@ -112,6 +126,30 @@ export function MemberDrives() {
     setToDelete(d);
   };
 
+  // The switch keeps its state: the row changes only when the PUT answers 200.
+  const openWrite = (d: MemberDriveAdminItem, on: boolean) => {
+    const label = T.TEAM_WRITE_SWITCH(d.name);
+    const opener = Array.from(document.querySelectorAll<HTMLElement>('[role="switch"]')).find((el) => el.getAttribute("aria-label") === label) ?? null;
+    setWriteError(null);
+    writeOpener.current = opener;
+    setToWrite({ drive: d, on, opener });
+  };
+
+  const write = async () => {
+    if (!toWrite) return;
+    setWriteBusy(true);
+    setWriteError(null);
+    try {
+      const item = await api.setMemberTeamDriveWrite(toWrite.drive.id, toWrite.on);
+      setRows((prev) => prev.map((r) => (r.id === item.id ? item : r)));
+      setToWrite(null);
+    } catch (e) {
+      setWriteError(getErrorMessage(e));
+    } finally {
+      setWriteBusy(false);
+    }
+  };
+
   const del = async (d: MemberDriveAdminItem) => {
     const open = openCount.current;
     setBusy(true);
@@ -142,6 +180,13 @@ export function MemberDrives() {
     <section data-testid="member-drives" className="mt-6 overflow-clip rounded-xl border border-border bg-card">
       <div className="px-6 pt-5">
         <h2 className="text-sm font-medium text-foreground">{T.TITLE}</h2>
+        {rows.some((d) => d.team) && (
+          <div className="mt-3">
+            <Note tone="amber">
+              <span>{DRIVES.TEAM_ONE_HOST}</span>
+            </Note>
+          </div>
+        )}
       </div>
       {status === "error" ? (
         <div className="flex flex-wrap items-center gap-3 px-6 py-4">
@@ -156,19 +201,33 @@ export function MemberDrives() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-[22%]">{SCIM.COL_DRIVE}</TableHead>
-                  <TableHead className="w-[22%]">{POOLS.COL_OWNER}</TableHead>
-                  <TableHead className="w-[14%]">{MAC_DRIVES.D15}</TableHead>
-                  <TableHead className="w-[14%]">{MAC_DRIVES.D09}</TableHead>
-                  <TableHead className="w-[9%]">{DRIVES.COL_SIZE}</TableHead>
-                  <TableHead className="w-[11%]">{POOLS.COL_STATE}</TableHead>
+                  <TableHead className="w-[17%]">{SCIM.COL_DRIVE}</TableHead>
+                  <TableHead className="w-[15%]">{POOLS.COL_OWNER}</TableHead>
+                  <TableHead className="w-[11%]">{MAC_DRIVES.D15}</TableHead>
+                  <TableHead className="w-[9%]">{MAC_DRIVES.D09}</TableHead>
+                  <TableHead className="w-[7%]">{DRIVES.COL_SIZE}</TableHead>
+                  <TableHead className="w-[9%]">{POOLS.COL_STATE}</TableHead>
+                  <TableHead className="w-[11%]">{POOL_UNIT.LABEL}</TableHead>
+                  <TableHead className="w-[13%]">{DRIVES.FIELD_TEAM_WRITE}</TableHead>
                   <TableHead className="w-[8%]" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {rows.map((d) => (
                   <TableRow key={d.id}>
-                    <TableCell className="truncate font-medium" title={d.name}>{d.name}</TableCell>
+                    <TableCell className="truncate font-medium" title={d.name}>
+                      {d.team ? (
+                        <span className="flex flex-col items-start gap-1.5">
+                          {d.name}
+                          <span className="flex flex-wrap gap-1.5">
+                            <Chip tone="neutral">{DRIVES.TEAM_CHIP}</Chip>
+                            <Chip tone="warning">{DRIVES.TEAM_ONE_HOST_CHIP}</Chip>
+                          </span>
+                        </span>
+                      ) : (
+                        d.name
+                      )}
+                    </TableCell>
                     <TableCell className="truncate" title={d.owner}>{d.owner}</TableCell>
                     <TableCell>{storageText(d.backend) ?? <Mono>{d.backend}</Mono>}</TableCell>
                     <TableCell data-testid="member-drive-mac" className="truncate">
@@ -177,6 +236,21 @@ export function MemberDrives() {
                     <TableCell>{driveSizeLabel(d.size_mib) ?? T.NONE}</TableCell>
                     <TableCell>
                       <Chip tone={d.deleting ? "warning" : "success"}>{d.deleting ? T.STATE_DELETING : T.STATE_READY}</Chip>
+                    </TableCell>
+                    <TableCell data-testid="member-drive-unit" className="truncate">
+                      {d.team_unit_name ? d.team_unit_name : d.team_unit_id ? <Mono>{d.team_unit_id}</Mono> : T.NONE}
+                    </TableCell>
+                    <TableCell data-testid="member-drive-write">
+                      {d.team && d.team_unit_id ? (
+                        <span className="inline-flex items-center gap-2">
+                          <Switch checked={!!d.members_can_write} onChange={(on) => openWrite(d, on)} label={T.TEAM_WRITE_SWITCH(d.name)} />
+                          <span aria-hidden="true" className="text-sm text-muted-foreground">
+                            {d.members_can_write ? T.TEAM_WRITE_ON : T.TEAM_WRITE_OFF}
+                          </span>
+                        </span>
+                      ) : (
+                        T.NONE
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end">
@@ -216,7 +290,9 @@ export function MemberDrives() {
                 : toDelete
                   ? toDelete.home_runner_id
                     ? T.DELETE_CONFIRM_MAC(toDelete.name)
-                    : NR_FILES.DELETE_CONFIRM(toDelete.name)
+                    : toDelete.team && toDelete.team_unit_id
+                      ? NR_FILES.DELETE_CONFIRM_TEAM(toDelete.name)
+                      : NR_FILES.DELETE_CONFIRM(toDelete.name)
                   : ""}
             </AlertDialogTitle>
             <AlertDialogDescription className="sr-only">{toDelete?.owner}</AlertDialogDescription>
@@ -250,6 +326,55 @@ export function MemberDrives() {
                 </AlertDialogAction>
               </>
             )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!toWrite} onOpenChange={(o) => !o && !writeBusy && setToWrite(null)}>
+        <AlertDialogContent
+          onOpenAutoFocus={(e) => {
+            // Allowing writing widens access, so it opens on Cancel; making it read-only opens on its button.
+            e.preventDefault();
+            (toWrite?.on ? writeCancel : writeAction).current?.focus();
+          }}
+          onCloseAutoFocus={(e) => {
+            const el = writeOpener.current;
+            if (el?.isConnected) {
+              e.preventDefault();
+              el.focus();
+            }
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {toWrite ? (toWrite.on ? T.TEAM_WRITE_ALLOW_TITLE(toWrite.drive.name) : T.TEAM_WRITE_STOP_TITLE(toWrite.drive.name)) : ""}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {toWrite
+                ? toWrite.on
+                  ? T.TEAM_WRITE_ALLOW_BODY(toWrite.drive.team_unit_name || "its unit")
+                  : T.TEAM_WRITE_STOP_BODY(toWrite.drive.owner)
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {writeError && (
+            <Note tone="red" role="alert">
+              <span>{writeError}</span>
+            </Note>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel ref={writeCancel} disabled={writeBusy}>{PEOPLE.CANCEL}</AlertDialogCancel>
+            <AlertDialogAction
+              ref={writeAction}
+              disabled={writeBusy}
+              onClick={(e) => {
+                e.preventDefault();
+                void write();
+              }}
+            >
+              {writeBusy ? <Loader2 className="size-4 animate-spin" /> : null}
+              {toWrite?.on ? T.TEAM_WRITE_ALLOW : T.TEAM_WRITE_STOP}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -95,10 +95,10 @@ export async function myDrives(runnerPoolId?: string): Promise<MeDriveCatalogue>
 
 /**
  * POST /me/drives (pkg/client.MemberDriveCreateRequest): the caller's own new drive. A runnerId makes it
- * a disk kept on that Mac of theirs.
+ * a disk kept on that Mac of theirs; team makes it a team drive shared with the person's governance unit.
  */
-export async function createMyDrive(name: string, runnerId?: string): Promise<MeDrive> {
-  const body = runnerId ? { name, runner_id: runnerId } : { name };
+export async function createMyDrive(name: string, runnerId?: string, team?: boolean): Promise<MeDrive> {
+  const body = runnerId ? { name, runner_id: runnerId } : team === true ? { name, team: true } : { name };
   return asJson<MeDrive>(await wfetch("/me/drives", { method: "POST", asPerson: true, body: JSON.stringify(body) }));
 }
 

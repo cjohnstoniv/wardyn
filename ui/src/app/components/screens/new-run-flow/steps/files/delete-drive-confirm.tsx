@@ -21,10 +21,12 @@ import { getErrorMessage } from "../../../../../lib/format";
 import type { MyDriveDeleteResult } from "../../../../../lib/api/me-drives";
 import { useEscapeClosesThis } from "./nested-escape";
 
-export function DeleteDriveConfirm({ name, onMac, remove, onDeleted, onClose, returnFocusTo }: {
+export function DeleteDriveConfirm({ name, onMac, team, remove, onDeleted, onClose, returnFocusTo }: {
   name: string;
   /** The drive is a disk kept on a Mac: the confirm says what an offline or unregistered Mac means before the click. */
   onMac?: boolean;
+  /** A team drive the person made: the confirm says the unit loses it too. */
+  team?: boolean;
   /** Destroys the drive; rejects with the server's refusal, and answers with a result when a disk drive was not removed in full. */
   remove: () => Promise<MyDriveDeleteResult | null>;
   /** Called once the delete was accepted, with the result when it was not a full delete (the Notice then speaks for itself). */
@@ -84,7 +86,7 @@ export function DeleteDriveConfirm({ name, onMac, remove, onDeleted, onClose, re
           </>
         ) : (
           <>
-            <DialogTitle className="text-base font-normal">{onMac ? MEMBER_DRIVES.DELETE_CONFIRM_MAC(name) : NR_FILES.DELETE_CONFIRM(name)}</DialogTitle>
+            <DialogTitle className="text-base font-normal">{onMac ? MEMBER_DRIVES.DELETE_CONFIRM_MAC(name) : team ? NR_FILES.DELETE_CONFIRM_TEAM(name) : NR_FILES.DELETE_CONFIRM(name)}</DialogTitle>
             {failure && <p role="alert" className="text-sm text-danger">{failure}</p>}
             <DialogFooter>
               <Button ref={cancelRef} type="button" variant="ghost" disabled={busy} onClick={onClose}>{NR_SHARED.CANCEL}</Button>

@@ -15,13 +15,14 @@ import { CREATE_ALLOWED, CREATE_DOORS, DRIVE_LEGACY, DRIVE_LOCKED, DRIVE_OWNED }
 import { filesPreflight, MAIN_DRIVE_FACTS, SCENARIO_FILES_WORKSPACES } from "../../../../../lib/new-run-fixtures/scenarios/files";
 import { DRIVE_REFUSAL } from "../../../../../lib/drive-refusals";
 import { MEMBER } from "../../../../../lib/governance-copy";
-import { DRIVE_MEMBER } from "../../../../../lib/user-drives-copy";
+import { DRIVE_MEMBER, DRIVES } from "../../../../../lib/user-drives-copy";
 import type { MeDrive, MeDriveCatalogue, MemberDriveCreate, MemberDriveCreateReason } from "../../../../../lib/api/me-drives";
 import { Dialog, DialogContent, DialogTitle } from "../../../../ui/dialog";
 import { NR_FILES } from "../../../../wardyn/copy/new-run/files";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import type { RunIntent } from "../../draft/run-intent";
 import { NewRunDraftProvider, useNewRunDispatch, useNewRunDraft } from "../../new-run-route";
+import { MacOSOfferContext, type MacOSOffer } from "../run/macos-offer";
 import { AnnounceContext } from "../step-shell";
 import { FilesRoute } from "./files-route";
 
@@ -43,8 +44,13 @@ let drives: MeDrive[];
 let post: (body: { name: string }) => Response | Promise<Response>;
 let del: (id: string) => Response;
 const announce = vi.fn();
+// A macOS run's offer and the person's Macs, for the team checkbox's Mac case only (as mac-drives.test.tsx sets them).
+let offer: MacOSOffer | undefined;
+let runners: unknown[];
 
 beforeEach(() => {
+  offer = undefined;
+  runners = [];
   create = CREATE_ALLOWED;
   drives = [DRIVE_LEGACY, DRIVE_OWNED, DRIVE_LOCKED];
   post = (body) => {
@@ -61,6 +67,7 @@ beforeEach(() => {
     const method = init?.method ?? "GET";
     if (path.startsWith("/workspaces")) return json(SCENARIO_FILES_WORKSPACES.member);
     if (path.startsWith("/setup/status")) return json({ runner: { driver: "", confinement_classes: [], kubernetes: false } });
+    if (path.startsWith("/me/runners")) return json(runners);
     if (path === "/me/drives" && method === "POST") return post(JSON.parse(init!.body!));
     if (path.startsWith("/me/drives/") && method === "DELETE") return del(decodeURIComponent(path.slice("/me/drives/".length)));
     if (path.startsWith("/me/drives")) {
@@ -87,11 +94,13 @@ function show(intent: RunIntent = INTERACTIVE) {
   render(
     <MemoryRouter>
       <AnnounceContext.Provider value={announce}>
-        <NewRunDraftProvider owner="alice">
-          <Seed intent={intent} />
-          <FilesRoute location={{ screen: "step", step: "files" }} go={vi.fn()} startFromScratch={() => {}} />
-          <Drawn />
-        </NewRunDraftProvider>
+        <MacOSOfferContext.Provider value={offer}>
+          <NewRunDraftProvider owner="alice">
+            <Seed intent={intent} />
+            <FilesRoute location={{ screen: "step", step: "files" }} go={vi.fn()} startFromScratch={() => {}} />
+            <Drawn />
+          </NewRunDraftProvider>
+        </MacOSOfferContext.Provider>
       </AnnounceContext.Provider>
     </MemoryRouter>,
   );
@@ -502,5 +511,84 @@ describe("with the public step's fixes", () => {
     expect(within(top()).getByLabelText(NR_FILES.ACCESS_LABEL)).toHaveValue("read");
     await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.SAVE }));
     await waitFor(() => expect(drawn().drives).toEqual([{ drive_id: DRIVE_OWNED.id, read_only: true }]));
+  });
+});
+
+describe("a team drive of the person's own (#3459)", () => {
+  const cardName = () => within(top()).getByLabelText(NR_FILES.DRIVE_NAME);
+  const teamBox = () => within(top()).getByRole("checkbox", { name: NR_FILES.CREATE_TEAM });
+  const TEAM_ON: MemberDriveCreate = { ...CREATE_ALLOWED, team_drives_allowed: true };
+
+  it("offers the team checkbox where a team drive can be made, and sends team", async () => {
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(within(top()).getByText(NR_FILES.CREATE_TEAM_HINT)).toBeInTheDocument();
+    await userEvent.click(teamBox());
+    await userEvent.type(cardName(), "Design assets{Enter}");
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ name: "Design assets", team: true });
+  });
+
+  it("hides the team checkbox when the catalogue says no", async () => {
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(within(top()).queryByRole("checkbox", { name: NR_FILES.CREATE_TEAM })).toBeNull();
+  });
+
+  it("never offers the team checkbox on a Mac card", async () => {
+    const MAC = "mac-studio-07";
+    offer = { ok: true, guestOS: "macOS 26.6.2 (25G83)", minCPUs: 4, minMemoryMiB: 8192, harnesses: ["none"], runner: MAC };
+    runners = [{ id: "r-mac", name: MAC, macos_vm: { max: 2, disk_drives: true, base: { state: "ready" } } }];
+    create = TEAM_ON;
+    show({ shape: "environment", experience: "interactive", machine_kind: "macos_vm" });
+    await userEvent.click(await screen.findByRole("button", { name: NR_FILES.ADD_ARIA }));
+    await userEvent.click(within(top()).getByRole("button", { name: new RegExp(`^${NR_FILES.KIND_USER_DRIVE}`) }));
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_FILES.CREATE_USER_DRIVE }));
+    expect(cardName()).toBeInTheDocument();
+    expect(within(top()).queryByRole("checkbox", { name: NR_FILES.CREATE_TEAM })).toBeNull();
+  });
+
+  it.each(["member_team_drives_disabled", "member_team_drive_unsupported", "member_team_drive_no_unit"])(
+    "a team refusal (%s) marks the checkbox, not the name",
+    async (reason) => {
+      const sentence = "This server does not make team drives.";
+      post = () => json({ error: sentence, reason }, 422);
+      create = TEAM_ON;
+      await openChoose();
+      await userEvent.click(createLink());
+      await userEvent.click(teamBox());
+      await userEvent.type(cardName(), "Design assets{Enter}");
+      const alert = await within(top()).findByRole("alert");
+      expect(alert).toHaveTextContent(sentence);
+      expect(teamBox()).toHaveAttribute("aria-invalid", "true");
+      expect(teamBox().getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+      expect(cardName()).not.toHaveAttribute("aria-invalid");
+      expect(cardName().getAttribute("aria-describedby") ?? "").not.toContain(alert.id);
+      await waitFor(() => expect(teamBox()).toHaveFocus());
+    },
+  );
+
+  it("a name refusal still marks the name", async () => {
+    const sentence = DRIVE_REFUSAL.MEMBER_NAME_TAKEN("Design assets");
+    post = () => json({ error: sentence, reason: "member_drive_name_taken" }, 422);
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    await userEvent.click(teamBox());
+    await userEvent.type(cardName(), "Design assets{Enter}");
+    const alert = await within(top()).findByRole("alert");
+    expect(cardName()).toHaveAttribute("aria-invalid", "true");
+    expect(cardName().getAttribute("aria-describedby")?.split(" ")).toContain(alert.id);
+    expect(teamBox()).not.toHaveAttribute("aria-invalid");
+    expect(teamBox().getAttribute("aria-describedby")?.split(" ")).not.toContain(alert.id);
+  });
+
+  it("the create card has no one-host line", async () => {
+    create = TEAM_ON;
+    await openChoose();
+    await userEvent.click(createLink());
+    expect(teamBox()).toBeInTheDocument();
+    expect(within(top()).queryByText(DRIVES.TEAM_ONE_HOST)).toBeNull();
   });
 });

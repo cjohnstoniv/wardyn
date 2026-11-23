@@ -386,6 +386,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `ACCESS_EDIT` | mock | Can edit |
 | `SHARED_WITH(groups)` | mock | Shared with: {groups} |
 | `TEAM_OTHERS_SEE` | mock | Others in this group see what your runs write here. |
+| `TEAM_OTHERS_SEE_UNIT` | mock | Others in this unit, and in the units below it, see what your runs write here. |
 | `ACCESS_READ` | mock | Read-only |
 | `ACCESS_ARIA(name)` | mock | Access for {name} |
 | `LOCKED_ARIA` | mock | Why this drive is read-only |
@@ -400,12 +401,15 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `CREATE_NO_DELETE` | pending (W-17) | This server can't delete drives, so it can't create them. |
 | `DELETE_DRIVE` | pending (W-17) | Delete drive |
 | `DELETE_CONFIRM(name)` | pending (W-17) | Delete {name}? Its files are deleted and can't be recovered. |
+| `DELETE_CONFIRM_TEAM(name)` | pending (W-17) | Delete {name}? Its files are deleted and can't be recovered. Everyone in its governance unit, and in the units below it, loses the folder too. |
 | `DRIVE_DELETED(name)` | pending (W-17) | {name} deleted. |
 | `CREATE_TITLE` | mock | Create user drive |
 | `CREATE_INTRO` | mock | Wardyn assigns the mount path. You can attach the drive to this run after it is created. |
 | `DRIVE_NAME` | mock | Drive name |
 | `DRIVE_NAME_PLACEHOLDER` | mock | e.g. Investigation files |
 | `CREATE_CONFIRM` | mock | Create drive |
+| `CREATE_TEAM` | mock | Share with my governance unit |
+| `CREATE_TEAM_HINT` | mock | Everyone in your governance unit, and in the units below it, sees one shared folder. Only you can write to it until a super admin allows writing. |
 | `DRIVE_CREATED(name)` | mock | {name} created and added to this run. |
 | `COMPUTER_TITLE` | mock | Your computer |
 | `COMPUTER_BODY` | mock | Folders on your laptop, desktop or VDI. |
