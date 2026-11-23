@@ -321,8 +321,7 @@ describe("PermissionsScreen — enforcement confirms", () => {
     expect(within(dialog).queryByText(PERM.ENFORCE_ZERO_CONFIRM)).toBeNull();
     const confirm = within(dialog).getByRole("button", { name: PERM.ENFORCE_CONFIRM });
     expect(confirm).toHaveClass("bg-warning");
-    expect(confirm).not.toHaveClass("bg-danger");
-    expect(confirm).not.toHaveClass("bg-destructive");
+    for (const c of ["bg-danger", "bg-destructive"]) expect(confirm).not.toHaveClass(c);
   });
 
   it("#2512: an enforced widening kind with nothing granted carries no 'refuses every request' note", async () => {
