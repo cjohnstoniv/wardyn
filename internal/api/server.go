@@ -679,9 +679,10 @@ type Config struct {
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
 	SSHChannels          map[string]bool // WARDYN_SSH_CHANNELS: the kinds served; nil = all (sshChannelOn)
-	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
-	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
-	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakes
+	// (WARDYN_SSH_MAX_HANDSHAKES) the handshakes in progress, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
+	// one address's share of them and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
+	SSHMaxConnections, SSHMaxHandshakes, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
 	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
 	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
 	// ignore file in the synced tree. Empty adds none.

@@ -23,10 +23,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
 - Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
 - Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke. A session's first keystroke, and the first after 570 seconds without one, still wait for the stamp, so a run paused meanwhile is thawed before the keystroke reaches it.
+- SSH gateway defaults, per replica: 256 authenticated connections (was 64) and 8 channels per run, SSH channels and API commands together (was 4). `WARDYN_SSH_MAX_HANDSHAKES` (default 64) sets the number of connections handshaking at once, which was fixed at 64.
 
 ### Fixed
 
 - SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
+
+### Before you upgrade
+
+- The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 
 ## [0.10.3] — 2026-11-23
 

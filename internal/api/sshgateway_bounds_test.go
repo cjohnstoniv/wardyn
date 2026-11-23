@@ -123,7 +123,7 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	// No SSO is configured, so the one principal's share is the whole ceiling: all 64 are served.
+	// No SSO is configured, so the one principal's share is the whole ceiling: all of them are served.
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
 	served := sshServed

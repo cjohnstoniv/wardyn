@@ -126,13 +126,12 @@ const (
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
 	// so the bound is self-documenting here, not implicit in a zero value.
 	sshMaxAuthTries = 6
-	// maxSSHHandshakes bounds connections this process is handshaking at
-	// once, from Accept until NewServerConn returns, and
-	// Config.SSHMaxHandshakesPerSource bounds one source address's share of
-	// them. A connection accepted over either is closed immediately — before
-	// any handshake byte is read or written — so the bound bites before a
-	// goroutine or a NewServerConn call is spent on it.
-	maxSSHHandshakes = 64
+	// DefaultSSHMaxHandshakes is Config.SSHMaxHandshakes' default: the connections this process is handshaking
+	// at once, from Accept until NewServerConn returns, while Config.SSHMaxHandshakesPerSource bounds one
+	// source address's share of them. A connection accepted over either is closed immediately — before any
+	// handshake byte is read or written — so the bound bites before a goroutine or a NewServerConn call is
+	// spent on it.
+	DefaultSSHMaxHandshakes = 64
 	// DefaultSSHMaxHandshakesPerSource is Config.SSHMaxHandshakesPerSource's default.
 	DefaultSSHMaxHandshakesPerSource = 16
 	// DefaultSSHMaxConnections is Config.SSHMaxConnections' default: the bound
@@ -140,7 +139,7 @@ const (
 	// the handshake bounds, so long-lived sessions never use them up and
 	// connections still handshaking never use up this one; a connection
 	// authenticated over it is closed.
-	DefaultSSHMaxConnections = 64
+	DefaultSSHMaxConnections = 256
 	// DefaultSSHMaxConnectionsPerPrincipal is Config.SSHMaxConnectionsPerPrincipal's default: how many of
 	// those authenticated connections one person may hold, so one person cannot take every slot. Counted
 	// by the principal the key is registered to; a connection authenticated over it is told why and closed.
@@ -152,7 +151,7 @@ const (
 	// from the SAME per-run counter — a single run may have open across every
 	// SSH connection combined. A resource-exhaustion bound, not a product
 	// limit.
-	defaultSSHSessionsPerRun = 4
+	defaultSSHSessionsPerRun = 8
 	// maxSSHSyncSessionsPerRun is the separate per-run cap on `wardyn-sync`
 	// channels (docs/design/0.9/PLAN.md §9.4): a sync never takes a shell's
 	// slot and a shell never takes a sync's.
@@ -265,7 +264,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		_ = ln.Close()
 	}()
 
-	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
+	lim := &sshConnLimits{handshakes: make(chan struct{}, cmp.Or(s.cfg.SSHMaxHandshakes, DefaultSSHMaxHandshakes)), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
 		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{},
 		perPrincipal: s.sshPerPrincipalCap(), principals: map[string]int{}, metrics: &s.metrics}
 	s.metrics.sshLimits.Store(lim)
@@ -291,7 +290,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 			s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 		default:
 			lim.leaveSource(src)
-			lim.refused(sshBoundHandshake, maxSSHHandshakes)
+			lim.refused(sshBoundHandshake, cap(lim.handshakes))
 			_ = conn.Close()
 		}
 	}
@@ -364,7 +363,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 // on the NEXT socket I/O, so it does nothing while this function is blocked
 // on a store call or an audit write. Without its own bound, a slow/stuck
 // backend call here lets an UNAUTHENTICATED client park a handshake slot
-// (one of maxSSHHandshakes) indefinitely.
+// (one of Config.SSHMaxHandshakes) indefinitely.
 func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 	ctx, cancel := context.WithTimeout(s.cfg.BaseCtx, sshAuthTimeout)
 	defer cancel()

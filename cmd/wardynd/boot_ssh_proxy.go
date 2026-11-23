@@ -21,9 +21,8 @@ func validateSSHProxyCommand(v string) error {
 	return nil
 }
 
-// maxSSHSessionsPerRunLimit is the upper bound on WARDYN_SSH_MAX_SESSIONS_PER_RUN:
-// the gateway's own total-connection cap, since every channel is a live exec in
-// one sandbox and a run holding more than that is a leak, not a workflow.
+// maxSSHSessionsPerRunLimit is the upper bound on WARDYN_SSH_MAX_SESSIONS_PER_RUN: every channel is a live exec
+// in one sandbox, and a run holding more than 64 is a leak, not a workflow.
 const maxSSHSessionsPerRunLimit = 64
 
 // validatePositiveBounds (with validateSSHPerPrincipal) refuses a connection bound set below 1; a flag left
@@ -35,6 +34,7 @@ func validatePositiveBounds(f *bootFlags) error {
 	}{
 		{"WARDYN_SSH_MAX_CONNECTIONS", f.sshMaxConns},
 		{"WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", f.sshPerSource},
+		{"WARDYN_SSH_MAX_HANDSHAKES", f.sshMaxHandshakes},
 		{"WARDYN_RUNNER_STREAM_HANDSHAKES_PER_ADDRESS", f.runnerPerAddr},
 	} {
 		if b.n != nil && *b.n < 1 {
