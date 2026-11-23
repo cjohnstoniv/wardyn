@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.4] — 2026-11-24
+
 ### Added
 
 - On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.

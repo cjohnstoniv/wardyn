@@ -36,6 +36,7 @@
 | **v0.10.1** | Support sessions inside another person's run on the owner's terms. Runners can use Azure DevOps through the organisation's proxy. A quicker retry after a first-use egress approval, custom model endpoints without `openid`, and SCIM ownership checks. | **Shipped (pre-alpha)** — `v0.10.1`, 2026-11-21 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.2** | Issuer portals with their own sign-in issuer, and a client-credentials service grant on a custom model endpoint. | **Shipped (pre-alpha)** — `v0.10.2`, 2026-11-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.3** | Issuer portals: a portal's people run in its pinned unit without a membership and read their own command output recovered from the run's recording; refused reads are audited. | **Shipped (pre-alpha)** — `v0.10.3`, 2026-11-23 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.4** | Outage handling: a lost Kubernetes run's owner can copy work out, an orphan sweep hold and a lock pool cap. Security fixes for sponsor changes, runner revives, relay sources, push removals and the kubectl door. | **Shipped (pre-alpha)** — `v0.10.4`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 

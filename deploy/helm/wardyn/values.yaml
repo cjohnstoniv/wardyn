@@ -64,7 +64,7 @@ ha:
 #
 # /readyz adds a 3-second Postgres ping and takes the pod out of the Service while
 # it fails. It was added in 0.6, and the empty
-# image.tag above resolves to .Chart.AppVersion, which is 0.10.3 — so the default
+# image.tag above resolves to .Chart.AppVersion, which is 0.10.4 — so the default
 # image serves it. An image.tag PINNED at or below 0.5.0 does not: a probe set to
 # /readyz there 404s forever and the rollout hangs. `helm upgrade --reuse-values`
 # keeps the previous release's path, /readyz for a release installed before 0.10.4.
