@@ -17,6 +17,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   terminal on that computer. The organisation still admits it exactly as an attach through the relay, holds the
   writer lease and keeps the audit rows; the recording is made from the runner's copy of the output.
 
+### Fixed
+
+- Docs: the threat model and the architecture guide now agree on what an audit row records: one actor and the run it
+  belongs to. The person behind an agent's row is that run's `created_by`, and the guide shows the lookup.
+- Docs: the audit actions reference now says that a field withheld below the super-admin tier can still be confirmed
+  by a reader who guesses its value, and that an interactive run of a BYOI image on a registered runner skips the image selftest.
+- Docs: the one-line installer's `claude-code` entry names the agent base image, which cannot sign in to Claude; the
+  image build guide says so and how to build one.
+
 ### Before you upgrade
 
 - If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before

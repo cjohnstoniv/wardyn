@@ -1086,6 +1086,7 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
   at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
   [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
   `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
+- Withheld is not hidden from a reader who can guess the value: the stored hashes take no key, so a candidate value can be checked against a marked row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
