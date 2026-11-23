@@ -225,14 +225,19 @@ func parseMDMChain(chain [][]byte) (leaf *x509.Certificate, inter *x509.CertPool
 }
 
 // mdmChainRefusal is the rest of the sentence for a chain that did not verify. Go reports both ends of the
-// validity window as Expired, so the leaf's own dates tell them apart.
+// validity window as Expired, for any certificate of the path, and names the one at fault (inv.Cert): the sentence
+// says whether that is the device's certificate or a CA's, with its own dates.
 func mdmChainRefusal(err error, leaf *x509.Certificate, now time.Time) string {
 	var inv x509.CertificateInvalidError
 	if errors.As(err, &inv) && inv.Reason == x509.Expired {
-		if now.Before(leaf.NotBefore) {
-			return "'s MDM device certificate is not valid until " + leaf.NotBefore.UTC().Format("2006-01-02") + "."
+		bad, who := leaf, "'s MDM device certificate"
+		if inv.Cert != nil && !inv.Cert.Equal(leaf) {
+			bad, who = inv.Cert, "'s MDM device certificate chain holds a CA certificate that"
 		}
-		return "'s MDM device certificate expired on " + leaf.NotAfter.UTC().Format("2006-01-02") + "."
+		if now.Before(bad.NotBefore) {
+			return who + " is not valid until " + bad.NotBefore.UTC().Format("2006-01-02") + "."
+		}
+		return who + " expired on " + bad.NotAfter.UTC().Format("2006-01-02") + "."
 	}
 	return "'s MDM device certificate is not issued by the configured MDM CA."
 }

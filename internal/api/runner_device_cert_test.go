@@ -792,6 +792,17 @@ func TestMDMDeviceVerdict_RefusalSentences(t *testing.T) {
 	mustRefuse(t, "expired", v, "expired on "+e.clock.now().Add(-time.Hour).UTC().Format("2006-01-02"))
 	v = e.verdict(e.runner(e.leaf(5, 48*time.Hour, 72*time.Hour)))
 	mustRefuse(t, "not yet valid", v, "is not valid until "+notBefore.UTC().Format("2006-01-02"))
+	// The bundle's own CA is what expired: the sentence says so, with the CA's date, not the leaf's later one.
+	caEnd := e.ca.cert.NotAfter
+	long := e.leaf(6, -time.Hour, 90*24*time.Hour)
+	long2 := e.clock.now().Add(90 * 24 * time.Hour)
+	e.clock.add(40 * 24 * time.Hour)
+	v = e.verdict(e.runner(long))
+	mustRefuse(t, "CA expired", v, "chain holds a CA certificate that expired on "+caEnd.UTC().Format("2006-01-02"))
+	if strings.Contains(v.refusal, long2.UTC().Format("2006-01-02")) {
+		t.Fatalf("the sentence names the leaf's date: %q", v.refusal)
+	}
+	e.clock.add(-40 * 24 * time.Hour)
 	foreign := mdmTestDeviceCert(t, other, 5, e.clock.now().Add(-time.Hour), e.clock.now().Add(time.Hour))
 	mustRefuse(t, "foreign CA", e.verdict(e.runner(foreign)), "is not issued by the configured MDM CA")
 	e.store.err = errors.New("db down")
