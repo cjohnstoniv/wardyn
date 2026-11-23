@@ -21,11 +21,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - With `k8s.rbac.create=false`, add `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `deletecollection` on `endpointslices.discovery.k8s.io` to the runs-namespace Role first; without them every run on the server's cluster fails to start with a 403 that names the verb.
-- The chart now renders two ValidatingAdmissionPolicies and their bindings (`<release>-wardyn-keep-service`, `-keep-endpoints`) whenever `k8s.enabled`. They need Kubernetes 1.30 or later serving `admissionregistration.k8s.io/v1`, the chart refuses to render otherwise, and the installer needs permission to create them.
-- The cluster must keep pod source addresses on pod-to-ClusterIP traffic (no kube-proxy `masqueradeAll`).
+- The chart now renders two ValidatingAdmissionPolicies and their bindings (`<release>-wardyn-keep-service`, `-keep-endpoints`) whenever `k8s.enabled`. They need Kubernetes 1.30 or later serving `admissionregistration.k8s.io/v1`, the chart refuses to render otherwise, and the installer needs permission to create them. An offline `helm template` with no `--kube-version` is not refused: pass the cluster's version.
+- The cluster must keep pod source addresses on pod-to-ClusterIP traffic (no kube-proxy `masqueradeAll`), and its CNI must apply NetworkPolicy after Service translation.
 - Interactive runs on the server's cluster rely on the agent image's own wait for its proxy, which Wardyn's images have had since 0.10.0. An image built before that, or a custom one without that wait in `agent-run`, may find its first requests refused; nothing leaves the sandbox.
 - Each run on the server's cluster now takes one address from the cluster's Service range and counts against a `services` or `count/services` quota in the runs namespace. Wardyn's capacity check does not count Services, so a full quota fails the run's start with a 403.
-- Rolling back to an earlier release leaves the Services of runs started on this one; delete them as docs/operations/kubernetes-agent-sandbox.md says.
+- Rolling back to an earlier release with keep off leaves the Service and EndpointSlice of each run started on this one when that run ends. Delete them per ended run by its `wardyn.run-id` label, as docs/operations/kubernetes-agent-sandbox.md says; never delete a live run's Service.
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
 
 ## [0.10.2] — 2026-11-22

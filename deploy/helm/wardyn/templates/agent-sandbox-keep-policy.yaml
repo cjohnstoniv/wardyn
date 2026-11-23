@@ -2,7 +2,7 @@
 Every run's own Service on the server's cluster (rendered whenever k8s.enabled). wardynd holds create, get and
 delete on Services and create, get, update and deletecollection on EndpointSlices in the runs namespace. These two
 policies hold its writes and deletes to what a run needs: a ClusterIP Service named for a run, with no selector and
-no external IPs, and EndpointSlices labelled for such a Service. Like the pod policies, they select on the
+no external IPs, and EndpointSlices labelled for such a Service, before and after an update. Like the pod policies, they select on the
 authenticated requester. One policy per kind, so each expression is type-checked against the one kind it reads.
 The names say "keep" because keep introduced them; scripts and CI select them by those names.
 */ -}}
@@ -50,7 +50,7 @@ spec:
     - name: requested-by-wardynd
       expression: {{ printf "request.userInfo.username == '%s'" $wardynUser | quote }}
   validations:
-    - expression: "request.operation == 'DELETE' ? (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')) : (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))"
+    - expression: "(request.operation == 'CREATE' || (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))) && (request.operation == 'DELETE' || (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')))"
       message: "wardynd may write or delete EndpointSlices only for a run's own Service"
 ---
 apiVersion: admissionregistration.k8s.io/v1

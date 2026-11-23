@@ -193,9 +193,11 @@
 3. Or delete the survivors: `kubectl delete sandboxes -l wardyn.managed=true`.
 
 - A Sandbox left behind keeps the controller watching it. If its pod is ever replaced, the controller makes the replacement from the template, which carries the gate, so it stays held and never starts.
-- The two admission policies stay: they render whenever `k8s.enabled`. After switching off, a replacement stays held only because the controller copies the template.
+- Switching off also removes the backend's two pod admission policies with the chart. After that, a replacement stays held only because the controller copies the template; no policy checks it.
+- The per-run Service and EndpointSlice policies stay: they render whenever `k8s.enabled`.
 
-- Turning keep off tears kept runs down at the next lease pass, about a minute later. A run started with keep on that is still running keeps using its Service, and the Service owns its agent: deleting the Service ends that run. Teardown deletes each run's Service whether keep is on or off. Services left by a run of an older release route nowhere; delete them with `kubectl delete services -l wardyn.managed=true,wardyn.component=proxy` in the runs namespace once no run of that release is live.
+- Turning keep off tears kept runs down at the next lease pass, about a minute later. A run started with keep on that is still running keeps using its Service, and the Service owns its agent: deleting the Service ends that run. Teardown deletes each run's Service whether keep is on or off.
+- After a rollback to an earlier release with keep off, a run started on this release leaves its Service and EndpointSlice when it ends. Once that run has ended, delete them with `kubectl delete services,endpointslices -l wardyn.run-id=<run id>` in the runs namespace. Never delete a live run's Service: its agent reaches its proxy only through it, and a kept run's agent is owned by it.
 
 - Stop and kill delete the Sandbox before the pods, so the controller does not recreate the agent pod. A failed Sandbox delete returns an error and keeps the NetworkPolicies. The orphan sweep also lists Sandboxes.
 

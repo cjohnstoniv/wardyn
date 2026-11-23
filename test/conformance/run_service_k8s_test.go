@@ -257,7 +257,7 @@ func testFirstPacket(t *testing.T, cs kubernetes.Interface, image string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), firstPacketLimit)
 	defer cancel()
-	ns := "wardyn-k7-" + uuid.NewString()[:8]
+	ns := "wardyn-first-packet-" + uuid.NewString()[:8]
 	if _, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}}, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create the scratch namespace: %v", err)
 	}
@@ -289,8 +289,8 @@ func testFirstPacket(t *testing.T, cs kubernetes.Interface, image string) {
 // reports whether any line was REACHED and the milliseconds from the pod create's return to the first line read.
 func firstPacketProbe(ctx context.Context, t *testing.T, cs kubernetes.Interface, ns, image, name string, deny bool) (bool, int64) {
 	t.Helper()
-	labels := map[string]string{"wardyn.k7": uuid.NewString()[:8]}
-	podName := "wardyn-k7-" + name
+	labels := map[string]string{"wardyn.first-packet": uuid.NewString()[:8]}
+	podName := "wardyn-first-packet-" + name
 	if deny {
 		np := &networkingv1.NetworkPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns},

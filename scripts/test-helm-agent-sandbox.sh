@@ -7,8 +7,9 @@
 #   - off (key absent, null, false, the 0.8.5 reuse-values file) renders the same bytes as one another, with no
 #     agents.x-k8s.io rule, no pods patch, no CRD, no WARDYN_K8S_AGENT_SANDBOX and no admissionregistration object but
 #     the two keep policies and their bindings, which render with k8s.enabled;
-#   - when BASE is a git rev (the CI check sets it to the commit before the key existed), the off render is
-#     byte-identical to that commit's chart under the same values;
+#   - when BASE is a git rev (the commit before the key existed), the k8s-off renders (defaults and the 0.8.5
+#     reuse-values file) are byte-identical to that commit's chart under the same values. A k8s.enabled render is not:
+#     it now carries the per-run Service rules and the keep policies;
 #   - on renders exactly: pods patch, a sandboxes create/get/list/delete rule, the env, and a
 #     ValidatingAdmissionPolicy + binding that selects the controller identity and requires the gate, a Sandbox owner and an empty nodeName;
 #   - on with k8s.agentSandbox.template adds only get on that one sandboxtemplate and WARDYN_K8S_AGENT_SANDBOX_TEMPLATE;
@@ -78,26 +79,28 @@ k8srole='select(.kind == "Role" and (.metadata.name | test("k8s-runner$")))'
   || die "k8s on: the runner Role has no, or a wider, services rule"
 [[ "$(y -o=json -I=0 "$k8srole | .rules[] | select(.apiGroups[0] == \"discovery.k8s.io\")" "$TMP/key-absent.out")" == '{"apiGroups":["discovery.k8s.io"],"resources":["endpointslices"],"verbs":["create","get","update","deletecollection"]}' ]] \
   || die "k8s on: the runner Role has no, or a wider, endpointslices rule"
-[[ "$(y "$k8srole | [.rules[] | select(.resources[0] == \"services\" or .apiGroups[0] == \"discovery.k8s.io\")] | length" "$TMP/key-absent.out" | grep -vx 0 || true)" == 2 ]] \
-  || die "k8s on: not exactly the services and endpointslices rules"
+# Every rule that names any of these resources or groups, in any position or with a wildcard: exactly the two above.
+[[ "$(y "$k8srole | [.rules[] | select((.resources | any_c(. == \"services\" or . == \"endpointslices\" or . == \"endpoints\" or . == \"*\")) or (.apiGroups | any_c(. == \"discovery.k8s.io\" or . == \"*\")))] | length" "$TMP/key-absent.out" | grep -vx 0 || true)" == 2 ]] \
+  || die "k8s on: a rule other than those two names services, endpointslices, endpoints, discovery.k8s.io or a wildcard"
 ok "k8s on: the per-run Service rules, exactly"
 
 render -f "$REUSE" "${BASAL[@]}" >"$TMP/reuse.out"
 absent "0.8.5 reuse-values render" "$TMP/reuse.out"
 ok "off under the 0.8.5 reuse-values file: no marker"
 
-# Byte-identity to the commit before the key existed, when the caller names one.
+# Byte-identity to the commit before the key existed, when the caller names one: k8s-off renders only, since every
+# k8s.enabled render now adds the per-run Service rules and the keep policies.
 if [[ -n "${BASE:-}" ]]; then
   mkdir -p "$TMP/base"
   git archive "$BASE" "$CHART" | tar -x -C "$TMP/base"
-  for args in "-f $ALLON" "-f $REUSE ${BASAL[*]}" "${BASAL[*]}"; do
+  for args in "-f $REUSE ${BASAL[*]}" "${BASAL[*]}"; do
     # shellcheck disable=SC2086
     helm template r "$TMP/base/$CHART" $args >"$TMP/base.out"
     # shellcheck disable=SC2086
     helm template r "$CHART" $args >"$TMP/head.out"
     cmp -s "$TMP/base.out" "$TMP/head.out" || { diff "$TMP/base.out" "$TMP/head.out" | head -20 >&2; die "off render differs from $BASE under: $args"; }
   done
-  ok "off render is byte-identical to $BASE (all-on values, 0.8.5 reuse-values, defaults)"
+  ok "k8s-off render is byte-identical to $BASE (0.8.5 reuse-values, defaults)"
 else
   echo "note: BASE not set, byte-identity to a base commit not checked (BASE=<rev> bash $0)"
 fi
@@ -169,7 +172,7 @@ for n in keep-service keep-endpoints; do
       msg="wardynd may make, change or delete only a run's own ClusterIP Service, with no selector and no external IPs" ;;
     keep-endpoints)
       rule='{"apiGroups":["discovery.k8s.io"],"apiVersions":["v1"],"operations":["CREATE","UPDATE","DELETE"],"resources":["endpointslices"]}'
-      expr="request.operation == 'DELETE' ? (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')) : (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))"
+      expr="(request.operation == 'CREATE' || (has(oldObject.metadata.labels) && 'kubernetes.io/service-name' in oldObject.metadata.labels && oldObject.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-'))) && (request.operation == 'DELETE' || (has(object.metadata.labels) && 'kubernetes.io/service-name' in object.metadata.labels && object.metadata.labels['kubernetes.io/service-name'].startsWith('wardyn-proxy-svc-')))"
       msg="wardynd may write or delete EndpointSlices only for a run's own Service" ;;
   esac
   kp="select(.kind == \"ValidatingAdmissionPolicy\" and .metadata.name == \"r-wardyn-$n\")"

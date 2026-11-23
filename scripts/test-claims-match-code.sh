@@ -508,8 +508,15 @@ for res in services endpointslices; do
 done
 grep -B1 'resources: \["endpointslices"\]' "${WORK}/rbac-role-server" | grep -q 'apiGroups: \["discovery.k8s.io"\]' \
   || fail "deploy/helm/wardyn/templates/rbac.yaml's endpointslices rule is not in apiGroups [\"discovery.k8s.io\"] (R-02c)"
+# Read as sets: a rule naming services, endpointslices, endpoints or a wildcard among other resources, or a rule in a
+# wildcard API group, would grant more than the two exact rules above.
+[ "$(grep -cE 'resources: \[[^]]*"(services|endpointslices|endpoints|\*)"' "${WORK}/rbac-role-server")" = 2 ] \
+  || fail "deploy/helm/wardyn/templates/rbac.yaml's runs Role names services, endpointslices, endpoints or a wildcard resource in a rule other than its two per-run Service rules (R-02c)"
+if grep -qE 'apiGroups: \[[^]]*"\*"' "${WORK}/rbac-role-server"; then
+  fail "deploy/helm/wardyn/templates/rbac.yaml's runs Role has a rule in a wildcard API group (R-02c)"
+fi
 runs_role "${ROOT}/deploy/helm/wardyn-runnerd/templates/rbac.yaml" > "${WORK}/rbac-role-runnerd"
-if grep -qE 'resources: \[[^]]*"(services|endpointslices)"' "${WORK}/rbac-role-runnerd"; then
+if grep -qE 'resources: \[[^]]*"(services|endpointslices|endpoints|\*)"' "${WORK}/rbac-role-runnerd"; then
   fail "deploy/helm/wardyn-runnerd/templates/rbac.yaml's runs Role grants services or endpointslices — runner mode makes no per-run Service and must not hold them (R-02c)"
 fi
 pass "R-02c the server chart's runs Role grants exactly runAddressAccess on services and endpointslices; runnerd's grants neither"

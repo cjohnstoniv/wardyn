@@ -54,7 +54,7 @@ Wardyn is up.
 
 ## Prerequisites
 
-**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. With `k8s.enabled` the chart renders two `ValidatingAdmissionPolicy` objects, so it needs Kubernetes 1.30+ serving `admissionregistration.k8s.io/v1` and refuses to render otherwise. In detail:
+**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. With `k8s.enabled` the chart renders two `ValidatingAdmissionPolicy` objects, so it needs Kubernetes 1.30+ serving `admissionregistration.k8s.io/v1` and refuses to render otherwise. An offline render (`helm template`) with no `--kube-version` is not refused: pass the cluster's version. In detail:
 
 - **Helm 3**. Other Kubernetes versions are untested.
   - With `k8s.enabled`, exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
@@ -64,7 +64,7 @@ Wardyn is up.
     - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
-- **Pod source addresses kept on pod-to-Service traffic** (no kube-proxy `masqueradeAll`): each run's agent reaches its proxy through a ClusterIP Service, and the proxy's NetworkPolicy admits only the agent pod's address. A masquerading cluster fails closed: no run can reach its proxy.
+- **Pod source addresses kept on pod-to-Service traffic** (no kube-proxy `masqueradeAll`): each run's agent reaches its proxy through a ClusterIP Service, and the proxy's NetworkPolicy admits only the agent pod's address. A masquerading cluster fails closed: no run can reach its proxy. The CNI must also apply NetworkPolicy after Service translation; Wardyn's conformance suite checks this on Calico.
 - **Pod sysctls allowed in `k8s.runsNamespace`** (with `k8s.enabled`): each run's proxy pod sets `net.ipv4.ip_unprivileged_port_start=53`, a namespaced safe sysctl, to bind its DNS listener without a capability. A cluster whose admission forbids pod sysctls fails every run at proxy start.
 - **Postgres 13+** (external or managed).
 - A wardynd image:
