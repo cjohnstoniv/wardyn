@@ -115,12 +115,11 @@ func refoldRecorder(steps *[]wallsStep) wallsObserver {
 // return the same result, PathProvenance and Chain included, and the same error.
 func TestWallsObserverNilEqualsResolver(t *testing.T) {
 	srv := refoldTestServer()
+	// Built once: each fixture call mints new ids, and the error names one, so every call below must see the same.
+	broken := []types.GovernanceUnit{refoldTestChain(t, "composed on a standalone root")[0], refoldTestChain(t, "Default alone")[0]}
 	errCases := []refoldTestCase{
 		{name: "an empty chain", chain: func() []types.GovernanceUnit { return nil }},
-		{name: "not a clean line", chain: func() []types.GovernanceUnit {
-			c := refoldTestChain(t, "composed on a standalone root")
-			return []types.GovernanceUnit{c[0], refoldTestChain(t, "Default alone")[0]}
-		}},
+		{name: "not a clean line", chain: func() []types.GovernanceUnit { return slices.Clone(broken) }},
 	}
 	for _, tc := range append(refoldTestCases(), errCases...) {
 		t.Run(tc.name, func(t *testing.T) {
