@@ -4,6 +4,7 @@
 package posture
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/devicecert"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -189,4 +191,47 @@ func TestDeviceCertSender_WatchSendsAtOnce(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the first report waited for the interval")
 	}
+}
+
+// A report over the organisation's event cap is trimmed, whole identities at a time and the largest chain first,
+// never sent oversize; and the sending goes on.
+func TestDeviceCertSender_TrimsAnOversizeReportAndKeepsSending(t *testing.T) {
+	big := func(n int, b byte) runnerwire.DeviceCertProof {
+		return runnerwire.DeviceCertProof{Chain: [][]byte{bytes.Repeat([]byte{b}, n)}, SignedAt: certNow, Signature: []byte{b}}
+	}
+	// Eight chains of about 8 KiB (about 11 KiB each as base64, 88 KiB in all) and one of 100 bytes.
+	var proofs []runnerwire.DeviceCertProof
+	for i := 0; i < 8; i++ {
+		proofs = append(proofs, big(devicecert.MaxDER-i, byte(i+1)))
+	}
+	proofs = append(proofs, big(100, 99))
+	run, got := deviceCertPeers(t)
+	var sizes []int
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		return runnerwire.DeviceCertReport{Proofs: proofs}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	s.ack = func(ctx context.Context, p *runnerwire.Peer, ev runnerwire.Event) error {
+		sizes = append(sizes, len(ev.Data))
+		return p.EventAck(ctx, ev)
+	}
+	if err := s.Send(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	r := <-got
+	if len(sizes) != 1 || sizes[0] > devicecert.MaxEventBytes {
+		t.Fatalf("sent sizes %v, want one event within %d", sizes, devicecert.MaxEventBytes)
+	}
+	var kept []byte
+	for _, p := range r.Proofs {
+		kept = append(kept, p.Signature[0])
+	}
+	// The three largest chains (the first three) went, one whole identity at a time; the rest stayed in order.
+	if want := []byte{4, 5, 6, 7, 8, 99}; !bytes.Equal(kept, want) {
+		t.Fatalf("kept identities %v, want %v", kept, want)
+	}
+	// Still sending: a second Send on the same session goes out.
+	if err := s.Send(t.Context(), run); err != nil || len(sizes) != 2 {
+		t.Fatalf("second send: %v, %d events", err, len(sizes))
+	}
+	<-got
 }

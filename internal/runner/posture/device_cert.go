@@ -13,10 +13,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/devicecert"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 )
 
@@ -81,7 +83,7 @@ func (s *DeviceCertSender) Send(ctx context.Context, peer *runnerwire.Peer) erro
 	if err != nil {
 		return err
 	}
-	data, err := runnerwire.Marshal(report)
+	data, err := marshalWithinCap(ctx, report)
 	if err != nil {
 		return err
 	}
@@ -95,6 +97,39 @@ func (s *DeviceCertSender) Send(ctx context.Context, peer *runnerwire.Peer) erro
 		return nil
 	}
 	return err
+}
+
+// marshalWithinCap is the report as event data that fits devicecert.MaxEventBytes. The organisation refuses a larger
+// event whole, which would end the sending for the session, so whole identities are dropped, the largest chain
+// first, each with one log line, until it fits.
+func marshalWithinCap(ctx context.Context, report runnerwire.DeviceCertReport) ([]byte, error) {
+	report.Proofs = slices.Clone(report.Proofs)
+	for {
+		data, err := runnerwire.Marshal(report)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) <= devicecert.MaxEventBytes || len(report.Proofs) == 0 {
+			return data, nil
+		}
+		big, bigSize := 0, -1
+		for i, p := range report.Proofs {
+			if n := chainBytes(p.Chain); n > bigSize {
+				big, bigSize = i, n
+			}
+		}
+		slog.InfoContext(ctx, "runner device certificate report too large for one event; leaving out the identity with the largest chain",
+			"identity_index", big, "chain_bytes", bigSize, "report_bytes", len(data), "limit", devicecert.MaxEventBytes)
+		report.Proofs = slices.Delete(report.Proofs, big, big+1)
+	}
+}
+
+func chainBytes(chain [][]byte) int {
+	n := 0
+	for _, c := range chain {
+		n += len(c)
+	}
+	return n
 }
 
 // Watch presents the identities at once, then again every interval, until peer ends or the organisation refuses

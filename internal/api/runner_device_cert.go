@@ -582,7 +582,7 @@ func parseMDMCRL(body []byte, roots []*x509.Certificate, now time.Time) (*mdmCRL
 }
 
 // maxDeviceCertEventBytes bounds one device_cert event's data.
-const maxDeviceCertEventBytes = 64 << 10
+const maxDeviceCertEventBytes = devicecert.MaxEventBytes
 
 // runnerDeviceCertStore is the PG capability behind the device_cert event. The api reaches it through this
 // interface, not by widening store.RunnerStore.

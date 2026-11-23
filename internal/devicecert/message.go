@@ -21,6 +21,8 @@ const (
 	MaxChainLen = 4
 	MaxDER      = 8 << 10
 	MaxSkew     = 10 * time.Minute
+	// MaxEventBytes is the most data one device_cert event may carry: the control plane refuses a larger one whole.
+	MaxEventBytes = 64 << 10
 )
 
 // hexLen is the length of a SHA-256 in hex.
