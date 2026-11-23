@@ -308,6 +308,25 @@ func TestRunScheduleCreate_RefusesWeekdayInBody(t *testing.T) {
 	}
 }
 
+// A schedule's name is held to a run title's 200 characters, counted in runes, with the title's reason.
+func TestRunScheduleCreate_RefusesALongName(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	body := func(name string) string {
+		return `{"name":"` + name + `","every":"daily","time":"09:00","time_zone":"UTC","request":{"agent":"claude-code"}}`
+	}
+	st := newFakeScheduleStore()
+	w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(st), body(strings.Repeat("é", maxRunTitleLen+1)))
+	if w.Code != http.StatusBadRequest || errorReason(w) != reasonRunFieldTooLong || !strings.Contains(w.Body.String(), "name is too long (201 chars, max 200)") {
+		t.Fatalf("a 201-character name = %d %s; want 400 %s naming the name", w.Code, w.Body, reasonRunFieldTooLong)
+	}
+	if len(st.rows) != 0 {
+		t.Errorf("a refused create stored %d schedules", len(st.rows))
+	}
+	if w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(st), body(strings.Repeat("é", maxRunTitleLen))); errorReason(w) == reasonRunFieldTooLong {
+		t.Errorf("a 200-character name of 400 bytes = %d %s; want it past the length check", w.Code, w.Body)
+	}
+}
+
 // The admin token (no person) and a service identity keep no schedule.
 func TestRunScheduleCreate_RefusesNonPerson(t *testing.T) {
 	t.Setenv(envScheduledRuns, "1")

@@ -430,6 +430,7 @@ call of that remote MCP tool. Its `requested_scope`:
 The client has no methods for these routes yet; call them over HTTP with a single sign-on session ([Repeating schedules](operations/runner-pools.md#repeating-schedules)).
 
 - `POST /run-schedules` takes `{name, every, time, time_zone, request}`: `every` is `daily`, `weekdays` or `weekly`, `time` is `HH:MM`, `time_zone` an IANA zone, and `request` a `CreateRunRequest` without `start_at`. It answers `201` with the schedule.
+- `name` is at most 200 characters, as a run title is (`400` `run_field_too_long`).
 - A schedule is `{id, name, every, weekday, time, time_zone, next_at, paused, last}`: `weekday` (0 is Sunday) for a weekly one, `paused` `{at, reason}`, and `last` `{due_at, run_id, outcome}`. It never carries the stored request.
 - `GET /run-schedules` lists your own; a security admin's `?view=admin` lists everyone's, each with `owner`.
 - `POST /run-schedules/{id}/pause` and `/resume` answer `200` with the schedule, and `DELETE /run-schedules/{id}` answers `204`. A resume runs the create's checks again.

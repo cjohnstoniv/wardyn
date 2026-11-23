@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -329,7 +330,8 @@ type runScheduleBody struct {
 }
 
 // decodeRunScheduleBody reads the body strictly with the create's body cap. A bad rule, a request that is not
-// an object, or one carrying start_at or start_time_zone is a 400 run_schedule_invalid.
+// an object, or one carrying start_at or start_time_zone is a 400 run_schedule_invalid. A name longer than a
+// run title may be is a 400 run_field_too_long, as the title's is.
 func decodeRunScheduleBody(w http.ResponseWriter, r *http.Request) (runScheduleBody, scheduleRule, bool) {
 	var in runScheduleBody
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
@@ -345,8 +347,13 @@ func decodeRunScheduleBody(w http.ResponseWriter, r *http.Request) (runScheduleB
 	}
 	if !ok {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunScheduleInvalid, runScheduleInvalidMsg)
+		return in, rule, false
 	}
-	return in, rule, ok
+	if n := utf8.RuneCountInString(in.Name); n > maxRunTitleLen {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunFieldTooLong, fmt.Sprintf(runFieldTooLongRefusal, "name", n, maxRunTitleLen))
+		return in, rule, false
+	}
+	return in, rule, true
 }
 
 // scheduleOwnerAuthority is the caller's authority when they may keep a schedule: a person signed in through
