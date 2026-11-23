@@ -40,7 +40,7 @@ const uiRoot = path.resolve(__dirname, "../..");
 // leaves about 598 kB of slack; the next budget change should start from 76,267 B.
 const ENTRY_BUDGET_BYTES = 672 * 1024;
 
-async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
+async function build_(mode: "production" | "e2e" = "production"): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
   // Vite only defaults NODE_ENV to "production" for a build when it is UNSET,
   // and vitest has already set it to "test". Left alone, `process.env.NODE_ENV`
   // inlines as "test", React resolves its development bundle, and the entry
@@ -53,7 +53,7 @@ async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
       configFile: path.join(uiRoot, "vite.config.ts"),
       root: uiRoot,
       logLevel: "silent",
-      mode: "production",
+      mode,
       // In-memory: never clobber the real dist/ a dev or the e2e lane is using.
       build: { write: false },
     })) as Rollup.RollupOutput | Rollup.RollupOutput[];
@@ -67,6 +67,9 @@ async function build_(): Promise<(Rollup.OutputChunk | Rollup.OutputAsset)[]> {
 // One build for every assertion below: it is the slow part.
 let built: ReturnType<typeof build_> | undefined;
 const buildOnce = () => (built ??= build_());
+// The e2e build (scripts/e2e-backend.sh builds it with --mode e2e) is the one the end-to-end checks load.
+let builtE2E: ReturnType<typeof build_> | undefined;
+const buildE2EOnce = () => (builtE2E ??= build_("e2e"));
 const chunksOf = (out: Awaited<ReturnType<typeof build_>>) =>
   out.filter((o): o is Rollup.OutputChunk => o.type === "chunk");
 
@@ -233,5 +236,74 @@ describe("barrier art ships as files, never inlined", () => {
     ]);
     const inlined = out.filter((o) => (o.type === "chunk" ? o.code : String(o.source)).includes("data:image/png"));
     expect(inlined.map((o) => o.fileName)).toEqual([]);
+  }, 180_000);
+});
+
+// The walls view's 3D stack: three (with its addons), React Three Fiber and camera-controls. Anchored on the package
+// directory, so a sibling such as three-mesh-bvh never matches, and checked one package at a time, so a build that
+// dropped one cannot pass on another's match.
+const STACK_3D: Record<string, RegExp> = {
+  three: /\/node_modules\/three\//,
+  "@react-three/fiber": /\/node_modules\/@react-three\/fiber\//,
+  "camera-controls": /\/node_modules\/camera-controls\//,
+};
+const ANY_3D = /\/node_modules\/(?:three|@react-three\/fiber|camera-controls)\//;
+// A source import of the stack. The e2e probe and its seam are skipped: production must drop them.
+const STACK_3D_IMPORT = /(?:from|import\()\s*["'](?:three|three\/addons\/[^"']+|@react-three\/fiber|camera-controls)["']/;
+const PROBE_FILES = /\/screens\/walls\/canvas\/webgl-probe(?:-e2e-seam)?\.ts$/;
+// What a 3D chunk must never carry: string evaluation, a worker, a blob or image data: URL (the CSP allows neither),
+// the GPU's identity, or a CDN host.
+const STACK_3D_FORBIDDEN =
+  /\bnew Function\s*\(|\beval\s*\(|\bnew (?:Shared)?Worker\s*\(|createObjectURL|data:image\/|WEBGL_debug_renderer_info|cdn\.jsdelivr\.net|unpkg\.com|fonts\.googleapis\.com|fonts\.gstatic\.com|raw\.githubusercontent\.com/;
+// EST, raw bytes of every chunk that carries the stack. The first green run's figure goes in the lane report.
+const STACK_3D_BUDGET_BYTES = 1600 * 1024;
+
+// Every entry chunk plus everything it statically imports: what a page loads before any lazy import runs.
+function eagerOf(chunks: Rollup.OutputChunk[]): Set<string> {
+  const eager = new Set(chunks.filter((c) => c.isEntry).map((c) => c.fileName));
+  for (const name of eager) for (const imported of chunks.find((c) => c.fileName === name)?.imports ?? []) eager.add(imported);
+  return eager;
+}
+
+describe("the walls 3D stack loads only in lazy chunks", () => {
+  it("ships three, React Three Fiber and camera-controls lazily in the e2e build, clean and under budget", async () => {
+    const chunks = chunksOf(await buildE2EOnce());
+    const eager = eagerOf(chunks);
+    const inEager = modulesOf(chunks.filter((c) => eager.has(c.fileName))).filter((m) => ANY_3D.test(m));
+    expect(inEager, `3D stack in an eager chunk: ${inEager.join(", ")}`).toEqual([]);
+
+    const lazy = chunks.filter((c) => !eager.has(c.fileName));
+    for (const [name, pattern] of Object.entries(STACK_3D)) {
+      expect(modulesOf(lazy).filter((m) => pattern.test(m)).length, `${name} is in no lazy chunk`).toBeGreaterThan(0);
+    }
+
+    const stackChunks = lazy.filter((c) => Object.keys(c.modules).some((m) => ANY_3D.test(m)));
+    const hits = stackChunks.flatMap((c) => {
+      const hit = STACK_3D_FORBIDDEN.exec(c.code);
+      return hit ? [`${c.fileName}: ${c.code.slice(Math.max(0, hit.index - 60), hit.index + 60)}`] : [];
+    });
+    expect(hits, "a 3D chunk carries eval, a worker, a blob or data: URL, the GPU identity or a CDN host").toEqual([]);
+
+    const bytes = stackChunks.reduce((n, c) => n + Buffer.byteLength(c.code, "utf8"), 0);
+    expect(bytes, `the 3D chunks are ${bytes} B`).toBeLessThan(STACK_3D_BUDGET_BYTES);
+  }, 180_000);
+
+  it("drops the e2e probe from the production build", async () => {
+    const out = await buildOnce();
+    const seam = out
+      .filter((o) => (o.type === "chunk" ? o.code : String(o.source)).includes("__wardynWallsProbe"))
+      .map((o) => o.fileName);
+    expect(seam, "the e2e-only probe seam ships in the production build").toEqual([]);
+
+    const chunks = chunksOf(out);
+    const eager = eagerOf(chunks);
+    const inEager = modulesOf(chunks.filter((c) => eager.has(c.fileName))).filter((m) => ANY_3D.test(m));
+    expect(inEager, `3D stack in an eager chunk: ${inEager.join(", ")}`).toEqual([]);
+    const inLazy = modulesOf(chunks.filter((c) => !eager.has(c.fileName))).filter((m) => ANY_3D.test(m));
+    if (appImports(STACK_3D_IMPORT, PROBE_FILES)) {
+      expect(inLazy.length, "the app imports the 3D stack but no lazy chunk carries it").toBeGreaterThan(0);
+    } else {
+      expect(inLazy, "only the e2e probe imports the 3D stack, so production carries none of it").toEqual([]);
+    }
   }, 180_000);
 });

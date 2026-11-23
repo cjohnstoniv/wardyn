@@ -9,6 +9,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./app/App";
 import { BrandingProvider } from "./app/components/wardyn/branding-context";
 import { basePath } from "./app/lib/base-path";
+import { exposeWebGLProbeForE2E } from "./app/components/screens/walls/canvas/webgl-probe-e2e-seam";
 import monoWoff2 from "jetbrains-mono/fonts/webfonts/JetBrainsMono-Regular.woff2?url";
 import "./styles/index.css";
 
@@ -20,6 +21,8 @@ preload.type = "font/woff2";
 preload.crossOrigin = "anonymous";
 preload.href = monoWoff2;
 document.head.appendChild(preload);
+
+exposeWebGLProbeForE2E();
 
 const container = document.getElementById("root");
 if (!container) {
