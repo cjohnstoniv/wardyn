@@ -763,14 +763,30 @@ func TestWindowsHolderRemoveDecodesSubject(t *testing.T) {
 }
 
 // An image name matches whatever its case, as the lower(name) unique index does, and the registered ref is
-// what the seat check is asked about.
+// what the seat check is asked about. An exact name wins over a folded one; two folded matches and no exact
+// one are ambiguous, refused windows_image_unregistered.
 func TestWindowsVMImageNameAnyCase(t *testing.T) {
 	srv, ws, _ := winvmServer(t, true)
-	launch, rf := srv.windowsImageDecision(winvmHTTP(memberContext()), winvmReq(func(q *createRunRequest) { q.WindowsImage = "SERVER" }), types.RunPolicySpec{})
+	named := func(name string) (store.WindowsLaunch, *runRefusal) {
+		return srv.windowsImageDecision(winvmHTTP(memberContext()), winvmReq(func(q *createRunRequest) { q.WindowsImage = name }), types.RunPolicySpec{})
+	}
+	launch, rf := named("SERVER")
 	if rf != nil || launch.Image.Ref != winvmRef {
 		t.Fatalf("SERVER = %+v, %v; want the image registered as Server", launch.Image, rf)
 	}
 	if !slices.Equal(ws.checks, []string{winvmRef + "|sub-admit-member"}) {
 		t.Errorf("seat checks = %v, want the registered ref for the member", ws.checks)
 	}
+	// "ſerver" (long s) folds to Server but is a name lower() keeps apart.
+	longS := types.WindowsImage{ID: uuid.New(), Name: "ſerver", Ref: "registry.example/windows/long@sha256:" + strings.Repeat("ef", 32),
+		LicencePoolID: ws.pool.ID, State: types.WindowsImageActive}
+	ws.images = append(ws.images, longS)
+	if launch, rf := named("Server"); rf != nil || launch.Image.Ref != winvmRef {
+		t.Errorf("exact Server = %+v, %v; want the exact match, not the folded one", launch.Image, rf)
+	}
+	if launch, rf := named("ſerver"); rf != nil || launch.Image.Ref != longS.Ref {
+		t.Errorf("exact ſerver = %+v, %v; want its own image", launch.Image, rf)
+	}
+	_, rf = named("SERVER")
+	wantWinRefusal(t, "two folded matches", rf, http.StatusUnprocessableEntity, reasonWindowsImageUnregistered, "windows_image")
 }

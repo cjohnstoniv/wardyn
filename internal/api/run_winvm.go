@@ -188,10 +188,20 @@ func windowsImageNamed(ctx context.Context, ws store.WindowsLicenceStore, name s
 	if err != nil {
 		return types.WindowsImage{}, runServerError("list Windows images", err)
 	}
+	// An exact name wins. Failing one, a single active name equal under case folding does, as the lower(name)
+	// index reads; two such names (folding is wider than lower) are ambiguous and match none.
+	var folded []types.WindowsImage
 	for _, img := range imgs {
-		if img.State == types.WindowsImageActive && strings.EqualFold(img.Name, name) { // as the lower(name) unique index
+		switch {
+		case img.State != types.WindowsImageActive:
+		case img.Name == name:
 			return img, nil
+		case strings.EqualFold(img.Name, name):
+			folded = append(folded, img)
 		}
+	}
+	if len(folded) == 1 {
+		return folded[0], nil
 	}
 	rf := runError(http.StatusUnprocessableEntity, reasonWindowsImageUnregistered,
 		fmt.Sprintf("No active Windows image is registered as %q. Ask an admin to register it.", name))
