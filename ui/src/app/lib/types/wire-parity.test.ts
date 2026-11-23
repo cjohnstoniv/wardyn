@@ -430,9 +430,7 @@ describe("source parity — Go DTOs vs their TS mirrors (T-69)", () => {
     const vm = /export type VMKind = ([^;]+);/.exec(kindTs);
     if (!vm) throw new Error("machine-kind.ts: no VMKind");
     const tsVMKinds = [...vm[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
-    // Kinds the server knows and the console does not offer yet. The console row that adds windows_vm to VMKind
-    // removes it from this set.
-    const NOT_IN_CONSOLE_YET = ["windows_vm"];
+    const NOT_IN_CONSOLE_YET = ["windows_vm"]; // the server knows it, the console does not offer it; the console row that does removes it
     expect(new Set(tsVMKinds)).toEqual(new Set(goKinds.filter((k) => k !== "container" && !NOT_IN_CONSOLE_YET.includes(k))));
   });
 
