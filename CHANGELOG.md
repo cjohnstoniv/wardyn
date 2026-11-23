@@ -24,6 +24,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
 - Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke. A session's first keystroke, and the first after 570 seconds without one, still wait for the stamp, so a run paused meanwhile is thawed before the keystroke reaches it.
 
+### Fixed
+
+- SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
