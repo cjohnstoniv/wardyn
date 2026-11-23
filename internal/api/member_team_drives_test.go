@@ -517,6 +517,24 @@ func TestMemberTeamDriveDelete_PreTombstoneWaitsForAnyStartingRun(t *testing.T) 
 	}
 }
 
+// TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun: past its claim, a team drive's delete still waits
+// for another person's STARTING run: refused in use, with no physical call and no issue recorded.
+func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun(t *testing.T) {
+	st, tr := newTeamDriveStore()
+	srv, _, rn := teamDriveServer(st, "docker")
+	d := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
+	ctx := withActor(context.Background(), types.ActorHuman, aliceSub)
+	tomb, started, err := st.BeginMemberDriveDelete(ctx, aliceSub, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.starting = map[string]bool{carolSub: true}
+	res := srv.deleteMemberDrive(ctx, st, tomb, started, memberDriveByOwner)
+	if res.reason != reasonMemberDriveInUse || len(rn.calls) != 0 || st.drives[d.ID].DeleteIssues != 0 {
+		t.Fatalf("delete = %+v, calls %d, issues %d; want in use, no call, no issue", res, len(rn.calls), st.drives[d.ID].DeleteIssues)
+	}
+}
+
 // TestMemberTeamDriveCatalogue_TeamDrivesAllowed: the catalogue's team_drives_allowed is true exactly when the create
 // gate would admit a team drive.
 func TestMemberTeamDriveCatalogue_TeamDrivesAllowed(t *testing.T) {

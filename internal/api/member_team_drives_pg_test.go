@@ -170,3 +170,28 @@ func TestMemberTeamDriveDelete_WaitsForAnyStartingRun_PG(t *testing.T) {
 		t.Fatalf("plain delete beside another person's starting run = %d (calls %d), want 204: %s", w.Code, len(e.rn.calls), w.Body.String())
 	}
 }
+
+// TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun_PG: a team drive already claimed for its delete is
+// refused in use while another person's run is STARTING, with no physical call and delete_issues still 0.
+func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun_PG(t *testing.T) {
+	e := newTeamDrivePGEnv(t)
+	ctx := withActor(context.Background(), types.ActorHuman, aliceSub)
+	d := e.teamDrive(t, aliceSub, "Design assets")
+	tomb, started, err := e.pg.BeginMemberDriveDelete(ctx, aliceSub, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := e.pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedAt: now, UpdatedAt: now, CreatedBy: "sub-member-carol", Agent: "claude-code",
+		ConfinementClass: types.CC1, State: types.RunStarting, SPIFFEID: "spiffe://wardyn.local/agent-run/" + uuid.NewString(), RunnerTarget: "docker"}); err != nil {
+		t.Fatal(err)
+	}
+	res := e.srv.deleteMemberDrive(ctx, e.pg, tomb, started, memberDriveByOwner)
+	var issues int
+	if err := e.pool.QueryRow(ctx, `SELECT delete_issues FROM user_drives WHERE id = $1`, d.ID).Scan(&issues); err != nil {
+		t.Fatal(err)
+	}
+	if res.reason != reasonMemberDriveInUse || len(e.rn.calls) != 0 || issues != 0 {
+		t.Fatalf("delete = %+v, calls %d, issues %d; want in use, no call, no issue", res, len(e.rn.calls), issues)
+	}
+}
