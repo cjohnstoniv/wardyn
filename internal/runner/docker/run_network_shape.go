@@ -68,15 +68,20 @@ func runNetworkOptions(labels map[string]string, isolated bool) client.NetworkCr
 	return opts
 }
 
-// runNetworkIsolation reports whether this engine can create a run network with no address on the
-// Docker host. An older or unreadable engine version refuses the run unless
-// Config.AllowHostReachableRunNetwork is set, when the network is created without the mode.
-func (d *Driver) runNetworkIsolation(ctx context.Context) (bool, error) {
+// engineVersion is the Docker Engine's version, read from Info.
+func (d *Driver) engineVersion(ctx context.Context) (string, error) {
 	res, err := d.cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
-		return false, fmt.Errorf("docker: info: %w", err)
+		return "", fmt.Errorf("docker: info: %w", err)
 	}
-	version := res.Info.ServerVersion
+	return res.Info.ServerVersion, nil
+}
+
+// runNetworkIsolation reports whether an engine of this version can create a run network with no address on the
+// Docker host. An older or unreadable engine version refuses the run unless
+// Config.AllowHostReachableRunNetwork is set, when the network is created without the mode. version is read by the
+// caller for this create, never cached: an engine replaced under a running daemon is read again on the next create.
+func (d *Driver) runNetworkIsolation(version string) (bool, error) {
 	if engineMajor(version) >= minIsolatedEngineMajor {
 		return true, nil
 	}

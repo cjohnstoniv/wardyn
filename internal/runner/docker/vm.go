@@ -327,7 +327,7 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 		}
 		return runner.Sandbox{}, err
 	}
-	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, false)
+	_, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, false, infoRes.Info.ServerVersion)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
