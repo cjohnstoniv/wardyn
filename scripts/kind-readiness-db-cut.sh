@@ -51,7 +51,7 @@ code() { curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${PORT}$1
 # forward POD: a port-forward to the pod itself, which answers whether or not the pod is Ready.
 forward() {
 	if [ -n "$pf_pid" ]; then kill "$pf_pid" 2>/dev/null || true; fi
-	k port-forward "pod/$1" "${PORT}:8080" >"$pf_log" 2>&1 &
+	kubectl -n "$NS" port-forward "pod/$1" "${PORT}:8080" >"$pf_log" 2>&1 &
 	pf_pid=$!
 	for _ in $(seq 1 30); do
 		[ "$(code /healthz)" = 200 ] && return 0
