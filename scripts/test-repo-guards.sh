@@ -163,7 +163,7 @@ NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurre
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
 # and release.yml's watched= (green-by-tree.sh matches a matrix job's "name (leg)" rows, #3439), or the
 # date is renewed in a reviewed change. Empty while no job is waiting.
-NOTIFY_EXEMPT_UNTIL="ai-gateway-kind=2026-11-28 kind-node-restart=2026-11-24 kind-agent-sandbox-keep-walk=2026-11-28"
+NOTIFY_EXEMPT_UNTIL="ai-gateway-kind=2026-12-06 kind-node-restart=2026-12-06 kind-agent-sandbox-keep-walk=2026-12-06"
 # notify_exempt_until_problems "<job=date ...>" "<exempt jobs>" <today>: one line per bad entry.
 notify_exempt_until_problems() {
     local pair job until max
