@@ -558,6 +558,26 @@ func TestMemberTeamDriveErasure_FinishesAnAskedDelete(t *testing.T) {
 	}
 }
 
+// TestMemberTeamDriveErasure_RefusalNamesAnyRun: a team drive whose delete the erasure finishes is held by anyone's
+// starting run, and the scope's error says a run on it is starting, not its owner's.
+func TestMemberTeamDriveErasure_RefusalNamesAnyRun(t *testing.T) {
+	st, tr := newTeamDriveStore()
+	srv, _, rn := teamDriveServer(st, "docker")
+	team := st.seedTeam(aliceSub, "Design assets", tr.unit.ID)
+	at := st.now.Add(-2 * time.Minute)
+	tomb := st.drives[team.ID]
+	tomb.DeleteStartedAt = &at
+	st.drives[team.ID] = tomb
+	st.starting = map[string]bool{carolSub: true}
+	_, err := srv.eraseMemberDrivesOf(context.Background(), aliceSub)
+	if err == nil || !strings.Contains(err.Error(), `member drive "Design assets" could not be deleted: a run on it is starting`) {
+		t.Fatalf("erasure error = %v, want the team drive held by a run on it", err)
+	}
+	if len(rn.calls) != 0 {
+		t.Errorf("calls = %d, want none while a run is starting", len(rn.calls))
+	}
+}
+
 // TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists: the 201 body of a team drive's create carries team, source
 // team and shared_with_unit, as the catalogue lists the same drive; a plain member drive's is personal and unshared.
 func TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists(t *testing.T) {
