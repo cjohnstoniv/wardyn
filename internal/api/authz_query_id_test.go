@@ -239,6 +239,7 @@ var queryParamNotAnID = map[string]string{
 	"include_revoked":           "GET /tokens?minted_for_others=true (security tier): adds the revoked rows of the deployment-wide token list, which that tier already reads whole",
 	"state":                     "approval state filter on an already-scoped listing; the ADO callback's signed OAuth state",
 	"event":                     "GET /audit/receipt (security tier): an audit event id to receipt; a session below the security tier is refused before it is read, and an audit row is not one principal's entity",
+	"after":                     "the assistant's event reads (GET /assistant/sessions/{id}/events and the run's GET /internal/assistant/turns): the seq of the session's transcript a read continues after; the session is the path's own, or the run token's, already authorized, and a seq names no entity",
 	"after_seq":                 "GET /audit/receipt and GET /audit/checkpoints (security tier): the seq a page of the signed chain continues after; a position in the deployment-wide log, not an entity",
 	"since":                     "audit time filter; narrows an already-scoped feed",
 	"order":                     "GET /audit: oldest-first or newest-first (order=desc) over a trail the caller's scope already bounds; it picks which end of that scoped trail is read and names no entity",

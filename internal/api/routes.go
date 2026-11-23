@@ -860,6 +860,8 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
 	// destination, served by the organisation; via_org.go.
 	s.mountViaOrgRoute(r)
+	// The assistant's run reads its person's turns and posts its events (assistant_internal.go).
+	s.mountAssistantInternalRoutes(r)
 
 	// Token renew: POST /api/v1/internal/token/renew
 	// The per-run proxy re-issues its own (short-TTL) run token before it

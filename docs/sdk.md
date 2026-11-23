@@ -894,6 +894,18 @@ start.
 | `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |
 | `assistant_provider_defers_inspection` | `PUT /assistant/settings`: a marked provider leaves prompt inspection to its gateway. |
 | `assistant_settings_via_own_route` | Change `assistant` with `PUT /assistant/settings`, not `PUT /site-config`. |
+| `assistant_at_run_limit` | `POST /assistant/preview` and `POST /assistant/sessions` (`409`): you are at your `max_concurrent_runs`, and the assistant's run would count against it. End a run first. |
+| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, and a message or edit on a live session (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
+| `assistant_session_not_found` | `404`: no session with that id is yours; another person's session answers the same. `409` on a message, an edit or a run's event when the session has ended or another session replaced it. |
+| `assistant_purpose_target_mismatch` | `400`: the purpose does not take that kind of target (a review names a held change). |
+| `assistant_preview_stale` | `POST /assistant/sessions` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
+| `assistant_rate_limited` | `429` with `Retry-After`: too many assistant requests from you, or more than four open event streams and long-polls at once. |
+| `assistant_role_denied` | `403`: your role no longer allows the assistant (the session ends), or the caller is no person, such as the admin token. |
+| `assistant_session_provider_changed` | A message or edit (`409`): the session's provider or model no longer serves the purpose. The session ends; start a new one. |
+| `assistant_target_not_found` | `POST /assistant/preview` and `POST /assistant/sessions` (`404`): no such target, or one you cannot read. |
+| `assistant_sessions_unavailable` | `501`: this server's store keeps no assistant sessions. |
+| `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. The run starts a new session. |
+| `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |

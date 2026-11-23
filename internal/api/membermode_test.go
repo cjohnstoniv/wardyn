@@ -781,3 +781,24 @@ func TestMemberMode_AssistantAvailabilityIsAMemberRead(t *testing.T) {
 		}
 	}
 }
+
+// TestMemberMode_AssistantSessionsAreAMemberRoute: an admin viewing as a member reaches the session routes as any
+// member does. None answers the admin-role refusal; an id that is not theirs answers 404, as a missing one does.
+func TestMemberMode_AssistantSessionsAreAMemberRoute(t *testing.T) {
+	srv, _ := memberModeServer(t)
+	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	session := "/api/v1/assistant/sessions/" + uuid.NewString()
+	for _, c := range []struct{ method, path, body string }{
+		{http.MethodPost, "/api/v1/assistant/preview", `{"purpose":"compose","target":{"kind":"template"}}`},
+		{http.MethodPost, "/api/v1/assistant/sessions", `{"purpose":"compose","target":{"kind":"template"},"preview_digest":"x"}`},
+		{http.MethodPost, session + "/messages", `{"text":"hello"}`},
+		{http.MethodPost, session + "/edits", `{"draft":{},"changed":[]}`},
+		{http.MethodGet, session + "/events", ""},
+		{http.MethodDelete, session, ""},
+	} {
+		w := doSSO(t, srv, c.method, c.path, on, c.body)
+		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+			t.Errorf("%s %s in member mode = %d %s, want a member's answer", c.method, c.path, w.Code, w.Body.String())
+		}
+	}
+}

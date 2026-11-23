@@ -426,6 +426,14 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/assistant/settings": {class: classAdmin},
 	"PUT /api/v1/assistant/settings": {class: classAdmin},
 	"GET /api/v1/me/assistant":       {class: classMember},
+	// The assistant's sessions: each is the signed-in person's own, and anyone else's {id} answers 404, as a
+	// missing one does, so a member reaches only their own.
+	"POST /api/v1/assistant/preview":                {class: classMember},
+	"POST /api/v1/assistant/sessions":               {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":    {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":        {class: classMember},
 	// Model providers (0.8): gateway addresses, the AWS access portal and
 	// account pins. SUPER for the agent roster's reason; the member tier is
 	// served SetupStatus.model_providers instead, which carries none of them.
@@ -1063,6 +1071,8 @@ var routeMatrix = map[string]classifiedRoute{
 
 	// internal (run-token / ground-truth-token bearer only)
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
+	"GET /api/v1/internal/assistant/turns":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/events":               {class: classInternal},
 	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
 	"GET /api/v1/internal/via-org/{grantID}/*":             {class: classInternal},
 	"HEAD /api/v1/internal/via-org/{grantID}/*":            {class: classInternal},
