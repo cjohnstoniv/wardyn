@@ -873,6 +873,7 @@ const (
 	reasonComponentHostServesModel         = "component_host_serves_model"        // a host of the component serves a model on this deployment
 	reasonComponentHostCollision           = "component_host_collision"           // a header delivery names a host that already carries a credential on the run
 	reasonComponentResidentDeliveryDenied  = "component_resident_delivery_denied" // the organisation turned off env and file delivery (components.deny_resident_delivery)
+	reasonComponentImageUnmet              = "component_image_unmet"              // the run's image does not meet an attached component's image requirement (#1972)
 	reasonComponentCLIAWSInjectOff         = "component_cli_aws_inject_off"       // an AWS CLI row while WARDYN_AWS_SSO_PROXY_INJECT is off, which would put the SSO token in the sandbox
 	reasonComponentCLISignInRequired       = "component_cli_sign_in_required"     // the caller has not signed in for an AWS or Azure CLI row the run attaches
 	reasonComponentCLIAzureNoEntra         = "component_cli_azure_no_entra"       // an Azure CLI row on a deployment whose console does not sign people in with Microsoft Entra

@@ -116,6 +116,8 @@ func parityCases() map[string]parityCase {
 					Definition: types.ComponentDefinition{Hosts: []string{"carol.example"}}})
 				return componentBody(map[string]any{"id": compOtherID})
 			}},
+		"image: the run does not name the image a component needs (#1972)": {status: 422, reason: "component_image_unmet",
+			setup: parityOrg(types.ComponentDefinition{Hosts: []string{"org-api.example"}, Image: "ghcr.io/acme/tools:1.2"}, nil)},
 		"model host": {status: 422, reason: "component_host_serves_model",
 			setup: parityBody(inlineComponent([]string{"API.OpenAI.com.:8443"}))},
 		"definition: a reserved environment name (A36)": {status: 422, reason: "component_definition_invalid",

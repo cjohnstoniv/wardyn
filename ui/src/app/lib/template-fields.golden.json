@@ -49,7 +49,8 @@
       "secrets",
       "config",
       "cli",
-      "mcp"
+      "mcp",
+      "image"
     ],
     "ComponentDelivery": [
       "mode",

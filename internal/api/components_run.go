@@ -125,6 +125,7 @@ type componentRefusal struct {
 // become policy. A component enforces nothing itself: the gate bounds each one
 // and then expands it into primitives every later stage already enforces —
 // allowed domains and eligible grants on spec, which it edits in place.
+// A component's image requirement is held to the run's image before anything is expanded (components_image.go).
 //
 // All three run doors call it at the same point: after the workspace and
 // direct-GitHub folds, so a host an admin already credentialed is seen and a
@@ -153,6 +154,9 @@ func (s *Server) applyRunComponents(r *http.Request, req createRunRequest, spec 
 	// the whole list, however many hosts and secrets it names.
 	r = r.WithContext(withOwnedSecretMemo(withCapBatch(r.Context())))
 	comps, refused := s.admitRunComponents(r, req.Components, *spec, req.Repo, ceiling, wsRefs, credentials, mcpIncludedHarnesses(req))
+	if refused == nil {
+		refused = componentImageRefusal(comps, s.componentRunImage(req, wsRefs))
+	}
 	if refused != nil {
 		s.auditComponentRefusal(r, *refused)
 		return runComponents{}, refused.refusal
