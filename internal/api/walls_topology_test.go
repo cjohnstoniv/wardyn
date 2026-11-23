@@ -310,8 +310,15 @@ func TestWallsTopologyElsewhereRule(t *testing.T) {
 	}
 	st.counts[0].Runs = 4
 	few := s.wallsTopoElsewhere(context.Background(), sc, clk.now, s.wallsTopoCaps())
-	if raw, err := json.Marshal(few); err != nil || string(raw) != `{"runs":"<5","live":"<5","held":"<5","not_allowed":"<5","allowed":"<5"}` {
-		t.Errorf("four runs elsewhere: %s, %v; want every field <5", raw, err)
+	// Compared as decoded JSON: encoding/json writes "<" as \u003c, the same string to every reader.
+	fewRaw, err := json.Marshal(few)
+	var fewFields map[string]any
+	if err == nil {
+		err = json.Unmarshal(fewRaw, &fewFields)
+	}
+	lt5 := map[string]any{"runs": "<5", "live": "<5", "held": "<5", "not_allowed": "<5", "allowed": "<5"}
+	if err != nil || !reflect.DeepEqual(fewFields, lt5) {
+		t.Errorf("four runs elsewhere: %s, %v; want every field \"<5\"", fewRaw, err)
 	}
 	st.countErr = errors.New("count refused")
 	if got := s.wallsTopoElsewhere(context.Background(), sc, clk.now, s.wallsTopoCaps()); got != nil {
