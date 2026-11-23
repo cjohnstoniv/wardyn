@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -134,5 +135,31 @@ func TestMoveImport_MarkerBeforeLinks(t *testing.T) {
 	}
 	if marker < 0 || firstLink < 0 || marker > firstLink {
 		t.Errorf("archive order %q; want the marker before the symlink", names)
+	}
+}
+
+// TestLastHost: a moved run's proxy takes its subnet's last host, below the broadcast address, whatever bits
+// the prefix carries past its mask; a subnet smaller than a run network may be, or not IPv4, is refused.
+func TestLastHost(t *testing.T) {
+	small := netip.PrefixFrom(netip.MustParseAddr("10.0.0.0"), maxRunSubnetBits+1)
+	for _, row := range []struct {
+		in, want string
+	}{
+		{"10.88.0.0/16", "10.88.255.254"},
+		{"10.200.0.16/28", "10.200.0.30"},
+		{"10.200.0.21/28", "10.200.0.30"},
+		{"192.168.1.0/24", "192.168.1.254"},
+		{netip.PrefixFrom(netip.MustParseAddr("10.0.0.8"), maxRunSubnetBits).String(), "10.0.0.14"},
+		{small.String(), ""},
+		{"10.0.0.1/32", ""},
+		{"fd00::/64", ""},
+	} {
+		got, err := lastHost(netip.MustParsePrefix(row.in))
+		switch {
+		case row.want == "" && err == nil:
+			t.Errorf("lastHost(%s) = %s; want a refusal", row.in, got)
+		case row.want != "" && (err != nil || got.String() != row.want):
+			t.Errorf("lastHost(%s) = %s, %v; want %s", row.in, got, err, row.want)
+		}
 	}
 }

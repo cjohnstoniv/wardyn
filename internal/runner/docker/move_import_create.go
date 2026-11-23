@@ -159,7 +159,7 @@ func (d *Driver) importProxyAddr(ctx context.Context, netID string) (netip.Addr,
 
 // lastHost is an IPv4 subnet's highest address below its broadcast address.
 func lastHost(p netip.Prefix) (netip.Addr, error) {
-	if !p.Addr().Is4() || p.Bits() > 29 {
+	if !p.Addr().Is4() || p.Bits() > maxRunSubnetBits {
 		return netip.Addr{}, fmt.Errorf("docker: run subnet %s is too small for a moved run's proxy", p)
 	}
 	a := p.Masked().Addr().As4()
