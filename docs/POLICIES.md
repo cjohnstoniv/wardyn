@@ -1521,7 +1521,7 @@ So an entry a pattern matches is judged one of two ways:
   - A run that checks out an older commit, or never pulls after a workflow changed on the default branch, can push a branch whose workflows are the older ones.
   - That includes one the default branch has since fixed.
   - The rule is that a push does not *change* a denied path relative to the commit it builds on — not that every branch carries the newest version of it.
-- **Removals are invisible.** These rules judge what a push *introduces*.
+- **Removals are invisible.** These rules judge what a push *introduces*. With `WARDYN_PUSH_HOLD_REMOVALS` on, a review path also holds a removal (below).
 
 **What the person pushing sees.**
 
@@ -1556,9 +1556,11 @@ So an entry a pattern matches is judged one of two ways:
   - Git prints the refusal as a remote rejection that names the paths and how to land them.
   - The control plane refuses such a raise as well.
   - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
-- **A push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
+- **By default, a push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
   - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
   - The forge's own branch policy is what protects that file.
+  - With `WARDYN_PUSH_HOLD_REMOVALS` on, a push to GitHub or Azure DevOps that removes such a file from a branch it updates is held, or refused on an unattended run. That includes a GitHub force-push that rewinds the branch. A branch the push creates has no tip to compare with, so nothing is removed from it.
+  - Turn it on only when every runner is 0.10.4 or later: an older runner is refused each run (`runner_proxy_setting_unsupported`).
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
   - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.

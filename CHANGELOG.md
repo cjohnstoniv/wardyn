@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - On the GitHub App and personal-token git lanes, a push refused because it touches a review path on an unattended run, or because its paths could not be worked out, now reaches git as a rejected ref. Git prints the reason, the paths and what to do, as it already did on the Azure DevOps lane, instead of a bare HTTP 403. The audit row is unchanged.
 
+### Security
+
+- New switch `WARDYN_PUSH_HOLD_REMOVALS`, off by default. On, a push to GitHub or Azure DevOps that removes a file matching `require_review_paths` from a branch it updates, by deleting it, renaming it out or replacing a directory above it with a file, is held for review like one that changes it, or refused on an unattended run. On GitHub that includes a force-push that rewinds the branch.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
