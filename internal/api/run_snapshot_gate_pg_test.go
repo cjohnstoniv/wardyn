@@ -48,7 +48,7 @@ func pgSecretsRun(t *testing.T) (*Server, store.PG, types.AgentRun) {
 	return srv, pg, run
 }
 
-// TestSecretsPresent_TakeoverFromApprovalRow is R3 on a real store: an asked takeover is not a secret, and the
+// TestSecretsPresent_TakeoverFromApprovalRow reads the takeover from its approval row on a real store: an asked takeover is not a secret, and the
 // takeover TakeOverApproval records refuses the snapshot.
 func TestSecretsPresent_TakeoverFromApprovalRow(t *testing.T) {
 	srv, pg, run := pgSecretsRun(t)
@@ -69,7 +69,7 @@ func TestSecretsPresent_TakeoverFromApprovalRow(t *testing.T) {
 	}
 }
 
-// TestSecretsPresent_SupportSessionFromGrantRow is R13 on a real store: a support grant only asked for is not a
+// TestSecretsPresent_SupportSessionFromGrantRow reads the support session from its grant row on a real store: a support grant only asked for is not a
 // secret, and an accepted one refuses the snapshot, for good, after it ends too.
 func TestSecretsPresent_SupportSessionFromGrantRow(t *testing.T) {
 	srv, pg, run := pgSecretsRun(t)

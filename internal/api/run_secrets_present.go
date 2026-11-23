@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/broker"
 	"github.com/cjohnstoniv/wardyn/internal/secretspresent"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -28,12 +29,13 @@ var residentGrantKinds = map[types.GrantKind]bool{
 }
 
 // brokeredGrantKinds are the grant kinds minted per use, each with the longest time a minted credential of that
-// kind stays valid: the broker caps every minted credential at an hour (broker.ttlFor). A git_pat grant's token
+// kind stays valid: the broker caps every minted credential at broker.DefaultMaxTTL. A git_pat grant's token
 // lives in the sandbox only when the broker was off, which is the dispatch row's fact, not the grant's. A grant
 // kind in neither map counts as resident, and a mint of a kind not here counts as valid for as long as the run
 // lives.
 var brokeredGrantKinds = map[types.GrantKind]time.Duration{
-	types.GrantGitHubToken: time.Hour, types.GrantCloudSTS: time.Hour, types.GrantAPIKey: time.Hour, types.GrantGitPAT: time.Hour,
+	types.GrantGitHubToken: broker.DefaultMaxTTL, types.GrantCloudSTS: broker.DefaultMaxTTL,
+	types.GrantAPIKey: broker.DefaultMaxTTL, types.GrantGitPAT: broker.DefaultMaxTTL,
 }
 
 // componentDeliveryResident says, for each delivery mode of a component secret, whether the secret lives inside
@@ -42,7 +44,7 @@ var componentDeliveryResident = map[string]bool{
 	types.ComponentDeliveryHeader: false, types.ComponentDeliveryEnv: true, types.ComponentDeliveryFile: true,
 }
 
-// secretsPresent gathers the facts for runID and evaluates the rule. w is R4's window for brokered mints. Every
+// secretsPresent gathers the facts for runID and evaluates the rule. w is the window a brokered mint is judged in. Every
 // fact that cannot be read, and a dispatch row that does not name the run's current token, answers Unknown.
 func (s *Server) secretsPresent(ctx context.Context, runID uuid.UUID, w mintWindow) (bool, []secretspresent.Reason) {
 	st, ok := s.cfg.Store.(store.RunSecretFacts)

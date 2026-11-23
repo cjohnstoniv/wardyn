@@ -212,7 +212,7 @@ func (f *secretsFixture) gate(t *testing.T) []secretspresent.Reason {
 	return why
 }
 
-// TestSnapshot_RefusedWhenSecretsPresent is R1, R2, R3, R7 and R13 of the snapshot rules: one row per kind of
+// TestSnapshot_RefusedWhenSecretsPresent covers every kind of secret a run can hold: one row per kind of
 // secret the run ever held, each refused with its reason, and a run with none admitted.
 func TestSnapshot_RefusedWhenSecretsPresent(t *testing.T) {
 	if why := newSecretsFixture(t).gate(t); why != nil {
@@ -430,7 +430,7 @@ func TestSecretsPresent_GitTokenFromDispatchRow(t *testing.T) {
 	}
 }
 
-// TestSnapshot_RefusedWithinMintTTL is R4: a brokered credential minted for the run counts while it may still be
+// TestSnapshot_RefusedWithinMintTTL: a brokered credential minted for the run counts while it may still be
 // valid, judged at admission against the database's clock and after a cut against the cut's own window; a mint
 // whose grant row is gone counts for as long as the run lives.
 func TestSnapshot_RefusedWithinMintTTL(t *testing.T) {
@@ -464,7 +464,7 @@ func TestSnapshot_RefusedWithinMintTTL(t *testing.T) {
 	}
 }
 
-// TestSecretsPresent_FailsClosedOnEveryUnreadableFact is R8: each fact the gate cannot read answers unknown.
+// TestSecretsPresent_FailsClosedOnEveryUnreadableFact: each fact the gate cannot read answers unknown.
 func TestSecretsPresent_FailsClosedOnEveryUnreadableFact(t *testing.T) {
 	unknown := []secretspresent.Reason{secretspresent.Unknown}
 	for _, tc := range []struct {
