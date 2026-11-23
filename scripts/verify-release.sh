@@ -5,7 +5,7 @@
 # Post-release verification (RELEASING step 6), READ-ONLY against the published release:
 #   V=X.Y.Z scripts/verify-release.sh      (or: scripts/verify-release.sh X.Y.Z)
 # Every release image is cosign-verified BY INDEX DIGEST against the release workflow run for THIS tag (an exact
-# certificate identity, so another tag's signature is refused), the asset NAMES are compared with the expected set,
+# certificate identity, so another tag's signature is refused), the asset NAMES are compared with the set that version shipped,
 # the SHA256SUMS blob is verified and every asset is checked against it, the install.sh URL is fetched and the helm chart is cosign-verified by digest against the
 # same exact identity (docs/VERIFY.md section 4) with its appVersion compared to $V. It never creates,
 # edits, deletes or retags a release or image.
@@ -14,6 +14,7 @@
 # list (that list includes the macOS runner package, wardyn-runnerd.pkg, which exists from 0.9.3, the licence tarball, wardyn-licenses.tar.gz, which exists from 0.9.4, and the CLI installers, install-cli.sh and install-cli.ps1, and the Windows CLI binaries, wardyn-windows-amd64.exe and wardyn-windows-arm64.exe, which exist from 0.10.0; older versions are checked without them), and wardyn-$V.tgz. A missing name AND an extra name are each a failure.
 # Every image index must also contain linux/amd64 and linux/arm64; a missing platform fails with the image name.
 # WSL law: an empty DOCKER_CONFIG so the desktop credential helper cannot break anonymous pulls of public packages.
+# From 0.10.0, the GitHub Latest label and :latest on every image release.yml floats must both name the highest published final release.
 # Exit status = the number of failures (capped at 255).
 set -uo pipefail
 V=${1:-${V:-}}; [ -n "$V" ] || { echo "usage: V=X.Y.Z $0   (or $0 X.Y.Z)" >&2; exit 2; }
@@ -24,6 +25,21 @@ TAG=v$V
 RELEASE_YML="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/release.yml"
 [ -r "$RELEASE_YML" ] || { echo "cannot read $RELEASE_YML" >&2; exit 2; }
 IMAGES=$(grep -oE '^[[:space:]]+- name: [a-z0-9-]+$' "$RELEASE_YML" | awk '{print $3}' | sort -u)
+ALL_IMAGES=$IMAGES
+# An older release is checked against the images it shipped (#3404): each image below first shipped in the
+# version named (the first tag whose release.yml matrix names it), so a version before it never had its image
+# or its SBOM.
+img_since() { case "$1" in wardynd-fips) echo 0.8.6 ;; wardyn-runnerd) echo 0.9.3 ;; agent-base) echo 0.6.2 ;;
+  agent-vscode|agent-novnc) echo 0.8.0 ;; agent-novnc-signin) echo 0.10.0 ;; *) echo 0.0.0 ;; esac; }
+IMAGES=$(for img in $IMAGES; do
+  since=$(img_since "$img")
+  [ "$(printf '%s\n' "${V%%-*}" "$since" | sort -V | head -1)" = "$since" ] || continue
+  # wardyn-runnerd, like its macOS package, first shipped in 0.9.3-rc.3.
+  [[ "$img" == wardyn-runnerd && ( "$V" == 0.9.3-rc.1 || "$V" == 0.9.3-rc.2 ) ]] && continue
+  echo "$img"
+done)
+# The images release.yml keeps :latest on (its float-latest rows).
+FLOATS=$(awk '/^[[:space:]]+- name: [a-z0-9-]+$/ { n = $3 } /^[[:space:]]+float-latest: "true"$/ { print n }' "$RELEASE_YML" | sort -u)
 WANT=$(sed -n '/for want in/,/; do/p' "$RELEASE_YML" | sed -e 's/.*for want in//' -e 's/; do.*//' -e 's/\\$//' | tr -s ' \n' '\n\n' | grep .)
 # The macOS package first shipped in 0.9.3-rc.3; an older tag, and the 0.9.3 rc.1 and rc.2 built just before
 # its job landed, never had it. (A plain sort -V on the full string cannot say this: it puts 0.9.3 before its rcs.)
@@ -35,13 +51,13 @@ case "$V" in 0.9.3-rc.1|0.9.3-rc.2) WANT=$(grep -vx 'wardyn-runnerd.pkg' <<<"$WA
 [ "$(printf '%s\n' "${V%%-*}" 0.10.0 | sort -V | head -1)" = 0.10.0 ] || WANT=$(grep -vE '^(install-cli\.|SHA256SUMS\.sigstore\.json$|wardyn-windows-)' <<<"$WANT")
 # The chart ref is the one release.yml's chart job signs, `cosign sign --yes "<ref>@<digest>"`.
 CHART_REF=$(sed -n 's/.*cosign sign --yes "\(ghcr\.io\/[^@"]*charts[^@"]*\)@.*/\1/p' "$RELEASE_YML" | head -1)
-[ -n "$IMAGES" ] && [ -n "$WANT" ] && [ -n "$CHART_REF" ] || { echo "could not derive the image, asset or chart list from $RELEASE_YML" >&2; exit 2; }
+[ -n "$IMAGES" ] && [ -n "$WANT" ] && [ -n "$CHART_REF" ] && [ -n "$FLOATS" ] || { echo "could not derive the image, asset, chart or float list from $RELEASE_YML" >&2; exit 2; }
 OUT=$(mktemp -d)
 export DOCKER_CONFIG="$OUT/dockercfg"; mkdir -p "$DOCKER_CONFIG"; echo '{}' > "$DOCKER_CONFIG/config.json"
 fails=0
 # The derived list must still name every product image; one dropped from release.yml is a failure, not a shorter check.
 for need in wardynd wardyn-proxy wardyn-runnerd; do
-  grep -qx "$need" <<<"$IMAGES" || { echo "FAIL $need: release.yml publishes no such image"; fails=$((fails+1)); }
+  grep -qx "$need" <<<"$ALL_IMAGES" || { echo "FAIL $need: release.yml publishes no such image"; fails=$((fails+1)); }
 done
 # The EXACT identity of the release workflow run for the requested tag: an image or checksum file signed
 # by any other tag's run is refused. (A promotion adds its own signature at the target tag: RELEASING.md.)
@@ -72,11 +88,22 @@ if [ "$(printf '%s\n' "${V%%-*}" 0.10.0 | sort -V | head -1)" = 0.10.0 ]; then
   state=$(head -1 "$OUT/assets.txt" | sed -n 's/^\(prerelease=[^ ]* draft=[^ ]*\) .*/\1/p')
   want="prerelease=false draft=false"; [[ "$V" == *-* ]] && want="prerelease=true draft=false"
   if [[ "$state" == "$want" ]]; then echo "OK   release state ($state)"; else echo "FAIL release state: $state (want $want)"; fails=$((fails+1)); fi
-  # A final must also be Latest, or a release at or after it must be (a patch to an older line is not Latest).
-  if [[ "$V" != *-* ]]; then
-    latest=$(gh release list --repo cjohnstoniv/wardyn --limit 100 --json tagName,isLatest --jq '.[]|select(.isLatest)|.tagName' | head -1)
-    if [ -n "$latest" ] && [ "$(printf '%s\n' "${latest#v}" "$V" | sort -V | tail -1)" = "${latest#v}" ]; then echo "OK   latest release ($latest)"; else echo "FAIL latest release: ${latest:-none} (want $TAG or a newer release)"; fails=$((fails+1)); fi
-  fi
+  # Latest names the highest published final across every line, whatever V is: a patch to an older line leaves
+  # it on the newer line's final, and an RC never takes it.
+  rels=$(gh release list --repo cjohnstoniv/wardyn --limit 100 --json tagName,isLatest,isDraft,isPrerelease --jq '.[] | "\(.tagName) \(.isLatest) \(.isDraft) \(.isPrerelease)"')
+  highest=$(awk '$3 == "false" && $4 == "false" && $1 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ { print $1 }' <<<"$rels" | sort -V | tail -1)
+  latest=$(awk '$2 == "true" { print $1 }' <<<"$rels" | head -1)
+  if [ -z "$highest" ]; then echo "FAIL latest release: no published final among the newest 100 releases"; fails=$((fails+1))
+  elif [ "$latest" = "$highest" ]; then echo "OK   latest release ($latest)"
+  else echo "FAIL latest release: ${latest:-none} (want $highest, the highest published final)"; fails=$((fails+1)); fi
+  # :latest on every image release.yml floats is that same final's image (anonymous reads: DOCKER_CONFIG is empty).
+  for img in $FLOATS; do
+    [ -n "$highest" ] || break
+    dl=$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/$img:latest" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
+    dh=$(docker buildx imagetools inspect "ghcr.io/cjohnstoniv/$img:${highest#v}" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')
+    if [[ -n "$dh" && "$dl" == "$dh" ]]; then echo "OK   $img:latest is $highest's image ($dh)"
+    else echo "FAIL $img:latest is ${dl:-unreadable}, not $highest's image (${dh:-unreadable})"; fails=$((fails+1)); fi
+  done
 fi
 expected=$({ for img in $IMAGES; do echo "sbom-$img.cdx.json"; done; echo "$WANT"; echo "wardyn-$V.tgz"; } | sort -u)
 have=$(tail -n +2 "$OUT/assets.txt" | sort -u)
