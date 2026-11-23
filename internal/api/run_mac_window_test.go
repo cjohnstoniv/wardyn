@@ -949,6 +949,31 @@ func TestMacWindowRecheck_UnsatisfiableProfileIsNotUnread(t *testing.T) {
 	}
 }
 
+// macUnmeetableStore is the Mac rig's store with a restriction that denies every placement.
+type macUnmeetableStore struct {
+	*macWindowStore
+	store.RestrictionStore // nil: the fold calls only GetRestrictionsByID
+	id                     uuid.UUID
+}
+
+func (s *macUnmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
+	deny := []types.Placement{types.PlacementLocal, types.PlacementRemote}
+	return []types.Restriction{{ID: s.id, Name: "walled", Limits: types.RestrictionLimits{DenyPlacements: &deny}}}, nil
+}
+
+// A restriction whose meet nothing satisfies (a *composer.OverlayError through foldRestrictionLimits, which
+// macWindowCheck sends on as a server error) is a refusal at a window's re-check, never unread.
+func TestMacWindowRecheck_UnmeetableRestrictionIsNotUnread(t *testing.T) {
+	r := newMacWindowRig(t)
+	w := r.mustOpen()
+	rid := uuid.New()
+	r.h.srv.cfg.Store = &macUnmeetableStore{macWindowStore: r.st, id: rid}
+	r.set(func(run *types.AgentRun) { run.RestrictionIDs = []uuid.UUID{rid} })
+	if reason, _, unread := r.h.srv.macWindowRecheck(context.Background(), w); reason != macWindowRefusedRecheck || unread {
+		t.Errorf("macWindowRecheck = %q unread %v, want %q unread false", reason, unread, macWindowRefusedRecheck)
+	}
+}
+
 // orNil is a close row's refused_by for a check that names none: the field is absent.
 func orNil(s string) any {
 	if s == "" {

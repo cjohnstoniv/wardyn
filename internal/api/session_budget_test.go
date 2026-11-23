@@ -259,6 +259,14 @@ func TestSessionUnconfirmedBudget_SiteValueCachedAndKeptOnFailure(t *testing.T) 
 			t.Fatalf("budget = %v, want 30s", got)
 		}
 	})
+	t.Run("a stored value outside 0 to 120 is clamped", func(t *testing.T) {
+		for stored, want := range map[int]time.Duration{-5: 0, 0: 0, 120: 120 * time.Second, 121: 120 * time.Second, 3600: 120 * time.Second} {
+			srv := newSrv(t, &siteReadStore{cfg: types.SiteConfig{Sessions: &types.SiteSessions{UnconfirmedBudgetSec: ptr(stored)}}})
+			if got := srv.sessionUnconfirmedBudget(ctx); got != want {
+				t.Errorf("stored %d: budget = %v, want %v", stored, got, want)
+			}
+		}
+	})
 	t.Run("the test override reads nothing", func(t *testing.T) {
 		st := &siteReadStore{}
 		srv := newSrv(t, st)

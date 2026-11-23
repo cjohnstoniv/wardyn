@@ -544,6 +544,7 @@ func TestSupportUI_WatchRidesTheBudget(t *testing.T) {
 		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceUIApp {
 			t.Fatalf("row %v, want rode_through on ui_app", data[0])
 		}
+		requireStreamOpen(t, ended)
 	})
 	t.Run("a revoke found after the ride ends the stream", func(t *testing.T) {
 		setSupportWatch(t, 20*time.Millisecond, 2*time.Second)

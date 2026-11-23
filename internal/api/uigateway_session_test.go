@@ -740,7 +740,8 @@ func TestUIDial_RunReadFailureIs503AndMissingRunIs404(t *testing.T) {
 // nothing, a *composer.OverlayError wrapped by foldRestrictionLimits.
 type uiUnmeetableStore struct {
 	*uiMemStore
-	id uuid.UUID
+	store.RestrictionStore // nil: the fold calls only GetRestrictionsByID
+	id                     uuid.UUID
 }
 
 func (s *uiUnmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
@@ -814,8 +815,8 @@ func TestUISession_UnsatisfiableProfileIs403NotUnconfirmed(t *testing.T) {
 				t.Errorf("uiInboundUnitDenial = %+v, want %d %s", in, a.status, a.reason)
 			}
 			sess.Inbound = false
-			if _, _, _, unread := h.srv.desktopRunCheck(context.Background(), sess); unread != a.unread {
-				t.Errorf("desktopRunCheck unread = %v, want %v", unread, a.unread)
+			if _, code, _, unread := h.srv.desktopRunCheck(context.Background(), sess); unread != a.unread || code != desktopCloseNotAuthorized {
+				t.Errorf("desktopRunCheck = code %d unread %v, want %d unread %v", code, unread, desktopCloseNotAuthorized, a.unread)
 			}
 		})
 	}

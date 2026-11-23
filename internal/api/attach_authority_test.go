@@ -900,7 +900,7 @@ func TestAttachAuthority_RevokeInsideTheWindowEndsAtOnce(t *testing.T) {
 	for _, lane := range []string{"cookie", "ticket"} {
 		t.Run(lane, func(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
-			rig.budget(time.Hour, 10*time.Millisecond)
+			rig.budget(time.Hour, 3*authorityTick)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
 			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
@@ -954,7 +954,8 @@ func TestAttachAuthority_MissingRunEndsAtOnce(t *testing.T) {
 // composition then meets to nothing, a *composer.OverlayError wrapped by foldRestrictionLimits.
 type unmeetableStore struct {
 	*authorityUnits
-	id uuid.UUID
+	store.RestrictionStore // nil: the fold calls only GetRestrictionsByID
+	id                     uuid.UUID
 }
 
 func (s *unmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
@@ -990,7 +991,7 @@ func TestAttachAuthority_SocketEndingInsideAWindowWritesClosed(t *testing.T) {
 	for _, lane := range []string{"cookie", "ticket"} {
 		t.Run(lane, func(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
-			rig.budget(time.Hour, 10*time.Millisecond)
+			rig.budget(time.Hour, 3*authorityTick)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
 			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
