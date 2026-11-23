@@ -2704,7 +2704,7 @@ jobs:
   # Nothing here retags, rebuilds or otherwise touches a published image.
   published-image-scan:
     if: inputs.scope != 'candidate'
-    name: published-image-scan (${{ matrix.name }})
+    name: published-image-scan (${{ matrix.name }}, line ${{ matrix.line }})
     runs-on: ubuntu-26.04
     timeout-minutes: 20
     permissions:
@@ -2713,6 +2713,8 @@ jobs:
       fail-fast: false
       matrix:
         name: [agent-base, agent-codex-cli, agent-aws-sso, agent-vscode, agent-novnc]
+        # line: the Nth newest minor line with a published release, so each line still patched is scanned.
+        line: [1, 2]
     steps:
       - name: Pull Docker Hub images through mirror.gcr.io (Docker Hub 429s)
         run: |
@@ -2727,17 +2729,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Resolve the latest published release
+      - name: Resolve the newest release of the line
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          LINE: ${{ matrix.line }}
+          NAME: ${{ matrix.name }}
         run: |
           set -euo pipefail
-          tag="$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')"
-          [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
-            || { echo "::error::no usable published release tag (got '${tag}')"; exit 1; }
-          echo "Scanning ${{ matrix.name }} from release ${tag}"
+          # gh lists releases newest first, so the first tag of a line is that line's newest release. `--limit 1`
+          # alone named whichever line published last, so a patch line went unscanned beside a newer one.
+          tags="$(gh release list --exclude-drafts --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || true)"
+          line="$(printf '%s\n' "$tags" | sed -nE 's/^v([0-9]+)\.([0-9]+)\..*/\1.\2/p' | sort -u -t. -k1,1nr -k2,2nr | sed -n "${LINE}p")"
+          [ -n "$line" ] || { echo "::error::no published release on the minor line ${LINE} places from the newest"; exit 1; }
+          tag="$(printf '%s\n' "$tags" | grep -E "^v${line//./\\.}\." | head -1)"
+          echo "Scanning ${NAME} from release ${tag} (line ${line})"
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
       # Same DB cache ci.yml's trivy job restores (ci.yml saves it from main pushes),
       # so five parallel scans do not each download the vulnerability DB from a
