@@ -637,6 +637,10 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 			runID.String(), "failure", mustJSON(holder.supportFields(map[string]any{"transport": "ssh", "state": "attaching", "error": attachAuditError(finishCtx, runID, attachErr)}))))
 		if !errors.Is(attachErr, errAttachCancelled) {
 			sendChannelError(channel, "attach failed: "+attachErr.Error())
+		} else if holder.evicted.Load() {
+			// Displaced while the exec was opening: displace writes the reason, then cancels pumpCtx (or its
+			// sshDisplaceGrace timer does). Closing the channel before that drops the line.
+			<-pumpCtx.Done()
 		}
 		closeReason = "attach failed"
 	} else {
