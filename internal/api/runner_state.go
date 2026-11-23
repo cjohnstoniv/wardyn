@@ -142,7 +142,7 @@ func (s *Server) OfflineFromRunner(ctx context.Context, runnerID uuid.UUID) erro
 				cancel()
 				return err // as a failed listing: nothing more is marked, and the runner's next report retries
 			}
-			s.loseRun(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at)
+			_, _ = s.loseRunAs(bounded, runnerLossClaim{PG: st, runnerID: runnerID, ref: run.SandboxRef}, st, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at, 0, lapseVerdict{cause: lapseCauseRunnerLink})
 			cancel()
 			after = run.ID
 		}

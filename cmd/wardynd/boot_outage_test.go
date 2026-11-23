@@ -12,6 +12,7 @@ import (
 
 func TestOutageFlagsRefuseOutOfRangeValues(t *testing.T) {
 	d := func(v time.Duration) *time.Duration { return &v }
+	n := func(v int) *int { return &v }
 	for _, tc := range []struct {
 		name    string
 		flags   outageFlags
@@ -23,6 +24,12 @@ func TestOutageFlagsRefuseOutOfRangeValues(t *testing.T) {
 		{"grace 2h", outageFlags{lapseRecoveryGrace: d(2 * time.Hour)}, ""},
 		{"grace negative", outageFlags{lapseRecoveryGrace: d(-time.Second)}, "WARDYN_LAPSE_RECOVERY_GRACE is -1s"},
 		{"grace above 2h", outageFlags{lapseRecoveryGrace: d(2*time.Hour + time.Minute)}, "WARDYN_LAPSE_RECOVERY_GRACE is 2h1m0s"},
+		{"share 1", outageFlags{lapseMassShare: n(1)}, ""},
+		{"share 100", outageFlags{lapseMassShare: n(100)}, ""},
+		{"share 0", outageFlags{lapseMassShare: n(0)}, "WARDYN_LAPSE_MASS_SHARE is 0"},
+		{"share 101", outageFlags{lapseMassShare: n(101)}, "WARDYN_LAPSE_MASS_SHARE is 101"},
+		{"min 1", outageFlags{lapseMassMin: n(1)}, ""},
+		{"min 0", outageFlags{lapseMassMin: n(0)}, "WARDYN_LAPSE_MASS_MIN is 0"},
 	} {
 		err := tc.flags.validate()
 		if (tc.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {

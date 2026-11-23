@@ -47,7 +47,8 @@ A run's lease ends it, or someone ends it now.
 | Approvals and credentials | Pending approvals are cancelled; broker credentials get a best-effort, audit-only revoke |
 
 - The run's own identity is not revoked, so the run stays `RUNNING` and holds its quota slot until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or an End run.
-- A run lost to an outage or a reboot (`run.lost`) is a separate path; see [Revive](#revive).
+- A run lost to an outage or a reboot (`run.lost`) is a separate path. After a control-plane outage that includes a headless run on the server's own Docker.
+- See [After a control-plane outage](#after-a-control-plane-outage) and [Revive](#revive).
 - `run.ending_soon` warns at 24h, 1h and 10m before the end.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
 - Only the four tail uploads (the recording, the scan results, the captured SSO cache and the egress proxy's last decisions) are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
@@ -87,6 +88,29 @@ No container holds the proxy's rendered configuration at rest: its per-run TLS-M
 
 - A run with no stored proxy config (one started before the row existed) can't be revived: `409`, start a new run. It runs, ends and is torn down as before.
 - `WARDYN_PROXY_IMAGE` must name a proxy image from the same release as wardynd: an older proxy doesn't read its config from stdin and exits at start.
+
+## After a control-plane outage
+
+When the database or the server is unreachable, a run's proxy cannot renew its token, and the lapse sweep marks the run lost (`run.lost`, reason `outage`).
+
+| Where the run runs | After an outage |
+| --- | --- |
+| The server's own Docker | Kept, headless runs too: the proxy is stopped, and the agent and its files stay. |
+| The server's Kubernetes | Ended: the run is `FAILED` and torn down, as an interactive Kubernetes run is. |
+| Registered runners | Unchanged. An interactive run, and a headless run on a person's own runner, are kept; a headless run on an organisation runner is ended as before. |
+
+- A run is read as lost to an outage, and kept, in three cases. Any one is enough:
+  - the server is recovering: it started, or the database became reachable again, within `WARDYN_LAPSE_RECOVERY_GRACE` (default 25 minutes);
+  - none of the server's own runs has renewed for 20 minutes;
+  - at least five of them, and at least a quarter, lapsed within 30 minutes (`WARDYN_LAPSE_MASS_MIN`, `WARDYN_LAPSE_MASS_SHARE`).
+- Outside those cases a proxy that dies on its own is ended as before.
+- The agent keeps running with no network.
+- An agent that exits while its run is kept does not end the run. The exit is recorded when the run is revived (within about two minutes), or the run ends at its own end, at its maximum age, or when someone ends it.
+- A kept Background task is still ended at its own end.
+- [Revive](#revive) brings a kept run back.
+- The first pass that keeps an unattended run writes one `run.lapse_sweep.hold` audit row per outage, per server process.
+
+See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 
 ## Revive
 
@@ -199,6 +223,7 @@ The Kubernetes substrate doesn't implement the optional runner capabilities the 
 The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused.
 
 - A Kubernetes run's end and limits still fire on schedule.
+- After a long control-plane outage a server Kubernetes run is still ended.
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.

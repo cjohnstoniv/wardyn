@@ -292,6 +292,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
 | `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
 | `WARDYN_LAPSE_RECOVERY_GRACE` | duration | `25m` | How long the server counts as recovering after the database is reachable again and after every start. `0` turns it off; boot refuses a negative value or one above `2h` (flag `-lapse-recovery-grace`). [Details](#wardyn_lapse_recovery_grace) |
+| `WARDYN_LAPSE_MASS_SHARE` | int | `25` | Percent of the server's own runs whose lapse inside 30 minutes marks an outage; 1 to 100 (flag `-lapse-mass-share`). [Details](#wardyn_lapse_mass_share) |
+| `WARDYN_LAPSE_MASS_MIN` | int | `5` | Fewest lapsed server runs that can mark an outage; at least 1 (flag `-lapse-mass-min`). [Details](#wardyn_lapse_mass_min) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
@@ -1424,12 +1426,35 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_LAPSE_RECOVERY_GRACE`
 
-- How long after the database is reachable again, and after every start of the server, the server counts as recovering (flag `-lapse-recovery-grace`; `0` turns it off; boot refuses a negative value or one above `2h`).
+- How long the server counts as recovering, after the database is reachable again and after every start (flag `-lapse-recovery-grace`).
+- `0` turns the outage rule off. Boot refuses a negative value or one above `2h`.
+- A run whose token lapsed is read as lost to an outage of the control plane, not to a dead proxy, in three cases. Any one is enough:
+  - the server is recovering;
+  - none of the server's own runs has renewed its token for 20 minutes;
+  - at least `WARDYN_LAPSE_MASS_MIN` of them, and at least `WARDYN_LAPSE_MASS_SHARE` percent, lapsed within the last 30 minutes.
+- In an outage the server's own Docker runs are kept, unattended ones as interactive ones are: the proxy is stopped, and the agent and its files stay. Revive brings one back.
+- Outside those cases a proxy that dies on its own is ended as before.
+- Server Kubernetes runs cannot be kept, so an outage still ends them.
+- A kept unattended run never finishes on its own: a pipeline sees it running until its own timeout, and it holds a concurrent-run slot while its agent runs.
+- On a server with one run of its own, every lapse of that run is read as an outage (no renewal for 20 minutes), so it is kept, not ended.
 - The server pings its database every 5 seconds. A ping that does not answer within 3 seconds, or fails, is not a good ping.
-- 30 seconds without a good ping restarts the count. A restart of wardynd also starts it again, so the first 25 minutes after every start count as recovering.
+- 30 seconds without a good ping restarts the count. A restart of wardynd also starts it again, so the first 25 minutes after every start keep every lapsed run.
 - A database pool starved for 30 seconds counts as unhealthy and starts the count again.
-- So a server whose pool is starved at least every 25 minutes counts as recovering for as long as that lasts.
+- So a server whose pool is starved at least every 25 minutes keeps every lapsed run, with no network, until its end or maximum age.
 - The same grace holds idle stops: for this long after the database is reachable again, and after every start of the server, no run is idle-stopped.
+- The first pass that keeps an unattended run writes one [`run.lapse_sweep.hold`](AUDIT-ACTIONS.md#runs) row per outage, per server process.
+
+### `WARDYN_LAPSE_MASS_SHARE`
+
+- The share of the server's own runs, in percent (1 to 100, default 25), whose lapse inside the last 30 minutes marks an outage (flag `-lapse-mass-share`).
+- It counts only when at least `WARDYN_LAPSE_MASS_MIN` runs lapsed; see [`WARDYN_LAPSE_RECOVERY_GRACE`](#wardyn_lapse_recovery_grace) for the rule.
+- Boot refuses a value outside 1 to 100.
+
+### `WARDYN_LAPSE_MASS_MIN`
+
+- The fewest lapsed server runs, at least 1 (default 5), that can mark an outage by their share (flag `-lapse-mass-min`).
+- A small server whose few runs lapse together is not read as an outage by this condition alone; the recovery grace and the 20-minute silence still apply.
+- Boot refuses a value below 1.
 
 ### `WARDYN_APPROVAL_EXPIRY_INTERVAL`
 

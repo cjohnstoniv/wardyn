@@ -5,6 +5,7 @@ package api
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +20,11 @@ type RunLeaseConfig struct {
 	// a lifetime source for every new run's end and lifetime_cap_at (#1319). 0 is
 	// off.
 	RunMaxAge time.Duration
+	// LapseMassSharePct is the share, in percent of the server's own runs, whose lapse inside 30 minutes marks an
+	// outage (rule M's mass-lapse condition, WARDYN_LAPSE_MASS_SHARE). 0 is read as 25.
+	LapseMassSharePct int
+	// LapseMassMin is the fewest lapsed runs that can mark an outage (WARDYN_LAPSE_MASS_MIN). 0 is read as 5.
+	LapseMassMin int
 }
 
 // runLeaseState is the run lease's part of Server, embedded so its fields read
@@ -51,4 +57,7 @@ type runLeaseState struct {
 	// run's proxy (run_revive.go, #1005), so a revive of a live run is bounded
 	// to one per reviveLiveEvery. An entry drops itself once it has lapsed.
 	liveRevived sync.Map
+	// lapseHoldOpen is whether this replica has an open outage episode: the lapse sweep has written its
+	// run.lapse_sweep.hold row and no later pass has closed the episode (run_lapse_class.go).
+	lapseHoldOpen atomic.Bool
 }
