@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -428,6 +429,33 @@ func TestDecisionBatchDoor_LogsNoSecrets(t *testing.T) {
 	for _, s := range []string{planted, tok, "secret.example.com"} {
 		if strings.Contains(logs.String(), s) {
 			t.Fatalf("the log carries %q: %s", s, logs.String())
+		}
+	}
+}
+
+// TestDecisionBatchDoc_ContactKeysOnEveryLabelledRow: the door labels the primary row of a batch record decided
+// while the proxy could not reach the control plane, whichever row that is (decisionEvents: the DNS row, the
+// bypass row or the egress row), so docs/AUDIT-ACTIONS.md names cp_contact and contact_age_s on each of them.
+func TestDecisionBatchDoc_ContactKeysOnEveryLabelledRow(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/AUDIT-ACTIONS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"run.dns.query", "llm.scan.*", "egress.*"} {
+		prefix := "| `" + action + "` |"
+		var row string
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, prefix) {
+				row = line
+				break
+			}
+		}
+		if row == "" {
+			t.Fatalf("docs/AUDIT-ACTIONS.md has no %s row", action)
+		}
+		cols := strings.Split(row, " | ")
+		if len(cols) < 3 || !strings.Contains(cols[2], "`cp_contact`") || !strings.Contains(cols[2], "`contact_age_s`") {
+			t.Errorf("the %s row's keys do not name cp_contact and contact_age_s, which the door adds to it", action)
 		}
 	}
 }
