@@ -70,3 +70,26 @@ func TestLettersFromMapKeepsLetters(t *testing.T) {
 		t.Errorf("rebuilt Apply = %q, want %q", got, want)
 	}
 }
+
+// Everyone a change names gets a letter: the subject of an assignment to a person, and any address in any
+// string. A group's subject is not a person.
+func TestPeopleNamedIn(t *testing.T) {
+	raw := []byte(`{"diff":{"subject_type":"user","subject":"sub-sam","unit":{"name":"pay"}},
+		"rules":[{"subject_type":"group","subject":"eng"},{"note":"ask kim@corp.example or lee@corp.example"}]}`)
+	got := PeopleNamedIn(raw)
+	want := []Person{{Name: "sub-sam"}, {Email: "kim@corp.example"}, {Email: "lee@corp.example"}}
+	if len(got) != len(want) {
+		t.Fatalf("PeopleNamedIn = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("PeopleNamedIn[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if PeopleNamedIn([]byte("not json")) != nil {
+		t.Error("a body that is not JSON named people")
+	}
+	if p := PersonOf("ann@corp.example"); p.Email != "ann@corp.example" || p.Name != "" {
+		t.Errorf("PersonOf(address) = %v", p)
+	}
+}

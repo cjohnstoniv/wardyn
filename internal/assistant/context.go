@@ -18,18 +18,19 @@ const (
 	MaxPayloadBytes = 768 << 10
 )
 
-// The section labels, in the order the records appear.
+// The section labels, in the order the records appear, in the words the preview draws.
 const (
-	LabelUnit      = "Your unit"
-	LabelTemplates = "Templates"
-	LabelAdmins    = "Unit admins"
-	LabelGrants    = "Credential grants"
-	LabelHistory   = "Run history, last 30 days"
-	LabelChange    = "The change under review"
-	LabelBuild     = "Build files"
+	LabelUnit      = "your unit record"                                   // PROPOSED: the preview's words
+	LabelRun       = "the run's policy record"                            // PROPOSED
+	LabelTemplates = "template records"                                   // PROPOSED: the preview's words
+	LabelAdmins    = "unit admins"                                        // PROPOSED: the preview's words
+	LabelGrants    = "credential grants"                                  // PROPOSED: the preview's words
+	LabelHistory   = "run history, last 30 days (host · decision · runs)" // PROPOSED: the preview's words
+	LabelChange    = "the change under review"                            // PROPOSED: the settings card's words
+	LabelBuild     = "build files"                                        // PROPOSED: the settings card's words
 )
 
-const truncatedMark = "\n[cut: too long to send]"
+const truncatedMark = "\n(cut: too long to send)" // PROPOSED
 
 // BuildFile is one confirmed build file of a repository draft.
 type BuildFile struct {
@@ -37,10 +38,11 @@ type BuildFile struct {
 	Text string
 }
 
-// HostCount is how many runs of the last 30 days reached one host.
+// HostCount is how many runs of the last 30 days met one decision at one host: Decision is "allow" or "deny".
 type HostCount struct {
-	Host  string
-	Count int
+	Host     string
+	Decision string
+	Count    int
 }
 
 // Inputs are the records the server found, already cut to what the person may read.
@@ -48,6 +50,8 @@ type Inputs struct {
 	Purpose types.AssistantPurpose
 	// UnitRecord is the person's unit record, cut at the security tier at most, mount sources removed.
 	UnitRecord string
+	// RunRecord is a run target's policy, cut the same way. A run's free-text task is never sent.
+	RunRecord string
 	// Templates are one record each: the target template, or for a new draft names and summaries.
 	Templates []string
 	// UnitAdmins, ChangeProposer and RunOwners are the people the records name, in the order their letters
@@ -55,6 +59,8 @@ type Inputs struct {
 	UnitAdmins     []Person
 	ChangeProposer *Person
 	RunOwners      []Person
+	// ChangePeople are the others a change under review names: whom it assigns, and every address in it.
+	ChangePeople []Person
 	// Grants are the credential grants by kind and host.
 	Grants []string
 	// RunHistory is included only when RunHistoryOn.
@@ -86,6 +92,9 @@ func FirstPayload(in Inputs) Payload {
 	for _, p := range in.RunOwners {
 		l.Add(p)
 	}
+	for _, p := range in.ChangePeople {
+		l.Add(p)
+	}
 	var secs []types.AssistantSection
 	add := func(label, text string, untrusted bool) {
 		if strings.TrimSpace(text) != "" {
@@ -93,6 +102,7 @@ func FirstPayload(in Inputs) Payload {
 		}
 	}
 	add(LabelUnit, in.UnitRecord, false)
+	add(LabelRun, in.RunRecord, false)
 	add(LabelTemplates, strings.Join(in.Templates, "\n"), false)
 	add(LabelAdmins, adminLine(in.UnitAdmins, l), false)
 	add(LabelGrants, strings.Join(in.Grants, "\n"), false)
@@ -116,12 +126,24 @@ func adminLine(admins []Person, l *Letters) string {
 	return strings.Join(labels, ", ")
 }
 
+// historyText is one line per host and decision, as the preview draws it: host · decision · runs.
 func historyText(h []HostCount) string {
 	lines := make([]string, len(h))
 	for i, c := range h {
-		lines[i] = fmt.Sprintf("%s: %d runs", c.Host, c.Count)
+		lines[i] = fmt.Sprintf("%s · %s · %d", c.Host, decisionWord(c.Decision), c.Count) // PROPOSED: the preview's words
 	}
 	return strings.Join(lines, "\n")
+}
+
+// decisionWord is how a history line names a decision: a refused host reads as refused.
+func decisionWord(d string) string {
+	switch d {
+	case "allow":
+		return "allowed" // PROPOSED: the preview's words
+	case "deny":
+		return "refused" // PROPOSED
+	}
+	return d
 }
 
 func buildText(files []BuildFile) string {

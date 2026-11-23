@@ -45,3 +45,17 @@ func TestPreviewDigestCoversTheBinding(t *testing.T) {
 		t.Error("the preview digest equals the records digest")
 	}
 }
+
+// OutputHash fed piece by piece equals OutputDigest of the whole text.
+func TestOutputHashEqualsOutputDigest(t *testing.T) {
+	h := NewOutputHash()
+	for _, p := range []string{"one ", "two ", "three"} {
+		h.Text(p)
+	}
+	if got, want := h.Sum([]byte(`{"x":1}`)), OutputDigest("one two three", []byte(`{"x":1}`)); got != want {
+		t.Errorf("OutputHash = %s, want %s", got, want)
+	}
+	if NewOutputHash().Sum(nil) != OutputDigest("", nil) {
+		t.Error("an empty OutputHash differs from the empty digest")
+	}
+}

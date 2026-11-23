@@ -24,7 +24,7 @@ func TestFirstPayloadOrderAndUntrusted(t *testing.T) {
 	p := FirstPayload(Inputs{
 		Purpose: types.AssistantReview, UnitRecord: "unit ada@corp.example", Templates: []string{"t1"},
 		UnitAdmins: []Person{admin}, ChangeProposer: &proposer, Grants: []string{"github api.github.com"},
-		RunHistoryOn: true, RunHistory: []HostCount{{"a.example", 3}},
+		RunHistoryOn: true, RunHistory: []HostCount{{"a.example", "allow", 3}},
 		Change: "note from pat@corp.example", BuildFiles: []BuildFile{{"go.mod", "module x"}},
 	})
 	want := []string{LabelUnit, LabelTemplates, LabelAdmins, LabelGrants, LabelHistory, LabelChange, LabelBuild}
@@ -46,7 +46,7 @@ func TestFirstPayloadOrderAndUntrusted(t *testing.T) {
 }
 
 func TestFirstPayloadLeavesOutWhatIsEmptyOrOff(t *testing.T) {
-	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, UnitRecord: "u", RunHistory: []HostCount{{"h", 1}}, Change: "ignored"})
+	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, UnitRecord: "u", RunHistory: []HostCount{{"h", "allow", 1}}, Change: "ignored"})
 	if got := labels(p); len(got) != 1 || got[0] != LabelUnit {
 		t.Errorf("labels = %v, want only the unit record: history is off and a compose session has no change", got)
 	}
@@ -76,5 +76,31 @@ func TestFirstPayloadCaps(t *testing.T) {
 		if strings.ToValidUTF8(s.Text, "") != s.Text {
 			t.Errorf("%s was cut inside a rune", s.Label)
 		}
+	}
+}
+
+// A run target's policy goes under its own label, never the unit's, and is trusted as policy text; a change's
+// assignee and any address in it become letters like its proposer.
+func TestFirstPayloadRunRecordAndChangePeople(t *testing.T) {
+	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, RunRecord: `{"allowed_domains":["a.example"]}`})
+	if got := labels(p); len(got) != 1 || got[0] != LabelRun || p.Sections[0].Untrusted {
+		t.Errorf("sections = %+v, want one trusted run record", p.Sections)
+	}
+	sam := Person{Name: "sub-sam"}
+	p = FirstPayload(Inputs{Purpose: types.AssistantReview, ChangeProposer: &Person{Email: "pat@corp.example"},
+		ChangePeople: []Person{sam, {Email: "kim@corp.example"}}, Change: `{"subject":"sub-sam","note":"ask kim@corp.example"}`})
+	text := p.Sections[len(p.Sections)-1].Text
+	if strings.Contains(text, "sub-sam") || strings.Contains(text, "kim@corp.example") ||
+		!strings.Contains(text, "Person B") || !strings.Contains(text, "Person C") {
+		t.Errorf("change record = %q, want the assignee and the address as letters", text)
+	}
+}
+
+// Each history line names its host, its decision and its count, and a refused host reads as refused.
+func TestHistoryLinesCarryTheDecision(t *testing.T) {
+	p := FirstPayload(Inputs{Purpose: types.AssistantCompose, RunHistoryOn: true,
+		RunHistory: []HostCount{{"a.example", "allow", 412}, {"b.example", "deny", 9}}})
+	if got, want := p.Sections[0].Text, "a.example · allowed · 412\nb.example · refused · 9"; got != want {
+		t.Errorf("history = %q, want %q", got, want)
 	}
 }

@@ -7,6 +7,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"regexp"
@@ -203,6 +204,52 @@ func boundaryAfter(text string, i int) bool {
 		return !isTokenRune(next)
 	}
 	return true
+}
+
+// addressRE matches an e-mail address.
+var addressRE = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`)
+
+// PeopleNamedIn is everyone a record's JSON names, in the order they appear: the subject of every object that
+// assigns something to a person ({"subject_type": "user", "subject": ...}), and every e-mail address in any
+// string. A subject that is not an address is a name. Keys are walked in sorted order, so the order is stable.
+func PeopleNamedIn(raw []byte) []Person {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return nil
+	}
+	var out []Person
+	var walk func(any)
+	walk = func(x any) {
+		switch t := x.(type) {
+		case map[string]any:
+			if st, _ := t["subject_type"].(string); st == "user" {
+				if sub, _ := t["subject"].(string); strings.TrimSpace(sub) != "" {
+					out = append(out, PersonOf(sub))
+				}
+			}
+			for _, k := range slices.Sorted(maps.Keys(t)) {
+				walk(t[k])
+			}
+		case []any:
+			for _, e := range t {
+				walk(e)
+			}
+		case string:
+			for _, a := range addressRE.FindAllString(t, -1) {
+				out = append(out, Person{Email: a})
+			}
+		}
+	}
+	walk(v)
+	return out
+}
+
+// PersonOf is a principal as a person: its e-mail when it is one, else its name.
+func PersonOf(subject string) Person {
+	if strings.Contains(subject, "@") {
+		return Person{Email: subject}
+	}
+	return Person{Name: subject}
 }
 
 // Restore puts each letter in text back to the name it stands for. Only tests use it.

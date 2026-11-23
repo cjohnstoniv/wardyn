@@ -10,8 +10,8 @@ import (
 
 // Edit is one field the person changed in the draft themselves, with its new value.
 type Edit struct {
-	Field string
-	Value string
+	Field string `json:"field"`
+	Value string `json:"value"`
 }
 
 // NextTurn is what the model reads for one person turn: a line for each field the person changed since the
