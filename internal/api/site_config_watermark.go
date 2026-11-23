@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -51,4 +52,14 @@ func (s *Server) desktopWatermarkFor(ctx context.Context, email, principal, run 
 		who = principal
 	}
 	return desktopWatermarkView{Who: who, Run: run, Required: s.desktopWatermarkRequired(ctx)}
+}
+
+// runDesktopWatermark is GET /runs/{id}'s desktop_watermark: only a run that can show a desktop carries one, and a
+// container run reads no site config.
+func (s *Server) runDesktopWatermark(r *http.Request, run types.AgentRun) *desktopWatermarkView {
+	if !run.MachineKind.IsVM() {
+		return nil
+	}
+	v := s.desktopWatermarkFor(r.Context(), oidcEmailFromContext(r.Context()), principalFromRequest(r), run.ID.String())
+	return &v
 }
