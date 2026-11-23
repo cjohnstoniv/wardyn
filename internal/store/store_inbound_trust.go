@@ -389,7 +389,7 @@ func (s PG) CreateExchangedToken(ctx context.Context, trust types.InboundTrust, 
 	// No row: the trust was deleted, or its identity's sponsor changed, since the API matched it.
 	var maxLive int
 	var tooLong bool
-	err = tx.QueryRow(ctx, `SELECT max_live, $3::timestamptz > now() + token_ttl_seconds * interval '1 second' FROM inbound_trusts WHERE id = $1 AND service_name = $2 FOR SHARE`,
+	err = tx.QueryRow(ctx, `SELECT max_live, $3::timestamptz > now() + (token_ttl_seconds + 60) * interval '1 second' FROM inbound_trusts WHERE id = $1 AND service_name = $2 FOR SHARE`,
 		trust.ID, trust.ServiceIdentity, *t.ExpiresAt).Scan(&maxLive, &tooLong)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.APIToken{}, ErrNotFound

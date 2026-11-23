@@ -571,19 +571,27 @@ func TestPG_InboundExchange_RefusesExpiryPastTrustTTL(t *testing.T) {
 	f.on(t)
 	// The door reads the stored ttl, so a caller's stale copy of the trust cannot widen it.
 	tr.TokenTTLSeconds = types.InboundTrustTTLMaxSeconds
-	exp := time.Now().UTC().Add(time.Duration(types.InboundTrustTTLDefaultSeconds)*time.Second + time.Minute)
+	exp := time.Now().UTC().Add(time.Duration(types.InboundTrustTTLDefaultSeconds)*time.Second + 90*time.Second)
 	_, err := f.st.CreateExchangedToken(f.ctx, tr, types.APIToken{
 		ID: uuid.New(), Principal: "service:ci-bot", Role: "user", UserType: types.UserTypeStandard, Name: "long",
 		ExpiresAt: &exp, Kind: types.APITokenKindInbound,
 	}, "wdn_"+uuid.NewString())
 	if err == nil {
-		t.Fatal("a token expiring a minute past its trust's ttl was stored")
+		t.Fatal("a token expiring 90 s past its trust's ttl was stored")
 	}
 	if n := rowCount(t, f.pool, `SELECT count(*) FROM api_tokens WHERE principal = 'service:ci-bot'`); n != 0 {
 		t.Errorf("%d rows written; want 0", n)
 	}
 	if _, err := exchange(t, f.st, tr); err == nil {
 		t.Fatal("exchange with the caller's widened ttl was stored")
+	}
+	// Up to 60 s past the ttl is clock slack between the API host and the database, and is stored.
+	slack := time.Now().UTC().Add(time.Duration(types.InboundTrustTTLDefaultSeconds)*time.Second + 30*time.Second)
+	if _, err := f.st.CreateExchangedToken(f.ctx, tr, types.APIToken{
+		ID: uuid.New(), Principal: "service:ci-bot", Role: "user", UserType: types.UserTypeStandard, Name: "slack",
+		ExpiresAt: &slack, Kind: types.APITokenKindInbound,
+	}, "wdn_"+uuid.NewString()); err != nil {
+		t.Fatalf("a token expiring 30 s past the ttl = %v; want stored (inside the clock slack)", err)
 	}
 	tr.TokenTTLSeconds = types.InboundTrustTTLDefaultSeconds
 	if _, err := exchange(t, f.st, tr); err != nil {
