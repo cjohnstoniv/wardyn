@@ -27,7 +27,7 @@ export const ASSISTANT = {
   COMPOSE: "Compose",
   COMPOSE_HINT: "Drafts runs, unit changes and templates from a chat.",
   REVIEW: "Review",
-  REVIEW_HINT: "Explains a change waiting for approval, at the reviewer's request. It never approves.",
+  REVIEW_HINT: "Explains a change waiting for approval, at the request of whoever is reading it. It never approves.", // PROPOSED
   PURPOSES_OFF: "Each purpose is off until you turn it on.",
   MAY_SERVE: "May serve the assistant",
   COL_PROVIDER: "Provider",
