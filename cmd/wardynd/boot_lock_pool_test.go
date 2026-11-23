@@ -31,14 +31,21 @@ func TestLockPoolMaxConnsRefusesOutOfRange(t *testing.T) {
 }
 
 // db.LockerFor sizes its connection pool on first use, so the size is applied before anything can ask for a lock:
-// applyLockPoolSize must come before connectAndMigrate in main.go.
+// validateBootPosture applies it, and run() calls that before connectAndMigrate.
 func TestLockPoolSizeIsAppliedBeforeTheConnect(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	main, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply, connect := strings.Index(string(src), "applyLockPoolSize("), strings.Index(string(src), "connectAndMigrate(")
-	if apply < 0 || connect < 0 || apply > connect {
-		t.Fatalf("applyLockPoolSize( at %d, connectAndMigrate( at %d; want the first before the second", apply, connect)
+	posture, err := os.ReadFile("boot_posture.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validate, connect := strings.Index(string(main), "validateBootPosture("), strings.Index(string(main), "connectAndMigrate(")
+	if validate < 0 || connect < 0 || validate > connect {
+		t.Fatalf("validateBootPosture( at %d, connectAndMigrate( at %d in main.go; want the first before the second", validate, connect)
+	}
+	if !strings.Contains(string(posture), "applyLockPoolSize(*f.lockPoolMaxConns)") {
+		t.Fatal("validateBootPosture does not apply the lock pool size")
 	}
 }

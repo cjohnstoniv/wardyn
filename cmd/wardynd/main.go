@@ -200,9 +200,6 @@ func run() error {
 	// (Validated before the DB connect on purpose: a typo'd path fails in
 	// milliseconds instead of after a 30s connect budget.)
 
-	if err := applyLockPoolSize(*f.lockPoolMaxConns); err != nil {
-		return err
-	}
 	// Connect + migrate (Postgres is the only required dependency). See
 	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection)
 	// and the separate connect/migrate timeout budgets — a fixed 30s
