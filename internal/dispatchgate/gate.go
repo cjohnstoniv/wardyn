@@ -18,7 +18,8 @@ import (
 )
 
 // ErrExpired is a Write refused, or cut, because the request's dispatch time passed or its connection closed
-// before its first write returned. A later write that returns after the connection closed also gets it.
+// before its first write returned, or because an earlier first write failed or came back short. A later write
+// that returns after the connection closed also gets it.
 var ErrExpired = errors.New("dispatchgate: the request's dispatch time passed")
 
 // Kinds of Outcome. Refused: no driver write had started, so zero bytes passed. Interrupted: the first driver
@@ -108,7 +109,11 @@ type Gate struct {
 func New(conn net.Conn, cfg Config) *Gate {
 	g := &Gate{Conn: conn, cfg: cfg, done: make(chan struct{}), q: make(chan job, 1), writerEnd: make(chan struct{})}
 	g.out.By = cfg.By
+	// A By at or before now fires the timer at once, on its own goroutine. expire takes mu before anything else,
+	// so its cleanup cannot read stopTimer before it is stored here.
+	g.mu.Lock()
 	g.stopTimer = cfg.AfterFunc(cfg.By.Sub(cfg.Now()), g.expire)
+	g.mu.Unlock()
 	return g
 }
 
@@ -124,7 +129,8 @@ func (g *Gate) wake() {
 // Write admits p through the writer goroutine. Before the gate opens: at or after By, after expiry or after
 // Close it refuses with ErrExpired (recording the refusal unless the gate is closed); otherwise it waits for the
 // driver write's return, expiry or Close. Once open, every Write passes with no clock check, still through the
-// writer, so Close wakes it in every state.
+// writer, so Close wakes it in every state. After a first write that did not open the gate, every Write refuses
+// with ErrExpired and records nothing.
 func (g *Gate) Write(p []byte) (int, error) {
 	g.writeMu.Lock()
 	defer g.writeMu.Unlock()
@@ -134,6 +140,13 @@ func (g *Gate) Write(p []byte) (int, error) {
 		return 0, ErrExpired
 	}
 	if g.st != open {
+		if g.st == started {
+			// A first write already passed bytes and did not open the gate (it failed or came back short): a later
+			// write is never a first write, and no refusal is recorded, since bytes passed. The outcome stays
+			// interrupted, with that write's start and bytes.
+			g.mu.Unlock()
+			return 0, ErrExpired
+		}
 		if !g.cfg.Now().Before(g.cfg.By) {
 			g.mu.Unlock()
 			g.cfg.Refuse()
