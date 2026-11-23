@@ -20,7 +20,7 @@ var (
 	scanAddCol   = regexp.MustCompile(`(?i)add column (?:if not exists )?([a-z_0-9]+)\s+([A-Za-z\[\]_0-9]+)`)
 	scanDropCol  = regexp.MustCompile(`(?i)drop column (?:if exists )?([a-z_0-9]+)`)
 	scanColumn   = regexp.MustCompile(`^\s*([a-z_0-9]+)\s+([A-Za-z\[\]_0-9]+)`)
-	personColumn = regexp.MustCompile(`^(principal|created_by|owner.*|owned_by|sponsor|holder|helper|person|sub|subject|decided_by|proposed_by|registered_by)$`)
+	personColumn = regexp.MustCompile(`^(principal|created_by|owner.*|owned_by|sponsor|holder|helper|person|sub|subject|decided_by|proposed_by|registered_by|moved_by)$`)
 	notAColumn   = map[string]bool{"PRIMARY": true, "UNIQUE": true, "CHECK": true, "FOREIGN": true, "CONSTRAINT": true, "EXCLUDE": true, "LIKE": true}
 )
 

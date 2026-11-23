@@ -88,6 +88,7 @@ type RunnerInventoryResult struct {
 	GoneDue bool
 	// Containment lists the page's containment-pending transitions, audited after it commits.
 	Containment []RunContainmentEvent
+	MoveIgnored []uuid.UUID // runs whose rows were skipped as a move left them (moveIgnoredRowTx), logged by the caller
 }
 
 // BeginRunnerInventory captures original candidates before fresh PENDING/STATE.
@@ -184,6 +185,11 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 		return out, err
 	}
 	for _, row := range page.Runs {
+		if skip, err := moveIgnoredRowTx(ctx, tx, runnerID, row.RunID, &out.MoveIgnored); err != nil {
+			return out, err
+		} else if skip {
+			continue
+		}
 		needs, capped, ev, err := s.intakeRunnerStateRow(ctx, tx, runnerID, row)
 		if err != nil {
 			return out, err
