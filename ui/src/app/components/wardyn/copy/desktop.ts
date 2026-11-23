@@ -43,6 +43,11 @@ export const DESKTOP = {
   whyEnforcedBody: "At the UI gateway, before the desktop is reached",
   whyCanChange: "Can change",
   whyCanChangeBody: "Yes. Open the desktop again from the run page to get a new link.",
+  // Not on the boards: a door refused the desktop (its governance profile), shown on the same card.
+  deniedBody: "Your organisation's rules for this run do not allow this desktop to open.",
+  deniedWallBody: "A limit in the governance profile this run was launched under",
+  deniedSetByBody: "Your organisation's admins",
+  deniedCanChangeBody: "Only by an admin who manages that governance profile.",
   gatewaySaid: "What the gateway said:",
   copyDetails: "Copy details",
   // Sign-ins in a desktop (#2972, board R11-2972-DesktopSignIns). Byte for byte from the board.
