@@ -33,6 +33,7 @@ var reservedRunTasks = map[string]bool{
 	harnessLoginTask:   true,
 	"workspace record": true,
 	"workspace verify": true,
+	assistantRunTask:   true, // the assistant's run: WARDYN_ASSISTANT starts the relay in it
 }
 
 // Length ceilings for the run's free-text display fields. Both are trust

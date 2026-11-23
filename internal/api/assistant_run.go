@@ -53,14 +53,18 @@ func assistantRunPolicy(cc types.ConfinementClass) types.RunPolicySpec {
 	}
 }
 
-// runIsAssistant reports whether a live or ended session row holds the run.
-func (s *Server) runIsAssistant(ctx context.Context, run uuid.UUID) bool {
+// runIsAssistant reports whether a live or ended session row holds the run. Only a store that keeps no
+// sessions, or a read that finds no row, means it is not one; a read that fails is returned, so the seal refuses.
+func (s *Server) runIsAssistant(ctx context.Context, run uuid.UUID) (bool, error) {
 	ss, ok := s.cfg.Store.(store.AssistantSessionStore)
 	if !ok {
-		return false
+		return false, nil
 	}
 	ids, err := ss.AssistantRunIDs(ctx, []uuid.UUID{run})
-	return err == nil && len(ids) == 1
+	if err != nil {
+		return false, err
+	}
+	return len(ids) == 1, nil
 }
 
 // assistantLaunch is an assistant run created but not yet dispatched, with what dispatch needs.
@@ -69,6 +73,7 @@ type assistantLaunch struct {
 	token string
 	cc    types.ConfinementClass
 	dc    dispatchCeiling
+	model string
 }
 
 // assistantNewRun creates the run of a session, pending. It is launchSourceScanRun's shape: the host-capacity
@@ -106,18 +111,34 @@ func (s *Server) assistantNewRun(ctx context.Context, actor string, binding type
 	if err != nil {
 		return assistantLaunch{}, fmt.Errorf("create assistant run: %w", err)
 	}
-	return assistantLaunch{run: created, token: token, cc: cc, dc: dc}, nil
+	return assistantLaunch{run: created, token: token, cc: cc, dc: dc, model: binding.Model}, nil
 }
 
-// assistantDispatch dispatches a created run under the policy Wardyn wrote. A deferring provider is refused
-// again where the gateway route is sealed (takeProviderGatewayRoute).
-func (s *Server) assistantDispatch(ctx context.Context, l assistantLaunch) types.AgentRun {
-	ctx = context.WithoutCancel(ctx)
-	return s.dispatchAndSettle(ctx, l.run, l.dc, dispatchParams{
+// assistantModelPin holds the run's proxy to the session's one model: the allowed-models list dispatch hands it
+// (recordAllowedModels keeps it on the run) is that model alone. The binding check already requires the model to
+// be on any list the person's unit sets, so this only ever narrows, and a call for the admin's harness model, or
+// any other, is refused. The relay names the same model on the first turn.
+func assistantModelPin(dc dispatchCeiling, model string) dispatchCeiling {
+	dc.modelLimit.models = []string{model}
+	return dc
+}
+
+// assistantDispatchArgs is what assistantDispatch hands dispatch: the ceiling with the model pinned, and the
+// policy Wardyn wrote.
+func (s *Server) assistantDispatchArgs(l assistantLaunch) (dispatchCeiling, dispatchParams) {
+	return assistantModelPin(l.dc, l.model), dispatchParams{
 		RunToken: l.token,
 		Image:    agentImage("claude-code", s.cfg.AgentImages),
 		Policy:   assistantRunPolicy(l.cc),
-	})
+	}
+}
+
+// assistantDispatch dispatches a created run under the policy Wardyn wrote, held to the session's model. A
+// deferring provider is refused again where the gateway route is sealed (takeProviderGatewayRoute).
+func (s *Server) assistantDispatch(ctx context.Context, l assistantLaunch) types.AgentRun {
+	ctx = context.WithoutCancel(ctx)
+	dc, p := s.assistantDispatchArgs(l)
+	return s.dispatchAndSettle(ctx, l.run, dc, p)
 }
 
 // assistantRunLimited reports whether err is max_concurrent_runs refusing the run.
@@ -151,12 +172,22 @@ func (s *Server) assistantTokens(ctx context.Context, run *uuid.UUID) (in, out i
 	return in, out
 }
 
+// assistantAuditActor is who an assistant row is written as: the session's person, so audit sealing and erasure
+// reach them; an erased session's rows name no one.
+func assistantAuditActor(sess types.AssistantSession, reason string) (types.ActorType, string) {
+	if reason == types.AssistantEndErased || assistantNoPerson(assistantSnapshotOfSession(sess)) {
+		return types.ActorSystem, "wardynd"
+	}
+	return types.ActorHuman, sess.Principal
+}
+
 // assistantEndAudit writes assistant.session.end: why it ended, how many turns, and the run's counted tokens.
 func (s *Server) assistantEndAudit(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession, reason string) {
 	turns, _ := ss.AssistantTurnCount(ctx, sess.ID)
 	tin, tout := s.assistantTokens(ctx, sess.RunID)
-	s.recordAudit(ctx, s.auditEvent(sess.RunID, types.ActorSystem, "wardynd", assistantSessionEndAction, sess.ID.String(), "success",
-		mustJSON(map[string]any{"person": sess.Principal, "end_reason": reason, "turns": turns, "input_tokens": tin, "output_tokens": tout})))
+	at, actor := assistantAuditActor(sess, reason)
+	s.recordAudit(ctx, s.auditEvent(sess.RunID, at, actor, assistantSessionEndAction, sess.ID.String(), "success",
+		mustJSON(map[string]any{"end_reason": reason, "turns": turns, "input_tokens": tin, "output_tokens": tout})))
 }
 
 // endAssistantSession ends sess once, writes assistant.session.end, and stops its run when stopRun is set and
@@ -199,53 +230,81 @@ func assistantRecordsEvent(prep *assistantPrep, turn string, session uuid.UUID) 
 	return m
 }
 
-// assistantSuggestion is the audit row of a completed turn, stored beside the relay's turn_end as a suggestion
-// event. The tool names come from the server's own tool_record events since the last turn, never from the
-// relay's tool_call events. No row carries prompt or output text, only digests.
-func (s *Server) assistantSuggestion(r *http.Request, ss store.AssistantSessionStore, sess types.AssistantSession, turnEnd types.AssistantEvent) {
-	ctx := context.WithoutCancel(r.Context())
-	evs, err := ss.ListAssistantEvents(ctx, sess.ID, 0, assistantEventsScan)
+// assistantSuggestionTools bounds how many tool names one suggestion row carries.
+const assistantSuggestionTools = 100
+
+// assistantTurnDigests are a completed turn's digests and tool names, read in bounded pieces and never from
+// seq 0 as a whole: the prompt is the records the session began with plus the last person turn before the
+// turn_end; the output is the text and proposal since the turn_end before it, hashed a page at a time; the tools
+// are the server's own tool_record names since then, never the relay's tool_call events.
+func (s *Server) assistantTurnDigests(ctx context.Context, ss store.AssistantSessionStore, id uuid.UUID, turnEnd int64) (promptDigest, outputDigest string, tools []string, err error) {
+	records, err := s.assistantStoredRecords(ctx, ss, id)
 	if err != nil {
-		return
+		return "", "", nil, err
 	}
-	var text, lastTurn, records string
+	last, err := ss.FindAssistantEvents(ctx, id, store.AssistantEventFilter{Before: turnEnd, Kinds: []string{types.AssistantEventUserMessage}, Limit: 1, Newest: true})
+	if err != nil {
+		return "", "", nil, err
+	}
+	var turn struct {
+		Turn string `json:"turn"`
+	}
+	if len(last) == 1 {
+		_ = json.Unmarshal(last[0].Payload, &turn)
+	}
+	after, err := assistantLastSeq(ctx, ss, id, types.AssistantEventTurnEnd, turnEnd)
+	if err != nil {
+		return "", "", nil, err
+	}
+	out := assistant.NewOutputHash()
 	var proposal []byte
-	tools := []string{}
-	for _, e := range evs {
-		if e.Seq >= turnEnd.Seq {
+	tools = []string{}
+	for {
+		evs, err := ss.FindAssistantEvents(ctx, id, store.AssistantEventFilter{After: after, Before: turnEnd,
+			Kinds: []string{types.AssistantEventText, types.AssistantEventProposal, types.AssistantEventToolRecord}, Limit: assistantEventsPage})
+		if err != nil {
+			return "", "", nil, err
+		}
+		for _, e := range evs {
+			var p struct {
+				Text string `json:"text"`
+				Name string `json:"name"`
+			}
+			_ = json.Unmarshal(e.Payload, &p)
+			switch e.Kind {
+			case types.AssistantEventText:
+				out.Text(p.Text)
+			case types.AssistantEventProposal:
+				proposal = e.Payload
+			case types.AssistantEventToolRecord:
+				if len(tools) < assistantSuggestionTools {
+					tools = append(tools, p.Name)
+				}
+			}
+			after = e.Seq
+		}
+		if len(evs) < assistantEventsPage {
 			break
 		}
-		var p struct {
-			Text    string                   `json:"text"`
-			Turn    string                   `json:"turn"`
-			Name    string                   `json:"name"`
-			State   string                   `json:"state"`
-			Records []types.AssistantSection `json:"records"`
-		}
-		_ = json.Unmarshal(e.Payload, &p)
-		switch e.Kind {
-		case types.AssistantEventTurnEnd:
-			text, proposal, tools = "", nil, []string{}
-		case types.AssistantEventText:
-			text += p.Text
-		case types.AssistantEventProposal:
-			proposal = e.Payload
-		case types.AssistantEventToolRecord:
-			tools = append(tools, p.Name)
-		case types.AssistantEventUserMessage:
-			lastTurn = p.Turn
-		case types.AssistantEventState:
-			if p.Records != nil {
-				records = assistant.RecordBytes(p.Records)
-			}
-		}
 	}
-	promptDigest, outputDigest := assistant.PromptDigest(records+lastTurn), assistant.OutputDigest(text, proposal)
+	return assistant.PromptDigest(assistant.RecordBytes(records) + turn.Turn), out.Sum(proposal), tools, nil
+}
+
+// assistantSuggestion is the audit row of a completed turn, stored beside the relay's turn_end as a suggestion
+// event. No row carries prompt or output text, only digests; the person is the row's actor.
+func (s *Server) assistantSuggestion(r *http.Request, ss store.AssistantSessionStore, sess types.AssistantSession, turnEnd types.AssistantEvent) {
+	ctx := context.WithoutCancel(r.Context())
+	promptDigest, outputDigest, tools, err := s.assistantTurnDigests(ctx, ss, sess.ID, turnEnd.Seq)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not read an assistant turn", slog.String("session", sess.ID.String()), slog.Any("err", err))
+		return
+	}
 	body, _ := json.Marshal(map[string]any{"prompt_digest": promptDigest, "output_digest": outputDigest, "tools": tools})
 	if _, err := ss.AppendAssistantEvent(ctx, sess.ID, types.AssistantEventSuggestion, body); err != nil {
 		return
 	}
-	s.recordAudit(ctx, s.auditEvent(sess.RunID, types.ActorSystem, "wardynd", assistantSuggestionAction, sess.ID.String(), "success",
-		mustJSON(map[string]any{"person": sess.Principal, "purpose": sess.Purpose, "provider_id": sess.Binding.ProviderID, "model": sess.Binding.Model,
+	at, actor := assistantAuditActor(sess, "")
+	s.recordAudit(ctx, s.auditEvent(sess.RunID, at, actor, assistantSuggestionAction, sess.ID.String(), "success",
+		mustJSON(map[string]any{"purpose": sess.Purpose, "provider_id": sess.Binding.ProviderID, "model": sess.Binding.Model,
 			"prompt_digest": promptDigest, "output_digest": outputDigest, "tools": tools, "target_kind": sess.TargetKind, "target_key": sess.TargetKey})))
 }

@@ -538,7 +538,7 @@ func refuseAssistantDeferral(p types.ModelProvider) *assistantRefusal {
 	if !inspectionDeferredFor(p) {
 		return nil
 	}
-	return assistantRefusalFor(http.StatusConflict, reasonAssistantDefersInspection, "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.")
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantDefersInspection, "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.") // PROPOSED: the board's words
 }
 
 // gatewayBindingHolds is the one predicate a mint and a revive share: the live
@@ -633,10 +633,13 @@ func (s *Server) takeProviderGatewayRoute(ctx context.Context, run types.AgentRu
 		return false
 	}
 	// The seal site: an assistant run's gateway route is sealed here, so a provider edited to defer
-	// inspection after the session began is refused once more, at dispatch.
-	if inspectionDeferredFor(p) && s.runIsAssistant(ctx, run.ID) {
-		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf("model_providers: %q: this provider leaves prompt inspection to its gateway, so it cannot serve the assistant", p.ID)}, nil)
-		return false
+	// inspection after the session began is refused once more, at dispatch. A session read that fails
+	// refuses too: a deferring provider is sealed only for a run known not to be an assistant run.
+	if inspectionDeferredFor(p) {
+		if isAssistant, err := s.runIsAssistant(ctx, run.ID); err != nil || isAssistant {
+			s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf("model_providers: %q: this provider leaves prompt inspection to its gateway, so it cannot serve the assistant", p.ID)}, nil)
+			return false
+		}
 	}
 	if !prov.addGatewayRoute(p) {
 		s.refuseProviderDispatch(ctx, run, p.Kind, providerDenial{msg: fmt.Sprintf(mpRunGatewayAddress, p.ID)}, nil)

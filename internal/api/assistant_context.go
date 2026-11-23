@@ -21,25 +21,30 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// assistantRefusal is a refusal decided while preparing a preview or a session; it is answered once.
+// assistantRefusal is a refusal decided while preparing a preview or a session; it is answered once. custom,
+// when set, answers it its own way and reports whether it did; otherwise the status, reason and message answer.
 type assistantRefusal struct {
 	status int
 	reason string
 	msg    string
+	custom func(http.ResponseWriter, *http.Request) bool
 }
 
-func (f *assistantRefusal) write(w http.ResponseWriter) {
+func (f *assistantRefusal) write(w http.ResponseWriter, r *http.Request) {
+	if f.custom != nil && f.custom(w, r) {
+		return
+	}
 	writeErrorReason(w, f.status, f.reason, f.msg)
 }
 
 // assistantTargetGone is the one refusal for a target the person cannot read or that does not exist, so the
 // answer never says which.
 func assistantTargetGone() *assistantRefusal {
-	return &assistantRefusal{http.StatusNotFound, reasonAssistantSessionNotFound, "That target was not found."} // PROPOSED
+	return assistantRefusalFor(http.StatusNotFound, reasonAssistantTargetNotFound, "That target was not found.") // PROPOSED
 }
 
 func assistantRefusalFor(status int, reason, msg string) *assistantRefusal {
-	return &assistantRefusal{status, reason, msg}
+	return &assistantRefusal{status: status, reason: reason, msg: msg}
 }
 
 // assistantNeverSent is the 409 of a target whose governance kind is on the organisation's never-sent list.
@@ -47,7 +52,7 @@ func assistantNeverSent(set *types.AssistantSettings, kind string) *assistantRef
 	if kind == "" || set == nil || !slices.Contains(set.NeverSentKinds, kind) {
 		return nil
 	}
-	return assistantRefusalFor(http.StatusConflict, reasonAssistantKindNeverSent, "This kind of record is never sent to a model provider.") // PROPOSED
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantKindNeverSent, "Your organisation keeps this kind of record away from the assistant.") // PROPOSED: the board's words
 }
 
 // assistantStaticKind is the governance kind a target names by its own kind, before anything is read: only a
@@ -101,13 +106,13 @@ func (s *Server) assistantResolveTarget(tr *http.Request, t types.AssistantTarge
 	ctx := tr.Context()
 	if t.ID == "" {
 		if t.Kind == types.AssistantTargetChange {
-			return out, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "A review needs the change to review.") // PROPOSED
+			return out, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "A review needs a change.") // PROPOSED
 		}
 		return out, nil
 	}
 	id, err := uuid.Parse(t.ID)
 	if err != nil {
-		return out, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "The target id is not valid.") // PROPOSED
+		return out, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "The target id is not valid.") // PROPOSED
 	}
 	switch t.Kind {
 	case types.AssistantTargetUnit:
@@ -188,12 +193,7 @@ func assistantGrantLines(spec types.RunPolicySpec) []string {
 }
 
 // assistantPerson is a person's e-mail when the subject is one, else their name.
-func assistantPerson(subject string) assistant.Person {
-	if strings.Contains(subject, "@") {
-		return assistant.Person{Email: subject}
-	}
-	return assistant.Person{Name: subject}
-}
+func assistantPerson(subject string) assistant.Person { return assistant.PersonOf(subject) }
 
 // assistantInputs reads the records the first message carries, through the person's own read paths. It reads
 // no secret value, no credential, no audit row and no per-run or per-person row.
@@ -211,6 +211,8 @@ func (s *Server) assistantInputs(tr *http.Request, rt assistantTarget, purpose t
 		}
 		in.UnitAdmins = admins
 	case rt.run != nil:
+		// The run's policy, under the run's own label. Its free-text task is a person's words with no place
+		// in the records, so it is never sent.
 		in.RunOwners = []assistant.Person{assistantPerson(rt.run.CreatedBy)}
 		if rt.run.PolicyID != nil {
 			p, err := s.cfg.Store.GetPolicy(ctx, *rt.run.PolicyID)
@@ -218,13 +220,15 @@ func (s *Server) assistantInputs(tr *http.Request, rt assistantTarget, purpose t
 				return in, err
 			}
 			spec = s.assistantRecordSpec(ctx, p.Spec)
-			in.UnitRecord = assistantJSON(map[string]any{"task": rt.run.Task, "policy": spec})
+			in.RunRecord = assistantJSON(spec)
 		}
 	case rt.change != nil:
 		ch := s.changeForRead(tr, *rt.change)
 		in.Change = assistantJSON(map[string]any{"target_kind": ch.TargetKind, "op": ch.Op, "target_key": ch.TargetKey, "diff": ch.Diff, "note": ch.Note})
 		p := assistantPerson(rt.change.ProposedBy)
 		in.ChangeProposer = &p
+		// Everyone else the change names, such as the person a membership assigns, becomes a letter too.
+		in.ChangePeople = assistant.PeopleNamedIn([]byte(in.Change))
 	}
 	in.Grants = assistantGrantLines(spec)
 	in.Templates = s.assistantTemplateLines(ctx, rt, snap)
@@ -317,24 +321,30 @@ func (s *Server) assistantHostCounts(ctx context.Context, rt assistantTarget, sn
 	return assistantHostCountsOf(rows), nil
 }
 
-// assistantHostCountsOf counts the distinct runs per host, most first, capped at assistantHistoryHosts.
+// assistantHostCountsOf counts the distinct runs per host and decision, most first, capped at
+// assistantHistoryHosts lines, so a host refused 400 times never reads as reached.
 func assistantHostCountsOf(rows []store.RunHostDecision) []assistant.HostCount {
-	runs := map[string]map[uuid.UUID]bool{}
+	type key struct{ host, decision string }
+	runs := map[key]map[uuid.UUID]bool{}
 	for _, r := range rows {
-		if runs[r.Host] == nil {
-			runs[r.Host] = map[uuid.UUID]bool{}
+		k := key{r.Host, r.Decision}
+		if runs[k] == nil {
+			runs[k] = map[uuid.UUID]bool{}
 		}
-		runs[r.Host][r.RunID] = true
+		runs[k][r.RunID] = true
 	}
 	out := make([]assistant.HostCount, 0, len(runs))
-	for h, set := range runs {
-		out = append(out, assistant.HostCount{Host: h, Count: len(set)})
+	for k, set := range runs {
+		out = append(out, assistant.HostCount{Host: k.host, Decision: k.decision, Count: len(set)})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {
 			return out[i].Count > out[j].Count
 		}
-		return out[i].Host < out[j].Host
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Decision < out[j].Decision
 	})
 	if len(out) > assistantHistoryHosts {
 		out = out[:assistantHistoryHosts]
@@ -352,6 +362,8 @@ type assistantPrep struct {
 	digest   string
 	snap     assistantSnapshot
 	lim      assistantLimits
+	// role is the role the tool context acts at, the lower of the snapshot's and the fresh one.
+	role string
 }
 
 // assistantPrepare runs the checks both the preview and the session start make, in order, and returns the
@@ -364,7 +376,7 @@ func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpos
 		return nil, assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "The assistant works for a signed-in person.") // PROPOSED
 	}
 	if !purpose.Valid() || !target.ValidFor(purpose) {
-		return nil, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "That purpose does not take that target.") // PROPOSED
+		return nil, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "Compose takes a run, unit or template. Review takes a change.") // PROPOSED
 	}
 	prep := &assistantPrep{snap: snap}
 	if ref := s.assistantAvailable(r, purpose, prep); ref != nil {
@@ -378,6 +390,7 @@ func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpos
 		return nil, s.assistantToolCtxRefusal(err)
 	}
 	defer release()
+	prep.role = oidcRoleFromContext(tctx)
 	tr := r.WithContext(tctx)
 	rt, ref := s.assistantResolveTarget(tr, target, snap)
 	if ref != nil {
@@ -402,9 +415,9 @@ func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpos
 // 403, anything else a server error.
 func (s *Server) assistantToolCtxRefusal(err error) *assistantRefusal {
 	if errors.Is(err, errAssistantRoleDenied) {
-		return assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "The assistant works for a signed-in person.") // PROPOSED
+		return assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "Your role no longer allows the assistant.") // PROPOSED
 	}
-	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not resolve the person.") // PROPOSED
+	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not check your role.") // PROPOSED
 }
 
 // assistantAvailable is step one: availability must be ready, else 409 with the state's reason. It fills the
@@ -417,7 +430,7 @@ func (s *Server) assistantAvailable(r *http.Request, purpose types.AssistantPurp
 	}
 	prep.sc = sc
 	if sc.Assistant == nil || !sc.Assistant.On(purpose) {
-		return assistantRefusalFor(http.StatusConflict, reasonAssistantOff, "The assistant is turned off.") // PROPOSED
+		return assistantRefusalFor(http.StatusConflict, reasonAssistantOff, "The assistant is off for your organisation.") // PROPOSED: the board's words
 	}
 	lim, err := s.assistantLimitsFor(ctx, sc, prep.snap.Principal)
 	if err != nil {
@@ -431,7 +444,7 @@ func (s *Server) assistantAvailable(r *http.Request, purpose types.AssistantPurp
 			return assistantRefusalFor(http.StatusInternalServerError, "", "Could not count your runs.") // PROPOSED
 		}
 		if full {
-			return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You are at your limit of runs.") // PROPOSED
+			return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You're at your run limit. End a run to start the assistant.") // PROPOSED: the settings card's words
 		}
 	}
 	p, b, ok := assistantServing(ans, sc)
@@ -453,12 +466,15 @@ type assistantPreviewRequest struct {
 func (s *Server) handleAssistantPreview(w http.ResponseWriter, r *http.Request) {
 	var req assistantPreviewRequest
 	if msg := decodeStrictMsg(w, r, &req); msg != "" {
-		writeErrorReason(w, http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, msg)
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, msg)
+		return
+	}
+	if s.assistantRateRefused(w, oidcHumanFromContext(r.Context())) {
 		return
 	}
 	prep, ref := s.assistantPrepare(r, req.Purpose, req.Target)
 	if ref != nil {
-		ref.write(w)
+		ref.write(w, r)
 		return
 	}
 	writeJSON(w, http.StatusOK, types.AssistantPreview{

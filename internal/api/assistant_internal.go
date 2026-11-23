@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -56,7 +57,9 @@ func (s *Server) assistantRunSession(w http.ResponseWriter, r *http.Request) (st
 
 // handleAssistantTurns is GET /internal/assistant/turns?after=N: the relay's long-poll, at most 25 seconds. It
 // answers the next person turn or reset after N, each with its session id and, on the first turn and on a reset,
-// the records and the system prompt; an end turn once the session ended.
+// the records and the system prompt; an end turn once the run has no live session. A warm reuse that replaces the
+// polled session on this run is followed to the new one, whose reset is numbered after the old session's last
+// event, so the relay reads the reset and carries on.
 func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	ss, sess, ok := s.assistantRunSession(w, r)
 	if !ok {
@@ -64,7 +67,7 @@ func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	}
 	after, valid := assistantAfter(r)
 	if !valid {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number")
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number.") // PROPOSED
 		return
 	}
 	deadline := time.NewTimer(assistantLongPoll)
@@ -74,6 +77,15 @@ func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	for {
 		cur, err := ss.GetAssistantSession(r.Context(), sess.ID, sess.Principal)
 		if err == nil && !cur.Live() {
+			next, nerr := ss.LiveAssistantSessionForRun(r.Context(), *sess.RunID)
+			if nerr == nil && next.ID != sess.ID {
+				sess = next
+				continue
+			}
+			if nerr != nil && !errors.Is(nerr, store.ErrNotFound) {
+				writeServerError(w, r, "read assistant session", nerr)
+				return
+			}
 			writeJSON(w, http.StatusOK, types.AssistantTurn{Kind: types.AssistantTurnEnd, SessionID: cur.ID})
 			return
 		}
@@ -121,7 +133,7 @@ func (s *Server) assistantTurnOf(r *http.Request, ss store.AssistantSessionStore
 	records := p.Records
 	if records == nil {
 		var err error
-		if records, err = s.assistantStoredRecords(r, ss, sess.ID); err != nil {
+		if records, err = s.assistantStoredRecords(r.Context(), ss, sess.ID); err != nil {
 			return turn, err
 		}
 	}
@@ -129,22 +141,21 @@ func (s *Server) assistantTurnOf(r *http.Request, ss store.AssistantSessionStore
 	return turn, nil
 }
 
-// assistantStoredRecords reads the records event written when the session began.
-func (s *Server) assistantStoredRecords(r *http.Request, ss store.AssistantSessionStore, id uuid.UUID) ([]types.AssistantSection, error) {
-	evs, err := ss.ListAssistantEvents(r.Context(), id, 0, assistantEventsScan)
-	if err != nil {
+// assistantStoredRecords reads the records the session began with: its first state event, which the server
+// wrote before the run could post anything (on a reuse, the reset that carries them).
+func (s *Server) assistantStoredRecords(ctx context.Context, ss store.AssistantSessionStore, id uuid.UUID) ([]types.AssistantSection, error) {
+	evs, err := ss.FindAssistantEvents(ctx, id, store.AssistantEventFilter{Kinds: []string{types.AssistantEventState}, Limit: 1})
+	if err != nil || len(evs) == 0 {
 		return nil, err
 	}
-	for _, e := range evs {
-		var p struct {
-			State   string                   `json:"state"`
-			Records []types.AssistantSection `json:"records"`
-		}
-		if e.Kind == types.AssistantEventState && json.Unmarshal(e.Payload, &p) == nil && p.State == "records" {
-			return p.Records, nil
-		}
+	var p struct {
+		State   string                   `json:"state"`
+		Records []types.AssistantSection `json:"records"`
 	}
-	return nil, nil
+	if json.Unmarshal(evs[0].Payload, &p) != nil || p.State != "records" {
+		return nil, nil
+	}
+	return p.Records, nil
 }
 
 // assistantRunEvent is the body of POST /internal/assistant/events. Everything but the kind and the session
@@ -181,6 +192,10 @@ func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request
 		payload = []byte("{}")
 	}
 	stored, err := ss.AppendAssistantEvent(r.Context(), sess.ID, ev.Kind, payload)
+	if errors.Is(err, store.ErrAssistantSessionEnded) {
+		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.") // PROPOSED
+		return
+	}
 	if err != nil {
 		writeServerError(w, r, "append assistant event", err)
 		return
@@ -189,8 +204,9 @@ func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, map[string]any{"seq": stored.Seq})
 }
 
-// assistantRunPayloadOK refuses a payload that is not a JSON object, and a state payload that names a turn: the
-// run cannot write a reset of its own.
+// assistantRunPayloadOK refuses a payload that is not a JSON object, a state payload that names a turn (the run
+// cannot write a reset of its own), and any payload with records: only the server writes the records a session
+// began with, and the audit row's prompt digest is taken from them.
 func assistantRunPayloadOK(ev assistantRunEvent) bool {
 	if len(ev.Payload) == 0 {
 		return true
@@ -200,7 +216,8 @@ func assistantRunPayloadOK(ev assistantRunEvent) bool {
 		return false
 	}
 	_, named := obj["turn"]
-	return !(ev.Kind == types.AssistantEventState && named)
+	_, records := obj["records"]
+	return !records && !(ev.Kind == types.AssistantEventState && named)
 }
 
 // assistantAfterRunEvent does what a posted event owes: a ready state moves the session on; a turn_end writes

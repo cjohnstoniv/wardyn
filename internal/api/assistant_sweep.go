@@ -14,15 +14,25 @@ import (
 
 // assistantSessionEraser erases a person's assistant sessions (store.PG).
 type assistantSessionEraser interface {
-	EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) ([]uuid.UUID, int, error)
+	EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) ([]store.ErasedAssistantSession, int, error)
 }
 
-// eraseAssistantSessions erases the sessions of names, stops each run the store returns and reports how many
-// sessions it touched.
+// eraseAssistantSessions erases the sessions of names, writes assistant.session.end with reason erased for each
+// live one it ended (a row that names no one), stops their runs and reports how many sessions it touched.
 func (s *Server) eraseAssistantSessions(ctx context.Context, e assistantSessionEraser, names []string) (int, error) {
-	runs, n, err := e.EraseAssistantSessionPersonalFields(ctx, names)
+	ended, n, err := e.EraseAssistantSessionPersonalFields(ctx, names)
 	if err != nil {
 		return 0, err
+	}
+	ss, _ := e.(store.AssistantSessionStore)
+	var runs []uuid.UUID
+	for _, es := range ended {
+		if ss != nil {
+			s.assistantEndAudit(ctx, ss, types.AssistantSession{ID: es.ID, RunID: es.RunID, Principal: types.AssistantErasedPrincipal}, types.AssistantEndErased)
+		}
+		if es.RunID != nil {
+			runs = append(runs, *es.RunID)
+		}
 	}
 	for _, run := range assistantRunsOf(runs) {
 		s.stopAssistantRun(ctx, run)
