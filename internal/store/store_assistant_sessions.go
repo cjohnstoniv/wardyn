@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +23,30 @@ import (
 // purpose.
 var ErrAssistantSessionLive = errors.New("store: a live assistant session already exists")
 
+// ErrAssistantSessionEnded reports an event appended to a session that already ended: a call that passed the
+// live check just before a replace or an erasure writes nothing.
+var ErrAssistantSessionEnded = errors.New("store: the assistant session has ended")
+
+// AssistantEventsReadMax is the most events one read of a transcript returns, whatever limit it asks for, so
+// no request holds a whole transcript.
+const AssistantEventsReadMax = 200
+
+// AssistantEventFilter picks events of one session: seq above After and, when Before is above zero, below
+// Before; of the given kinds when Kinds is non-empty; at most Limit of them (capped at AssistantEventsReadMax),
+// oldest first, or the newest ones when Newest is set, still returned oldest first.
+type AssistantEventFilter struct {
+	After, Before int64
+	Kinds         []string
+	Limit         int
+	Newest        bool
+}
+
+// ErasedAssistantSession is a live session an erasure ended.
+type ErasedAssistantSession struct {
+	ID    uuid.UUID
+	RunID *uuid.UUID
+}
+
 // AssistantSessionStore keeps assistant sessions and their transcripts. Optional like
 // UnitModelUsageReader: the api answers 501 from a store without it.
 type AssistantSessionStore interface {
@@ -30,7 +56,7 @@ type AssistantSessionStore interface {
 	CreateAssistantSession(ctx context.Context, s types.AssistantSession) (types.AssistantSession, error)
 	// ReplaceAssistantSession ends the live session old as replaced and creates s, in one transaction. A
 	// non-nil reset is written as the new session's first event, numbered after the old session's last, so
-	// one run's turns keep one count.
+	// one run's turns keep one count. ErrNotFound when old is missing or already ended, and nothing is created.
 	ReplaceAssistantSession(ctx context.Context, old uuid.UUID, s types.AssistantSession, reset []byte) (types.AssistantSession, error)
 	// AttachAssistantRun moves a fetching session to starting on run.
 	AttachAssistantRun(ctx context.Context, session, run uuid.UUID) error
@@ -48,10 +74,13 @@ type AssistantSessionStore interface {
 	// AssistantRunIDsCreated is the ids of every run created in [since, until) that ever had a session.
 	AssistantRunIDsCreated(ctx context.Context, since, until time.Time) ([]uuid.UUID, error)
 	// AppendAssistantEvent writes an event with the next seq of its session, taken under the session row's
-	// lock. ErrNotFound when the session does not exist.
+	// lock. ErrNotFound when the session does not exist, ErrAssistantSessionEnded when it has ended.
 	AppendAssistantEvent(ctx context.Context, session uuid.UUID, kind string, payload []byte) (types.AssistantEvent, error)
-	// ListAssistantEvents is up to limit events with seq above after, oldest first.
+	// ListAssistantEvents is up to limit events with seq above after, oldest first, at most
+	// AssistantEventsReadMax.
 	ListAssistantEvents(ctx context.Context, session uuid.UUID, after int64, limit int) ([]types.AssistantEvent, error)
+	// FindAssistantEvents is the events f picks, oldest first.
+	FindAssistantEvents(ctx context.Context, session uuid.UUID, f AssistantEventFilter) ([]types.AssistantEvent, error)
 	// NextAssistantTurn is the first event above after that the relay must act on: a person's message or a
 	// reset. first reports that no earlier turn of the session exists, so the turn carries the records.
 	// ErrNotFound when there is none.
@@ -65,11 +94,12 @@ type AssistantSessionStore interface {
 	// EndAssistantSession ends the session with reason; it is idempotent and keeps the first reason. It
 	// reports whether this call ended it.
 	EndAssistantSession(ctx context.Context, session uuid.UUID, reason string) (bool, error)
-	// EraseAssistantSessionPersonalFields ends every live session of principals as erased and returns their
-	// run ids so the caller stops those runs; deletes the transcript text of every session of principals;
-	// clears the letters, draft, groups and e-mail; and blanks the principal. It returns the sessions it
-	// touched.
-	EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) (runs []uuid.UUID, sessions int, err error)
+	// EraseAssistantSessionPersonalFields ends every live session of principals as erased and returns them
+	// so the caller stops their runs; deletes the transcript text of every session of principals; clears
+	// the letters, draft, groups and e-mail; blanks the principal; and, in every other session's letters,
+	// replaces a name that is one of principals with the erased marker. It returns the sessions of
+	// principals it touched.
+	EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) (ended []ErasedAssistantSession, sessions int, err error)
 	// SweepEndedAssistantSessions deletes the events of sessions ended before before and clears their
 	// payload, in batches of batch sessions and one transaction each. It returns the sessions cleaned.
 	SweepEndedAssistantSessions(ctx context.Context, before time.Time, batch int) (int, error)
@@ -170,9 +200,15 @@ func (s PG) ReplaceAssistantSession(ctx context.Context, old uuid.UUID, sess typ
 			}
 			return fmt.Errorf("store: lock assistant session: %w", err)
 		}
-		if _, err := q.Exec(ctx, `UPDATE assistant_sessions SET state = 'ended', ended_at = now(), end_reason = $2
-			WHERE id = $1 AND state <> 'ended'`, old, types.AssistantEndReplaced); err != nil {
+		tag, err := q.Exec(ctx, `UPDATE assistant_sessions SET state = 'ended', ended_at = now(), end_reason = $2
+			WHERE id = $1 AND state <> 'ended'`, old, types.AssistantEndReplaced)
+		if err != nil {
 			return fmt.Errorf("store: end replaced assistant session: %w", err)
+		}
+		// A DELETE or an erasure that won the race ended it first: the run may be stopping, so no session
+		// starts on it.
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
 		}
 		created, err := insertAssistantSession(ctx, q, sess)
 		if err != nil {
@@ -262,12 +298,15 @@ func (s PG) AppendAssistantEvent(ctx context.Context, session uuid.UUID, kind st
 	}
 	var ev types.AssistantEvent
 	err := s.inTx(ctx, func(q Querier) error {
-		var locked uuid.UUID
-		if err := q.QueryRow(ctx, `SELECT id FROM assistant_sessions WHERE id = $1 FOR UPDATE`, session).Scan(&locked); err != nil {
+		var state string
+		if err := q.QueryRow(ctx, `SELECT state FROM assistant_sessions WHERE id = $1 FOR UPDATE`, session).Scan(&state); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("store: lock assistant session: %w", err)
+		}
+		if state == types.AssistantSessionEnded {
+			return ErrAssistantSessionEnded
 		}
 		e, err := scanAssistantEvent(q.QueryRow(ctx, `INSERT INTO assistant_session_events (session_id, seq, kind, payload)
 			SELECT $1, coalesce(max(seq), 0) + 1, $2, $3 FROM assistant_session_events WHERE session_id = $1
@@ -282,8 +321,32 @@ func (s PG) AppendAssistantEvent(ctx context.Context, session uuid.UUID, kind st
 }
 
 func (s PG) ListAssistantEvents(ctx context.Context, session uuid.UUID, after int64, limit int) ([]types.AssistantEvent, error) {
-	return collect(ctx, s.Pool, "read", "assistant events", `SELECT session_id, seq, kind, payload, created_at
-		FROM assistant_session_events WHERE session_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`, []any{session, after, limit}, scanAssistantEvent)
+	return s.FindAssistantEvents(ctx, session, AssistantEventFilter{After: after, Limit: limit})
+}
+
+// AssistantEventsLimit is limit within [1, AssistantEventsReadMax].
+func AssistantEventsLimit(limit int) int {
+	return min(max(limit, 1), AssistantEventsReadMax)
+}
+
+func (s PG) FindAssistantEvents(ctx context.Context, session uuid.UUID, f AssistantEventFilter) ([]types.AssistantEvent, error) {
+	order := "ASC"
+	if f.Newest {
+		order = "DESC"
+	}
+	kinds := f.Kinds
+	if kinds == nil {
+		kinds = []string{}
+	}
+	evs, err := collect(ctx, s.Pool, "read", "assistant events", `SELECT session_id, seq, kind, payload, created_at
+		FROM assistant_session_events WHERE session_id = $1 AND seq > $2 AND ($3 <= 0 OR seq < $3)
+		AND (cardinality($4::text[]) = 0 OR kind = ANY($4)) ORDER BY seq `+order+` LIMIT $5`,
+		[]any{session, f.After, f.Before, kinds, AssistantEventsLimit(f.Limit)}, scanAssistantEvent)
+	if err != nil || !f.Newest {
+		return evs, err
+	}
+	slices.Reverse(evs)
+	return evs, nil
 }
 
 func (s PG) NextAssistantTurn(ctx context.Context, session uuid.UUID, after int64) (types.AssistantEvent, bool, error) {
@@ -343,26 +406,26 @@ func (s PG) EndAssistantSession(ctx context.Context, session uuid.UUID, reason s
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s PG) EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) ([]uuid.UUID, int, error) {
+func (s PG) EraseAssistantSessionPersonalFields(ctx context.Context, principals []string) ([]ErasedAssistantSession, int, error) {
 	if len(principals) == 0 {
 		return nil, 0, nil
 	}
-	runs := []uuid.UUID{}
+	var ended []ErasedAssistantSession
 	n := 0
+	lowered := make([]string, len(principals))
+	for i, p := range principals {
+		lowered[i] = strings.ToLower(p)
+	}
 	err := s.inTx(ctx, func(q Querier) error {
-		ended, err := collect(ctx, q, "end", "assistant sessions", `UPDATE assistant_sessions SET state = 'ended', ended_at = now(), end_reason = $2
-			WHERE principal = ANY($1) AND state <> 'ended' RETURNING run_id`, []any{principals, types.AssistantEndErased},
-			func(r pgx.Row) (*uuid.UUID, error) {
-				var id *uuid.UUID
-				return id, r.Scan(&id)
+		var err error
+		ended, err = collect(ctx, q, "end", "assistant sessions", `UPDATE assistant_sessions SET state = 'ended', ended_at = now(), end_reason = $2
+			WHERE principal = ANY($1) AND state <> 'ended' RETURNING id, run_id`, []any{principals, types.AssistantEndErased},
+			func(r pgx.Row) (ErasedAssistantSession, error) {
+				var e ErasedAssistantSession
+				return e, r.Scan(&e.ID, &e.RunID)
 			})
 		if err != nil {
 			return err
-		}
-		for _, id := range ended {
-			if id != nil {
-				runs = append(runs, *id)
-			}
 		}
 		if _, err := q.Exec(ctx, `DELETE FROM assistant_session_events WHERE kind IN ('user_message', 'person_edit', 'text')
 			AND session_id IN (SELECT id FROM assistant_sessions WHERE principal = ANY($1))`, principals); err != nil {
@@ -374,12 +437,22 @@ func (s PG) EraseAssistantSessionPersonalFields(ctx context.Context, principals 
 			return fmt.Errorf("store: erase assistant sessions: %w", err)
 		}
 		n = int(tag.RowsAffected())
+		// Other people's sessions may have lettered this person, as a unit admin, a proposer or a run owner:
+		// the name a letter stands for becomes the erased marker, matched without case as letters match.
+		if _, err := q.Exec(ctx, `UPDATE assistant_sessions s SET person_letters = (
+				SELECT jsonb_object_agg(e.key, CASE WHEN lower(e.value) = ANY($1) THEN $2 ELSE e.value END)
+				FROM jsonb_each_text(s.person_letters) e)
+			WHERE s.person_letters IS NOT NULL
+			AND EXISTS (SELECT 1 FROM jsonb_each_text(s.person_letters) e WHERE lower(e.value) = ANY($1))`,
+			lowered, types.AssistantErasedPrincipal); err != nil {
+			return fmt.Errorf("store: erase assistant letters: %w", err)
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-	return runs, n, nil
+	return ended, n, nil
 }
 
 func (s PG) SweepEndedAssistantSessions(ctx context.Context, before time.Time, batch int) (int, error) {

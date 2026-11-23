@@ -6,6 +6,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,45 @@ func TestAssistantEventsAndTurnsPG(t *testing.T) {
 	if err != nil || len(evs) != 1 {
 		t.Errorf("events of the new session = %d, %v", len(evs), err)
 	}
+	if _, err := st.AppendAssistantEvent(ctx, s1.ID, types.AssistantEventText, nil); !errors.Is(err, store.ErrAssistantSessionEnded) {
+		t.Errorf("an event on the replaced session: %v, want ErrAssistantSessionEnded", err)
+	}
+	if _, err := st.ReplaceAssistantSession(ctx, s1.ID, newAssistantSession("cy3-"+uuid.NewString(), &run, types.AssistantCompose), nil); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("replacing an ended session: %v, want ErrNotFound and no new session", err)
+	}
+}
+
+// The filtered read takes only the kinds and the seq window it names, never more than the read cap, and the
+// newest ones come back oldest first.
+func TestAssistantFindEventsPG(t *testing.T) {
+	ctx, st, newRunID, _ := assistantStore(t)
+	run := newRunID(t)
+	s, err := st.CreateAssistantSession(ctx, newAssistantSession("gus-"+uuid.NewString(), &run, types.AssistantCompose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < store.AssistantEventsReadMax+20; i++ {
+		kind := types.AssistantEventText
+		if i%2 == 0 {
+			kind = types.AssistantEventPersonEdit
+		}
+		if _, err := st.AppendAssistantEvent(ctx, s.ID, kind, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := st.FindAssistantEvents(ctx, s.ID, store.AssistantEventFilter{Limit: 100000})
+	if err != nil || len(all) != store.AssistantEventsReadMax {
+		t.Fatalf("an unbounded ask = %d events, %v, want the cap %d", len(all), err, store.AssistantEventsReadMax)
+	}
+	newest, err := st.FindAssistantEvents(ctx, s.ID, store.AssistantEventFilter{Kinds: []string{types.AssistantEventPersonEdit}, Before: 20, Limit: 3, Newest: true})
+	if err != nil || len(newest) != 3 || newest[0].Seq != 15 || newest[2].Seq != 19 {
+		t.Errorf("newest edits before 20 = %+v, %v, want seqs 15, 17, 19", newest, err)
+	}
+	for _, e := range newest {
+		if e.Kind != types.AssistantEventPersonEdit {
+			t.Errorf("kind %s leaked into a person_edit read", e.Kind)
+		}
+	}
 }
 
 // The retention sweep deletes an ended session's events past the window and clears its payload, keeping the
@@ -214,14 +254,19 @@ func TestAssistantSweepPG(t *testing.T) {
 	}
 }
 
-// Erasing a person ends their live session as erased, returns its run, deletes their transcript text and
-// blanks the principal and e-mail.
+// Erasing a person ends their live session as erased, returns it with its run, deletes their transcript text,
+// blanks the principal and e-mail, and turns their address into the erased marker in another person's letters.
 func TestAssistantEraseSessionsPG(t *testing.T) {
 	ctx, st, newRunID, _ := assistantStore(t)
-	run := newRunID(t)
+	run, otherRun := newRunID(t), newRunID(t)
 	person := "eve-" + uuid.NewString()
 	s, err := st.CreateAssistantSession(ctx, newAssistantSession(person, &run, types.AssistantCompose))
 	if err != nil {
+		t.Fatal(err)
+	}
+	other := newAssistantSession("fay-"+uuid.NewString(), &otherRun, types.AssistantCompose)
+	other.PersonLetters = map[string]string{"Person A": strings.ToUpper(person), "Person B": "kim@example.com"}
+	if other, err = st.CreateAssistantSession(ctx, other); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{types.AssistantEventUserMessage, types.AssistantEventPersonEdit, types.AssistantEventText, types.AssistantEventToolRecord} {
@@ -229,9 +274,16 @@ func TestAssistantEraseSessionsPG(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runs, n, err := st.EraseAssistantSessionPersonalFields(ctx, []string{person})
-	if err != nil || n != 1 || len(runs) != 1 || runs[0] != run {
-		t.Fatalf("erase = %v, %d, %v", runs, n, err)
+	ended, n, err := st.EraseAssistantSessionPersonalFields(ctx, []string{person})
+	if err != nil || n != 1 || len(ended) != 1 || ended[0].ID != s.ID || ended[0].RunID == nil || *ended[0].RunID != run {
+		t.Fatalf("erase = %+v, %d, %v", ended, n, err)
+	}
+	kept, err := st.GetAssistantSession(ctx, other.ID, other.Principal)
+	if err != nil || kept.PersonLetters["Person A"] != types.AssistantErasedPrincipal || kept.PersonLetters["Person B"] != "kim@example.com" || !kept.Live() {
+		t.Errorf("another person's session after the erasure = %+v, %v, want only the erased address replaced", kept, err)
+	}
+	if _, err := st.AppendAssistantEvent(ctx, s.ID, types.AssistantEventText, nil); !errors.Is(err, store.ErrAssistantSessionEnded) {
+		t.Errorf("an event on the erased session: %v, want ErrAssistantSessionEnded", err)
 	}
 	if _, err := st.GetAssistantSession(ctx, s.ID, person); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("the erased principal still owns the session: %v", err)
