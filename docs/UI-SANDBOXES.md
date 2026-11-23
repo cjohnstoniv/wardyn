@@ -52,11 +52,12 @@
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
   An end asked for right after a sign-in began can be refused while the sign-in is still starting, for up to 6 minutes; ask for it again.
+- An end that cannot stop the display still closes it within about 5 seconds, while the end is retried.
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
 - A run that declares a desktop under a profile with `deny_interactive` is created with a warning, in Review too: its desktop does not open while the profile denies interactive sessions.
-- A limit set during a sign-in stops new entry. An open display stays until it
-  ends, and the agent comes back at End or within 30 minutes. If the end cannot
+- A limit set during a sign-in stops new entry. An open display stays until the
+  sign-in ends, and the agent comes back at End or within 30 minutes. If the end cannot
   finish, Wardyn ends the run after 3 failed retries.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
