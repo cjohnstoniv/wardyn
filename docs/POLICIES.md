@@ -646,6 +646,48 @@ What the check does and does not settle:
 
 - The file is the one `wardyn walls set` reads, and `push_rules.deny_all: true` is read like any other knob. A preset that names no limit is refused (`422` `wall_preset_invalid`).
 
+## Agent rules
+
+- Agent rules are an organisation's limits for one agent harness (`claude-code`, `codex-cli` or any catalogue harness). They are the same narrow-only walls a person sets for themselves ([Your walls](#your-walls)), plus an optional requirement on the harness's own sandbox and approvals.
+- Every run that includes the harness is narrowed by them, the same way a person's walls narrow it: they only ever remove what the run could do. A super admin's own run is bound too.
+- They bind the whole sandbox, wherever it is placed: the organisation's executor, an organisation cluster runner or a person's own laptop. A sandbox's network cannot tell which process sent a request, so anyone sharing the desktop with the agent is bound too.
+- A run launched without the harness ("Your own tools") is not bound. That is the one-click sandbox without the agent.
+- The run's effective policy names the layer: each value the rules decided has the provenance layer `agent_rules`, named by the harness id, and the `run.create` row's `policy_source.agent_rules` lists what each harness's rules narrowed.
+
+| Knob | Effect on each run that includes the harness |
+|---|---|
+| `allowed_domains`, `denied_domains` | The run reaches only the listed sites, and never the denied ones. The agent's model host and the run's own setup stay reachable under an allowlist, as for your walls |
+| `allow_all_egress` | `false` only. Turns open egress off |
+| `first_use_approval`, `min_confinement_class` | The stricter of the run's and the rule's stands |
+| `desktop` | Each named direction is blocked |
+| `withheld_grants` | The run is not given a grant of that `kind`, or of that `kind` and `scope` |
+| `tool_rules`, `push_rules` | Added to the run's: a hold or deny for a tool, paths added to the push deny list, or every push refused |
+| `recording` | A floor: the run is recorded at least at that level, read at dispatch |
+| `auto_stop_after_sec` | A cap on the idle seconds before the sandbox stops. The shorter stands |
+| `inner_walls` | The harness's own walls: see below |
+
+- `github_capabilities` and `azure_devops_capabilities` are refused (`422` `agent_rules_invalid`) for now, because Wardyn would not enforce them on every run. Use `push_rules`, `withheld_grants` or a restriction.
+- Every value only narrows. `allow_all_egress: true`, an `inner_walls` sandbox of `off` or approvals of `none`, and rules that name nothing are refused as `agent_rules_invalid`. A harness the catalogue does not have is `agent_rules_harness_unknown`.
+- `inner_walls` sets `sandbox_mode` (`workspace-write` or `read-only`) and `approvals` (`harness` or `wardyn`) for the agent's own walls.
+  - The stricter sandbox mode wins over the policy's. Approvals must match the policy's when both set them, or the run is refused `agent_rules_conflict`.
+  - An inner-walls rule binds every catalogue agent in the run.
+  - A rule looser than the agent's lane refuses the run: `approvals: harness` on a hold-lane run, or `sandbox_mode: workspace-write` on a read-only launch. It never launches the agent looser.
+- Rules that cannot be read refuse the run, and a stored rule the walls rules now refuse refuses it too (`agent_rules_invalid`). At a credential mint, rules that cannot be read answer a retryable `503`.
+
+**When a change reaches a running run.**
+
+- Denies, blocked desktop directions, withheld credentials and a refusal of every push reach it at its next dispatch or revive.
+- Tool rules, `push_rules.deny_paths`, `recording`, `auto_stop_after_sec`, `first_use_approval`, `min_confinement_class`, `inner_walls` and the allowlist reach only runs created after the change.
+- A queued run keeps the policy it was resolved with, and its dispatch re-asserts the current rules' denies.
+
+**Routes**, on the security tier (`admin` or `security_admin`), all audited and covered by strict audit:
+
+- `GET /agent-rules` lists the rules, sorted by harness.
+- `PUT /agent-rules/{harness}` writes them. The body is `spec`, `inner_walls` and `version`: `0` creates, any other value must be the stored version, or the write is `409` `agent_rules_version_conflict`.
+- `DELETE /agent-rules/{harness}?version=<n>` removes them at that version.
+
+With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, every PUT and DELETE is held for a second security admin (`202` `pending_change`). The break-glass admin token writes directly and leaves an `admin_token_break_glass` audit row, as for every other held governance write.
+
 ## `deny_kept_machines`
 
 `deny_kept_machines` is a limit on a governance profile, not a field of a run's policy. When it is `true`, the profile's people cannot keep a macOS VM between runs ([macOS VMs](operations/macos-vms.md#keeping-the-machine)).

@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- An organisation can set rules for an agent harness: `PUT /api/v1/agent-rules/{harness}` (security tier; `GET` lists, `DELETE ?version=` removes) takes the same narrow-only walls a person sets for themselves, plus an optional `inner_walls` for the harness's own sandbox mode and approvals. Every run that includes the harness is narrowed by them, wherever it is placed and whoever starts it, with the layer `agent_rules` named in the run's policy provenance and in `policy_source.agent_rules`. A run without the agent is not bound. A rule the run cannot meet, such as approvals looser than the agent's lane, refuses the run (`422` `agent_rules_conflict`); rules that cannot be read refuse it too. A write follows `WARDYN_GOVERNANCE_SECOND_HUMAN` and is audited as `agent_rules.write` and `agent_rules.delete`. `github_capabilities` and `azure_devops_capabilities` are refused for now. See [Agent rules](docs/POLICIES.md#agent-rules).
+- Migration `0400_agent_rules` creates `agent_rules`: one row per harness holding its walls and inner walls, with a version.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+
 ### Fixed
 
 - A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).

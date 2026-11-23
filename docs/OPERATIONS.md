@@ -756,7 +756,7 @@ commands are the ones in "Back them up" and "Restore them", and in
   - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
-    `/drives/grants`, `/wall-presets`, `/templates` and `/me/walls`.
+    `/drives/grants`, `/wall-presets`, `/templates`, `/me/walls` and `/agent-rules`.
   - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
     `/governance/dry-run`, `/governance/approval-rules/dry-run`, `/templates/import` and `/templates/{id}/policy-check`.
   - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
@@ -4212,6 +4212,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
+- `0400` (`0400_agent_rules`) creates `agent_rules`: one row per agent harness holding the organisation's walls spec and optional inner walls for it, with a version. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role that was granted `UPDATE` on `delegates`, other than that table's owner; an app role outside those needs the same grant by hand on a split-role install. Without it a run that includes a harness is refused.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
