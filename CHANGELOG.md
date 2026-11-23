@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - The high-availability page says what Wardyn needs from its Postgres: a session-mode connection and a synchronous standby, and what a failover to a standby that lost commits does to sandboxes.
+- The platform tenancy page describes one deployment per business unit as the hard isolation between units, and what it costs.
 
 ### Changed
 
