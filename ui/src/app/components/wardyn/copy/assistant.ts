@@ -5,7 +5,6 @@
 
 // Copy for the assistant: the Settings card, the person's list of providers it may use, and the one line
 // that says why the assistant is not available. A {name} is filled in by the function that holds it.
-// A string marked PROPOSED is not on the approved board yet.
 
 export const ASSISTANT = {
   // ---- the unavailable line, one reason per state ----
@@ -17,8 +16,8 @@ export const ASSISTANT = {
   PROVIDER_ERROR: (provider: string) => `${provider} didn't answer. Your draft is kept. Try again in a moment.`,
   KIND_NEVER_SENT: (kind: string) => `Your organisation keeps ${kind} away from the assistant.`,
   TRY_AGAIN: "Try again",
-  NO_PROVIDER: "No model provider can serve the assistant yet.", // PROPOSED
-  AT_RUN_LIMIT: "You're at your run limit. End a run to start the assistant.", // PROPOSED
+  NO_PROVIDER: "No model provider can serve the assistant yet.",
+  AT_RUN_LIMIT: "You're at your run limit. End a run to start the assistant.",
 
   // ---- Settings card ----
   TITLE: "AI assistant",
@@ -27,7 +26,7 @@ export const ASSISTANT = {
   COMPOSE: "Compose",
   COMPOSE_HINT: "Drafts runs, unit changes and templates from a chat.",
   REVIEW: "Review",
-  REVIEW_HINT: "Explains a change waiting for approval, at the request of whoever is reading it. It never approves.", // PROPOSED
+  REVIEW_HINT: "Explains a change waiting for approval when the person viewing it asks. It never approves.",
   PURPOSES_OFF: "Each purpose is off until you turn it on.",
   MAY_SERVE: "May serve the assistant",
   COL_PROVIDER: "Provider",
@@ -42,34 +41,30 @@ export const ASSISTANT = {
   GROUP_TOOLCHAIN: "Toolchain pins",
   GROUP_MANIFESTS: "Manifests",
   GROUP_LOCKFILES: "Lockfiles",
-  // PROPOSED: the file names are drawn on the board, not listed as strings.
-  FILES_CONTAINER: "Dockerfile, Containerfile, .devcontainer.json", // PROPOSED
-  FILES_TOOLCHAIN: ".tool-versions, .nvmrc, .python-version, .ruby-version, mise.toml, rust-toolchain.toml, global.json, runtime.txt", // PROPOSED
-  FILES_MANIFESTS: "package.json, go.mod, Cargo.toml, pyproject.toml, requirements.txt, Pipfile, composer.json, pom.xml, pubspec.yaml", // PROPOSED
+  FILES_CONTAINER: "Dockerfile, Containerfile, .devcontainer.json",
+  FILES_TOOLCHAIN: ".tool-versions, .nvmrc, .python-version, .ruby-version, mise.toml, rust-toolchain.toml, global.json, runtime.txt",
+  FILES_MANIFESTS: "package.json, go.mod, Cargo.toml, pyproject.toml, requirements.txt, Pipfile, composer.json, pom.xml, pubspec.yaml",
   FILES_LOCKFILES:
-    "package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, Cargo.lock, poetry.lock, pdm.lock, uv.lock, Pipfile.lock, Gemfile.lock, composer.lock, mix.lock, pubspec.lock", // PROPOSED
+    "package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, Cargo.lock, poetry.lock, pdm.lock, uv.lock, Pipfile.lock, Gemfile.lock, composer.lock, mix.lock, pubspec.lock",
   BUILD_PROGRAMS:
     "Dockerfile and Containerfile are build programs, kept on purpose: the image is the point. Other build programs (Gradle build and settings files, mix.exs, Gemfile) are left out, as are files that often hold registry credentials (Maven settings.xml, .yarnrc.yml, .npmrc), compose files, CI files and Makefiles.",
   ALSO_SENT: "Also sent: these build files for a repository draft, and on review the change under review, labelled untrusted.",
   NEVER_SENT: "Never sent to the assistant",
   ADD_KIND: "Add a kind",
-  REMOVE_KIND: (kind: string) => `Remove ${kind}`, // PROPOSED
+  REMOVE_KIND: (kind: string) => `Remove ${kind}`,
   ALWAYS_ON: "Always on",
   REDACTION:
     "Policy text is cut to what the person may read, at most the security tier, and mount sources are never sent. People named in that text become Person A, Person B, put back only in the person's browser. What a person types in the chat is sent as they type it.",
   SAVE: "Save assistant settings",
 
   // A provider that cannot serve the assistant shows its reason and no checkboxes.
-  CANNOT_SERVE: "This provider can't serve the assistant yet.", // PROPOSED
-  BEDROCK: "Bedrock providers can't serve the assistant, because Wardyn can't inspect their prompts.", // PROPOSED
-  DEFERS_INSPECTION: "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.", // PROPOSED
+  CANNOT_SERVE: "This provider can't serve the assistant yet.",
+  BEDROCK: "Bedrock providers can't serve the assistant, because Wardyn can't inspect their prompts.",
+  DEFERS_INSPECTION: "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.",
 
-  // A save that widens is held for approval and the card keeps showing what is stored.
-  HELD: "Saved for approval. It applies when it is approved.", // PROPOSED
-  HELD_OPEN: "Open the change", // PROPOSED
-  SAVED_TOAST: "Assistant settings saved.", // PROPOSED
-  SAVE_FAILED: "Couldn't save the assistant settings.", // PROPOSED
-  LOAD_FAILED: "Couldn't load the assistant settings.", // PROPOSED
+  SAVED_TOAST: "Assistant settings saved.",
+  SAVE_FAILED: "Couldn't save the assistant settings.",
+  LOAD_FAILED: "Couldn't load the assistant settings.",
 
   // ---- a person's own list of providers ----
   MARKED: "Marked for the assistant",

@@ -27,8 +27,10 @@ vi.mock("../../../lib/api/model-providers", () => ({ modelProviders: { getModelP
 
 import { HttpError } from "../../../lib/api/core";
 import type { AssistantSettings, ModelProvider } from "../../../lib/types/site";
+import { CHANGES } from "../../../lib/governance-copy";
 import { ASSISTANT as T } from "../../wardyn/copy/assistant";
-import { AssistantSettingsCard, settingsBody } from "./assistant-settings-card";
+import { CHANGES_TAB_PATH } from "../governance/submitted-note";
+import { AssistantSettingsCard, KEEPABLE_KINDS, settingsBody } from "./assistant-settings-card";
 
 const CLAUDE = [{ harness: "claude-code", model: "m" }];
 const provider = (id: string, extra: Partial<ModelProvider> = {}): ModelProvider => ({
@@ -136,7 +138,8 @@ describe("AssistantSettingsCard", () => {
     const card = await open();
     const user = await widen(card);
     setField(within(card).getByRole("textbox", { name: `org-gw: ${T.COL_MODELS}` }), "m-1, m-2");
-    await user.selectOptions(within(card).getByRole("combobox", { name: T.ADD_KIND }), "role_mapping");
+    await user.click(within(card).getByRole("button", { name: T.ADD_KIND }));
+    await user.click(await screen.findByRole("menuitem", { name: "Role mapping" }));
     await user.click(within(card).getByRole("button", { name: T.SAVE }));
     await waitFor(() => expect(putSettingsMock).toHaveBeenCalledTimes(1));
     expect(putSettingsMock).toHaveBeenCalledWith(
@@ -174,19 +177,20 @@ describe("AssistantSettingsCard", () => {
     const user = await widen(card);
     await user.click(within(card).getByRole("button", { name: T.SAVE }));
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST));
-    expect(within(card).queryByText(T.HELD, { exact: false })).toBeNull();
+    expect(within(card).queryByTestId("assistant-settings-held")).toBeNull();
     expect(within(card).getByRole("switch", { name: T.COMPOSE })).toBeChecked();
     expect(within(card).getByRole("button", { name: T.SAVE })).toBeDisabled();
   });
 
-  it("a 202 says the change waits, links to it, shows today's stored values and is not a saved confirmation", async () => {
-    putSettingsMock.mockResolvedValue({ held: true, changeId: "7f1c2d3e" });
+  it("a 202 shows the shared submitted note with its Changes link, today's stored values and no saved confirmation", async () => {
+    putSettingsMock.mockResolvedValue({ held: { id: "7f1c2d3e", target_kind: "assistant_settings", op: "replace", target_key: "assistant", state: "pending" } });
     const card = await open();
     const user = await widen(card);
     await user.click(within(card).getByRole("button", { name: T.SAVE }));
     const held = await within(card).findByTestId("assistant-settings-held");
-    expect(held).toHaveTextContent(T.HELD);
-    expect(within(held).getByRole("link", { name: T.HELD_OPEN })).toHaveAttribute("href", "/governance/changes/7f1c2d3e");
+    expect(held).toHaveTextContent(CHANGES.SUBMITTED_TITLE);
+    expect(held).toHaveTextContent(CHANGES.SUBMITTED_BODY);
+    expect(within(held).getByRole("link", { name: CHANGES.SUBMITTED_LINK })).toHaveAttribute("href", CHANGES_TAB_PATH);
     expect(toastSuccess).not.toHaveBeenCalled();
     // What is stored is still off: the form is back to it.
     expect(within(card).getByRole("switch", { name: T.COMPOSE })).not.toBeChecked();
@@ -213,13 +217,20 @@ describe("AssistantSettingsCard", () => {
     expect(await within(card).findByRole("alert")).toHaveTextContent(T.CANNOT_SERVE);
   });
 
-  it("a kind never sent can be removed again, and the choices leave out the kinds already listed", async () => {
+  it("Add a kind lists every kind the console names, less the ones already listed, and a removed kind returns", async () => {
     const card = await open({ ...OFF, never_sent_kinds: ["role_mapping"] });
     const user = userEvent.setup();
-    const add = within(card).getByRole("combobox", { name: T.ADD_KIND });
-    expect(within(add).queryByRole("option", { name: "Role mapping" })).toBeNull();
+    await user.click(within(card).getByRole("button", { name: T.ADD_KIND }));
+    const offered = (await screen.findAllByRole("menuitem")).map((m) => m.textContent);
+    expect(offered).toEqual(KEEPABLE_KINDS.filter((k) => k !== "role_mapping").map((k) => CHANGES.KIND[k]));
+    await user.keyboard("{Escape}");
     await user.click(within(card).getByRole("button", { name: T.REMOVE_KIND("Role mapping") }));
-    expect(within(card).queryByText("Role mapping", { selector: "span,div" })).toBeNull();
-    expect(within(within(card).getByRole("combobox", { name: T.ADD_KIND })).getByRole("option", { name: "Role mapping" })).toBeInTheDocument();
+    expect(within(card).queryByText("Role mapping")).toBeNull();
+    await user.click(within(card).getByRole("button", { name: T.ADD_KIND }));
+    expect((await screen.findAllByRole("menuitem")).map((m) => m.textContent)).toEqual(KEEPABLE_KINDS.map((k) => CHANGES.KIND[k]));
+  });
+
+  it("offers exactly the kinds of CHANGES.KIND", () => {
+    expect([...KEEPABLE_KINDS].sort()).toEqual(Object.keys(CHANGES.KIND).sort());
   });
 });

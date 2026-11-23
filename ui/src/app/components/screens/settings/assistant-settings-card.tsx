@@ -13,7 +13,6 @@
 // AdminSettingsScreen alone.
 import * as React from "react";
 import { Loader2, X } from "lucide-react";
-import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { assistant, type AssistantSettingsSnapshot } from "../../../lib/api/assistant";
 import { HttpError } from "../../../lib/api/core";
@@ -21,9 +20,11 @@ import { modelProviders, type ModelProvider } from "../../../lib/api/model-provi
 import { getErrorMessage } from "../../../lib/format";
 import { CHANGES } from "../../../lib/governance-copy";
 import { MODEL_PROVIDERS } from "../../../lib/model-providers-copy";
+import type { GovernanceChange } from "../../../lib/types";
 import type { AssistantProviderMark, AssistantSettings } from "../../../lib/types/site";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { Input } from "../../ui/input";
 import { CollapsibleCard } from "../../wardyn/collapsible-card";
 import { ASSISTANT as T } from "../../wardyn/copy/assistant";
@@ -31,15 +32,14 @@ import { COMPONENTS_ADMIN } from "../../wardyn/copy/components-admin";
 import { INLINE_ACTIONS } from "../../wardyn/form-actions";
 import { Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
+import { SubmittedNote } from "../governance/submitted-note";
 import { ErrorState, failureSentence } from "../../wardyn/states";
 
 // The one harness that serves the assistant (types.AssistantHarness).
 const ASSISTANT_HARNESS = "claude-code";
 
-// The record kinds a person may keep from the assistant: the kinds of governance change the server knows,
-// less the two it holds no change for.
-const NOT_KEEPABLE = new Set(["delegate_admission", "portal_issuer_retire"]);
-const KEEPABLE_KINDS = Object.keys(CHANGES.KIND).filter((k) => !NOT_KEEPABLE.has(k));
+// The record kinds a person may keep from the assistant: every kind of governance change the console names.
+export const KEEPABLE_KINDS = Object.keys(CHANGES.KIND);
 const kindLabel = (k: string) => CHANGES.KIND[k] ?? k;
 
 type Mark = { compose: boolean; review: boolean; models: string };
@@ -68,7 +68,8 @@ export function settingsBody(d: Draft): AssistantSettings {
 
 const isBedrock = (p: ModelProvider) => p.kind === "bedrock_sso" || p.kind === "bedrock_bearer";
 
-// Why a provider cannot serve the assistant, the server's own reasons in its own order; "" when it can.
+// Why a provider cannot serve the assistant, "" when it can. Bedrock is checked first because it is the more
+// useful reason: the server refuses a provider without the harness first, but either way the row has no checkboxes.
 function cannotServe(p: ModelProvider): string {
   if (isBedrock(p)) return T.BEDROCK;
   if (!p.harnesses?.some((h) => h.harness === ASSISTANT_HARNESS)) return T.CANNOT_SERVE;
@@ -171,20 +172,20 @@ function NeverSent({ kinds, disabled, onChange }: { kinds: string[]; disabled: b
             </button>
           </Chip>
         ))}
-        <select
-          aria-label={T.ADD_KIND}
-          value=""
-          disabled={disabled || choices.length === 0}
-          onChange={(e) => e.target.value && onChange([...kinds, e.target.value])}
-          className="h-8 rounded-md border border-input bg-input-background px-2 text-body outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring"
-        >
-          <option value="">{T.ADD_KIND}</option>
-          {choices.map((k) => (
-            <option key={k} value={k}>
-              {kindLabel(k)}
-            </option>
-          ))}
-        </select>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" disabled={disabled || choices.length === 0}>
+              {T.ADD_KIND}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            {choices.map((k) => (
+              <DropdownMenuItem key={k} onSelect={() => onChange([...kinds, k])}>
+                {kindLabel(k)}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </section>
   );
@@ -201,7 +202,7 @@ export function AssistantSettingsCard() {
   const [saving, setSaving] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [savedElsewhere, setSavedElsewhere] = React.useState(false);
-  const [heldChange, setHeldChange] = React.useState<string | null>(null);
+  const [heldChange, setHeldChange] = React.useState<GovernanceChange | null>(null);
 
   const load = React.useCallback(
     () =>
@@ -232,7 +233,7 @@ export function AssistantSettingsCard() {
       if ("held" in result) {
         // Nothing is applied: what is stored stays on screen until the change is approved.
         setDraft(draftOf(loaded.snapshot.settings));
-        setHeldChange(result.changeId);
+        setHeldChange(result.held);
       } else {
         setLoaded({ ...loaded, snapshot: result.applied });
         setDraft(draftOf(result.applied.settings));
@@ -316,12 +317,9 @@ export function AssistantSettingsCard() {
               </Button>
             </div>
             {heldChange && (
-              <p role="status" data-testid="assistant-settings-held" className="mt-2 text-right text-xs text-muted-foreground">
-                {T.HELD}{" "}
-                <Link className="underline" to={`/governance/changes/${encodeURIComponent(heldChange)}`}>
-                  {T.HELD_OPEN}
-                </Link>
-              </p>
+              <div className="mt-2" data-testid="assistant-settings-held">
+                <SubmittedNote change={heldChange} />
+              </div>
             )}
           </div>
         </div>

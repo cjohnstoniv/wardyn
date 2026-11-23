@@ -7,6 +7,7 @@
 // settings, which a super admin reads and replaces, and a person's own answer to whether they can use the
 // assistant for one purpose. A refusal throws the HttpError of core.ts, so the console shows the server's own
 // sentence and can match on `reason`.
+import type { GovernanceChange } from "../types";
 import type { AssistantSettings } from "../types/site";
 import { asJson, PendingChangeError, wfetch } from "./core";
 
@@ -35,8 +36,8 @@ export interface AssistantSettingsSnapshot {
   etag: string | null;
 }
 
-/** A 200 applied the block; a 202 held it for approval, under the change `changeId`. */
-export type AssistantSaveResult = { applied: AssistantSettingsSnapshot } | { held: true; changeId: string };
+/** A 200 applied the block; a 202 held it for approval, and `held` is the change waiting. */
+export type AssistantSaveResult = { applied: AssistantSettingsSnapshot } | { held: GovernanceChange };
 
 export const assistant = {
   // GET /api/v1/assistant/settings (super admin).
@@ -57,7 +58,7 @@ export const assistant = {
       });
       return { applied: { settings: await asJson<AssistantSettings>(res), etag: res.headers.get("ETag") } };
     } catch (e) {
-      if (e instanceof PendingChangeError) return { held: true, changeId: e.change.id };
+      if (e instanceof PendingChangeError) return { held: e.change };
       throw e;
     }
   },

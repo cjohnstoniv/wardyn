@@ -39,7 +39,7 @@ vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () =
 vi.mock("../../../lib/api/assistant", () => ({
   assistant: {
     getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
-    putAssistantSettings: () => Promise.resolve({ held: true, changeId: "" }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
     getMyAssistant: () => Promise.resolve({ state: "off" }),
   },
 }));
