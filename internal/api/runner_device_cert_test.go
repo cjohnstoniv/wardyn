@@ -5,18 +5,24 @@ package api
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +38,8 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/devicecert"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -139,6 +147,7 @@ func TestRunnerSettings_MDMFieldsSurviveToggle(t *testing.T) {
 		return doSSO(t, srv, http.MethodPut, "/api/v1/runners/settings", admin, body)
 	}
 	ca := newMDMTestCA(t, "MDM CA")
+	sum := sha256.Sum256(ca.cert.Raw)
 	body, _ := json.Marshal(map[string]string{"mdm_device_ca_pem": ca.pem, "mdm_device_crl_url": "https://pki.example.com/ca.crl"})
 	if w := put(string(body)); w.Code != http.StatusOK {
 		t.Fatalf("set the MDM fields: %d %s", w.Code, w.Body.String())
@@ -154,9 +163,18 @@ func TestRunnerSettings_MDMFieldsSurviveToggle(t *testing.T) {
 	if w := doSSO(t, srv, http.MethodGet, "/api/v1/runners/settings", admin, ""); !strings.Contains(w.Body.String(), `"mdm_device_crl_url":"https://pki.example.com/ca.crl"`) {
 		t.Fatalf("settings read: %s", w.Body.String())
 	}
-	ev := lastAuditEvent(t, h.audit.snapshot(), "runners.mdm_device.set")
-	if strings.Contains(string(ev.Data), "BEGIN CERTIFICATE") || strings.Contains(string(ev.Data), "MIIB") {
-		t.Fatalf("the audit row carries the PEM: %s", ev.Data)
+	var rows []types.AuditEvent
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "runners.mdm_device.set" {
+			rows = append(rows, ev)
+		}
+	}
+	if len(rows) != 2 || rows[0].Target != "runners.mdm_device_ca_pem" || rows[1].Target != "runners.mdm_device_crl_url" {
+		t.Fatalf("audit rows %+v, want one for the CA and one for the URL", rows)
+	}
+	if strings.Contains(string(rows[0].Data), "BEGIN CERTIFICATE") || strings.Contains(string(rows[0].Data), "MIIB") ||
+		!strings.Contains(string(rows[0].Data), hex.EncodeToString(sum[:])) {
+		t.Fatalf("the CA's audit row %s, want the certificate's SHA-256 and no PEM", rows[0].Data)
 	}
 	if w := put(`{"mdm_device_ca_pem":""}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "runner_mdm_device_invalid") {
 		t.Fatalf("clearing only the CA: %d %s, want 400 runner_mdm_device_invalid", w.Code, w.Body.String())
@@ -216,7 +234,7 @@ type lockWatcher struct {
 
 func (l *lockWatcher) Lock(ctx context.Context, k db.LockKey, wait time.Duration) (context.Context, func(), error) {
 	lctx, unlock, err := l.Locker.Lock(ctx, k, wait)
-	if err != nil {
+	if err != nil || k.Class != db.SiteConfigLockClass {
 		return lctx, unlock, err
 	}
 	l.mu.Lock()
@@ -432,17 +450,23 @@ func mustPass(t *testing.T, label string, v mdmDeviceVerdict) {
 // mdmTestDeviceCert is a device certificate the CA issued, with the given serial and validity.
 func mdmTestDeviceCert(t *testing.T, ca mdmTestCA, serial int64, from, to time.Time) []byte {
 	t.Helper()
+	der, _ := mdmTestDeviceIdentity(t, ca, "device-"+uuid.NewString(), serial, from, to)
+	return der
+}
+
+// mdmTestDeviceIdentity is a device certificate named cn and the ECDSA key it certifies.
+func mdmTestDeviceIdentity(t *testing.T, ca mdmTestCA, cn string, serial int64, from, to time.Time) ([]byte, *ecdsa.PrivateKey) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "device-" + uuid.NewString()},
-		NotBefore: from, NotAfter: to}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: cn},
+		NotBefore: from, NotAfter: to}, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return der
+	return der, key
 }
 
 // mdmTestCRL is a CRL the CA signed. extra are CRL-level extensions, entryExtra extensions on each entry.
@@ -547,7 +571,7 @@ func TestMDMDeviceVerdict_CRLFromSameNameOtherKeyRefuses(t *testing.T) {
 func TestMDMDeviceVerdict_RevokedRefuses(t *testing.T) {
 	e := newMDMEnv(t)
 	e.serveCRL(e.crl(1, 48*time.Hour, 5, 6))
-	mustRefuse(t, "revoked", e.verdict(e.runner(e.leaf(5, -time.Hour, 24*time.Hour))), "MDM device certificate was revoked on "+e.clock.now().UTC().Format("2006-01-02"))
+	mustRefuse(t, "revoked", e.verdict(e.runner(e.leaf(5, -time.Hour, 24*time.Hour))), "MDM device certificate was revoked on ")
 	mustPass(t, "not listed", e.verdict(e.runner(e.leaf(7, -time.Hour, 24*time.Hour))))
 	v := e.verdict(e.runner(e.leaf(7, -time.Hour, 24*time.Hour)))
 	if !strings.Contains(v.evidence, "expires ") || !strings.Contains(v.evidence, "presented ") || !strings.Contains(v.evidence, "CRL checked ") {
@@ -721,7 +745,7 @@ func TestMDMCRLCache_SharesOneInFlightFetch(t *testing.T) {
 // A hung CRL host does not stall a verdict: the caller's own context, or the fetch's timeout, ends the wait
 // and the verdict refuses.
 func TestMDMCRLCache_WaitIsBoundedAndFailsClosed(t *testing.T) {
-	hang := func(e *mdmEnv) {
+	hang := func(t *testing.T, e *mdmEnv) {
 		block := make(chan struct{})
 		t.Cleanup(func() { close(block) })
 		e.handle(func(w http.ResponseWriter, r *http.Request) {
@@ -733,7 +757,7 @@ func TestMDMCRLCache_WaitIsBoundedAndFailsClosed(t *testing.T) {
 	}
 	t.Run("the caller's context ends first", func(t *testing.T) {
 		e := newMDMEnv(t)
-		hang(e)
+		hang(t, e)
 		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 		defer cancel()
 		start := time.Now()
@@ -745,7 +769,7 @@ func TestMDMCRLCache_WaitIsBoundedAndFailsClosed(t *testing.T) {
 	})
 	t.Run("the fetch times out", func(t *testing.T) {
 		e := newMDMEnv(t)
-		hang(e)
+		hang(t, e)
 		e.srv.mdmCRLs().timeout = 300 * time.Millisecond
 		start := time.Now()
 		v := e.verdict(e.runner(e.leaf(5, -time.Hour, 72*time.Hour)))
@@ -937,4 +961,289 @@ func checkVerdictShapes(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl) (ca
 		return true
 	})
 	return calls
+}
+
+// deviceFake is the store behind a device_cert event: one runner row, and what the event stored.
+type deviceFake struct {
+	store.Store
+	rn      types.Runner
+	chains  [][][]byte
+	records int
+	changed bool
+	session string
+}
+
+func (d *deviceFake) GetRunner(context.Context, uuid.UUID) (types.Runner, error) { return d.rn, nil }
+
+func (d *deviceFake) RecordRunnerDeviceCertFrom(_ context.Context, _ uuid.UUID, session string, chains [][][]byte, _ time.Time) (bool, error) {
+	d.records++
+	d.chains, d.session = chains, session
+	return d.changed, nil
+}
+
+const deviceOrgURL = "https://org.example.com"
+
+// deviceProofEnv is a server and runner for the device_cert event, a CA, and the runner's key fingerprint.
+type deviceProofEnv struct {
+	t     *testing.T
+	ca    mdmTestCA
+	fp    string
+	org   string
+	now   time.Time
+	store *deviceFake
+	audit *memAudit
+	srv   *Server
+}
+
+func newDeviceProofEnv(t *testing.T) *deviceProofEnv {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := runnerwire.Fingerprint(pub)
+	e := &deviceProofEnv{t: t, ca: newMDMTestCA(t, "MDM CA"), fp: fp, org: federation.OrgURLSHA256(deviceOrgURL), now: time.Now().Truncate(time.Second),
+		store: &deviceFake{rn: types.Runner{ID: uuid.New(), KeyFingerprint: fp}, changed: true}, audit: &memAudit{}}
+	e.srv = &Server{cfg: Config{Store: e.store, Audit: e.audit, RunnerOrgURL: deviceOrgURL, Now: func() time.Time { return e.now }}}
+	return e
+}
+
+// proof is a chain whose leaf key signed message for the fingerprint, org and time named.
+func (e *deviceProofEnv) proof(cn string, fp, org string, at time.Time) runnerwire.DeviceCertProof {
+	der, key := mdmTestDeviceIdentity(e.t, e.ca, cn, 11, e.now.Add(-time.Hour), e.now.Add(time.Hour))
+	msg, err := devicecert.Message(fp, org, at)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	d := sha256.Sum256(msg)
+	sig, err := ecdsa.SignASN1(rand.Reader, key, d[:])
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return runnerwire.DeviceCertProof{Chain: [][]byte{der}, SignedAt: at, Signature: sig}
+}
+
+func (e *deviceProofEnv) send(proofs ...runnerwire.DeviceCertProof) error {
+	data, err := json.Marshal(runnerwire.DeviceCertReport{Proofs: proofs})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return e.srv.DeviceCertFromRunner(context.Background(), e.store.rn.ID, "session-1", runnerwire.Event{Kind: runnerwire.EventDeviceCert, Data: data})
+}
+
+// A proof binds to this runner: a signature over another fingerprint, another organisation, a time 11
+// minutes off, a message without the prefix, or by a key other than the leaf's is dropped; a valid one is stored.
+func TestDeviceCertFromRunner_ProofBinding(t *testing.T) {
+	e := newDeviceProofEnv(t)
+	otherFP := strings.Repeat("cd", 32)
+	otherOrg := strings.Repeat("ef", 32)
+	valid := e.proof("valid", e.fp, e.org, e.now)
+	noPrefix := e.proof("no-prefix", e.fp, e.org, e.now)
+	noPrefix.Signature = func() []byte { // a leaf key signing the message minus its prefix
+		der, key := mdmTestDeviceIdentity(t, e.ca, "no-prefix", 12, e.now.Add(-time.Hour), e.now.Add(time.Hour))
+		noPrefix.Chain = [][]byte{der}
+		msg, _ := devicecert.Message(e.fp, e.org, e.now)
+		d := sha256.Sum256(msg[len(devicecert.Prefix):])
+		sig, _ := ecdsa.SignASN1(rand.Reader, key, d[:])
+		return sig
+	}()
+	wrongKey := e.proof("wrong-key", e.fp, e.org, e.now)
+	wrongKey.Signature = e.proof("other", e.fp, e.org, e.now).Signature // signed by a different device key
+	dropped := map[string]runnerwire.DeviceCertProof{
+		"another fingerprint": e.proof("fp", otherFP, e.org, e.now),
+		"another org":         e.proof("org", e.fp, otherOrg, e.now),
+		"11 minutes late":     e.proof("late", e.fp, e.org, e.now.Add(-11*time.Minute)),
+		"11 minutes early":    e.proof("early", e.fp, e.org, e.now.Add(11*time.Minute)),
+		"no prefix":           noPrefix,
+		"another key":         wrongKey,
+	}
+	e.store.changed = false // a dropped proof stores an empty list; the audit row is for the valid one below
+	for name, p := range dropped {
+		e.store.records, e.store.chains = 0, nil
+		if err := e.send(p); err != nil || e.store.records != 1 || len(e.store.chains) != 0 {
+			t.Errorf("%s: err %v, %d records, %d chains stored, want it dropped and an empty list stored", name, err, e.store.records, len(e.store.chains))
+		}
+	}
+	e.store.chains, e.store.changed = nil, true
+	if err := e.send(valid, dropped["another org"]); err != nil || len(e.store.chains) != 1 || e.store.session != "session-1" {
+		t.Fatalf("valid and dropped: err %v, chains %d, session %q, want one stored on the event's session", err, len(e.store.chains), e.store.session)
+	}
+	rows := e.audit.find(placement.ActionRunnerDeviceCertRecord)
+	if len(rows) != 1 || rows[0].Actor != "runner:"+e.store.rn.ID.String() || rows[0].Target != e.store.rn.ID.String() {
+		t.Fatalf("audit rows %+v, want one runner.device_cert.record by the runner", rows)
+	}
+	var data struct {
+		Leaves  []map[string]string `json:"leaves"`
+		Dropped int                 `json:"dropped"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil || data.Dropped != 1 || len(data.Leaves) != 1 || data.Leaves[0]["serial"] != "b" ||
+		len(data.Leaves[0]["sha256"]) != 64 || len(data.Leaves[0]["issuer_sha256"]) != 64 {
+		t.Fatalf("audit data %s (%v)", rows[0].Data, err)
+	}
+	// An unchanged report writes no audit row.
+	e.store.changed = false
+	if err := e.send(valid); err != nil || len(e.audit.find(placement.ActionRunnerDeviceCertRecord)) != 1 {
+		t.Fatalf("an unchanged report: %v, %d rows", err, len(e.audit.find(placement.ActionRunnerDeviceCertRecord)))
+	}
+}
+
+// Other key types: RSA of 2048 bits signs with PKCS#1 v1.5, a smaller RSA key and an ed25519 key are dropped.
+func TestDeviceCertFromRunner_KeyTypes(t *testing.T) {
+	e := newDeviceProofEnv(t)
+	msg, _ := devicecert.Message(e.fp, e.org, e.now)
+	d := sha256.Sum256(msg)
+	rsaProof := func(bits int) runnerwire.DeviceCertProof {
+		key, err := rsa.GenerateKey(rand.Reader, bits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "rsa"},
+			NotBefore: e.now.Add(-time.Hour), NotAfter: e.now.Add(time.Hour)}, e.ca.cert, &key.PublicKey, e.ca.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, d[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return runnerwire.DeviceCertProof{Chain: [][]byte{der}, SignedAt: e.now, Signature: sig}
+	}
+	edPub, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	edDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(4), Subject: pkix.Name{CommonName: "ed"},
+		NotBefore: e.now.Add(-time.Hour), NotAfter: e.now.Add(time.Hour)}, e.ca.cert, edPub, e.ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed := runnerwire.DeviceCertProof{Chain: [][]byte{edDER}, SignedAt: e.now, Signature: ed25519.Sign(edKey, msg)}
+	for name, c := range map[string]struct {
+		p    runnerwire.DeviceCertProof
+		kept int
+	}{"RSA 2048": {rsaProof(2048), 1}, "RSA 1024": {rsaProof(1024), 0}, "ed25519": {ed, 0}} {
+		e.store.chains = nil
+		if err := e.send(c.p); err != nil || len(e.store.chains) != c.kept {
+			t.Errorf("%s: err %v, %d chains kept, want %d", name, err, len(e.store.chains), c.kept)
+		}
+	}
+}
+
+// A report outside the bounds is refused whole, and nothing is stored.
+func TestDeviceCertFromRunner_RefusesBadShape(t *testing.T) {
+	e := newDeviceProofEnv(t)
+	good := e.proof("good", e.fp, e.org, e.now)
+	many := make([]runnerwire.DeviceCertProof, devicecert.MaxProofs+1)
+	for i := range many {
+		many[i] = good
+	}
+	long := good
+	long.Chain = make([][]byte, devicecert.MaxChainLen+1)
+	for i := range long.Chain {
+		long.Chain[i] = good.Chain[0]
+	}
+	empty := good
+	empty.Chain = nil
+	huge := good
+	huge.Chain = [][]byte{make([]byte, devicecert.MaxDER+1)}
+	for name, proofs := range map[string][]runnerwire.DeviceCertProof{"9 proofs": many, "5 certificates": {long}, "no certificate": {empty}, "over 8 KiB": {huge}} {
+		if err := e.send(proofs...); !errors.Is(err, errReportShape) {
+			t.Errorf("%s: %v, want errReportShape", name, err)
+		}
+	}
+	run := uuid.New()
+	for name, ev := range map[string]runnerwire.Event{
+		"a run id":         {Kind: runnerwire.EventDeviceCert, RunID: &run, Data: []byte(`{"proofs":[]}`)},
+		"an unknown field": {Kind: runnerwire.EventDeviceCert, Data: []byte(`{"proofs":[],"x":1}`)},
+		"not json":         {Kind: runnerwire.EventDeviceCert, Data: []byte(`nope`)},
+		"over 64 KiB":      {Kind: runnerwire.EventDeviceCert, Data: []byte(`{"proofs":[],"pad":"` + strings.Repeat("a", 65<<10) + `"}`)},
+	} {
+		if err := e.srv.DeviceCertFromRunner(context.Background(), e.store.rn.ID, "s", ev); !errors.Is(err, errReportShape) {
+			t.Errorf("%s: %v, want errReportShape", name, err)
+		}
+	}
+	if e.store.records != 0 {
+		t.Fatalf("a refused report stored %d times", e.store.records)
+	}
+}
+
+// bufferHandler collects what the server logs.
+type bufferHandler struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *bufferHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (b *bufferHandler) Handle(_ context.Context, r slog.Record) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.WriteString(r.Message)
+	r.Attrs(func(a slog.Attr) bool { b.buf.WriteString(" " + a.Key + "=" + a.Value.String()); return true })
+	b.buf.WriteString("\n")
+	return nil
+}
+func (b *bufferHandler) WithAttrs([]slog.Attr) slog.Handler { return b }
+func (b *bufferHandler) WithGroup(string) slog.Handler      { return b }
+func (b *bufferHandler) text() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// No key, CRL body, final redirect URL or certificate subject reaches a log line, an audit row or a refusal.
+func TestMDMDevice_LogsAndAuditCarryNoSubject(t *testing.T) {
+	const (
+		subject  = "PLANTED-SUBJECT-CN"
+		marker   = "PLANTED-CRL-BODY-MARKER"
+		redirect = "planted-redirect-path"
+	)
+	h := &bufferHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	var seen []string
+	e := newMDMEnv(t)
+	leaf, _ := mdmTestDeviceIdentity(t, e.ca, subject, 5, e.clock.now().Add(-time.Hour), e.clock.now().Add(time.Hour))
+	rn := e.runner(leaf)
+	judge := func(label string) { seen = append(seen, label+": "+e.verdict(rn).refusal) }
+	e.handle(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, marker, http.StatusInternalServerError) })
+	judge("status body")
+	e.clock.add(time.Hour)
+	e.handle(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "ftp://pki.example.com/"+redirect+"?"+marker, http.StatusFound)
+	})
+	judge("redirect")
+	e.clock.add(time.Hour)
+	e.serveCRL([]byte(marker))
+	judge("not a CRL")
+	e.clock.add(time.Hour)
+	e.serveCRL(e.crl(1, 48*time.Hour, 5))
+	judge("revoked")
+	seen = append(seen, "missing: "+e.verdict(types.Runner{Name: "studio"}).refusal)
+
+	d := newDeviceProofEnv(t)
+	_ = d.send(d.proof(subject, d.fp, d.org, d.now), d.proof(subject, strings.Repeat("cd", 32), d.org, d.now)) // only the rows are read
+	var rows strings.Builder
+	for _, r := range d.audit.rows {
+		rows.WriteString(string(r.Data) + r.Target + r.Actor)
+	}
+	// And the settings door's own row, which names the CA by fingerprint.
+	srv, _, ah := newRunnerRegistrationServer(t)
+	srv.cfg.ControlPlaneURL = "https://wardynd.internal:8443"
+	admin := memberModeSSOSession(t, "carol", "carol@example.com", oidc.RoleAdmin, false)
+	ca := newMDMTestCA(t, subject)
+	body, _ := json.Marshal(map[string]string{"mdm_device_ca_pem": ca.pem, "mdm_device_crl_url": "https://pki.example.com/ca.crl"})
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/runners/settings", admin, string(body)); w.Code != http.StatusOK {
+		t.Fatalf("set the MDM fields: %d %s", w.Code, w.Body.String())
+	}
+	for _, ev := range ah.audit.snapshot() {
+		rows.WriteString(string(ev.Data))
+	}
+	all := h.text() + rows.String() + strings.Join(seen, "\n")
+	for _, banned := range []string{subject, marker, redirect, "BEGIN CERTIFICATE", "PRIVATE KEY"} {
+		if strings.Contains(all, banned) {
+			t.Errorf("%q reached a log line, an audit row or a refusal:\n%s", banned, all)
+		}
+	}
+	if rows.Len() == 0 || !strings.Contains(h.text(), "cause=") {
+		t.Fatalf("the cases wrote no audit row or no failed-fetch log line to check: rows %d, log %q", rows.Len(), h.text())
+	}
 }

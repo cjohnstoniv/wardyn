@@ -348,6 +348,48 @@ func (s PG) RecordRunnerPostureFrom(ctx context.Context, id uuid.UUID, session s
 	return changed, nil
 }
 
+// recordDeviceCert replaces a claimed runner's device certificate chains and says whether they differ from
+// the ones held. The reported-at time moves on every write, so it says when the runner last presented.
+const recordDeviceCert = `
+		UPDATE runners r SET device_cert = $2::jsonb, device_cert_reported_at = $3
+		FROM (SELECT id, device_cert FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE) old
+		WHERE r.id = old.id
+		RETURNING old.device_cert IS DISTINCT FROM $2::jsonb`
+
+// RecordRunnerDeviceCertFrom stores the MDM device certificate chains a claimed runner presented on session
+// and says whether they differ from the ones held, so only a change writes runner.device_cert.record. Like
+// RecordRunnerPostureFrom it writes only while session is the runner's current inventory session: a
+// superseded session's late report writes nothing and reports no change. A runner that is not claimed is
+// ErrNotFound. Whether a chain is trusted, current or revoked is not stored or judged here.
+func (s PG) RecordRunnerDeviceCertFrom(ctx context.Context, id uuid.UUID, session string, chains [][][]byte, now time.Time) (bool, error) {
+	if chains == nil {
+		chains = [][][]byte{}
+	}
+	b, err := json.Marshal(types.RunnerDeviceCert{Chains: chains})
+	if err != nil {
+		return false, err
+	}
+	var changed bool
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT 1 FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE`, id).Scan(new(int)); err != nil {
+			return err
+		}
+		var current bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+			id, session).Scan(&current); err != nil || !current {
+			return err
+		}
+		return q.QueryRow(ctx, recordDeviceCert, id, b, now).Scan(&changed)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: record runner device certificate: %w", err)
+	}
+	return changed, nil
+}
+
 // RunnerRevocation is what one committed revoke did: the revoked runner and
 // the runs it ended KILLED (RN-Q29), each with the state it was killed from.
 type RunnerRevocation struct {

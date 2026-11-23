@@ -6,10 +6,15 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -22,8 +27,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/cjohnstoniv/wardyn/internal/devicecert"
+	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -122,6 +133,23 @@ type mdmDeviceVerdict struct {
 }
 
 func mdmRefused(sentence string) mdmDeviceVerdict { return mdmDeviceVerdict{refusal: sentence} }
+
+// gateOutcome is the managed-Mac gate's answer once the trust and posture checks have passed: the evidence
+// the pass rested on, or the refusal. The zero verdict refuses with a fixed sentence.
+func (v mdmDeviceVerdict) gateOutcome(rn types.Runner) ([]string, *placement.Refusal) {
+	evidence := []string{"managed_device (set by an administrator)", "MDM posture file"}
+	switch {
+	case v.notRequired:
+		return append(evidence, "no MDM device-certificate check configured"), nil
+	case !v.ok:
+		detail := v.refusal
+		if detail == "" {
+			detail = macRunnerName(rn) + " was not checked for an MDM device certificate."
+		}
+		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind", Detail: detail}
+	}
+	return append(evidence, v.evidence), nil
+}
 
 // mdmNow is the control plane's clock, time.Now when none is set.
 func (s *Server) mdmNow() time.Time {
@@ -546,4 +574,126 @@ func parseMDMCRL(body []byte, roots []*x509.Certificate, now time.Time) (*mdmCRL
 		return nil, "expired"
 	}
 	return &mdmCRL{list: rl, signers: signers, lastOK: now}, ""
+}
+
+// maxDeviceCertEventBytes bounds one device_cert event's data.
+const maxDeviceCertEventBytes = 64 << 10
+
+// runnerDeviceCertStore is the PG capability behind the device_cert event. The api reaches it through this
+// interface, not by widening store.RunnerStore.
+type runnerDeviceCertStore interface {
+	GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error)
+	RecordRunnerDeviceCertFrom(ctx context.Context, id uuid.UUID, session string, chains [][][]byte, now time.Time) (bool, error)
+}
+
+var _ runnerDeviceCertStore = store.PG{}
+
+// deviceProofLeaf is the proof's leaf certificate when the proof binds to this runner and organisation: the
+// signature is by the leaf's key over the message that names the runner's key fingerprint and the
+// organisation, made within the allowed skew. Any other key type, or a signature that does not verify, is no
+// proof.
+func deviceProofLeaf(p runnerwire.DeviceCertProof, fingerprint, org string, now time.Time) *x509.Certificate {
+	if d := now.Sub(p.SignedAt); d > devicecert.MaxSkew || -d > devicecert.MaxSkew {
+		return nil
+	}
+	leaf, err := x509.ParseCertificate(p.Chain[0])
+	if err != nil {
+		return nil
+	}
+	msg, err := devicecert.Message(fingerprint, org, p.SignedAt)
+	if err != nil {
+		return nil
+	}
+	digest := sha256.Sum256(msg)
+	switch pub := leaf.PublicKey.(type) {
+	case *ecdsa.PublicKey:
+		if (pub.Curve == elliptic.P256() || pub.Curve == elliptic.P384()) && ecdsa.VerifyASN1(pub, digest[:], p.Signature) {
+			return leaf
+		}
+	case *rsa.PublicKey:
+		if pub.N.BitLen() >= 2048 && rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], p.Signature) == nil {
+			return leaf
+		}
+	}
+	return nil
+}
+
+// decodeDeviceCertReport strictly decodes one device_cert body: no unknown field and nothing after the
+// object. decodeRunnerEventData is not used because it refuses a body over maxActionResultBytes, which a
+// certificate chain exceeds; the caller has already bounded the body.
+func decodeDeviceCertReport(data []byte) (runnerwire.DeviceCertReport, error) {
+	var r runnerwire.DeviceCertReport
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&r); err != nil {
+		return r, errReportShape
+	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return r, errReportShape
+	}
+	return r, nil
+}
+
+// deviceCertShapeOK is whether the report is within the bounds the helper keeps to.
+func deviceCertShapeOK(r runnerwire.DeviceCertReport) bool {
+	if len(r.Proofs) > devicecert.MaxProofs {
+		return false
+	}
+	for _, p := range r.Proofs {
+		if len(p.Chain) == 0 || len(p.Chain) > devicecert.MaxChainLen {
+			return false
+		}
+		for _, der := range p.Chain {
+			if len(der) > devicecert.MaxDER {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// DeviceCertFromRunner stores the MDM device certificate chains a claimed runner presented, each whose
+// device-key signature binds this runner's key and organisation, and, only when they changed, writes
+// runner.device_cert.record. session is the runner session the event came in on: a superseded session
+// writes nothing. A proof that does not verify is dropped and counted. Nothing here touches trust_class,
+// the posture or any run: whether a chain is trusted, current and unrevoked is judged when a macOS sandbox
+// is placed (mdmDeviceVerdictFor).
+func (s *Server) DeviceCertFromRunner(ctx context.Context, runnerID uuid.UUID, session string, ev runnerwire.Event) error {
+	st, ok := s.cfg.Store.(runnerDeviceCertStore)
+	if !ok {
+		return errRunnerIngestUnavailable
+	}
+	if ev.RunID != nil || len(ev.Data) > maxDeviceCertEventBytes {
+		return errReportShape
+	}
+	report, err := decodeDeviceCertReport(ev.Data)
+	if err != nil || !deviceCertShapeOK(report) {
+		return errReportShape
+	}
+	rn, err := st.GetRunner(ctx, runnerID)
+	if err != nil {
+		return err
+	}
+	org := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
+	now := s.mdmNow()
+	chains := [][][]byte{}
+	var leaves []map[string]any
+	for _, p := range report.Proofs {
+		leaf := deviceProofLeaf(p, rn.KeyFingerprint, org, now)
+		if leaf == nil {
+			continue
+		}
+		chains = append(chains, p.Chain)
+		sum, issuer := sha256.Sum256(leaf.Raw), sha256.Sum256(leaf.RawIssuer)
+		leaves = append(leaves, map[string]any{"sha256": hex.EncodeToString(sum[:]), "serial": leaf.SerialNumber.Text(16),
+			"not_after": leaf.NotAfter.UTC().Format(time.RFC3339), "issuer_sha256": hex.EncodeToString(issuer[:])})
+	}
+	changed, err := st.RecordRunnerDeviceCertFrom(ctx, runnerID, session, chains, now)
+	if err != nil || !changed {
+		return err
+	}
+	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "runner:"+runnerID.String(),
+		placement.ActionRunnerDeviceCertRecord, runnerID.String(), "success",
+		mustJSON(map[string]any{"leaves": leaves, "dropped": len(report.Proofs) - len(chains)})))
+	return nil
 }

@@ -658,17 +658,7 @@ func macOSHostGate(rn types.Runner, operator bool, device mdmDeviceVerdict) (evi
 		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind",
 			Detail: macRunnerName(rn) + " has no MDM posture file saying it is managed (`/Library/Application Support/Wardyn/posture.json`)."}
 	}
-	switch {
-	case device.notRequired:
-		return []string{"managed_device (set by an administrator)", "MDM posture file", "no MDM device-certificate check configured"}, nil
-	case !device.ok:
-		detail := device.refusal
-		if detail == "" {
-			detail = macRunnerName(rn) + " was not checked for an MDM device certificate."
-		}
-		return nil, &placement.Refusal{Reason: placement.ReasonRunnerPostureUnmet, Field: "machine_kind", Detail: detail}
-	}
-	return []string{"managed_device (set by an administrator)", "MDM posture file", device.evidence}, nil
+	return device.gateOutcome(rn)
 }
 
 // macOSVMRefusal is the refusal (placement_capability, or runner_posture_unmet from the gate) of a macOS VM run on runner id, or nil when the
