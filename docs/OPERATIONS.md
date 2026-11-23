@@ -2112,6 +2112,7 @@ Moved to [member-mode.md](operations/member-mode.md#exercising-member-mode-as-an
    ```
 
    - On the first boot with an issuer, wardynd exits nonzero if discovery fails. A deployment upgraded from 0.10.1 or older counts as a first boot, because the record of issuers began in 0.10.2.
+   - A failed read of that record at boot, or one that takes more than 5 seconds, also counts as a first boot, so discovery failing then refuses boot.
    - Once wardynd has booted with that issuer, a provider that does not answer (no connection, a timeout, a TLS failure, a 429 or a 5xx) no longer stops boot. wardynd starts with sign-in closed (`/auth/login` answers 503), retries in the background, and `/healthz` shows `sso_pending: true`.
    - Any other discovery failure still refuses boot: a 4xx other than 429, a bad discovery document, or an extra scope the provider does not advertise.
    - While sign-in is closed, people already signed in keep their sessions, and API tokens and runs keep working.

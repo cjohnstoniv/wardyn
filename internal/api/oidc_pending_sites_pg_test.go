@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -569,5 +571,77 @@ func TestBackchannelPending_EveryHoldOutcomeWritesARow(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// bodyHook is a request body whose first read runs hook, so a test can publish the provider's state after the
+// route decided on the headers and before the form is read.
+type bodyHook struct {
+	r    *strings.Reader
+	hook func()
+	once sync.Once
+}
+
+func (b *bodyHook) Read(p []byte) (int, error) {
+	b.once.Do(b.hook)
+	return b.r.Read(p)
+}
+
+func postWithBodyHook(srv *Server, token string, hook func()) *httptest.ResponseRecorder {
+	form := url.Values{"logout_token": {token}}.Encode()
+	r := httptest.NewRequest(http.MethodPost, "/auth/backchannel-logout", strings.NewReader(""))
+	r.Body = io.NopCloser(&bodyHook{r: strings.NewReader(form), hook: hook})
+	r.ContentLength = int64(len(form))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func backchannelBucketTokens(srv *Server) (tokens float64, charged bool) {
+	l := &srv.backchannelLimiter
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.buckets[""]
+	if b == nil {
+		return 0, false
+	}
+	return b.tokens, true
+}
+
+// A request that skipped the limiter because the server was pending, but whose body is read after the state was
+// published, is charged on the discovered path, and answered 429 when the limiter refuses.
+func TestBackchannelPending_ExemptRequestChargedAfterPublish(t *testing.T) {
+	rev := &fakeSessionRevocations{}
+	pc := newPendingConsole(t, rev)
+	srv, _ := pendingServer(t, pc, rev)
+	// Control: a request whose body is read while still pending is not charged.
+	postHeldLogout(t, srv, "garbage")
+	if _, charged := backchannelBucketTokens(srv); charged {
+		t.Fatal("a malformed request under the pending exemption charged the limiter before the first refusal")
+	}
+	w := postWithBodyHook(srv, "garbage", func() { pc.recoverProvider(t) })
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("a malformed token on the discovered path = %d %s, want 400", w.Code, w.Body.String())
+	}
+	if tokens, charged := backchannelBucketTokens(srv); !charged || tokens > backchannelLogoutBurst-0.5 {
+		t.Errorf("limiter bucket = %v tokens, charged %v; want the late request charged", tokens, charged)
+	}
+}
+
+func TestBackchannelPending_ExemptRequestRefusedAfterPublishWhenLimited(t *testing.T) {
+	rev := &fakeSessionRevocations{}
+	pc := newPendingConsole(t, rev)
+	srv, _ := pendingServer(t, pc, rev)
+	for range int(backchannelLogoutBurst) + 2 {
+		srv.backchannelLimiter.allow("", srv.cfg.Now())
+	}
+	w := postWithBodyHook(srv, pc.token(t, "u1", "j1", nil), func() { pc.recoverProvider(t) })
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("an exempt request past the rate on the discovered path = %d %s, want 429", w.Code, w.Body.String())
+	}
+	if len(rev.cutSubs) != 0 {
+		t.Errorf("a refused request cut sessions: %v", rev.cutSubs)
 	}
 }

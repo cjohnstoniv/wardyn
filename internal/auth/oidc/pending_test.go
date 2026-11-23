@@ -156,6 +156,19 @@ type recSink struct {
 	applied  []string
 	applyErr error
 	onApply  func()
+	// denyCharge makes ChargeLogout refuse; charges counts its calls and lateCharges those for a late held logout.
+	denyCharge           bool
+	charges, lateCharges int
+}
+
+func (s *recSink) ChargeLogout(ctx context.Context) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.charges++
+	if writoidc.LogoutLate(ctx) {
+		s.lateCharges++
+	}
+	return !s.denyCharge
 }
 
 func (s *recSink) Noted(_ context.Context, ev writoidc.LogoutQueueEvent) {

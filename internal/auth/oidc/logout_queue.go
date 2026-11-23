@@ -93,6 +93,30 @@ type LogoutQueueSink interface {
 	Apply(ctx context.Context, sub string, receivedAt time.Time, sha string) error
 }
 
+// LogoutCharger is an optional method of a LogoutQueueSink: it charges the route's rate limiter for a request
+// or a held logout that skipped it because the authenticator was pending, and reports false when the limiter
+// refuses. A sink without it charges nothing.
+type LogoutCharger interface {
+	ChargeLogout(ctx context.Context) bool
+}
+
+type lateLogoutKey struct{}
+
+// LogoutLate reports whether ctx belongs to a held logout that arrived while the drain was running and is
+// processed after the state was published.
+func LogoutLate(ctx context.Context) bool { return ctx.Value(lateLogoutKey{}) != nil }
+
+// chargeSkippedLimiter asks the attached sink to charge a request that skipped the limiter; true when there is
+// nothing to charge or the limiter allows it.
+func (a *Authenticator) chargeSkippedLimiter(ctx context.Context) bool {
+	if s := a.logouts.sink.Load(); s != nil {
+		if c, ok := (*s).(LogoutCharger); ok {
+			return c.ChargeLogout(ctx)
+		}
+	}
+	return true
+}
+
 // LogoutQueueStats is the queue's size and what it has done since the process started.
 type LogoutQueueStats struct {
 	Held, Queued, Applied, Unverifiable, RefusedQueueFull, RateLimited int
@@ -374,46 +398,83 @@ func (a *Authenticator) pendingBackchannel(w http.ResponseWriter, r *http.Reques
 	return true
 }
 
-// drainAndPublish applies the held logouts, then publishes st. It fetches the provider's key set once per
-// attempt, and only when something is held. A kept entry (the keys did not answer, the attempt ended, a cut
-// could not be written) leaves the state unpublished and the queue as it was.
+// drainAndPublish applies the logouts held when the provider's keys are fetched, then publishes st. It fetches
+// the key set once per attempt, and only when something is held. A kept entry (the keys did not answer, the
+// attempt ended, a cut could not be written) leaves the state unpublished and the queue as it was. Logouts that
+// arrive during the drain do not hold up the publish, so a steady inflow cannot keep sign-in closed: they are
+// checked after it against the same keys, each charged to the route's limiter first.
 func (a *Authenticator) drainAndPublish(ctx context.Context, st *providerState) error {
 	q := &a.logouts
-	var ks *gooidc.StaticKeySet
-	for {
+	q.mu.Lock()
+	if len(q.entries) == 0 {
+		a.publishLocked(ctx, st) // unlocks
+		return nil
+	}
+	q.mu.Unlock()
+
+	ks, err := fetchDrainKeySet(ctx, st)
+	if err != nil {
+		return err
+	}
+	q.mu.Lock()
+	snapshot := len(q.entries)
+	q.mu.Unlock()
+	for range snapshot {
 		q.mu.Lock()
-		if len(q.entries) == 0 {
-			// Under the mutex, so no token arrives between the last drain and the publish.
-			a.prov.CompareAndSwap(nil, st)
-			a.pending.Store(false)
-			n, from := q.takeRateWindowLocked()
-			q.mu.Unlock()
-			q.emitRateSummary(ctx, n, from, q.clock())
-			return nil
-		}
 		e := q.entries[0]
 		q.mu.Unlock()
-
 		if err := ctx.Err(); err != nil {
 			slog.Warn("oidc: the held logouts were not all checked before the attempt ended; they stay queued", "error", err)
 			return fmt.Errorf("%w: %w", ErrLogoutDrainIncomplete, err)
 		}
-		if ks == nil {
-			var err error
-			if ks, err = fetchDrainKeySet(ctx, st); err != nil {
-				return err
-			}
-		}
-		if err := a.drainEntry(ctx, st, ks, e); err != nil {
+		if err := a.drainEntry(ctx, st, ks, e, false); err != nil {
 			return err
 		}
 	}
+
+	q.mu.Lock()
+	late := append([]logoutEntry(nil), q.entries...)
+	// Published under the mutex: from here a handler that finds the state published goes the discovered path, and
+	// none can add to the queue, so `late` is everything that arrived during the drain.
+	a.publishLocked(ctx, st) // unlocks
+	lctx := context.WithValue(ctx, lateLogoutKey{}, struct{}{})
+	for _, e := range late {
+		if err := a.drainEntry(lctx, st, ks, e, true); err != nil {
+			slog.Error("wardynd: a logout that arrived while the held logouts were checked could not be applied and was dropped",
+				"token_sha256", e.sha, "error", err)
+			q.mu.Lock()
+			q.entries = q.entries[1:]
+			delete(q.seen, e.sha)
+			q.mu.Unlock()
+		}
+	}
+	return nil
+}
+
+// publishLocked publishes st, clears the pending flag and emits the remaining rate-limit summary. The caller
+// holds q.mu, which this releases.
+func (a *Authenticator) publishLocked(ctx context.Context, st *providerState) {
+	q := &a.logouts
+	a.prov.CompareAndSwap(nil, st)
+	a.pending.Store(false)
+	n, from := q.takeRateWindowLocked()
+	q.mu.Unlock()
+	q.emitRateSummary(ctx, n, from, q.clock())
 }
 
 // drainEntry checks one held logout against the static key set and removes it from the queue unless it must
 // be kept.
-func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *gooidc.StaticKeySet, e logoutEntry) error {
+func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *gooidc.StaticKeySet, e logoutEntry, late bool) error {
 	q := &a.logouts
+	if late && !a.chargeSkippedLimiter(ctx) {
+		// The limiter refuses it, as it would any request past the rate: counted, and not applied.
+		a.NoteLogoutRateLimited(ctx)
+		q.mu.Lock()
+		q.entries = q.entries[1:]
+		delete(q.seen, e.sha)
+		q.mu.Unlock()
+		return nil
+	}
 	v := gooidc.NewVerifier(st.issuer, ks, &gooidc.Config{
 		ClientID:             a.cfg.ClientID,
 		SupportedSigningAlgs: st.signingAlgs,
@@ -455,43 +516,16 @@ func (a *Authenticator) applyHeld(ctx context.Context, sub string, e logoutEntry
 	return CutSessions(ctx, a.cfg.Revocations, sub)
 }
 
-// jwksRecorder wraps the drain's key-fetch transport and remembers how its request ended.
-type jwksRecorder struct {
-	inner  http.RoundTripper
-	mu     sync.Mutex
-	status int // 0 until a response arrives
-	failed bool
-}
-
-func (j *jwksRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
-	inner := j.inner
-	if inner == nil {
-		inner = http.DefaultTransport
-	}
-	resp, err := inner.RoundTrip(req)
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if err != nil || resp == nil {
-		j.failed = true
-		return resp, err
-	}
-	j.status = resp.StatusCode
-	return resp, nil
-}
-
 // fetchDrainKeySet GETs the provider's jwks_uri once and returns a static key set of the keys Wardyn can use
 // to check a signature: RSA, ECDSA and Ed25519, with a `use` that is empty or `sig`. A static set never
 // fetches, so junk in the queue cannot turn into key requests. go-oidc's StaticKeySet returns on the first
 // key of any other type, so an unusable key is skipped here, with one WARN line naming its kid. No answer, a
 // non-200, an undecodable body and a set with no usable key all wrap ErrLogoutKeysUnavailable.
 func fetchDrainKeySet(ctx context.Context, st *providerState) (*gooidc.StaticKeySet, error) {
-	rec := &jwksRecorder{}
 	c := &http.Client{}
 	if st.httpClient != nil {
 		*c = *st.httpClient
 	}
-	rec.inner = c.Transport
-	c.Transport = rec
 	c = newTolerantJWKSClient(c)
 
 	fail := func(why string, err error) (*gooidc.StaticKeySet, error) {

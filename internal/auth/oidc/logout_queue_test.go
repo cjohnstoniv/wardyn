@@ -607,6 +607,91 @@ func TestLogoutQueue_RateLimitedSummaryOncePerMinute(t *testing.T) {
 	}
 }
 
+// pendingInflow posts one more genuine logout through h for each logout the drain applies while the state is
+// still unpublished, as a steady inflow of well-formed tokens would; it returns how many it posted.
+func pendingInflow(t *testing.T, p *pendingEnv, h http.HandlerFunc, perApply int) (applied *int, posted *int) {
+	t.Helper()
+	applied, posted = new(int), new(int)
+	p.sink.onApply = func() {
+		if !p.auth.Pending() {
+			return
+		}
+		*applied++
+		for range perApply {
+			*posted++
+			wantStatus(t, "an arrival during the drain", holdToken(t, h,
+				p.env.tokenWithJTI(t, fmt.Sprintf("late-%d", *posted), fmt.Sprintf("jl%d", *posted))), http.StatusServiceUnavailable)
+		}
+	}
+	return applied, posted
+}
+
+// Logouts that keep arriving during the drain do not hold up the publish: the drain checks the entries held
+// when it fetched the keys, publishes, and then checks the late ones, each charged to the limiter.
+func TestLogoutQueue_InflowDuringDrainPublishes(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	applied, posted := pendingInflow(t, p, h, 3)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if p.auth.Pending() {
+		t.Fatal("still pending after the drain: the inflow kept sign-in closed")
+	}
+	if *applied != 1 || *posted != 3 {
+		t.Errorf("applied while pending %d, posted %d; want the snapshot of 1 applied and 3 arrivals", *applied, *posted)
+	}
+	st := p.auth.LogoutQueueStats()
+	if st.Held != 0 || st.Applied != 4 {
+		t.Errorf("stats = %+v, want the queue empty and 4 applied (1 snapshot, 3 late)", st)
+	}
+	p.sink.mu.Lock()
+	late := p.sink.lateCharges
+	p.sink.mu.Unlock()
+	if late != 3 {
+		t.Errorf("late charges = %d, want 3: every late logout is charged, the snapshot is not", late)
+	}
+}
+
+// A late logout the limiter refuses is counted as rate limited and not applied; the publish is unaffected.
+func TestLogoutQueue_LateEntryRefusedByLimiter(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	p.sink.denyCharge = true
+	pendingInflow(t, p, h, 2)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	st := p.auth.LogoutQueueStats()
+	if p.auth.Pending() || st.Held != 0 || st.Applied != 1 || st.RateLimited != 2 {
+		t.Errorf("pending %v, stats %+v; want published, empty, 1 applied and 2 rate limited", p.auth.Pending(), st)
+	}
+}
+
+// A request that reaches the discovered path is charged through the sink, and answered 429 when it refuses.
+func TestBackchannelHandler_DiscoveredPathCharges(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	wantStatus(t, "a logout once discovered", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j1")), http.StatusOK)
+	if p.sink.charges != 1 {
+		t.Errorf("charges = %d, want 1", p.sink.charges)
+	}
+	p.sink.denyCharge = true
+	w := holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-2", "j2"))
+	wantStatus(t, "a refused charge", w, http.StatusTooManyRequests)
+	if w.Header().Get("Retry-After") == "" {
+		t.Error("the 429 carries no Retry-After")
+	}
+}
+
 // A nil reserved func is an accepted argument: draining a genuine held logout through it does not panic.
 func TestLogoutQueue_NilReservedFuncDrainsWithoutPanic(t *testing.T) {
 	p := newPendingEnv(t)

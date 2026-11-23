@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -92,6 +93,10 @@ const (
 // pending and has room to hold the token (see backchannelLogout).
 type backchannelExemptKey struct{}
 
+// backchannelExempt is the value of backchannelExemptKey; charged is set when the request was charged to the
+// limiter afterwards, so a successful cut refunds it like any other.
+type backchannelExempt struct{ charged atomic.Bool }
+
 // backchannelLogout serves POST /auth/backchannel-logout within backchannelLimiter, with 429 past it. While the
 // authenticator is pending (the provider has not been reached) and its queue has room, the route is exempt from
 // the limiter: a provider signing out many people at once must not lose the later ones to 429, and the queue's
@@ -99,7 +104,7 @@ type backchannelExemptKey struct{}
 func (s *Server) backchannelLogout() http.HandlerFunc {
 	s.cfg.OIDC.AttachLogoutQueueSink(logoutQueueSink{s: s})
 	next := s.cfg.OIDC.BackchannelLogoutHandler(s.isReservedPrincipal, func(r *http.Request, sub string, err error) {
-		if r.Context().Value(backchannelExemptKey{}) == nil {
+		if ex, _ := r.Context().Value(backchannelExemptKey{}).(*backchannelExempt); ex == nil || ex.charged.Load() {
 			s.backchannelLimiter.refund("", s.cfg.Now())
 		}
 		s.auditIdPLogout(r, "idp_back_channel_logout", sub, err)
@@ -118,7 +123,7 @@ func (s *Server) backchannelLogout() http.HandlerFunc {
 		}
 		ctx, _ := store.WithCLIEnded(r.Context())
 		if exempt {
-			ctx = context.WithValue(ctx, backchannelExemptKey{}, struct{}{})
+			ctx = context.WithValue(ctx, backchannelExemptKey{}, &backchannelExempt{})
 		}
 		next(w, r.WithContext(ctx))
 	}
@@ -126,6 +131,23 @@ func (s *Server) backchannelLogout() http.HandlerFunc {
 
 // logoutQueueSink writes the audit rows of the held back-channel logouts and applies a verified one.
 type logoutQueueSink struct{ s *Server }
+
+// ChargeLogout charges the limiter for a request that skipped it under the pending exemption but reached the
+// discovered path, and for a held logout that arrived during the drain and is checked after the publish. A
+// request the limiter already charged passes. It reports false when the limiter refuses.
+func (k logoutQueueSink) ChargeLogout(ctx context.Context) bool {
+	ex, _ := ctx.Value(backchannelExemptKey{}).(*backchannelExempt)
+	if ex == nil && !oidc.LogoutLate(ctx) {
+		return true
+	}
+	if !k.s.backchannelLimiter.allow("", k.s.cfg.Now()) {
+		return false
+	}
+	if ex != nil {
+		ex.charged.Store(true)
+	}
+	return true
+}
 
 // Noted writes one session.revoke.hold row per queued, refused or unverifiable logout, and one
 // session.revoke_hold.coalesce row per rate-limit summary. The target is never a person and never caller text:

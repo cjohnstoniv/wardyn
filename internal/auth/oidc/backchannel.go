@@ -58,6 +58,13 @@ func (a *Authenticator) BackchannelLogoutHandler(reserved func(sub string) bool,
 		if closed {
 			st, _ = a.state() // published since the first read: the discovered path
 		}
+		// A request the limiter let through because the authenticator was pending, and which reaches the discovered
+		// path, is charged now: its body may have arrived long after the headers.
+		if !a.chargeSkippedLimiter(r.Context()) {
+			w.Header().Set("Retry-After", "1")
+			backchannelRefuse(w, http.StatusTooManyRequests, "temporarily_unavailable", "too many logout tokens; retry later")
+			return
+		}
 		sub, problem := logoutTokenSub(r.Context(), st.verifier, r.PostForm.Get("logout_token"), time.Now())
 		if problem != "" {
 			backchannelRefuse(w, http.StatusBadRequest, "invalid_request", problem)
