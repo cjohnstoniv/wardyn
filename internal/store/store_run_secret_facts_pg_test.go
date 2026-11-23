@@ -184,3 +184,50 @@ func TestPG_RunSecretFacts_UpsertOrs(t *testing.T) {
 		t.Fatalf("a revive of a run with no row made one: %+v", f.Dispatch)
 	}
 }
+
+// TestPG_RunSecretFacts_RetentionDrop pins the retention-drop value: a `drop` anchor that removed rows recorded at
+// or after the run was created marks the run's mints unreadable, as does one whose recorded range is unknown; a
+// drop of rows from before the run, an empty drop and a `split` anchor do not.
+func TestPG_RunSecretFacts_RetentionDrop(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	old := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	if _, err := pool.Exec(ctx, `UPDATE agent_runs SET created_at = $2 WHERE id = $1`, old.ID, time.Now().Add(-72*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	fresh := persistRun(t, ctx, pool, newRun(types.RunRunning))
+	dropped := func(run types.AgentRun) bool {
+		t.Helper()
+		f, err := pg.ReadRunSecretFacts(ctx, run.ID, "harness login", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f.AuditRowsDropped
+	}
+	anchor := func(kind string, recordedHi *time.Time, rows *int64) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `INSERT INTO audit_chain_anchors (kind, partition_name, recorded_hi, row_count, actor)
+			VALUES ($1, 'audit_events_facts_test', $2, $3, 'test')`, kind, recordedHi, rows); err != nil {
+			t.Fatalf("anchor: %v", err)
+		}
+	}
+	if dropped(old) || dropped(fresh) {
+		t.Fatal("a run reads dropped with no anchor")
+	}
+	before, later := time.Now().Add(-48*time.Hour), time.Now().Add(time.Hour)
+	none, some := int64(0), int64(5)
+	anchor("drop", &later, &none)
+	anchor("split", &later, &some)
+	anchor("drop", &before, &some)
+	if !dropped(old) {
+		t.Error("a drop of rows recorded after the run was created does not count")
+	}
+	if dropped(fresh) {
+		t.Error("an empty drop, a split, or a drop of rows from before the run counts")
+	}
+	anchor("drop", nil, nil)
+	if !dropped(fresh) {
+		t.Error("a drop whose recorded range is unknown does not count")
+	}
+}
