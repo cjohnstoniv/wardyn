@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A run can carry up to 4 extra containers beside the agent (`containers` on `POST /runs`), on Kubernetes: each shares the agent's network, work folder and drives, egresses only through the run's proxy, runs under the agent's restricted security context with no secret, and takes its CPU and memory out of the run's size. Each image is pinned by digest and gated like `image`.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

@@ -154,6 +154,22 @@ A Kubernetes organisation runner can watch namespaces for `WardynWorkload` resou
 - The resource is only an authorisation key and a status carrier. Its run pods go to the pool's runs namespace on that runner, not to the resource's namespace.
 - A resource's workload is owned by the bound service identity, as `service:<name>`, with source `k8s`.
 
+A platform that can hand pod construction to Wardyn governs a workload by rendering a `WardynWorkload` in place of its
+own Deployment. Wardyn builds the pod, so every container in it is held by the run's walls. A workload made of
+several containers puts them in `intent.containers` ([Extra containers](../sdk.md#extra-containers)); the
+namespace's service identity needs an image grant for each image. Wardyn does not take over pods it did not create.
+What the platform gives up:
+
+- Its pod spec. An extra container takes a name, an image, a command, ports and a size: no env, probes, init
+  containers or volumes of its own. It runs as user 1000, and Wardyn picks the node and the sandbox class.
+- Its namespace. The run's pod is in the pool's runs namespace on the runner, so nothing reading pods, logs or
+  readiness in the resource's namespace sees it. A service there reaches the agent only through a `ui_apps`
+  app declared `inbound: true`.
+- A runner-less install. The resource needs an organisation runner on Kubernetes.
+- Kubernetes volume drives. A `k8s_pvc` drive is refused on a runner placement in this release.
+- Fast feedback at scale. A status can lag a change by up to 30 seconds, and a namespace with more than 1000
+  resources sends no full-list sync (see [Known limits](#known-limits)).
+
 ### Bind a namespace
 
 A binding says: the resources of namespace N, on the runners of pool P, launch as service identity S. It is standing authority, so it is made by a signed-in person with the security role, never with an API token or the admin token.
@@ -309,6 +325,7 @@ Do not use the `Ready` condition for health: a completed workload is `Ready=Fals
 - A replacement that waited in the queue of the pool its old run held a slot in has already ended that run. If its start is refused for the pin, the workload has no run until its next launch.
 - `wardyn apply --dry-run` prints a launch policy digest only for a workload that is owed a launch: a new or changed one, or one whose latest spec has not launched. To read the digest of an unchanged workload, dry-run the file with its `restart_key` changed.
 - A launch the dry run refuses before its policy is fully resolved, for example because no runner can take it, shows no digest.
+- Extra containers run on Kubernetes runners only; a workload with `intent.containers` bound to a pool of Docker runners is refused at each launch with `placement_capability`.
 
 ## Audit
 

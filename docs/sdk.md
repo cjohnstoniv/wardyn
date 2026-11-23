@@ -683,6 +683,66 @@ A `wardyn/v1` document with `kind: Run` is a draft of one run. Its `intent` hold
 - A held tool call's approval names the agent that asked in `requested_scope.harness`; an egress approval names none, since the agents share one proxy route: the agent whose tool-approval credential the call carried, never one the request body names. The agents share one user in the sandbox, so one agent could present another's credential; every agent holds the same met rules, so that changes the name on the card and never the decision.
 - Needs a harnesses image from 0.10.0 or later: an older image's launcher has no `--tasks`.
 
+### Extra containers
+
+`containers` on `POST /runs` runs up to 4 containers beside the agent, in the same sandbox. Kubernetes only, in
+server mode and on a Kubernetes runner.
+
+| Field | Rule |
+|---|---|
+| `name` | Lower-case letters, digits and dashes, at most 40. Not `agent`, and not starting with `wardyn-` or `stage-`. Unique in the run |
+| `image` | Pinned by digest: `<repository>@sha256:<64 hex>`, at most 256 bytes |
+| `command` | Optional. Replaces the image's entrypoint; at most 32 arguments. Stored with the run and its presets: never put a secret in it |
+| `ports` | Optional. The ports it listens on, 1024 to 65535, each used by one container. A declaration only: nothing is opened |
+| `resources.cpu_millis`, `resources.memory_mib` | Required: 1 to 1048576 millicores and 1 to 16777216 MiB. Taken out of the run's own size; the agent keeps at least 250 millicores and 256 MiB |
+
+What each extra container gets:
+- The agent's network: its only route out is the run's proxy, under the run's egress policy, and the proxy adds the
+  run's credentials to its requests exactly as to the agent's. It shares `127.0.0.1` with the agent, both ways.
+- No inbound connection. To open one of its ports in the console or to callers, list it in `ui_apps` with that port:
+  the gateway uses the port when something already listens on it.
+- The work folder at `/home/agent/work` and the run's drives, read-only where the drive is. Nothing else of the
+  agent's: no secret, no managed file, no service account token.
+- User 1000, no added capabilities and no privilege escalation, whatever the image's own user. An image that needs
+  root does not start.
+- Of the run's variables, only `WARDYN_RUN_ID`, `WARDYN_PROXY_URL`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (each
+  also lower-case) and, when the run inspects TLS, `WARDYN_MITM_CA_PEM`. The image must trust that certificate itself
+  for a host the run inspects; other hosts need nothing.
+- Its own `disk_mib` limit when the run sets one: each container's writes are bounded by it.
+
+Have it listen on `127.0.0.1`: the agent and the gateway reach it there, and a port bound to every address can be
+reachable from the node the pod runs on. (r1: L5)
+
+What an extra container changes in a run (r1: M7):
+- It runs what the agent sends it. Tool rules, the autonomy level and the harness's own walls bind the agent, not
+  what an extra container does for it over `127.0.0.1`, so an image grant for one is a grant of what that image
+  will run.
+- What the agent and an extra container exchange over `127.0.0.1` is in neither the run's recording nor the proxy's
+  audit; their traffic out through the proxy is in the audit as the agent's is.
+- Its `command` is stored with the run and its presets and is shown to whoever can read them. The `run.create` row
+  leaves it out.
+
+Who may add one: the image needs what `image` needs, an image grant for a member and the digest rule, and image
+admission checks each image. The verdicts are on the `201`'s run under `containers` and on the `run.create` row.
+The run's page and `GET /runs/{id}` do not list extra containers in this release. (r1: L6)
+
+The run starts when every extra container is running; one that cannot start fails the run with its name. One that
+exits later stays down and the run goes on. Its output is its container log, not part of the run's recording.
+
+| Answer | Why |
+|---|---|
+| `400` `run_containers_invalid` | An entry breaks a rule above; `field` names it |
+| `422` `run_containers_over_budget` | The containers leave the agent under its floor |
+| `422` `placement_capability`, `field` `containers` | The run lands on Docker or on a runner older than this release |
+| `422` `request_field_unavailable` | A VM `machine_kind` |
+| `403`, as an ungranted `image` is | A member's image is not granted |
+| `403` `governance_unit` | Your governance profile refuses commands nobody supervises (`deny_task_mode_exec`) |
+| `422` `request_field_unavailable`, `field` `containers` | Your organisation requires recording: `recording: required` on the organisation or the run's pool, or a recording level locked on. A governance profile's own recording level does not refuse them |
+
+Presets, run documents and a workload's `intent` carry `containers` like every other field. The New Run screens have
+no control for them: set them in the run document. A copy of a run that did not keep its setup is made from its
+`run.create` row and does not carry them, as it does not carry `image`. (r1: M4)
+
 ## Kept machines
 
 A kept machine is a person's macOS VM, kept on their own Mac between runs ([macOS VMs](operations/macos-vms.md#keeping-the-machine)). The refusal codes are in the [reason table](#reason-branch-on-this-never-on-errors-prose) as `kept_machine_*`.
