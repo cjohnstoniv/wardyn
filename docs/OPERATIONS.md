@@ -5576,6 +5576,14 @@ What the switch needs, and refuses to render or boot without:
   holds its lock on a connection of its own, outside `pool_max_conns`, so every
   replica elects and is fenced on a pool of any size ([ENV.md](ENV.md),
   `WARDYN_PG_DSN`).
+  The sweeps that must run once are split into four families (runs, credentials, audit
+  and records), each led by one replica on that connection, and a watchdog gives a family
+  up to another replica when every sweep it watches has gone three intervals without a success.
+  A sweep that does not stop when its family is given up keeps the family's lock, and the
+  family reads as stalled, until the sweep returns; a session the database ends drops the
+  lock anyway.
+  A run's start locks share two connections per replica: one statement that takes longer than 2 seconds, or an unlock the database refuses, closes that connection and ends every start hold on it, and each of those starts is refused rather than run unfenced.
+  A sweep family is fenced against an older replica only while every replica runs this version: an older replica that takes the single sweeper lock after this replica's database session ends does not stop a family sweep still running here, so upgrade with every replica stopped.
 - **A PodDisruptionBudget** (`minAvailable: 1`, at two or more replicas) and a preferred **pod anti-affinity**
   across nodes (soft, so a one-node cluster still schedules every replica; an
   `affinity.podAntiAffinity` of your own replaces it).

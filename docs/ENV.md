@@ -434,7 +434,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - All on top of whatever the pool needs for its own request-serving queries.
 - Below 4 wardynd warns at boot, because a request that finds the pool empty waits rather than fails.
 - The process-lifetime locks take nothing from the pool: the single-instance lock (`db.SingleInstanceLockKey`; wardynd refuses to start while another instance holds it; `WARDYN_HA` lifts that, and then no replica holds it).
-- The sweeper leader's lock (`db.SweeperLeaderLockKey`, which elects the one replica that runs the approval, recording, credential, always-egress and pause sweepers, on a pool of any size).
+- The sweeper election connection, on a pool of any size. The sweeps that must run once are split into four families: runs, credentials, audit and records.
+- Each family is led by one replica under its own lock (`db.SweeperFamilyLockClass`), and a replica holds every family it leads on this one connection.
+- A family leader holds `db.SweeperLeaderLockKey` there in shared mode, so a replica of an older version never leads beside it.
 - And the ground-truth rotator's leader-election lock (`db.GroundTruthRotatorLockKey`, only with `WARDYN_GROUNDTRUTH_TOKEN_FILE` or `WARDYN_GROUNDTRUTH_TOKEN_SECRET` set).
 - They each hold a connection of their own, dialled from the same DSN.
 - `pool_max_conns` plus up to 3 dedicated lifetime connections per replica.
@@ -451,10 +453,11 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - They each hold a connection of their own, dialled from the same DSN and kept out of the request pool.
 - So a slow guarded operation can never starve the queries it guards.
 - A process holds at most **8** at once (`WARDYN_LOCK_POOL_MAX_CONNS`, default 8).
+- A run's start locks are not among them: they share 2 fence connections per replica, whatever the setting.
 - Nested locks share their caller's connection, and a lock that finds all of them in use waits two seconds and is then refused with `503` `lock_unavailable` (retry), never skipped.
-- Budget Postgres `max_connections` for `pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 listener connections per replica, and up to 8 more for guarded credential writes.
+- Budget Postgres `max_connections` for `pool_max_conns` plus 3 dedicated lifetime connections plus 8 lock connections plus 2 fence connections plus 2 listener connections per replica, and up to 8 more for guarded credential writes.
 - That is at the default. With `WARDYN_LOCK_POOL_MAX_CONNS` set, count that number twice in place of the two 8s.
-- So at worst `pool_max_conns` plus 21 per replica at the default, or 5 plus twice `WARDYN_LOCK_POOL_MAX_CONNS` otherwise (every wardynd dials `LISTEN wardyn_live` and `LISTEN wardyn_mask` outside the pool, with `WARDYN_HA` or not).
+- So at worst `pool_max_conns` plus 23 per replica at the default, or 7 plus twice `WARDYN_LOCK_POOL_MAX_CONNS` otherwise (every wardynd dials `LISTEN wardyn_live` and `LISTEN wardyn_mask` outside the pool, with `WARDYN_HA` or not).
 - The sign-in supersede lock is the one exception, and keeps its documented behaviour on a pooled connection (see above).
 
 ### `WARDYN_LOCK_POOL_MAX_CONNS`

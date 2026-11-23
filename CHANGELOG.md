@@ -17,12 +17,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- Multiple replicas share the sweeps that run once: each of four sweep families has its own leader and fencing epoch, and a family whose sweeps stop ticking is handed to another replica (#4064).
+- A run's command start no longer opens a database connection of its own: start locks share two connections per replica, and no longer count against WARDYN_LOCK_POOL_MAX_CONNS (#4064).
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
 
 ### Fixed
 
 - When a replayed audit event was already stored, the audit sinks received it with empty chain hashes. They now receive the stored row's hashes.
+
+### Before you upgrade
+
+- Each replica holds 2 more database connections for locks; budget max_connections for them.
 
 ## [0.10.2] — 2026-11-22
 
