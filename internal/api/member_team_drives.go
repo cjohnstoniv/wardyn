@@ -278,7 +278,7 @@ func (s *Server) handlePutMemberTeamDrive(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.member.team.change", id.String(), "success", mustJSON(map[string]any{
+		"drive.member_team.change", id.String(), "success", mustJSON(map[string]any{
 			"drive": after.Drive.Name, "drive_id": id, "owner": after.Drive.OwnerSubject, "unit_id": after.UnitID,
 			"members_can_write": after.MembersCanWrite, "was": before.MembersCanWrite,
 		})))
