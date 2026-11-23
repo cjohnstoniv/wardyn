@@ -432,7 +432,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	resp := preflightResponse{
 		SetupItems:               items,
 		EnforcedConfinementClass: enforced,
-		ConfinementRaiseCause:    blastRadiusRaiseCause(f.confinementRaised),
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 warnings,
@@ -444,7 +443,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Attachments:              f.attachments,
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
-	resp.BarrierOptions = f.barrierOptions
+	resp.BarrierOptions, resp.ConfinementRaiseCause = f.barrierOptions, blastRadiusRaiseCause(f.confinementRaised)
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.AllowedModels, resp.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()
