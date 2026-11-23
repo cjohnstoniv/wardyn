@@ -75,6 +75,12 @@ type SandboxOrphanSweeper interface {
 	SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error)
 }
 
+// SandboxOrphanHolder is the sweep with a hold (WARDYN_ORPHAN_SWEEP_HOLD): an orphan held(runID) names has its
+// proxy stopped and its agent stopped and kept, never removed. Only the server's own Docker holds; held counts them.
+type SandboxOrphanHolder interface {
+	SweepOrphanedSandboxesHolding(ctx context.Context, minAge time.Duration, isOrphan, held func(runID uuid.UUID) bool) (swept, heldN int, err error)
+}
+
 // ReconcileOnBoot rebuilds the safety net that keeps a run from stranding
 // non-terminal forever with a live sandbox and un-revoked credentials (C3), then
 // keeps rebuilding it for the life of the daemon. Three parts, because they are
@@ -293,6 +299,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 	sctx, cancel := context.WithTimeout(ctx, orphanSweepBound)
 	defer cancel()
 	sweepEnd, _ := sctx.Deadline()
+	rowless := map[uuid.UUID]bool{} // the ids this pass found with no run row: the only ones a hold may keep
 	isOrphan := func(runID uuid.UUID) bool {
 		if liveChecks[runID] {
 			return false
@@ -303,6 +310,7 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 			return false // a run that cannot be read is never torn down
 		}
 		if !known {
+			rowless[runID] = true
 			return true // no run row owns these containers — pure leak
 		}
 		if isTerminalRunState(run.State) {
@@ -323,9 +331,36 @@ func (s *Server) sweepOrphanedSandboxes(ctx context.Context) error {
 		}
 		return true
 	}
-	swept, err := sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
+	hold, now := s.cfg.OrphanSweepHold, s.cfg.Now()
+	held := func(runID uuid.UUID) bool {
+		if hold <= 0 || !rowless[runID] {
+			return false
+		}
+		first, _ := s.orphanFirstSeen.LoadOrStore(runID, now)
+		return now.Sub(first.(time.Time)) < hold
+	}
+	var swept, heldN int
+	if holder, ok := s.cfg.Runner.(SandboxOrphanHolder); ok && hold > 0 {
+		swept, heldN, err = holder.SweepOrphanedSandboxesHolding(sctx, undispatchedGrace, isOrphan, held)
+	} else {
+		swept, err = sweeper.SweepOrphanedSandboxes(sctx, undispatchedGrace, isOrphan)
+	}
 	if swept > 0 {
 		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep", slog.Int("swept", swept))
+	}
+	if heldN > 0 {
+		slog.InfoContext(ctx, "wardynd: orphaned sandbox sweep held sandboxes with no run row", slog.Int("held", heldN), slog.Duration("hold", hold))
+	}
+	if err == nil && lookupErr == nil {
+		// A sandbox still there after a failed teardown is asked about again and keeps its first-seen time, so it
+		// never earns a second hold; a swept or vanished one is not asked about, so its entry goes. A pass that
+		// never listed the sandboxes, or never read a row, restarts no count.
+		s.orphanFirstSeen.Range(func(k, _ any) bool {
+			if !rowless[k.(uuid.UUID)] {
+				s.orphanFirstSeen.Delete(k)
+			}
+			return true
+		})
 	}
 	if err = errors.Join(err, lookupErr); err != nil {
 		return fmt.Errorf("sweep orphaned sandboxes: %w", err)

@@ -11,12 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
+- WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+
 ### Changed
 
 - `WARDYN_ATTACH_LOCAL` is now `on` by default. A person's `wardyn attach` on their own runner's computer keeps the
   terminal on that computer. The organisation still admits it exactly as an attach through the relay, holds the
   writer lease and keeps the audit rows; the recording is made from the runner's copy of the output.
 - Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once for as long as the run stays on its runner. Revocations still end a runner's session within one check (15 seconds).
+- After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
+- Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
 
 ### Fixed
 
