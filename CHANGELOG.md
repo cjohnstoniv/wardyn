@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
