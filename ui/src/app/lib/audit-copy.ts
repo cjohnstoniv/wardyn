@@ -90,6 +90,7 @@ const ACTION_VERB: Record<string, string> = {
   // pending H11-P2: recommended text until the owner answers; the packet names no label for wardyn sync's own row.
   "ssh.sync.transfer": "a wardyn sync session against the run's sandbox",
   "ssh.forward": "an ssh port forward into the run's sandbox",
+  "run.port.forward": "a port forward into the run's sandbox through the organisation",
   "kernel.process.exec": "observed a process exec",
   "kernel.network.connect": "observed a network connect",
   "kernel.file.write": "observed a write to a sensitive path",

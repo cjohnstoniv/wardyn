@@ -213,6 +213,8 @@ var queryIDMatrix = map[string]queryIDRoute{
 // non-id stays a non-id wherever it is read. An id-shaped name read by a new
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
+	"port":                      "GET /runs/{id}/attach/forward: a port number from 1 to 65535 on the path run's own sandbox loopback, already authorised by the ticket and the entry rule; it names no entity",
+	"check":                     "GET /runs/{id}/attach/forward: 1 asks for every check and a 204 without opening anything; it names no entity",
 	"limit":                     "page window (parseListPage)",
 	"run_in":                    "GET /policies/default: one of the caller's own units to read their ceiling in, by id or exact name; a unit they are not in, another person's or none, is the same 403 unit_not_a_context (TestDefaultPolicyContexts), so it selects no other principal's entity and tells no one which units exist",
 	"key":                       "GET /runs/{id}/recording-chain: a recording key of the path's run, already authorised by the recording read's rule; the range query matches it only on that run's own desktop.recording.write row (run_id = the path id), so another run's key is the same 404 as an unknown one (TestRecordingChain_ReadersOnly)",
