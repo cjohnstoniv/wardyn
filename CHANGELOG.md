@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Documentation
+
+- The Helm README now covers CC3 on a managed Kubernetes Kata pool: a values recipe that tolerates the pool's taint and prefers other nodes for other classes, with the RuntimeClass's own scheduling pinning Kata runs; that offering CC3 raises runs holding a write-capable grant or an `api_key` to a host outside the baseline, so they need Kata slots; to set an organisation default barrier first, because a launch naming no barrier otherwise gets the strongest class offered; that a Kata guest is sized from the run's limits, so JVM heaps belong under `memory_mib`; and a field report that CC3 runs and ReadWriteOnce `k8s_pvc` drives work on a managed Kata pool, leaving shared (ReadWriteMany) drives as unknown. [Dev sandboxes](docs/UI-SANDBOXES.md) now says the application-server form is failed before create while `WARDYN_START_AFTER_READBACK` is on.
+
 ## [0.10.3] — 2026-11-23
 
 ### Added
