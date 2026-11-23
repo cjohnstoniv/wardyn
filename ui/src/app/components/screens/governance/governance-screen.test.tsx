@@ -72,6 +72,14 @@ const listUserTypesMock = vi.fn();
 vi.mock("../../../lib/api/user-types", () => ({
   userTypes: { listUserTypes: () => listUserTypesMock() },
 }));
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
 import type { DirectoryEntry } from "../../../lib/api/directory";

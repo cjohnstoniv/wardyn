@@ -82,6 +82,15 @@ vi.mock("../../../lib/api/agent-providers", () => ({
   agentProviders: { getAgentProviders: () => Promise.resolve({ providers: {}, etag: null }) },
 }));
 
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
+
 // The model card's sign-in pane drives a real PTY through xterm, which does not
 // render in jsdom.
 vi.mock("./harness-login-pane", () => ({
