@@ -11,8 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.
+- The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
+- WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+
 ### Changed
 
+- After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
+- Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
+- Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
+- Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke. A session's first keystroke, and the first after 570 seconds without one, still wait for the stamp, so a run paused meanwhile is thawed before the keystroke reaches it.
+- SSH gateway defaults, per replica: 256 authenticated connections (was 64) and 8 channels per run, SSH channels and API commands together (was 4). `WARDYN_SSH_MAX_HANDSHAKES` (default 64) sets the number of connections handshaking at once, which was fixed at 64.
 - The Runs board reads ended runs through a new index on their end time, live and ended runs as two ordered reads, and a member's list that includes sponsored service runs through the creator index, so reading a page of the board no longer walks the caller's whole run history.
 - The attention badge and the "Needs you" filter read only runs that can need attention.
 - `/healthz` reuses its runner, network-policy and sensor reads for up to 2 seconds, one read at a time. A stalled database still fails it.
@@ -21,8 +32,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The terminal-sandbox retry sweep pages by run creation time and id, so runs created between sweeps no longer hold it on its newest page.
 - Debounce and ready caches drop only expired entries when they grow large, instead of forgetting every entry.
 
+### Fixed
+
+- SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
+
 ### Before you upgrade
 
+- The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 - Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
 
 ## [0.10.3] — 2026-11-23
