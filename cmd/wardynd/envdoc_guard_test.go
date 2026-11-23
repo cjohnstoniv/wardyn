@@ -139,6 +139,10 @@ var envDocShellOnly = map[string]bool{
 	// service_state): a seam for scripts/test-service-supervisor.sh only. wardynd
 	// reads the default path over exec and never sets or reads this var.
 	"WARDYN_SERVICE_STATE_FILE": true,
+	// The repository clones' state-file path (deploy/images/common/agent-run-lib.sh
+	// _clone_state_write): a seam for scripts/test-clone-state.sh only. wardynd
+	// reads the default path and never sets or reads this var.
+	"WARDYN_CLONE_STATE_FILE": true,
 	// The store-mode and Transit compose overlays' host directory holding the
 	// Vault token (deploy/compose/docker-compose.{vault,transit}.yaml); Go reads
 	// the mounted file.
