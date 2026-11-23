@@ -242,6 +242,30 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 	return n, nil
 }
 
+// BlankRunTaskByID is BlankRunTasks' run blank for one run alone: the task text, title, description and
+// correlation id of that run, marked erased while it waits so a promoted start cannot put the text back, then
+// its agents' own tasks. A repeating schedule's booking that lands after its schedule was deleted, by the owner
+// or by an erasure, is blanked with it; no other run is touched.
+func (s PG) BlankRunTaskByID(ctx context.Context, runID uuid.UUID) error {
+	waiting := []string{string(types.RunQueued), string(types.RunPending)}
+	if _, err := s.Pool.Exec(ctx, `UPDATE agent_runs SET task = '', title = '', description = '', correlation_id = '',
+			tasks_erased_at = CASE WHEN state = ANY($2) THEN COALESCE(tasks_erased_at, now()) ELSE tasks_erased_at END
+		WHERE id = $1`, runID, waiting); err != nil {
+		return fmt.Errorf("store: blank a run's task: %w", err)
+	}
+	var held bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_harnesses h WHERE h.run_id = $1 AND h.task <> '')`,
+		runID).Scan(&held); err != nil {
+		return fmt.Errorf("store: read a run's agent tasks: %w", err)
+	}
+	if held {
+		if _, err := s.Pool.Exec(ctx, `UPDATE run_harnesses h SET task = '' WHERE h.run_id = $1 AND h.task <> ''`, runID); err != nil {
+			return fmt.Errorf("store: blank a run's agent tasks: %w", err)
+		}
+	}
+	return nil
+}
+
 // PrincipalForName maps a name an event carries (a principal, an entra:<tenant>:<object> form, an
 // email the person signed in with) to the person's principal through PrincipalsNamed, the one answer
 // erasure resolves by. A name that resolves to none, or to more than one, is returned as it is. The
