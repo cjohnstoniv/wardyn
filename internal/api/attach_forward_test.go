@@ -642,11 +642,25 @@ func (fr *forwardRig) forwardAs(t *testing.T, ta ticketActor) *httptest.Response
 	return w
 }
 
+// sponsoringStore is the rig's store with the optional service identity reads: sponsor is every service identity's
+// current sponsor.
+type sponsoringStore struct {
+	*forwardStore
+	store.ServiceIdentityStore
+	sponsor string
+}
+
+func (s sponsoringStore) ServiceStillSponsored(_ context.Context, _, sponsor string, _ time.Time) (bool, error) {
+	return sponsor == s.sponsor, nil
+}
+
 func TestAttachForward_ServiceIdentityRunRefused(t *testing.T) {
 	fr := newForwardRig(t, true, nil)
+	fr.srv.cfg.Store = sponsoringStore{forwardStore: fr.st, sponsor: forwardOwner}
 	run := fr.addRun(types.ServicePrincipalPrefix+"bot", nil)
 	for name, principal := range map[string]string{"sponsor": forwardOwner, "service": types.ServicePrincipalPrefix + "bot"} {
 		t.Run(name, func(t *testing.T) {
+			before := len(execRows(fr.audit.snapshot(), "session.attach"))
 			ta := ticketActor{actorType: types.ActorHuman, principal: principal, role: oidc.RoleUser, authorizedAt: time.Now()}
 			rc := chi.NewRouteContext()
 			rc.URLParams.Add("id", run.String())
@@ -655,6 +669,10 @@ func TestAttachForward_ServiceIdentityRunRefused(t *testing.T) {
 			w := httptest.NewRecorder()
 			fr.srv.handleAttachForward(w, req)
 			fr.wantReason(t, w, http.StatusForbidden, runOwnerOnlyReason)
+			rows := execRows(fr.audit.snapshot(), "session.attach")
+			if len(rows) != before+1 || rows[before].Outcome != "failure" || rowFields(t, rows[before])["reason"] != runOwnerOnlyReason {
+				t.Errorf("session.attach rows = %d (was %d), want one more, a failure with reason %s", len(rows), before, runOwnerOnlyReason)
+			}
 		})
 	}
 	fr.wantNoExec(t)
