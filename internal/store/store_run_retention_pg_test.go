@@ -33,10 +33,11 @@ func retentionExec(t *testing.T, pool *pgxpool.Pool, q string, args ...any) {
 	}
 }
 
-// endRun sets the run's state and its end time daysAgo days back.
+// endRun sets the run's state and its end time daysAgo days back, and records its sandbox as gone.
 func endRun(t *testing.T, pool *pgxpool.Pool, id uuid.UUID, state types.RunState, daysAgo int) {
 	t.Helper()
-	retentionExec(t, pool, `UPDATE agent_runs SET state = $2, ended_at = now() - make_interval(days => $3) WHERE id = $1`, id, string(state), daysAgo)
+	retentionExec(t, pool, `UPDATE agent_runs SET state = $2, ended_at = now() - make_interval(days => $3), sandbox_ref = '' WHERE id = $1`,
+		id, string(state), daysAgo)
 }
 
 func runExists(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) bool {
@@ -137,11 +138,11 @@ func TestDeleteExpiredRunsKeepsLiveAndHeldPG(t *testing.T) {
 
 	// A lease-ended run is still RUNNING: its end time is lost_at, but it is not terminal.
 	lost := f.run(t)
-	retentionExec(t, pool, `UPDATE agent_runs SET lost_reason = 'ended', lost_at = now() - interval '40 days' WHERE id = $1`, lost.ID)
+	retentionExec(t, pool, `UPDATE agent_runs SET lost_reason = 'ended', lost_at = now() - interval '40 days', sandbox_ref = '' WHERE id = $1`, lost.ID)
 	kept = append(kept, lost.ID)
 	ended(types.RunQueued)
 	failed := f.run(t)
-	retentionExec(t, pool, `UPDATE agent_runs SET state = 'FAILED', ended_at = NULL WHERE id = $1`, failed.ID)
+	retentionExec(t, pool, `UPDATE agent_runs SET state = 'FAILED', ended_at = NULL, sandbox_ref = '' WHERE id = $1`, failed.ID)
 	kept = append(kept, failed.ID)
 
 	pushRun := ended(types.RunCompleted)
@@ -174,6 +175,12 @@ func TestDeleteExpiredRunsKeepsLiveAndHeldPG(t *testing.T) {
 		VALUES ('owner', 'workload-a', 'api', '{}', 'digest', 'owner', $1)`, workloadRun.ID)
 	heldTeardown := ended(types.RunKilled)
 	retentionExec(t, pool, `INSERT INTO run_teardown_holds (run_id, runner_id, kind, since) VALUES ($1, $2, 'kill', now())`, heldTeardown.ID, f.rn.ID)
+	// A sandbox never confirmed gone: the terminal sandbox sweep still finds it by this row.
+	sandboxLeft := ended(types.RunCompleted)
+	retentionExec(t, pool, `UPDATE agent_runs SET sandbox_ref = $2 WHERE id = $1`, sandboxLeft.ID, sandboxLeft.SandboxRef)
+	containment := ended(types.RunKilled)
+	retentionExec(t, pool, `INSERT INTO run_containment_pending (run_id, runner_id, kind, since) VALUES ($1, $2, 'agent_only', now())`,
+		containment.ID, f.rn.ID)
 
 	// An asserted subject's action (no run) supersedes one of this run's.
 	superseded := ended(types.RunFailed)

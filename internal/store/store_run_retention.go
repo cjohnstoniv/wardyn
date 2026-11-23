@@ -25,7 +25,8 @@ var retentionTerminalStates = []string{
 // (ON DELETE RESTRICT or no action: 0182, 0183, 0288, 0085 through the run's approvals, and 0155's two
 // self-references on runner_pending_actions, where another run's action, or an asserted subject's with no
 // run, supersedes or settles one of this run's); the last name the run as live state (0250 kept machines and
-// 0253's unconfirmed fresh start, 0241 workloads, 0286 teardown holds).
+// 0253's unconfirmed fresh start, 0241 workloads, 0286 teardown holds, and 0189's containment pending: pods
+// deleted with no proof that the processes stopped).
 const runRetentionHeldSQL = `(
 	EXISTS (SELECT 1 FROM runner_output_watermarks x WHERE x.run_id = r.id) OR
 	EXISTS (SELECT 1 FROM runner_retirements x WHERE x.run_id = r.id) OR
@@ -38,7 +39,8 @@ const runRetentionHeldSQL = `(
 	EXISTS (SELECT 1 FROM kept_machines x WHERE x.run_id = r.id) OR
 	EXISTS (SELECT 1 FROM kept_machines x WHERE x.reset_run_id = r.id) OR
 	EXISTS (SELECT 1 FROM workloads x WHERE x.current_run_id = r.id) OR
-	EXISTS (SELECT 1 FROM run_teardown_holds x WHERE x.run_id = r.id))`
+	EXISTS (SELECT 1 FROM run_teardown_holds x WHERE x.run_id = r.id) OR
+	EXISTS (SELECT 1 FROM run_containment_pending x WHERE x.run_id = r.id))`
 
 // runRetentionStatementTimeout bounds one batch statement, as the recording sweep bounds its delete: a batch
 // that cannot finish in it is cancelled, and the next tick tries again.
@@ -46,12 +48,13 @@ var runRetentionStatementTimeout = "5min"
 
 // DeleteExpiredRuns deletes up to limit ended runs whose end time is older than olderThan, with every row that
 // cascades from them, and records a run_history_tombstones row for each in the same statement. A run held by
-// runRetentionHeldSQL is kept. The statement runs under runRetentionStatementTimeout. It returns how many runs
+// runRetentionHeldSQL is kept, and so is one whose sandbox was never confirmed gone (sandbox_ref set): the
+// sandbox sweeps find it through its row. The statement runs under runRetentionStatementTimeout. It returns how many runs
 // it deleted.
 func (s PG) DeleteExpiredRuns(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
 	q := `WITH doomed AS (
 		SELECT r.id FROM agent_runs r
-		WHERE r.state = ANY($1) AND ` + runEndTimeR + ` < now() - make_interval(secs => $2::bigint)
+		WHERE r.state = ANY($1) AND r.sandbox_ref = '' AND ` + runEndTimeR + ` < now() - make_interval(secs => $2::bigint)
 		  AND NOT ` + runRetentionHeldSQL + `
 		ORDER BY r.id LIMIT $3
 		FOR UPDATE OF r SKIP LOCKED
