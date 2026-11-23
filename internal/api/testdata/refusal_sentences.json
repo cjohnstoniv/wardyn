@@ -275,6 +275,11 @@
     "sentence": "fmt.Sprintf(\"the deciders of unit %s allow this %s request to be decided up to %q; %q reaches further\", v.unit, v.kind, limit, scope)"
   },
   {
+    "reason": "decision_scope_above_rule",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"the unit deciders could not be read, so this %s request is decided once at most; %q reaches further\", v.kind, scope)"
+  },
+  {
     "reason": "delegation_scope",
     "target": "id.String()",
     "sentence": "(audit only)"

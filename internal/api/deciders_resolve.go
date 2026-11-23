@@ -45,6 +45,9 @@ type deciderVerdict struct {
 	// ownerCapDenied: rule lists owner and the caller owns the run, but the egress_host grant refuses them the
 	// host. The member path then answers its own capability refusal.
 	ownerCapDenied bool
+	// unreadable: the rules or the unit tree could not be read and a security caller decides anyway. No rule is
+	// known, so the narrowest binds: once at most (capScopeToRule).
+	unreadable bool
 }
 
 func (v deciderVerdict) decides() bool { return v.basis != "" }
@@ -332,8 +335,8 @@ func (s *Server) writeDecidersUnreadable(w http.ResponseWriter, r *http.Request,
 
 // deciderForDecide is decide's read of the rule and the caller's basis, for every caller past the member gate,
 // and the rule's max_scope over scope (capScopeToRule). A security caller whose run or rules cannot be read
-// still decides, as without deciders (the deployment switches still bind); anyone else is refused (503). It
-// loads the run into run when it reads one.
+// still decides, under the narrowest rule (deciderVerdict.unreadable); anyone else is refused (503). It loads
+// the run into run when it reads one.
 func (s *Server) deciderForDecide(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, run *types.AgentRun, haveRun *bool, scope types.ApprovalScope) (deciderVerdict, types.ApprovalScope, bool) {
 	ctx := r.Context()
 	if deciderKindOf(ap) == "" {
@@ -358,7 +361,7 @@ func (s *Server) deciderForDecide(w http.ResponseWriter, r *http.Request, id uui
 	}
 	switch {
 	case err != nil && security:
-		return deciderVerdict{}, scope, true
+		v = deciderVerdict{kind: deciderKindOf(ap), unreadable: true}
 	case err != nil:
 		s.writeDecidersUnreadable(w, r, ap, err)
 		return deciderVerdict{}, scope, false
@@ -383,16 +386,20 @@ func scopeRank(sc types.ApprovalScope) int {
 }
 
 // capScopeToRule is the rule's max_scope over a decision's scope, for every decider. Under a rule the cap is
-// at most run, so always (which persists the host onto the workspace beyond the run) is always refused. A
-// decision sent with no scope keeps the kind's default unless an egress default (the run) reaches past the
-// cap, when it is decided once: an egress_domain request's, or a host rule hold's whose proxy accepts once
-// (hostCallDecisionRule). A wider explicit scope is refused (403 decision_scope_above_rule).
+// at most run, so always (which persists the host onto the workspace beyond the run) is always refused. While
+// the rules cannot be read (v.unreadable) the cap is once. A decision sent with no scope keeps the kind's
+// default unless an egress default (the run) reaches past the cap, when it is decided once: an egress_domain
+// request's, or a host rule hold's whose proxy accepts once (hostCallDecisionRule). A wider explicit scope is
+// refused (403 decision_scope_above_rule).
 func (s *Server) capScopeToRule(w http.ResponseWriter, r *http.Request, id uuid.UUID, ap types.ApprovalRequest, v deciderVerdict, scope types.ApprovalScope) (types.ApprovalScope, bool) {
-	if v.rule == nil {
+	if v.rule == nil && !v.unreadable {
 		return scope, true
 	}
 	limit := types.ScopeRun
-	if v.rule.MaxScope != "" {
+	switch {
+	case v.unreadable:
+		limit = types.ScopeOnce
+	case v.rule.MaxScope != "":
 		limit = v.rule.MaxScope
 	}
 	if scope == "" {
@@ -403,6 +410,12 @@ func (s *Server) capScopeToRule(w http.ResponseWriter, r *http.Request, id uuid.
 	}
 	if scopeRank(limit) > 0 && scopeRank(scope) <= scopeRank(limit) {
 		return scope, true
+	}
+	if v.unreadable {
+		s.refuse(w, r, authz.Deny(authz.ReasonDecisionScopeAboveRule, id.String(), fmt.Sprintf(
+			"the unit deciders could not be read, so this %s request is decided once at most; %q reaches further", v.kind, scope)).
+			OnRun(ap.RunID))
+		return scope, false
 	}
 	s.refuse(w, r, authz.Deny(authz.ReasonDecisionScopeAboveRule, id.String(), fmt.Sprintf(
 		"the deciders of unit %s allow this %s request to be decided up to %q; %q reaches further", v.unit, v.kind, limit, scope)).

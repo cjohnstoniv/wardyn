@@ -560,14 +560,15 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		state = types.ApprovalApproved
 	}
 	result, err := s.cfg.Approvals.Decide(r.Context(), id, decidedByType, types.ApprovalDecision{
-		State:     state,
-		DecidedBy: decidedBy,
-		Reason:    body.Reason,
-		Scope:     scope,
-		ExpiresAt: body.ExpiresAt,
-		Policy:    policyMatchFrom(r.Context()),
-		Basis:     dv.basis,
-		Rule:      dv.ruleRef(),
+		State:              state,
+		DecidedBy:          decidedBy,
+		Reason:             body.Reason,
+		Scope:              scope,
+		ExpiresAt:          body.ExpiresAt,
+		Policy:             policyMatchFrom(r.Context()),
+		Basis:              dv.basis,
+		Rule:               dv.ruleRef(),
+		DecidersUnreadable: dv.unreadable,
 	})
 	if err != nil {
 		// The break-glass leaves a row even when the decision fails, because

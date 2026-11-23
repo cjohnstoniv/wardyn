@@ -71,3 +71,15 @@ func TestDecidedAuditBytesUnchangedWithoutRule(t *testing.T) {
 		t.Errorf("approval.decide data =\n %s\nwant\n %s", ev.Data, want)
 	}
 }
+
+// TestDecideAuditSaysDecidersUnreadable: a decision made while the unit deciders could not be read says so on its
+// approval.decide row, beside the usual keys and with no basis or rule.
+func TestDecideAuditSaysDecidersUnreadable(t *testing.T) {
+	id, ev := decideRow(t, types.ApprovalDecision{
+		State: types.ApprovalDenied, DecidedBy: "sub-sec", Reason: "ok", Scope: types.ScopeOnce, DecidersUnreadable: true,
+	})
+	want := `{"approval_id":"` + id.String() + `","deciders_unreadable":true,"decision":"DENIED","decision_scope":"once","host":"registry.npmjs.org","reason":"ok"}`
+	if string(ev.Data) != want {
+		t.Errorf("approval.decide data =\n %s\nwant\n %s", ev.Data, want)
+	}
+}
