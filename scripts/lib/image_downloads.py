@@ -625,7 +625,7 @@ def check_wget(body):
                              "[ \"$(printf '%s\\n' \"$keys\" | grep -c '^pub:')\" = 1 ] || { ...; exit 1; }; "
                              "fpr=\"$(printf '%s\\n' \"$keys\" | awk -F: '$1 == \"fpr\" { print $10; exit }')\"; "
                              "[ \"$fpr\" = \"<40 hex>\" ] || { ...; exit 1; }")
-        if not re.search(r"\bwget\s[^;|&]*\s" + re.escape(path) + r"(?=[\s;|&]|$)", body[:at]):
+        if not re.search(r"(?:^|[;&|({])\s*wget\s(?:[^;|&]*\s)?-q?O\s+" + re.escape(path) + r"(?=[\s;|&]|$)", body[:at]):
             raise ValueError(f"wget download {path} is fetched after its fingerprint is asserted; fetch it, then assert it, then use it")
         if body[:check.end()].count(path) != 2:
             raise ValueError(f"wget download {path} is used before its fingerprint is asserted")

@@ -211,6 +211,7 @@ class ImageDownloads(unittest.TestCase):
             "wget_fpr_from_another_variable": (f"RUN set -eu; {KEY_FETCH}; " + KEY_SHOW.replace('fpr="$(printf \'%s\\n\' "$keys"', 'fpr="$(printf \'%s\\n\' "$other"') + f"; {KEY_ASSERT}; {KEY_USE}", "as one sequence"),
             "wget_refetched_after_assert": (f"RUN set -eu; {KEY_FETCH}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched more than once"),
             "wget_fetched_after_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/k.asc; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_mentioned_before_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/; command -v wget  /tmp/k.asc || :; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
             "wget_sequence_in_a_comment": (f"RUN set -eu; {KEY_FETCH} # {KEY_SHOW}; {KEY_ASSERT}", "as one sequence"),
             "unquoted_hash_record": (f"RUN set -e; sum={HASH}; {DOWNLOAD}; echo $sum\\ \\ /tmp/a.tgz | sha256sum -c -", "double-quoted"),
         }
