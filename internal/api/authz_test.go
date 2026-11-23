@@ -999,6 +999,9 @@ var routeMatrix = map[string]classifiedRoute{
 	// Thawing a paused run keeps its sandbox busy: a write, so not the
 	// security tier's inspect-or-stop.
 	"POST /api/v1/runs/{id}/resume": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	// Moving a paused run, and reading its placements: owner or super admin, as resume.
+	"POST /api/v1/runs/{id}/move":      {class: classOwner, entity: entityRun, ownerTier: tierSuper},
+	"GET /api/v1/runs/{id}/placements": {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	// Revive gives a run egress again: a write, like PATCH above.
 	"POST /api/v1/runs/{id}/revive":             {class: classOwner, entity: entityRun, ownerTier: tierSuper},
 	"POST /api/v1/runs/{id}/profile":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
@@ -1936,9 +1939,10 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive).
-		if probed != 55 {
-			t.Errorf("probed %d classOwner routes, want 55 — a route that left classOwner takes its tier "+
+		// /runs/{id}/egress (tierSuper, as revive); 57 since 0.11 added POST
+		// /runs/{id}/move and GET /runs/{id}/placements (tierSuper, as resume).
+		if probed != 57 {
+			t.Errorf("probed %d classOwner routes, want 57 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
