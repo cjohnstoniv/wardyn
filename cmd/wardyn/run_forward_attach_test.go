@@ -121,6 +121,29 @@ func startForward(t *testing.T, f *forwardOrgFixture, args ...string) (stderr *s
 	return stderr, cancel, ch
 }
 
+// startForwardFree runs `run forward <port>:<remote>` on a free local port and returns that port once the command
+// listens. The command binds the named port itself and takes no listener, so it picks again, up to 3 times, when
+// another process took the port before the bind.
+func startForwardFree(t *testing.T, f *forwardOrgFixture, remote string) (port int, stderr *syncBuffer, cancel context.CancelFunc, done <-chan error) {
+	t.Helper()
+	for try := 1; ; try++ {
+		port = freePort(t)
+		stderr, cancel, done = startForward(t, f, strconv.Itoa(port)+":"+remote)
+		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(stderr.String(), "(Ctrl-C to stop)") && len(done) == 0 && time.Now().Before(deadline); {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if strings.Contains(stderr.String(), "(Ctrl-C to stop)") {
+			return port, stderr, cancel, done
+		}
+		if len(done) == 0 || try == 3 {
+			t.Fatalf("stderr %q never held the listening line", stderr.String())
+		}
+		if err := <-done; err == nil || !strings.Contains(err.Error(), "is not free here") {
+			t.Fatalf("forward exited before it listened: %v", err)
+		}
+	}
+}
+
 func waitForText(t *testing.T, b *syncBuffer, want string) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
@@ -233,7 +256,7 @@ func TestRunForward_GatewayOffOlderServer(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			}
-			_, err := runForwardSync(t, f, strconv.Itoa(freePort(t))+":4000")
+			_, err := runForwardSync(t, f, "1:4000")
 			if err == nil {
 				t.Fatal("want a refusal")
 			}
@@ -253,8 +276,7 @@ func TestRunForward_GatewayOffOlderServer(t *testing.T) {
 
 func TestRunForward_GatewayOffForwardsThroughTheOrganisation(t *testing.T) {
 	f := newForwardOrgFixture(t)
-	port := freePort(t)
-	stderr, cancel, done := startForward(t, f, strconv.Itoa(port)+":4000")
+	port, stderr, cancel, done := startForwardFree(t, f, "4000")
 	waitForText(t, stderr, "through the organisation (Ctrl-C to stop)")
 	echoOnce(t, port, "hello")
 	echoOnce(t, port, "again")
@@ -307,8 +329,7 @@ func TestRunForward_MintRefusedClosesThatConnection(t *testing.T) {
 				}
 				good(n, w)
 			}
-			port := freePort(t)
-			stderr, cancel, done := startForward(t, f, strconv.Itoa(port)+":4000")
+			port, stderr, cancel, done := startForwardFree(t, f, "4000")
 			waitForText(t, stderr, "(Ctrl-C to stop)")
 			conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
 			if err != nil {
@@ -332,8 +353,7 @@ func TestRunForward_MintRefusedClosesThatConnection(t *testing.T) {
 
 func TestRunForward_HalfCloseClosesBoth(t *testing.T) {
 	f := newForwardOrgFixture(t)
-	port := freePort(t)
-	stderr, cancel, done := startForward(t, f, strconv.Itoa(port)+":4000")
+	port, stderr, cancel, done := startForwardFree(t, f, "4000")
 	waitForText(t, stderr, "(Ctrl-C to stop)")
 	conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
@@ -387,7 +407,7 @@ func TestRunForward_TransportErrorNeverPrintsTheTicket(t *testing.T) {
 	t.Run("pre_check", func(t *testing.T) {
 		f := newForwardOrgFixture(t)
 		f.check = func(w http.ResponseWriter, _ *http.Request) { dropConn(w) }
-		_, err := runForwardSync(t, f, strconv.Itoa(freePort(t))+":4000")
+		_, err := runForwardSync(t, f, "1:4000")
 		if err == nil || !strings.HasPrefix(err.Error(), "forward:") {
 			t.Fatalf("err = %v, want a forward: refusal", err)
 		}
@@ -398,8 +418,7 @@ func TestRunForward_TransportErrorNeverPrintsTheTicket(t *testing.T) {
 	t.Run("dial", func(t *testing.T) {
 		f := newForwardOrgFixture(t)
 		f.dial = func(w http.ResponseWriter, _ *http.Request) bool { dropConn(w); return true }
-		port := freePort(t)
-		stderr, cancel, done := startForward(t, f, strconv.Itoa(port)+":4000")
+		port, stderr, cancel, done := startForwardFree(t, f, "4000")
 		waitForText(t, stderr, "(Ctrl-C to stop)")
 		conn, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
 		if err != nil {

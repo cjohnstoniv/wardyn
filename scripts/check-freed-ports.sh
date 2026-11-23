@@ -33,6 +33,8 @@ ALLOWED = {
         "the port is only text in a kept-address file; the test never binds or dials it",
     ("cmd/wardyn-runnerd/relay_test.go", "TestRelayEnsureNeedsAPair"):
         "Ensure listens on the URL's own port, never 0; another port is picked when the bind fails",
+    ("cmd/wardyn/run_forward_attach_test.go", "freePort"):
+        "the command binds a named local port itself; the test retries on a bind failure",
     ("cmd/wardyn/proxyrelay_test.go", "TestProxyRelay_WarningGoesToStderrNotStdout"):
         "the command takes a listen port, never 0; another port is picked when the bind fails",
     ("cmd/wardynd/boot_metrics_test.go", "TestStartMetricsListener"):

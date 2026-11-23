@@ -1,3 +1,6 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package api
 
 // Port forwarding over the organisation: GET /api/v1/runs/{id}/attach/forward?port=<n>&ticket=<t>.
@@ -313,7 +316,7 @@ type wsForwardChannel struct {
 
 // Read is the client-to-sandbox copy's read. The copy is free while inside it, and parked from the moment it returns
 // bytes until its next Read: that span is the copy's write into the sandbox's stdin (and the presence mark,
-// run_pause.go:434-440).
+// presenceReader.Read).
 func (c wsForwardChannel) Read(p []byte) (int, error) {
 	c.parks.reader.free()
 	n, err := c.Conn.Read(p)
