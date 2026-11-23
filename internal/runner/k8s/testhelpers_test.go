@@ -228,6 +228,25 @@ func installDeleteCollectionSupport(t *testing.T, cs *fake.Clientset) {
 	})
 }
 
+// installServiceIPReactor gives every Service create the ClusterIP and UID the API server would, when nothing else
+// has set them: every server-mode run makes its own Service, and the driver refuses one with no ClusterIP. A test
+// reactor installed later (installKeepServiceReactor) runs first and keeps its own values.
+func installServiceIPReactor(cs *fake.Clientset) {
+	cs.PrependReactor("create", "services", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		svc, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Service)
+		if !ok {
+			return false, nil, nil
+		}
+		if svc.Spec.ClusterIP == "" {
+			svc.Spec.ClusterIP = "10.96.7.7"
+		}
+		if svc.UID == "" {
+			svc.UID = "svc-uid-default"
+		}
+		return false, nil, nil
+	})
+}
+
 // newTestDriver constructs a Driver against a fresh fake clientset with the
 // enforcing canary reactor and DeleteCollection support installed (the
 // common case for tests that are not themselves exercising the canary state
@@ -237,6 +256,7 @@ func newTestDriver(t *testing.T, cfg Config) (*Driver, *fake.Clientset) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	installDeleteCollectionSupport(t, cs)
+	installServiceIPReactor(cs)
 	if len(cfg.Namespaces) == 0 {
 		cfg.Namespaces = []string{testNamespace}
 	}

@@ -122,7 +122,7 @@ func bootAgentSandbox(ctx context.Context, cs kubernetes.Interface, restCfg *res
 		access = append(slices.Clone(access), named)
 	}
 	if cfg.AgentSandboxKeep {
-		access = append(slices.Clone(access), keepAddressAccess...)
+		access = append(slices.Clone(access), runAddressAccess...)
 	}
 	served, err := cs.Discovery().ServerResourcesForGroupVersion(agentSandboxAPIVersion)
 	if err != nil {

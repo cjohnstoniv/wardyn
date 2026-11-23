@@ -180,6 +180,7 @@ func newSandboxRig(t *testing.T, cfg Config, answer sandboxAnswer) (*Driver, *fa
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	installDeleteCollectionSupport(t, cs)
+	installServiceIPReactor(cs)
 	cs.Resources = servedSandboxes()
 	installAccessReactor(cs, "", nil)
 	dyn := newFakeDynamic()

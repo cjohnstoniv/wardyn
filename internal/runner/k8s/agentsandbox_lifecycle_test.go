@@ -77,7 +77,7 @@ func TestAgentSandboxLifecycle_TeardownDeletesTheSandboxBeforeThePods(t *testing
 	if err := d.KillSandbox(context.Background(), ref); err != nil {
 		t.Fatalf("KillSandbox: %v", err)
 	}
-	want := []string{"delete sandboxes", "delete-collection pods", "delete-collection secrets", "delete-collection networkpolicies"}
+	want := []string{"delete sandboxes", "delete-collection pods", "delete-collection secrets", "delete services", "delete-collection endpointslices", "delete-collection networkpolicies"}
 	if !slices.Equal(*order, want) {
 		t.Errorf("teardown writes = %v\nwant %v", *order, want)
 	}

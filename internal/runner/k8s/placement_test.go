@@ -61,6 +61,7 @@ func TestPlacement_AllThreePods(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	installDeleteCollectionSupport(t, cs)
+	installServiceIPReactor(cs)
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	installAgentRunningReactor(t, cs)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{
@@ -321,6 +322,7 @@ func TestPlacement_ImageArchesPlaceTheAgentPod(t *testing.T) {
 	cs := fake.NewClientset()
 	installCanaryReactor(t, cs, false)
 	installDeleteCollectionSupport(t, cs)
+	installServiceIPReactor(cs)
 	installProxyIPReactor(t, cs, "10.244.0.7")
 	installAgentRunningReactor(t, cs)
 	d, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespaces: []string{testNamespace}, ProxyImage: "wardyn/wardyn-proxy:test"})

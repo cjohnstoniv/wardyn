@@ -253,15 +253,17 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	}
 	// NetworkPolicies first, then the Secret (the policies must strictly
 	// outlive the Secret so the orphan sweep can find it by their labels without
-	// holding `secrets: list`), then proxy pod, then agent pod.
-	want := []string{"networkpolicies", "networkpolicies", "secrets", "pods", "pods"}
+	// holding `secrets: list`), then the run's Service and its empty
+	// EndpointSlice (the agent pins the Service's address from its create, so
+	// both come before either pod), then proxy pod, then agent pod.
+	want := []string{"networkpolicies", "networkpolicies", "secrets", "services", "endpointslices", "pods", "pods"}
 	if !equalStrings(createOrder, want) {
 		t.Fatalf("create order = %v, want %v", createOrder, want)
 	}
 
 	// Both NetworkPolicies exist strictly before either pod: the two
-	// "networkpolicies" creates (indices 1,2) precede the two "pods" creates
-	// (indices 3,4) — already implied by the exact sequence above, asserted
+	// "networkpolicies" creates (indices 0,1) precede the two "pods" creates
+	// (indices 5,6) — already implied by the exact sequence above, asserted
 	// again explicitly since it's the security-critical invariant this test
 	// exists to prove.
 	netpolIdx, podIdx := -1, -1
@@ -317,7 +319,8 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 
 	// Negative control for the line above: the agent's ONE egress path does not
 	// come from a service link and must be untouched by turning them off — it is
-	// the static HostAliases entry pointing wardyn-proxy at the sidecar's pod IP.
+	// the static HostAliases entry pointing wardyn-proxy at the run's own
+	// Service's ClusterIP (server mode).
 	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), agentPodName(spec.RunID), metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get agent pod: %v", err)
@@ -325,13 +328,13 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	reachesProxy := false
 	for _, ha := range agentPod.Spec.HostAliases {
 		for _, h := range ha.Hostnames {
-			if h == proxyContainerName && ha.IP == "10.244.0.7" {
+			if h == proxyContainerName && ha.IP == "10.96.7.7" {
 				reachesProxy = true
 			}
 		}
 	}
 	if !reachesProxy {
-		t.Errorf("agent pod HostAliases = %v, want wardyn-proxy pinned to the proxy pod IP (its only egress path)", agentPod.Spec.HostAliases)
+		t.Errorf("agent pod HostAliases = %v, want wardyn-proxy pinned to the run's Service ClusterIP (its only egress path)", agentPod.Spec.HostAliases)
 	}
 }
 

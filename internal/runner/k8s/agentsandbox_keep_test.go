@@ -382,18 +382,28 @@ func TestCreateSandboxKeepPinsTheServiceAddress(t *testing.T) {
 	}
 }
 
-// assertNotKept is what a run that is not kept looks like with keep on or off: no Service or EndpointSlice is touched,
-// the agent pins the proxy pod's IP, the proxy pod owns the agent, and there is no keep label.
+// assertNotKept is what a run that is not kept looks like with keep on or off: like every server-mode run it has its
+// Service and the agent pins its ClusterIP, but the proxy pod owns the agent, there is no keep label, and no
+// EndpointSlice write records a kept Sandbox.
 func assertNotKept(t *testing.T, cs *fake.Clientset, dyn *dynamicfake.FakeDynamicClient, ref string) {
 	t.Helper()
 	for _, a := range cs.Actions() {
-		if r := a.GetResource().Resource; r == "services" || r == "endpointslices" {
-			t.Errorf("unexpected %s %s on a run that is not kept", a.GetVerb(), r)
+		if a.GetResource().Resource != "endpointslices" {
+			continue
+		}
+		w, ok := a.(interface{ GetObject() runtime.Object }) // a create or an update
+		if !ok {
+			continue
+		}
+		if es, ok := w.GetObject().(*discoveryv1.EndpointSlice); ok {
+			if _, kept := es.Annotations[annotationKeptSandbox]; kept {
+				t.Errorf("%s endpointslices records a kept Sandbox on a run that is not kept", a.GetVerb())
+			}
 		}
 	}
 	u, tmpl := sandboxTemplate(t, dyn, ref)
-	if aliases := tmpl.Spec.HostAliases; len(aliases) != 1 || aliases[0].IP != "10.244.0.7" {
-		t.Errorf("hostAliases = %+v, want the proxy pod's IP", aliases)
+	if aliases := tmpl.Spec.HostAliases; len(aliases) != 1 || aliases[0].IP != "10.96.0.50" {
+		t.Errorf("hostAliases = %+v, want the run's Service ClusterIP", aliases)
 	}
 	if owners := u.GetOwnerReferences(); len(owners) != 1 || owners[0].Kind != "Pod" || owners[0].Name != proxyPodName(asRunID) {
 		t.Errorf("Sandbox owners = %+v, want the proxy pod", owners)
@@ -447,8 +457,8 @@ func TestTeardownKeepDeletesServiceAndSlices(t *testing.T) {
 		t.Fatalf("KillSandbox: %v", err)
 	}
 	want := []string{
-		"delete sandboxes", "delete-collection pods", "delete services", "delete-collection endpointslices",
-		"delete-collection secrets", "delete-collection networkpolicies",
+		"delete sandboxes", "delete-collection pods", "delete-collection secrets", "delete services",
+		"delete-collection endpointslices", "delete-collection networkpolicies",
 	}
 	if !slices.Equal(*order, want) {
 		t.Errorf("teardown writes = %v\nwant %v", *order, want)

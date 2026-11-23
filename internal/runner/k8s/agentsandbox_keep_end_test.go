@@ -522,8 +522,10 @@ func TestCreateSandboxRecordsTheKeptSandbox(t *testing.T) {
 		t.Fatalf("CreateSandbox: %v", err)
 	}
 	for _, a := range cs.Actions() {
-		if a.GetResource().Resource == "endpointslices" {
-			t.Errorf("unexpected %s on EndpointSlices for a run that is not kept", a.GetVerb())
+		if ua, ok := a.(clienttesting.UpdateAction); ok && a.GetResource().Resource == "endpointslices" {
+			if _, kept := ua.GetObject().(*discoveryv1.EndpointSlice).Annotations[annotationKeptSandbox]; kept {
+				t.Errorf("an EndpointSlice update records a kept Sandbox for a run that is not kept")
+			}
 		}
 	}
 }

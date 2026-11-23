@@ -17,11 +17,14 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 )
 
-// TestCreateSandbox_AgentWaitsForProxyReady: a proxy PodIP is not a started
-// proxy — the CNI assigns it before any image pull — so CreateSandbox must not
-// create the agent pod until the proxy is Ready, must fail fast naming a
-// terminal proxy state, and must roll back everything it created.
-func TestCreateSandbox_AgentWaitsForProxyReady(t *testing.T) {
+// TestCreateSandbox_ServerAgentStartsBesideItsProxy: in server mode the agent pod
+// is created right after the proxy pod, without waiting for it, because the agent
+// reaches the proxy through the run's own Service. A proxy PodIP is still not a
+// started proxy — the CNI assigns it before any image pull — so CreateSandbox
+// must not return until the proxy is Ready, must fail fast naming a terminal
+// proxy state, and must roll back everything it created, the Service and its
+// EndpointSlice included. The slice only ever names the scripted proxy address.
+func TestCreateSandbox_ServerAgentStartsBesideItsProxy(t *testing.T) {
 	waiting := func(reason string) corev1.ContainerState {
 		return corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason, Message: "simulated"}}
 	}
@@ -87,19 +90,28 @@ func TestCreateSandbox_AgentWaitsForProxyReady(t *testing.T) {
 					}
 				}
 			}
+			for _, ip := range sliceAddressesWritten(cs) {
+				if ip != "" && ip != "10.244.0.7" {
+					t.Errorf("the run's EndpointSlice named %q, an address the case never scripted", ip)
+				}
+			}
 			if tc.wantErrHas == "" {
 				if err != nil || !agentCreated {
 					t.Fatalf("healthy proxy did not launch the agent: err=%v agentCreated=%v", err, agentCreated)
 				}
+				if got := sliceIPs(keepSlice(t, cs, spec.RunID)); len(got) != 1 || got[0] != "10.244.0.7" {
+					t.Errorf("EndpointSlice endpoints = %v, want the proxy pod's IP 10.244.0.7", got)
+				}
 				return
 			}
-			if err == nil || agentCreated {
-				t.Fatalf("proxy never became ready, yet err=%v agentCreated=%v", err, agentCreated)
+			if err == nil || !agentCreated {
+				t.Fatalf("proxy never became ready: err=%v agentCreated=%v, want an error with the agent pod created beside it", err, agentCreated)
 			}
 			if !strings.Contains(err.Error(), tc.wantErrHas) {
 				t.Errorf("err = %v, want it to name %q", err, tc.wantErrHas)
 			}
 			assertRunObjectsGone(t, cs, spec.RunID)
+			assertRunAddressGone(t, cs, spec.RunID)
 		})
 	}
 }

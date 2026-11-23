@@ -292,8 +292,8 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // which anyone who can patch the pod can change: a label naming another run would tear that run down,
 // and a missing one would leave this run's objects behind. It then sweeps every Wardyn-owned object
 // carrying the run's label via three DeleteCollection calls (pods, Secrets, NetworkPolicies); the agent-sandbox
-// backend's Sandbox is deleted before them, and with keep on the run's Service and a fourth DeleteCollection, of
-// its EndpointSlices, come between the pods and the Secrets.
+// backend's Sandbox is deleted before them, and the run's Service and a fourth DeleteCollection, of its
+// EndpointSlices, come between the Secrets and the NetworkPolicies.
 //
 // An agent pod whose label no longer names the ref's run is deleted by its name and UID besides
 // (teardownRun), since the run's label selector no longer reaches it.
@@ -403,18 +403,24 @@ func (d *Driver) teardownRun(ctx context.Context, runID uuid.UUID, drifted *core
 		}
 	}
 
-	if d.keepOn() {
-		if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
-			return fmt.Errorf("k8s: teardown: %w", err)
-		}
-	}
-
-	// Secret FIRST, NetworkPolicies after (mirrors CreateSandbox's order): the
+	// Secret FIRST, NetworkPolicies last (mirrors CreateSandbox's order): the
 	// orphan sweep keys the Secret on the netpols, since listing Secrets needs
 	// a body-returning verb it's never granted. Reversing the order would
 	// leave a crash-window survivor with nothing left to find it by.
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete secrets: %w", err)
+	}
+	// The run's Service and EndpointSlices: every server-mode run has them; a run made by an older release has none,
+	// and the delete finds nothing. They go after the Secret, so a failed delete here never leaves the Secret, and
+	// before the NetworkPolicies, so a run whose Service survives is still found by the orphan sweep, which deletes
+	// it again. With keep off, a Role that lacks these verbs (k8s.rbac.create=false, not yet updated) made no Service
+	// either, so a 403 is logged and the NetworkPolicies still go.
+	if err := d.deleteKeepAddress(ctx, ns, runID); err != nil {
+		if d.keepOn() || !apierrors.IsForbidden(err) {
+			return fmt.Errorf("k8s: teardown: %w", err)
+		}
+		slog.Warn("wardynd: k8s substrate: teardown could not delete the run's Service or EndpointSlices: the runs Role lacks the per-run Service verbs",
+			slog.String("namespace", ns), slog.String("run_id", runID.String()), slog.String("error", err.Error()))
 	}
 	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
@@ -559,8 +565,8 @@ func (d *Driver) waitPodGone(ctx context.Context, ns string, pod *corev1.Pod, ti
 // Deduped by run id, since teardownByRunID reaches every object from the id.
 //
 // A drive PVC is never touched: it carries labelDrive, never labelRun, and
-// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; with
-// keep on it also deletes the run's Service and EndpointSlices (deleteKeepAddress).
+// teardownByRunID only DeleteCollections pods, NetworkPolicies and Secrets; it
+// also deletes the run's Service and EndpointSlices (deleteKeepAddress).
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
 	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {
