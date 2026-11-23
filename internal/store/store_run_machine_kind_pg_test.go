@@ -46,7 +46,7 @@ func TestPG_RunMachineKindAndVMMachine(t *testing.T) {
 	}
 
 	bad := newRun(types.RunStarting)
-	bad.MachineKind = "windows_vm"
+	bad.MachineKind = "plan9_vm"
 	if _, err := pg.CreateRun(ctx, bad); err == nil {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, bad.ID)
 		t.Fatal("agent_runs took an unknown machine kind")
@@ -118,7 +118,7 @@ func TestPG_MacOSVMKindAndHolders(t *testing.T) {
 	}
 
 	bad := newRun(types.RunStarting)
-	bad.MachineKind = "windows_vm"
+	bad.MachineKind = "plan9_vm"
 	if _, err := pg.CreateRun(ctx, bad); err == nil {
 		_, _ = pg.Pool.Exec(ctx, `DELETE FROM agent_runs WHERE id=$1`, bad.ID)
 		t.Fatal("agent_runs took an unknown machine kind")

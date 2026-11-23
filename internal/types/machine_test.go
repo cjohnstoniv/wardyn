@@ -22,7 +22,8 @@ func TestMachineKind(t *testing.T) {
 		{kind: MachineContainer, valid: true, wantNormal: ""},
 		{kind: MachineLinuxVM, valid: true, isVM: true, wantNormal: MachineLinuxVM},
 		{kind: MachineMacOSVM, valid: true, isVM: true, isMacOS: true, wantNormal: MachineMacOSVM},
-		{kind: "windows_vm", wantNormal: "windows_vm", wantErrNames: []string{`"windows_vm"`, `"container"`, `"linux_vm"`, `"macos_vm"`}},
+		{kind: MachineWindowsVM, valid: true, isVM: true, wantNormal: MachineWindowsVM},
+		{kind: "plan9_vm", wantNormal: "plan9_vm", wantErrNames: []string{`"plan9_vm"`, `"container"`, `"linux_vm"`, `"macos_vm"`, `"windows_vm"`}},
 	} {
 		err := tc.kind.Validate()
 		if (err == nil) != tc.valid {
@@ -35,6 +36,29 @@ func TestMachineKind(t *testing.T) {
 		}
 		if tc.kind.IsVM() != tc.isVM || tc.kind.IsMacOSVM() != tc.isMacOS || tc.kind.Normalize() != tc.wantNormal {
 			t.Errorf("%q: IsVM %v IsMacOSVM %v Normalize %q", tc.kind, tc.kind.IsVM(), tc.kind.IsMacOSVM(), tc.kind.Normalize())
+		}
+	}
+}
+
+// Only a container run and a Linux VM run a member image: a macOS VM boots a Mac's base, and a Windows VM the
+// organisation's registered image.
+func TestRunsMemberImage(t *testing.T) {
+	for kind, want := range map[MachineKind]bool{
+		"": true, MachineContainer: true, MachineLinuxVM: true, MachineMacOSVM: false, MachineWindowsVM: false,
+	} {
+		if got := kind.RunsMemberImage(); got != want {
+			t.Errorf("%q: RunsMemberImage = %v, want %v", kind, got, want)
+		}
+	}
+}
+
+// A Linux VM's and a Windows VM's main disk is a qcow2 overlay on a base; no other kind's is.
+func TestHasDiskOverlay(t *testing.T) {
+	for kind, want := range map[MachineKind]bool{
+		"": false, MachineContainer: false, MachineLinuxVM: true, MachineMacOSVM: false, MachineWindowsVM: true,
+	} {
+		if got := kind.HasDiskOverlay(); got != want {
+			t.Errorf("%q: HasDiskOverlay = %v, want %v", kind, got, want)
 		}
 	}
 }

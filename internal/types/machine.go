@@ -23,6 +23,10 @@ const (
 	// MachineMacOSVM is a macOS guest under Apple's Virtualization.framework, started by a registered
 	// runner on a managed Mac that offers it. Off unless the organisation turns it on (WARDYN_MACOS_VMS).
 	MachineMacOSVM MachineKind = "macos_vm"
+	// MachineWindowsVM is a Windows guest under QEMU/KVM, started by a registered organisation runner that
+	// offers it, from an image the organisation registered and bound to a licence pool. It is desktop-only:
+	// Wardyn puts no agent in the guest.
+	MachineWindowsVM MachineKind = "windows_vm"
 )
 
 // Normalize maps "container" to "", the stored form; any other value is returned unchanged.
@@ -36,18 +40,29 @@ func (k MachineKind) Normalize() MachineKind {
 // Validate refuses a kind outside the closed set.
 func (k MachineKind) Validate() error {
 	switch k {
-	case "", MachineContainer, MachineLinuxVM, MachineMacOSVM:
+	case "", MachineContainer, MachineLinuxVM, MachineMacOSVM, MachineWindowsVM:
 		return nil
 	}
-	return fmt.Errorf("machine_kind %q is not %q, %q or %q", string(k), MachineContainer, MachineLinuxVM, MachineMacOSVM)
+	return fmt.Errorf("machine_kind %q is not %q, %q, %q or %q", string(k), MachineContainer, MachineLinuxVM, MachineMacOSVM, MachineWindowsVM)
 }
 
 // IsVM reports whether the kind is any virtual machine; a site that depends on which kind says so with
 // IsMacOSVM or a comparison with MachineLinuxVM.
-func (k MachineKind) IsVM() bool { return k == MachineLinuxVM || k == MachineMacOSVM }
+func (k MachineKind) IsVM() bool {
+	return k == MachineLinuxVM || k == MachineMacOSVM || k == MachineWindowsVM
+}
 
 // IsMacOSVM reports whether the kind is a macOS virtual machine.
 func (k MachineKind) IsMacOSVM() bool { return k == MachineMacOSVM }
+
+// RunsMemberImage reports whether the run's image is a member image that the image pin and admission check:
+// false for a macOS VM, which boots a Mac's base, and for a Windows VM, whose image is the organisation's
+// registered, digest-pinned ref.
+func (k MachineKind) RunsMemberImage() bool { return k != MachineMacOSVM && k != MachineWindowsVM }
+
+// HasDiskOverlay reports whether the run's main disk is a qcow2 overlay on a base image, sized as one: a
+// Linux VM's and a Windows VM's.
+func (k MachineKind) HasDiskOverlay() bool { return k == MachineLinuxVM || k == MachineWindowsVM }
 
 // RunStatusDetailMacPrepRunning is the status detail of an interactive macOS VM run while its prep runs.
 const RunStatusDetailMacPrepRunning = "prep: running"

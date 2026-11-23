@@ -414,7 +414,7 @@ func TestVMSpecRefusalsCreateNothing(t *testing.T) {
 		want string
 	}{
 		"VMs off":      {off: true, want: "does not offer Linux VM"},
-		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "windows_vm" }, want: "unknown machine kind"},
+		"unknown kind": {mut: func(s *runner.SandboxSpec) { s.MachineKind = "plan9_vm" }, want: "unknown machine kind"},
 		"a volume drive": {mut: func(s *runner.SandboxSpec) {
 			s.Drives = []types.DriveMount{{ObjectName: "d", Backend: types.DriveBackendDockerVolume}}
 		}, want: "only a drive bound to this runner"},

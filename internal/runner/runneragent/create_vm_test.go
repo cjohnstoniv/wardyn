@@ -34,7 +34,7 @@ func TestDispatcherCreateMethodsStartOnlyTheirOwnKind(t *testing.T) {
 		{"VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineLinuxVM, true, false, false, "needs create_vm"},
 		{"container by create_vm", runnerwire.MethodCreateVM, "", true, true, false, "VM sandboxes only"},
 		{"VM on a runner that does not offer VMs", runnerwire.MethodCreateVM, types.MachineLinuxVM, false, false, false, "does not offer Linux VM sandboxes"},
-		{"unknown kind", runnerwire.MethodCreateVM, "windows_vm", true, true, false, "machine_kind"},
+		{"unknown kind", runnerwire.MethodCreateVM, "plan9_vm", true, true, false, "machine_kind"},
 		{"VM by create_vm", runnerwire.MethodCreateVM, types.MachineLinuxVM, true, false, true, ""},
 		{"macOS VM by create_sandbox", runnerwire.MethodCreateSandbox, types.MachineMacOSVM, true, true, false, "needs create_vm"},
 		{"macOS VM on a runner that offers Linux VMs only", runnerwire.MethodCreateVM, types.MachineMacOSVM, true, false, false, "does not offer macOS VM sandboxes"},

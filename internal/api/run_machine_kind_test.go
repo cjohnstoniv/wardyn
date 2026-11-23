@@ -72,7 +72,7 @@ func TestPlacementCapability_LinuxVMNeedsARunnerThatOffersIt(t *testing.T) {
 func TestDecodeAndValidateCreateRun_UnknownMachineKind(t *testing.T) {
 	h := newHarness(t)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","machine_kind":"windows_vm"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"claude-code","machine_kind":"plan9_vm"}`))
 	if _, _, _, _, ok := h.srv.decodeAndValidateCreateRun(rec, req); ok || rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), reasonMachineKindUnknown) {
 		t.Fatalf("status %d body %s, want 400 %s", rec.Code, rec.Body.String(), reasonMachineKindUnknown)
 	}

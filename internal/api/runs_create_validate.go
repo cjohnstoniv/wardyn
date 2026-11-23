@@ -240,6 +240,9 @@ const macOSVMsOff = "macOS virtual machines are turned off in this organisation.
 // closed set is today's two kinds, and a refusal reads as it did before macos_vm existed, except that
 // macos_vm itself says the switch is off.
 func machineKindRefusal(kind types.MachineKind) string {
+	if kind == types.MachineWindowsVM { // a kind, but no create accepts it yet, whatever WARDYN_MACOS_VMS says
+		return "Windows VM sandboxes are not available yet."
+	}
 	if envEnabled(envMacOSVMs) {
 		if err := kind.Validate(); err != nil {
 			return err.Error()
