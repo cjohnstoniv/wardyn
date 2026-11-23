@@ -79,6 +79,9 @@ type Config struct {
 	// machine_kind macos_vm. Each kind has its own switch, so a runner that offers one starts none of
 	// the other.
 	MacOSVM bool
+	// WindowsVM is LinuxVM for Windows VM sandboxes (Caps.WindowsVM): false refuses a create_vm for
+	// machine_kind windows_vm, whatever the substrate would do with it.
+	WindowsVM bool
 	// WorkloadStatus patches the status of one WardynWorkload custom resource from the org's answer
 	// (a k8s runner that lists workload namespaces); nil refuses workload_status.
 	WorkloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
@@ -277,6 +280,8 @@ func (d *Dispatcher) create(ctx context.Context, peer *runnerwire.Peer, id uint3
 		return nil, runnerwire.Refuse("this runner does not offer Linux VM sandboxes")
 	case kind.IsMacOSVM() && !d.cfg.MacOSVM:
 		return nil, runnerwire.Refuse("this runner does not offer macOS VM sandboxes")
+	case kind == types.MachineWindowsVM && !d.cfg.WindowsVM:
+		return nil, runnerwire.Refuse("this runner does not offer Windows VM sandboxes")
 	}
 	if err := d.cfg.BeforeCreate(ctx, a.Spec); err != nil {
 		return nil, err

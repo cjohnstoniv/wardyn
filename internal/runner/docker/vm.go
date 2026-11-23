@@ -81,6 +81,7 @@ type VMConfig struct {
 	// Virtiofs is what the probe found: the QEMU image's virtiofsd runs, so a VM can share the
 	// run's mounts. Without it a VM run that carries a mount is refused before anything is created.
 	Virtiofs bool
+	Windows  *WinVMConfig // Windows VM sandboxes beside Linux ones (winvm.go); nil is off
 }
 
 // maxSocketPath is the longest unix socket path a connect accepts (sun_path is 108 bytes).
@@ -137,6 +138,7 @@ type vmRun struct {
 	dir   string
 	// mac marks a macOS VM (macvm.go): its helper, not a QEMU container, runs it.
 	mac   bool
+	win   *winVM // a Windows VM (winvm.go): no guest agent, one desktop stream
 	agent *guestagent.Client
 	// stop ends the output followers of the VM's detached execs at teardown.
 	ctx  context.Context
@@ -185,46 +187,46 @@ func (d *Driver) vmLookup(ctx context.Context, ref string) (*vmRun, error) {
 	if v := d.macVMLookup(ref); v != nil {
 		return v, nil
 	}
-	id, isVM, err := d.linuxVMRef(ctx, ref)
-	if err != nil || !isVM {
+	id, kind, err := d.linuxVMRef(ctx, ref)
+	if err != nil || kind == "" {
 		return nil, err
 	}
 	vc := d.vmConfig()
 	if vc == nil {
 		return nil, errVMUnreachable
 	}
-	v, _ := d.vms.LoadOrStore(ref, d.newVMRun(id, vc.runDir(id)))
+	v, _ := d.vms.LoadOrStore(ref, d.vmRunOf(kind, id, vc.runDir(id)))
 	return v.(*vmRun), nil
 }
 
-// linuxVMRef says whether ref is a Linux VM, from its container: the machine-kind label createVM
-// sets, which needs no VM config, so a VM made before VM sandboxes went off is still a VM. A ref
-// found to be a container is remembered (notVMs); one the engine does not hold is not a VM.
-func (d *Driver) linuxVMRef(ctx context.Context, ref string) (uuid.UUID, bool, error) {
+// linuxVMRef says which QEMU VM kind ref is ("" for none), from its container: the machine-kind label
+// createVM or createWinVM sets, which needs no VM config, so a VM made before VM sandboxes went off is
+// still a VM. A ref found to be a container is remembered (notVMs); one the engine does not hold is not a VM.
+func (d *Driver) linuxVMRef(ctx context.Context, ref string) (uuid.UUID, types.MachineKind, error) {
 	res, err := d.cli.ContainerInspect(ctx, ref, client.ContainerInspectOptions{})
 	if isNotFound(err) {
-		return uuid.Nil, false, nil
+		return uuid.Nil, "", nil
 	}
 	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("docker: inspect %s: %w", ref, err)
+		return uuid.Nil, "", fmt.Errorf("docker: inspect %s: %w", ref, err)
 	}
 	if !isLinuxVM(res.Container.Config) {
 		d.notVMs.Store(ref, struct{}{})
 		if h := res.Container.HostConfig; h != nil && !runtimeSupportsExec(h.Runtime) {
 			d.execLess.Store(ref, h.Runtime)
 		}
-		return uuid.Nil, false, nil
+		return uuid.Nil, "", nil
 	}
 	id, err := parseRunID(res.Container.Config.Labels[labelRun])
 	if err != nil {
-		return uuid.Nil, true, err
+		return uuid.Nil, types.MachineKind(res.Container.Config.Labels[labelMachineKind]), err
 	}
-	return id, true, nil
+	return id, types.MachineKind(res.Container.Config.Labels[labelMachineKind]), nil
 }
 
-// isLinuxVM says whether a container's config is a Linux VM's QEMU container, by the label createVM sets.
+// isLinuxVM says whether a container's config is a QEMU VM's container (Linux or Windows), by the label createVM or createWinVM sets.
 func isLinuxVM(c *container.Config) bool {
-	return c != nil && c.Labels[labelMachineKind] == string(types.MachineLinuxVM)
+	return c != nil && (c.Labels[labelMachineKind] == string(types.MachineLinuxVM) || isWinVM(c))
 }
 
 // MayHoldRuns says whether a Linux VM made under c.StateDir may still exist. A VM's run directory is
@@ -282,6 +284,9 @@ func (d *Driver) refuseVMSpec(spec runner.SandboxSpec) error {
 //
 //nolint:funlen // One linear assembly sequence whose rollback must stay in one scope, as CreateSandbox's.
 func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if spec.MachineKind == types.MachineWindowsVM {
+		return d.createWinVM(ctx, spec)
+	}
 	if err := d.refuseVMSpec(spec); err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -714,7 +719,7 @@ func (d *Driver) removeVMSidecars(ctx context.Context, runID uuid.UUID) error {
 	for n := 0; n < maxVMShares; n++ {
 		remove(vmfsName(runID, n))
 	}
-	for _, what := range []string{"export", "image", "overlay"} {
+	for _, what := range []string{"export", "image", "overlay", vmtpmStep} {
 		remove(vmPrepName(runID, what))
 	}
 	return errors.Join(errs...)
@@ -928,7 +933,7 @@ func (d *Driver) sweepVMOrphans(ctx context.Context, lister containerListerAPI, 
 	cleaned := map[uuid.UUID]bool{}
 	macs, macErr := d.sweepMacVMOrphans(ctx, cutoff, isOrphan)
 	errs := []error{macErr}
-	for _, comp := range []string{componentVMNet, componentVMFS, componentVMPrep} {
+	for _, comp := range []string{componentVMNet, componentVMFS, componentVMPrep, componentVMTPM} {
 		res, err := lister.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", labelComponent+"="+comp)})
 		if err != nil {
 			errs = append(errs, fmt.Errorf("docker: list VM sidecars for orphan sweep: %w", err))

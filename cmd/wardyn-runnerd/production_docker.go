@@ -117,6 +117,7 @@ func productionRunnerHooks(ctx context.Context, identity runneridentity.Identity
 	watch.onChange = opts.offline.relayChanged
 	extras.report = connectReport{log: opts.offline, relay: watch}
 	extras.linuxVM = enableLinuxVM(ctx, sub, stateDir, os.Getenv)
+	extras.windowsVM = enableWindowsVM(ctx, sub, extras.linuxVM, os.Getenv)
 	extras.macOSVM = enableMacOSVM(ctx, sub, identity.RunnerID.String(), stateDir, opts.macOSVM, opts.macOSVMSettings)
 	extras.localAttach, extras.orgURL = local, opts.orgURL
 	endVMsOnFullSpool(sink.spoolSink, extras.linuxVM, stateDir, sub.EndVM)
@@ -407,7 +408,8 @@ type runtimeExtras struct {
 	closeAlso func() error
 	// linuxVM, set when the operator turned Linux VM sandboxes on and the probe passed, is what the
 	// runner's caps offer; nil offers none and refuses create_vm.
-	linuxVM *runnerwire.VMCaps
+	linuxVM   *runnerwire.VMCaps
+	windowsVM *runnerwire.VMCaps // enableWindowsVM: Windows VM sandboxes beside Linux ones; nil offers none
 	// macOSVM, set when the operator turned macOS VM sandboxes on (enableMacOSVM), builds the caps'
 	// macos_vm and resends them when they change; nil offers none.
 	macOSVM *macOSVMs
@@ -545,7 +547,7 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 		ExecutionResult:  manager.ExecutionResult,
 		Streams:          streams.Call, Output: streams.Output, BindOutput: streams.BindOutput, ForgetOutput: streams.ForgetOutput,
 		Resident: resident, LinuxVM: extra.linuxVM != nil, MacOSVM: extra.macOSVM.enabled(),
-		WorkloadStatus: extra.workloadStatus,
+		WorkloadStatus: extra.workloadStatus, WindowsVM: extra.windowsVM != nil,
 	})
 	if err != nil {
 		return runnerRuntime{}, err

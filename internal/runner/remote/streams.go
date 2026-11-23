@@ -97,27 +97,31 @@ func (s *Substrate) agentPauseCall(ctx context.Context, method, ref string, gen 
 func offersSignIns(c runnerwire.Caps, k types.MachineKind) bool {
 	linux := c.LinuxVM != nil && c.LinuxVM.SignIns
 	mac := c.MacOSVM != nil && c.MacOSVM.SignIns
-	return byKind(k, linux, mac)
+	return byKind(k, linux, mac, false) // a Windows VM has no agent to pause
 }
 
 // offersDesktop says the runner opens the display of a VM of kind k: a Linux VM's by its Linux caps, a
 // macOS VM's when its Mac's Screen Sharing can be controlled or watched (the gateway and the helper keep
-// a watcher's input from the guest). A Mac with no Screen Sharing offers none.
+// a watcher's input from the guest), a Windows VM's by its Windows caps. A Mac with no Screen Sharing
+// offers none.
 func offersDesktop(c runnerwire.Caps, k types.MachineKind) bool {
 	linux := c.LinuxVM != nil && c.LinuxVM.Desktop
 	mac := c.MacOSVM != nil && (c.MacOSVM.Desktop == runnerwire.MacVMDesktopControl || c.MacOSVM.Desktop == runnerwire.MacVMDesktopObserve)
-	return byKind(k, linux, mac)
+	win := c.WindowsVM != nil && c.WindowsVM.Desktop
+	return byKind(k, linux, mac, win)
 }
 
-// byKind picks the cap of k's kind; a ref of no known kind takes either.
-func byKind(k types.MachineKind, linux, mac bool) bool {
+// byKind picks the cap of k's kind; a ref of no known kind takes any.
+func byKind(k types.MachineKind, linux, mac, win bool) bool {
 	switch k {
 	case types.MachineLinuxVM:
 		return linux
 	case types.MachineMacOSVM:
 		return mac
+	case types.MachineWindowsVM:
+		return win
 	}
-	return linux || mac
+	return linux || mac || win
 }
 
 // DialDesktop opens a VM sandbox's display on the runner (runner.DesktopDialer). A runner whose caps do

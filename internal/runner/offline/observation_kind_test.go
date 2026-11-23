@@ -81,6 +81,29 @@ func TestObserveRunReportsUncoveredKindAsPresent(t *testing.T) {
 	}
 }
 
+// A Windows VM run has no agent exec, so its exit is never recorded: the QEMU container's exit reaches
+// the organisation only as an absent sandbox. The Docker driver reads an exited Windows VM as stopped
+// with no exit code, which is absent here; the shape it had before (stopped with an exit code) reads
+// present, a recorded exit still to be sent that never comes.
+func TestObserveWindowsRunExitedReportsGone(t *testing.T) {
+	m, sub, _, org := managerFixture(t)
+	m.sub = &kindSub{localSub: sub, covers: map[types.MachineKind]bool{types.MachineWindowsVM: true}}
+	sub.setStatus(runner.Status{State: types.RunStopped, Message: "the Windows VM has exited"})
+	id := createKind(t, m, org, types.MachineWindowsVM)
+	if presentOf(t, m)[id] {
+		t.Fatal("an exited Windows VM (stopped, no exit code) read present")
+	}
+	zero := 0
+	sub.setStatus(runner.Status{State: types.RunStopped, ExitCode: &zero})
+	if !presentOf(t, m)[id] {
+		t.Fatal("stopped with an exit code no longer reads present: the observer changed under the Windows mapping")
+	}
+	sub.setStatus(runner.Status{State: types.RunRunning})
+	if !presentOf(t, m)[id] {
+		t.Fatal("a running Windows VM read absent")
+	}
+}
+
 func TestObserveRunReportsCoveredGoneKindAbsent(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	m.sub = &kindSub{localSub: sub, covers: map[types.MachineKind]bool{types.MachineMacOSVM: true}}

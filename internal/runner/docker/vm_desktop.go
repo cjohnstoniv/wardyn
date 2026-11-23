@@ -25,6 +25,9 @@ func (d *Driver) DialDesktop(ctx context.Context, ref string) (io.ReadWriteClose
 		return nil, runner.ErrDesktopUnsupported
 	}
 	sock := filepath.Join(v.dir, "ctl", qemu.VNCSocket)
+	if v.win != nil {
+		return d.dialWinDesktop(ctx, v, sock)
+	}
 	if v.mac {
 		if macDesktopOff(v.dir) {
 			return nil, errMacDesktopOff

@@ -234,6 +234,13 @@ func (s *Substrate) checkVMCaps(spec runner.SandboxSpec) error {
 		}
 		return nil
 	}
+	// A Windows VM has its own caps, and nothing to share into the guest (the runner refuses a mount).
+	if spec.MachineKind == types.MachineWindowsVM {
+		if !ok || c.WindowsVM == nil {
+			return runnerwire.Refuse("this runner does not offer Windows VM sandboxes: it is older than 0.11, or its operator has not turned them on")
+		}
+		return nil
+	}
 	if !ok || c.LinuxVM == nil {
 		return runnerwire.Refuse("this runner does not offer Linux VM sandboxes: it is older than 0.10, or its operator has not turned them on")
 	}

@@ -27,6 +27,8 @@ func statusFromInspect(insp container.InspectResponse) runner.Status {
 	switch {
 	case s.Running:
 		st.State = types.RunRunning
+	case isWinVM(insp.Config) && s.Status != "created":
+		st.State, st.Message = types.RunStopped, "the Windows VM has exited"
 	case s.OOMKilled:
 		st.State = types.RunFailed
 		st.Message = "OOM killed"
