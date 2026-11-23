@@ -749,9 +749,12 @@ func (sw *scheduleSweep) missed(ctx context.Context, sc store.RunSchedule, rule 
 			return scheduleTickNone
 		}
 	}
-	if _, err := sw.st.AdvanceRunSchedule(ctx, sc.ID, sc.NextAt, rule.nextOccurrence(sw.now), nil, scheduleOutcomeMissed); err != nil {
+	won, err := sw.st.AdvanceRunSchedule(ctx, sc.ID, sc.NextAt, rule.nextOccurrence(sw.now), nil, scheduleOutcomeMissed)
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run schedule advance failed", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
-		return scheduleTickNone
+	}
+	if !won {
+		return scheduleTickNone // another sweep recorded this slot, and wrote its row
 	}
 	sw.fire(ctx, sc, nil, "failure", map[string]any{"reason": scheduleOutcomeMissed, "due_at": sc.NextAt})
 	return scheduleTickMissed
@@ -815,8 +818,9 @@ func (sw *scheduleSweep) outcome(ctx context.Context, sc store.RunSchedule, rule
 			reason = strconv.Itoa(code)
 		}
 		sw.pause(ctx, sc, scheduleRefusedPrefix+reason)
-		sw.advance(ctx, sc, rule, nil, scheduleOutcomeRefused)
-		sw.fire(ctx, sc, nil, "failure", map[string]any{"reason": reason, "due_at": sc.NextAt})
+		if sw.advance(ctx, sc, rule, nil, scheduleOutcomeRefused) {
+			sw.fire(ctx, sc, nil, "failure", map[string]any{"reason": reason, "due_at": sc.NextAt})
+		}
 		return scheduleTickNone
 	case retryableBooking(code, body):
 		return scheduleTickNone
@@ -824,8 +828,9 @@ func (sw *scheduleSweep) outcome(ctx context.Context, sc store.RunSchedule, rule
 		if reason == "" {
 			reason = strconv.Itoa(code)
 		}
-		sw.advance(ctx, sc, rule, nil, scheduleOutcomeSkippedPrefix+reason)
-		sw.fire(ctx, sc, nil, "failure", map[string]any{"reason": reason, "due_at": sc.NextAt})
+		if sw.advance(ctx, sc, rule, nil, scheduleOutcomeSkippedPrefix+reason) {
+			sw.fire(ctx, sc, nil, "failure", map[string]any{"reason": reason, "due_at": sc.NextAt})
+		}
 		return scheduleTickNone
 	}
 }
@@ -856,8 +861,9 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 		slog.WarnContext(ctx, "wardynd: run schedule booking unread", slog.String("run_id", runID.String()), slog.Any("err", err))
 		return scheduleTickNone // the next tick replays it again
 	} else if err != nil || (run.State.IsTerminal() && run.AdmittedAt == nil) {
-		sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+scheduleRunEnded)
-		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": scheduleRunEnded, "run_id": runID, "due_at": sc.NextAt, "replayed": true})
+		if sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+scheduleRunEnded) {
+			sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": scheduleRunEnded, "run_id": runID, "due_at": sc.NextAt, "replayed": true})
+		}
 		return scheduleTickNone
 	}
 	if live, err := sw.live(ctx, a, sc.AuthorityAt); err != nil || !live {
@@ -865,11 +871,14 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 			slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("run_id", runID.String()), slog.Any("err", err))
 		}
 		sw.pause(ctx, sc, schedulePausedIdentity)
-		sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+schedulePausedIdentity)
-		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": schedulePausedIdentity, "run_id": runID, "due_at": sc.NextAt})
+		if sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+schedulePausedIdentity) {
+			sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": schedulePausedIdentity, "run_id": runID, "due_at": sc.NextAt})
+		}
 		return scheduleTickNone
 	}
-	sw.advance(ctx, sc, rule, &runID, scheduleOutcomeBooked)
+	if !sw.advance(ctx, sc, rule, &runID, scheduleOutcomeBooked) {
+		return scheduleTickNone // another sweep recorded this slot's booking, and wrote its row
+	}
 	data := map[string]any{"run_id": runID, "due_at": sc.NextAt}
 	if replayed {
 		data["replayed"] = true
@@ -894,16 +903,20 @@ func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, r
 		slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("schedule", sc.ID.String()),
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
-	sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason)
-	sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt})
+	if sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason) {
+		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt})
+	}
 	return scheduleTickNone
 }
 
-// advance moves the schedule past this slot to the next after it.
-func (sw *scheduleSweep) advance(ctx context.Context, sc store.RunSchedule, rule scheduleRule, runID *uuid.UUID, outcome string) {
-	if _, err := sw.st.AdvanceRunSchedule(ctx, sc.ID, sc.NextAt, rule.nextOccurrence(sc.NextAt), runID, outcome); err != nil {
+// advance moves the schedule past this slot to the next after it, and reports whether this sweep's
+// compare-and-set did: only then does it write the slot's run.schedule.fire row, so two sweeps at once write one.
+func (sw *scheduleSweep) advance(ctx context.Context, sc store.RunSchedule, rule scheduleRule, runID *uuid.UUID, outcome string) bool {
+	won, err := sw.st.AdvanceRunSchedule(ctx, sc.ID, sc.NextAt, rule.nextOccurrence(sc.NextAt), runID, outcome)
+	if err != nil {
 		slog.WarnContext(ctx, "wardynd: run schedule advance failed", slog.String("schedule", sc.ID.String()), slog.Any("err", err))
 	}
+	return won && err == nil
 }
 
 // pause pauses a schedule as the system, with the reason; the row is written only when it was active.

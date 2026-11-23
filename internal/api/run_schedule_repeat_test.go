@@ -623,3 +623,55 @@ func TestRunScheduleSweep_ReplayedEndedRunIsNotBooked(t *testing.T) {
 		})
 	}
 }
+
+// Two sweeps over one due slot (an overlapping leader, or every replica sweeping) book it under one key, and only
+// the sweep whose advance wins writes the slot's run.schedule.fire row: one row, whether the slot was booked or
+// skipped. The second sweep's whole turn runs inside the first one's create.
+func TestRunScheduleSweep_TwoSweepsWriteOneFireRow(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		name    string
+		code    int
+		outcome string
+	}{
+		{"booked", http.StatusCreated, scheduleOutcomeBooked},
+		{"skipped", http.StatusUnprocessableEntity, scheduleOutcomeSkippedPrefix + reasonScheduledRunsUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			st.runs = map[uuid.UUID]types.AgentRun{runID: {State: types.RunQueued}}
+			srv := scheduleTestServer(st)
+			answer := func(replayed bool) http.HandlerFunc {
+				if tc.code == http.StatusCreated {
+					return booking201(runID, replayed, nil)
+				}
+				return answers(tc.code)
+			}
+			second, _ := testSweep(srv, st, now, answer(false), true)
+			first, _ := testSweep(srv, st, now, func(w http.ResponseWriter, r *http.Request) {
+				if err := second.run(context.Background()); err != nil {
+					t.Error(err)
+				}
+				answer(true)(w, r)
+			}, true)
+			if err := first.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			fires := 0
+			for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+				if ev.Action == "run.schedule.fire" {
+					fires++
+				}
+			}
+			if fires != 1 {
+				t.Errorf("run.schedule.fire rows = %d, want 1", fires)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != tc.outcome || !got.NextAt.Equal(sc.NextAt.Add(24*time.Hour)) {
+				t.Errorf("the schedule after both sweeps = %+v; want one slot on, recorded %s", got, tc.outcome)
+			}
+		})
+	}
+}
