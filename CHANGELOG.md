@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- Multiple replicas share the sweeps that run once: each of four sweep families has its own leader and fencing epoch, and a family whose sweeps stop ticking is handed to another replica (#4064).
+- Multiple replicas share the sweeps that run once: each of four sweep families has its own leader and fencing epoch, and a family whose sweeps stop ticking is handed to another replica. Replicas that start together share the families; after a rolling restart a family stays with the replica that took it over until that replica gives it up (#4064).
 - A run's command start no longer opens a database connection of its own: start locks share two connections per replica, and no longer count against WARDYN_LOCK_POOL_MAX_CONNS (#4064).
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
@@ -29,6 +29,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - Each replica holds 2 more database connections for locks; budget max_connections for them.
+- Stop every older replica before this release's first replica starts: a sweep family is fenced against an older
+  replica only while every replica runs this version.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, UPDATE` on
   `sweeper_families` to every role that was granted `UPDATE` on `sweeper_leader`, other than that table's owner. If the
   app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
