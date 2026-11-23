@@ -150,11 +150,20 @@ func TestDeleteExpiredRunsKeepsLiveAndHeldPG(t *testing.T) {
 	retentionExec(t, pool, `INSERT INTO approvals (id, run_id, kind, requested_scope) VALUES ($1, $2, 'push_content', '{}')`, pushApproval, pushRun.ID)
 	retentionExec(t, pool, `INSERT INTO push_content_paths (approval_id, paths, truncated) VALUES ($1, '{README.md}', false)`, pushApproval)
 
-	mcpRun := ended(types.RunCompleted)
-	mcpApproval := uuid.New()
-	retentionExec(t, pool, `INSERT INTO approvals (id, run_id, kind, requested_scope) VALUES ($1, $2, 'tool_call', '{}')`, mcpApproval, mcpRun.ID)
-	retentionExec(t, pool, `INSERT INTO mcp_call_sends (owner, operation_scope, operation_key, approval_id, run_id, call_sha256, sent_at)
-		VALUES ('owner', 'scope', $1, $2, $3, 'sha', now())`, uuid.NewString(), mcpApproval, mcpRun.ID)
+	// Each mcp_call_sends arm on its own run: one send names the run but rides a live run's approval; the other
+	// rides the run's approval but names the live run.
+	mcpLive := f.run(t)
+	mcpSend := func(approvalRun, sendRun uuid.UUID) {
+		t.Helper()
+		approval := uuid.New()
+		retentionExec(t, pool, `INSERT INTO approvals (id, run_id, kind, requested_scope) VALUES ($1, $2, 'tool_call', '{}')`, approval, approvalRun)
+		retentionExec(t, pool, `INSERT INTO mcp_call_sends (owner, operation_scope, operation_key, approval_id, run_id, call_sha256, sent_at)
+			VALUES ('owner', 'scope', $1, $2, $3, 'sha', now())`, uuid.NewString(), approval, sendRun)
+	}
+	mcpNamed := ended(types.RunCompleted)
+	mcpSend(mcpLive.ID, mcpNamed.ID)
+	mcpApproved := ended(types.RunCompleted)
+	mcpSend(mcpApproved.ID, mcpLive.ID)
 
 	retired := ended(types.RunCompleted)
 	retentionExec(t, pool, `INSERT INTO runner_retirements (run_id, runner_id, obligation_id, ref, state, settled_at)
