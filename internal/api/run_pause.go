@@ -682,6 +682,9 @@ func (s *Server) sweepRunPauses(ctx context.Context) error {
 		if s.inDesktopSignin(ctx, &signins, run.ID) {
 			continue // a freeze would stop the person's display (run_desktop_signin.go)
 		}
+		if run.MachineKind == types.MachineWindowsVM {
+			continue // not freezable: a freeze stops the QEMU container under a person who may be at its desktop
+		}
 		quiet := now.Sub(activeSince(run))
 		switch {
 		case c.WaitingRequest && quiet >= pauseWaitingAfter && freezable(run.ConfinementClass):

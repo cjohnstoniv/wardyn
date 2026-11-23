@@ -94,6 +94,7 @@ describe("template field registry", () => {
       "start_time_zone",
       "title",
       "wall_preset",
+      "windows_image",
     ]);
     expect(templateFieldRule("title")?.excluded).toBe("launch");
     expect(TEMPLATE_POLICY_FIELDS.filter((r) => r.excluded)).toEqual([]);

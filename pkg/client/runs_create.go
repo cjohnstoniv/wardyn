@@ -53,12 +53,15 @@ type CreateRunRequest struct {
 	// idle sandbox.
 	Interactive bool `json:"interactive,omitempty"`
 	// MachineKind is the kind of sandbox: "" or "container" (the default), "linux_vm", a Linux
-	// guest under QEMU/KVM, or "macos_vm", a macOS guest on a managed Mac; only a registered runner
-	// offering the kind starts it.
+	// guest under QEMU/KVM, "macos_vm", a macOS guest on a managed Mac, or "windows_vm", a desktop-only
+	// Windows guest; only a registered runner offering the kind starts it.
 	MachineKind string `json:"machine_kind,omitempty"`
 	// MacOSBase is a macos_vm run's macOS base: "" or "Standard", the one prepare builds, or one of
 	// the Mac's other bases by name (PoolMacOSVM.Bases). Any other kind of sandbox sends none.
 	MacOSBase string `json:"macos_base,omitempty"`
+	// WindowsImage is a windows_vm run's image: the name of a Windows image an admin registered. A
+	// Windows VM run takes no image, only this. Any other kind of sandbox sends none.
+	WindowsImage string `json:"windows_image,omitempty"`
 	// DesktopWindow, "at_start", asks for a window onto a macOS VM run on the person's own Mac as the VM comes
 	// up. The server judges it as it judges `wardyn window`, at create and again when the run is up: a create
 	// it would refuse is refused with the sentence, and a window that can't open then (the Mac's screen is

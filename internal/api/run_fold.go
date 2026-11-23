@@ -126,6 +126,8 @@ type runFold struct {
 	// admission is the image admission verdict for the member's image (stepImageAdmission), which the run row
 	// and the run.create row carry; nil when no check applied.
 	admission *types.ImageAdmissionVerdict
+	// windowsFold is stepWindowsImage's: a windows_vm run's registered image and the seat it takes.
+	windowsFold
 }
 
 // runFoldStep is one gate or fold of the shared sequence. run writes its own
@@ -205,6 +207,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepPortalUnit, foldAll},
 	{(*Server).stepBaseline, foldAll},
 	{(*Server).stepPolicy, foldAll},
+	{(*Server).stepWindowsImage, foldAll},
 	{(*Server).stepComputerFolderDataOut, foldAll},
 	{(*Server).stepSeedWorkspace, foldAll},
 	{(*Server).stepADOOverride, foldAll},
@@ -224,6 +227,7 @@ var runFoldSteps = []runFoldStep{
 	{(*Server).stepLocalEligibility, foldAll},
 	{(*Server).stepConfinement, foldAll},
 	{(*Server).stepPlacementCapability, foldAll},
+	{(*Server).stepWindowsPlacement, foldAll},
 	{(*Server).stepMainDrive, foldAll},
 	{(*Server).stepModelProvider, foldAll},
 	{(*Server).stepDenyLists, foldAll},

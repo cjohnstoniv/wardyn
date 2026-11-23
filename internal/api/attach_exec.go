@@ -284,6 +284,9 @@ func (s *Server) attachOptionsFor(runID uuid.UUID, h *attachHolder, writer bool)
 // pass cuts the socket and opens nothing. Each Attach starts before its check's
 // start plus uiDispatchFresh (attachDispatchBy for the ticket's).
 func (s *Server) establishExec(ctx context.Context, run types.AgentRun, h *attachHolder) error {
+	if rf := windowsVMDoorRefusal(run, "interactive exec"); rf != nil {
+		return errors.New(rf.body.Error)
+	}
 	if backgroundOnlyRefusal(run, "interactive exec") != nil {
 		return errAttachBackgroundOnly
 	}

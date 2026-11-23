@@ -162,6 +162,9 @@ var passiveRunRoutes = map[string]string{
 // the run may be entered, the 409 to answer with when it is background-only. A
 // door audits its own refusal under the action it already uses.
 func backgroundOnlyRefusal(run types.AgentRun, door string) *runRefusal {
+	if rf := windowsVMDoorRefusal(run, door); rf != nil {
+		return rf
+	}
 	if !run.BackgroundOnly() {
 		return nil
 	}

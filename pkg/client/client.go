@@ -118,12 +118,15 @@
 //     credential is shared or per-person (0.7.2). Admin-only, same page
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
+//   - /api/v1/windows-licence-pools, /api/v1/windows-images — the Windows VM licence
+//     pools, their holders and seats, and the registered Windows images. Admin-only
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
 //   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,
 //     scan-results, token renew). Deliberately unwrapped: it is the sandbox's
 //     surface, not an operator's.
-//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens
+//   - /api/v1/me             — beyond Me, ssh-keys and components: capabilities, run-layout, tokens,
+//     windows-images
 //   - /api/v1/auth, /auth/login, /auth/callback — the browser SSO leg, plus the
 //     harness-login device flow. A redirect dance, not an API call.
 //   - /api/v1/scm            — the per-user Azure DevOps sign-in (0.7.10): a

@@ -256,6 +256,8 @@ func supportIneligibleMsg(kind string) string {
 		return "This run belongs to a service identity, which has no person to answer a request."
 	case supportIneligibleReserved:
 		return "This run is a sign-in or a workspace step, which belongs to its owner alone, so nobody can help inside it."
+	case supportIneligibleWindowsVM:
+		return "This run is a Windows VM, whose one desktop session a helper would take from its owner."
 	}
 	return "This run is a background task, which cannot take a helper."
 }

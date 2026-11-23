@@ -462,8 +462,8 @@ type runRowInput struct {
 func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 	req, f, placed := in.req, in.f, in.placed
 	operatorOwned := operatorOwnedRequest(ctx)
-	service, _ := frozenRunService(req.Service)          // serviceRefusal has already held it valid
-	imageInput := createDigestInput(req, f.carriedImage) // what the digest rule was asked about, for a revive to ask again
+	service, _ := frozenRunService(req.Service)                               // serviceRefusal has already held it valid
+	imageInput := f.windowsImageInput(createDigestInput(req, f.carriedImage)) // what the digest rule was asked about, for a revive to ask again
 	return types.AgentRun{
 		ID:               in.runID,
 		CreatedAt:        in.now,
@@ -480,6 +480,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		RunnerTarget:     in.runnerTarget,
 		Interactive:      req.Interactive,
 		MachineKind:      types.MachineKind(req.MachineKind).Normalize(),
+		Image:            f.windowsRef,          // a Windows VM run's registered ref, which its insert takes a seat by; "" otherwise
 		VMMachine:        macOSBaseMachine(req), // a macOS VM's picked base, until the Mac records its machine
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
@@ -624,6 +625,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
 	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
 	stampImageAdmission(createData, f.admission)
+	stampWindowsLicence(createData, f.windowsLaunch)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	return createData

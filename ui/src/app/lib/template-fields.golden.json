@@ -832,6 +832,11 @@
       "why": "A macOS VM's base is chosen at each launch, with the kind of sandbox."
     },
     {
+      "name": "windows_image",
+      "excluded": "launch",
+      "why": "A Windows VM's image is chosen at each launch, with the kind of sandbox."
+    },
+    {
       "name": "desktop_window",
       "excluded": "launch",
       "why": "A window onto a macOS VM is asked for at each launch by the person at that Mac; a template never opens one for whoever uses it."

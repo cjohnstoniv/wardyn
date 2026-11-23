@@ -921,7 +921,7 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 		requestMiB = f.req.Resources.DiskMiB
 	}
 	md := mainDriveFor(policyMiB, requestMiB, f.place.limits.DiskMiB)
-	if types.MachineKind(f.req.MachineKind) == types.MachineLinuxVM {
+	if types.MachineKind(f.req.MachineKind).HasDiskOverlay() {
 		// A Linux VM's disk is its image-sized base plus an overlay on the runner, not the container's
 		// writable layer, so no runner enforces a size on it whatever it reports for containers.
 		// A process limit counts as written when the run's source policy asked for one (the Requested
@@ -941,7 +941,7 @@ func (s *Server) stepMainDrive(f *runFold, rec *foldRecorder) bool {
 			f.policyWarns = append(f.policyWarns, warnLinuxVMPidsNotCapped)
 		}
 	}
-	if !md.Soft && md.MiB > 0 && types.MachineKind(f.req.MachineKind) != types.MachineLinuxVM && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
+	if !md.Soft && md.MiB > 0 && !types.MachineKind(f.req.MachineKind).HasDiskOverlay() && s.runnerCannotCapDisk(f.r.Context(), *f.req, f.place) {
 		msg := mainDriveUnenforceableMsg()
 		if !f.place.pooled {
 			msg = mainDriveUnenforceableUnpooledMsg()

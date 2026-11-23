@@ -78,6 +78,9 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 	if writeHostCapacityRefusal(w, r, err) {
 		return
 	}
+	if writeWindowsLicenceRefusal(w, err) {
+		return
+	}
 	// A lock, or the guarded credential write's connection (putOwned), that could not
 	// be taken in time is a retry, not a fault: 503 with a Retry-After.
 	if db.LockRefused(err) {

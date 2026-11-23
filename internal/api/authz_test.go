@@ -278,6 +278,18 @@ var routeMatrix = map[string]classifiedRoute{
 	"DELETE /api/v1/runner-pools/{id}/runners/{runner}":        {class: classAdmin},
 	"PUT /api/v1/me/runner-pools/{id}/remote-runners/{rid}":    {class: classMember},
 	"DELETE /api/v1/me/runner-pools/{id}/remote-runners/{rid}": {class: classMember},
+	// Windows licence pools (windows_licences.go): SUPER, beside the runner-pool writes, reads with their writes;
+	// a member reads only the images in pools they hold, on a path of their own.
+	"GET /api/v1/windows-licence-pools":                           {class: classAdmin},
+	"POST /api/v1/windows-licence-pools":                          {class: classAdmin},
+	"GET /api/v1/windows-licence-pools/{id}":                      {class: classAdmin},
+	"PUT /api/v1/windows-licence-pools/{id}":                      {class: classAdmin},
+	"DELETE /api/v1/windows-licence-pools/{id}":                   {class: classAdmin},
+	"GET /api/v1/windows-licence-pools/{id}/holders":              {class: classAdmin},
+	"POST /api/v1/windows-licence-pools/{id}/holders":             {class: classAdmin},
+	"DELETE /api/v1/windows-licence-pools/{id}/holders/{subject}": {class: classAdmin},
+	"GET /api/v1/windows-licence-pools/{id}/seats":                {class: classAdmin},
+	"GET /api/v1/me/windows-images":                               {class: classMember},
 	// Remote-hosted runners (remote_runners.go): the operators read them and write the people policy
 	// (held for a second human); only an admin renames one; a person lists the ones they may add.
 	"GET /api/v1/remote-runners":                           {class: classSecurity},
@@ -354,6 +366,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/base-images":            {class: classSecurity, body: `{"kind":"prewrapped","image":"ghcr.io/acme/x@sha256:` + strings.Repeat("0", 64) + `"}`},
 	"POST /api/v1/base-images/{id}/check": {class: classSecurity},
 	"DELETE /api/v1/base-images/{id}":     {class: classSecurity},
+	// Windows images (windows_licences.go): the security tier registers, renames, moves and retires them, beside
+	// the base images.
+	"GET /api/v1/windows-images":         {class: classSecurity},
+	"POST /api/v1/windows-images":        {class: classSecurity},
+	"GET /api/v1/windows-images/{id}":    {class: classSecurity},
+	"PUT /api/v1/windows-images/{id}":    {class: classSecurity},
+	"DELETE /api/v1/windows-images/{id}": {class: classSecurity},
 	// The workspace routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST.
 	// Their egress-decision siblings (approved-/denied-egress, promote-egress)
 	// are classSecurity below — same handler file, same scopedWorkspaceWrite
@@ -2121,8 +2140,11 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10.2 portal people add the portal-person lookup, a person's portal list, the suspension and the portal
 	// lifecycle status on the security tier: a suspension is the fast cut the security admin owns (= 109 SEC). The
 	// reactivation and the purge, which undo or end a person for good, are SUPER (= 81 SUPER).
-	if sec != 109 || super != 81 {
-		t.Errorf("tier split = %d security / %d admin, want 109 / 81 (PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// Windows VM licences add the five /windows-images routes on the security tier, beside /base-images (= 114 SEC),
+	// and the nine /windows-licence-pools routes, its holders and seats, on the SUPER tier, beside the runner-pool
+	// writes (= 90 SUPER).
+	if sec != 114 || super != 90 {
+		t.Errorf("tier split = %d security / %d admin, want 114 / 90 (PLUS the 5 /windows-images security routes and the 9 /windows-licence-pools SUPER routes, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 

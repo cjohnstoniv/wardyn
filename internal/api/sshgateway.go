@@ -436,9 +436,9 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	// A background task has no SSH access for anyone, a super admin included:
 	// it is the run's shape, not a permission, so it sits after the ownership
 	// checks (a foreign caller learns nothing) and outside adminDoorExempt.
-	if backgroundOnlyRefusal(run, "SSH access") != nil {
-		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reasonRunBackgroundOnly)
-		return nil, errors.New("ssh: this run is a background task; it has no SSH access")
+	if rf := backgroundOnlyRefusal(run, "SSH access"); rf != nil {
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, rf.body.Reason)
+		return nil, sshDoorRefusalErr(rf)
 	}
 	// deny_interactive on the profile the run was created under closes SSH
 	// for all but a super admin (a fresh, uncapped admin key), as the terminal

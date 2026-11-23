@@ -132,7 +132,7 @@ func (s *Server) handleReviveRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSuperAdmin)
-	if !ok {
+	if !ok || windowsVMDoorRefusal(run, "revive").write(s, w, r) {
 		return
 	}
 	res, err := s.reviveFromRequest(r, run, true)

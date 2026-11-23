@@ -216,7 +216,7 @@ func (s *Server) handleRunResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := s.getRunAuthorized(w, r, id)
-	if !ok {
+	if !ok || windowsVMDoorRefusal(run, "resource usage").write(s, w, r) {
 		return
 	}
 	// A runner must be wired to exec into anything (headless API mode cannot).
