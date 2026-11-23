@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -261,6 +262,9 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	if asSupport {
 		t.SupportGrant, t.SupportExpires = supportTicketGrant(grant)
 	}
+	if asSponsor {
+		t.SponsorService, _ = serviceOfRun(run) // the insert holds the identity to this sponsor (MintAttachTicket)
+	}
 	s.issueAttachTicket(w, r, t, authorizedAt)
 }
 
@@ -292,6 +296,12 @@ func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t sto
 		}
 	}
 	tok, err := storeAttachTicket(r.Context(), s.cfg.Store, t, issue)
+	if errors.Is(err, store.ErrServiceIdentityInactive) {
+		// The sponsorship ended between the entry check and the insert: the sponsor refusal's foreign-run 404.
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found")
+		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonSponsorNotEntitled, t.RunID.String(), "run not found").OnRun(t.RunID))
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", t.RunID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")

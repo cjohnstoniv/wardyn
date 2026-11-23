@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

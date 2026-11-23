@@ -700,6 +700,11 @@
     "sentence": "\"run not found\""
   },
   {
+    "reason": "sponsor_not_entitled",
+    "target": "t.RunID.String()",
+    "sentence": "\"run not found\""
+  },
+  {
     "reason": "src.reason",
     "target": "\"runs.agent\"",
     "sentence": "fmt.Sprintf(\"%s is not supported under %s at this run's posture: it permits autonomy level %s (bound by %s), which routes an \" + \"unattended run's tool calls to a Wardyn approval, and this agent has no external tool-approval contract. Launch a different agent, or launch interactively.\", autonomyAgentLabel(agents[i]), src.phrase, level, bound)"

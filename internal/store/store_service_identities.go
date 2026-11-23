@@ -252,7 +252,8 @@ func (s PG) UpdateServiceIdentity(ctx context.Context, name string, ch ServiceId
 }
 
 // UpdateServiceIdentityQ is UpdateServiceIdentity's statements on tx (a pgx.Tx), which a held governance
-// change applies inside the decision transaction.
+// change applies inside the decision transaction. A sponsor change also deletes the previous sponsor's outstanding
+// attach tickets on the identity's runs.
 func UpdateServiceIdentityQ(ctx context.Context, tx Querier, name string, ch ServiceIdentityChange) (ServiceIdentityChanged, error) {
 	if ch.Sponsor != nil {
 		if err := ruleDelegatePersonSubject(ctx, tx, "service_identities.sponsor", *ch.Sponsor); err != nil {
@@ -286,6 +287,14 @@ func UpdateServiceIdentityQ(ctx context.Context, tx Querier, name string, ch Ser
 		}
 		if out.TokensRevoked, err = revokeServiceTokens(ctx, tx, name); err != nil {
 			return ServiceIdentityChanged{}, err
+		}
+		// The previous sponsor's tickets on this identity's runs end with the sponsorship they were minted under,
+		// whatever the two clocks say (a support ticket's authority is its grant, so it is kept). A sponsor's mint
+		// holds this row FOR SHARE (MintAttachTicket), so none lands after this delete under the old sponsor.
+		if _, err = tx.Exec(ctx, `DELETE FROM attach_tickets t USING agent_runs r
+			WHERE t.run_id = r.id AND r.created_by = $1 AND t.principal = $2 AND t.support_grant IS NULL`,
+			types.ServicePrincipalPrefix+name, before.Sponsor); err != nil {
+			return ServiceIdentityChanged{}, fmt.Errorf("store: end the previous sponsor's attach tickets: %w", err)
 		}
 	}
 	switch {
