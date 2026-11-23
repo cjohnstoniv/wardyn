@@ -730,6 +730,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-ci-run-isolation.sh
 	./scripts/test-ci-wait-run.sh
 	./scripts/test-claims-match-code.sh
+	./scripts/test-codeql-sarif-drop.sh
 	./scripts/test-compose-cap-drop.sh
 	./scripts/test-compose-ns-registry-port.sh
 	./scripts/test-dco.sh

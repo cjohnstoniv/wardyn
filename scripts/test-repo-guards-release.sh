@@ -9,6 +9,8 @@
 #  36. ci.yml's go legs build with the Makefile recipes' flags; one split binary.
 #  34. nightly.yml's concurrency group: a dispatch shares its ref and scope's group; a called run gets its own.
 #  35. lane-check.yml's steps equal the ci.yml jobs they copy (ordered, with the named omissions).
+#  33. codeql.yml runs only once WARDYN_CODEQL_ADVANCED is 'true', and #3672's
+#      exclusion stays one rule on one file.
 
 # ── 26. release.yml's CLI targets, upload steps and asserted assets agree ────
 # The binaries job builds every TARGETS entry in one step, but each target has its
@@ -360,4 +362,34 @@ if [ -f "$LC" ]; then
             ok "lane-check.yml's steps equal the ci.yml jobs they copy (self-test catches a changed run line, a dropped fetch-depth and a deleted step)"
         fi
     fi
+fi
+
+# ── 33. CodeQL stays off until its repository variable is set, and its one exclusion stays narrow ──
+# codeql.yml must not run while default setup is on (GitHub refuses the upload and the job goes red), so every job
+# is gated on the repository variable. The overlay-proofs false positive is dropped by rule id and file
+# (scripts/codeql-sarif-drop.sh); nothing may widen that to another rule, another workflow or every file.
+CQ=.github/workflows/codeql.yml
+if [ -f "$CQ" ]; then
+    cq_fail=0
+    for job in $(awk '/^jobs:/{j=1;next} j && /^  [A-Za-z0-9_-]+:$/{gsub(/[ :]/,"");print}' "$CQ"); do
+        block="$(awk -v j="  $job:" '$0==j{f=1;next} f&&/^  [A-Za-z0-9_-]+:$/{exit} f{print}' "$CQ")"
+        printf '%s\n' "$block" | grep -qxF "    if: vars.WARDYN_CODEQL_ADVANCED == 'true'" \
+            || { bad "$CQ: job '$job' is not gated on exactly \`if: vars.WARDYN_CODEQL_ADVANCED == 'true'\`"; cq_fail=1; }
+    done
+    hits="$(grep -rn 'poisonable-step' .github scripts --include='*.yml' --include='*.yaml' --include='*.sh' | grep -v '^scripts/test-' || true)"
+    [ "$(printf '%s\n' "$hits" | grep -c .)" = 1 ] && printf '%s' "$hits" | grep -q '^scripts/codeql-sarif-drop.sh:[0-9]*:RULE=actions/cache-poisoning/poisonable-step$' \
+        || { bad "the poisonable-step exclusion must be named once, as scripts/codeql-sarif-drop.sh's RULE: ${hits:-none}"; cq_fail=1; }
+    grep -qx 'FILE=.github/workflows/overlay-proofs.yml' scripts/codeql-sarif-drop.sh \
+        || { bad "scripts/codeql-sarif-drop.sh's FILE must be exactly .github/workflows/overlay-proofs.yml"; cq_fail=1; }
+    [ "$(grep -c 'run: .wardyn-ci/scripts/codeql-sarif-drop.sh ' "$CQ")" = 1 ] && [ "$(grep -c 'codeql-sarif-drop.sh' "$CQ")" = 2 ] \
+        && grep -B2 'run: .wardyn-ci/scripts/codeql-sarif-drop.sh ' "$CQ" | grep -qF "if: matrix.language == 'actions'" \
+        && [ "$(grep -cxF '          sparse-checkout: scripts/codeql-sarif-drop.sh' "$CQ")" = 1 ] \
+        && [ "$(grep -cxF '          path: .wardyn-ci' "$CQ")" = 1 ] \
+        && [ "$(grep -cxF '          ref: ${{ github.sha }}' "$CQ")" = 1 ] \
+        || { bad "$CQ: codeql-sarif-drop.sh must run once, from the .wardyn-ci sparse checkout, in the actions leg only"; cq_fail=1; }
+    cfg="$(grep -rlnE 'query-filters|paths-ignore|^[[:space:]]*paths:' .github/codeql 2>/dev/null || true)"
+    [ -z "$cfg" ] || { bad "a CodeQL config filters queries or paths ($cfg): #3672's exclusion is one rule on one file, see scripts/codeql-sarif-drop.sh"; cq_fail=1; }
+    grep -qE '^[[:space:]]*(config|config-file|queries):' "$CQ" \
+        && { bad "$CQ: init takes no config or extra queries; an exclusion there reaches every file"; cq_fail=1; }
+    [ "$cq_fail" = 0 ] && ok "codeql.yml is gated on WARDYN_CODEQL_ADVANCED and its one exclusion is one rule on one file"
 fi
