@@ -13,7 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
-- The kubectl door now refuses a create or replace of a pod or workload that mounts a service account token, a Secret or the host, since a run with `write` could read it back through the pod's log. Such a pod must set `automountServiceAccountToken: false`, mount only plain volumes, and use no host namespace or privileged container. A patch to a pod or workload's pod spec is refused, and so is any JSON Patch to one: replace the whole object instead. A write of a ControllerRevision is refused, since a StatefulSet builds its pods from one. So `kubectl run`, `kubectl create deployment` and `kubectl set image` are refused; create and replace from a manifest ([details](docs/ENV.md#wardyn_kubectl_cli)).
+- The kubectl door now refuses a create or replace of a pod or workload that mounts a service account token, a Secret or the host, since a run with `write` could read it back through the pod's log. Such a pod must set `automountServiceAccountToken: false`, mount only plain volumes, fill its environment only from fields, resources, ConfigMaps and files, and use no host access. A path with a `secrets` segment is refused in any group. A patch to a pod or workload's pod spec is refused, and so is any JSON Patch to one: replace the whole object instead. A write of a ControllerRevision is refused, since a StatefulSet builds its pods from one. So `kubectl run`, `kubectl create deployment` and `kubectl set image` are refused; create and replace from a manifest ([details](docs/ENV.md#wardyn_kubectl_cli)).
 
 ## [0.10.3] — 2026-11-23
 

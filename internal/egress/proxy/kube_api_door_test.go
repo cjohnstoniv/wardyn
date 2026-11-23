@@ -171,6 +171,7 @@ func TestKubeAPI_AdmitsInsideTheRow(t *testing.T) {
 		"/api/v1/namespaces/team-a/pods/web-1/log?container=app",
 		"/api/v1/namespaces/team-a",
 		"/api", "/apis", "/api/v1", "/apis/apps", "/apis/apps/v1", "/version", "/openapi/v2", "/openapi/v3/apis/apps/v1",
+		"/apis/example.io/v1/namespaces/team-a/secretstores", // named like secrets, not secrets
 	} {
 		t.Run(target, func(t *testing.T) {
 			h := newKubeHarness(t, kubeOpts{trustCA: true})
@@ -212,6 +213,10 @@ func TestKubeAPI_RefusesOutsideTheRow(t *testing.T) {
 		{"reading the namespace's status", http.MethodGet, "/api/v1/namespaces/team-a/status", true, nil},
 		{"secrets", http.MethodGet, "/api/v1/namespaces/team-a/secrets", true, nil},
 		{"one secret", http.MethodGet, "/api/v1/namespaces/team-a/secrets/db", true, nil},
+		{"another group's secrets subresource", http.MethodGet, "/apis/image.example.io/v1/namespaces/team-a/imagestreams/i/secrets", true, nil},
+		{"Secrets with a capital S", http.MethodGet, "/api/v1/namespaces/team-a/Secrets", true, nil},
+		{"a secrets subresource", http.MethodGet, "/apis/apps/v1/namespaces/team-a/deployments/web/secrets", true, nil},
+		{"secrets in another group", http.MethodPost, "/apis/example.io/v1/namespaces/team-a/SECRETS", true, nil},
 		{"a token request", http.MethodPost, "/api/v1/namespaces/team-a/serviceaccounts/default/token", true, nil},
 		{"exec", http.MethodPost, "/api/v1/namespaces/team-a/pods/web-1/exec?command=sh", true, nil},
 		{"exec over GET", http.MethodGet, "/api/v1/namespaces/team-a/pods/web-1/exec?command=sh", true, nil},
@@ -332,6 +337,44 @@ func TestKubeAPI_PodSpecWrites(t *testing.T) {
 			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"windowsOptions":[]}}]`), true, false, []string{ct}},
 		{"hostProcess set false", http.MethodPost, pods,
 			pod(`"automountServiceAccountToken":false,"securityContext":{"windowsOptions":{"hostProcess":false}},"containers":[{"name":"a","securityContext":{"windowsOptions":{"hostProcess":false}}}]`), true, true, []string{ct}},
+		// Capabilities are an allow-list, the Pod Security baseline set in its exact spelling.
+		{"SYS_ADMIN in a container", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":["SYS_ADMIN"]}}}]`), true, false, []string{ct}},
+		{"SYS_ADMIN in an init container", http.MethodPost, pods,
+			pod(ok + `,"initContainers":[{"name":"i","securityContext":{"capabilities":{"add":["SYS_ADMIN"]}}}]`), true, false, []string{ct}},
+		{"SYS_ADMIN in an ephemeral container", http.MethodPost, pods,
+			pod(ok + `,"ephemeralContainers":[{"name":"e","securityContext":{"capabilities":{"add":["SYS_ADMIN"]}}}]`), true, false, []string{ct}},
+		{"NET_BIND_SERVICE added", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":["NET_BIND_SERVICE"],"drop":["ALL"]}}}]`), true, true, []string{ct}},
+		{"capabilities add ALL as a string", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":"ALL"}}}]`), true, false, []string{ct}},
+		{"a lower-case capability", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":["cap_sys_admin"]}}}]`), true, false, []string{ct}},
+		{"a CAP_ prefix", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":["CAP_CHOWN"]}}}]`), true, false, []string{ct}},
+		{"a capability that is not a string", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"add":[1]}}}]`), true, false, []string{ct}},
+		{"procMount Unmasked", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"procMount":"Unmasked"}}]`), true, false, []string{ct}},
+		{"procMount Default and null", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"procMount":"Default"}},{"name":"b","securityContext":{"procMount":null}}]`), true, true, []string{ct}},
+		// windowsOptions may set only hostProcess and runAsUserName: a gMSA credential spec hands the pod a domain identity.
+		{"a pod-level gmsaCredentialSpecName", http.MethodPost, pods, pod(ok + `,"securityContext":{"windowsOptions":{"gmsaCredentialSpecName":"sql-gmsa"}}`), true, false, []string{ct}},
+		{"a container gmsaCredentialSpec", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"windowsOptions":{"gmsaCredentialSpec":"{}"}}}]`), true, false, []string{ct}},
+		{"runAsUserName and a null gMSA field", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"windowsOptions":{"runAsUserName":"ContainerUser","gmsaCredentialSpec":null}}}]`), true, true, []string{ct}},
+		// Environment sources are an allow-list.
+		{"an unknown valueFrom source", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","env":[{"name":"x","valueFrom":{"futureSecretRef":{"name":"db"}}}]}]`), true, false, []string{ct}},
+		{"an unknown envFrom source", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","envFrom":[{"futureSecretRef":{"name":"db"}}]}]`), true, false, []string{ct}},
+		{"a mis-cased SecretKeyRef", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","env":[{"name":"x","valueFrom":{"SecretKeyRef":{"name":"db","key":"p"}}}]}]`), true, false, []string{ct}},
+		{"every plain env source", http.MethodPost, pods,
+			pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","env":[{"name":"a","valueFrom":{"fieldRef":{"fieldPath":"metadata.name"}}},` +
+				`{"name":"b","valueFrom":{"resourceFieldRef":{"resource":"limits.cpu"}}},{"name":"c","valueFrom":{"configMapKeyRef":{"name":"cfg","key":"k"}}},` +
+				`{"name":"d","valueFrom":{"fileKeyRef":{"volumeName":"e","path":"p","key":"k"}}}],"envFrom":[{"prefix":"C_","configMapRef":{"name":"cfg"}}]}]`), true, true, []string{ct}},
 		{"a YAML body", http.MethodPost, pods, pod(ok), true, false, []string{"Content-Type: application/yaml"}},
 		{"an encoded body", http.MethodPost, pods, pod(ok), true, false, []string{ct, "Content-Encoding: gzip"}},
 		{"a JSON Patch to pods", http.MethodPatch, pods + "/p", `[{"op":"add","path":"/metadata/labels/a","value":"b"}]`, true, false,
@@ -356,6 +399,7 @@ func TestKubeAPI_PodSpecWrites(t *testing.T) {
 		{"PUT a ControllerRevision", http.MethodPut, "/apis/apps/v1/namespaces/team-a/controllerrevisions/web-1", `{"kind":"ControllerRevision","revision":2}`, true, false, []string{ct}},
 		{"GET a ControllerRevision", http.MethodGet, "/apis/apps/v1/namespaces/team-a/controllerrevisions/web-1", "", true, true, nil},
 		{"DELETE a ControllerRevision", http.MethodDelete, "/apis/apps/v1/namespaces/team-a/controllerrevisions/web-1", "", true, true, nil},
+		{"POST a ControllerRevision in another group", http.MethodPost, "/apis/x.example/v1/namespaces/team-a/controllerrevisions", `{"revision":1}`, true, false, []string{ct}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newKubeHarness(t, kubeOpts{write: c.write, trustCA: true})
@@ -399,6 +443,12 @@ func TestKubeAPI_PodSpecMisCasedKeys(t *testing.T) {
 		"Privileged":            {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"Privileged":true}}]`), "application/json"},
 		"HostProcess":           {http.MethodPost, pods, pod(ok + `,"securityContext":{"windowsOptions":{"HostProcess":true}}`), "application/json"},
 		"WindowsOptions":        {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"WindowsOptions":{"hostProcess":true}}}]`), "application/json"},
+		"Capabilities":          {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"Capabilities":{"add":["SYS_ADMIN"]}}}]`), "application/json"},
+		"Add":                   {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","securityContext":{"capabilities":{"Add":["SYS_ADMIN"]}}}]`), "application/json"},
+		"Volumes":               {http.MethodPost, pods, pod(ok + `,"Volumes":[{"name":"s","secret":{}}]`), "application/json"},
+		"InitContainers":        {http.MethodPost, pods, pod(ok + `,"InitContainers":[{"name":"i","securityContext":{"privileged":true}}]`), "application/json"},
+		"SecurityContext":       {http.MethodPost, pods, pod(`"automountServiceAccountToken":false,"containers":[{"name":"a","SecurityContext":{"privileged":true}}]`), "application/json"},
+		"projected Sources":     {http.MethodPost, pods, pod(ok + `,"volumes":[{"name":"p","projected":{"Sources":[{"secret":{}}]}}]`), "application/json"},
 		"Spec in a merge patch": {http.MethodPatch, pods + "/p", `{"Spec":{"containers":[]}}`, "application/merge-patch+json"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -462,6 +512,25 @@ func TestKubeAPI_RestartRowSkipsPodSpec(t *testing.T) {
 	h.mustRefuse(t, "a JSON Patch on a restart row", rec, kubeAPIRefused)
 	if !strings.Contains(rec.Body.String(), kubeRestartRefusalLead) {
 		t.Errorf("refused by another rule: %s", rec.Body)
+	}
+}
+
+// A secrets segment anywhere in the path is refused on every access level.
+func TestKubeAPI_SecretsSegmentEveryAccess(t *testing.T) {
+	const target = "/apis/image.example.io/v1/namespaces/team-a/imagestreams/i/secrets"
+	for name, o := range map[string]kubeOpts{
+		"read":    {trustCA: true},
+		"restart": {restart: true, trustCA: true},
+		"write":   {write: true, trustCA: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newKubeHarness(t, o)
+			rec := h.tunnel(t, http.MethodGet, target)
+			h.mustRefuse(t, name, rec, kubeAPIRefused)
+			if !strings.Contains(rec.Body.String(), "Secrets are not readable") {
+				t.Errorf("refused by another rule: %s", rec.Body)
+			}
+		})
 	}
 }
 
