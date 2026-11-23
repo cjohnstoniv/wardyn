@@ -20,9 +20,11 @@ package proxy
 // a service account's token request, exec, attach, port-forward, the API
 // server's proxy, ephemeral containers, any protocol upgrade, and any
 // impersonation header. A write may not create or replace a pod, or a workload
-// that carries a pod spec, unless it sets automountServiceAccountToken: false
-// and mounts or reads no Secret, nor patch one's pod spec, since what the pod
-// prints is readable through its log (kube_api_door_podspec.go).
+// that carries a pod spec, unless it sets automountServiceAccountToken: false,
+// mounts only plain volumes, reads no Secret and uses no host access, nor patch
+// one's pod spec, since what the pod prints is readable through its log
+// (kube_api_door_podspec.go). Nor may it write a ControllerRevision, from
+// which a StatefulSet builds its pods.
 
 import (
 	"context"
@@ -183,6 +185,8 @@ func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) 
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
 	case len(rest) == 3 && rest[0] == "serviceaccounts" && rest[2] == "token":
 		return errors.New("this run's kubectl cannot request a service account token")
+	case len(rest) >= 1 && rest[0] == "controllerrevisions" && method != http.MethodGet && method != http.MethodDelete:
+		return errors.New("this run's kubectl cannot create or change a ControllerRevision, because a StatefulSet builds its pods from one")
 	case method != http.MethodGet && !d.write && !d.restart:
 		return errors.New("this run's kubectl has read access only")
 	}
@@ -236,7 +240,7 @@ func headerHasToken(h http.Header, name, token string) bool {
 // serveKubeAPI is the door: judge, resolve, forward.
 func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string, port int) {
 	err := p.kube.admit(r.Method, adoRawPath(r), r.Header)
-	if err == nil {
+	if err == nil && p.kube.write {
 		err = p.kube.admitPodSpec(r, adoRawPath(r))
 	}
 	if err != nil {

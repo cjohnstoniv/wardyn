@@ -5,11 +5,17 @@ package proxy
 
 // The kubectl door's pod-spec check. A run whose kubectl may write can create a
 // pod and read what it prints through pods/<name>/log, so a pod that mounts a
-// service account token, or reads a Secret into a file or a variable, would
-// hand that credential to the sandbox. A create or replace of a resource that
-// carries a pod spec must set automountServiceAccountToken: false and name no
-// Secret. A patch is merged into an object the door never sees, so one that
-// touches the pod spec at all is refused, and so is any JSON Patch.
+// service account token, a Secret or the node's files, or reads a Secret into a
+// variable, would hand that credential to the sandbox. A create or replace of a
+// resource that carries a pod spec must set automountServiceAccountToken: false,
+// mount only the plain volume kinds below (a kind the door does not know is
+// refused), read no Secret into its environment and use no host namespace or
+// privileged container. A patch is merged into an object the door never sees,
+// so one that touches the pod spec at all is refused, and so is any JSON Patch.
+//
+// The API server reads keys case-sensitively and ignores one spelled otherwise,
+// so the door reads each key in its exact spelling and refuses an object that
+// also holds it in another case: a key the server ignores never satisfies a rule.
 
 import (
 	"bytes"
@@ -18,6 +24,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -30,11 +37,14 @@ const kubePodSpecMaxBody = 1 << 20
 var (
 	errKubePodToken  = errors.New("this run's kubectl cannot create a pod that mounts a service account token: set automountServiceAccountToken: false")
 	errKubePodSecret = errors.New("this run's kubectl cannot create a pod that reads a Secret")
+	errKubePodVolume = errors.New("this run's kubectl may mount only emptyDir, configMap, downwardAPI, persistentVolumeClaim, ephemeral, image and projected volumes in a pod, and project only configMap, downwardAPI and clusterTrustBundle")
+	errKubePodHost   = errors.New("this run's kubectl cannot create a pod that shares the host's process, IPC or network namespace, or runs a privileged container")
+	errKubePodCase   = errors.New("this run's kubectl sent a pod or workload with a key Wardyn reads spelled in another case")
 	errKubePodShape  = errors.New("this run's kubectl sent a pod or workload Wardyn cannot read")
 )
 
 // kubePodSpecPaths maps each resource that carries a pod spec, in any API
-// group, to the keys (lower case) that lead from the object to its pod spec.
+// group, to the keys that lead from the object to its pod spec.
 var kubePodSpecPaths = map[string][]string{
 	"pods":                   {"spec"},
 	"deployments":            {"spec", "template", "spec"},
@@ -43,9 +53,17 @@ var kubePodSpecPaths = map[string][]string{
 	"daemonsets":             {"spec", "template", "spec"},
 	"jobs":                   {"spec", "template", "spec"},
 	"replicationcontrollers": {"spec", "template", "spec"},
-	"cronjobs":               {"spec", "jobtemplate", "spec", "template", "spec"},
+	"cronjobs":               {"spec", "jobTemplate", "spec", "template", "spec"},
 	"podtemplates":           {"template", "spec"},
 }
+
+// kubePlainVolumes are the keys a volume may carry: its name and the kinds that
+// hold no Secret, service account token or node path. kubePlainProjections are
+// the sources a projected volume may carry.
+var (
+	kubePlainVolumes     = []string{"name", "emptyDir", "configMap", "downwardAPI", "persistentVolumeClaim", "ephemeral", "image", "projected"}
+	kubePlainProjections = []string{"configMap", "downwardAPI", "clusterTrustBundle"}
+)
 
 // admitPodSpec judges the body of a create, replace or patch of a resource
 // that carries a pod spec and leaves r.Body readable again with the bytes it
@@ -70,14 +88,17 @@ func (d *kubeAPIDoor) admitPodSpec(r *http.Request, raw string) error {
 	if err != nil {
 		return err
 	}
-	obj, err := kubeFoldedObject(body)
+	obj, err := kubeObject(body)
 	if err != nil {
 		return err
 	}
 	if r.Method == http.MethodPatch {
 		return judgeKubePodSpecPatch(obj, path)
 	}
-	spec, _ := kubeWalk(obj, path)
+	spec, err := kubeWalk(obj, path)
+	if err != nil {
+		return err
+	}
 	return judgeKubePodSpec(spec)
 }
 
@@ -131,116 +152,155 @@ func readKubePodSpecBody(r *http.Request) ([]byte, error) {
 	return body, nil
 }
 
-// kubeFoldedObject parses body as one JSON object with every key lower-cased.
-// A key repeated, even in another case, is refused: two parsers could read it
-// differently.
-func kubeFoldedObject(body []byte) (map[string]any, error) {
+// kubeObject parses body as one JSON object. A key repeated at any depth is
+// refused: two parsers could keep different copies.
+func kubeObject(body []byte) (map[string]any, error) {
 	if _, err := types.CanonicalJSON(body); err != nil {
 		return nil, errKubePodShape
 	}
-	var v any
-	if err := json.Unmarshal(body, &v); err != nil {
-		return nil, errKubePodShape
-	}
-	folded, ok := kubeFoldKeys(v)
-	obj, isObj := folded.(map[string]any)
-	if !ok || !isObj {
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil || obj == nil {
 		return nil, errKubePodShape
 	}
 	return obj, nil
 }
 
-func kubeFoldKeys(v any) (any, bool) {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, e := range t {
-			lk := strings.ToLower(k)
-			if _, dup := out[lk]; dup {
-				return nil, false
-			}
-			f, ok := kubeFoldKeys(e)
-			if !ok {
-				return nil, false
-			}
-			out[lk] = f
-		}
-		return out, true
-	case []any:
-		for i, e := range t {
-			f, ok := kubeFoldKeys(e)
-			if !ok {
-				return nil, false
-			}
-			t[i] = f
+// kubeKey reads key from obj in its exact spelling, and refuses obj when it
+// also holds key spelled in another case.
+func kubeKey(obj map[string]any, key string) (any, error) {
+	for k := range obj {
+		if k != key && strings.EqualFold(k, key) {
+			return nil, errKubePodCase
 		}
 	}
-	return v, true
+	return obj[key], nil
 }
 
-// kubeWalk follows path from obj; it reports at which step it stopped (len(path)
-// when it reached a value).
-func kubeWalk(obj map[string]any, path []string) (map[string]any, int) {
-	cur := obj
-	for i, k := range path {
-		next, ok := cur[k].(map[string]any)
-		if !ok {
-			return nil, i
-		}
-		cur = next
+// kubeHas reports whether obj holds key, null included, as kubeKey reads it.
+func kubeHas(obj map[string]any, key string) (bool, error) {
+	if _, err := kubeKey(obj, key); err != nil {
+		return false, err
 	}
-	return cur, len(path)
+	_, has := obj[key]
+	return has, nil
+}
+
+// kubeMap reads key as an object; absent or null is nil.
+func kubeMap(obj map[string]any, key string) (map[string]any, error) {
+	v, err := kubeKey(obj, key)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, errKubePodShape
+	}
+	return m, nil
+}
+
+// kubeList reads key as a list of objects; absent or null is none.
+func kubeList(obj map[string]any, key string) ([]map[string]any, error) {
+	v, err := kubeKey(obj, key)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	list, ok := v.([]any)
+	if !ok {
+		return nil, errKubePodShape
+	}
+	out := make([]map[string]any, 0, len(list))
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return nil, errKubePodShape
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// kubeTrue reads key as a boolean; absent or null is false.
+func kubeTrue(obj map[string]any, key string) (bool, error) {
+	v, err := kubeKey(obj, key)
+	if err != nil || v == nil {
+		return false, err
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false, errKubePodShape
+	}
+	return b, nil
+}
+
+// kubeWalk follows path from obj to the pod spec; nil when the body has none.
+func kubeWalk(obj map[string]any, path []string) (map[string]any, error) {
+	for _, k := range path {
+		next, err := kubeMap(obj, k)
+		if err != nil || next == nil {
+			return nil, err
+		}
+		obj = next
+	}
+	return obj, nil
 }
 
 // judgeKubePodSpecPatch admits a merge patch only when it leaves the pod spec
 // alone: every object on the way to it holds no strategic merge directive, and
-// the patch names no step of the path past where it stops.
+// the patch stops short of it without naming the next step.
 func judgeKubePodSpecPatch(obj map[string]any, path []string) error {
-	_, at := kubeWalk(obj, path)
-	cur := obj
-	for i := 0; i <= at && i < len(path); i++ {
-		for k := range cur {
-			if strings.HasPrefix(k, "$") {
+	for _, k := range path {
+		for key := range obj {
+			if strings.HasPrefix(key, "$") {
 				return errors.New("this run's kubectl cannot send a strategic merge directive to a pod or workload")
 			}
 		}
-		if i == at {
-			if _, named := cur[path[i]]; named {
-				return errKubePodShape
-			}
-			return nil
+		if has, err := kubeHas(obj, k); err != nil || !has {
+			return err
 		}
-		cur = cur[path[i]].(map[string]any)
+		next, ok := obj[k].(map[string]any)
+		if !ok {
+			return errKubePodShape
+		}
+		obj = next
 	}
 	return errors.New("this run's kubectl cannot patch the pod spec of a pod or workload, because Wardyn cannot see what it already mounts: replace the whole object instead")
 }
 
 // judgeKubePodSpec refuses a pod spec that does not set
-// automountServiceAccountToken: false, or that names a Secret or a service
-// account token in a volume or a container's environment.
+// automountServiceAccountToken: false, that shares a host namespace, that
+// mounts a volume kind outside the plain ones, or whose containers run
+// privileged or read a Secret into their environment.
 func judgeKubePodSpec(spec map[string]any) error {
-	if off, ok := spec["automountserviceaccounttoken"].(bool); !ok || off {
+	if v, err := kubeKey(spec, "automountServiceAccountToken"); err != nil {
+		return err
+	} else if off, ok := v.(bool); !ok || off {
 		return errKubePodToken
 	}
-	vols, ok := kubeObjects(spec["volumes"])
-	if !ok {
-		return errKubePodShape
+	for _, key := range []string{"hostPID", "hostIPC", "hostNetwork"} {
+		on, err := kubeTrue(spec, key)
+		if err != nil {
+			return err
+		}
+		if on {
+			return errKubePodHost
+		}
+	}
+	vols, err := kubeList(spec, "volumes")
+	if err != nil {
+		return err
 	}
 	for _, v := range vols {
-		if _, has := v["secret"]; has {
-			return errKubePodSecret
-		}
-		if err := judgeKubeProjected(v["projected"]); err != nil {
+		if err := judgeKubeVolume(v); err != nil {
 			return err
 		}
 	}
-	for _, key := range []string{"containers", "initcontainers", "ephemeralcontainers"} {
-		cs, ok := kubeObjects(spec[key])
-		if !ok {
-			return errKubePodShape
+	for _, key := range []string{"containers", "initContainers", "ephemeralContainers"} {
+		cs, err := kubeList(spec, key)
+		if err != nil {
+			return err
 		}
 		for _, c := range cs {
-			if err := judgeKubeContainerEnv(c); err != nil {
+			if err := judgeKubeContainer(c); err != nil {
 				return err
 			}
 		}
@@ -248,75 +308,69 @@ func judgeKubePodSpec(spec map[string]any) error {
 	return nil
 }
 
-func judgeKubeProjected(p any) error {
-	if p == nil {
-		return nil
+// judgeKubeVolume admits a volume that carries only a name and plain kinds,
+// and a projected one only plain sources.
+func judgeKubeVolume(v map[string]any) error {
+	for k := range v {
+		if !slices.Contains(kubePlainVolumes, k) {
+			return errKubePodVolume
+		}
 	}
-	proj, ok := p.(map[string]any)
-	if !ok {
-		return errKubePodShape
+	proj, err := kubeMap(v, "projected")
+	if err != nil {
+		return err
 	}
-	srcs, ok := kubeObjects(proj["sources"])
-	if !ok {
-		return errKubePodShape
+	srcs, err := kubeList(proj, "sources")
+	if err != nil {
+		return err
 	}
 	for _, s := range srcs {
-		if _, has := s["secret"]; has {
-			return errKubePodSecret
-		}
-		if _, has := s["serviceaccounttoken"]; has {
-			return errors.New("this run's kubectl cannot create a pod that mounts a service account token")
+		for k := range s {
+			if !slices.Contains(kubePlainProjections, k) {
+				return errKubePodVolume
+			}
 		}
 	}
 	return nil
 }
 
-func judgeKubeContainerEnv(c map[string]any) error {
-	env, ok := kubeObjects(c["env"])
-	if !ok {
-		return errKubePodShape
+// judgeKubeContainer refuses a privileged container and one that reads a
+// Secret into its environment.
+func judgeKubeContainer(c map[string]any) error {
+	sc, err := kubeMap(c, "securityContext")
+	if err != nil {
+		return err
+	}
+	if on, err := kubeTrue(sc, "privileged"); err != nil {
+		return err
+	} else if on {
+		return errKubePodHost
+	}
+	env, err := kubeList(c, "env")
+	if err != nil {
+		return err
 	}
 	for _, e := range env {
-		if e["valuefrom"] == nil {
-			continue
+		from, err := kubeMap(e, "valueFrom")
+		if err != nil {
+			return err
 		}
-		from, ok := e["valuefrom"].(map[string]any)
-		if !ok {
-			return errKubePodShape
-		}
-		if _, has := from["secretkeyref"]; has {
+		if has, err := kubeHas(from, "secretKeyRef"); err != nil {
+			return err
+		} else if has {
 			return errKubePodSecret
 		}
 	}
-	envFrom, ok := kubeObjects(c["envfrom"])
-	if !ok {
-		return errKubePodShape
+	envFrom, err := kubeList(c, "envFrom")
+	if err != nil {
+		return err
 	}
 	for _, e := range envFrom {
-		if _, has := e["secretref"]; has {
+		if has, err := kubeHas(e, "secretRef"); err != nil {
+			return err
+		} else if has {
 			return errKubePodSecret
 		}
 	}
 	return nil
-}
-
-// kubeObjects reads an absent or null value as no items, and refuses anything
-// but a list of objects.
-func kubeObjects(v any) ([]map[string]any, bool) {
-	if v == nil {
-		return nil, true
-	}
-	list, ok := v.([]any)
-	if !ok {
-		return nil, false
-	}
-	out := make([]map[string]any, 0, len(list))
-	for _, e := range list {
-		m, ok := e.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		out = append(out, m)
-	}
-	return out, true
 }
