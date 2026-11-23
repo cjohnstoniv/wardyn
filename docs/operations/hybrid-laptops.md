@@ -366,8 +366,13 @@ What happens:
   just-written change; Wardyn logs a warning and continues.
 - Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
   [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
-- Known limit: on a runner-hosted or Kubernetes sandbox, the agent can stay running with its
-  network for up to about 2 minutes after the run ends, while the first pass back runs (its timeout).
+- Known limit: on a virtual machine sandbox, the agent can stay running with its network for up to about 2 minutes
+  after the run ends, while the first pass back runs (its timeout).
+- On a Kubernetes runner, or a runner older than 0.10.0, Wardyn stops the sandbox's proxy before the first pass back
+  instead. The agent has no network, but it is left running and can still change files while the pass runs. If the
+  proxy can't be stopped, no pass runs.
+- On Kubernetes in server mode, no pass back runs while the agent is still running: the sandbox is stopped and the
+  run records that its changes were not brought back.
 - `wardyn folder bring-back <run>` ends a **Both ways** run early: the agent is stopped, then its changes come
   back. Only you can do it.
 

@@ -14,10 +14,19 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/testfloor"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// endedAgentRunner is fakeRunner whose agent reads as ended: it cannot stop a proxy alone, so a pass back runs in
+// its sandbox only then.
+type endedAgentRunner struct{ *fakeRunner }
+
+func (endedAgentRunner) AgentStatus(context.Context, string, string) (runner.Status, error) {
+	return runner.Status{State: types.RunCompleted}, nil
+}
 
 // pgUnansweredPassRun is a COMPLETED run on Postgres with a seeded both-ways folder on a laptop runner that is not
 // connected here. Its record is at gen 2 with gen 1 settled, so its last pass is unanswered, kept with stalled
@@ -27,7 +36,7 @@ func pgUnansweredPassRun(t *testing.T, e *poolEnv, stalled int) uuid.UUID {
 	ctx := context.Background()
 	laptop := uuid.New()
 	run := e.boundRun(func(r *types.AgentRun) {
-		r.State, r.SandboxRef = types.RunCompleted, "sbx-"+r.ID.String()
+		r.State, r.SandboxRef, r.AgentExecID = types.RunCompleted, "sbx-"+r.ID.String(), "agent-exec"
 		r.LocalFolder = &types.RunLocalFolder{Name: "my-app", RemoteDir: "/home/agent/work", RunnerID: &laptop, Path: "/Users/alice/code/my-app", Direction: types.ComputerFolderBoth}
 	})
 	if ok, err := e.pg.SetRunLocalFolderSeed(ctx, run, ""); !ok || err != nil {
@@ -55,7 +64,7 @@ func TestPG_PassBack_TheBoundIsReadBeforeTheBump(t *testing.T) {
 	testfloor.Mark(t, "pg")
 	e := newPoolEnv(t, false)
 	ctx := context.Background()
-	e.srv.cfg.Runner = &fakeRunner{}
+	e.srv.cfg.Runner = endedAgentRunner{&fakeRunner{}}
 	e.srv.cfg.ComputerFolders = true
 
 	given := pgUnansweredPassRun(t, e, computerFolderStalls)
