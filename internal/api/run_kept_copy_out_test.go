@@ -432,6 +432,7 @@ func TestKeptCopyOut_ABackgroundRunStaysClosed(t *testing.T) {
 func TestKeptCopyOut_OnlyTheOwnersDoorsSetTheException(t *testing.T) {
 	qualified := funcBodies(t, true)
 	for name, want := range map[string][]string{
+		"copyOutBy":  {"Server.liveRunForExec", "liveRunWords.copyOutFor"},
 		"copyOutFor": {"Server.bridgeSSHExec", "Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.handleSSHDirectTCPIP", "Server.sshFreshRun", "attachWordsFor"},
 		"keptCopyOutRefusal": {"Server.handleAttachTicket", "Server.handleAttachWS", "Server.keptCopyOutOpen",
 			"Server.liveRunForExec", "Server.refuseDesktopNotLive"},
