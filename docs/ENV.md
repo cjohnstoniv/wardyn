@@ -291,6 +291,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_APPROVAL_EXPIRY_AFTER` | duration | `24h` | PENDING approvals older than this expire; `0` or negative turns the sweeper off (boot warning). It then expires nothing: a pending approval stays pending past its run's wait budget unless the client that raised it withdraws it (flag `-approval-expiry-after`) |
 | `WARDYN_ENDED_RUN_GRACE` | duration | `168h` (7 days) | How long a run whose end has passed keeps its files; past the grace it is torn down, and `0` tears a run down at its end (flag `-ended-run-grace`). [Details](#wardyn_ended_run_grace) |
 | `WARDYN_RUN_MAX_AGE` | duration | (unset: off) | Absolute cap on a run's age since creation (no flag). It is every new run's lifetime cap; a run still live at it is killed. The reaper stops only older runs with no cap. [Details](#wardyn_run_max_age) |
+| `WARDYN_LAPSE_RECOVERY_GRACE` | duration | `25m` | How long the server counts as recovering after the database is reachable again and after every start. `0` turns it off; boot refuses a negative value or one above `2h` (flag `-lapse-recovery-grace`). [Details](#wardyn_lapse_recovery_grace) |
 | `WARDYN_APPROVAL_EXPIRY_INTERVAL` | duration | `10m` | Sweep interval for stale approvals; 0 disables, which removes the only thing that bounds a PENDING request with no run-scoped wait/end (flag `-approval-expiry-interval`). [Details](#wardyn_approval_expiry_interval) |
 | `WARDYN_AUTOSTOP_INTERVAL` | duration | `1m` | lifecycle reaper scan interval; 0 disables (flag `-autostop-interval`) |
 | `WARDYN_AUDIT_COALESCE_WINDOW` | duration | `5m` | Fold identical consecutive `auth.fail` audit rows into the first row plus one new summary row; `0` disables the folding (flag `-audit-coalesce-window`). [Details](#wardyn_audit_coalesce_window) |
@@ -1420,6 +1421,15 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Both run pods are also created with the agent owned by the proxy pod, so deleting the proxy pod removes the agent.
 - The reaper scans every `WARDYN_AUTOSTOP_INTERVAL`, which must stay under the 10-minute grace; the reaper has to be enabled for the age stop, the pod deadlines work without it.
 - Chart: set it with `env`.
+
+### `WARDYN_LAPSE_RECOVERY_GRACE`
+
+- How long after the database is reachable again, and after every start of the server, the server counts as recovering (flag `-lapse-recovery-grace`; `0` turns it off; boot refuses a negative value or one above `2h`).
+- The server pings its database every 5 seconds. A ping that does not answer within 3 seconds, or fails, is not a good ping.
+- 30 seconds without a good ping restarts the count. A restart of wardynd also starts it again, so the first 25 minutes after every start count as recovering.
+- A database pool starved for 30 seconds counts as unhealthy and starts the count again.
+- So a server whose pool is starved at least every 25 minutes counts as recovering for as long as that lasts.
+- The same grace holds idle stops: for this long after the database is reachable again, and after every start of the server, no run is idle-stopped.
 
 ### `WARDYN_APPROVAL_EXPIRY_INTERVAL`
 

@@ -43,6 +43,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // also registers the "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -404,6 +405,8 @@ func run() error {
 	holder := sweeperHolder()
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
+	health := storehealth.New(time.Now, orZero(f.outage.lapseRecoveryGrace))
+	go health.Run(rootCtx, st.Ping)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
 	// Nil unless WARDYN_AUDIT_SINKS has an otlp_metrics block; started after the workers below.
 	otlpMetrics := newOTLPMetrics(*f.auditSinks)
@@ -421,6 +424,7 @@ func run() error {
 		ImageAdmissionConfig:  api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
 		SweeperLease:          leader,
 		SweepHealth:           ticks,
+		StoreHealth:           health,
 		Store:                 st,
 		Identity:              idp,
 		// Reads its row on first use, so an install with identity off has no key
