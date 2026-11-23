@@ -506,7 +506,7 @@ for res in services endpointslices; do
   [ "${got}" = "${want}" ] \
     || fail "deploy/helm/wardyn/templates/rbac.yaml's runs Role grants [${got}] on ${res}, but runAddressAccess lists [${want}] — the Role must grant exactly what the driver's per-run Service calls use (R-02c)"
 done
-grep -B1 'resources: \["endpointslices"\]' "${WORK}/rbac-role-server" | grep -q 'apiGroups: \["discovery.k8s.io"\]' \
+grep -B1 'resources: \["endpointslices"\]' "${WORK}/rbac-role-server" | grep 'apiGroups: \["discovery.k8s.io"\]' >/dev/null \
   || fail "deploy/helm/wardyn/templates/rbac.yaml's endpointslices rule is not in apiGroups [\"discovery.k8s.io\"] (R-02c)"
 # Read as sets: a rule naming services, endpointslices, endpoints or a wildcard among other resources, or a rule in a
 # wildcard API group, would grant more than the two exact rules above.
