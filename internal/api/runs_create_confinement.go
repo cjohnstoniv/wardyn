@@ -72,6 +72,23 @@ func resolveConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, 
 	return enforced, source, raised, nil
 }
 
+// blastRadiusRaiseCause is Review's confinement_raise_cause: blast_radius_floor when the floor lifted the
+// class to CC3, else empty.
+func blastRadiusRaiseCause(raised bool) string {
+	if raised {
+		return "blast_radius_floor"
+	}
+	return ""
+}
+
+// blastRadiusRaiseWarning is the sentence Review shows beside that cause; none when the floor raised nothing.
+func blastRadiusRaiseWarning(raised bool) []string {
+	if !raised {
+		return nil
+	}
+	return []string{"Raised to CC3 by the blast-radius floor: this run holds a write-capable grant or an API key for a host outside the baseline."}
+}
+
 // stampConfinementDefault records on run.create who chose the class of a launch that named none: the
 // organisation's default barrier or the server's strongest-offered rule. A launch that named a class
 // carries nothing, as confinement_source already says so.

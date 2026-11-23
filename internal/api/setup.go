@@ -364,8 +364,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			checks = append(checks, chk)
 		}
 		// runner_limits (runners that take no run until limits are set) and credential_delivery (stored
-		// delivery rows the server cannot build). Never Blocking.
-		checks = append(checks, s.runnerPolicyRows(ctx)...)
+		// delivery rows the server cannot build), and default_barrier_unset. Never Blocking.
+		checks = append(checks, s.runnerPolicyRows(ctx, rnr)...)
 		// recording: whether session recording is on, and how to turn it on. Never Blocking.
 		checks = append(checks, s.recordingRows()...)
 		// runner_arch_images: image keys with no image for a registered runner's architecture. Never Blocking.
@@ -378,10 +378,6 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			checks = append(checks, s.upgradeChecks(ctx, siteCfg)...)
 			// private_ip_refusals: hosts a run's proxy refused for resolving into liftable private space. Never Blocking.
 			checks = append(checks, s.privateIPRefusalsRows(ctx, siteCfg)...)
-		}
-		// default_barrier_unset: no organisation default barrier while a stronger class is offered. Never Blocking.
-		if chk, ok := s.defaultBarrierUnsetRow(ctx, rnr); ok {
-			checks = append(checks, chk)
 		}
 		// High availability rows: present only while WARDYN_HA is on, and read
 		// Postgres, so they share this operator-only gate.
