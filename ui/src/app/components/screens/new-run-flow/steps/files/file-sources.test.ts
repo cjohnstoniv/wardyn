@@ -25,6 +25,10 @@ describe("driveReason", () => {
       DRIVE_MEMBER.NR_BOUND_ELSEWHERE("team-share"),
     );
   });
+
+  it("closes a person's drive whose delete has not finished with the Deleting sentence", () => {
+    expect(driveReason({ name: "notes", source: "personal", unavailable_reason: "deleting" } as MeDrive)).toBe(DRIVE_MEMBER.NR_DELETING);
+  });
 });
 
 describe("driveMountsLine", () => {

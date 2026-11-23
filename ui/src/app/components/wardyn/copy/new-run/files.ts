@@ -97,6 +97,8 @@ export const NR_FILES = {
   CREATE_NO_DELETE: "This server can't delete drives, so it can't create them.",
   /** pending W-17: the recommended text until the owner answers. */
   DELETE_DRIVE: "Delete drive",
+  /** The owned-row action on a drive whose delete has not finished (#4061): the same delete, pressed again. */
+  DELETE_DRIVE_AGAIN: "Delete again",
   /** pending W-17: the recommended text until the owner answers. */
   DELETE_CONFIRM: (name: string | number) => `Delete ${name}? Its files are deleted and can't be recovered.`,
   /** Deleting a team drive a person made: everyone it is shared with loses the folder too (#3459). */

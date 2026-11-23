@@ -472,6 +472,7 @@ export const DRIVE_MEMBER = {
   // with. Same shape as NR_PAUSED/NR_DENIED: one line where the checkbox
   // would be.
   NR_UNAVAILABLE: "Your drive couldn't be checked, so it stays unmounted for this run. Try again, or ask an admin.",
+  NR_DELETING: "This drive is still being deleted, so it can't be added to a run. Wardyn retries on its own, and you can try again a minute after its last try.",
   NR_GOVERNANCE_UNAVAILABLE:
     "Your governance profile couldn't be resolved, so your drive stays unmounted for this run — sign in again.",
   GS_DRIVE_CHIP: (name: string, size: string, mode: string) => `Drive · ${name}, ${size}, ${mode}`,

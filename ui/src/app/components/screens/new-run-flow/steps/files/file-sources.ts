@@ -30,6 +30,7 @@ const DRIVE_REASON: Record<Exclude<NonNullable<MeDrive["unavailable_reason"]>, "
   unmountable: DRIVE_MEMBER.NR_UNAVAILABLE,
   placement_denied: NR_RUN.REASON_NOT_ALLOWED_PROFILE,
   not_in_pool: NR_FILES.NOT_IN_POOL,
+  deleting: DRIVE_MEMBER.NR_DELETING,
 };
 
 /**
