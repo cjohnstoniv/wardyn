@@ -459,3 +459,21 @@ func TestDecisionBatchDoc_ContactKeysOnEveryLabelledRow(t *testing.T) {
 		}
 	}
 }
+
+// TestDecisionBatchDoc_StatesWhereRetriesMiss: docs/AUDIT-ACTIONS.md says that a proxy whose clock is outside the
+// queue-time window loses the batch's dedupe (each retry adds the rows again), and that a row spooled on a 503'd
+// attempt and drained before the retry reaches no sink and no counter.
+func TestDecisionBatchDoc_StatesWhereRetriesMiss(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/AUDIT-ACTIONS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sentence := range []string{
+		"A proxy whose clock is outside that window gets the control plane's time on every row, so each retry of its batch adds the rows again.",
+		"stored by the spool's drain before the retry, reaches no sink and no counter",
+	} {
+		if !strings.Contains(string(raw), sentence) {
+			t.Errorf("docs/AUDIT-ACTIONS.md does not state %q", sentence)
+		}
+	}
+}

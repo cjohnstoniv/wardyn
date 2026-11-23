@@ -94,8 +94,10 @@ The decision door also takes a batch of up to 128 decisions under its own media 
 (`application/vnd.wardyn.decision-batch+json`), once its answers have said it does, and each
 kept batch is one append. A batch row's `time` is when the proxy queued the decision, accepted
 from 10 minutes before the post arrived to 5 minutes after (else the control plane's time).
+A proxy whose clock is outside that window gets the control plane's time on every row, so each retry of its batch adds the rows again.
 A batch whose answer is lost after a spool, or whose answer comes from a proxy in front of the control plane (a 502 or 504) after it committed, can be written or counted twice; nothing is lost.
 A sink can receive a spooled row a second time when the answer to the post that spooled it was lost.
+A row spooled on an attempt the door answered 503 (another row of that batch was refused), and stored by the spool's drain before the retry, reaches no sink and no counter; the table holds it once.
 On
 `/internal/via-org/{grantID}/…`: `delivery_not_via_org`, `via_org_destination_refused` and
 `via_org_cap_exceeded` (`429`). The org-side

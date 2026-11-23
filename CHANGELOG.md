@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
-- Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
+- Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows unless the proxy's clock is more than 10 minutes behind the control plane's or 5 minutes ahead, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
 
 ### Fixed
 
