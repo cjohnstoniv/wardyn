@@ -186,8 +186,9 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 	return sb, rd.Manifest(), nil
 }
 
-// reemit writes the entries rd reads as a tar for the daemon to extract at "/", then the booted marker.
-// It holds the symlinks back and writes them only after rd has read the stream's manifest and matched it.
+// reemit writes the entries rd reads as a tar for the daemon to extract at "/", then the booted marker. It
+// holds the symlinks back and writes them last, after the marker, once rd has read the stream's manifest
+// and matched it.
 func reemit(out io.Writer, rd *movepack.Reader) error {
 	tw := tar.NewWriter(out)
 	now := time.Now().Truncate(time.Second)
@@ -229,17 +230,13 @@ func reemit(out io.Writer, rd *movepack.Reader) error {
 			}
 		}
 	}
-	for _, th := range links {
-		if err := tw.WriteHeader(th); err != nil {
-			return err
-		}
-	}
+	// The marker goes before the links, so no carried symlink can stand where it is written.
 	marker := strings.TrimPrefix(bootedMarker, "/")
 	dir := hdr(path.Dir(marker)+"/", 0o755)
 	dir.Typeflag = tar.TypeDir
 	file := hdr(marker, 0o644)
 	file.Typeflag = tar.TypeReg
-	for _, th := range []*tar.Header{dir, file} {
+	for _, th := range append([]*tar.Header{dir, file}, links...) {
 		if err := tw.WriteHeader(th); err != nil {
 			return err
 		}

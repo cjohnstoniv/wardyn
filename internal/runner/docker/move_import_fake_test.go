@@ -6,9 +6,11 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -78,4 +80,59 @@ func newImportFake() *fakeDocker {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
 	return f
+}
+
+// TestMoveImport_MarkerBeforeLinks: the archive the daemon extracts writes the booted marker before every
+// symlink, and the symlinks last, so no carried link can stand where the import writes a file.
+func TestMoveImport_MarkerBeforeLinks(t *testing.T) {
+	set := runner.CarriedSet{Roots: []string{"/work"}}
+	var buf bytes.Buffer
+	w, err := movepack.NewWriter(&buf, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []movepack.Header{
+		{Path: "work", Type: movepack.TypeDir, Mode: 0o755},
+		{Path: "work/a", Type: movepack.TypeSymlink, Mode: 0o777, Link: "/etc"},
+		{Path: "work/b", Type: movepack.TypeDir, Mode: 0o755},
+	} {
+		if err := w.Add(h, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f := newImportFake()
+	if _, _, err := newTestDriver(f).ImportSandbox(context.Background(), importSpec(), set, 1<<20, &buf); err != nil {
+		t.Fatalf("ImportSandbox: %v", err)
+	}
+	if len(f.copies) != 1 {
+		t.Fatalf("archive calls = %d; want 1", len(f.copies))
+	}
+	var names []string
+	marker, firstLink := -1, -1
+	tr := tar.NewReader(bytes.NewReader(f.copies[0].archive))
+	for {
+		th, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if th.Name == strings.TrimPrefix(bootedMarker, "/") {
+			marker = len(names)
+		}
+		if th.Typeflag == tar.TypeSymlink && firstLink < 0 {
+			firstLink = len(names)
+		}
+		if th.Typeflag != tar.TypeSymlink && firstLink >= 0 {
+			t.Errorf("%s follows a symlink in the archive", th.Name)
+		}
+		names = append(names, th.Name)
+	}
+	if marker < 0 || firstLink < 0 || marker > firstLink {
+		t.Errorf("archive order %q; want the marker before the symlink", names)
+	}
 }
