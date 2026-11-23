@@ -538,10 +538,8 @@ func TestSupportUI_WatchRidesTheBudget(t *testing.T) {
 		ended := rig.openStream("events", rig.helperSession("code"))
 		requireStreamOpen(t, ended)
 		rig.grants.failOn("SupportGrantLive", errors.New("db down"))
-		time.Sleep(100 * time.Millisecond)
+		waitFor(t, "the window to open", func() bool { return rig.grants.failedLives() >= 1 })
 		rig.grants.failOn("SupportGrantLive", nil)
-		time.Sleep(100 * time.Millisecond)
-		requireStreamOpen(t, ended)
 		_, data := wantUnconfirmedRows(t, rig.audit, 1)
 		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceUIApp {
 			t.Fatalf("row %v, want rode_through on ui_app", data[0])

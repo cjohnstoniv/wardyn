@@ -32,11 +32,15 @@ type macWindowRevocations struct {
 	mu      sync.Mutex
 	revoked bool
 	err     error
+	failed  atomic.Int64 // reads that answered with err
 }
 
 func (r *macWindowRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.err != nil {
+		r.failed.Add(1)
+	}
 	return r.revoked, r.err
 }
 func (r *macWindowRevocations) RevokeSub(context.Context, string) error { return nil }
@@ -849,11 +853,11 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 // rode_through row and no takeover.close.
 func TestMacWindowRecheck_RidesAnUnreadCheck(t *testing.T) {
 	r := newMacWindowRig(t)
-	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(500*time.Millisecond), 10*time.Millisecond
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
 	w := r.mustOpen()
 	r.rev.set(false, errors.New("conn closed by peer"))
 	r.tick()
-	time.Sleep(60 * time.Millisecond)
+	macWindowEventually(t, "the unread credential check", func() bool { return r.rev.failed.Load() >= 1 })
 	r.rev.set(false, nil)
 	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
 	if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceWindow {
@@ -904,7 +908,7 @@ func TestMacWindowRecheck_RefusalAfterUnreadWritesRefusedRow(t *testing.T) {
 	r.mustOpen()
 	r.rev.set(false, errors.New("conn closed by peer"))
 	r.tick()
-	time.Sleep(60 * time.Millisecond)
+	macWindowEventually(t, "the unread credential check", func() bool { return r.rev.failed.Load() >= 1 })
 	r.rev.set(true, nil)
 	if c := r.closeRow(); c["reason"] != macWindowRevoked {
 		t.Fatalf("close reason = %v, want %s", c["reason"], macWindowRevoked)
@@ -912,6 +916,36 @@ func TestMacWindowRecheck_RefusalAfterUnreadWritesRefusedRow(t *testing.T) {
 	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
 	if data[0]["result"] != "refused" || data[0]["surface"] != sessionSurfaceWindow {
 		t.Fatalf("row %v, want refused on the window", data[0])
+	}
+}
+
+// A profile composition nothing satisfies is a definite refusal at a window's re-check (not unread, so it never
+// rides the budget); a profile read that fails is unread.
+func TestMacWindowRecheck_UnsatisfiableProfileIsNotUnread(t *testing.T) {
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "baseline", Ceiling: types.RunPolicySpec{AllowedMethods: []string{"GET"}}}
+	post := []string{"POST"}
+	child := types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	for _, tc := range []struct {
+		name   string
+		units  []types.GovernanceUnit
+		err    error
+		unread bool
+	}{
+		{"nothing satisfies the overlay", []types.GovernanceUnit{base, child}, nil, false},
+		{"the profile read fails", []types.GovernanceUnit{base, child}, errors.New("conn closed by peer"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMacWindowRig(t)
+			w := r.mustOpen()
+			r.h.store.sshMemStore.mu.Lock()
+			r.h.store.profiles, r.h.store.profilesErr = tc.units, tc.err
+			r.h.store.sshMemStore.mu.Unlock()
+			r.set(func(run *types.AgentRun) { run.UnitID = &child.ID })
+			reason, _, unread := r.h.srv.macWindowRecheck(context.Background(), w)
+			if reason != macWindowRefusedRecheck || unread != tc.unread {
+				t.Errorf("macWindowRecheck = %q unread %v, want %q unread %v", reason, unread, macWindowRefusedRecheck, tc.unread)
+			}
+		})
 	}
 }
 

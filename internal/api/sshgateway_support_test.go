@@ -501,7 +501,7 @@ func TestSSHProbe_OwnerConnectionEndsWhenTheBudgetRunsOut(t *testing.T) {
 		closes bool
 	}{{50 * time.Millisecond, true}, {time.Hour, false}} {
 		t.Run(tc.budget.String(), func(t *testing.T) {
-			setKeepaliveForTest(t, 30*time.Millisecond)
+			setKeepaliveForTest(t, 50*time.Millisecond)
 			mem, run, principal := sshOwnedRunningRun(t)
 			st := &sshKeyReadFailureStore{sshMemStore: mem}
 			priv, pub := mustSSHKeypair(t)
@@ -524,7 +524,7 @@ func TestSSHProbe_OwnerConnectionEndsWhenTheBudgetRunsOut(t *testing.T) {
 
 // A helper's grant read that fails once rides the budget: the connection stays (it closed on the tick before).
 func TestSSHProbe_HelperRidesTheBudget(t *testing.T) {
-	setKeepaliveForTest(t, 30*time.Millisecond)
+	setKeepaliveForTest(t, 50*time.Millisecond)
 	r := newSSHSupportRig(t, sshAllSupportDoors)
 	r.h.srv.sessionBudgets.test = ptr(time.Hour)
 	r.h.srv.sessionBudgets.retry = 10 * time.Millisecond
@@ -549,7 +549,7 @@ func TestSSHProbe_HelperRidesTheBudget(t *testing.T) {
 // A helper's connection whose run is gone, or whose run_id does not parse, closes on the next tick even under an
 // hour's budget (sshReasonRunGone); a run read that fails some other way still rides.
 func TestSSHProbe_HelperOnADeletedRunClosesAtOnce(t *testing.T) {
-	setKeepaliveForTest(t, 30*time.Millisecond)
+	setKeepaliveForTest(t, 50*time.Millisecond)
 	r := newSSHSupportRig(t, sshAllSupportDoors)
 	r.h.srv.sessionBudgets.test = ptr(time.Hour)
 	r.h.srv.sessionBudgets.retry = 10 * time.Millisecond

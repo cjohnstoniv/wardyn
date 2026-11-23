@@ -40,6 +40,7 @@ type attachRevocations struct {
 	failNext int
 	hangNext int
 	asked    int
+	failed   int // lookups that answered with an error
 }
 
 func newAttachRevocations() *attachRevocations {
@@ -78,6 +79,9 @@ func (r *attachRevocations) lookup(ctx context.Context, sub, email string, seq i
 		return false, ctx.Err()
 	}
 	if fail {
+		r.mu.Lock()
+		r.failed++
+		r.mu.Unlock()
 		return false, errors.New("revocation store unreachable")
 	}
 	return high > seq, nil
@@ -118,7 +122,10 @@ func (r *attachRevocations) CutSessions(_ context.Context, sub string) error {
 func (r *attachRevocations) RevokeAll(context.Context) error { return r.stamp(r.revoked, "*") }
 
 func (r *attachRevocations) setFail(n int) { r.mu.Lock(); r.failNext = n; r.mu.Unlock() }
-func (r *attachRevocations) setHang(n int) { r.mu.Lock(); r.hangNext = n; r.mu.Unlock() }
+
+// failedReads is how many lookups have answered with an error.
+func (r *attachRevocations) failedReads() int { r.mu.Lock(); defer r.mu.Unlock(); return r.failed }
+func (r *attachRevocations) setHang(n int)    { r.mu.Lock(); r.hangNext = n; r.mu.Unlock() }
 
 var (
 	_ oidc.IdentityRevocations = (*attachRevocations)(nil)
@@ -896,7 +903,7 @@ func TestAttachAuthority_RevokeInsideTheWindowEndsAtOnce(t *testing.T) {
 			rig.budget(time.Hour, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
-			time.Sleep(6 * authorityTick) // the window is open on both sockets
+			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
 			_ = rig.rev.RevokeSub(context.Background(), holderOwner)
 			rig.rev.setFail(0)
 			wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
@@ -986,7 +993,7 @@ func TestAttachAuthority_SocketEndingInsideAWindowWritesClosed(t *testing.T) {
 			rig.budget(time.Hour, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
-			time.Sleep(6 * authorityTick) // the window is open on both sockets
+			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
 			for _, ws := range socks {
 				_ = ws.c.Close(websocket.StatusNormalClosure, "bye")
 			}

@@ -440,7 +440,7 @@ func TestRunExecSupport_UnreadableGrantRidesTheBudget(t *testing.T) {
 	t.Run("one failed read rides", func(t *testing.T) {
 		rig, closed, _ := start(t, time.Hour)
 		rig.st.failOn("SupportGrantLive", errors.New("database down"))
-		time.Sleep(10 * authorityTick)
+		waitFor(t, "the window to open", func() bool { return rig.st.failedLives() >= 1 })
 		rig.st.failOn("SupportGrantLive", nil)
 		_, data := wantUnconfirmedRows(t, rig.aud, 1)
 		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceCommand {

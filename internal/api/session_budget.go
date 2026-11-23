@@ -292,7 +292,7 @@ func (s *Server) sessionUnconfirmedBudget(ctx context.Context) time.Duration {
 		slog.WarnContext(ctx, "wardynd: the open-session budget could not be read; keeping the last one", "err", err)
 		return n
 	}
-	n = cfg.Sessions.UnconfirmedBudget()
+	n = min(max(cfg.Sessions.UnconfirmedBudget(), 0), types.SessionBudgetMaxSec*time.Second)
 	st.mu.Lock()
 	st.n, st.readAt = n, time.Now()
 	st.mu.Unlock()

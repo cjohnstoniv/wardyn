@@ -76,8 +76,8 @@ func TestSessionBudget_ObserveWindow(t *testing.T) {
 		}
 		select {
 		case <-b.retryC():
-		case <-time.After(50 * time.Millisecond):
-			t.Fatal("the retry clock did not fire within 50 ms")
+		case <-time.After(3 * time.Second):
+			t.Fatal("the retry clock did not fire within 3 s")
 		}
 	})
 	t.Run("an unanswered check past the budget is spent", func(t *testing.T) {

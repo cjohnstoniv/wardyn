@@ -464,6 +464,29 @@ func TestUIGateway_InboundRunRefusalChargesTheCaller(t *testing.T) {
 	}
 }
 
+// TestInboundTake_CallerRefusalSpendsNothingFromTheRun: a caller over their own limit is refused by their own
+// bucket and takes nothing from the run's callers; this was so before and stays so.
+func TestInboundTake_CallerRefusalSpendsNothingFromTheRun(t *testing.T) {
+	h, _ := inboundHarness(t)
+	for range int(inboundCallerBurst) {
+		if refused, _ := h.srv.uiInbound.take(uuid.New(), "bob", h.clock.now(), ""); refused != "" {
+			t.Fatal("a caller's first calls, each on its own run, were refused")
+		}
+	}
+	runBucket := func() float64 {
+		h.srv.uiInbound.mu.Lock()
+		defer h.srv.uiInbound.mu.Unlock()
+		return refill(&h.srv.uiInbound.buckets, h.run.ID, h.clock.now(), inboundRunRatePerSec, inboundRunBurst).tokens
+	}
+	before := runBucket()
+	if refused, _ := h.srv.uiInbound.take(h.run.ID, "bob", h.clock.now(), ""); refused != "caller" {
+		t.Fatalf("a call from a caller with an empty bucket was refused by %q, want \"caller\"", refused)
+	}
+	if after := runBucket(); after != before {
+		t.Errorf("the run's bucket went from %v to %v, want it unchanged", before, after)
+	}
+}
+
 // TestUIGateway_InboundBothBucketsEmptyNamesTheRun: when a call finds the run's bucket and its own caller's both
 // empty, the refusal names the run's, which is checked first.
 func TestUIGateway_InboundBothBucketsEmptyNamesTheRun(t *testing.T) {
@@ -931,14 +954,14 @@ func TestUIGateway_InboundStreamIsReadmitted(t *testing.T) {
 		h.srv.sessionBudgets.test, h.srv.sessionBudgets.retry = ptr(400*time.Millisecond), 10*time.Millisecond
 		conn, br := openInboundStream(t, h, gw, "wdn_alice")
 		tokens(h).failReads(errors.New("connection refused"))
+		failedAt := time.Now()
 		time.Sleep(5 * every) // the first unanswerable re-admission opens the window
 		h.clock.advance(inboundResolveTTL)
-		time.Sleep(2 * every)
-		if !echoes(conn, br) {
-			t.Fatal("the stream was closed at the stale bound with its budget unspent")
-		}
 		if !closes(conn, br) {
 			t.Fatal("the stream outlived its budget")
+		}
+		if d := time.Since(failedAt); d < 400*time.Millisecond {
+			t.Fatalf("the stream closed %v after its first unanswered check, inside its 400 ms budget", d)
 		}
 		if rows := awaitDenies(h); len(rows) != 1 || !h.audit.hasDataValue("reason", reasonRunUnreadable) {
 			t.Errorf("inbound.deny rows = %+v, want one run_unreadable", rows)

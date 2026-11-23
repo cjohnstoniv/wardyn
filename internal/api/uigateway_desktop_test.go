@@ -801,10 +801,11 @@ func (s *desktopRulesStore) QueryAuditEvents(ctx context.Context, runID uuid.UUI
 // reads as replicas on one database do; fail makes its reads or its writes fail.
 type desktopClosedStore struct {
 	*uiMemStore
-	mu       sync.Mutex
-	closed   map[string]time.Time
-	readErr  error
-	writeErr error
+	mu          sync.Mutex
+	closed      map[string]time.Time
+	readErr     error
+	writeErr    error
+	failedReads atomic.Int64 // Closed-set reads that answered with readErr
 	// afterRead, when set, runs once after the next read has taken its answer: a Close landing just then.
 	afterRead func()
 }
@@ -835,6 +836,7 @@ func (s *desktopClosedStore) UIDesktopClosed(_ context.Context, key string, now 
 		hook()
 	}
 	if err != nil {
+		s.failedReads.Add(1)
 		return false, err
 	}
 	return ok && exp.After(now), nil
@@ -1045,11 +1047,13 @@ func TestDesktopWithControlIsToldAWindowOpened(t *testing.T) {
 // desktopFlakyRunStore fails the run read while failRun is set, as a store blip would.
 type desktopFlakyRunStore struct {
 	*desktopClosedStore
-	failRun atomic.Bool
+	failRun    atomic.Bool
+	failedRuns atomic.Int64
 }
 
 func (s *desktopFlakyRunStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	if s.failRun.Load() {
+		s.failedRuns.Add(1)
 		return types.AgentRun{}, errors.New("runs unavailable")
 	}
 	return s.desktopClosedStore.GetRun(ctx, id)
@@ -1070,7 +1074,7 @@ func desktopBudgetRig(t *testing.T, n time.Duration) (*uiHarness, *desktopFakeRu
 // An open stream rides a Closed set read and a run read that each fail once: it stays open, relays the display's
 // next frame, and writes one rode_through row naming both checks.
 func TestDesktopStream_RidesAnUnreadClosedSetAndRun(t *testing.T) {
-	h, dr, fake, flaky := desktopBudgetRig(t, 500*time.Millisecond)
+	h, dr, fake, flaky := desktopBudgetRig(t, time.Hour)
 	release := make(chan struct{})
 	dr.after = func(b net.Conn) {
 		<-release
@@ -1088,7 +1092,7 @@ func TestDesktopStream_RidesAnUnreadClosedSetAndRun(t *testing.T) {
 
 	fake.fail(errors.New("database unreachable"), nil)
 	flaky.failRun.Store(true)
-	time.Sleep(120 * time.Millisecond)
+	waitFor(t, "the window to open on both checks", func() bool { return fake.failedReads.Load() >= 1 && flaky.failedRuns.Load() >= 1 })
 	fake.fail(nil, nil)
 	flaky.failRun.Store(false)
 	_, data := wantUnconfirmedRows(t, h.audit, 1)

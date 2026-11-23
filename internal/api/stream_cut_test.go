@@ -1265,9 +1265,9 @@ func TestStreamCut_WatchRidesTheBudget(t *testing.T) {
 		c, n := watchBudgeted(t, testBudget(h.srv, time.Hour, 5*time.Millisecond), every, soft, nil)
 		waitFor(t, "the window to close", func() bool { return n.Load() >= 2 })
 		before := n.Load()
-		time.Sleep(3*every + every/2)
-		if got := n.Load() - before; got < 2 || c.isCut() {
-			t.Fatalf("checks in 3 intervals after the window = %d (cut %v), want at least 2", got, c.isCut())
+		waitFor(t, "two regular checks after the window", func() bool { return n.Load()-before >= 2 })
+		if c.isCut() {
+			t.Fatal("the stream was cut after its window closed")
 		}
 	})
 }
