@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
@@ -198,5 +200,59 @@ func TestPG_PrincipalGroups_ASignInReplacesARecordStampedAhead(t *testing.T) {
 	got, err := st.GetPrincipalGroups(ctx, "sub-ahead", "")
 	if err != nil || !slices.Equal(got.Groups, []string{"new"}) {
 		t.Fatalf("record = %+v, %v; want the sign-in's groups [new]", got, err)
+	}
+}
+
+// A sign-in records the roles claim beside the groups; a write that carries no roles (the portal door, or a
+// groups-only write) leaves it; a SCIM group removal clears it, so no role is left that the narrowed groups no
+// longer show, and reads as NULL (no roles recorded) until the person's next sign-in.
+func TestPG_PrincipalSignIn_ScimRemovalClearsTheRoles(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now()
+	var id uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower) VALUES ('sub-roles', 'https://idp.example', 'roles@corp.example') RETURNING id`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutPrincipalSignIn(ctx, "sub-roles", "roles@corp.example", []string{"eng"}, []string{"wardyn-admins"}, false); err != nil {
+		t.Fatal(err)
+	}
+	roles := func() (r []string, null bool) {
+		t.Helper()
+		var raw *[]string
+		if err := pool.QueryRow(ctx, `SELECT roles FROM principal_groups WHERE principal = 'sub-roles' AND portal = ''`).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw == nil {
+			return nil, true
+		}
+		return *raw, false
+	}
+	if r, null := roles(); null || !slices.Equal(r, []string{"wardyn-admins"}) {
+		t.Fatalf("roles after sign-in = %v (null %v), want the claim", r, null)
+	}
+	if err := st.PutPrincipalGroups(ctx, "sub-roles", "", "roles@corp.example", []string{"eng"}, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if r, null := roles(); null || len(r) != 1 {
+		t.Fatalf("roles after a write with none = %v (null %v), want them kept", r, null)
+	}
+	eng, err := st.CreateScimGroup(ctx, "eng", "Engineering", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddScimGroupMembers(ctx, eng.ID, []uuid.UUID{id}, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.StartGroupRemoval(ctx, eng.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, null := roles(); !null {
+		t.Fatal("a SCIM group removal left the roles claim in place, want NULL")
+	}
+	got, err := st.GetPrincipalGroups(ctx, "sub-roles", "")
+	if err != nil || len(got.Groups) != 0 {
+		t.Fatalf("record after the removal = %+v, %v; want the group gone", got, err)
 	}
 }

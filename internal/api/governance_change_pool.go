@@ -219,7 +219,7 @@ const (
 	recordPasses recordOutcome = iota
 	// recordNone: they have no sign-in record, or none that names a principal.
 	recordNone
-	// recordRoleGone: sign-in would now refuse them, or give no role.
+	// recordRoleGone: sign-in would now refuse them, or give no role, on a complete record.
 	recordRoleGone
 	// recordUnconfirmed: the predicate fails and the record is a partial snapshot, so the failure may be a
 	// group the cut dropped.
@@ -241,6 +241,10 @@ type recordVerdict struct {
 func (s *Server) judgeRecord(in *recordInputs, gs *grantSet, approver govApprover, rec store.SignInRecord) recordVerdict {
 	d := s.deriveFromRecord(in, rec)
 	if !d.OK() {
+		if rec.Truncated {
+			// The groups were cut, so a group that would have given a role may be the one that was dropped.
+			return recordVerdict{outcome: recordUnconfirmed}
+		}
 		return recordVerdict{outcome: recordRoleGone}
 	}
 	ctx, err := recordIdentity(in.base, rec, d)
