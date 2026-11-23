@@ -205,6 +205,7 @@ var Table = []Entry{
 	{Struct: StructProxyConfig, Field: "ScrubResponses", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "NoNetwork", Class: ClassExempt, Rule: RuleExempt, Variant: "a no-network run's flag: it only refuses; no credential"},
 	{Struct: StructProxyConfig, Field: "CanonicalPushRepos", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's held-push key spelling; it names an approval, no credential"},
+	{Struct: StructProxyConfig, Field: "PushHoldRemovals", Class: ClassExempt, Rule: RuleExempt, Variant: "the operator's switch that holds a push removing a review path; it names an approval, no credential"},
 	{Struct: StructProxyConfig, Field: "GitPushWithheld", Class: ClassExempt, Rule: RuleExempt, Variant: "the hosts whose pushes the run's capabilities withhold; it names a refusal, no credential"},
 	{Struct: StructProxyConfig, Field: "Attribution", Class: ClassExempt, Rule: RuleExempt},
 	{Struct: StructProxyConfig, Field: "VM", Class: ClassExempt, Rule: RuleExempt, Variant: "a desktop VM run's flag: it turns the port rule on and the relay's refusal route; no credential"},

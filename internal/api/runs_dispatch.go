@@ -520,6 +520,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			Unattended:         runUnattended(p, policy),
 			ScrubResponses:     s.cfg.ScrubProxyResponses,
 			CanonicalPushRepos: s.cfg.CanonicalPushRepos,
+			PushHoldRemovals:   s.cfg.PushHoldRemovals,
 			PushRuleSets:       p.PushRuleSets,
 			PushRuleBase:       pushRuleBase(policy, p.PushRuleSets),
 			// The code hosts the proxy refuses while deny_all is in force (nil

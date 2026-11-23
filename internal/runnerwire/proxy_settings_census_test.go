@@ -47,6 +47,7 @@ var proxySettingOfField = map[string]string{
 	// (proxy.patPushTarget), so an admin's denial of Owner/Repo.git is asked
 	// again as owner/repo: the one decision the operator turned it on for is lost.
 	"CanonicalPushRepos": ProxySettingCanonicalRepos,
+	"PushHoldRemovals":   ProxySettingPushHoldRemovals,
 	// Dropped, the proxy attaches no token and forwards the sandbox's own header
 	// to the gateway: an older remote executor must refuse the run, not run it
 	// unsigned. A person's runner never gets this far (internal/placement enforce.go).

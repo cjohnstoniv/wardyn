@@ -120,6 +120,7 @@ func newProxy(opts Options) *Proxy {
 		scrubResponses:       opts.ScrubResponses,
 		noNetwork:            opts.NoNetwork,
 		canonicalPushRepos:   opts.CanonicalPushRepos,
+		pushHoldRemovals:     opts.PushHoldRemovals,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),

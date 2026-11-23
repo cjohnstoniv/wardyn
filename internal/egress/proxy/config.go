@@ -322,6 +322,11 @@ type Config struct {
 	// WARDYN_PUSH_HOLD_CANONICAL_REPOS at dispatch; false (the default) names
 	// the path as git spelled it.
 	CanonicalPushRepos bool `json:"canonical_push_repos,omitempty"`
+	// PushHoldRemovals has the review rules also hold a push that removes a
+	// path they claim from a branch it updates (forgeRepo.removedFromTip), on
+	// a forge the broker reads. WARDYN_PUSH_HOLD_REMOVALS at dispatch; false
+	// (the default) judges only what a push introduces.
+	PushHoldRemovals bool `json:"push_hold_removals,omitempty"`
 	// VM marks a run whose only client is wardyn-vmnet, the network relay of a
 	// desktop VM (vmnet_flows.go): the port rule is on whatever PortRule says,
 	// and vmnet's two-stage CONNECT and refusal reports are honoured. Set only

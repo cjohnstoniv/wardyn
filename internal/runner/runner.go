@@ -233,6 +233,7 @@ type ProxyConfig struct {
 	Unattended           bool                      // a run nobody is driving: a held push is refused instead
 	ScrubResponses       bool                      // replace proxy-held credentials in relayed responses (proxy.Config.ScrubResponses)
 	CanonicalPushRepos   bool                      // one held-push key per github.com repository spelling (proxy.Config.CanonicalPushRepos)
+	PushHoldRemovals     bool                      `json:"push_hold_removals,omitempty"` // hold a push that removes a review path (proxy.Config.PushHoldRemovals)
 	Attribution          *policyref.Ref            // the policy named in a policy-decided refusal; nil when none
 	PushRuleSets         []types.PushRuleSet       // push content rules per SCM entry (provider+org); proxy.Config.PushRuleSets
 	PushRuleBase         *types.PushRulesSpec      // the run's push rules after the ceiling, for an entry with no set; proxy.Config.PushRuleBase
