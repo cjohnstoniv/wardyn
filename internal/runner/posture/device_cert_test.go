@@ -176,3 +176,17 @@ func TestDeviceCertSender_RefusedAckStops(t *testing.T) {
 		t.Fatalf("the next session sent %d times (%v), want a second ask", acks.Load(), err)
 	}
 }
+
+// Watch presents at once, not after the first interval: it is the only sender, so READY never waits on the helper.
+func TestDeviceCertSender_WatchSendsAtOnce(t *testing.T) {
+	run, got := deviceCertPeers(t)
+	s := newDeviceCertSender(func(context.Context, string, string, time.Time) (runnerwire.DeviceCertReport, error) {
+		return runnerwire.DeviceCertReport{Proofs: []runnerwire.DeviceCertProof{}}, nil
+	}, "/state", strings.Repeat("a", 64), time.Now, time.Hour)
+	go s.Watch(run)
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first report waited for the interval")
+	}
+}

@@ -592,12 +592,6 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 					slog.WarnContext(ctx, "runner posture report failed", "error", err)
 				}
 			}
-			// Like posture, a failed device certificate report must not keep the runner from READY.
-			if deviceCerts != nil {
-				if err := deviceCerts.Send(ctx, peer); err != nil {
-					slog.WarnContext(ctx, "runner device certificate report failed", "error", err)
-				}
-			}
 			return manager.Replay(ctx, peer)
 		},
 		Online: func(peer *runnerwire.Peer, resumed bool) {
@@ -609,6 +603,8 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
 			}
+			// The device certificate report waits on the Mac's keychain, so it runs beside the session, not on
+			// the way to READY: Watch sends at once, then every 6 hours.
 			if deviceCerts != nil {
 				go deviceCerts.Watch(peer)
 			}

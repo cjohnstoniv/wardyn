@@ -97,7 +97,9 @@ func (s *DeviceCertSender) Send(ctx context.Context, peer *runnerwire.Peer) erro
 	return err
 }
 
-// Watch presents the identities again every interval until peer ends or the organisation refuses the event.
+// Watch presents the identities at once, then again every interval, until peer ends or the organisation refuses
+// the event. It runs on its own goroutine after the session is online, so a helper that waits on the keychain
+// never delays the runner's READY.
 func (s *DeviceCertSender) Watch(peer *runnerwire.Peer) {
 	s.mu.Lock()
 	if s.watching == peer {
@@ -109,19 +111,26 @@ func (s *DeviceCertSender) Watch(peer *runnerwire.Peer) {
 	t := time.NewTicker(s.every)
 	defer t.Stop()
 	for {
+		if s.refusedFor(peer) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*deviceHelperTimeout)
+		go func() {
+			select {
+			case <-peer.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		if err := s.Send(ctx, peer); err != nil {
+			slog.Warn("runner device certificate report failed", "error", err)
+		}
+		cancel()
 		select {
 		case <-peer.Done():
 			return
 		case <-t.C:
 		}
-		if s.refusedFor(peer) {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*deviceHelperTimeout)
-		if err := s.Send(ctx, peer); err != nil {
-			slog.Warn("runner device certificate report failed", "error", err)
-		}
-		cancel()
 	}
 }
 
