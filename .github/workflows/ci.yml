@@ -3505,18 +3505,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           since="$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)"
-          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false
+          gh workflow run nightly.yml --ref "$HEAD_REF" -f scope=candidate -f publish=false -f dispatch_id="$DISPATCH_ID"
           id=
           for _ in $(seq 40); do
             id="$(gh run list --workflow nightly.yml --branch "$HEAD_REF" --event workflow_dispatch --limit 20 \
-              --json databaseId,headSha,createdAt | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since")"
+              --json databaseId,headSha,createdAt,displayTitle | ./scripts/ci-pick-dispatched-run.sh "$HEAD_SHA" "$since" "$DISPATCH_ID")"
             [ -z "$id" ] || break
             sleep 15
           done
-          [ -n "$id" ] || { echo "::error::no dispatched nightly run appeared on $HEAD_SHA"; exit 1; }
+          [ -n "$id" ] || { echo "::error::no dispatched nightly run [$DISPATCH_ID] appeared on $HEAD_SHA"; exit 1; }
           echo "nightly run: $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$id"
           # The wait polls rather than `gh run watch` and gives up after ten
           # failed reads in a row (see ci-wait-run.sh).

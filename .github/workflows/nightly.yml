@@ -1,5 +1,9 @@
 name: Nightly (full-stack e2e)
 
+# A dispatch from ci.yml's train-suites names itself in the run title, so train-suites follows its own run and never
+# another run on the same commit (scripts/ci-pick-dispatched-run.sh). Every other run keeps the workflow's name.
+run-name: ${{ inputs.dispatch_id && format('Nightly (full-stack e2e) [{0}]', inputs.dispatch_id) || 'Nightly (full-stack e2e)' }}
+
 # Heavy, Docker-dependent suites that are too slow for every PR: the live
 # security e2e (test/e2e/e2e.sh) and the docker-tagged report suite.
 # Runs nightly and on manual dispatch. Failures here are real regressions in the
@@ -24,8 +28,12 @@ on:
         description: "runner-compat-walk also runs step 3b (DR-0436): the released runner's exit refused for good by this tree's organisation is acknowledged once. Off in the nightly."
         type: boolean
         default: false
+      dispatch_id:
+        description: "Set by ci.yml's train-suites to find its own run; leave empty on a hand dispatch."
+        type: string
+        default: ''
   # Kept, but nothing calls it today: ci.yml's train-suites dispatches this workflow with
-  # scope=candidate and publish=false. The input is a string here (workflow_call has no choice
+  # scope=candidate, and publish from the head's candidate marker. The input is a string here (workflow_call has no choice
   # type); a value other than candidate runs every lane.
   workflow_call:
     inputs:
@@ -55,8 +63,10 @@ permissions:
 # run a group of its own: it never cancels or queues behind a dispatched nightly
 # on the same ref, and ci.yml's own cancel-in-progress is what stops it when a
 # newer push supersedes the PR.
+# The run-id suffix is on the called arm only; with the empty string as the first arm, it is falsy and every run got
+# the suffix.
 concurrency:
-  group: nightly-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '' || format('-{0}', github.run_id) }}
+  group: nightly-${{ github.event_name }}-${{ github.ref }}-${{ inputs.scope || 'full' }}${{ (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 # SCOPE. scope=candidate skips every job that release.yml's preflight-green does
