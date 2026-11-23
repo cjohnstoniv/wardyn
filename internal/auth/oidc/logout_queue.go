@@ -402,7 +402,7 @@ func (a *Authenticator) pendingBackchannel(w http.ResponseWriter, r *http.Reques
 // the key set once per attempt, and only when something is held. A kept entry (the keys did not answer, the
 // attempt ended, a cut could not be written) leaves the state unpublished and the queue as it was. Logouts that
 // arrive during the drain do not hold up the publish, so a steady inflow cannot keep sign-in closed: they are
-// checked after it against the same keys, each charged to the route's limiter first.
+// checked after it against the same keys, and only one that fails verification is charged to the route's limiter.
 func (a *Authenticator) drainAndPublish(ctx context.Context, st *providerState) error {
 	q := &a.logouts
 	q.mu.Lock()
@@ -433,22 +433,45 @@ func (a *Authenticator) drainAndPublish(ctx context.Context, st *providerState) 
 	}
 
 	q.mu.Lock()
-	late := append([]logoutEntry(nil), q.entries...)
 	// Published under the mutex: from here a handler that finds the state published goes the discovered path, and
-	// none can add to the queue, so `late` is everything that arrived during the drain.
+	// none can add to the queue, so what is left in it is everything that arrived during the drain.
 	a.publishLocked(ctx, st) // unlocks
+	return a.finishLate(ctx, st, ks)
+}
+
+// lateCutBudget bounds one late cut. It runs on its own context, so the attempt's deadline or a stop that ends
+// ctx cannot turn a verified logout into a lost one.
+const lateCutBudget = 5 * time.Second
+
+// finishLate checks the logouts that arrived during the drain, after the state was published. Entries that
+// verify are applied with no charge; only one that fails verification is charged to the route's limiter. A cut
+// that cannot be written, or an attempt that ends, returns an error and leaves the rest queued: Discover
+// finishes them on its next call, and a stop reports them as lost. ks may be nil, then the keys are fetched.
+func (a *Authenticator) finishLate(ctx context.Context, st *providerState, ks *gooidc.StaticKeySet) error {
+	q := &a.logouts
 	lctx := context.WithValue(ctx, lateLogoutKey{}, struct{}{})
-	for _, e := range late {
-		if err := a.drainEntry(lctx, st, ks, e, true); err != nil {
-			slog.Error("wardynd: a logout that arrived while the held logouts were checked could not be applied and was dropped",
-				"token_sha256", e.sha, "error", err)
-			q.mu.Lock()
-			q.entries = q.entries[1:]
-			delete(q.seen, e.sha)
+	for {
+		q.mu.Lock()
+		if len(q.entries) == 0 {
 			q.mu.Unlock()
+			return nil
+		}
+		e := q.entries[0]
+		q.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			slog.Warn("oidc: the logouts that arrived during the drain were not all checked before the attempt ended; they stay queued", "error", err)
+			return fmt.Errorf("%w: %w", ErrLogoutDrainIncomplete, err)
+		}
+		if ks == nil {
+			var err error
+			if ks, err = fetchDrainKeySet(ctx, st); err != nil {
+				return err
+			}
+		}
+		if err := a.drainEntry(lctx, st, ks, e, true); err != nil {
+			return err
 		}
 	}
-	return nil
 }
 
 // publishLocked publishes st, clears the pending flag and emits the remaining rate-limit summary. The caller
@@ -463,18 +486,10 @@ func (a *Authenticator) publishLocked(ctx context.Context, st *providerState) {
 }
 
 // drainEntry checks one held logout against the static key set and removes it from the queue unless it must
-// be kept.
+// be kept. A late one (it arrived during the drain) is applied without a charge once it verifies, on a context
+// of its own; only one that fails verification is charged to the route's limiter.
 func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *gooidc.StaticKeySet, e logoutEntry, late bool) error {
 	q := &a.logouts
-	if late && !a.chargeSkippedLimiter(ctx) {
-		// The limiter refuses it, as it would any request past the rate: counted, and not applied.
-		a.NoteLogoutRateLimited(ctx)
-		q.mu.Lock()
-		q.entries = q.entries[1:]
-		delete(q.seen, e.sha)
-		q.mu.Unlock()
-		return nil
-	}
 	v := gooidc.NewVerifier(st.issuer, ks, &gooidc.Config{
 		ClientID:             a.cfg.ClientID,
 		SupportedSigningAlgs: st.signingAlgs,
@@ -482,6 +497,9 @@ func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *g
 	})
 	sub, problem := logoutTokenSub(ctx, v, e.raw, e.receivedAt)
 	switch {
+	case problem != "" && late && !a.chargeSkippedLimiter(ctx):
+		// Unverifiable and past the rate: counted as rate limited, with no row of its own.
+		a.NoteLogoutRateLimited(ctx)
 	case problem != "":
 		q.unverifiable.Add(1)
 		slog.Error("wardynd: a logout held while the identity provider was unreachable failed verification and was not applied",
@@ -490,12 +508,18 @@ func (a *Authenticator) drainEntry(ctx context.Context, st *providerState, ks *g
 	case a.logoutReserved(sub):
 		q.note(ctx, LogoutQueueEvent{State: LogoutRefusedReserved, TokenSHA256: e.sha, ReceivedAt: e.receivedAt})
 	default:
-		if err := a.applyHeld(ctx, sub, e); err != nil {
+		cctx := ctx
+		if late {
+			var cancel context.CancelFunc
+			cctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), lateCutBudget)
+			defer cancel()
+		}
+		if err := a.applyHeld(cctx, sub, e); err != nil {
 			slog.Warn("oidc: a held logout's session cut could not be written; it stays queued", "token_sha256", e.sha, "error", err)
 			return fmt.Errorf("%w: %v", ErrLogoutCutFailed, err)
 		}
 		q.applied.Add(1)
-		q.note(ctx, LogoutQueueEvent{State: LogoutApplied, TokenSHA256: e.sha, ReceivedAt: e.receivedAt})
+		q.note(cctx, LogoutQueueEvent{State: LogoutApplied, TokenSHA256: e.sha, ReceivedAt: e.receivedAt})
 	}
 	q.mu.Lock()
 	q.entries = q.entries[1:]

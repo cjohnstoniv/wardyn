@@ -627,7 +627,7 @@ func pendingInflow(t *testing.T, p *pendingEnv, h http.HandlerFunc, perApply int
 }
 
 // Logouts that keep arriving during the drain do not hold up the publish: the drain checks the entries held
-// when it fetched the keys, publishes, and then checks the late ones, each charged to the limiter.
+// when it fetched the keys, publishes, and then checks and applies the late ones.
 func TestLogoutQueue_InflowDuringDrainPublishes(t *testing.T) {
 	p := newPendingEnv(t)
 	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
@@ -650,25 +650,128 @@ func TestLogoutQueue_InflowDuringDrainPublishes(t *testing.T) {
 	p.sink.mu.Lock()
 	late := p.sink.lateCharges
 	p.sink.mu.Unlock()
-	if late != 3 {
-		t.Errorf("late charges = %d, want 3: every late logout is charged, the snapshot is not", late)
+	if late != 0 {
+		t.Errorf("late charges = %d, want 0: a late logout that verifies is applied uncharged", late)
 	}
 }
 
-// A late logout the limiter refuses is counted as rate limited and not applied; the publish is unaffected.
-func TestLogoutQueue_LateEntryRefusedByLimiter(t *testing.T) {
+// A late logout that fails verification is charged, and counted as rate limited when the limiter refuses; the
+// publish and the genuine late logouts are unaffected.
+func TestLogoutQueue_LateForgedEntryChargedAndRefused(t *testing.T) {
 	p := newPendingEnv(t)
 	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
 	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.sink.denyCharge = true
-	pendingInflow(t, p, h, 2)
+	n := 0
+	p.sink.onApply = func() {
+		if !p.auth.Pending() {
+			return
+		}
+		for range 2 {
+			n++
+			wantStatus(t, "a forged arrival", holdToken(t, h, p.env.forgedToken(t, other, "test-key", fmt.Sprintf("x%d", n), fmt.Sprintf("jf%d", n))), http.StatusServiceUnavailable)
+		}
+		n++
+		wantStatus(t, "a genuine arrival", holdToken(t, h, p.env.tokenWithJTI(t, "late-genuine", "jg")), http.StatusServiceUnavailable)
+	}
 	p.recover()
 	if err := p.auth.Discover(p.ctx); err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
 	st := p.auth.LogoutQueueStats()
-	if p.auth.Pending() || st.Held != 0 || st.Applied != 1 || st.RateLimited != 2 {
-		t.Errorf("pending %v, stats %+v; want published, empty, 1 applied and 2 rate limited", p.auth.Pending(), st)
+	if p.auth.Pending() || st.Held != 0 || st.Applied != 2 || st.RateLimited != 2 || st.Unverifiable != 0 {
+		t.Errorf("pending %v, stats %+v; want published, empty, 2 applied (snapshot and the genuine late one), 2 forged rate limited", p.auth.Pending(), st)
+	}
+}
+
+// A burst of genuine logouts that arrive during the drain is applied whole, even when the limiter would refuse
+// every charge: none is charged.
+func TestLogoutQueue_TwentyGenuineLateAllApplied(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	p.sink.denyCharge = true
+	pendingInflow(t, p, h, 20)
+	p.recover()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	st := p.auth.LogoutQueueStats()
+	if p.auth.Pending() || st.Held != 0 || st.Applied != 21 || st.RateLimited != 0 {
+		t.Errorf("pending %v, stats %+v; want published, empty, 21 applied and none rate limited", p.auth.Pending(), st)
+	}
+}
+
+// A late logout whose cut fails once is kept after the publish and applied when Discover runs again.
+func TestLogoutQueue_LateCutFailsThenApplied(t *testing.T) {
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	injected := false
+	p.sink.onApply = func() {
+		if injected || !p.auth.Pending() {
+			return
+		}
+		injected = true
+		wantStatus(t, "an arrival during the drain", holdToken(t, h, p.env.tokenWithJTI(t, "late-1", "jl1")), http.StatusServiceUnavailable)
+		p.sink.mu.Lock()
+		p.sink.applyErr = errors.New("database unavailable")
+		p.sink.mu.Unlock()
+	}
+	p.recover()
+	err := p.auth.Discover(p.ctx)
+	if !errors.Is(err, writoidc.ErrLogoutCutFailed) {
+		t.Fatalf("Discover = %v, want ErrLogoutCutFailed for the late cut", err)
+	}
+	if st := p.auth.LogoutQueueStats(); p.auth.Pending() || st.Held != 1 || st.Applied != 1 {
+		t.Fatalf("pending %v, stats %+v; want published with the failed late logout still held", p.auth.Pending(), st)
+	}
+	p.sink.mu.Lock()
+	p.sink.applyErr = nil
+	p.sink.mu.Unlock()
+	if err := p.auth.Discover(p.ctx); err != nil {
+		t.Fatalf("Discover again: %v", err)
+	}
+	if st := p.auth.LogoutQueueStats(); st.Held != 0 || st.Applied != 2 {
+		t.Errorf("stats = %+v, want the late logout applied on the retry", st)
+	}
+}
+
+// A stop during the late loop leaves the unfinished logouts held and reports each as lost at shutdown.
+func TestLogoutQueue_StopDuringLateLoopReportsLost(t *testing.T) {
+	logs := captureLogs(t)
+	p := newPendingEnv(t)
+	h := p.auth.BackchannelLogoutHandler(isReserved, nil)
+	wantStatus(t, "a logout while pending", holdToken(t, h, p.env.tokenWithJTI(t, "pairwise-1", "j0")), http.StatusServiceUnavailable)
+	ctx, cancel := context.WithCancel(p.ctx)
+	defer cancel()
+	applies := 0
+	p.sink.onApply = func() {
+		applies++
+		switch applies {
+		case 1: // the snapshot entry: two arrive during the drain
+			for i := range 2 {
+				wantStatus(t, "an arrival during the drain", holdToken(t, h, p.env.tokenWithJTI(t, fmt.Sprintf("late-%d", i), fmt.Sprintf("jl%d", i))), http.StatusServiceUnavailable)
+			}
+		case 2: // the first late entry: the process is stopping
+			cancel()
+		}
+	}
+	p.recover()
+	err := p.auth.Discover(ctx)
+	if !errors.Is(err, writoidc.ErrLogoutDrainIncomplete) {
+		t.Fatalf("Discover = %v, want ErrLogoutDrainIncomplete", err)
+	}
+	if st := p.auth.LogoutQueueStats(); st.Held != 1 || st.Applied != 2 {
+		t.Fatalf("stats = %+v, want the first late logout applied despite the stop and one still held", st)
+	}
+	writoidc.ReportLogoutsLostAtShutdown(p.auth)
+	if p.sink.count(writoidc.LogoutLostAtShutdown) != 1 || !strings.Contains(logs.String(), "was never applied") {
+		t.Errorf("events %v, want one lost_at_shutdown for the unfinished late logout", p.sink.states())
 	}
 }
 

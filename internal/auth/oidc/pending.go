@@ -100,15 +100,16 @@ func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error
 }
 
 // Discover performs OIDC discovery, then applies the logouts held while the provider was away and publishes
-// the provider state. It returns nil at once when the state is already published. On a failure that wraps
+// the provider state. When the state is already published it only finishes the logouts that arrived during the drain and are still held, and returns nil when none are. On a failure that wraps
 // ErrProviderUnreachable the authenticator is marked pending. The state is published only after every held
 // logout is applied or recorded as unverifiable, so a failed cut or an unreachable key set keeps it pending.
 // The injected HTTP client is read from ctx, as New always did.
 func (a *Authenticator) Discover(ctx context.Context) error {
 	a.discoverMu.Lock()
 	defer a.discoverMu.Unlock()
-	if a.prov.Load() != nil {
-		return nil
+	if st := a.prov.Load(); st != nil {
+		// Published already. Logouts that arrived during the drain and could not be finished are finished now.
+		return a.finishLate(ctx, st, nil)
 	}
 	if !a.built {
 		return errors.New("oidc: Discover needs an Authenticator built by NewPending")
