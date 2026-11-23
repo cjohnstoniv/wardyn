@@ -77,7 +77,7 @@
 
 - A device, a service identity and a delegated portal token match none of these. The admin token, local mode and a stale or truncated group snapshot match neither `unit_admins` nor a group.
 - `unit_admins` and `group:<name>` never match the run's own people: its creator, the sponsor of a service identity that created it, or its recorded author. The creator decides only through `owner`, so the `egress_host` grant still stands between them and a host. The sponsor of a service identity and the recorded author decide none of the run's holds.
-- A service identity's run with no recorded author is decided by security alone.
+- A service identity's run with no recorded author is decided by security alone, and while the rules cannot be read by the admin token alone.
 - An approval rule (`policy:`) never matches `who`. It decides only as the security tier's automation, and `second_human` refuses it.
 
 ## How a hold is resolved
@@ -90,13 +90,14 @@
 - Nothing is stored on the hold. Rules and unit-admin grants are read again when a decision arrives, so a revoked grant or an edited rule applies at once.
 - Group membership comes from the caller's session snapshot. Leaving a group at the identity provider takes effect at the next sign-in, or when the person is removed through SCIM; an API token's groups are bounded as in [Group deciders and sign-in age](#group-deciders-and-sign-in-age).
 - A run with no unit, or a deleted unit, is decided as without rules.
-- Rules or the unit tree that cannot be read answer the run's owner `503` `deciders_unreadable`, and anyone else the usual `404`. A security admin still decides, with no rule applied: see [the residual](../../threatmodel/THREAT-MODEL.md#unit-deciders-who-may-decide-a-hold-and-five-residuals).
+- Rules or the unit tree that cannot be read answer the run's owner `503` `deciders_unreadable`, and anyone else the usual `404`. A security admin and the admin token still decide, under the narrowest rule: `once` at most, whether or not a rule exists for the hold. The `approval.decide` row carries `deciders_unreadable`. See [the residual](../../threatmodel/THREAT-MODEL.md#unit-deciders-who-may-decide-a-hold-and-five-residuals).
+- While they cannot be read, a security admin never decides a hold on a run of their own. The admin token is the audited break-glass (`switch` `unit deciders (unreadable)`). In local mode, and on a run whose row cannot be read, only the admin token decides then.
 - The widest scope under any rule is `run`. A decision sent with no scope keeps the kind's default, except an egress decision under a cap below `run`, which is stored as `once`. A wider scope answers `403` `decision_scope_above_rule`.
 
 | Reason | Status | When |
 |---|---|---|
 | `not_a_decider` | `403` | the owner is left out of an egress, Azure DevOps or MCP hold |
-| `decision_scope_above_rule` | `403` | the scope is wider than `max_scope`, or is `always` |
+| `decision_scope_above_rule` | `403` | the scope is wider than `max_scope`, or is `always`, or is wider than `once` while the rules cannot be read |
 | `deciders_unreadable` | `503` | the rules or the unit tree could not be read |
 | `second_human_required` | `403` | a rule's `second_human` refuses the decider |
 | `unit_knob_locked` | `409` | a unit above locks `deciders` |
