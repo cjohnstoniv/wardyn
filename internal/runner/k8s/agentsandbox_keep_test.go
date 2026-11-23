@@ -197,8 +197,13 @@ func TestKeepServiceHasNoSelectorAndThreePorts(t *testing.T) {
 		t.Errorf("Service ports = %v, want %v", got, want)
 	}
 
-	// An API server that returns no ClusterIP is an error, not a Service with no address.
-	d2, _ := newTestDriver(t, Config{})
+	// An API server that returns no ClusterIP is an error, not a Service with no address. newTestDriver's reactor gives
+	// every created Service an address, so this one answers the create first, as stored, with none.
+	d2, cs2 := newTestDriver(t, Config{})
+	cs2.PrependReactor("create", "services", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		obj := a.(clienttesting.CreateAction).GetObject()
+		return true, obj, cs2.Tracker().Create(corev1.SchemeGroupVersion.WithResource("services"), obj, a.GetNamespace())
+	})
 	if _, err := d2.createKeepService(context.Background(), testNamespace, uuid.New(), nil); err == nil || !strings.Contains(err.Error(), "no ClusterIP") {
 		t.Errorf("createKeepService without a ClusterIP: err = %v, want the refusal", err)
 	}

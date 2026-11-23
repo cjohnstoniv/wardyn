@@ -182,6 +182,7 @@ func agentPod(t *testing.T, cs *fake.Clientset, runID uuid.UUID) *corev1.Pod {
 
 func TestRunService_ServerAgentPinsTheServiceAddress(t *testing.T) {
 	d, cs, spec, _ := serverRun(t, Config{}, readyAt7)
+	installPodUIDReactor(cs) // the fake gives no UID, and the owner reference needs the proxy pod's
 	spec.Interactive = true
 	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
