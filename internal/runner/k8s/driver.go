@@ -298,6 +298,8 @@ type Driver struct {
 	runLocks sync.Map
 	// brackets routes a creating pod's start-wait reads through its bracket (runner mode).
 	brackets sync.Map
+	// podWatch rings the pod waits when their pods change (podwatch.go). Nil until New sets it: every wait then polls.
+	podWatch *podWatch
 	// hardDeny is Config.HardDeny with the substrate's own apiserver added (runner mode).
 	hardDeny *HardDeny
 	// now is the wall clock evidence bounds and stamps read; a test seam.
@@ -325,16 +327,20 @@ func New(cfg Config) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// One pod watch per runs namespace, started now: the boot log then says whether its waits ring or poll.
+	d.podWatch = newPodWatch(cs)
+	for _, ns := range d.cfg.Namespaces {
+		d.podWatch.start(ns)
+	}
 	d.startCanaryRecheck()
 	d.startWarmPools()
 	return d, nil
 }
 
-// clientQPS and clientBurst replace client-go's 5/10 default, which one
-// readiness poll consumes on its own: two overlapping starts would starve
-// every other pod and Secret call. Fixed, not configurable — nothing sets a knob.
-// ponytail: a shared pod informer replaces the Get polls if ~45 concurrent
-// task runs per replica ever saturate this.
+// clientQPS and clientBurst replace client-go's 5/10 default. The pod waits ring on one pod watch per
+// runs namespace and read on a change (podwatch.go), so a waiting pod no longer spends a request every
+// 200 ms. Without `watch` on pods they poll, and this limit is what bounds them. Fixed, not
+// configurable: nothing sets a knob.
 const (
 	clientQPS   = 50
 	clientBurst = 100
