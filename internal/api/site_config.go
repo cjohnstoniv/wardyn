@@ -747,6 +747,48 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	logWarnInternalHostsDeclared(saved.InternalHosts)
 	sshWideRows := sshLaneWidePastPathRows(saved.WorkspaceProviders)
 	logWarnSSHLaneWidePastPath(sshWideRows)
+	datum := siteConfigAuditDatum(saved)
+	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
+	auditComponentSettings(datum, saved.Components, present["components"])
+	auditSiteRecording(datum, saved.Recording, present["recording"])
+	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
+	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
+	auditProviderBlocks(datum, saved, invalidated)
+	auditServiceGrantCleanup(datum, cleanup)
+	// Only when the body NAMED the block — see the count above.
+	if narrowed != nil {
+		datum["sources_no_longer_admitted"] = *narrowed
+	}
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"site_config.write", "site_config", "success", mustJSON(datum)))
+	if logoErr != nil {
+		writeServerError(w, r, "apply site config branding logo", logoErr)
+		return
+	}
+	w.Header().Set("ETag", computeETag(saved))
+	// Projected onto the response AFTER the ETag above, which must hash the stored document.
+	saved = s.projectPutSiteConfig(saved)
+	// dangling_secret_refs surfaces the "reset+apply came back green but every
+	// credentialed path is dead" gap: this document round-trips secret NAMES
+	// only, so an apply after a secret-store wipe (or a hand-edited file) can
+	// reference a secret that was never restored — never rejected (dangling is
+	// a valid mid-recovery state), always reported.
+	writeJSON(w, http.StatusOK, siteConfigPutResponse{
+		SiteConfig:                   saved,
+		DanglingSecretRefs:           danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
+		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
+		AppliesFrom:                  siteConfigAppliesFromNextDispatch,
+		SourcesNoLongerAdmitted:      narrowed,
+		SSHLaneWidePastPath:          sshWideRows,
+		BrandingLogoPending:          logoPending,
+		ModelProviderWarnings:        providerWarnings,
+	})
+}
+
+// siteConfigAuditDatum is the site_config.write row's data for the document just saved: what it holds in the
+// clear (topology, never a credential) and the counts. handlePutSiteConfig adds the parts that depend on the
+// request.
+func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
 	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
 	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
 	datum := map[string]any{
@@ -779,47 +821,13 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		"sign_in_help_text": saved.SignInHelpText,
 		"sign_in_help_url":  saved.SignInHelpURL,
 	}
-	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
-	auditComponentSettings(datum, saved.Components, present["components"])
-	auditSiteRecording(datum, saved.Recording, present["recording"])
-	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
 	}
 	if hosts := goChecksumDBOffHosts(saved.EgressRedirects); len(hosts) > 0 {
 		datum["go_checksum_db_off"] = hosts
 	}
-	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
-	auditProviderBlocks(datum, saved, invalidated)
-	auditServiceGrantCleanup(datum, cleanup)
-	// Only when the body NAMED the block — see the count above.
-	if narrowed != nil {
-		datum["sources_no_longer_admitted"] = *narrowed
-	}
-	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"site_config.write", "site_config", "success", mustJSON(datum)))
-	if logoErr != nil {
-		writeServerError(w, r, "apply site config branding logo", logoErr)
-		return
-	}
-	w.Header().Set("ETag", computeETag(saved))
-	// Projected onto the response AFTER the ETag above, which must hash the stored document.
-	saved = s.projectPutSiteConfig(saved)
-	// dangling_secret_refs surfaces the "reset+apply came back green but every
-	// credentialed path is dead" gap: this document round-trips secret NAMES
-	// only, so an apply after a secret-store wipe (or a hand-edited file) can
-	// reference a secret that was never restored — never rejected (dangling is
-	// a valid mid-recovery state), always reported.
-	writeJSON(w, http.StatusOK, siteConfigPutResponse{
-		SiteConfig:                   saved,
-		DanglingSecretRefs:           danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
-		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
-		AppliesFrom:                  siteConfigAppliesFromNextDispatch,
-		SourcesNoLongerAdmitted:      narrowed,
-		SSHLaneWidePastPath:          sshWideRows,
-		BrandingLogoPending:          logoPending,
-		ModelProviderWarnings:        providerWarnings,
-	})
+	return datum
 }
 
 // projectPutSiteConfig projects the PUT response's read-only fields onto the
