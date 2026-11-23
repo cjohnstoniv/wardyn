@@ -421,9 +421,17 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 	}
 	// Held outside the inspection slot (already released by inspectPush): a
 	// hold lasts minutes and the slot belongs to the whole engine.
-	if len(review.paths) > 0 && !p.holdPush(w, r, rules, review, target, subject, deny) {
-		release()
-		return nil, noRelease, false
+	if len(review.paths) > 0 {
+		if target.writeToGit == nil {
+			// git prints a rejected ref's reason but not a 403's body: answer the refusals
+			// holdPush writes to git (unattended, or paths not worked out) from the push's own head.
+			head := receivePackHead(buf)
+			target.writeToGit = func(w http.ResponseWriter, msg string) { writeADOGitRefusal(w, head, msg) }
+		}
+		if !p.holdPush(w, r, rules, review, target, subject, deny) {
+			release()
+			return nil, noRelease, false
+		}
 	}
 	return bytes.NewReader(buf), release, true
 }

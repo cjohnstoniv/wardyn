@@ -43,6 +43,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Helm chart: the readiness probe now reads `/healthz` by default instead of `/readyz`. A Postgres outage that
   refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
   its database banner. `/readyz` still pings Postgres.
+- On the GitHub App and personal-token git lanes, a push refused because it touches a review path on an unattended run, or because its paths could not be worked out, now reaches git as a rejected ref. Git prints the reason, the paths and what to do, as it already did on the Azure DevOps lane, instead of a bare HTTP 403. The audit row is unchanged.
 
 ### Fixed
 

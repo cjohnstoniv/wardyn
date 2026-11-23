@@ -39,6 +39,7 @@ type forgeRun struct {
 	decisions       *bytes.Buffer
 	brokerURL       string
 	forge           *gitForge
+	p               *Proxy
 	mu              sync.Mutex
 	refusal         string // the body of the last refused receive-pack POST
 }
@@ -85,7 +86,7 @@ func newForgeRunSpec(t *testing.T, patHost string, spec types.RunPolicySpec, see
 			upstreamAddr(forge.srv))
 		repoPath = "/wardyn/git/" + patHost + "/octocat/hello-world.git"
 	}
-	r := &forgeRun{bare: bare, ref: BranchNSPrefix(p.runID) + "work", decisions: decisions, forge: forge}
+	r := &forgeRun{bare: bare, ref: BranchNSPrefix(p.runID) + "work", decisions: decisions, forge: forge, p: p}
 	// git drops a refused receive-pack's body, so the broker's answer is kept
 	// here for the tests that assert on the reason it gives.
 	broker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
