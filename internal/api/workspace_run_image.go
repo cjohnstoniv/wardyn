@@ -12,7 +12,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -150,6 +152,54 @@ func (s *Server) removeStaleImage(ctx context.Context, ref, next string) {
 		slog.WarnContext(ctx, "wardynd: could not reclaim superseded workspace image",
 			slog.String("image", ref), slog.Any("err", err))
 	}
+}
+
+// runImageReclaimBound bounds reclaimRunImageAfterTeardown's read and removal, well inside backgroundShutdownBudget.
+const runImageReclaimBound = 30 * time.Second
+
+// perRunImageTag reports whether ref has the form of a tag Wardyn built in run runID's launch: a custom image wrapped
+// for it or its dev container image. A workspace's chosen base image is wrapped under the same form and then kept on
+// the workspace row for later runs, so the form alone does not make a tag removable (reclaimRunImageAfterTeardown).
+func perRunImageTag(runID uuid.UUID, ref string) bool {
+	id := runID.String()
+	return ref == "wardyn-byoi/"+id+":latest" || ref == "wardyn-devcontainer/"+id+":latest"
+}
+
+// reclaimRunImageAfterTeardown removes, in the background, the image tag Wardyn built for this run alone, once a
+// confirmed teardown has cleared the run's sandbox ref: with no sandbox the run cannot be revived, so nothing reads
+// that tag again unless a workspace row records it. It re-reads the run and removes nothing unless the run is terminal, has no sandbox ref and runs its
+// own per-run tag. A launch holding the tag keeps it (runner.RemoveUnlessHeld). Errors are logged only, as
+// removeStaleImage's are: a tag left behind costs disk, never a run.
+func (s *Server) reclaimRunImageAfterTeardown(ctx context.Context, runID uuid.UUID) {
+	ir, ok := s.cfg.Runner.(runner.ImageRemover)
+	if !ok || s.cfg.Store == nil {
+		return
+	}
+	base := context.WithoutCancel(ctx)
+	s.goBackground(func() {
+		ctx, cancel := context.WithTimeout(base, runImageReclaimBound)
+		defer cancel()
+		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if err != nil || !isTerminalRunState(run.State) || run.SandboxRef != "" || !perRunImageTag(runID, run.Image) {
+			return
+		}
+		// A workspace's chosen base image is wrapped under the tag of the run that first built it and kept on the workspace
+		// row for every later run (resolveWorkspaceImage). That tag is the workspace's: removeStaleImage reclaims it when it is
+		// superseded. A list that cannot be read removes nothing.
+		wss, err := s.cfg.Store.ListWorkspaces(ctx)
+		if err != nil || slices.ContainsFunc(wss, func(ws types.Workspace) bool { return ws.ImageRef == run.Image }) {
+			return
+		}
+		held, err := runner.RemoveUnlessHeld(ctx, run.Image, ir.ImageRemove)
+		switch {
+		case held:
+			slog.InfoContext(ctx, "wardynd: kept an ended run's own image a run launch is using",
+				slog.String("run_id", runID.String()), slog.String("image", run.Image))
+		case err != nil:
+			slog.WarnContext(ctx, "wardynd: could not remove an ended run's own image",
+				slog.String("run_id", runID.String()), slog.String("image", run.Image), slog.Any("err", err))
+		}
+	})
 }
 
 // orNop is f, or a no-op when f is nil.
