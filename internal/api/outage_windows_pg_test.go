@@ -197,9 +197,9 @@ func TestServerOutageWindow_MassLapseOpensForAGroup_PG(t *testing.T) {
 	})
 }
 
-// With rule M switched off, the next sweep pass closes an open server window rather than leaving it open to cover
-// later expiries. It fails if the rule-M-off return comes back ahead of the close.
-func TestServerOutageWindow_RuleMOffClosesIt_PG(t *testing.T) {
+// With lapse recovery switched off, the next sweep pass closes an open server window rather than leaving it open to
+// cover later expiries. It fails if the early return for recovery off comes back ahead of the close.
+func TestServerOutageWindow_RecoveryOffClosesIt_PG(t *testing.T) {
 	f := newServerOutageFixture(t)
 	f.serverRun(t, false, 21*time.Minute)
 	f.serverRun(t, false, 21*time.Minute)

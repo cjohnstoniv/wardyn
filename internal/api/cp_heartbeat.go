@@ -159,8 +159,8 @@ func (s *Server) closeRunnerLinkWindow(ctx context.Context, st store.RunnerStore
 
 // recordServerOutageWindow opens or closes the server_outage window from this pass's verdict. A recovering store
 // or an unread census changes nothing: the heartbeat's window covers the first, and a failed read neither opens nor
-// closes a window. A no-renewals or mass-lapse condition opens one only for a group of the server's runs. With rule M
-// off, an open window is closed.
+// closes a window. A no-renewals or mass-lapse condition opens one only for a group of the server's runs. With lapse
+// recovery off (no store health tracker, or a zero grace), an open window is closed.
 func (s *Server) recordServerOutageWindow(ctx context.Context, v lapseVerdict) {
 	ow, ok := s.cfg.Store.(store.OutageWindows)
 	if !ok {
