@@ -2610,7 +2610,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_RUN_ID` | string | (unset) | this run's id, injected into sidecar/sandbox |
 | `WARDYN_REPO_URL` | string | (unset) | repo clone URL for the run |
 | `WARDYN_REPO_SLUG` | string | (unset) | repo slug for the run |
-| `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run |
+| `WARDYN_REPOS` | string (JSON) | (unset) | multi-repo spec for the run. `agent-run` writes each clone's outcome to `~/.wardyn/clones.json`, which wardynd reads once; `WARDYN_CLONE_STATE_FILE` moves that file for [`scripts/test-clone-state.sh`](../scripts/test-clone-state.sh) only |
 | `WARDYN_EPHEMERAL_DIRS` | string (CSV) | (unset) | scratch targets a workspace's ephemeral sources ask for: `agent-run` mkdirs them in the sandbox. No host path is involved — they die with the run |
 | `WARDYN_START_FOLDER` | string | (unset) | the run's `start_folder`: a folder inside one attachment, or `image_default` for the image's own directory. `agent-run` fails rather than start elsewhere |
 | `WARDYN_USER_DRIVE` | string (`<target>:ro\|rw`) | (unset) | the run's USER DRIVE, present ONLY when one is mounted: the in-container target and the mode. An ANNOUNCEMENT, never the mechanism: the mount is made by the runner (`applyUserDriveEnv`, [`internal/api/runs_dispatch_mounts.go`](../internal/api/runs_dispatch_mounts.go)). [Details](#wardyn_user_drive) |

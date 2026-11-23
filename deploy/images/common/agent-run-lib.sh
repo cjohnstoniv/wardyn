@@ -559,27 +559,53 @@ ado_lane_hint() {
     echo "agent-run: cloning ${1}: this run was not given an Azure DevOps credential (${WARDYN_ADO_LANE_DECLINED}); the run's Credentials panel and 'wardyn run get ${WARDYN_RUN_ID:-<run-id>}' say why" >&2
 }
 
+# Clone outcomes for wardynd (#3159). dispatch_repo_clones writes {"v":1,"done":false,"repos":[]} when it starts, so
+# wardynd can tell a clone still running from an image that writes nothing. Each clone_one result is noted, and at
+# its end dispatch_repo_clones writes them once, as one line of JSON, to a file wardynd reads over the exec channel
+# (internal/api/run_clone_status.go), as it reads the service supervisor's. v1, at the end:
+#   {"v":1,"done":true,"repos":[{"dest":"<path>","outcome":"ok|present|skipped|failed","cause":"|not_a_checkout|cannot_create|clone_failed|ref_failed"}]}
+# The stderr lines stay as they are. WARDYN_CLONE_STATE_FILE is the test's seam only.
+_clone_results=()
+_clone_note() {  # $1=dest $2=outcome $3=cause
+    local d="${1//\\/\\\\}"; d="${d//\"/\\\"}"
+    _clone_results+=("{\"dest\":\"${d}\",\"outcome\":\"$2\",\"cause\":\"$3\"}")
+}
+_clone_state_write() {  # $1=true|false (done)
+    local f="${WARDYN_CLONE_STATE_FILE:-/home/agent/.wardyn/clones.json}" IFS=,
+    mkdir -p "${f%/*}" 2>/dev/null || return 0
+    if [[ "$1" == true ]]; then
+        printf '{"v":1,"done":true,"repos":[%s]}\n' "${_clone_results[*]}" > "$f.tmp" 2>/dev/null || return 0
+    else
+        printf '{"v":1,"done":false,"repos":[]}\n' > "$f.tmp" 2>/dev/null || return 0
+    fi
+    mv -f "$f.tmp" "$f" 2>/dev/null || :
+}
+
 clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" = the remote's default branch)
     local url="$1" dest="$2" slug="$3" ref="${4:-}"
     [[ -n "$url" && -n "$dest" ]] || return 0
-    [[ -e "${dest}/.git" ]] && return 0   # never clobber a populated/bind-mounted repo
+    [[ -e "${dest}/.git" ]] && { _clone_note "$dest" present ""; return 0; }   # never clobber a populated/bind-mounted repo
     # Anything else already at dest (a host folder through a writable mount)
     # is never deleted or cloned over: the clone is skipped instead.
     if [[ -e "$dest" && ( ! -d "$dest" || -n "$(ls -A -- "$dest" 2>/dev/null)" ) ]]; then
         echo "agent-run: clone SKIPPED for ${dest} — it already holds files that are not a checkout of ${slug:-$url}; they are left as they are; continuing" >&2
+        _clone_note "$dest" skipped not_a_checkout
         return 0
     fi
     if ! mkdir -p -- "$dest" 2>/dev/null; then
         echo "agent-run: clone SKIPPED for ${dest} — the folder cannot be created (a read-only mount?); continuing" >&2
+        _clone_note "$dest" skipped cannot_create
         return 0
     fi
     echo "agent-run: cloning ${slug:-$url}${ref:+ @ ${ref}} into ${dest} (shallow, via wardyn-proxy)" >&2
     if [[ -z "$ref" ]]; then
         if git clone --depth 1 -- "$url" "$dest"; then
             echo "agent-run: clone OK (${dest})" >&2
+            _clone_note "$dest" ok ""
             name_run_branch "$dest"
         else
             echo "agent-run: clone FAILED for ${dest} — the egress policy or credential broker may have blocked it (a governance signal); continuing" >&2
+            _clone_note "$dest" failed clone_failed
             ado_lane_hint "${slug:-$url}" "$url"
         fi
         return 0
@@ -590,6 +616,7 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
     # GitHub and the git-broker both support fetching by full sha.
     if git clone --depth 1 --branch "$ref" -- "$url" "$dest" 2>/dev/null; then
         echo "agent-run: clone OK (${dest} @ ${ref})" >&2
+        _clone_note "$dest" ok ""
         name_run_branch "$dest"
         return 0
     fi
@@ -601,12 +628,14 @@ clone_one() {  # $1=url  $2=dest  $3=slug  $4=ref (optional: branch/tag/sha; "" 
         && git -C "$dest" fetch --depth 1 origin "$ref" \
         && git -C "$dest" checkout FETCH_HEAD; then
         echo "agent-run: clone OK (${dest} @ ${ref}, via fetch)" >&2
+        _clone_note "$dest" ok ""
         name_run_branch "$dest"
     else
         # Leave dest as the attempt found it (empty): a bare .git left here would read as a
         # populated checkout to the next start, which then never retries.
         find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
         echo "agent-run: clone FAILED for ${dest} @ ${ref} — the ref may not exist, or the egress policy/credential broker may have blocked it (a governance signal); continuing" >&2
+        _clone_note "$dest" failed ref_failed
         ado_lane_hint "${slug:-$url}" "$url"
     fi
 }
@@ -630,6 +659,8 @@ repo_record_fields() {
 # `workdir` itself, only uses it to compute clone destinations.
 dispatch_repo_clones() {
     local rec r_url r_dest r_slug r_ref
+    _clone_results=()
+    _clone_state_write false
     if [[ -n "${WARDYN_REPOS:-}" ]]; then
         while IFS= read -r rec; do
             repo_record_fields "$rec" r_url r_dest r_slug r_ref
@@ -648,6 +679,7 @@ dispatch_repo_clones() {
             clone_one "$WARDYN_REPO_URL" "${workdir}/${reponame}" "${WARDYN_REPO_SLUG:-}"
         fi
     fi
+    _clone_state_write true
 }
 
 # resolve_workdir — the ONE place a start path's working directory is chosen.

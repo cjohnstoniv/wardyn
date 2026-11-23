@@ -132,6 +132,7 @@ var passiveRunRoutes = map[string]string{
 	"GET /runs/{id}/model-usage":         "read the run's stored token counts; opens nothing",
 	"GET /runs/{id}/files":               "read",
 	"GET /runs/{id}/grants":              "read",
+	"GET /runs/{id}/clones":              "read",
 	"GET /runs/{id}/output":              "logs and output stay available",
 	"GET /runs/{id}/policy":              "read",
 	"GET /runs/{id}/resources":           "read",

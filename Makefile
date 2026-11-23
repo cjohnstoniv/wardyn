@@ -739,6 +739,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-min-os-guard.sh
 	./scripts/test-runner-limits.sh
 	./scripts/test-service-supervisor.sh
+	./scripts/test-clone-state.sh
 	./scripts/test-stage-agent-binary.sh
 	./scripts/test-doc-form.sh
 	./scripts/test-doc-links.sh

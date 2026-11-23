@@ -219,6 +219,7 @@ func (s *Server) routes() chi.Router {
 			r.Get("/runs/{id}/sign-in", s.handleRunSignIn)
 			s.mountRunLeaseRoutes(r)
 			r.Get("/runs/{id}/grants", s.handleListGrants)
+			r.Get("/runs/{id}/clones", s.handleRunClones)    // same gate as GET /runs/{id}
 			r.Get("/runs/{id}/policy", s.handleGetRunPolicy) // owner or admin; not on the delegation list
 			// The run's Files panel (#2967): the person who may enter the run only (desktopRun).
 			r.Get("/runs/{id}/desktop/files", s.handleListDesktopFiles)

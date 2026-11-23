@@ -939,6 +939,7 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/events":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/output":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/clones":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// A waiting sign-in's device code: approving it binds the approver's

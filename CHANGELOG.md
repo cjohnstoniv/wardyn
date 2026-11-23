@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - The run's policy view, its Policy tab and `wardyn run policy` show each host-scoped secret that went in as its value, and why (#3741).
+- The run page shows a repository clone that was skipped or failed; images from this release report it (#3159).
 
 ## [0.10.2] — 2026-11-22
 

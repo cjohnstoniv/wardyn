@@ -134,6 +134,7 @@ var namespaceCensusColumns = []censusColumn{
 // own query (the UI gateway reads a run's UI-app callers from them).
 var namespaceCensusExempt = map[string]string{
 	"portal_issuers.created_by":                 "the admin who bound the issuer; this table is the registry the census consults",
+	"run_clone_status.repos":                    "a run's own repository folders and clone outcomes; no person list",
 	"run_support_grants.owner_email":            "an email address; a principal is never stored in it",
 	"runner_pending_actions.subject":            "the action's subject kind (run or asserted), not a person",
 	"runner_registration_tokens.owner_kind":     "a kind word, not a principal",
