@@ -599,17 +599,26 @@ func TestWindowsVMDiskSizedAsOverlay(t *testing.T) {
 	}
 }
 
-// The idle sweep never freezes a Windows VM run: a freeze would stop the VM under a person at its desktop.
+// Neither the waiting nor the idle pause freezes a Windows VM run, a freeze would stop the VM under a person at
+// its desktop; a Linux VM run in the same state is paused, the control.
 func TestWindowsVMNotIdlePaused(t *testing.T) {
-	f := newPauseFixture(t, pauseWaitingAfter+time.Minute)
-	f.st.open, f.st.waiting = true, true
-	f.st.dispatchTestStore.run.MachineKind = types.MachineWindowsVM
-	f.sweep(t)
-	if freezes, _ := f.rn.counts(); freezes != 0 {
-		t.Fatalf("freezes = %d, want a Windows VM run never frozen", freezes)
-	}
-	if pausedAt, _ := f.st.paused(); pausedAt != nil {
-		t.Fatalf("the Windows VM run was marked paused at %v", pausedAt)
+	for _, kind := range []types.MachineKind{types.MachineLinuxVM, types.MachineWindowsVM} {
+		for _, branch := range []string{"waiting", "idle"} {
+			f := newPauseFixture(t, time.Hour)
+			if branch == "waiting" {
+				f.st.open, f.st.waiting = true, true
+			} else {
+				f.st.run.RunLimits.PauseIdleAfterSec = 60
+				f.rn.cpu = pct(2)
+			}
+			f.st.run.MachineKind = kind
+			f.sweep(t)
+			freezes, _ := f.rn.counts()
+			pausedAt, _ := f.st.paused()
+			if paused := freezes != 0 || pausedAt != nil; paused != (kind == types.MachineLinuxVM) {
+				t.Errorf("%s, %s: freezes %d, paused at %v; want a pause only for the Linux VM control", kind, branch, freezes, pausedAt)
+			}
+		}
 	}
 }
 
