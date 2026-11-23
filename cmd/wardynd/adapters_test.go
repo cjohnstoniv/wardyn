@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/api"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -339,6 +341,21 @@ func TestMaskingRecorder_MasksJSONEscapedSecretInData(t *testing.T) {
 	}
 	if !strings.Contains(string(inner.last.Data), "<secret-hidden>") {
 		t.Fatalf("expected placeholder in Data, got %s", inner.last.Data)
+	}
+}
+
+// A write the store answered "busy" (every append slot taken for the chain lock's whole wait bound) is spooled
+// like a lock timeout, not lost.
+func TestSpoolingRecorderSpoolsABusyAppend(t *testing.T) {
+	busy := fmt.Errorf("record: %w", store.ErrAuditAppendBusy)
+	spool, err := api.NewAuditSpool(filepath.Join(t.TempDir(), "audit-spool.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := types.AuditEvent{ID: uuid.New(), Action: "person.deprovision", Time: time.Now().UTC()}
+	err = spoolingRecorder{inner: &fakeAuditRecorder{retErr: busy}, spool: spool}.Record(t.Context(), ev)
+	if !errors.Is(err, audit.ErrSpooled) || !errors.Is(err, store.ErrAuditAppendBusy) || spool.Lines() != 1 {
+		t.Errorf("busy append: err %v, spool %d rows; want ErrSpooled wrapping ErrAuditAppendBusy and 1 row", err, spool.Lines())
 	}
 }
 

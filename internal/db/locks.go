@@ -161,7 +161,7 @@ var LockWait = 30 * time.Second
 // LockPoolMaxConns bounds the connections one process holds for locks at once;
 // a lock beyond it waits LockPoolAcquireWait and is then refused. Nested locks
 // share their caller's connection, so this bounds concurrent guarded
-// operations, not locks.
+// operations, not locks. Set once at boot from WARDYN_LOCK_POOL_MAX_CONNS, before the first LockerFor; default 8.
 var LockPoolMaxConns = 8
 
 // LockPoolAcquireWait bounds the wait for one of the LockPoolMaxConns slots.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -41,7 +42,17 @@ func WithAuditReplay(ctx context.Context) context.Context {
 // takes the same lock itself (the only way a row enters the table since 0111);
 // the lock here is re-entrant and free, and keeps the bounded wait below in
 // front of it.
+//
+// At most a few writers (auditAppendSlots) wait on the chain lock at once, so a held lock cannot take every
+// connection the pool has: a writer waits for a slot first, within the same bound as the lock wait, and the lock
+// wait gets what is left of it. A writer that finds every slot taken for the whole bound answers
+// ErrAuditAppendBusy without having sent anything.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
+	release, left, err := takeAuditAppendSlot(ctx, pool, db.AuditChainLockTimeout)
+	if err != nil {
+		return err
+	}
+	defer release()
 	// The cap lives at the one INSERT every audit writer reaches (api server,
 	// broker, identity, approval sweeper, spool drain), not in Server.auditEvent,
 	// which internal/approval bypasses by building its own AuditEvent values.
@@ -61,7 +72,7 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
 	if replay, _ := ctx.Value(auditReplayKey{}).(bool); replay && ev.ID != uuid.Nil {
-		return insertReplayedAuditEvent(ctx, tx, ev, dataJSON)
+		return insertReplayedAuditEvent(ctx, tx, ev, dataJSON, left)
 	}
 	// The lock wait bound, the chain lock and the append go to the database together: the lock is held for one
 	// round trip less. Results are read strictly in order and the first error returns before Commit: a failed
@@ -70,7 +81,8 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	// holds it and this call is on the request path. A timeout is not a lost event: the error reaches
 	// spoolingRecorder, which fsyncs it to the local spool for the drain to replay.
 	b := &pgx.Batch{}
-	b.Queue(db.AuditChainLockTimeoutSQL())
+	wait, waitArg := db.AuditChainLockWaitSQL(left)
+	b.Queue(wait, waitArg)
 	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
 	b.Queue(auditAppendSQL, ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action,
 		ev.Target, ev.Outcome, ev.SourceIP, dataJSON)
@@ -111,9 +123,10 @@ const auditReadBackSQL = `SELECT COALESCE(prev_hash,''), COALESCE(row_hash,'') F
 // insertReplayedAuditEvent is InsertAuditEvent's body for a replayed event (WithAuditReplay): an event the
 // table already holds is not appended again, and ev carries the stored row's hashes. The lock wait bound, the
 // chain lock and the read-back go to the database together.
-func insertReplayedAuditEvent(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent, dataJSON []byte) error {
+func insertReplayedAuditEvent(ctx context.Context, tx pgx.Tx, ev *types.AuditEvent, dataJSON []byte, left time.Duration) error {
 	b := &pgx.Batch{}
-	b.Queue(db.AuditChainLockTimeoutSQL())
+	wait, waitArg := db.AuditChainLockWaitSQL(left)
+	b.Queue(wait, waitArg)
 	b.Queue(lockAuditChainSQL, db.AuditChainLockKey)
 	b.Queue(auditReadBackSQL, ev.Time, ev.ID)
 	br := tx.SendBatch(ctx, b)
