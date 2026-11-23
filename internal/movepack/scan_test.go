@@ -9,6 +9,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -197,10 +199,12 @@ func TestMoveScan_FindsValuesAcrossChunks(t *testing.T) {
 
 // TestMoveScan_FindsValuesInGitObjects: a value in a loose object, a packed object stored whole, and a
 // delta's inserts joined across consecutive inserts is found; one a copy splits is not (the stated limit).
-// A git directory pointing outside the roots, and a git file that cannot be decoded, are refused.
+// A git directory pointing outside the roots, and a git file that cannot be decoded, are refused. Besides the
+// objects built here, the rows read objects git itself wrote, committed in testdata/git.
 func TestMoveScan_FindsValuesInGitObjects(t *testing.T) {
 	const g = "home/agent/work/.git"
 	const o = g + "/objects"
+	looseID := looseTestdataID(t)
 	id := strings.Repeat("ab", 19)
 	half := len(secret) / 2
 	// Compressible padding makes deflate code the value's bytes, so the stored bytes do not hold it.
@@ -221,6 +225,11 @@ func TestMoveScan_FindsValuesInGitObjects(t *testing.T) {
 		{"a .git pointer inside the roots", mustPack(t, dir("home/agent/work"), dir("home/agent/work/sub"), reg("home/agent/work/sub/.git", "gitdir: ../.git/modules/sub\n")), nil, ""},
 		{"a loose object that is not zlib", gitTree(t, dir(o+"/ab"), reg(o+"/ab/"+id, "not zlib")), movepack.ErrScanUnreadable, "loose object ab" + id},
 		{"a pack that is not a pack", gitTree(t, dir(o+"/pack"), reg(o+"/pack/pack-1.pack", "JUNKJUNKJUNKJUNK")), movepack.ErrScanUnreadable, "pack-1.pack"},
+		// Objects git itself wrote (testdata/git/make-testdata.sh).
+		{"a loose object git wrote", gitTree(t, dir(o+"/"+looseID[:2]), reg(o+"/"+looseID[:2]+"/"+looseID[2:], testdata(t, "loose-"+looseID))), movepack.ErrValueFound, "loose object " + looseID},
+		{"a whole object in a pack after git gc", gitTree(t, dir(o+"/pack"), reg(o+"/pack/pack-1.pack", testdata(t, "whole.pack"))), movepack.ErrValueFound, "of pack"},
+		{"a delta's inserts in a pack after git gc --aggressive", gitTree(t, dir(o+"/pack"), reg(o+"/pack/pack-1.pack", testdata(t, "delta.pack"))), movepack.ErrValueFound, "of pack"},
+		{"a pack git wrote with no value", gitTree(t, dir(o+"/pack"), reg(o+"/pack/pack-1.pack", testdata(t, "clean.pack"))), nil, ""},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
@@ -279,4 +288,24 @@ func TestMoveScan_PackEndsAtItsChecksum(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testdata is a file of testdata/git, as a string.
+func testdata(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "git", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// looseTestdataID is the object id of the loose object in testdata/git, from its file's name.
+func looseTestdataID(t *testing.T) string {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join("testdata", "git", "loose-*"))
+	if err != nil || len(m) != 1 {
+		t.Fatalf("testdata loose objects = %v, %v; want one", m, err)
+	}
+	return strings.TrimPrefix(filepath.Base(m[0]), "loose-")
 }
