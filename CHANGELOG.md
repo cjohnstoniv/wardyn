@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- People can make a team drive of their own, shared with their governance unit and the units below it, read-only for others until a super admin allows writing (`storage.user_drive.member_create.team_drives`, off by default; Docker only) (#3459).
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

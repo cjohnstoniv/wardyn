@@ -4212,6 +4212,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
+- `0400` (`0400_member_team_drives`) adds `user_drives.team_unit_id` (a unit, set NULL when the unit is deleted) and `user_drives.team_members_can_write` (false by default), and widens 0205's team check to a person's own Docker volume drive. Existing rows are unchanged.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4939,6 +4940,7 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 | `storage_class` | The claim's StorageClass on Kubernetes. Empty is the cluster default |
 | profile `deny_member_drives` | A governance profile refuses creation for its people. A person can still delete a drive they have |
 | `keep_main_drive` | Lets a run keep its work folder as its person's drive (`keep_work_folder` on the run). Off by default |
+| `team_drives` | Lets a person make a team drive shared with their governance unit and the units below it. Needs `storage.user_drive.team_drives` and Docker. Off by default |
 
 **What differs by substrate.**
 
@@ -5031,6 +5033,15 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - The allocation does not mount the drive by itself. To mount it, include its id in the run's drives list. Once mounted, other issuer portals cannot reach that run (`portal_run_scope`), even if the allocation is removed or the creating portal is revoked.
 - A queued run starts with no wider mode than it was admitted with, and read-only when none was recorded.
 - While a portal holds the drive, an edit that would stop it being a team drive answers 409, and one that adds a second place or moves it off those two backends answers 422. Nothing is written; remove the portal's allocation first.
+
+**Made by a person.**
+
+- With `member_create.team_drives: true` and `storage.user_drive.team_drives: true`, `POST /api/v1/me/drives` with `team: true` makes a team drive that belongs to the person's governance unit.
+- Everyone in that unit, or a unit below it, sees one shared folder at `/home/agent/shared/<name-slug>`. It is read-only for everyone but the person who made it until a super admin sends `PUT /api/v1/drives/member/{id}/team` with `members_can_write: true`.
+- It is a Docker volume on the server's own Docker host, so it serves runs on that host only. Kubernetes and Mac disk drives are refused with 422 `member_team_drive_unsupported`.
+- A person in no unit, or in Default, is refused with 422 `member_team_drive_no_unit`. Deleting the unit leaves the drive to the person who made it.
+- It counts toward that person's `max_per_person`, and only they or a super admin delete it. Erasing the person keeps it: the scope reports it under `kept_team_drives`, and the record keeps their subject until a super admin deletes the drive.
+- Turn the switch on only once every server runs this version: an older server deleting the drive removes its record and leaves the shared volume behind.
 
 **Before you upgrade.** Turning on `storage.user_drive.team_drives` shares folders between people. Members of the allocated groups share the team folder. Each allocated issuer portal has a separate folder for the people who mount the drive through that portal. Anyone with access to a folder can read files another person left there. One person's agent can read, and if the allocation is writable run, what another person's agent wrote there, which is cross-person injection, and any secret an agent writes there is visible to everyone who shares that folder. The switch is off by default; a team drive is admin-made and allocated to groups or eligible issuer portals, read-only unless a super admin sets `members_can_write` on a writable drive, and every mount's audit row names the person who mounted it.
 
