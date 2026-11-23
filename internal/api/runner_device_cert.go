@@ -185,14 +185,14 @@ func (s *Server) mdmDeviceVerdictFor(ctx context.Context, rn types.Runner) mdmDe
 	j := &mdmJudge{s: s, ctx: ctx, st: st, roots: roots, name: name, now: s.mdmNow()}
 	last := name + " has not presented an MDM device certificate."
 	for _, chain := range rn.DeviceCert.Chains {
-		leaf, inter := parseMDMChain(chain)
+		leaf, inter, presented := parseMDMChain(chain)
 		if leaf == nil || leaf.IsCA {
 			continue
 		}
 		paths, err := leaf.Verify(x509.VerifyOptions{Roots: pool, Intermediates: inter, CurrentTime: j.now,
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
 		if err != nil {
-			last = name + mdmChainRefusal(err, leaf, j.now)
+			last = name + mdmChainRefusal(leaf, presented, roots, j.now)
 			continue
 		}
 		for _, vc := range paths {
@@ -208,38 +208,39 @@ func (s *Server) mdmDeviceVerdictFor(ctx context.Context, rn types.Runner) mdmDe
 
 // parseMDMChain parses a presented chain, leaf first. A chain with a certificate that does not parse is
 // no chain.
-func parseMDMChain(chain [][]byte) (leaf *x509.Certificate, inter *x509.CertPool) {
+func parseMDMChain(chain [][]byte) (leaf *x509.Certificate, inter *x509.CertPool, presented []*x509.Certificate) {
 	inter = x509.NewCertPool()
 	for i, der := range chain {
 		c, err := x509.ParseCertificate(der)
 		if err != nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		if i == 0 {
 			leaf = c
 		} else {
 			inter.AddCert(c)
+			presented = append(presented, c)
 		}
 	}
-	return leaf, inter
+	return leaf, inter, presented
 }
 
-// mdmChainRefusal is the rest of the sentence for a chain that did not verify. Go reports both ends of the
-// validity window as Expired, for any certificate of the path, and names the one at fault (inv.Cert): the sentence
-// says whether that is the device's certificate or a CA's, with its own dates.
-func mdmChainRefusal(err error, leaf *x509.Certificate, now time.Time) string {
-	var inv x509.CertificateInvalidError
-	if errors.As(err, &inv) && inv.Reason == x509.Expired {
-		bad, who := leaf, "'s MDM device certificate"
-		if inv.Cert != nil && !inv.Cert.Equal(leaf) {
-			bad, who = inv.Cert, "'s MDM device certificate chain holds a CA certificate that"
-		}
-		if now.Before(bad.NotBefore) {
-			return who + " is not valid until " + bad.NotBefore.UTC().Format("2006-01-02") + "."
-		}
-		return who + " expired on " + bad.NotAfter.UTC().Format("2006-01-02") + "."
+// mdmChainRefusal is the rest of the sentence for a chain that did not verify. Go reports a CA outside its window
+// only as an unknown authority, so the windows are read here, at the verify time: the first certificate outside its
+// window is named, the device's own or a CA's, with its date. Otherwise the chain is not from the configured CA.
+func mdmChainRefusal(leaf *x509.Certificate, presented, roots []*x509.Certificate, now time.Time) string {
+	bad, notYet := devicecert.OutsideWindow(now, leaf, presented, roots)
+	if bad == nil {
+		return "'s MDM device certificate is not issued by the configured MDM CA."
 	}
-	return "'s MDM device certificate is not issued by the configured MDM CA."
+	who := "'s MDM device certificate"
+	if bad != leaf {
+		who = "'s MDM device certificate chain holds a CA certificate that"
+	}
+	if notYet {
+		return who + " is not valid until " + bad.NotBefore.UTC().Format("2006-01-02") + "."
+	}
+	return who + " expired on " + bad.NotAfter.UTC().Format("2006-01-02") + "."
 }
 
 // mdmJudge is one verdict's state: the CRL is fetched at most once for it.

@@ -803,6 +803,11 @@ func TestMDMDeviceVerdict_RefusalSentences(t *testing.T) {
 		t.Fatalf("the sentence names the leaf's date: %q", v.refusal)
 	}
 	e.clock.add(-40 * 24 * time.Hour)
+	// A CA whose window has not started is named too.
+	early := e.leaf(7, -4*time.Hour, 24*time.Hour)
+	e.clock.add(-2 * time.Hour)
+	mustRefuse(t, "CA not yet valid", e.verdict(e.runner(early)), "chain holds a CA certificate that is not valid until "+e.ca.cert.NotBefore.UTC().Format("2006-01-02"))
+	e.clock.add(2 * time.Hour)
 	foreign := mdmTestDeviceCert(t, other, 5, e.clock.now().Add(-time.Hour), e.clock.now().Add(time.Hour))
 	mustRefuse(t, "foreign CA", e.verdict(e.runner(foreign)), "is not issued by the configured MDM CA")
 	e.store.err = errors.New("db down")
@@ -1262,40 +1267,5 @@ func TestMDMDevice_LogsAndAuditCarryNoSubject(t *testing.T) {
 func TestMDMDeviceSetActionIsThePlacementOne(t *testing.T) {
 	if auditRunnersMDMDeviceSet != placement.ActionRunnersMDMDeviceSet {
 		t.Fatalf("%q is not placement's %q", auditRunnersMDMDeviceSet, placement.ActionRunnersMDMDeviceSet)
-	}
-}
-
-// mdmChainRefusal names the certificate Go found at fault: the device's, a CA's or an intermediate's, expired or not yet
-// valid, and falls back to the device's when Go names none.
-func TestMDMChainRefusal_NamesTheCertificateAtFault(t *testing.T) {
-	now := time.Unix(1900000000, 0).UTC()
-	cert := func(raw byte, from, to time.Duration) *x509.Certificate {
-		return &x509.Certificate{Raw: []byte{raw}, NotBefore: now.Add(from), NotAfter: now.Add(to)}
-	}
-	day := func(c *x509.Certificate, end bool) string {
-		if end {
-			return c.NotAfter.UTC().Format("2006-01-02")
-		}
-		return c.NotBefore.UTC().Format("2006-01-02")
-	}
-	notYet := cert(1, 48*time.Hour, 72*time.Hour)
-	gone := cert(1, -96*time.Hour, -48*time.Hour)
-	caNotYet := cert(2, 72*time.Hour, 96*time.Hour)
-	interGone := cert(3, -96*time.Hour, -48*time.Hour)
-	for name, c := range map[string]struct {
-		leaf, bad *x509.Certificate
-		want      string
-	}{
-		"no certificate named, device not yet valid": {notYet, nil, "'s MDM device certificate is not valid until " + day(notYet, false) + "."},
-		"no certificate named, device expired":       {gone, nil, "'s MDM device certificate expired on " + day(gone, true) + "."},
-		"the device's own certificate named":         {notYet, notYet, "'s MDM device certificate is not valid until " + day(notYet, false) + "."},
-		"a CA not yet valid":                         {notYet, caNotYet, "'s MDM device certificate chain holds a CA certificate that is not valid until " + day(caNotYet, false) + "."},
-		"a presented intermediate that expired":      {notYet, interGone, "'s MDM device certificate chain holds a CA certificate that expired on " + day(interGone, true) + "."},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := mdmChainRefusal(x509.CertificateInvalidError{Cert: c.bad, Reason: x509.Expired}, c.leaf, now); got != c.want {
-				t.Fatalf("sentence %q, want %q", got, c.want)
-			}
-		})
 	}
 }
