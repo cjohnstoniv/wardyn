@@ -205,3 +205,67 @@ func TestCapAllowed_TrustedEmailMatchesThroughOIDC(t *testing.T) {
 		t.Errorf("with email_verified enforced: capAllowed = %v, %v; want true", got, err)
 	}
 }
+
+// A restricted value is open only to an allow that names it. An allow on the caller's unverified email counts
+// for nothing, so it cannot be the named allow that lets a wildcard allow through.
+func TestCapAllowed_UnverifiedEmailNeverSatisfiesARestriction(t *testing.T) {
+	const p = "5b0f2f6e-5f5e-4c53-9d83-0c5a1d3b7a11"
+	allow := types.CapabilityAllow
+	wildcard := grant(types.CapabilitySubjectAll, "", capPolicy, capWildcard, allow)
+	for _, tc := range []struct {
+		name               string
+		grants             []types.CapabilityGrant
+		switchOff, emailOK bool
+		want               bool
+	}{
+		{"switch on: the named allow is on the unverified email", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, false, false},
+		{"switch off: the old match", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, true, false, true},
+		{"email keys opted in", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, true, true},
+		{"control: the named allow is on the sub", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capSub, capPolicy, p, allow)}, false, false, true},
+		{"control: no wildcard, the named allow is on the unverified email", []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, false, false},
+	} {
+		srv := capServer(&capStore{grants: tc.grants, restricted: map[string]map[string]bool{capPolicy: {p: true}}})
+		srv.cfg.UnverifiedEmailCapGrantsMatch, srv.cfg.AllowEmailMappings = tc.switchOff, tc.emailOK
+		if got, err := srv.capAllowed(memberCtx(nil), capPolicy, p); err != nil || got != tc.want {
+			t.Errorf("%s: capAllowed = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	// The list read through the same decision.
+	srv := capServer(&capStore{
+		grants:     []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)},
+		restricted: map[string]map[string]bool{capPolicy: {p: true}},
+	})
+	if got := capVisible(memberCtx(nil), srv, capPolicy, []string{p}, func(s string) string { return s }); len(got) != 0 {
+		t.Errorf("capVisible = %v; want none", got)
+	}
+}
+
+// A wildcard image allow on the caller's unverified email grants nothing, so it must not count as a
+// non-prefix allow that skips the refusal of another tag of a restricted repository.
+func TestCapAllowed_UnverifiedEmailWildcardKeepsThePrefixSiblingRule(t *testing.T) {
+	const sibling = "registry.example.com/team/app:2"
+	allow := types.CapabilityAllow
+	prefix := grant(types.CapabilitySubjectUser, capSub, capImage, imgPrefix, allow)
+	for _, tc := range []struct {
+		name               string
+		wildcard           types.CapabilityGrant
+		switchOff, emailOK bool
+		want               bool
+	}{
+		{"switch on: the wildcard is on the unverified email", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), false, false, false},
+		{"switch off", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), true, false, true},
+		{"email keys opted in", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), false, true, true},
+		{"control: the wildcard is on the sub", grant(types.CapabilitySubjectUser, capSub, capImage, capWildcard, allow), false, false, true},
+	} {
+		st := &capStore{
+			grants:     []types.CapabilityGrant{prefix, tc.wildcard},
+			enf:        map[string]bool{capImage: true},
+			restricted: map[string]map[string]bool{capImage: {"registry.example.com/team/app:1": true}},
+		}
+		srv := capServer(st)
+		srv.cfg.UnverifiedEmailCapGrantsMatch, srv.cfg.AllowEmailMappings = tc.switchOff, tc.emailOK
+		if got, err := srv.capGranted(memberCtx(nil), capImage, sibling); err != nil || got != tc.want {
+			t.Errorf("%s: capGranted(%q) = %v, %v; want %v", tc.name, sibling, got, err, tc.want)
+		}
+	}
+}
