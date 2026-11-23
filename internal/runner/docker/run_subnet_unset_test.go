@@ -100,7 +100,7 @@ func TestRunSubnetPool_UnsetSendsMainsRequests(t *testing.T) {
 	defer cli.Close()
 	d := newWithClient(newEngineClient(cli), Config{ProxyImage: "wardyn-proxy:dev"})
 	id := testSpec().RunID
-	if _, err := d.createRunNetwork(context.Background(), id, d.labels(id, "network", nil)); err != nil {
+	if _, err := d.createRunNetwork(context.Background(), id, d.labels(id, "network", nil), engineVersionOf(t, d)); err != nil {
 		t.Fatalf("createRunNetwork: %v", err)
 	}
 	const golden = "testdata/run-network-unset.golden"

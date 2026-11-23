@@ -645,14 +645,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
-		// shell or the harness binary).
+		// shell or the harness binary). A reused wrap keeps the prefix.
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"byoi_base": req.Image})
 		if !ok {
 			return "", nil, true
 		}
-		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
+		built, reused, berr := s.wrapRunImage(ctx, buildCtx, run, cmp.Or(imagePin(run), req.Image), outTag)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
@@ -660,9 +659,9 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		}
 		image, origin = built.Ref, imageOriginMember
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
+			runID.String(), "success", mustJSON(buildSuccessData(reusedFields(map[string]any{
 				"byoi_base": req.Image, "image": built.Ref,
-			}, built.ID))))
+			}, reused), built.ID))))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"devcontainer_repo": req.DevcontainerRepo})

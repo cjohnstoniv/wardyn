@@ -82,7 +82,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion))
+	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion), info.ServerVersion)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -256,12 +256,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // config written to the proxy (startProxy), and the undo that removes both; on an error it has
 // already undone them. dnsListen has the proxy answer DNS on :53 (proxy.DNSListenEnv): only for a container
 // run whose agent resolver is mounted to point at it, since a proxy told to open the listener exits when it
-// cannot bind.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
+// cannot bind. engineVersion is the engine's version, read once by the caller for this create.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool, engineVersion string) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
-	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
+	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels), engineVersion)
 	if err != nil {
 		return "", "", "", nil, err
 	}
@@ -335,8 +335,8 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 //
 // Both ways of picking the subnet create the same shape (runNetworkOptions), and the created network is
 // read back and checked (checkRunNetwork) before anything joins it.
-func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
-	isolated, err := d.runNetworkIsolation(ctx)
+func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string, engineVersion string) (string, error) {
+	isolated, err := d.runNetworkIsolation(engineVersion)
 	if err != nil {
 		return "", err
 	}

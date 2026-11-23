@@ -28,7 +28,7 @@ func newPoolDriver(f *fakeDocker, pool string) *Driver {
 func poolNet(t *testing.T, f *fakeDocker, d *Driver) (string, netip.Prefix, error) {
 	t.Helper()
 	id := uuid.New()
-	if _, err := d.createRunNetwork(context.Background(), id, d.labels(id, componentNetwork, nil)); err != nil {
+	if _, err := d.createRunNetwork(context.Background(), id, d.labels(id, componentNetwork, nil), engineVersionOf(t, d)); err != nil {
 		return "", netip.Prefix{}, err
 	}
 	f.mu.Lock()
@@ -193,13 +193,13 @@ func TestSweepOrphanedSandboxes_ReleasesOrphanRunNetworks(t *testing.T) {
 	orphan, live, young, other := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	ctx := context.Background()
 	for _, id := range []uuid.UUID{orphan, live, young} {
-		if _, err := d.createRunNetwork(ctx, id, d.labels(id, componentNetwork, nil)); err != nil {
+		if _, err := d.createRunNetwork(ctx, id, d.labels(id, componentNetwork, nil), engineVersionOf(t, d)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	otherLabels := d.labels(other, componentNetwork, nil)
 	otherLabels[labelDeployment] = "wardyn-internal-other"
-	if _, err := d.createRunNetwork(ctx, other, otherLabels); err != nil {
+	if _, err := d.createRunNetwork(ctx, other, otherLabels, engineVersionOf(t, d)); err != nil {
 		t.Fatal(err)
 	}
 	f.mu.Lock()

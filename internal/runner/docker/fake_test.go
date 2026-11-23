@@ -113,7 +113,8 @@ type fakeDocker struct {
 	// stopFailures is how many more ContainerStop calls on a container fail with a cancelled context.
 	stopFailures map[string]int
 
-	info system.Info
+	info      system.Info
+	infoCalls int // Info calls made
 	// pingErr is what Ping answers; pingBlock makes it wait for ctx instead.
 	pingErr   error
 	pingBlock bool
@@ -515,6 +516,9 @@ func (f *fakeDocker) stdinOf(id string) []byte {
 }
 
 func (f *fakeDocker) Info(ctx context.Context, _ client.InfoOptions) (client.SystemInfoResult, error) {
+	f.mu.Lock()
+	f.infoCalls++
+	f.mu.Unlock()
 	return client.SystemInfoResult{Info: f.info}, nil
 }
 
