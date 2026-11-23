@@ -124,3 +124,23 @@ func TestPG_MacOSVMKindAndHolders(t *testing.T) {
 		t.Fatal("agent_runs took an unknown machine kind")
 	}
 }
+
+// A windows_vm run takes the scoped machine write as the other VM kinds do, and reads it back.
+func TestPG_SetRunVMMachineTakesAWindowsVMRun(t *testing.T) {
+	f := newWinFix(t)
+	p := f.newPool("Engineering", 1)
+	img := f.newImage("Server", p)
+	f.addHolder(p, "ana@example.com")
+	run, err := f.launch(img, "ana@example.com")
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	m := types.VMMachine{MachineType: "pc-q35-10.0", CPUModel: "Haswell-v4", Accelerator: "kvm", QEMUVersion: "10.0.13"}
+	if err := f.pg.SetRunVMMachine(f.ctx, run.ID, m); err != nil {
+		t.Fatalf("SetRunVMMachine on a windows_vm run: %v", err)
+	}
+	got, err := f.pg.GetRun(f.ctx, run.ID)
+	if err != nil || got.VMMachine == nil || *got.VMMachine != m || got.MachineKind != types.MachineWindowsVM {
+		t.Fatalf("GetRun = %+v %q %v", got.VMMachine, got.MachineKind, err)
+	}
+}
