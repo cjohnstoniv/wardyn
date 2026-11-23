@@ -47,6 +47,7 @@ func (s *Server) componentRunImage(req createRunRequest, wsRefs []types.Workspac
 	}
 	// req.AllowedImage is refused before this gate at this version (unappliedFields); when the server
 	// applies it, it is the case to add here, beside req.Image.
+	// Launch may swap this image for the other architecture's variant (archImage), which the gate cannot see.
 	if req.UsesRunMode() && !s.workspaceBuildsImage(wsRefs) {
 		fact, _ := harnessSetImage(harnessSet(req), s.cfg.AgentImages, customImageRequested(req, wsRefs))
 		return fact.Ref

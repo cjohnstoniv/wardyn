@@ -169,7 +169,7 @@ func TestComponentImage_LaunchRefusalIsAudited(t *testing.T) {
 	if got := decodeErrorBody(t, w); w.Code != http.StatusUnprocessableEntity || got.Reason != "component_image_unmet" {
 		t.Fatalf("launch = %d %s, want 422 component_image_unmet", w.Code, w.Body.String())
 	}
-	want := []string{` {"ordinal":0,"reason":"component_image_unmet","source":"org"}`}
+	want := []string{` {"component_id":"` + compOrgID + `","ordinal":0,"reason":"component_image_unmet","source":"org"}`}
 	if rows := f.componentAudit(before, "run.component.refuse"); !slices.Equal(rows, want) {
 		t.Errorf("run.component.refuse = %v, want %v", rows, want)
 	}

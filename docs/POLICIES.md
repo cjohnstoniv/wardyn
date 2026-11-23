@@ -1059,7 +1059,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 
 - A run names stored components by `components[].id`. It carries at most 8.
 - A definition holds `hosts` (up to 32), `secrets` (up to 8) and plain `config` variables (up to 32 keys). It may carry a `description`: one plain line of up to 500 characters that New Run shows on the component's card.
-- A definition may carry an `image`: the image a run must use to attach the component. A reference with a tag or a digest asks for that image, and one without asks for any tag of its repository. A run whose image does not meet it is refused `component_image_unmet`. Wardyn never pulls or picks the image for the run.
+- A definition may carry an `image`: the image a run must use to attach the component. A reference with a tag or a digest asks for that image, and one without asks for any tag or digest of its repository. A run whose image does not meet it is refused `component_image_unmet`. Wardyn never pulls or picks the image.
 - Each secret names one stored secret and one delivery:
 
 | `delivery.mode` | What the secret does | The grant it becomes |
