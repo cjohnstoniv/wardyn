@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
-- The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on: under `features` in site config, or, for inbound federation, with its own switch. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
+- The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
 - A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
 
 ## [0.10.2] — 2026-11-22

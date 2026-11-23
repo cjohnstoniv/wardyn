@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -90,20 +92,49 @@ func wantSiteFeatureRefusal(t *testing.T, w *httptest.ResponseRecorder, fake *fa
 	}
 }
 
+// siteFeatureStatusStore is the /setup/status server's store, which counts every site config write.
+type siteFeatureStatusStore struct {
+	*integStore
+	puts int
+}
+
+func (s *siteFeatureStatusStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
+	s.puts++
+	s.site = cfg
+	return cfg, nil
+}
+
+func newSiteFeatureStatusStore(sc types.SiteConfig) *siteFeatureStatusStore {
+	return &siteFeatureStatusStore{integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: sc}}
+}
+
 // setupFeatureFlags is GET /setup/status's features object for a deployment whose site config is sc.
 func setupFeatureFlags(t *testing.T, sc types.SiteConfig) map[string]json.RawMessage {
 	t.Helper()
-	w := do(t, modelProvidersStatusSrv(t, sc, &capStore{}), http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	return setupFeatureFlagsFrom(t, newSiteFeatureStatusStore(sc))
+}
+
+// setupFeatureFlagsFrom is GET /setup/status's features object from a server whose store is st (the
+// modelProvidersStatusSrv wiring).
+func setupFeatureFlagsFrom(t *testing.T, st *siteFeatureStatusStore) map[string]json.RawMessage {
+	t.Helper()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Runner = &fakeRunner{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	w := do(t, New(cfg), http.MethodGet, "/api/v1/setup/status", adminToken, "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /setup/status = %d; body=%s", w.Code, w.Body.String())
 	}
-	var st struct {
+	var status struct {
 		Features map[string]json.RawMessage `json:"features"`
 	}
-	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	return st.Features
+	return status.Features
 }
 
 // wantNoNewSetupFlags fails if flags carries any key the features block adds.
@@ -609,23 +640,28 @@ func TestRegisterSiteFeatureRefuses(t *testing.T) {
 // key was unavailable comes on, with no write, once a release can turn the feature on.
 func TestSiteFeatureStoredWhileUnavailableComesOnWhenAvailable(t *testing.T) {
 	const doc = "docs/OPERATIONS.md: a switch stored while its key was unavailable takes effect with no new write"
-	fake := &fakeSiteConfigStore{cfg: siteFeaturesDoc(t, `{"features":{"run_move":{"enabled":true},"org_sites":{"enabled":true}}}`)}
+	stored := siteFeaturesDoc(t, `{"features":{"run_move":{"enabled":true},"org_sites":{"enabled":true}}}`)
+	st := newSiteFeatureStatusStore(stored)
 	withSiteFeatureHooks(t, nil)
 	for _, k := range []siteFeatureKey{featureRunMove, featureOrgSites} {
-		if siteFeatureOn(fake.cfg, k) {
+		if siteFeatureOn(stored, k) {
 			t.Errorf("%s reads on with no hook (%s)", k, doc)
 		}
 	}
-	wantNoNewSetupFlags(t, setupFeatureFlags(t, fake.cfg))
+	wantNoNewSetupFlags(t, setupFeatureFlagsFrom(t, st))
 	withSiteFeatureHooks(t, availableSiteFeatures(featureRunMove, featureOrgSites))
-	flags := setupFeatureFlags(t, fake.cfg)
+	flags := setupFeatureFlagsFrom(t, st)
 	for _, k := range []siteFeatureKey{featureRunMove, featureOrgSites} {
-		if !siteFeatureOn(fake.cfg, k) || string(flags[string(k)]) != "true" {
-			t.Errorf("%s: on %v, setup flag %s, want on with no write (%s)", k, siteFeatureOn(fake.cfg, k), flags[string(k)], doc)
+		if !siteFeatureOn(st.site, k) || string(flags[string(k)]) != "true" {
+			t.Errorf("%s: on %v, setup flag %s, want on with no write (%s)", k, siteFeatureOn(st.site, k), flags[string(k)], doc)
 		}
 	}
-	if fake.putSeen != nil {
-		t.Error("the switch came on through a write")
+	if st.puts != 0 || !reflect.DeepEqual(st.site, stored) {
+		t.Errorf("the server's store saw %d site config writes and holds %+v: the switch came on through a write", st.puts, st.site.FeatureSwitches)
+	}
+	// The no-write check bites: a write through the same store is counted.
+	if _, err := st.PutSiteConfig(context.Background(), stored); err != nil || st.puts != 1 {
+		t.Errorf("a write through the status server's store counted %d (%v), want 1: the no-write check above proves nothing", st.puts, err)
 	}
 }
 

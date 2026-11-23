@@ -267,7 +267,7 @@ func siteFeatureFlags(f SetupFeatures, sc types.SiteConfig, ok bool) SetupFeatur
 	if f.PreviewURLs = siteFeatureOn(sc, featurePreviewURLs); f.PreviewURLs {
 		f.PreviewMaxVisibility = "private" // an absent ceiling reads private
 		if p := siteFeatureSettings(sc).PreviewURLs; p != nil && p.MaxVisibility == "org" {
-			f.PreviewMaxVisibility = "org" // any other stored value, a hand-edited "public" or "bogus" included, reads private; PV-5 adds "public" here
+			f.PreviewMaxVisibility = "org" // any other stored value, a hand-edited "public" or "bogus" included, reads private; a later release adds "public" here
 		}
 	}
 	return f
