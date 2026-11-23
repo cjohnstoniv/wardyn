@@ -54,6 +54,10 @@ type RunFilter struct {
 	// Scope, when set, keeps only the runs whose unit is in it. It applies to the list and to
 	// the hidden-run counts alike, so no count includes a run outside it.
 	Scope *RunUnitScope
+	// AttentionCandidates keeps only the rows that can carry an attention marker: a lost run, a waiting run, or
+	// one with a PENDING approval. It narrows the attention reads' live set and never changes which of those
+	// rows need attention, which the api layer still decides.
+	AttentionCandidates bool
 }
 
 // RunUnitScope is a set of units a run list is limited to: the subtree a portal's pin names. A run with
@@ -144,7 +148,9 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 	if f.Owner != "" {
 		owner := bindArg(args, f.Owner)
 		if f.WithSponsored {
-			clauses = append(clauses, "(created_by = "+owner+" OR created_by IN "+sponsoredServicePrincipalsSQL(owner)+")")
+			// One array, so created_by = ANY(...) is an index condition on agent_runs_created_by_idx: the
+			// OR form walked every run and tested each against a hashed sub-plan. ARRAY(SELECT ...) runs once.
+			clauses = append(clauses, "created_by = ANY(ARRAY["+owner+"::text] || ARRAY"+sponsoredServicePrincipalsSQL(owner)+")")
 		} else {
 			clauses = append(clauses, "created_by = "+owner)
 		}
@@ -177,6 +183,10 @@ func baseWhere(f RunFilter, nonTerminal string, args *[]any) string {
 		clauses = append(clauses, fmt.Sprintf(
 			"(title ILIKE %[1]s ESCAPE '\\' OR task ILIKE %[1]s ESCAPE '\\' OR repo ILIKE %[1]s ESCAPE '\\' OR created_by ILIKE %[1]s ESCAPE '\\')",
 			p))
+	}
+	if f.AttentionCandidates {
+		clauses = append(clauses, "(lost_at IS NOT NULL OR state = '"+string(types.RunWaiting)+
+			"' OR id IN (SELECT run_id FROM approvals WHERE state = '"+string(types.ApprovalPending)+"'))")
 	}
 	return strings.Join(clauses, " AND ")
 }

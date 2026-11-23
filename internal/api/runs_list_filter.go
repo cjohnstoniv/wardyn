@@ -254,6 +254,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	if isNeedsStatus(params.filter.Statuses) {
 		liveFilter := params.filter
 		liveFilter.Statuses = []string{"active"}
+		liveFilter.AttentionCandidates = true
 		live, err := pager.ListRunsFiltered(r.Context(), liveFilter, store.Page{})
 		if err != nil {
 			writeServerError(w, r, "list", err)
