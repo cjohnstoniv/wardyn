@@ -42,8 +42,8 @@ type localWindowSession struct {
 	refusal string // guarded by mu: what the filter refused first, in its fixed words
 }
 
-// localWindow is MethodLocalWindow: the organisation's grant for the connection holding args.Nonce. The
-// nonce is spent by this call whatever it answers.
+// localWindow is MethodLocalWindow: the organisation's grant for the connection holding args.Nonce. Once
+// the call has decoded its arguments and its ref is this runner's, the nonce is spent whatever it answers.
 func (s *Server) localWindow(ctx context.Context, peer *runnerwire.Peer, id uint32, raw json.RawMessage) (any, error) {
 	args, err := decode[runnerwire.LocalWindowArgs](raw)
 	if err != nil {
