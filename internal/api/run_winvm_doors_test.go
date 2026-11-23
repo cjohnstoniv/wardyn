@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -30,19 +31,31 @@ func TestWindowsVMAdminRestartRefused(t *testing.T) {
 	}
 }
 
-// A live egress edit that would revive a Windows VM run's proxy is refused, and replaces no proxy.
+// Every live egress edit of a Windows VM run is refused before it is tried: one a revive would apply, and one a
+// runner that narrows in place would apply. No proxy is replaced or narrowed.
 func TestWindowsVMEgressEditRefused(t *testing.T) {
+	want := func(t *testing.T, name string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusConflict || errorReasonOf(w.Body.String()) != reasonWindowsVMFeatureRefused ||
+			!strings.Contains(w.Body.String(), windowsDeskOnlyMsg("egress edit")) {
+			t.Errorf("%s: egress edit = %d %s, want 409 %s", name, w.Code, w.Body, reasonWindowsVMFeatureRefused)
+		}
+	}
 	f := newEgressEditFixture(t)
 	f.st.run.MachineKind = types.MachineWindowsVM
 	f.run = f.st.run
-	w := f.editEgress(t, `{"deny_hosts":["evil.example"]}`)
-	if w.Code != http.StatusConflict || errorReasonOf(w.Body.String()) != reasonWindowsVMFeatureRefused ||
-		!strings.Contains(w.Body.String(), windowsDeskOnlyMsg("revive")) {
-		t.Errorf("egress edit = %d %s, want 409 %s", w.Code, w.Body, reasonWindowsVMFeatureRefused)
-	}
+	want(t, "by revive", f.editEgress(t, `{"deny_hosts":["evil.example"]}`))
 	if len(f.rr.replaced) != 0 {
-		t.Errorf("ReplaceProxy calls = %d, want none", len(f.rr.replaced))
+		t.Errorf("by revive: ReplaceProxy calls = %d, want none", len(f.rr.replaced))
 	}
+	n := newNarrowFixture(t)
+	n.st.run.MachineKind = types.MachineWindowsVM
+	n.run = n.st.run
+	want(t, "in place", n.editEgress(t, `{"deny_hosts":["evil.example"]}`))
+	if probes, narrows := n.nr.counts(); probes != 0 || narrows != 0 || len(n.rr.replaced) != 0 {
+		t.Errorf("in place: probes %d, narrows %d, replaces %d; want none", probes, narrows, len(n.rr.replaced))
+	}
+	n.nothingChanged(t)
 }
 
 // A token launch is refused, even one that carries the person's own identity: a person's API token, the CLI's

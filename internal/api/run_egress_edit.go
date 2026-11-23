@@ -155,7 +155,7 @@ func (s *Server) handleEditRunEgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, ok := s.getRunAuthorizedBy(w, r, id, s.ownsRunOrSuperAdmin)
-	if !ok {
+	if !ok || windowsVMDoorRefusal(run, "egress edit").write(s, w, r) { // before an in-place narrow, which never revives
 		return
 	}
 	var req egressEditRequest
