@@ -301,6 +301,32 @@ describe("the page at 390 px", () => {
   });
 });
 
+describe("the width edge", () => {
+  it.each([
+    [639, "stacked"],
+    [640, "tabs"],
+  ] as const)("a page %i px wide is laid out as %s", async (px, layout) => {
+    stubWidth(true);
+    widthSpy?.mockReturnValue(px);
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    expect(screen.getByTestId("change-review-page")).toHaveAttribute("data-layout", layout);
+  });
+});
+
+describe("the tab strip", () => {
+  it("moves between the tabs with the arrow keys, and every tab points at the one panel in the page", async () => {
+    renderPage(change());
+    const effect = await screen.findByRole("tab", { name: CHANGE_APPROVALS.TAB_EFFECT });
+    effect.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(await screen.findByRole("tab", { name: CHANGE_REVIEW.IMPACT, selected: true })).toHaveFocus();
+    const panel = screen.getByRole("tabpanel");
+    for (const t of screen.getAllByRole("tab")) expect(t.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: CHANGE_REVIEW.IMPACT }).id);
+  });
+});
+
 describe("deciding", () => {
   it("approving the last approval applies the change, toasts and returns to the queue, sending the reason", async () => {
     approveMock.mockResolvedValue(change({ state: "applied", approvals: undefined }));
@@ -430,6 +456,61 @@ describe("deciding", () => {
     await userEvent.click(approveButton());
     expect(await screen.findByText("The proposer is no longer active. Propose it again.")).toBeInTheDocument();
     expect(screen.queryByTestId("change-stale")).toBeNull();
+  });
+});
+
+describe("focus and failures after a decision", () => {
+  it("opens the note form from the Impact tab by going back to Effect, and gives the controls back after Cancel", async () => {
+    renderPage(change({ approvals: { ...SAMPLE_APPROVALS, viewer: { state: "proposer" } } }), "rory@example.com");
+    await userEvent.click(await screen.findByRole("tab", { name: CHANGE_REVIEW.IMPACT }));
+    await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.ADD }));
+    expect(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: CHANGE_APPROVALS.TAB_EFFECT })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: CHANGE_APPROVALS.WITHDRAW })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.CANCEL }));
+    expect(screen.queryByLabelText(CHANGE_NOTE.WHY_LABEL)).toBeNull();
+    expect(screen.getByRole("button", { name: CHANGE_APPROVALS.WITHDRAW })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
+  });
+
+  it("moves focus to Take back after an approval that leaves the change pending", async () => {
+    approveMock.mockResolvedValue(change());
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    getChangeMock.mockResolvedValue(change({ approvals: { ...SAMPLE_APPROVALS, viewer: { state: "approved", approved_at: aheadByHours(-0.1) } } }));
+    await userEvent.click(approveButton());
+    await waitFor(() => expect(screen.getByRole("button", { name: CHANGE_APPROVALS.TAKE_BACK })).toHaveFocus());
+  });
+
+  it("moves focus back to the buttons after a take-back", async () => {
+    const mine = change({ approvals: { ...SAMPLE_APPROVALS, viewer: { state: "approved", approved_at: aheadByHours(-0.2) } } });
+    takeBackMock.mockResolvedValue(change());
+    renderPage(mine);
+    const takeBack = await screen.findByRole("button", { name: CHANGE_APPROVALS.TAKE_BACK });
+    getChangeMock.mockResolvedValue(change());
+    await userEvent.click(takeBack);
+    await waitFor(() => expect(rejectButton()).toHaveFocus());
+  });
+
+  it("moves focus to the banner when a refusal finds the change decided", async () => {
+    approveMock.mockRejectedValue(new HttpError(409, "No longer waiting.", "governance_change_not_pending"));
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    getChangeMock.mockResolvedValue(change({ state: "rejected", approvals: undefined }));
+    await userEvent.click(approveButton());
+    await waitFor(() => expect(screen.getByTestId("change-decided")).toHaveFocus());
+  });
+
+  it("keeps the refusal on screen above the error when the read after a 409 fails", async () => {
+    approveMock.mockRejectedValue(new HttpError(409, "The change moved under you.", "governance_change_stale"));
+    renderPage(change());
+    await screen.findByTestId("change-approvals");
+    getChangeMock.mockRejectedValue(new HttpError(500, "the store is unavailable", "store_unavailable"));
+    await userEvent.click(approveButton());
+    expect(await screen.findByText("the store is unavailable")).toBeInTheDocument();
+    const alert = screen.getByText("The change moved under you.");
+    expect(alert).toBeInTheDocument();
+    expect(follows(alert, screen.getByText("the store is unavailable"))).toBe(true);
   });
 });
 

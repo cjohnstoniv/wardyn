@@ -37,6 +37,7 @@ import { NotFoundPage } from "../../wardyn/not-found-page";
 import { usePrincipal } from "../../wardyn/operator-context";
 import { ErrorState, failureSentence } from "../../wardyn/states";
 import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
+import { PageTabs, pageTabPanelProps } from "../../wardyn/page-tabs";
 import { ChangeApprovalsPanel } from "./change-approvals-panel";
 import { ChangeDecisionFooter } from "./change-decision-footer";
 import { ChangeNoteForm } from "./change-note-form";
@@ -121,6 +122,8 @@ export function ChangeReviewPage() {
   const [busy, setBusy] = React.useState(false);
   const [refused, setRefused] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState(false);
+  // A decision, a take-back or a refusal replaced the control that had focus: put focus on what took its place.
+  const [refocus, setRefocus] = React.useState(false);
   // A decision answered 409 governance_change_stale: stale for every kind, whatever the impact route replays.
   const [staleSeen, setStaleSeen] = React.useState(false);
 
@@ -163,16 +166,36 @@ export function ChangeReviewPage() {
     };
   }, [reviewable, id]);
 
+  React.useEffect(() => {
+    if (!refocus || busy || !root) return;
+    const target =
+      root.querySelector<HTMLElement>('[data-testid="change-decision-bar"] button:not([disabled])') ??
+      root.querySelector<HTMLElement>('[data-testid="change-decided"]');
+    target?.focus();
+    setRefocus(false);
+  }, [refocus, busy, root, change]);
+
+  // The server's sentence for a refused decision, shown as it came, wherever the page ends up.
+  const refusedNote = refused ? (
+    <Note tone="red" role="alert">
+      <b className="font-semibold">{CHANGES.DECIDE_REFUSED_TITLE}</b>
+      <Mono className="text-inherit">{refused}</Mono>
+    </Note>
+  ) : null;
+
   if (missing) return <NotFoundPage admin />;
   if (loadError !== null) {
     return (
-      <ErrorState
-        message={loadError}
-        onRetry={() => {
-          setLoadError(null);
-          void reload();
-        }}
-      />
+      <div className="space-y-4">
+        {refusedNote}
+        <ErrorState
+          message={loadError}
+          onRetry={() => {
+            setLoadError(null);
+            void reload();
+          }}
+        />
+      </div>
     );
   }
   if (!change) return <p role="status" className="p-6 text-body text-muted-foreground">{CHANGE_APPROVALS.LOADING}</p>;
@@ -191,6 +214,7 @@ export function ChangeReviewPage() {
         if (out.state === "pending") {
           setReason("");
           await reload();
+          setRefocus(true);
         } else void navigate(QUEUE);
       } else {
         await api.rejectChange(change.id, reason.trim());
@@ -203,6 +227,7 @@ export function ChangeReviewPage() {
       if (e instanceof HttpError && e.status === 409) {
         if (e.reason === "governance_change_stale") setStaleSeen(true);
         await reload();
+        setRefocus(true);
       }
     } finally {
       setBusy(false);
@@ -216,6 +241,7 @@ export function ChangeReviewPage() {
       await api.takeBackApproval(change.id);
       toast.success(CHANGE_APPROVALS.TOAST_TAKEN_BACK);
       await reload();
+      setRefocus(true);
     } catch (e) {
       setRefused(e instanceof HttpError ? e.message : getErrorMessage(e));
     } finally {
@@ -384,21 +410,24 @@ export function ChangeReviewPage() {
       refused={refused}
       pinned={pinned}
       hasNote={hasNote}
-      onEditNote={() => setEditing(true)}
+      onEditNote={() => {
+        // The note form is drawn in the Effect tab: show it, whichever tab the button was clicked from.
+        setTab("effect");
+        setEditing(true);
+      }}
       onApprove={() => void decide(true)}
       onReject={() => void decide(false)}
       onTakeBack={() => void takeBack()}
     />
   ) : (
     <>
-      {decidedNote && <Note>{decidedNote}</Note>}
-      {/* A refusal that moved the change out of waiting still says what the server said. */}
-      {refused && (
-        <Note tone="red" role="alert">
-          <b className="font-semibold">{CHANGES.DECIDE_REFUSED_TITLE}</b>
-          <Mono className="text-inherit">{refused}</Mono>
-        </Note>
+      {decidedNote && (
+        <div data-testid="change-decided" tabIndex={-1} className="outline-none">
+          <Note>{decidedNote}</Note>
+        </div>
       )}
+      {/* A refusal that moved the change out of waiting still says what the server said. */}
+      {refusedNote}
     </>
   );
   const panel = deciding && <ChangeApprovalsPanel change={change} principal={principal} />;
@@ -454,26 +483,14 @@ export function ChangeReviewPage() {
           requestBody
         ) : (
           <>
-            <div role="tablist" aria-label={CHANGE_APPROVALS.TABS_LABEL} className="flex gap-1 border-b border-border">
-              {TABS.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  role="tab"
-                  id={`change-tab-${t.id}`}
-                  aria-selected={tab === t.id}
-                  aria-controls={`change-panel-${t.id}`}
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    "-mb-px border-b-2 px-3 py-2 text-body",
-                    tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground",
-                  )}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-            <div role="tabpanel" id={`change-panel-${tab}`} aria-labelledby={`change-tab-${tab}`} className="space-y-4">
+            <PageTabs
+              value={tab}
+              onValueChange={setTab}
+              tabs={TABS.map((t) => ({ value: t.id, label: t.label }))}
+              label={CHANGE_APPROVALS.TABS_LABEL}
+              idPrefix="change"
+            />
+            <div {...pageTabPanelProps("change", tab)} className="space-y-4">
               {tab === "effect" && (
                 <>
                   {verdict}
