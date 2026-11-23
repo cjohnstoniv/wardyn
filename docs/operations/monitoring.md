@@ -104,7 +104,7 @@
 
 ## Substrate and sweep health
 
-- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it.
+- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it where `readinessProbe.path` is `/readyz`; the default is `/healthz`.
 - A substrate fault that pulled every replica out of the Service would take the console down with them, and the console is the one place the fault is visible.
 - A broken substrate and a stalled sweep show instead on two gauges and on one `/setup/status` row, `substrate_health`, which an operator sees and a member does not.
 

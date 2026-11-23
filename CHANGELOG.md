@@ -11,6 +11,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Helm chart: the readiness probe now reads `/healthz` by default instead of `/readyz`. A Postgres outage that
+  refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
+  its database banner. `/readyz` still pings Postgres.
+
+### Before you upgrade
+
+- Helm chart: to keep readiness on Postgres, set `readinessProbe.path: /readyz`. A values file or `--set` that names a
+  path keeps it, and `helm upgrade --reuse-values` keeps the previous release's `/readyz`. To see the path in use:
+  `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
