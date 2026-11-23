@@ -903,7 +903,7 @@ func TestAttachAuthority_RevokeInsideTheWindowEndsAtOnce(t *testing.T) {
 			rig.budget(time.Hour, 3*authorityTick)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
-			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
+			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 3 })
 			_ = rig.rev.RevokeSub(context.Background(), holderOwner)
 			rig.rev.setFail(0)
 			wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
@@ -970,6 +970,7 @@ func TestAttachAuthority_UnmeetableRestrictionEndsAtOnce(t *testing.T) {
 	rig.budget(time.Hour, 10*time.Millisecond)
 	restriction := uuid.New()
 	rig.srv.cfg.Store = &unmeetableStore{authorityUnits: rig.units, id: restriction}
+	socks := rig.pairWatched(t, "cookie", rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 	rig.ast.mu.Lock()
 	rig.run.OperatorOwned, rig.run.RestrictionIDs = false, []uuid.UUID{restriction}
 	rig.ast.runs[rig.run.ID] = rig.run
@@ -980,7 +981,6 @@ func TestAttachAuthority_UnmeetableRestrictionEndsAtOnce(t *testing.T) {
 	if err := check(context.Background()); !errors.Is(err, errAttachAuthorityEnded) || errors.Is(err, errSessionUnconfirmed) {
 		t.Fatalf("ticket lane check = %v, want a refusal that is not unconfirmed", err)
 	}
-	socks := rig.pairWatched(t, "cookie", rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 	wantClosedWith(t, socks, attachAuthEndedCode, attachAuthEndedReason)
 	noUnconfirmedRows(t, rig.audit)
 }
@@ -994,7 +994,7 @@ func TestAttachAuthority_SocketEndingInsideAWindowWritesClosed(t *testing.T) {
 			rig.budget(time.Hour, 3*authorityTick)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
 			rig.rev.setFail(1 << 30)
-			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 2 })
+			waitFor(t, "the window to open on both sockets", func() bool { return rig.rev.failedReads() >= 3 })
 			for _, ws := range socks {
 				_ = ws.c.Close(websocket.StatusNormalClosure, "bye")
 			}

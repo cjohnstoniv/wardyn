@@ -965,6 +965,7 @@ func (s *macUnmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) (
 // macWindowCheck sends on as a server error) is a refusal at a window's re-check, never unread.
 func TestMacWindowRecheck_UnmeetableRestrictionIsNotUnread(t *testing.T) {
 	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test = ptr(time.Hour) // the window's watch then reads no budget from the store swapped below
 	w := r.mustOpen()
 	rid := uuid.New()
 	r.h.srv.cfg.Store = &macUnmeetableStore{macWindowStore: r.st, id: rid}
