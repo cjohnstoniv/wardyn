@@ -124,10 +124,10 @@ func TestReachOf(t *testing.T) {
 	}
 }
 
-// TestChangeViewRedactsForTheReader: every read and decision answer of a held change goes through
-// writeChangeView, so a pending change under the approval rules is served with its diff as the reader may see
-// it. A unit admin reads no host path and no belongs_by, a security admin no host path, and a super admin the
-// stored diff whole.
+// TestChangeViewRedactsForTheReader: writeChangeView, the GET, take-back and recorded-approval answer of a
+// held change, serves a pending change under the approval rules with its diff as the reader may see it. A unit
+// admin reads no host path and no belongs_by, a security admin no host path, and a super admin the stored diff
+// whole.
 func TestChangeViewRedactsForTheReader(t *testing.T) {
 	const planted = "/srv/planted-host-path"
 	s, _ := govCovServer(t, &govCovStore{})

@@ -643,7 +643,8 @@ type approvalsRead struct {
 }
 
 // writeChangeView answers 200 with the change in GET's shape: its diff as the reader may see it
-// (changeForRead), redacted here on the one path every read and decision answer takes. A pending change under
+// (changeForRead), redacted here for the GET, take-back and recorded-approval answers; every other writer of a
+// held change calls changeForRead itself. A pending change under
 // the approval rules carries the approvals block, built from one rolled-back read transaction over the stored
 // change; every other change is exactly as it was.
 func (s *Server) writeChangeView(w http.ResponseWriter, r *http.Request, ch types.GovernanceChange) {
