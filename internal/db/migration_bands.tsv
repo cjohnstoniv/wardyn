@@ -1,0 +1,17 @@
+# Migration number bands: which 4-digit prefixes each release line numbers its new migrations from.
+# Read by scripts/check-migration-numbers.sh, scripts/lib/migration-overlap.py and the internal/db band tests.
+# Columns, tab-separated:
+#   first last  the band's prefix range. Every prefix below the first band is the closed pre-band sequence.
+#   open        yes while the band takes new files on the branches below.
+#   branches    comma-separated base-branch globs; the first is the line's own branch.
+#   follows     the first prefix of the band that is complete before this band's first file exists, or -.
+#               It counts only while that band's open column is no: while main still numbers from it, a new file
+#               can land there after this band has started.
+#               Two bands where neither follows the other can reach a database in either order.
+#   tags        the tag glob of the line that owns the band: a byte-for-byte copy of one of its files is a
+#               forward-port and keeps its number on any branch. - when no release line owns the band.
+# The commit that opens 0.12 on main sets the 0400 row to no and the 0700 row to yes.
+0300	0399	yes	release/0.10,train/0.10.*	-	v0.10.*
+0400	0599	yes	main,train/0.11-*	-	-
+0600	0699	yes	release/0.11,train/0.11.*	0400	v0.11.*
+0700	9999	no	main,train/0.12-*	0400	-
