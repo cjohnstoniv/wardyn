@@ -124,5 +124,8 @@ func (s *Server) runWatcherTick(ctx context.Context, lastUndispatched *time.Time
 	// Support grants: lapsed, expired and run-over ones end, each end no route audited gets its one row, and
 	// this replica's audit window is re-read.
 	pass("support grant sweep", s.sweepSupportGrants(ctx))
+	// Member drive deletes left held on a Docker volume or a Kubernetes claim, retried by the leader only: the
+	// substrate is reachable from every replica, and each attempt is audited.
+	pass("held member drive delete retry", s.sweepHeldMemberDriveDeletes(ctx))
 	return first
 }

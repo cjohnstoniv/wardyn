@@ -477,10 +477,10 @@ func fenceAgeMark(e *queueEnv, drive uuid.UUID) {
 	e.exec(`UPDATE user_drives SET delete_started_at = now() - interval '61 seconds' WHERE id = $1`, drive)
 }
 
-// A claim whose cleanup never ran (the process stopped between the end and its cleanup) stays hidden from its owner
-// and counts against the limit; the administrator's list shows it Deleting, and the administrator's delete is
-// refused until the mark is a minute old and then finishes it. Row 12, today's behaviour.
-func TestPG_DriveFence_StuckClaimIsHiddenAndAnAdminFinishesIt(t *testing.T) {
+// A claim whose cleanup never ran (the process stopped between the end and its cleanup) is listed to its owner as
+// Deleting, is not attachable, and counts against the limit; the administrator's list shows it Deleting too, and the
+// administrator's delete is refused until the mark is a minute old and then finishes it. Row 12.
+func TestPG_DriveFence_StuckClaimShowsDeletingAndAnAdminFinishesIt(t *testing.T) {
 	e, pool := keepEnv(t, 3)
 	ctx := context.Background()
 	var calls atomic.Int32
@@ -498,12 +498,15 @@ func TestPG_DriveFence_StuckClaimIsHiddenAndAnAdminFinishesIt(t *testing.T) {
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &cat) != nil {
 		t.Fatalf("GET /me/drives = %d %s", w.Code, w.Body)
 	}
-	listed := map[string]bool{}
+	reasons := map[string]string{}
 	for _, d := range cat.Drives {
-		listed[d.ID] = true
+		reasons[d.ID] = d.UnavailableReason
 	}
-	if !listed[control.ID.String()] || listed[drive.String()] {
-		t.Errorf("the owner's catalogue lists the control drive = %v and the stuck claim = %v; want true and false", listed[control.ID.String()], listed[drive.String()])
+	if r, ok := reasons[control.ID.String()]; !ok || r != "" {
+		t.Errorf("the owner's catalogue lists the control drive = %v with reason %q; want listed with none", ok, r)
+	}
+	if r, ok := reasons[drive.String()]; !ok || r != client.MeDriveUnavailableDeleting {
+		t.Errorf("the owner's catalogue lists the stuck claim = %v with reason %q; want listed as %q", ok, r, client.MeDriveUnavailableDeleting)
 	}
 	if cat.Create == nil || cat.Create.Count != 2 {
 		t.Errorf("the owner's drive count = %+v, want 2 (the stuck claim counts against the limit)", cat.Create)

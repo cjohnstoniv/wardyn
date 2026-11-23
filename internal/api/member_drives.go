@@ -503,7 +503,8 @@ func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDr
 // absent, record-only), the claim's clearing (a refusal before any call, or a definitive refusal after it that
 // touched nothing), the claim left for the Mac's sweep, or nothing, which leaves the drive deleting: a call was
 // made and its outcome is not known. The one physical call is made only after IssueMemberDriveDelete committed
-// for this exact pair, so a retry, a duplicate or a claim taken over never makes a second call.
+// for this exact pair, so a retry, a duplicate or a claim taken over never makes a second call. A sweep's claim
+// (mac_reconnect, retry_sweep) is never cleared: its next pass meets the mark again.
 func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string) memberDriveDeletion {
 	// Past the claim the delete finishes even if the caller goes away, so
 	// the row is always removed or settled and the attempt audited.
@@ -568,7 +569,7 @@ func (s *Server) deleteMemberDrive(ctx context.Context, ms store.MemberDriveStor
 // settleMemberDriveDelete applies what deleteMemberDrive found to the claim (started, d.DeleteIssues).
 func (s *Server) settleMemberDriveDelete(ctx context.Context, ms store.MemberDriveStore, d types.UserDrive, started time.Time, by string, res *memberDriveDeletion) {
 	claimN := d.DeleteIssues
-	sweep := by == memberDriveByMacReconnect
+	sweep := by == memberDriveByMacReconnect || by == memberDriveByRetrySweep
 	var err error
 	if res.reason == "" && res.outcome != string(runner.DriveReclaimDeleted) && res.outcome != string(runner.DriveReclaimAlreadyAbsent) {
 		// Both reclaim paths end here. A reply with no outcome, or one this server does not know (a Mac's
