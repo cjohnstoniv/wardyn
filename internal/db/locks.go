@@ -27,6 +27,13 @@ package db
 // would hand the lock to an unrelated request, and borrowing from the request
 // pool let slow guarded work starve the queries it guards. The number of
 // concurrent holds is bounded by LockPoolMaxConns (docs/ENV.md).
+//
+// A run's start lock (RunStartLockClass) taken with no hold on its context is
+// the exception: it takes the fence path (locks_fence.go), whose holds share
+// LockFenceConns connections per locker, take no LockPoolMaxConns slot and only
+// ever try, polling while the key is held elsewhere. A writer that ends a run
+// takes the same key with LockQueued, which queues in Postgres on a connection
+// of its own, so a stream of starts cannot starve it.
 
 import (
 	"context"
@@ -162,6 +169,7 @@ var LockWait = 30 * time.Second
 // a lock beyond it waits LockPoolAcquireWait and is then refused. Nested locks
 // share their caller's connection, so this bounds concurrent guarded
 // operations, not locks. Set once at boot from WARDYN_LOCK_POOL_MAX_CONNS, before the first LockerFor; default 8.
+// A run's start lock on the fence path takes no slot (LockFenceConns).
 var LockPoolMaxConns = 8
 
 // LockPoolAcquireWait bounds the wait for one of the LockPoolMaxConns slots.
@@ -340,8 +348,9 @@ func callerNames(pcs []uintptr) string {
 
 // PGLocker is the Postgres-backed Locker.
 type PGLocker struct {
-	cfg *pgx.ConnConfig
-	sem chan struct{}
+	cfg   *pgx.ConnConfig
+	sem   chan struct{}
+	fence fenceSet // run start locks (locks_fence.go)
 }
 
 var pgLockers sync.Map // *pgxpool.Pool -> *PGLocker
@@ -359,7 +368,9 @@ func LockerFor(pool *pgxpool.Pool) *PGLocker {
 
 // NewPGLocker is a locker of its own with size connection slots (tests).
 func NewPGLocker(pool *pgxpool.Pool, size int) *PGLocker {
-	return &PGLocker{cfg: lockConnConfig(pool.Config().ConnConfig), sem: make(chan struct{}, size)}
+	l := &PGLocker{cfg: lockConnConfig(pool.Config().ConnConfig), sem: make(chan struct{}, size)}
+	l.fence.cfg = l.cfg
+	return l
 }
 
 // Keepalives on a lock connection free a session lock whose holder vanished without closing its socket
@@ -412,6 +423,10 @@ type lockConn struct {
 	// session no longer holds what it took. A release never ends it.
 	lost context.Context
 	lose context.CancelCauseFunc
+	// fence: a shared connection of the fence path, whose statements are stmts and whose watcher starts once.
+	fence     bool
+	stmts     fenceStmts
+	watchOnce sync.Once
 }
 
 func (c *lockConn) close() {
@@ -421,6 +436,9 @@ func (c *lockConn) close() {
 		return
 	}
 	c.closed = true
+	if c.conn == nil { // a test's fake fence connection
+		return
+	}
 	bg, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	// Unlock first so the lock is free the moment the call returns, not when
@@ -536,15 +554,38 @@ func LockHeld(ctx context.Context) error {
 }
 
 func (l *PGLocker) Lock(ctx context.Context, k LockKey, wait time.Duration) (context.Context, func(), error) {
-	lctx, release, _, err := l.lock(ctx, k, wait, false)
+	lctx, release, _, err := l.lock(ctx, k, wait, false, false)
 	return lctx, release, err
 }
 
 func (l *PGLocker) TryLock(ctx context.Context, k LockKey) (context.Context, func(), bool, error) {
-	return l.lock(ctx, k, 0, true)
+	return l.lock(ctx, k, 0, true, false)
 }
 
-func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try bool) (context.Context, func(), bool, error) {
+// LockQueued is Lock for a writer that ends a run: it queues in Postgres (a blocking pg_advisory_lock on its own
+// connection, or nested on ctx's hold), never the fence's try-and-poll, so a stream of starts cannot starve it.
+// A Locker without a queued path takes k with Lock.
+func LockQueued(ctx context.Context, l Locker, k LockKey, wait time.Duration) (context.Context, func(), error) {
+	if q, ok := l.(interface {
+		LockQueued(context.Context, LockKey, time.Duration) (context.Context, func(), error)
+	}); ok {
+		return q.LockQueued(ctx, k, wait)
+	}
+	return l.Lock(ctx, k, wait)
+}
+
+// LockQueued is the dialled path for k even when k is a run's start lock: with a live hold on ctx it nests on that
+// hold's connection (the fence path on a fence hold, as Lock), otherwise it takes a LockPoolMaxConns slot, dials a
+// connection and waits in Postgres's queue for k. A queued writer is ahead of every later try of k, so it gets k at
+// the next release.
+func (l *PGLocker) LockQueued(ctx context.Context, k LockKey, wait time.Duration) (context.Context, func(), error) {
+	lctx, release, _, err := l.lock(ctx, k, wait, false, true)
+	return lctx, release, err
+}
+
+// lock takes k: nested on ctx's live hold, on the fence path for a run's start lock that is not queued, or on a
+// connection of its own.
+func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try, queued bool) (context.Context, func(), bool, error) {
 	if h := heldFrom(ctx); h != nil && h.conn != nil && !h.conn.isClosed() {
 		return l.nest(ctx, h, k, wait, try)
 	}
@@ -552,6 +593,9 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 	// of this locker: start from nothing.
 	if _, err := checkLockOrder(nil, k); err != nil {
 		return ctx, nil, false, err
+	}
+	if k.Class == RunStartLockClass && !queued {
+		return l.fence.take(ctx, k, wait, try)
 	}
 
 	acquire := time.NewTimer(LockPoolAcquireWait)
@@ -611,14 +655,21 @@ func (l *PGLocker) lock(ctx context.Context, k LockKey, wait time.Duration, try 
 	return hctx, release, true, nil
 }
 
-// nest takes k on the caller's own connection.
+// nest takes k on the caller's own connection. On a fence hold only a further start lock may be taken, on the fence
+// path; any other class is out of order.
 func (l *PGLocker) nest(ctx context.Context, h *holds, k LockKey, wait time.Duration, try bool) (context.Context, func(), bool, error) {
+	if h.conn.fence && k.Class != RunStartLockClass {
+		return ctx, nil, false, fmt.Errorf("%w: %v taken while holding a run's start lock", ErrLockOrder, k)
+	}
 	reentrant, err := checkLockOrder(h.keys, k)
 	if err != nil {
 		return ctx, nil, false, err
 	}
 	if reentrant {
 		return ctx, func() {}, true, nil
+	}
+	if h.conn.fence {
+		return l.fence.nest(ctx, h, k, wait, try)
 	}
 	budget := wait
 	if try || budget <= 0 {
