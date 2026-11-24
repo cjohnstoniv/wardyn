@@ -34,6 +34,7 @@ var k8sEnvRead = []string{
 	"WARDYN_RUNNERD_HARD_DENY_CIDRS",
 	"WARDYN_RUNNERD_POD_SELECTOR",
 	"WARDYN_RUNNERD_WORKLOAD_NAMESPACES",
+	"WARDYN_RUNNERD_DRIVES",
 	archEnv,
 	"WARDYN_CONFINEMENT_MAP",
 	"WARDYN_K8S_READ_NODES",
@@ -51,6 +52,7 @@ type k8sEnv struct {
 	podSelector                       map[string]string
 	confinement                       map[types.ConfinementClass]string
 	linuxVM                           bool // WARDYN_RUNNER_LINUX_VM=1: offer Linux VM sandboxes as CC3 pods
+	drives                            bool // WARDYN_RUNNERD_DRIVES=1: mount drives kept on this runner (the chart's drives.enabled)
 	// workloadNamespaces are the namespaces watched for WardynWorkload resources (design T3 §2.5);
 	// none leaves the workload path off.
 	workloadNamespaces []string
@@ -134,6 +136,12 @@ func readK8sEnv(environ []string) (k8sEnv, error) {
 		e.linuxVM = v == "1"
 	default:
 		errs = append(errs, fmt.Errorf("WARDYN_RUNNER_LINUX_VM: want 1 or unset, got %q", v))
+	}
+	switch v := env["WARDYN_RUNNERD_DRIVES"]; v {
+	case "", "1":
+		e.drives = v == "1"
+	default:
+		errs = append(errs, fmt.Errorf("WARDYN_RUNNERD_DRIVES: want 1 or unset, got %q", v))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return k8sEnv{}, fmt.Errorf("runner k8s settings: %w", err)

@@ -110,6 +110,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 	drv, err = k8s.NewRunner(substrate.Deps{ProxyImage: opts.proxyImage, ConfinementRuntimes: env.confinement, Record: record}, func(c *k8s.Config) {
 		c.Namespaces = opts.runsNamespaces
 		c.RunnerID = runnerID
+		c.Drives = env.drives
 		c.ControlPlaneRelay = relay.Ensure
 		c.RunnerdPeer = &k8s.RunnerdPeer{Namespace: ownNS, PodLabels: env.podSelector, RelayPort: env.relayPort, SinkPort: env.sink}
 		c.TrustedCAPEM = opts.trustedCA
@@ -173,6 +174,7 @@ func k8sRunnerHooks(ctx context.Context, identity runneridentity.Identity, state
 		linuxVM:        linuxVM,
 		report:         connectReport{log: opts.offline},
 		runsNamespaces: opts.runsNamespaces,
+		drives:         env.drives,
 		workloadStatus: workloads.statusFunc(),
 		netPolWatch:    drv.OnNetPolChange,
 	})
