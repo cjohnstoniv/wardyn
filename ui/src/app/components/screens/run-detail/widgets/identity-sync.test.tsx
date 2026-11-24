@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { aheadByHours } from "../../../../lib/test-clock";
 import type { AuditEvent, RunDetail } from "../../../../lib/types";
 import { RUN_SYNC } from "../../../wardyn/copy/runners";
 import { SyncRows, syncDirs } from "./identity-sync";
@@ -18,7 +19,7 @@ afterEach(cleanup);
 const CAP = "This sync session reached its 512.0 MB limit for sending in, set by the Platform unit (locked)";
 const ended = (data: Record<string, unknown>): AuditEvent => ({
   id: "e1",
-  time: "2026-11-23T14:31:00Z",
+  time: aheadByHours(-1),
   actor_type: "human",
   actor: "dana",
   action: "ssh.sync.transfer",
