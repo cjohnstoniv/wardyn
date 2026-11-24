@@ -159,13 +159,15 @@ func TestRelay_EndToEndOverLoopback(t *testing.T) {
 	}
 }
 
-// getRunCounter counts the run reads one request makes, and the grant reads. While fail is set a run read
-// answers an error.
+// getRunCounter counts the run reads one request makes, and the grant reads: all of them (grants), and those
+// a via_org request's own grant check makes (viaOrgGrants, viaOrgGrant's read, which a run's via_org state holds).
+// While fail is set a run read answers an error.
 type getRunCounter struct {
 	store.PG
-	n      atomic.Int32
-	grants atomic.Int32
-	fail   atomic.Bool
+	n            atomic.Int32
+	grants       atomic.Int32
+	viaOrgGrants atomic.Int32
+	fail         atomic.Bool
 }
 
 func (c *getRunCounter) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
@@ -178,6 +180,9 @@ func (c *getRunCounter) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRu
 
 func (c *getRunCounter) ListGrantsByRun(ctx context.Context, id uuid.UUID) ([]types.CredentialGrant, error) {
 	c.grants.Add(1)
+	if inStack("viaOrgGrant") {
+		c.viaOrgGrants.Add(1)
+	}
 	return c.PG.ListGrantsByRun(ctx, id)
 }
 

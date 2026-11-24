@@ -295,5 +295,6 @@ func ProxySettingsOf(c proxy.Config) ProxyConfig {
 		MCPApproveEach:     c.MCPApproveEach,
 		LLMHeaders:         c.LLMHeaders,
 		NoNetwork:          c.NoNetwork,
+		PushHoldRemovals:   c.PushHoldRemovals,
 	}
 }

@@ -344,18 +344,21 @@ func TestSupportTerminalRowsNameTheEntry(t *testing.T) {
 }
 
 // (e) and (f): a revoke or an expiry (the test clock) closes an open terminal with 4401 within an authority
-// tick, and so does a grant read that fails (fail closed). A grant that stays live leaves it open.
+// tick. A grant read that fails rides the session budget; at a budget of 0 it closes the terminal at that
+// check (fail closed) with the reconnecting 1013. A grant that stays live leaves it open.
 func TestSupportTerminalClosesWhenTheGrantStopsAuthorizing(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		stop func(*supportTermRig)
+		code websocket.StatusCode
 	}{
-		{"revoked", func(r *supportTermRig) { r.endGrant("revoked") }},
-		{"expired", func(r *supportTermRig) { r.st.tick(31 * time.Minute) }},
-		{"a failed grant read", func(r *supportTermRig) { r.st.failOn("SupportGrantLive", errors.New("database down")) }},
+		{"revoked", func(r *supportTermRig) { r.endGrant("revoked") }, attachAuthEndedCode},
+		{"expired", func(r *supportTermRig) { r.st.tick(31 * time.Minute) }, attachAuthEndedCode},
+		{"a failed grant read", func(r *supportTermRig) { r.st.failOn("SupportGrantLive", errors.New("database down")) }, websocket.StatusTryAgainLater},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, "terminal")
+			rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // a grant read that fails ends the terminal at its first check
 			end := rig.open(rig.ticket(supportHelperSub, true), false)
 			select {
 			case err := <-end:
@@ -363,8 +366,8 @@ func TestSupportTerminalClosesWhenTheGrantStopsAuthorizing(t *testing.T) {
 			case <-time.After(5 * authorityTick):
 			}
 			tc.stop(rig)
-			if code, _ := wantClosed(t, end); code != attachAuthEndedCode {
-				t.Fatalf("closed with %d, want %d", code, attachAuthEndedCode)
+			if code, _ := wantClosed(t, end); code != tc.code {
+				t.Fatalf("closed with %d, want %d", code, tc.code)
 			}
 		})
 	}
