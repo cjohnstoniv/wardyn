@@ -5,7 +5,9 @@ package guestagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -85,7 +87,7 @@ func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
 			{"/usr/sbin/chown", "root:admin", stage},
 			{"/bin/chmod", "0775", stage},
 			{"/bin/rm", "-rf", MacApplications + "/Tool.app"},
-			{"/usr/bin/ditto", stage, MacApplications},
+			{"/usr/bin/ditto", "--noacl", stage, MacApplications},
 		}},
 		{"dmg", []string{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Tool.app"}, [][]string{
 			{"/bin/rm", "-rf", stage},
@@ -115,6 +117,22 @@ func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("an unreadable stage stops before any removal or copy", func(t *testing.T) {
+		rig := newToolsRig(t)
+		var ran [][]string
+		rig.t.listDir = func(string) ([]string, error) { return nil, errors.New("stage unreadable") }
+		rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
+			ran = append(ran, argv)
+			return nil, 0, nil
+		}
+		if w := rig.exec("/usr/bin/ditto", "-x", "-k", E+"/item.zip", MacApplications); w.Code != http.StatusInternalServerError {
+			t.Fatalf("answer = %d %s, want 500", w.Code, w.Body)
+		}
+		if slices.ContainsFunc(ran, func(a []string) bool { return strings.HasPrefix(a[len(a)-1], MacApplications) }) {
+			t.Errorf("ran %q, want no removal or copy in /Applications", ran)
+		}
+	})
 
 	t.Run("a failed chown stops before the copy", func(t *testing.T) {
 		rig := newToolsRig(t)

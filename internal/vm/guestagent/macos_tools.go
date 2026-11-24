@@ -900,7 +900,7 @@ func appInstallSteps(argv []string) []installStep {
 		stage = filepath.Dir(argv[3]) + "/" + itemAppStage
 		unpack = installStep{argv: []string{"/usr/bin/ditto", "-x", "-k", argv[3], stage}}
 		clearOld = installStep{clearOld: stage}
-		place = installStep{argv: []string{"/usr/bin/ditto", stage, MacApplications}}
+		place = installStep{argv: []string{"/usr/bin/ditto", "--noacl", stage, MacApplications}} // keeps /Applications' own ACL
 		top = []installStep{{argv: []string{"/usr/sbin/chown", "root:admin", stage}}, {argv: []string{"/bin/chmod", "0775", stage}}}
 	case len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(filepath.Base(argv[1])) &&
 		isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+filepath.Base(argv[1]):
