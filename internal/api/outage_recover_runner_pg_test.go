@@ -157,3 +157,57 @@ func TestRunnerState_HeldRunDoesNotNeedLoss_PG(t *testing.T) {
 	ohRequireReady(t, f, run, false, "held by its runner's window")
 	ohRequireUnmarked(t, f.st, f.srv.cfg.Audit.(*syncAudit), run, "the held run")
 }
+
+// A held run whose runner reports its proxy stopped is held no longer, by the sweeps as by the STATE judge: the
+// offline sweep marks it lost, and the runner's next page is READY. Nothing waits for the hold to run out, with the
+// runner not ready and its other held runs refused with it.
+func TestOfflineFromRunner_HeldRunWithStoppedProxyIsMarkedLost_PG(t *testing.T) {
+	f := ohRunnerFixture(t)
+	run := ohRunnerRun(t, f, 70*time.Minute, ohPauses)
+	ohOpenWindow(t, f.st, store.OutageKindRunnerLink, &f.rn.ID, 70*time.Minute)
+	ohRequireReady(t, f, run, false, "the proxy up")
+
+	ohRequireNeedsLoss(t, f, run, true, "the proxy stopped")
+	if rc := ohCheck(t, f.st, run.ID); rc.Held {
+		t.Fatal("the sweeps still hold a run whose runner reports its proxy stopped")
+	}
+	ohOfflineSweep(t, f)
+	ohRequireMarked(t, f.st, run, "the held run with its proxy stopped")
+	ohRequireReady(t, f, run, true, "after the loss mark")
+}
+
+// The STATE judge and the sweeps read one hold: for each report of a held run, the judge asks for the run's loss
+// exactly when the sweeps' recovery check no longer holds it.
+func TestRunnerState_JudgeAndSweepsAgreeOnTheHold_PG(t *testing.T) {
+	stopped := time.Now().Add(-time.Second)
+	for _, tc := range []struct {
+		name string
+		held bool
+		row  func(run types.AgentRun) runnerwire.RunState
+	}{
+		{"the proxy up", true, func(run types.AgentRun) runnerwire.RunState {
+			return runnerwire.RunState{RunID: run.ID, Ref: run.SandboxRef, SandboxPresent: true}
+		}},
+		{"the proxy stopped", false, func(run types.AgentRun) runnerwire.RunState {
+			return runnerwire.RunState{RunID: run.ID, Ref: run.SandboxRef, SandboxPresent: true, ProxyStoppedAt: &stopped}
+		}},
+		{"containment pending", false, func(run types.AgentRun) runnerwire.RunState {
+			return runnerwire.RunState{RunID: run.ID, Ref: run.SandboxRef, SandboxPresent: true,
+				ContainmentPending: &runnerwire.ContainmentPending{Kind: "agent_only", Since: time.Now().Add(-time.Minute)}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := ohRunnerFixture(t)
+			run := ohRunnerRun(t, f, 70*time.Minute, ohPauses)
+			ohOpenWindow(t, f.st, store.OutageKindRunnerLink, &f.rn.ID, 70*time.Minute)
+			if err := finalStatePage(t, f.srv, f.rn.ID, tc.row(run)); err != nil && !errors.Is(err, store.ErrRunnerReconciliationRequired) {
+				t.Fatalf("STATE page = %v", err)
+			}
+			needs, _ := ohObservation(t, f, run)
+			held := ohCheck(t, f.st, run.ID).Held
+			if held != tc.held || needs == held {
+				t.Fatalf("the sweeps hold the run: %v (want %v); the judge asks for its loss: %v (want %v)", held, tc.held, needs, !tc.held)
+			}
+		})
+	}
+}

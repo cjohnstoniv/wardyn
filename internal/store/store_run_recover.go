@@ -64,16 +64,25 @@ const storeRecoveringTerm = "<store_recovering>"
 // tokenExpirySQL is E, a run token's expiry: its database stamp plus the token's lifetime.
 var tokenExpirySQL = fmt.Sprintf(`a.token_renewed_at + interval '%d seconds'`, int(identity.RunTokenTTL/time.Second))
 
+// runnerReportsProxyDownSQL is TRUE for an agent_runs row (alias a) whose runner's latest STATE report of it, on its
+// current session (runner_inventory_observations), has its proxy stopped or holds it containment pending. Nothing can
+// recover such a run's proxy. The STATE judge stores each report before it judges it (intakeRunnerStateRow), so the
+// judge and the sweeps read the same report.
+const runnerReportsProxyDownSQL = `EXISTS (SELECT 1 FROM runner_inventory_observations o WHERE o.runner_id = a.runner_id
+	AND o.run_id = a.id AND (o.assertion->>'proxy_stopped_at' IS NOT NULL OR jsonb_typeof(o.assertion->'containment_pending') = 'object'))`
+
 // recoveryHeldSQL is the one hold predicate with every duration filled in at package init, over agent_runs a LEFT JOIN
 // run_outage_terms t. A run is held while its proxy pauses, its lineage is not cut, its strict allowance (if strict)
-// is not spent, its token expired under 24 h ago, its runner does not hold it contained, and an outage covers its
-// expiry: the store tracker recovering, a recorded window that ended under OutageRecoveryGrace ago, or a heartbeat gap
-// still open that began OutageCoverLead before the expiry (the cp_outage window the next beat writes).
+// is not spent, its token expired under 24 h ago, its runner does not hold it contained or report its proxy down, and
+// an outage covers its expiry: the store tracker recovering, a recorded window that ended under OutageRecoveryGrace
+// ago, or a heartbeat gap still open that began OutageCoverLead before the expiry (the cp_outage window the next beat
+// writes).
 var recoveryHeldSQL = fmt.Sprintf(`COALESCE((COALESCE(t.proxy_pauses, false)
 	AND COALESCE(a.token_jti, '') NOT LIKE '%[1]s%%'
 	AND (NOT t.strict OR clock_timestamp() <= a.token_renewed_at + make_interval(secs => t.allowance_s))
 	AND clock_timestamp() <= a.token_renewed_at + interval '%[2]d seconds'
 	AND NOT (%[3]s)
+	AND NOT %[11]s
 	AND (%[4]s
 	     OR EXISTS (SELECT 1 FROM outage_windows w WHERE %[5]s
 	        AND COALESCE(w.ended_at, clock_timestamp()) > clock_timestamp() - interval '%[6]d seconds')
@@ -89,7 +98,8 @@ var recoveryHeldSQL = fmt.Sprintf(`COALESCE((COALESCE(t.proxy_pauses, false)
 	int(ControlPlaneGapOver/time.Second),
 	"("+tokenExpirySQL+")",
 	int(OutageCoverLead/time.Second),
-	int(OutageCoverSlack/time.Second))
+	int(OutageCoverSlack/time.Second),
+	runnerReportsProxyDownSQL)
 
 // recoveryHeldExpr is the one hold predicate (recoveryHeldSQL), with storeRecovering the SQL boolean for "the store
 // health tracker is recovering": a placeholder, or "false" where the tracker is not known (the STATE judge).

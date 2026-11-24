@@ -221,14 +221,16 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 	if err != nil {
 		return false, false, nil, err
 	}
+	// The report is stored before it is judged: the recovery hold (runnerReportsProxyDownSQL) reads the runner's latest
+	// report of the run, here as in the sweeps. Its verdict columns are written below.
+	if _, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion) VALUES($1,$2,$3)`, runnerID, row.RunID, assertion); err != nil {
+		return false, false, nil, err
+	}
 	containment, needsLoss, err := s.reconcileRunnerStateRowTx(ctx, tx, runnerID, row)
 	if errors.Is(err, ErrNotFound) {
 		// No org row: contain the asserted subject per run, so one erased run
 		// never refuses the page for the runner's other runs.
-		if needs, capped, err = assertedSubjectTx(ctx, tx, runnerID, row); err != nil {
-			return false, false, nil, err
-		}
-		_, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion) VALUES($1,$2,$3)`, runnerID, row.RunID, assertion)
+		needs, capped, err = assertedSubjectTx(ctx, tx, runnerID, row)
 		return needs, capped, nil, err
 	}
 	if err != nil {
@@ -264,7 +266,7 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 		return false, false, nil, err
 	}
 	needsLoss = needsLoss || gone
-	if _, err = tx.Exec(ctx, `INSERT INTO runner_inventory_observations(runner_id,run_id,assertion,containment,needs_loss) VALUES($1,$2,$3,$4,$5)`, runnerID, row.RunID, assertion, proof, needsLoss); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE runner_inventory_observations SET containment=$3, needs_loss=$4 WHERE runner_id=$1 AND run_id=$2`, runnerID, row.RunID, proof, needsLoss); err != nil {
 		return false, false, nil, err
 	}
 	_, err = tx.Exec(ctx, `UPDATE runner_inventory_candidates SET seen=true WHERE runner_id=$1 AND run_id=$2`, runnerID, row.RunID)

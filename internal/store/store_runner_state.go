@@ -53,11 +53,10 @@ func (s PG) reconcileRunnerStateRowTx(ctx context.Context, tx pgx.Tx, runnerID u
 	}
 	// A timestamp is an assertion, never an ACK: H3's exact action reconciliation
 	// alone clears pending_runner. Live missing sandboxes also require recovery.
-	// A lapsed run held for its proxy to recover (#4082, recoveryHeldExpr) is not a fault while its runner reports the
-	// sandbox and its proxy still up and nothing pending containment: the runner may become ready, and the proxy's
-	// recovery reaches the control plane through it. The hold ends on its own, and the next report or lapse sweep then
-	// marks the run as before.
-	held = held && row.SandboxPresent && row.ProxyStoppedAt == nil && row.ContainmentPending == nil
+	// A lapsed run held for its proxy to recover (#4082, recoveryHeldExpr) is not a fault: the runner may become ready,
+	// and the proxy's recovery reaches the control plane through it. The hold reads this report, stored before the
+	// judge runs, so a report of the proxy stopped or containment pending ends it here and in the sweeps alike. The hold
+	// ends on its own otherwise, and the next report or lapse sweep then marks the run as before.
 	needsLoss := run.State == types.RunRunning && run.LostAt == nil && ((lapsed && !held) || !row.SandboxPresent)
 	return request, needsLoss, nil
 }
@@ -115,7 +114,7 @@ const goneClaimableSQL = `a.state='RUNNING' AND ` + HoldsSandboxSQL + `
 // still reports absent at least $2 (RunnerSandboxGoneAfter) after its first absent report, and that a
 // gone mark may land on. It reads o.needs_loss, so intakeRunnerStateRow runs runnerSandboxGoneTx after
 // syncRunContainmentPendingTx (this report's containment row is the one goneClaimableSQL checks) and
-// before its observation insert (the row's needs_loss carries the gone verdict).
+// before it writes the observation's verdict (the row's needs_loss carries the gone verdict).
 const goneConfirmedSQL = `a.sandbox_absent_at IS NOT NULL AND ` + goneClaimableSQL + `
 	AND EXISTS (SELECT 1 FROM runner_inventories i JOIN runner_inventory_observations o ON o.runner_id=i.runner_id
 		WHERE i.runner_id=$1 AND o.run_id=a.id AND o.needs_loss AND i.created_at >= a.sandbox_absent_at + $2::interval)`
