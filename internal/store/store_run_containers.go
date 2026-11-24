@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -33,10 +32,8 @@ func insertRunContainers(ctx context.Context, q queryRower, runID uuid.UUID, cs 
 	return nil
 }
 
-// RunContainers reads a run's extras; none is nil, nil. A role refused the read that also lacks INSERT on the table
-// (a split-role app role the migrator's grant loop missed) can have written no row, so it reads none rather than
-// failing every start (runContainersUnwritable); any other failure is returned, so a run's extras are never
-// silently dropped.
+// RunContainers reads a run's extras; none is nil, nil. A table the role cannot read is an error, never none: rows
+// another role wrote may be there, so dispatch and revive refuse rather than run without the extras.
 func (s PG) RunContainers(ctx context.Context, runID uuid.UUID) ([]types.RunExtraContainer, error) {
 	var doc []byte
 	err := s.Pool.QueryRow(ctx, `SELECT containers FROM run_containers WHERE run_id = $1`, runID).Scan(&doc)
@@ -44,9 +41,6 @@ func (s PG) RunContainers(ctx context.Context, runID uuid.UUID) ([]types.RunExtr
 		return nil, nil
 	}
 	if err != nil {
-		if none, perr := s.runContainersUnwritable(ctx, err); none || perr != nil {
-			return nil, perr
-		}
 		return nil, fmt.Errorf("store: read run containers: %w", err)
 	}
 	var out []types.RunExtraContainer
@@ -54,20 +48,4 @@ func (s PG) RunContainers(ctx context.Context, runID uuid.UUID) ([]types.RunExtr
 		return nil, fmt.Errorf("store: decode run containers: %w", err)
 	}
 	return out, nil
-}
-
-// runContainersUnwritable reports whether err, a statement's failure on run_containers, is the privilege refusal of
-// a role that cannot INSERT into the table either, so it can have written no row and the statement is skipped. Only
-// SQLSTATE 42501 (insufficient_privilege) asks; a role with INSERT, or any other failure, answers false. A failed
-// privilege read is returned.
-func (s PG) runContainersUnwritable(ctx context.Context, err error) (bool, error) {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
-		return false, nil
-	}
-	var ok bool
-	if err := s.Pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'run_containers', 'INSERT')`).Scan(&ok); err != nil {
-		return false, fmt.Errorf("store: read the run containers privilege: %w", err)
-	}
-	return !ok, nil
 }

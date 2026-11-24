@@ -7,12 +7,14 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -127,11 +129,10 @@ func TestPG_RunContainersCascade(t *testing.T) {
 	}
 }
 
-// TestPG_RunContainersWithoutTheGrant: a role refused the read that has no INSERT on run_containers either (a
-// split-role app role the grant loop missed) reads none, so a start does not fail; a role that can select but not
-// insert reads the rows that exist; a role that can insert but not select fails, so stored extras are never
-// silently dropped; with both it reads them. The erasure blank skips the table for the role without INSERT instead
-// of failing.
+// TestPG_RunContainersWithoutTheGrant: a role refused the read (a split-role app role the grant loop missed) gets
+// an error, never none, since rows another role wrote may be there; the erasure blank fails the same way. A role
+// that can select but not insert reads the rows that exist; one that can insert but not select fails; with both it
+// reads them.
 func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -156,12 +157,13 @@ func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 	t.Cleanup(restricted.Close)
 	pg := store.NewPG(restricted)
 
-	if got, err := pg.RunContainers(ctx, r.ID); err != nil || got != nil {
-		t.Errorf("read without INSERT = %+v, %v; want none and no error", got, err)
+	var pgErr *pgconn.PgError
+	if got, err := pg.RunContainers(ctx, r.ID); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Errorf("read without any grant = %+v, %v; want an error with code 42501", got, err)
 	}
 	exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends, run_harnesses TO ` + role)
-	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); err != nil {
-		t.Errorf("erasure blank without INSERT on run_containers: %v; want it skipped", err)
+	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Errorf("erasure blank without access to run_containers: %v; want it to fail with code 42501", err)
 	}
 	exec(`GRANT SELECT ON run_containers TO ` + role)
 	if got, err := pg.RunContainers(ctx, r.ID); err != nil || len(got) != len(r.Containers) {

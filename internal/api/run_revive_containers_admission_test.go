@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -28,10 +29,11 @@ const (
 type extrasReviveStore struct {
 	*reviveStore
 	extras []types.RunExtraContainer
+	err    error
 }
 
 func (s *extrasReviveStore) RunContainers(context.Context, uuid.UUID) ([]types.RunExtraContainer, error) {
-	return s.extras, nil
+	return s.extras, s.err
 }
 
 // extrasReviveFixture is reviveAdmissionFixture's pinned, enforced run that also keeps one extra at
@@ -72,6 +74,16 @@ func TestReviveImageAdmission_ExtraContainersAreRechecked(t *testing.T) {
 			t.Fatalf("revive = %d %s; want 403 %s naming containers[0].image, with the revive sentence", code, body, reasonImageSignatureMissing)
 		}
 		f.assertReviveRefused(t, reasonImageSignatureMissing)
+	})
+	t.Run("extras unreadable", func(t *testing.T) {
+		a := &fakeAdmitter{}
+		f := extrasReviveFixture(t, types.ImageAdmissionEnforce, a)
+		f.srv.cfg.Store.(*extrasReviveStore).err = errors.New("permission denied for table run_containers")
+		code, body := f.reviveAs(t, true)
+		if code != http.StatusServiceUnavailable || !strings.Contains(body, reasonReviveOwnerAuthorityUnreadable) {
+			t.Fatalf("revive = %d %s, want 503 %s", code, body, reasonReviveOwnerAuthorityUnreadable)
+		}
+		f.assertReviveRefused(t, reasonReviveOwnerAuthorityUnreadable)
 	})
 	t.Run("audit", func(t *testing.T) {
 		a := &fakeAdmitter{}
