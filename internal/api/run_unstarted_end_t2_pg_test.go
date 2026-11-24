@@ -395,6 +395,12 @@ func t2Dispatch1(t *testing.T, kind types.MachineKind, c t2Dispatch) t2Dispatche
 	f.srv.cfg.Runner = t2Reclaimer{fake, reclaims}
 	f.reportCaps(t, true)
 	ctx := t.Context()
+	if kind == types.MachineMacOSVM {
+		// A macOS run needs a managed device: the dispatch floor refuses it on any other class.
+		if _, _, err := f.st.SetRunnerTrustClass(ctx, f.rn.ID, types.RunnerTrustManagedDevice, "t2", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	run := f.startingRun(t, func(r *types.AgentRun) {
 		r.State, r.MachineKind, r.Interactive = types.RunPending, kind, true
 	})
