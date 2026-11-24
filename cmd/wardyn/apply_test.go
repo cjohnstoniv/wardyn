@@ -729,6 +729,8 @@ func TestRefusedLaunchSaysWhatKeepsRunning(t *testing.T) {
 		{"first apply", sdk.Workload{Name: "web"}, "no run was started"},
 		{"its run had ended", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunCompleted)}, "no run was started"},
 		{"its run is live", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunRunning)}, "the previous run keeps running"},
+		{"its service run had ended", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunFailed) + "/unknown"}, "no run was started"},
+		{"its service run is live", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunRunning) + "/healthy"}, "the previous run keeps running"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			answer := replyJSON(http.StatusOK, sdk.WorkloadApplyResult{Workload: tc.w, Outcome: sdk.WorkloadCreated, Launch: refused})

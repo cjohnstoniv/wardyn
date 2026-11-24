@@ -19,7 +19,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Fixed
 
 - `wardyn run logs --follow` against a server older than 0.9.4 says it needs 0.9.4 or later, instead of printing the trail once and then nothing (#4146).
-- `wardyn run logs --follow` reads a quiet run less often: the wait doubles from `--interval` up to 10 seconds and returns to `--interval` once anything new arrives, and each read after the first asks for 20 events instead of the server's default 1,000. A quiet minute now costs the server under a third of the requests and a tenth of the rows (#4147).
+- `wardyn run logs --follow` reads a quiet run less often: the wait doubles from `--interval` up to 10 seconds and returns to `--interval` once anything new arrives, and each read after the first asks for 20 events instead of the server's default 1,000. On a run with a long trail, a quiet minute now costs the server under a third of the requests and a tenth of the rows (#4147).
 - The CLI's version notice prints nothing when it cannot tell which of the two versions is newer, instead of the advice for a newer server (#4155).
 - The Windows installer, `install-cli.ps1`, puts `wardyn.exe` back when the swap fails or is interrupted, and a run after one that stopped mid-swap restores the parked `wardyn.exe.old` before it downloads anything (#4156).
 - The Helm chart's probes use HTTPS when the server serves TLS itself, that is when `WARDYN_TLS_CERT` and `WARDYN_TLS_KEY` are both set by a value or a `valueFrom`. A name-only `extraEnv` entry counts as unset. Before, such a pod never became ready (#4158).

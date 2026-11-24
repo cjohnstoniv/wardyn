@@ -316,6 +316,8 @@ awk '/if \(-not \(Test-Path \$target\) -and \(Test-Path \$old\)\)/{if(!p)p=NR} /
   || fail "install-cli.ps1: a parked wardyn.exe.old is not put back before the first download"
 awk '/^    try \{$/{t=NR} /Move-Item -Force -Path \$target -Destination \$old/{k=NR} /Move-Item -Force -Path \$stage -Destination \$target/{s=NR} /^    \} finally \{$/{f=NR} /Move-Item -Force -Path \$old -Destination \$target/{r=NR} END{exit !(t && k && s && f && r && t<k && k<s && s<f && f<r)}' "$PS1_SCRIPT" \
   || fail "install-cli.ps1: the park and the move are not inside one try whose finally restores wardyn.exe"
+grep -qF 'if (-not $swapped -and -not (Test-Path $target) -and (Test-Path $old)) {' "$PS1_SCRIPT" \
+  || fail "install-cli.ps1: the finally restores wardyn.exe.old even after a good swap"
 grep -qF 'matches the SHA256SUMS list that cosign verified' "$PS1_SCRIPT" || fail "install-cli.ps1 lost the signed-list checksum line"
 pass "install-cli.ps1 carries the same checks (parsed by pwsh when present)"
 

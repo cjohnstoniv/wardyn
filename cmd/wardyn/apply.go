@@ -183,7 +183,8 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 // refusalLeft says what a refused launch left running, from the workload as the answer reads it: its current run
 // while that run has not ended, and nothing when it has none (a first apply, or a restart after its run ended).
 func refusalLeft(w sdk.Workload) string {
-	if w.RunID != nil && !types.RunState(w.State).IsTerminal() {
+	state, _, _ := strings.Cut(w.State, "/") // a service workload's state carries its health after a slash
+	if w.RunID != nil && !types.RunState(state).IsTerminal() {
 		return "the previous run keeps running"
 	}
 	return "no run was started"
