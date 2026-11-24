@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -439,4 +440,61 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 	if runs, queued := f.count(`SELECT count(*) FROM agent_runs`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
 		t.Errorf("a queued fill left %d runs and %d queue rows", runs, queued)
 	}
+}
+
+// TestDriveSeed_PostCreateCheckEndsRun_PG: a created run whose grants are not exactly the own-token git_pat is ended
+// KILLED and answered 422 with the run id, audited refused with that run; a kill whose teardown fails answers the
+// kill route's 500 with the run id and writes its run.revoke failure row.
+func TestDriveSeed_PostCreateCheckEndsRun_PG(t *testing.T) {
+	t.Run("the fold dropped the grant", func(t *testing.T) {
+		f := newFillPG(t)
+		defer func() { driveFillBeforeCreate = func() {} }()
+		driveFillBeforeCreate = func() { f.h.srv.cfg.DefaultPolicy.EligibleGrants = nil }
+		w := f.fill()
+		f.wantReason(w, http.StatusUnprocessableEntity, reasonDriveSeedOwnCredentialRequired)
+		var id string
+		if err := f.pool.QueryRow(context.Background(), `SELECT id::text FROM agent_runs`).Scan(&id); err != nil || !strings.Contains(w.Body.String(), id) {
+			t.Fatalf("run id %q (%v) is not in the answer %s", id, err, w.Body.String())
+		}
+		if state := f.count(`SELECT count(*) FROM agent_runs WHERE state = 'KILLED'`); state != 1 {
+			t.Errorf("killed runs = %d, want the fill's run", state)
+		}
+		rows := f.rows("drive.seed")
+		if len(rows) != 1 || rows[0].Outcome != "failure" || rows[0].RunID == nil || rows[0].RunID.String() != id {
+			t.Errorf("drive.seed rows = %+v, want one refused with the run %s", rows, id)
+		}
+	})
+	t.Run("the teardown fails", func(t *testing.T) {
+		f := newFillPG(t)
+		f.h.srv.cfg.Runner = &failTeardownRunner{fillPGRunner: f.rn}
+		defer func() { driveFillBeforeCreate = func() {} }()
+		driveFillBeforeCreate = func() { f.h.srv.cfg.DefaultPolicy.EligibleGrants = nil }
+		w := f.fill()
+		var got struct {
+			ID     uuid.UUID `json:"id"`
+			State  string    `json:"state"`
+			Reason string    `json:"reason"`
+		}
+		if w.Code != http.StatusInternalServerError || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.State != string(types.RunKilled) || got.ID == uuid.Nil {
+			t.Fatalf("fill = %d %s, want the kill route's 500 with the run id and KILLED", w.Code, w.Body.String())
+		}
+		if n := len(f.rows("run.revoke")); n != 1 {
+			t.Errorf("run.revoke rows = %d, want 1", n)
+		}
+		var data map[string]any
+		rows := f.rows("drive.seed")
+		if len(rows) != 1 || json.Unmarshal(rows[0].Data, &data) != nil || data["reason"] != "internal" || rows[0].RunID == nil || *rows[0].RunID != got.ID {
+			t.Errorf("drive.seed rows = %+v, want one refused, reason internal, with the run", rows)
+		}
+	})
+}
+
+// failTeardownRunner cannot stop or kill a sandbox.
+type failTeardownRunner struct{ *fillPGRunner }
+
+func (failTeardownRunner) StopSandbox(context.Context, string) error {
+	return errors.New("teardown failed")
+}
+func (failTeardownRunner) KillSandbox(context.Context, string) error {
+	return errors.New("teardown failed")
 }

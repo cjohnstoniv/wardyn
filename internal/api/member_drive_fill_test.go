@@ -377,3 +377,72 @@ func TestDriveSeedTask_QuotesValues(t *testing.T) {
 		t.Fatalf("a value ran as a command")
 	}
 }
+
+// fillGrantSpec is a git_pat grant over scope.
+func fillGrantSpec(t *testing.T, kind types.GrantKind, ownerOnly bool, scope types.GitPATScope) types.CredentialGrant {
+	t.Helper()
+	raw, err := json.Marshal(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.CredentialGrant{Spec: types.GrantSpec{Kind: kind, OwnerOnly: ownerOnly, Scope: raw}}
+}
+
+// TestDriveSeed_GrantsCheck: the read-back of a fill's grants holds only for exactly one git credential, the own-token
+// git_pat, owner-only, for the clone's path, with read access; other kinds are the workspace's and are not judged.
+func TestDriveSeed_GrantsCheck(t *testing.T) {
+	const repo = "org/name"
+	own := types.GitHubOwnTokenSecretName("gh-own")
+	good := types.GitPATScope{Host: "github.com", SecretName: own, Repos: types.PATRepoSet(driveFillRepoPath(repo)), Access: types.PATAccessRead}
+	with := func(f func(*types.GitPATScope)) types.GitPATScope {
+		sc := good
+		f(&sc)
+		return sc
+	}
+	apiKey := types.CredentialGrant{Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: json.RawMessage(`{"host":"api.example","header":"x"}`)}}
+	for _, tc := range []struct {
+		name   string
+		grants []types.CredentialGrant
+		want   bool
+	}{
+		{"the own token", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, good)}, true},
+		{"plus an api_key of the workspace", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, good), apiKey}, true},
+		{"none", nil, false},
+		{"only an api_key", []types.CredentialGrant{apiKey}, false},
+		{"two git kinds", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, good), {Spec: types.GrantSpec{Kind: types.GrantSSHKey}}}, false},
+		{"two git_pat grants", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, good), fillGrantSpec(t, types.GrantGitPAT, true, good)}, false},
+		{"a GitHub App token", []types.CredentialGrant{{Spec: types.GrantSpec{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{}`)}}}, false},
+		{"not owner-only", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, false, good)}, false},
+		{"a shared secret name", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, with(func(s *types.GitPATScope) { s.SecretName = "git-pat-github-com" }))}, false},
+		{"the old repos value for a bare slug", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, with(func(s *types.GitPATScope) { s.Repos = types.PATRepoSet(repo) }))}, false},
+		{"no repos", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, with(func(s *types.GitPATScope) { s.Repos = nil }))}, false},
+		{"two repos", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, with(func(s *types.GitPATScope) { s.Repos = types.PATRepoSet("org/name.git", "org/x.git") }))}, false},
+		{"write access", []types.CredentialGrant{fillGrantSpec(t, types.GrantGitPAT, true, with(func(s *types.GitPATScope) { s.Access = "write" }))}, false},
+		{"an undecodable scope", []types.CredentialGrant{{Spec: types.GrantSpec{Kind: types.GrantGitPAT, OwnerOnly: true, Scope: json.RawMessage(`[1]`)}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := driveFillGrantsOK(tc.grants, repo); got != tc.want {
+				t.Errorf("driveFillGrantsOK = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDriveSeed_GrantRepoCoversTheClone: the composed grant's repos entry covers the URL the run clones, for a bare
+// slug, an https locator and one ending .git; the bare slug itself does not cover a bare slug's clone.
+func TestDriveSeed_GrantRepoCoversTheClone(t *testing.T) {
+	pair := types.GitPATScope{Host: "github.com", SecretName: "git-pat-github-com"}
+	for _, repo := range []string{"org/name", "https://github.com/org/name", "https://github.com/org/name.git"} {
+		var sc types.GitPATScope
+		if err := json.Unmarshal(driveFillGrant(pair, repo).Scope, &sc); err != nil {
+			t.Fatal(err)
+		}
+		if !patScopeCoversRepo(sc, repoCloneURL(repo)) {
+			t.Errorf("%s: the scope %v does not cover the clone %s", repo, *sc.Repos, repoCloneURL(repo))
+		}
+	}
+	old := types.GitPATScope{Host: "github.com", SecretName: "x", Repos: types.PATRepoSet("org/name")}
+	if patScopeCoversRepo(old, repoCloneURL("org/name")) {
+		t.Errorf("a scope for org/name covers the bare slug's clone %s; the proxy compares the path exactly", repoCloneURL("org/name"))
+	}
+}

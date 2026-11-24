@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -20,6 +22,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/lifecycle"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -164,7 +167,65 @@ func (s *Server) handleFillMyDrive(w http.ResponseWriter, r *http.Request) {
 		s.driveFillAnswer(w, r, &d, req, driveFillFault("read the fill run", err))
 		return
 	}
+	grants, err := s.cfg.Store.ListGrantsByRun(ctx, run.ID)
+	if err != nil || !driveFillGrantsOK(grants, req.Repo) {
+		s.driveFillEndRun(w, r, &d, req, run)
+		return
+	}
 	s.driveFillAccepted(w, r, &d, req, run, plan)
+}
+
+// driveFillGrantsOK reads the run's grants back: exactly one git, GitHub-App or ssh credential, and it is the own
+// token git_pat the fill composed. Other kinds, such as a required integration's api_key, are the workspace's and
+// are not judged here.
+func driveFillGrantsOK(grants []types.CredentialGrant, repo string) bool {
+	var git []types.GrantSpec
+	for _, g := range grants {
+		switch g.Spec.Kind {
+		case types.GrantGitPAT, types.GrantGitHubToken, types.GrantSSHKey:
+			git = append(git, g.Spec)
+		}
+	}
+	if len(git) != 1 || git[0].Kind != types.GrantGitPAT || !git[0].OwnerOnly {
+		return false
+	}
+	sc, err := types.DecodeGitPATScope(git[0].Scope)
+	if err != nil || !types.IsGitHubOwnTokenSecret(sc.SecretName) || sc.Access != types.PATAccessRead {
+		return false
+	}
+	return sc.Repos != nil && len(*sc.Repos) == 1 && (*sc.Repos)[0] == driveFillRepoPath(repo)
+}
+
+// driveFillEndRun ends a fill's run that did not get exactly the own-token grant, as the kill route does, and answers
+// the person. A kill that did not apply, or whose teardown failed, is a fault the person sees with the run id.
+func (s *Server) driveFillEndRun(w http.ResponseWriter, r *http.Request, d *types.UserDrive, req client.MemberDriveSeedRequest, run createRunResponse) {
+	ctx, id := r.Context(), run.ID
+	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
+	cascadeCtx = withKillConfirm(cascadeCtx)
+	killerType, killer := actorFromRequest(r)
+	applied, killData, err := s.killLiveRun(cascadeCtx, run.AgentRun, killerType, killer, false)
+	switch {
+	case err != nil || !applied:
+		if err == nil {
+			err = errors.New("the run changed state before the fill could end it")
+		}
+		s.driveFillAnswer(w, r, d, req, &driveSeedRefusal{err: err, op: "end the fill run", reason: "internal", runID: &id})
+	case len(killData) > 0:
+		s.recordAudit(cascadeCtx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.revoke",
+			id.String(), "failure", mustJSON(lifecycle.WithFailedSteps(killData))))
+		s.auditDriveSeed(r, d, req, "refused", "internal", &id)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"id":     id,
+			"state":  types.RunKilled,
+			"errors": slices.Sorted(maps.Keys(killData)), // step names only; the text is in the run.revoke row
+			"reason": reasonInternalError,
+			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
+		})
+	default:
+		s.driveFillAnswer(w, r, d, req, &driveSeedRefusal{status: http.StatusUnprocessableEntity,
+			reason: reasonDriveSeedOwnCredentialRequired, msg: driveFillEndedMsg(id), runID: &id})
+	}
 }
 
 // driveFillAccepted audits and answers a fill whose run was created. Accepted means the run was created and is
@@ -558,6 +619,10 @@ func driveFillNoOwnTokenMsg() string {
 
 func driveFillWouldDropMsg(repo string) string {
 	return fmt.Sprintf("Your organisation's policy would not give this run the GitHub token for %s. Ask an admin.", repo)
+}
+
+func driveFillEndedMsg(id uuid.UUID) string {
+	return fmt.Sprintf("Wardyn could not give this run only your own GitHub token, so it ended run %s. Ask an admin.", id)
 }
 
 func driveFillNoBaseImageMsg() string {
