@@ -433,6 +433,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 		wp.GitPatBrokerEnabled = &on
 		cfg.WorkspaceProviders = &wp
 	}
+	cfg.Runners = withDenialList(cfg.Runners) // after the ETag, which hashes the stored document
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -853,6 +854,7 @@ func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
 		wp.GitPatBrokerEnabled = &on
 		saved.WorkspaceProviders = &wp
 	}
+	saved.Runners = withDenialList(saved.Runners)
 	return saved
 }
 

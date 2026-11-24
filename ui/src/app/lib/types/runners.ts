@@ -10,6 +10,7 @@
 
 import type { MacVMCaps } from "./runner-macvm";
 import type { ConfinementClass } from "./runs";
+import type { MachineKindDenial } from "./site";
 
 /** Go: types.RunnerState. */
 export type RunnerState = "unclaimed" | "claimed" | "revoked";
@@ -250,6 +251,8 @@ export interface RunnerSettingsRequest {
   // An empty string clears; set both or clear both.
   mdm_device_ca_pem?: string;
   mdm_device_crl_url?: string;
+  // The whole denial list, replacing the stored one; [] clears it.
+  machine_kind_denials?: readonly MachineKindDenial[];
 }
 
 /** `GET /runners?state=`; the default is active. */
