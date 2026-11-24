@@ -44,7 +44,7 @@ func TestRunnerLabelCmd(t *testing.T) {
 	}
 
 	n := len(clear.reqs)
-	for _, bad := range [][]string{{"label", id.String(), "cluster"}, {"label", "not-a-uuid", "a=b"}} {
+	for _, bad := range [][]string{{"label", id.String(), "cluster"}, {"label", id.String(), "cluster=a", "cluster=b"}, {"label", "not-a-uuid", "a=b"}} {
 		if err := execCmd(t, append(append([]string{"runner"}, bad...), "--url", clear.URL, "--token", "t")...); err == nil {
 			t.Errorf("%v was accepted", bad)
 		}

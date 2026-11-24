@@ -133,7 +133,7 @@ A runner carries two sets of labels, each at most 16, in Kubernetes label syntax
 - **Proposed** (`asserted_labels`): what the runner sent at registration, with `wardyn-runnerd register --label key=value` (repeat it) or the chart's `labels` value. It is the runner's own claim, shown and never trusted.
 - **Confirmed** (`labels`): what a security operator wrote, with `wardyn runner label <runner-id> [key=value ...]` or `PUT /api/v1/runners/{id}/labels`. It replaces the whole set, `{}` or no arguments clears it, and it needs a claimed runner. `--accept-proposed` starts from the proposed set. Each change is audited as `runner.label.write`.
 
-Only confirmed labels reach audit: `run.create` and `run.queue.start` record the run's runner's as `runner_labels`, the run read shows the runner's current ones, and the OpenTelemetry export carries them as `wardyn.runner_label.<key>`. A label change never touches a running run. The recommended keys are `cluster` and `region`; any other key is kept and shown.
+Only confirmed labels reach audit: `run.create` and `run.queue.start` record the run's runner's as `runner_labels`, the run read shows the runner's current ones, and the OpenTelemetry export carries them as `wardyn.runner_label.<key>`. A label change never touches a running run. The recommended keys are `cluster` and `region`; any other key works the same way.
 
 A runner proposing labels registers only against a control plane that runs this release: an older one refuses the request.
 

@@ -67,7 +67,7 @@ spec:
             - --name={{ $fullname }}
             - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
             {{- range $k, $v := .Values.labels }}
-            - {{ printf "--label=%s=%s" $k $v | quote }}
+            - {{ printf "--label=%s=%v" $k $v | quote }}
             {{- end }}
             {{- if .Values.trustedCA.configMap }}
             - --trusted-ca-file=/etc/wardyn/trusted-ca/ca.pem

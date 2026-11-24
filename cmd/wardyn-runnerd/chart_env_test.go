@@ -34,7 +34,7 @@ func TestChartSetsOnlyWhatRunnerdReads(t *testing.T) {
 		"--set", "k8s.runtimeClasses.CC2=runsc",
 		"--set", "k8s.linuxVM=true",
 		"--set", "trustedCA.configMap=corp-ca",
-		"--set", "labels.cluster=eu-1",
+		"--set", "labels.cluster=eu-1", "--set", "labels.rack=7", "--set", "labels.gpu=true",
 		"--set", "limits.maxRuns=2", "--set", "limits.totalCPU=4", "--set", "limits.totalMemory=8", "--set", "limits.totalDisk=50",
 		"--set", "limits.perRunCPU=2", "--set", "limits.perRunMemory=4", "--set", "limits.perRunDisk=25",
 	).CombinedOutput()
@@ -94,6 +94,12 @@ func TestChartSetsOnlyWhatRunnerdReads(t *testing.T) {
 		}
 		if !strings.HasPrefix(stateDir, mount+"/") {
 			t.Errorf("%s: --state-dir %q is not a directory below the state volume %q", c.Name, stateDir, mount)
+		}
+	}
+	// A label value that YAML reads as a number or a bool still renders as the text it was written as.
+	for _, want := range []string{"--label=cluster=eu-1", "--label=rack=7", "--label=gpu=true"} {
+		if !slices.Contains(spec.InitContainers[0].Args, want) {
+			t.Errorf("the register container lacks %s: %v", want, spec.InitContainers[0].Args)
 		}
 	}
 	if !slices.Contains(spec.InitContainers[0].Args, "--trusted-ca-file=/etc/wardyn/trusted-ca/ca.pem") {

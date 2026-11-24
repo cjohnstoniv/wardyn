@@ -36,6 +36,12 @@ func TestValidateRunnerLabels_Table(t *testing.T) {
 		{"url value", map[string]string{"cluster": "https://x"}, false},
 		{"colon value", map[string]string{"cluster": "a:b"}, false},
 		{"space value", map[string]string{"cluster": "a b"}, false},
+		{"newline value", map[string]string{"cluster": "eu-1\n"}, false},
+		{"newline key", map[string]string{"cluster\n": "v"}, false},
+		{"NUL value", map[string]string{"cluster": "a\x00b"}, false},
+		{"tab value", map[string]string{"cluster": "a\tb"}, false},
+		{"non-ASCII value", map[string]string{"cluster": "é"}, false},
+		{"non-ASCII key", map[string]string{"é": "v"}, false},
 		{"upper prefix", map[string]string{"Example.com/x": "v"}, false},
 		{"long prefix", map[string]string{strings.Repeat("a.", 127) + "a/x": "v"}, false},
 	} {

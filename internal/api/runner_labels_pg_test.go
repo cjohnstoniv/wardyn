@@ -115,6 +115,21 @@ func TestRunnerLabels_Route_PG(t *testing.T) {
 	if code, got := e.putLabels(e.alice, uuid.New(), body); code != http.StatusNotFound {
 		t.Fatalf("labels on no runner = %d %s, want 404", code, got)
 	}
+	// A revoked runner and a lapsed unclaimed one answer as no runner.
+	revoked := e.claimedRunner("sub-person")
+	if w := e.call(e.alice, http.MethodDelete, "/api/v1/runners/"+revoked.String(), ""); w.Code != http.StatusOK {
+		t.Fatalf("revoke = %d %s", w.Code, w.Body)
+	}
+	if code, got := e.putLabels(e.alice, revoked, body); code != http.StatusNotFound || !strings.Contains(got, "runner_not_found") {
+		t.Fatalf("labels on a revoked runner = %d %s, want 404 runner_not_found", code, got)
+	}
+	lapsed := e.registerWith(e.mintOrg(e.alice).Token)
+	if _, err := e.pool.Exec(context.Background(), `UPDATE runners SET created_at = $2 WHERE id = $1`, lapsed, time.Now().Add(-types.RunnerUnclaimedTTL-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if code, got := e.putLabels(e.alice, lapsed, body); code != http.StatusNotFound || !strings.Contains(got, "runner_not_found") {
+		t.Fatalf("labels on a lapsed unclaimed runner = %d %s, want 404 runner_not_found", code, got)
+	}
 	org := e.registerWith(e.mintOrg(e.alice).Token)
 	if code, got := e.putLabels(e.alice, org, body); code != http.StatusConflict || !strings.Contains(got, "runner_labels_invalid") {
 		t.Fatalf("labels on an unclaimed runner = %d %s, want 409 runner_labels_invalid", code, got)

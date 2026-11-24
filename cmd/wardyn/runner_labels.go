@@ -25,8 +25,8 @@ func runnerLabelCmd(client clientFn) *cobra.Command {
 		given := map[string]string{}
 		for _, a := range args[1:] {
 			k, v, ok := strings.Cut(a, "=")
-			if !ok {
-				return fmt.Errorf("label %q: want key=value", a)
+			if _, dup := given[k]; !ok || dup {
+				return fmt.Errorf("label %q: want key=value, each key once", a)
 			}
 			given[k] = v
 		}

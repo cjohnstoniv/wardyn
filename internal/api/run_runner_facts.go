@@ -16,7 +16,7 @@ import (
 // projectRunnerFacts names the runner of each local run, so the run page and the Runs board can say where
 // a run is and whether that computer is connected. The facts are read at request time and never stored:
 // a runner's row is never renamed and a claimed row is never deleted, so its current name is the name at
-// create, even once the runner is revoked. A runner whose row cannot be read leaves all three facts off
+// create, even once the runner is revoked. A runner whose row cannot be read leaves every fact off
 // that run, never fails the response, and is not read again for another run in the same request.
 func (s *Server) projectRunnerFacts(r *http.Request, runs []types.AgentRun) {
 	rs, ok := s.cfg.Store.(interface {
