@@ -135,8 +135,13 @@ func (s *Server) wallsChainRead(ctx context.Context, run types.AgentRun) ([]type
 }
 
 // unitLeafName is the name of the profile id names and nothing else: no chain is composed and no
-// base is returned, so it is safe for a member surface. store.ErrNotFound when the profile is gone.
+// base is returned, so it is safe for a member surface. store.ErrNotFound when the profile is gone. It reads
+// on the transaction ctx carries (withUnitScopeTx), so a held change's apply never asks the pool.
 func (s *Server) unitLeafName(ctx context.Context, id uuid.UUID) (string, error) {
+	if q, inTx := ctx.Value(unitScopeTxKey{}).(store.Querier); inTx {
+		u, err := store.GetGovernanceUnitQ(ctx, q, id, false)
+		return u.Name, err
+	}
 	chain, err := s.cfg.Store.GetGovernanceUnitChain(ctx, id)
 	if err != nil {
 		return "", err
