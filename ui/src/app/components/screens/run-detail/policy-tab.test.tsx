@@ -816,6 +816,27 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     expect(chips).toHaveLength(2);
   });
 
+  it("puts Agent rules: {harness} on the rows an agent's rules decided, one chip per agent", async () => {
+    const rules = policy({
+      provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" }, push_rules: { layer: "agent_rules", name: "codex-cli" }, first_use_approval: { layer: "deployment" } },
+      wall_preset: undefined,
+    });
+    show(rules);
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Agent rules: claude-code")).toHaveLength(1);
+    expect(inSummary("Agent rules: codex-cli")).toHaveLength(1);
+  });
+
+  it("keeps the wall preset's chip beside an agent's on a row both decided", async () => {
+    const both = policy({ provenance: { allowed_domains: { layer: "wall_preset" }, push_rules: { layer: "agent_rules", name: "claude-code" } } });
+    show(both, { run: withPreset(sealed) });
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Wall preset: Sealed").length).toBeGreaterThan(0);
+    expect(inSummary("Agent rules: claude-code").length).toBeGreaterThan(0);
+  });
+
   it("draws no chip for a personal preset a non-owner reads, which carries its scope alone", async () => {
     show(policy({ wall_preset: { scope: "person" } }), { run: withPreset({ scope: "person" }) });
     await ready();

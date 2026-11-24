@@ -56,6 +56,7 @@ import {
   SheetTitle,
 } from "../ui/sheet";
 import { ConfinementChip, Chip, OperatorOnlyHint } from "../wardyn/primitives";
+import { AgentRulesSection } from "./policies/agent-rules-section";
 import { Field } from "../wardyn/form-primitives";
 import { PolicyPanel, egressSummary, lifecycleSummary, minimalSpec, parseSpec } from "../wardyn/policy-panel";
 import { PolicyDocumentView } from "../wardyn/policy-document/policy-document";
@@ -353,6 +354,8 @@ export function PoliciesScreen() {
           </Table>
         )}
       </div>
+
+      {securityOperator && <AgentRulesSection />}
 
       <PolicyDetail
         policy={policies.find((p) => p.id === selected) ?? null}
