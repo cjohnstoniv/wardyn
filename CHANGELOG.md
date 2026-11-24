@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Governance: writing one person's or group's assignment to a profile no longer waits for an assignment of the same subject to a different profile; two writes of the same assignment still apply one at a time (#3478).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
