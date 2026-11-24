@@ -109,11 +109,11 @@ func BenchmarkAuditAppend_V1VsV2(b *testing.B) {
 	}
 }
 
-// BenchmarkRunnerSpoolIngest_LockShare: how much of a runner's spooled record is spent from the moment its rows
+// BenchmarkRunnerSpoolIngest_LockShare_PG: how much of a runner's spooled record is spent from the moment its rows
 // are ready to be written (after they are masked and sealed) to the commit, which is where the audit chain's
 // lock is waited for and held. It reports that span as a percentage of each record's whole ingest, for one
 // runner and for eight at once.
-func BenchmarkRunnerSpoolIngest_LockShare(b *testing.B) {
+func BenchmarkRunnerSpoolIngest_LockShare_PG(b *testing.B) {
 	const perRunner = 150
 	for _, runners := range []int{1, 8} {
 		b.Run(fmt.Sprintf("runners=%d", runners), func(b *testing.B) {
