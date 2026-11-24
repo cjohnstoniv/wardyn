@@ -80,7 +80,7 @@ func TestMacDiskHold_RefusedAtEveryDoor(t *testing.T) {
 		if ok || rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), reasonDriveInAnotherRun) || !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("mode %d: ok %v, %d %s; want 409 %s %q", mode, ok, rec.Code, rec.Body, reasonDriveInAnotherRun, want)
 		}
-		if n := len(srv.cfg.Audit.(*recRecorder).events); n != 0 {
+		if n := len(srv.cfg.Audit.(*recRecorder).snapshot()); n != 0 {
 			t.Errorf("mode %d: %d audit rows written, want none", mode, n)
 		}
 	}

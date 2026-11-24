@@ -75,7 +75,7 @@ func driveMacDiskElsewhereMsg(name, mac string) string {
 	return fmt.Sprintf("%s is a disk on %s, so only macOS VM runs on %s can use it.", name, mac, mac)
 }
 
-// driveMacDiskInAnotherRunMsg refuses a person's disk drive that another run that has not ended holds (MAC-D04).
+// driveMacDiskInAnotherRunMsg refuses a person's disk drive that another run that has not ended holds.
 func driveMacDiskInAnotherRunMsg(name string) string {
 	return name + " is in another macOS VM on this Mac. A disk drive is in one run at a time: try again when that run ends."
 }
