@@ -19,7 +19,7 @@ import (
 // DELETE under one is a covered change unless auditStrictExcluded names it.
 var auditStrictPrefixes = []string{
 	"/policies", "/governance", "/approvals", "/permissions", "/drives/grants",
-	"/wall-presets", "/templates", "/me/walls",
+	"/wall-presets", "/templates", "/me/walls", "/assistant/settings",
 }
 
 // auditStrictUnderPrefix reports whether route sits under one of auditStrictPrefixes, on a path-segment

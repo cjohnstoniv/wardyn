@@ -764,3 +764,20 @@ func TestUserView_WritesOnlyTheCurrentAuditAction(t *testing.T) {
 		assertSingleEmit(t, audit.rows, true)
 	})
 }
+
+// TestMemberMode_AssistantAvailabilityIsAMemberRead: an admin viewing as a member may ask whether the
+// assistant is available, as any member may, and is refused the settings behind it as a member is.
+func TestMemberMode_AssistantAvailabilityIsAMemberRead(t *testing.T) {
+	srv, _ := memberModeServer(t)
+	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/me/assistant?purpose=review", on, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"state":"off"`) {
+		t.Fatalf("GET /me/assistant in member mode = %d %s, want 200 off", w.Code, w.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		w := doSSO(t, srv, method, "/api/v1/assistant/settings", on, "{}")
+		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "requires admin role") {
+			t.Errorf("%s /assistant/settings in member mode = %d %s, want the admin-role refusal", method, w.Code, w.Body.String())
+		}
+	}
+}

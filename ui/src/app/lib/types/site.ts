@@ -39,9 +39,30 @@ export interface RunnerSettings {
   require_managed_device: boolean;
 }
 
+// types.AssistantProviderMark (internal/types/assistant.go), the json tags verbatim. No models means the
+// provider's own harness model.
+export interface AssistantProviderMark {
+  readonly provider_id: string;
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly models: readonly string[];
+}
+
+// types.AssistantSettings (SiteConfig.assistant), the json tags verbatim. Absent is every purpose off.
+export interface AssistantSettings {
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly run_history_counts: boolean;
+  readonly never_sent_kinds: readonly string[];
+  readonly providers: readonly AssistantProviderMark[];
+}
+
 export interface SiteConfig {
   // Dedicated runner administration owns changes; generic PUT retains this block.
   readonly runners?: RunnerSettings;
+  // types.SiteConfig.Assistant: the organisation's assistant settings. PUT /assistant/settings owns changes;
+  // the generic PUT carries the block forward and refuses a changed one.
+  readonly assistant?: AssistantSettings;
   upstream_proxy_secret_ref?: string;
   // The corporate upstream proxy URL written IN THE CLEAR — topology, not a
   // credential. Must not embed a userinfo (user:pass@); the server 400s that

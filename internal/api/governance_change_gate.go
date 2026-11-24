@@ -193,6 +193,7 @@ type govApplied struct {
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
+	govKindAssistantSettings:   {approver: operatorApprover, apply: applyAssistantSettingsChange},
 	govKindUnit:                {approver: securityApprover, apply: applyUnitChange},
 	govKindMembership:          {approver: securityApprover, apply: applyMembershipChange},
 	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
