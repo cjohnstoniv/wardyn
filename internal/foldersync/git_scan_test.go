@@ -422,7 +422,7 @@ func TestCheckBundleAllowed_SweepsAbandonedScans(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, "precious"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(target, old, old); err != nil { // old enough to sweep, so only the link check spares it
+	if err := os.Chtimes(target, old, old); err != nil { // the target is old enough to sweep: following the link would remove it
 		t.Fatal(err)
 	}
 	link := filepath.Join(beside, "wardyn-bundle-scan-link")
