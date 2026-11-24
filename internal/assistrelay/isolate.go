@@ -28,7 +28,7 @@ var keptEnv = []string{
 
 // memoryNames are what the harness loads as instructions from its working directory and each directory above
 // it. None may exist above the isolated working directory.
-var memoryNames = []string{"CLAUDE.md", "CLAUDE.local.md", ".claude"}
+var memoryNames = []string{"CLAUDE.md", "CLAUDE.local.md", ".claude", "AGENTS.md"}
 
 // Isolation is the directory the harness runs in. Its home and config dir are empty at start, so the harness
 // loads no hooks, skills, memory or CLAUDE.md from any config dir.

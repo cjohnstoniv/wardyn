@@ -37,7 +37,7 @@ func checkCommonFlags(t *testing.T, argv []string) {
 			}
 		}
 	}
-	for _, flag := range []string{" --tools ", " --strict-mcp-config ", " --allowedTools ", " --verbose "} {
+	for _, flag := range []string{" --tools ", " --strict-mcp-config ", " --disable-slash-commands ", " --allowedTools ", " --verbose "} {
 		if !strings.Contains(joined, flag) {
 			t.Fatalf("argv lacks %s: %q", flag, argv)
 		}
@@ -48,7 +48,7 @@ func TestStreamArgs(t *testing.T) {
 	got := StreamArgs("claude", "stub-model", "the prompt", "/ah/s/1/mcp.json")
 	want := []string{"claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--model", "stub-model", "--system-prompt", "the prompt", "--tools", "", "--mcp-config", "/ah/s/1/mcp.json",
-		"--strict-mcp-config", "--allowedTools", "mcp__wardyn__*"}
+		"--strict-mcp-config", "--disable-slash-commands", "--allowedTools", "mcp__wardyn__*"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stream argv = %q\nwant %q", got, want)
 	}
@@ -58,7 +58,7 @@ func TestStreamArgs(t *testing.T) {
 func TestResumeArgs(t *testing.T) {
 	base := []string{"claude", "-p", "--output-format", "stream-json", "--verbose",
 		"--model", "stub-model", "--system-prompt", "the prompt", "--tools", "", "--mcp-config", "/ah/s/1/mcp.json",
-		"--strict-mcp-config", "--allowedTools", "mcp__wardyn__*"}
+		"--strict-mcp-config", "--disable-slash-commands", "--allowedTools", "mcp__wardyn__*"}
 	first := ResumeArgs("claude", "stub-model", "the prompt", "/ah/s/1/mcp.json", "u-1", false)
 	if want := append(append([]string(nil), base...), "--session-id", "u-1"); !reflect.DeepEqual(first, want) {
 		t.Fatalf("first turn argv = %q\nwant %q", first, want)

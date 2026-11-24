@@ -191,7 +191,7 @@ func TestClearStoreRemovesTheConversation(t *testing.T) {
 }
 
 func TestCheckAncestorsRefusesInstructionsAbove(t *testing.T) {
-	for _, name := range memoryNames {
+	for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", ".claude", "AGENTS.md"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			iso, err := NewIsolation(root, "")

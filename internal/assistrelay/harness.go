@@ -30,6 +30,7 @@ func StreamArgs(claude, model, system, mcpConfig string) []string {
 		"--tools", "",
 		"--mcp-config", mcpConfig,
 		"--strict-mcp-config",
+		"--disable-slash-commands",
 		"--allowedTools", allowTools,
 	}
 }
@@ -46,6 +47,7 @@ func ResumeArgs(claude, model, system, mcpConfig, session string, resume bool) [
 		"--tools", "",
 		"--mcp-config", mcpConfig,
 		"--strict-mcp-config",
+		"--disable-slash-commands",
 		"--allowedTools", allowTools,
 	}
 	if resume {
