@@ -116,6 +116,15 @@
   (`qemu-vdagent`), and the VM has none. The rules take effect once one exists.
 - The filter is not a boundary against a run built to get data out: the run controls what its screen shows.
 
+## The sandbox browser lockdown
+
+- With `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run carries a Chromium policy the agent cannot change: no extension but those the organisation allows. It binds every Chromium build in the sandbox that reads `/etc/chromium/policies`, whoever starts it. It does not bind Google Chrome, Chrome for Testing or Firefox.
+- The agent drives its browser through `wardyn-signin cdp --agent [--session ID]`, a socket only its uid can open, never a port.
+- `wardyn-signin browser` takes only `--headless` and start URLs, in every deployment, and starts Chromium with a fixed environment.
+- A browser the agent starts itself can still open a debugging port on the sandbox's own loopback. Nothing outside the sandbox reaches it except Wardyn's ticketed forwarders.
+- A Linux VM guest refuses the policy when a directory above it is not root-owned or is writable by others. A Linux VM guest that allows unprivileged user namespaces lets a process mount over the policy directory in a namespace of its own. Set `user.max_user_namespaces=0` in the guest image to close that.
+- Who is refused, and the Kubernetes limit: [`WARDYN_BROWSER_LOCKDOWN`](ENV.md#wardyn_browser_lockdown) and [`WARDYN_BROWSER_POLICY_FILE`](ENV.md#wardyn_browser_policy_file).
+
 ## Diagnosing a blocked request
 
 - A relayed editor is the place developers most often meet the egress policy, and

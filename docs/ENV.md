@@ -353,6 +353,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SCHEDULED_RUNS` | bool | (unset) | let a run be scheduled to start once, later (`start_at` on `POST /runs`, within 7 days less the run's wait); unset refuses `start_at` with `scheduled_runs_off`. Read per request. [Details](#wardyn_scheduled_runs) |
 | `WARDYN_EGRESS_PORT_RULE` | enum | `off` | container runs' egress port rule, `off`, `dry_run` or `on` (flag `-egress-port-rule`); the proxy turns it on for runs dispatched as a desktop VM. [Details](#wardyn_egress_port_rule) |
 | `WARDYN_DESKTOP_SIGNINS` | enum | `off` | `on` lets a run's creator sign in to websites in a browser of their own inside the run's desktop, with the agent stopped, and share one site's login with the agent (flag `-desktop-signins`). [Details](#wardyn_desktop_signins) |
+| `WARDYN_BROWSER_LOCKDOWN` | enum | `off` | `on` delivers one Chromium managed policy into every container and Linux VM run, which the agent cannot change (flag `-browser-lockdown`). [Details](#wardyn_browser_lockdown) |
+| `WARDYN_BROWSER_POLICY_FILE` | path | empty | The organisation's own Chromium policies, added to the lockdown's (flag `-browser-policy-file`). [Details](#wardyn_browser_policy_file) |
 | `WARDYN_START_AFTER_READBACK` | enum | `off` | `on` starts a run's agent only after its proxy first confirms its policy; the run stays `STARTING` until then and fails if it does not confirm (flag `-start-after-readback`). [Details](#wardyn_start_after_readback) |
 | `WARDYN_APPROVAL_RULES` | enum | `off` | approval rules, `off`, `dry_run` or `on`: a security admin's rule may approve a held `tool_call` or first-use `egress_domain` approval on a service identity's run. [Details](#wardyn_approval_rules) |
 | `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` | string (URL) | (unset) | **TEST ONLY.** Re-points **both** AWS IAM Identity Center services at this base URL (flag `-aws-sso-endpoint-override`; `ValidateAWSSSOEndpointOverride`, [`internal/api/awssso_endpoint.go`](../internal/api/awssso_endpoint.go)); **REFUSED unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`**. [Details](#wardyn_aws_sso_endpoint_override) |
@@ -1838,6 +1840,27 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **Runners.** A run on a self-hosted runner, a remote-hosted runner or Kubernetes gets no sign-in store, no sign-in image and no `signin_listen` key (a runner's own proxy may predate the key and would refuse the run). Such a run starts normally, and a sign-in on it answers `desktop_signin_runner_unsupported`.
 - The person's sign-in browser runs as a different uid in the same sandbox, not in a sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md) says what that does and does not protect. A login reaches the agent only when the person shares that site, and after a share the agent holds those cookies within its egress.
 - Takes effect for runs dispatched after the change. Any other value exits 2 at boot. Not a secret, so it has no `_FILE` twin.
+
+### `WARDYN_BROWSER_LOCKDOWN`
+
+- The sandbox browser lockdown (flag `-browser-lockdown`; [`internal/api/run_browser_lockdown.go`](../internal/api/run_browser_lockdown.go), #2970). `off` (the default) delivers nothing and refuses nothing.
+- `on` delivers one Chromium managed policy into every container and Linux VM run, root-owned and unwritable by the agent. It blocks every extension install but those `WARDYN_BROWSER_POLICY_FILE` allows (`ExtensionInstallBlocklist: ["*"]`), and turns developer tools off (`DeveloperToolsAvailability: 2`).
+- The file is `/etc/chromium/policies/managed/wardyn.json` in the sandbox. Chromium reads it whoever starts the browser, with whatever flags.
+- It covers Chromium only: builds that read `/etc/chromium/policies`. Google Chrome (which reads `/etc/opt/chrome`), Chrome for Testing and Firefox are not bound by it.
+- **Who is refused.** With `on`, these runs fail at dispatch with a hint that names the lockdown:
+  - a run whose runner does not deliver managed files;
+  - a run on an exec-less runtime its runner cannot vouch for (krun);
+  - on Docker, a run whose image's USER is root, whose `/etc/chromium` is not root-owned or is writable by group or others, or whose image ships `/etc/chromium/policies`.
+- A macOS VM run is accepted at create and fails at dispatch with the lockdown's hint, every such run while the lockdown is on.
+- Runs already started when the switch turns on keep running without the policy. It binds runs dispatched after wardynd restarts with it.
+- On Kubernetes the policy is mounted read-only, but Wardyn does not check the image. An image whose `/etc/chromium` the agent's user can write lets the agent move the policy aside, and an image's own `/etc/chromium/policies/managed` is hidden, not refused.
+- Any other value exits 2 at boot, and so does `WARDYN_BROWSER_POLICY_FILE` set while this is `off`. Not a secret, so it has no `_FILE` twin.
+
+### `WARDYN_BROWSER_POLICY_FILE`
+
+- The organisation's own Chromium policies (flag `-browser-policy-file`), added to the lockdown's. It is read only with `WARDYN_BROWSER_LOCKDOWN=on`; empty (the default) delivers the lockdown's policies alone.
+- The file is one JSON object of Chromium policy names, at most 64 KiB, read once at boot. `ExtensionInstallAllowlist` names the extensions the agent's browser may install, each by its extension id (32 letters `a` to `p`).
+- It may not set a key the lockdown sets itself: every key in `browserpolicy.Owned` ([`internal/browserpolicy/browserpolicy.go`](../internal/browserpolicy/browserpolicy.go)), and every key that starts with `Proxy` or `DeveloperToolsAvailability`. Such a key, a malformed file or an extension id of another shape exits 2 at boot.
 
 ### `WARDYN_START_AFTER_READBACK`
 

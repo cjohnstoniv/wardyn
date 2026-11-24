@@ -43,6 +43,12 @@ docker run -d --name "$C" --network none --memory 2g \
 	--tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m \
 	--tmpfs /run/wardyn/signin:rw,nosuid,nodev,noexec,size=256m,uid=1001,gid=1001,mode=0700 \
 	"$IMAGE" sh -c 'while :; do sleep 3600; done' >/dev/null
+# BROWSER_POLICY_PRESEED=1: the container carries the browser lockdown's policy, as delivered (#2970).
+if [ "${BROWSER_POLICY_PRESEED:-}" = 1 ]; then
+	printf '%s' '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"]}' |
+		docker exec -i -u 0 "$C" sh -c 'mkdir -p /etc/chromium/policies/managed &&
+			cat > /etc/chromium/policies/managed/wardyn.json && chmod 0644 /etc/chromium/policies/managed/wardyn.json'
+fi
 person() { docker exec -i -u 1001:1001 "$C" "$@"; }
 agent() { docker exec -i -u 1000:1000 "$C" "$@"; }
 root() { docker exec -i -u 0 "$C" "$@"; }

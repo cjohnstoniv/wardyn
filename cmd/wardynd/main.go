@@ -469,6 +469,7 @@ func run() error {
 		EgressPortRule:       egressPortRule(*f.egressPortRule),
 		ModelUsageOff:        modelUsageOff,
 		DesktopSignins:       *f.desktopSignins == "on",
+		BrowserPolicy:        f.browserPolicy,
 		StartAfterReadback:   *f.startAfterReadback == "on",
 		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
 		HealthzProbeTTL:      2 * time.Second,
