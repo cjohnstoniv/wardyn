@@ -68,6 +68,11 @@ describe("the Azure Foundry door", () => {
     expect(ADO.CONNECT_CTA).toBe("Continue to Microsoft");
   });
 
+  it("opens with focus on Continue, not Cancel", async () => {
+    await openDoor();
+    expect(await screen.findByRole("button", { name: ADO.CONNECT_CTA })).toHaveFocus();
+  });
+
   it("Continue sends the browser to the row's start route, with the base path and the uid", async () => {
     const user = await openDoor();
     await user.click(await screen.findByRole("button", { name: ADO.CONNECT_CTA }));

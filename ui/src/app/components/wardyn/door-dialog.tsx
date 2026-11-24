@@ -110,9 +110,11 @@ function AzureDoor({ provider, onCancel }: { provider: SetupModelProvider; onCan
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
           {KEY_DOOR.CANCEL}
         </Button>
+        {/* Default focus is Continue (F13), not the first control in the dialog. */}
         <Button
           type="button"
           size="sm"
+          autoFocus
           disabled={busy || !provider.uid}
           onClick={() => {
             setBusy(true);
