@@ -82,6 +82,8 @@ func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
 			{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", stage},
 			{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage},
 			{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage},
+			{"/usr/sbin/chown", "root:admin", stage},
+			{"/bin/chmod", "0775", stage},
 			{"/bin/rm", "-rf", MacApplications + "/Tool.app"},
 			{"/usr/bin/ditto", stage, MacApplications},
 		}},

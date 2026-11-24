@@ -893,6 +893,7 @@ type installStep struct {
 func appInstallSteps(argv []string) []installStep {
 	var stage string
 	var unpack, clearOld, place installStep
+	var top []installStep // the zip form copies the stage folder itself onto /Applications: give it /Applications' own owner and mode
 	switch {
 	case len(argv) == 5 && argv[0] == "/usr/bin/ditto" && argv[1] == "-x" && argv[2] == "-k" &&
 		isItemFile(argv[3], ItemZip) && argv[4] == MacApplications:
@@ -900,6 +901,7 @@ func appInstallSteps(argv []string) []installStep {
 		unpack = installStep{argv: []string{"/usr/bin/ditto", "-x", "-k", argv[3], stage}}
 		clearOld = installStep{clearOld: stage}
 		place = installStep{argv: []string{"/usr/bin/ditto", stage, MacApplications}}
+		top = []installStep{{argv: []string{"/usr/sbin/chown", "root:admin", stage}}, {argv: []string{"/bin/chmod", "0775", stage}}}
 	case len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(filepath.Base(argv[1])) &&
 		isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+filepath.Base(argv[1]):
 		stage = filepath.Dir(filepath.Dir(argv[1])) + "/" + itemAppStage
@@ -910,14 +912,13 @@ func appInstallSteps(argv []string) []installStep {
 	default:
 		return nil
 	}
-	return []installStep{
+	steps := []installStep{
 		{argv: []string{"/bin/rm", "-rf", stage}},
 		unpack,
 		{argv: []string{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage}},
 		{argv: []string{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage}},
-		clearOld,
-		place,
 	}
+	return append(append(steps, top...), clearOld, place)
 }
 
 // clearOldSteps are the rm -rf argvs, one per top-level app bundle (ItemAppPattern) of the unpacked stage, that
