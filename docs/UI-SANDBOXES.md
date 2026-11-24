@@ -98,6 +98,12 @@
 - It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
   sandbox serves can still show text.
 
+## The desktop watermark
+
+- It shows the viewer's email, or their principal, and the run id over the picture only: in the live desktop, a background watch and the recording replay.
+- An admin can require it with `desktop_watermark.required` in site config (Settings → Desktop watermark). Otherwise each viewer may turn it on for one view; the choice is not stored.
+- It deters a casual screen capture. It does not stop one: anyone who can see the screen can still photograph it.
+
 ## The desktop of a Linux VM run
 
 - A `linux_vm` run's desktop is QEMU's VNC display, reached through the run's runner. Nothing inside the guest serves it.

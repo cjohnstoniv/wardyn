@@ -449,7 +449,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth", "macos_vm", "images", "sessions", "features",
+	"recording", "governance_max_depth", "macos_vm", "images", "sessions", "features", "desktop_watermark",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -518,6 +518,7 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteImages(cfg, existing, present)
 	carryForwardSiteSessions(cfg, existing, present)
 	carryForwardSiteFeatures(cfg, existing, present)
+	carryForwardSiteDesktopWatermark(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
