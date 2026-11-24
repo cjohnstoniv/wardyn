@@ -42,9 +42,9 @@ own stages follow (its engine, proxy image and relay), then whether the organisa
 receipts. A failing stage names the setting that fixes it.
 
 Names are shown, values are not: no token, password or proxy credential appears in either format. doctor changes
-no setting. Like every command, it renews a saved sign-in whose access token is spent, and stores the renewal, or
-the server's refusal of it, with that sign-in. It exits 0 when no stage failed and 1 otherwise; --json prints the
-same stages as data.`,
+no setting. Like every command that calls the server, it renews a saved sign-in whose access token is spent, and
+stores the renewal, or the server's refusal of it, with that sign-in. It exits 0 when no stage failed and 1
+otherwise; --json prints the same stages as data.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c := client()

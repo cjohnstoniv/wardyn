@@ -30,7 +30,7 @@ func TestDocsSayWhatTheCodeDoes(t *testing.T) {
 		{"session-only cut, CLI section", []string{"docs", "operations", "api-tokens.md"}, "own API tokens working, as before", "personal API tokens and SSH keys working"},
 		{"session-only cut, audit catalogue", []string{"docs", "AUDIT-ACTIONS.md"}, "browser sessions end, API tokens and SSH keys keep working", "browser and CLI sign-ins end, with the CLI sign-ins' tokens"},
 		{"session-only cut, reason table", []string{"docs", "sdk.md"}, "(browser sessions end; API tokens and SSH keys keep working)", "(browser and CLI sign-ins end; personal API tokens and SSH keys keep working)"},
-		{"rehearsal opens credentials and principal keys", []string{"docs", "operations", "recovery-rehearsal.md"}, "open every stored row", "every row of the `secrets` table"},
+		{"rehearsal opens credentials and principal keys", []string{"docs", "operations", "recovery-rehearsal.md"}, "open every stored row", "every `secrets` row"},
 		{"url flag", []string{"docs", "ENV.md"}, "flag `-url`", "flag `--url`"},
 		{"doctor renews a sign-in", []string{"docs", "ENV.md"}, "writes nothing and exits 1", "renews a saved sign-in whose access token is spent"},
 		{"doctor help", []string{"cmd", "wardyn", "doctor.go"}, "doctor writes", "renews a saved sign-in whose access token is spent"},
