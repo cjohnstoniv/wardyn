@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -313,7 +314,14 @@ func TestAgentRulesRunStep_NarrowsEveryKnob(t *testing.T) {
 					}
 					continue
 				}
-				if !composer.Leq(got, base, types.GovernanceLimits{}, types.GovernanceLimits{}) {
+				// A policy open to all egress already reaches every name on 80 and 443, so the meet seeds the
+				// rule's list into it before closing it (composer.MeetWalls); Leq reads an open base's own list
+				// only, so it judges the result against that seeded base.
+				within := base.Clone()
+				if base.AllowAllEgress && !got.AllowAllEgress && row.rule.AllowedDomains != nil {
+					within.AllowedDomains = append(within.AllowedDomains, *row.rule.AllowedDomains...)
+				}
+				if !composer.Leq(got, within, types.GovernanceLimits{}, types.GovernanceLimits{}) {
 					t.Errorf("%s: %+v is wider than %+v", kind, got, base)
 				}
 				if !row.effect(kind, got) {
@@ -355,16 +363,27 @@ func httpRequestAs(principal string) *http.Request {
 }
 
 // TestAgentRulesRunStep_EveryArmAndCaller: the rules bind the default arm and the inline arm, for a member, a
-// security admin and a super admin alike; both arms end in the one tail that runs the step.
+// security admin and a super admin alike; both arms end in the one tail that runs the step. An admin tier's SSO
+// session is in the Admin view and cannot preview (refuseAdminViewLaunch), so the two admin tiers preview through
+// a wdn_ token that carries their own role.
 func TestAgentRulesRunStep_EveryArmAndCaller(t *testing.T) {
-	srv, _ := agentRulesServer(t, claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com")}))
+	srv, st := agentRulesServer(t, claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com")}))
 	for caller, role := range map[string]string{"member": oidc.RoleUser, "security admin": oidc.RoleSecurityAdmin, "super admin": oidc.RoleAdmin} {
-		cookie := ssoSession(t, "sub-ar-"+strings.ReplaceAll(caller, " ", "-"), "ar@corp.example", role)
+		sub := "sub-ar-" + strings.ReplaceAll(caller, " ", "-")
+		cookie := ssoSession(t, sub, "ar@corp.example", role)
 		for arm, body := range map[string]string{
 			"default": `{"agent":"claude-code","task":"t"}`,
 			"inline":  `{"agent":"claude-code","task":"t","inline_policy":{"min_confinement_class":"CC2","allowed_domains":["api.anthropic.com"]}}`,
 		} {
-			w := doSSO(t, srv, http.MethodPost, previewDoor, cookie, body)
+			var w *httptest.ResponseRecorder
+			if role == oidc.RoleUser {
+				w = doSSO(t, srv, http.MethodPost, previewDoor, cookie, body)
+			} else {
+				complete := false
+				st.tokenRaw = apiTokenPrefix + "agent-rules-" + sub
+				st.token = &types.APIToken{ID: uuid.New(), Principal: sub, Email: "ar@corp.example", Role: role, GroupsTruncated: &complete}
+				w = do(t, srv, http.MethodPost, previewDoor, st.tokenRaw, body)
+			}
 			var pv policyPreviewResponse
 			if err := json.Unmarshal(w.Body.Bytes(), &pv); err != nil || w.Code != http.StatusOK {
 				t.Fatalf("%s, %s arm: preview %d %v: %s", caller, arm, w.Code, err, w.Body)
@@ -586,11 +605,12 @@ func TestAgentRulesInnerWalls_RefusalNamesTheRule(t *testing.T) {
 	}
 }
 
-// TestAgentRulesInnerWalls_PolicyAndRuleBothNamed: a policy that set harness_inner_walls and a rule that
-// then changed it are both named, never the rule alone.
+// TestAgentRulesInnerWalls_PolicyAndRuleBothNamed: a policy that set the refused harness_inner_walls axis and a
+// rule that then changed it are both named, never the rule alone. A policy that set only the other axis is not
+// named (TestAgentRulesInnerWalls_TwoRulesNameNoPolicy).
 func TestAgentRulesInnerWalls_PolicyAndRuleBothNamed(t *testing.T) {
 	srv, _ := agentRulesServer(t, innerRule(innerWalls(types.InnerSandboxReadOnly, "")))
-	policy := types.RunPolicySpec{HarnessInnerWalls: innerWalls("", types.InnerApprovalsWardyn)}
+	policy := types.RunPolicySpec{HarnessInnerWalls: innerWalls(types.InnerSandboxWorkspaceWrite, types.InnerApprovalsWardyn)}
 	spec, source, _, refusal := agentRulesStep(t, srv, innerClaudeAttach, policy)
 	if refusal != nil || spec.HarnessInnerWalls == nil || spec.HarnessInnerWalls.SandboxMode != types.InnerSandboxReadOnly ||
 		spec.HarnessInnerWalls.Approvals != types.InnerApprovalsWardyn {
