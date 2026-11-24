@@ -78,7 +78,7 @@ func (s *Server) stepLocalFolderWalls(f *runFold, _ *foldRecorder) bool {
 	if walls == nil {
 		return true
 	}
-	layers, err := s.localFolderWallLayers(f.r.Context(), f)
+	layers, err := s.localFolderWallLayers(f.r.Context(), walls, f.ceiling, f.source.knobs)
 	if err != nil {
 		return !runServerError("read the Wardyn boundary", err).write(s, f.w, f.r)
 	}
@@ -118,11 +118,10 @@ func localFolderWalledText(wall string, l types.LocalFolderWallLayer) string {
 	return "local_folder: " + localFolderWhat(wall) + " is walled off by " + localFolderLayer(l.Layer, l.Name, l.Locked)
 }
 
-// localFolderWallLayers is the layer of each wall the clamped f.spec.LocalFolders sets: the outermost layer whose own
+// localFolderWallLayers is the layer of each wall the run's clamped walls set: the outermost layer whose own
 // local_folders sets it. That is the boundary in hard_limits, else the run's unit ceiling, else the run's own policy.
-// Locked is the knob's lock. A boundary that cannot be read is an error.
-func (s *Server) localFolderWallLayers(ctx context.Context, f *runFold) (map[string]types.LocalFolderWallLayer, error) {
-	run := f.spec.LocalFolders
+// Locked is the knob's lock (knobs). A boundary that cannot be read is an error.
+func (s *Server) localFolderWallLayers(ctx context.Context, run *types.LocalFolderRules, ceiling governanceCeiling, knobs knobProvenance) (map[string]types.LocalFolderWallLayer, error) {
 	if run == nil {
 		return nil, nil
 	}
@@ -134,11 +133,11 @@ func (s *Server) localFolderWallLayers(ctx context.Context, f *runFold) (map[str
 	if b.HardLimits() {
 		boundary = b.Spec.LocalFolders
 	}
-	if f.ceiling.Unit != nil {
-		unit = f.ceiling.Unit.Ceiling.LocalFolders
+	if ceiling.Unit != nil {
+		unit = ceiling.Unit.Ceiling.LocalFolders
 	}
-	unitP, ownP := f.ceiling.provenance(), f.ceiling.ownProvenance()
-	locked := f.source.knobs["local_folders"].Locked
+	unitP, ownP := ceiling.provenance(), ceiling.ownProvenance()
+	locked := knobs["local_folders"].Locked
 	out := map[string]types.LocalFolderWallLayer{}
 	for _, wall := range localFolderWallNames {
 		if !localFolderWallSet(run, run, wall) {

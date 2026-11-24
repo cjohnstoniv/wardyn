@@ -187,7 +187,7 @@ func TestLocalFolderWallLayers_OutermostSetter(t *testing.T) {
 	s := &Server{cfg: Config{Store: lfwBoundaryStore{b: types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{
 		LocalFolders: &types.LocalFolderRules{DenyPull: true, MaxPushMiB: 50},
 	}}}}}
-	got, err := s.localFolderWallLayers(context.Background(), f)
+	got, err := s.localFolderWallLayers(context.Background(), f.spec.LocalFolders, f.ceiling, f.source.knobs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestLocalFolderWallLayers_OutermostSetter(t *testing.T) {
 	}
 	f.ceiling.Unit = nil
 	s.cfg.Store = lfwBoundaryStore{err: errors.New("database down")}
-	if _, err := s.localFolderWallLayers(context.Background(), f); err == nil {
+	if _, err := s.localFolderWallLayers(context.Background(), f.spec.LocalFolders, f.ceiling, f.source.knobs); err == nil {
 		t.Error("a boundary that cannot be read gave layers")
 	}
 }
