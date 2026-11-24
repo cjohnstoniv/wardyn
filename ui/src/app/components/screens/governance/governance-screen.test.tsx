@@ -28,6 +28,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 const [getGovernanceMock, createProfileMock, updateProfileMock, deleteProfileMock] = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
 const [upsertAssignmentMock, deleteAssignmentMock, previewGovernanceMock, listChangesMock, getMyAssistantMock] = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+const getApprovalCountsMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -41,6 +42,7 @@ vi.mock("../../../lib/api/governance", async () => {
       deleteAssignment: (...a: unknown[]) => deleteAssignmentMock(...a),
       previewGovernance: (...a: unknown[]) => previewGovernanceMock(...a),
       listChanges: () => listChangesMock(),
+      getApprovalCounts: () => getApprovalCountsMock(),
     },
   };
 });
@@ -67,7 +69,8 @@ import { COMPOSER_PATH, composerHref } from "../../../lib/composer-url";
 import { ASSISTANT } from "../../wardyn/copy/assistant";
 import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
-import { CHANGES, DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
+import { APPROVALS_NEEDED } from "../../../lib/approvals-needed-copy";
+import { BASELINE, CHANGES, DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { ACCESS_STATE, PEOPLE, PREVIEW } from "../../../lib/people-access-copy";
 import { PERM } from "../../../lib/permissions-copy";
 // R4/F035: the drives templates flow through the SAME question() helper, so the
@@ -144,6 +147,7 @@ beforeEach(() => {
   gradePolicyMock.mockReset();
   gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
   getGovernanceMock.mockReset();
+  getApprovalCountsMock.mockReset();
   createProfileMock.mockReset();
   updateProfileMock.mockReset();
   deleteProfileMock.mockReset();
@@ -878,6 +882,38 @@ const HELD = new PendingChangeError({
   proposed_at: aheadByHours(-1),
   expires_at: aheadByHours(20),
   diff: { changed: [] },
+});
+
+describe("GovernanceScreen — the Approvals needed tab", () => {
+  const counts = { minimum: 2, highest: 2, default: { required: 2, require_security: false }, kinds: [] };
+
+  it("is a security operator's tab, after Baseline hosts, and opens the counts", async () => {
+    getApprovalCountsMock.mockResolvedValue(counts);
+    renderScreen();
+    const tab = await screen.findByRole("tab", { name: APPROVALS_NEEDED.TITLE });
+    const names = screen.getAllByRole("tab").map((t) => t.textContent);
+    expect(names.indexOf(APPROVALS_NEEDED.TITLE)).toBe(names.indexOf(BASELINE.TAB) + 1);
+    expect(getApprovalCountsMock).not.toHaveBeenCalled();
+    await userEvent.click(tab);
+    expect(await screen.findByText(APPROVALS_NEEDED.MIN_LABEL)).toBeInTheDocument();
+    expect(getApprovalCountsMock).toHaveBeenCalledTimes(1);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("is absent for a caller without the security tier, whatever the URL asks", async () => {
+    getGovernanceMock.mockResolvedValue(snapshot());
+    render(
+      <MemoryRouter initialEntries={["/?tab=approvals-needed"]}>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <GovernanceScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText(GREENFIELD.name);
+    expect(screen.queryByRole("tab", { name: APPROVALS_NEEDED.TITLE })).toBeNull();
+    expect(screen.getByRole("tab", { name: GOV.PROFILES_TITLE })).toHaveAttribute("aria-selected", "true");
+    expect(getApprovalCountsMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("GovernanceScreen — the Changes tab", () => {
