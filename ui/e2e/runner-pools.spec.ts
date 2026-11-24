@@ -207,8 +207,6 @@ test.describe("user pools against the real server", () => {
 // A remote-hosted runner and an organization pool that holds it. The harness has no remote-hosted runner, so
 // the routes the two screens read are answered here; what is proved is what the screens do with the answers.
 test.describe("Admin Runners with a remote-hosted runner", () => {
-  // A first attempt here once failed with no cause found in code (#4011): keep its trace, so the next one shows it.
-  test.use({ trace: "retain-on-failure" });
   const RUNNER = remoteRunner({ id: "rr-eu", name: "eu-cluster", revision: 3 });
   const POOL = pool({ id: "p-ci", name: "CI jobs" });
 

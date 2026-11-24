@@ -69,8 +69,6 @@ test.describe("Runner cards: the macOS VMs badge", () => {
 });
 
 test.describe("Runner drawer: macOS virtual machines", () => {
-  // A first attempt here once failed with no cause found in code (#4018): keep its trace, so the next one shows it.
-  test.use({ trace: "retain-on-failure" });
   test("ready: the guest, the live runs, the smallest run and the desktop", async ({ page }) => {
     await openRunners(page);
     const drawer = await openDrawer(page, "mac-ready");
