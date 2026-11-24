@@ -18,7 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - Audit rows are now hashed with a per-row salt that Postgres makes and stores with the row (hash format 2), so a row exported with its fields projected away can no longer be matched against a list of guessed values. Rows from before keep their format and verify as they did. A device sends its rows' format and salt, and the organisation re-checks the claim with them.
-- Every audit row written under a run's token now names the run's owner and workload as `run_owner` and `run_workload`, and a service-owned run's sponsor as `sponsor`, taken from the verified token. The credential mint row carries only `run_workload`, because it is written without the audit sealer; a decision a runner spooled takes them from the stored run.
+- Every audit row written under a run's token now names the run's owner and workload as `run_owner` and `run_workload`, and a service-owned run's sponsor as `sponsor`, taken from the verified token. A successful credential mint row carries only `run_workload`, because it is written without the audit sealer (a denied or failed mint goes through the recorders and carries all three); a decision a runner spooled takes them from the stored run.
 - A server egress proxy that cannot reach the control plane now keeps up to 50,000 decisions (32 MiB) in its container's temporary directory and sends them when it can, with their own times, instead of dropping them.
 - Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
 - At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
@@ -30,9 +30,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
-- There is no rolling upgrade across this release: stop every older replica before the first new one starts. An older replica that keeps running hashes new audit rows with the old formula and reports a chain break at the first of them.
+- There is no rolling upgrade across this release: stop every older replica before the first new one starts. An older replica that keeps running writes format 2 rows too, because the database makes the hash, but its verify sweep and checkpoint signer recompute every row with the old formula and report a chain break at the first format 2 row.
 - Upgrade the organisation before its devices.
-- An older `wardyn audit verify` cannot check the new rows: update the CLI before you verify a new export.
+- An older `wardyn audit verify` reports every new row as altered and exits 1, because it ignores the row's format and salt: update the CLI before you verify a new export.
 - If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
 
 ## [0.10.2] — 2026-11-22
