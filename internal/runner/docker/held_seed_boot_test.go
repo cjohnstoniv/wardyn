@@ -186,4 +186,16 @@ func TestHeldSeed_EveryAgentRunAdopts(t *testing.T) {
 			t.Errorf("%s: no source /usr/local/bin/agent-run-lib.sh line", rel)
 		}
 	}
+	// The harnesses image's agent-run sources no library: it carries the exact line, after a no-op definition so
+	// it runs under set -e, and the start harness's own agent-run adopts the seed.
+	b, err := os.ReadFile(ccAbs(t, "../../../deploy/images/common/agent-run-set"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(b), "\n")
+	def := slices.Index(lines, "held_seed_adopt() { :; }")
+	call := slices.Index(lines, "held_seed_adopt")
+	if def < 0 || call < 0 || call < def {
+		t.Errorf("agent-run-set: want a no-op held_seed_adopt definition, then the exact held_seed_adopt line (def %d, call %d)", def, call)
+	}
 }
