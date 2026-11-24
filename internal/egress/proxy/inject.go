@@ -100,8 +100,8 @@ type injectedHeader struct {
 	placeholder string
 }
 
-// injEntry is one host's injection: grantID is immutable; header + expiresAt are guarded by reMu,
-// which also single-flights re-resolution. expiresAt==0 marks a static credential that never re-resolves.
+// injEntry is one host's injection: grantID is immutable; header + expiresAt are guarded by reMu, and
+// refreshing single-flights re-resolution. expiresAt==0 marks a static credential that never re-resolves.
 type injEntry struct {
 	grantID uuid.UUID
 	reMu    sync.Mutex
@@ -315,10 +315,13 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			e.reMu.Unlock()
 			select {
 			case <-ch:
-				continue
 			case <-ctx.Done():
-				return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, ctx.Err())
 			}
+			// Both may be ready at once, and select then picks either: a request that has ended takes no answer.
+			if err := ctx.Err(); err != nil {
+				return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+			}
+			continue
 		}
 		// This caller re-resolves, and learns the answer itself: a refusal or failure reaches the request that asked.
 		var query url.Values
@@ -334,8 +337,29 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 // reresolve asks the control plane for e's credential with reMu released. The caller has opened e.refreshing;
 // reresolve closes it once the answer is on the entry, before any re-auth wait, so later callers join that hold.
 func (i *injector) reresolve(ctx context.Context, e *injEntry, key string, query url.Values) (injectedHeader, bool, error) {
-	resolved, err := resolveInjectionQuery(ctx, i.base, i.token.Get(), e.grantID, query, i.client)
-	e.reMu.Lock()
+	landed := false
+	defer func() {
+		if !landed { // the ask panicked: end the flight, or every later caller waits on it for good
+			e.reMu.Lock()
+			close(e.refreshing)
+			e.refreshing = nil
+			e.reMu.Unlock()
+		}
+	}()
+	var resolved types.ResolvedInjection
+	var err error
+	for {
+		resolved, err = resolveInjectionQuery(ctx, i.base, i.token.Get(), e.grantID, query, i.client)
+		e.reMu.Lock()
+		// Azure DevOps refused a credential while this ask was out (dropStale), and the answer is that same
+		// credential: ask again with the hint, or the refused credential goes back on the entry and the hint is lost.
+		if err != nil || e.staleJTI == "" || resolved.JTI != e.staleJTI || query.Get("stale_jti") == e.staleJTI {
+			break
+		}
+		query = url.Values{"stale_jti": {e.staleJTI}}
+		e.reMu.Unlock()
+	}
+	landed = true
 	close(e.refreshing)
 	e.refreshing = nil
 	if err == nil {
@@ -423,7 +447,7 @@ func (i *injector) dropStale(host, jti string) {
 }
 
 // reresolveStale is dropStale followed at once by the re-resolve, for a request that will be
-// retried with the answer. The re-resolve is resolveCtx's own: single-flighted on reMu, and a 423
+// retried with the answer. The re-resolve is resolveCtx's own: single-flighted on refreshing, and a 423
 // joins the re-auth hold exactly as an expiry re-resolve does. A paced drop re-resolves nothing and
 // answers the header the entry holds.
 func (i *injector) reresolveStale(ctx context.Context, host, jti string) (injectedHeader, error) {

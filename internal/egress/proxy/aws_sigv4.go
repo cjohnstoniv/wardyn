@@ -588,10 +588,17 @@ func (p *Proxy) awsSigV4Credentials(ctx context.Context) (aws.Credentials, error
 	select {
 	case <-flight:
 	case <-ctx.Done():
-		return aws.Credentials{}, ctx.Err()
+	}
+	// Both may be ready at once, and select then picks either: a request that has ended takes no answer.
+	if err := ctx.Err(); err != nil {
+		return aws.Credentials{}, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// A renewal refused again answers with its refusal: the held credentials are not served after it.
+	if d.lastErr != nil {
+		return aws.Credentials{}, d.lastErr
+	}
 	if d.creds.HasKeys() && time.Now().Before(d.creds.Expires) {
 		return d.creds, nil
 	}

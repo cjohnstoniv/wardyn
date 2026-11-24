@@ -569,7 +569,13 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// is never cut, and one that stalls is.
 	if state, ok := r.Context().Value(networkBodyKey{}).(*networkBody); ok {
 		tracked := r
-		state.rearm = func() { rearmBodyDeadline(w, tracked) }
+		state.rearm = func() {
+			// The transport's write loop may read on after this handler returned, while net/http serves the
+			// next request on the connection: an ended request re-arms nothing, or it would cut that one.
+			if tracked.Context().Err() == nil {
+				rearmBodyDeadline(w, tracked)
+			}
+		}
 	}
 	p.stripGatewayHeaders(r.Header)
 	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
