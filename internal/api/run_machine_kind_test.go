@@ -340,25 +340,23 @@ func TestPlacementTrust_PersonalMacRefusedAMacOSVM(t *testing.T) {
 	}
 }
 
-// A runner of the dispatch tests' run: the stored row classification reads for the runner's trust class and owner kind.
-type localDispatchRunnerStore struct {
-	localDispatchStore
-	row types.Runner
-}
-
-func (s localDispatchRunnerStore) GetRunner(context.Context, uuid.UUID) (types.Runner, error) {
-	return s.row, nil
+// ownerOfClass is the owner kind a runner of class has: an org_cluster runner is the organisation's.
+func ownerOfClass(class types.RunnerTrustClass) types.RunnerOwnerKind {
+	if class == types.RunnerTrustOrgCluster {
+		return types.RunnerOwnerOrg
+	}
+	return types.RunnerOwnerPerson
 }
 
 // dispatchOfKind classifies a local run of kind bound to a runner of class, against site configuration sc, and
 // answers whether dispatch went on, with the audit and the run.
-func dispatchOfKind(t *testing.T, kind types.MachineKind, class types.RunnerTrustClass, sc types.SiteConfig) (bool, *recRecorder, localDispatchRunnerStore, types.AgentRun) {
+func dispatchOfKind(t *testing.T, kind types.MachineKind, class types.RunnerTrustClass, sc types.SiteConfig) (bool, *recRecorder, localPersonRunnerStore, types.AgentRun) {
 	t.Helper()
 	srv, ls, audit, run := localDispatchFixture(t, types.PlacementLocal)
 	id := uuid.New()
 	run.RunnerID, run.MachineKind = &id, kind
 	ls.run = run
-	st := localDispatchRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: class, OwnerKind: types.RunnerOwnerPerson}}
+	st := localPersonRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: class, OwnerKind: ownerOfClass(class)}}
 	srv.cfg.Store = st
 	spec := localOrgNetworkSpec(run.ID)
 	ok := srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), sc, &spec, nil, llmTransport{}, false)
@@ -399,7 +397,7 @@ func TestPlacementTrust_DispatchFailsClosedOnAnUnreadableSiteConfig(t *testing.T
 	id := uuid.New()
 	run.RunnerID = &id
 	ls.run = run
-	st := localDispatchRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}}
+	st := localPersonRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}}
 	srv.cfg.Store = st
 	spec := localOrgNetworkSpec(run.ID)
 	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
