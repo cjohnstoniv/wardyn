@@ -70,6 +70,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Security
 
+- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The 0.10.4 images carried 2.103.3, built with
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and can refuse to admit.
 - A SCIM group delete no longer leaves a member of another identity provider or tenant signed in. Before the group is deleted, Wardyn now cuts the browser sessions and revokes the group-holding API tokens of every member the delete removes, and keeps the group, answering an error the identity provider retries, until every cut is recorded.
 - A run that a SCIM suspension killed, but whose teardown failed, is now torn down again and counted even when the person is reactivated before the retry. Before, the retry could close it as a run made after the suspension, with no teardown and one kill missing from `person.deprovision`.
 - A server whose database role cannot read the support-session table no longer treats the person deciding an approval as someone who never helped in the run; it refuses the decision. A person's erasure no longer reports success while their support requests still hold a reason or an email because the role lost a table grant; it fails and is retried.
