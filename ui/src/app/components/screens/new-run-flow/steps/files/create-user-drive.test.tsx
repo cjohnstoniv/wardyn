@@ -440,6 +440,21 @@ describe("delete: Escape and focus", () => {
     expect(within(addDialog()).getByRole("button", { name: NR_SHARED.BACK })).toBeVisible();
   });
 
+  it("moves focus on once a deferred delete leaves the drive listed as Deleting", async () => {
+    create = CREATE_DOORS.limit_reached;
+    del = (id) => {
+      drives = drives.map((d) => (d.id === id ? { ...d, unavailable_reason: "deleting" } : d));
+      return json({ reason: "member_drive_delete_deferred", message: DRIVE_REFUSAL.MEMBER_DELETE_DEFERRED("kofi-mbp") }, 202);
+    };
+    await openChoose();
+    await userEvent.click(ownDeletes()[0]);
+    await userEvent.click(within(top()).getByRole("button", { name: NR_FILES.DELETE_DRIVE }));
+    await userEvent.click(await within(top()).findByRole("button", { name: NR_SHARED.CLOSE_DIALOG }));
+    await waitFor(() => expect(dialogs()).toHaveLength(1));
+    await waitFor(() => expect(addDialog().contains(focused())).toBe(true));
+    expect(focused()).not.toBe(addDialog());
+  });
+
   it("moves focus to Back when nothing else is left to land on", async () => {
     create = CREATE_DOORS.disabled;
     drives = [DRIVE_OWNED];

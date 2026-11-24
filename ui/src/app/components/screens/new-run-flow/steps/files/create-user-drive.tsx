@@ -58,7 +58,8 @@ export function CreateUserDrive({ choose, reload, creating, setCreating, deletin
     }
   }, [creating]);
   React.useEffect(() => {
-    if (!afterDelete || deleting || catalogue?.drives.some((d) => d.id === afterDelete.id)) return;
+    // A drive that reads Deleting counts as gone: a Mac's deferred delete leaves its row listed, and focus still has to move.
+    if (!afterDelete || deleting || catalogue?.drives.some((d) => d.id === afterDelete.id && d.unavailable_reason !== "deleting")) return;
     setAfterDelete(null);
     if (link.current) return link.current.focus();
     // No create link on screen: the next own drive's Delete, else the first option, else Back; never the dialog itself.
