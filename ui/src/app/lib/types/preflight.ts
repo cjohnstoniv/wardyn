@@ -119,6 +119,7 @@ export interface SetupItem {
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;
+  confinement_raise_cause?: "blast_radius_floor";
   risk_assessment?: RiskItem[];
   overall_risk?: RiskLevel;
   // Clamp notices — non-empty only for a MEMBER whose inline_policy the server

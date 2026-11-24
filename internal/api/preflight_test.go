@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -289,6 +290,39 @@ func TestPreflight_BlastRadiusRaisesToCC3(t *testing.T) {
 	}
 	if resp.EnforcedConfinementClass != types.CC3 {
 		t.Errorf("enforced_confinement_class = %q, want CC3 (write-capable grant raise)", resp.EnforcedConfinementClass)
+	}
+}
+
+// TestPreflight_ConfinementRaiseCause pins confinement_raise_cause and its warning line to the floor
+// actually lifting the class: set when a write-capable grant raised CC2 to CC3, absent when the request
+// already named CC3 or the run holds no such grant.
+func TestPreflight_ConfinementRaiseCause(t *testing.T) {
+	const grant = `,"eligible_grants":[{"kind":"github_token","scope":{"repos":["octocat/Hello-World"],"permissions":{"contents":"write"}}}]`
+	const line = "Raised to CC3 by the blast-radius floor"
+	for _, c := range []struct {
+		name, cc, grants, cause string
+	}{
+		{"raised", "CC2", grant, "blast_radius_floor"},
+		{"requested CC3 already", "CC3", grant, ""},
+		{"no write grant", "CC2", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := newSecretsHarness(t)
+			body := `{"agent":"claude-code","repo":"octocat/Hello-World","confinement_class":"` + c.cc + `","inline_policy":{` +
+				`"min_confinement_class":"` + c.cc + `","allowed_domains":["api.anthropic.com"]` + c.grants + `}}`
+			w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("code=%d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var resp preflightResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+			}
+			warned := slices.ContainsFunc(resp.Warnings, func(m string) bool { return strings.Contains(m, line) })
+			if resp.ConfinementRaiseCause != c.cause || warned != (c.cause != "") {
+				t.Errorf("confinement_raise_cause = %q, warned = %v; want %q, warned = %v", resp.ConfinementRaiseCause, warned, c.cause, c.cause != "")
+			}
+		})
 	}
 }
 
