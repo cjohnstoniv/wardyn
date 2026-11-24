@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A web or local terminal displaced while it was still opening, for example when the run's owner joins while a helper's terminal connects, now closes with code 1008 and the reason instead of a plain close (#4206).
+
 ## [0.10.3] — 2026-11-23
 
 ### Added

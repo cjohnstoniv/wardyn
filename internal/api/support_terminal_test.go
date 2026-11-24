@@ -82,12 +82,21 @@ type supportTermRig struct {
 
 func newSupportTermRig(t *testing.T, doors ...string) *supportTermRig {
 	t.Helper()
+	return newSupportTermRigWith(t, nil, doors...)
+}
+
+// newSupportTermRigWith is newSupportTermRig with configure applied to the server's Config before New.
+func newSupportTermRigWith(t *testing.T, configure func(*Config), doors ...string) *supportTermRig {
+	t.Helper()
 	t.Setenv(envSupportSessions, "1")
 	rig := &supportTermRig{t: t, st: &supportTermStore{supportBackend: newSupportBackend()}, fr: &supportTermRunner{}, aud: &sshTestRecorder{}}
 	cfg := baseTestConfig(newHarness(t), rig.st)
 	cfg.Audit = rig.aud
 	cfg.Runner = rig.fr
 	cfg.OIDC = &oidc.Authenticator{}
+	if configure != nil {
+		configure(&cfg)
+	}
 	rig.srv = New(cfg)
 	rig.srv.authorityTest = attachAuthorityTimings{every: authorityTick, lookup: 100 * time.Millisecond}
 	t.Cleanup(rig.srv.WaitBackground)
