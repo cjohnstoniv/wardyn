@@ -540,6 +540,16 @@ func TestSupportTerminalOwnerWinsTheWriterSeat(t *testing.T) {
 	rig := newSupportTermRig(t, "terminal")
 	helperEnd := rig.open(rig.ticket(supportHelperSub, true), false)
 	waitFor(t, "the helper to hold the seat", func() bool { w := rig.srv.attachHolderFor(rig.run.ID); return w != nil && w.support == rig.grant.ID })
+	// The owner joins once the helper's exec is open: an eviction while it is still opening ends the
+	// helper's attach as cancelled, before the displacement's close frame can be sent.
+	waitFor(t, "the helper's exec to open", func() bool {
+		for _, ev := range rig.rows("session.attach") {
+			if ev.Actor == supportHelperSub && strings.Contains(string(ev.Data), `"state":"ready"`) {
+				return true
+			}
+		}
+		return false
+	})
 
 	rig.open(rig.ticket(supportOwnerSub, false), false)
 	code, reason := wantClosed(t, helperEnd)
