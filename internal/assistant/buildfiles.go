@@ -4,10 +4,14 @@
 package assistant
 
 import (
+	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -81,6 +85,28 @@ func KeepWithinCaps(files []File) (kept []File, skipped []string) {
 	return kept, skipped
 }
 
+// RawScanPrefix goes before a file that parses as JSON when it is scanned a second time, so the scanner reads it
+// as one raw span, object keys included, and not as the string values it would walk.
+const RawScanPrefix = "#\n"
+
+// HeldBack reports whether a file must not be sent: it holds a NUL byte (a binary file, which no
+// session row can keep), or the secret scan flags it, errors, or does not cover all of it. A body that parses as
+// JSON is scanned twice, as its string values and as one raw span: the first walk never reads an object key, or a
+// key repeated earlier in the object, though the text sent holds both.
+func HeldBack(eng *contentscan.Engine, text string) bool {
+	if strings.IndexByte(text, 0) >= 0 {
+		return true
+	}
+	flagged := func(body string) bool {
+		res, _, err := eng.ScanRequest(contentscan.ChannelGeneric, []byte(body))
+		return err != nil || len(res.Findings) > 0 || res.Skipped || eng.ShouldBlock(res)
+	}
+	if flagged(text) {
+		return true
+	}
+	return json.Valid([]byte(text)) && flagged(RawScanPrefix+text)
+}
+
 // BuildFilesScanSpec is the inspection a repository read scans each file with. It is the one constructor:
 // production builds its engine from it and the lockfile test scans with it. Only the catalog of well-known
 // secret formats is on. Entropy is off because lockfile integrity hashes would hold back every repository, and
@@ -91,14 +117,22 @@ func BuildFilesScanSpec() types.LLMInspectionSpec {
 		DetectSecretPatterns: true,
 		BlockMinSeverity:     "low",
 		OnScannerError:       "block",
-		MaxScanBytes:         MaxBuildFileBytes,
+		MaxScanBytes:         MaxBuildFileBytes + len(RawScanPrefix),
 	}
 }
 
 // AddBuildFiles is p with the confirmed files added as the last, untrusted section, as the first message
-// carries them. Names the payload already lettered are lettered in the files too, and the caps apply.
+// carries them. Names the payload already lettered are lettered in each file, and the caps apply. A file is
+// framed by a header that gives its length, "--- <name> (<n> bytes)", so FilesOf reads the section back by
+// position and a line inside a file that looks like a header changes nothing.
 func AddBuildFiles(p Payload, files []File) Payload {
-	text := LettersFromMap(p.Letters).Apply(buildText(files))
+	letters := LettersFromMap(p.Letters)
+	parts := make([]string, 0, len(files))
+	for _, f := range files {
+		text := letters.Apply(f.Text)
+		parts = append(parts, fmt.Sprintf("--- %s (%d bytes)\n%s", f.Name, len(text), text))
+	}
+	text := strings.Join(parts, "\n")
 	if strings.TrimSpace(text) == "" {
 		return p
 	}
@@ -106,7 +140,7 @@ func AddBuildFiles(p Payload, files []File) Payload {
 	return Payload{Sections: capSections(secs), Letters: p.Letters}
 }
 
-var buildFileHeader = regexp.MustCompile(`(?m)^--- (` + strings.Join(quoteAll(BuildFileNames()), "|") + `)$`)
+var buildFileHeader = regexp.MustCompile(`^--- (` + strings.Join(quoteAll(BuildFileNames()), "|") + `) \((\d+) bytes\)\n?`)
 
 func quoteAll(names []string) []string {
 	out := make([]string, len(names))
@@ -116,24 +150,29 @@ func quoteAll(names []string) []string {
 	return out
 }
 
-// FilesOf reads the confirmed files back from a payload's sections: the text of the build-files section split at
-// its headers, which only the fixed list's names can open. A section with none yields no file.
+// FilesOf reads the confirmed files back from a payload's sections: the build-files section, walked from its
+// start, one header and its stated length of text at a time. Nothing inside a file is read as a header. A section
+// the size cap cut short gives its last file what is left; a section that does not open with a header yields none.
 func FilesOf(sections []types.AssistantSection) []File {
 	var out []File
 	for _, s := range sections {
 		if s.Label != LabelBuild {
 			continue
 		}
-		heads := buildFileHeader.FindAllStringSubmatchIndex(s.Text, -1)
-		for i, h := range heads {
-			start, end := h[1], len(s.Text)
-			if start < end {
-				start++ // the newline after the header
+		rest := s.Text
+		for {
+			m := buildFileHeader.FindStringSubmatchIndex(rest)
+			if m == nil {
+				break
 			}
-			if i+1 < len(heads) {
-				end = max(start, heads[i+1][0]-1) // the newline that joined this file to the next
+			n, err := strconv.Atoi(rest[m[4]:m[5]])
+			if err != nil {
+				break
 			}
-			out = append(out, File{Name: s.Text[h[2]:h[3]], Text: s.Text[min(start, end):end]})
+			body := rest[m[1]:]
+			n = min(n, len(body))
+			out = append(out, File{Name: rest[m[2]:m[3]], Text: body[:n]})
+			rest = strings.TrimPrefix(body[n:], "\n")
 		}
 	}
 	return out

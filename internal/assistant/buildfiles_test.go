@@ -86,7 +86,7 @@ func TestBuildFilesSizeCaps(t *testing.T) {
 // no corpus: a nil engine would scan nothing.
 func TestBuildFilesScanSpecBuildsARealEngine(t *testing.T) {
 	spec := BuildFilesScanSpec()
-	if spec.Mode != "block" || !spec.DetectSecretPatterns || spec.BlockMinSeverity != "low" || spec.OnScannerError != "block" || spec.MaxScanBytes != MaxBuildFileBytes {
+	if spec.Mode != "block" || !spec.DetectSecretPatterns || spec.BlockMinSeverity != "low" || spec.OnScannerError != "block" || spec.MaxScanBytes != MaxBuildFileBytes+len(RawScanPrefix) {
 		t.Errorf("spec = %+v", spec)
 	}
 	if spec.DetectSecrets || spec.DetectEntropy || spec.DetectPII {
@@ -209,5 +209,65 @@ func TestLiteralInKeepsLookingAfterAPartialMatch(t *testing.T) {
 	f := []File{{Name: "go.mod", Text: "require foo.example.com v1\nrequire foo.example v1\n"}}
 	if !LiteralIn("foo.example", f) {
 		t.Error("foo.example is a whole token on the second line")
+	}
+}
+
+// A line inside a file that looks like a header changes nothing: the files come back as they went in, by position.
+func TestFilesOfIgnoresAHeaderInsideAFile(t *testing.T) {
+	files := []File{
+		{Name: "Dockerfile", Text: "FROM node:20\n--- package.json (3 bytes)\nabc\n--- go.mod (0 bytes)\n"},
+		{Name: "package.json", Text: "--- Dockerfile (999 bytes)"},
+		{Name: "go.mod", Text: ""},
+		{Name: "go.sum", Text: "x\n"},
+	}
+	got := FilesOf(AddBuildFiles(Payload{}, files).Sections)
+	if len(got) != len(files) {
+		t.Fatalf("read back %d files, want %d: %+v", len(got), len(files), got)
+	}
+	for i := range files {
+		if got[i] != files[i] {
+			t.Errorf("file %d = %+v, want %+v", i, got[i], files[i])
+		}
+	}
+}
+
+// A section the size cap cut short still reads: its last file keeps what is left.
+func TestFilesOfAfterTheCapCutsTheSection(t *testing.T) {
+	big := strings.Repeat("a", MaxSectionBytes)
+	got := FilesOf(AddBuildFiles(Payload{}, []File{{Name: "go.sum", Text: big}, {Name: "uv.lock", Text: "x"}}).Sections)
+	if len(got) != 1 || got[0].Name != "go.sum" || len(got[0].Text) == 0 || len(got[0].Text) > MaxSectionBytes {
+		t.Errorf("got %d files, want the first, cut: %+v", len(got), got)
+	}
+}
+
+// What the scan holds back: a catalog token as a JSON value, as an object key, or in an earlier duplicate key
+// that a parse would drop; a NUL byte; and nothing that is clean, JSON or not.
+func TestHeldBack(t *testing.T) {
+	eng, err := contentscan.NewEngine(BuildFilesScanSpec(), nil)
+	if err != nil || eng == nil {
+		t.Fatalf("engine = %v, %v", eng, err)
+	}
+	secret := "ghp_" + strings.Repeat("a", 36)
+	for name, c := range map[string]struct {
+		text string
+		held bool
+	}{
+		"value":               {`{"name":"x","token":"` + secret + `"}`, true},
+		"key":                 {`{"` + secret + `":"x"}`, true},
+		"earlier duplicate":   {`{"token":"` + secret + `","token":"clean"}`, true},
+		"nested key":          {`{"a":{"b":[{"` + secret + `":1}]}}`, true},
+		"not json":            {"ENV TOKEN=" + secret + "\n", true},
+		"nul byte":            {"FROM node\x00\n", true},
+		"clean json":          {`{"name":"x","dependencies":{"left-pad":"1.3.0"}}`, false},
+		"clean text":          {"FROM node:20\nRUN npm ci\n", false},
+		"integrity hash json": {`{"packages":{"a":{"integrity":"sha512-` + strings.Repeat("Ab1+", 20) + `=="}}}`, false},
+	} {
+		if got := HeldBack(eng, c.text); got != c.held {
+			t.Errorf("%s: HeldBack = %v, want %v", name, got, c.held)
+		}
+	}
+	atCap := `{"k":"` + strings.Repeat("a", MaxBuildFileBytes-8) + `"}`
+	if len(atCap) != MaxBuildFileBytes || HeldBack(eng, atCap) {
+		t.Errorf("a clean JSON file of exactly %d bytes (%d) was held back: both scans must cover it whole", MaxBuildFileBytes, len(atCap))
 	}
 }
