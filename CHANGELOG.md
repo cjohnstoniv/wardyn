@@ -13,8 +13,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
-- An experimental `spire` identity provider (`WARDYN_IDENTITY=spire`, off by default, Kubernetes only): each run token is a SPIRE JWT-SVID, its delegation chain is kept in the new `identity_token_bindings` table, and only the run's proxy pod can be attested for the run's X.509-SVID. The chart's `spire` block wires it; see docs/operations/spire.md.
+- An experimental `spire` identity provider (`WARDYN_IDENTITY=spire`, off by default, Kubernetes only): each run token is a SPIRE JWT-SVID, its delegation chain is kept in the new `identity_token_bindings` table, and wardynd registers one SPIRE entry per run that selects only the run's proxy pod. Not yet run against a live SPIRE server. The chart's `spire` block wires it; see docs/operations/spire.md.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, DELETE` on `identity_token_bindings` to every role that was granted `DELETE` on run_attach_leases, other than that table's owner.
+- Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 
 ## [0.10.4] — 2026-11-24
 

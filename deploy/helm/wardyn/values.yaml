@@ -799,16 +799,16 @@ spire:
   enabled: false
   # The SPIFFE CSI driver that publishes the agent's Workload API socket into a pod.
   csiDriver: csi.spiffe.io
-  # wardynd's Workload API socket. The CSI volume is mounted at /spiffe-workload-api, and every
-  # proxy dials /spiffe-workload-api/spire-agent.sock, so keep the file name your agent uses there.
+  # wardynd's Workload API socket. The CSI volume is mounted at /spiffe-workload-api; each proxy pod
+  # mounts the socket there too, though nothing in the proxy reads it yet. Keep your agent's file name.
   socketPath: /spiffe-workload-api/spire-agent.sock
   server:
     # The SPIRE server's host (a Service name such as spire-server.spire-server.svc) and port.
     address: ""
-    port: 8081
+    port: 443
     # The server pod's own port, which the egress rule names: a NetworkPolicy sees the pod's port,
-    # not the Service's (upstream's Service maps 443 to 8081). Empty means port.
-    targetPort: ""
+    # not the Service's. Upstream's chart maps Service port 443 to pod port 8081. 1-65535.
+    targetPort: 8081
     # The namespace the server runs in: wardynd's egress rule allows only that namespace and port.
     namespace: ""
   # The node alias that parents every run entry. It must select this cluster's agents only.

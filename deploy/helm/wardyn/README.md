@@ -487,7 +487,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - The chart installs no SPIRE. Install the server, the agents and the SPIFFE CSI driver from upstream first, with an entry for wardynd that carries `-admin`.
 - Values:
   - `spire.csiDriver` (default `csi.spiffe.io`) and `spire.socketPath` (default `/spiffe-workload-api/spire-agent.sock`);
-  - `spire.server.address`, `spire.server.port` (default `8081`) and `spire.server.namespace`, all required, and `spire.server.targetPort`, the server pod's own port for the egress rule (empty means `port`);
+  - `spire.server.address`, `spire.server.port` (default `443`) and `spire.server.namespace`, all required, and `spire.server.targetPort` (default `8081`, a number from 1 to 65535), the server pod's own port for the egress rule. The defaults are upstream's Service and pod ports;
   - `spire.parentId`, required: the node alias that parents run entries, selecting this cluster's agents only;
   - `spire.proxyServiceAccount` (default `wardyn-proxy`).
 - On, the chart sets the four `WARDYN_SPIRE_*` variables, `WARDYN_POD_SERVICE_ACCOUNT` from the pod's own spec, and `WARDYN_K8S_SPIFFE_CSI_DRIVER` and `WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT`.

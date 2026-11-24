@@ -240,13 +240,17 @@ spec:
     {{- if $spire.enabled }}
     # The SPIRE server (spire.server.*): its namespace and port only, never cluster-wide.
     {{- $srv := $spire.server | default dict }}
+    {{- $tp := int $srv.targetPort }}
+    {{- if or (ne (toString $tp) (toString $srv.targetPort)) (lt $tp 1) (gt $tp 65535) }}
+    {{- fail (printf "wardyn: spire.server.targetPort must be a port number from 1 to 65535 (the SPIRE server pod's own port), not %v" $srv.targetPort) }}
+    {{- end }}
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ required "wardyn: spire.server.namespace is required when spire.enabled=true and networkPolicy.enabled=true (the egress rule to the SPIRE server names it)" $srv.namespace | quote }}
       ports:
         - protocol: TCP
-          port: {{ int ($srv.targetPort | default $srv.port) }}
+          port: {{ $tp }}
     {{- end }}
     {{- with .Values.networkPolicy.egress.extra }}
     # Operator-supplied additional egress rules (OIDC issuer, SIEM sinks, etc.).

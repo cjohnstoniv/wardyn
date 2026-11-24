@@ -64,7 +64,7 @@ ok "off (default, null): identical renders, no SPIRE env, volume or ServiceAccou
 render -f "$ALLON" "${ON[@]}" --set-string env.WARDYN_IDENTITY=embedded >"$TMP/on.out"
 want "on: WARDYN_IDENTITY, rendered once over env" "$(y "$dep | .containers[0].env[] | select(.name == \"WARDYN_IDENTITY\") | .value" "$TMP/on.out")" "spire"
 want "on: WARDYN_SPIRE_AGENT_SOCKET" "$(envval WARDYN_SPIRE_AGENT_SOCKET "$TMP/on.out")" "unix:///spiffe-workload-api/spire-agent.sock"
-want "on: WARDYN_SPIRE_SERVER_ADDRESS" "$(envval WARDYN_SPIRE_SERVER_ADDRESS "$TMP/on.out")" "spire-server.spire-server.svc:8081"
+want "on: WARDYN_SPIRE_SERVER_ADDRESS" "$(envval WARDYN_SPIRE_SERVER_ADDRESS "$TMP/on.out")" "spire-server.spire-server.svc:443"
 want "on: WARDYN_SPIRE_PARENT_ID" "$(envval WARDYN_SPIRE_PARENT_ID "$TMP/on.out")" "spiffe://example.org/spire/agent/k8s_psat/ci"
 want "on: WARDYN_K8S_NAMESPACE" "$(envval WARDYN_K8S_NAMESPACE "$TMP/on.out")" "wardyn-runs"
 want "on: WARDYN_SPIRE_SELECTORS" "$(envval WARDYN_SPIRE_SELECTORS "$TMP/on.out")" \
@@ -90,9 +90,9 @@ want "on: SPIRE server egress rule" \
   "$(y "$np | select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"spire-server\") | .ports[0].port" "$TMP/on.out")" "8081"
 want "on: cluster-wide peers" "$(grep -c 'namespaceSelector: {}' "$TMP/on.out")" "$(grep -c 'namespaceSelector: {}' "$TMP/absent.out")"
 ok "on: one egress rule to the SPIRE server's namespace and port, no new cluster-wide peer"
-render -f "$ALLON" "${ON[@]}" --set spire.server.port=443 --set spire.server.targetPort=8081 >"$TMP/target.out"
-want "targetPort: address" "$(envval WARDYN_SPIRE_SERVER_ADDRESS "$TMP/target.out")" "spire-server.spire-server.svc:443"
-want "targetPort: egress port" "$(y "$np | select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"spire-server\") | .ports[0].port" "$TMP/target.out")" "8081"
+render -f "$ALLON" "${ON[@]}" --set spire.server.port=8443 --set spire.server.targetPort=9443 >"$TMP/target.out"
+want "targetPort: address" "$(envval WARDYN_SPIRE_SERVER_ADDRESS "$TMP/target.out")" "spire-server.spire-server.svc:8443"
+want "targetPort: egress port" "$(y "$np | select(.to[0].namespaceSelector.matchLabels[\"kubernetes.io/metadata.name\"] == \"spire-server\") | .ports[0].port" "$TMP/target.out")" "9443"
 ok "targetPort: the address keeps the Service port, the egress rule names the pod's"
 
 render "${BASAL[@]}" -n wardyn-sys --set k8s.enabled=true --set k8s.proxyImage=example.test/proxy:1 \
@@ -112,5 +112,8 @@ refused "proxy account empty" "spire.proxyServiceAccount must name a dedicated a
 refused "no server address" "spire.server.address is required" -f "$ALLON" "${ON[@]}" --set spire.server.address=
 refused "no server namespace" "spire.server.namespace is required" -f "$ALLON" "${ON[@]}" --set spire.server.namespace=
 refused "no parent ID" "spire.parentId is required" -f "$ALLON" "${ON[@]}" --set spire.parentId=
+refused "named target port" "spire.server.targetPort must be a port number" -f "$ALLON" "${ON[@]}" --set spire.server.targetPort=grpc
+refused "target port 0" "spire.server.targetPort must be a port number" -f "$ALLON" "${ON[@]}" --set spire.server.targetPort=0
+refused "target port 65536" "spire.server.targetPort must be a port number" -f "$ALLON" "${ON[@]}" --set spire.server.targetPort=65536
 
 log "helm spire: PASS"

@@ -10,7 +10,7 @@
 
 ## What you install
 
-- The SPIRE server, the SPIRE agents and the SPIFFE CSI driver, from upstream. Wardyn bundles none of them. Wardyn's kind walk targets the upstream `spire` chart 0.31.0 (SPIRE 1.16.0).
+- The SPIRE server, the SPIRE agents and the SPIFFE CSI driver, from upstream. Wardyn bundles none of them. The provider is built against SPIRE 1.16.0 (upstream `spire` chart 0.31.0) but has not yet been run against a live SPIRE server.
 - Node attestation by `k8s_psat`, so an agent proves which cluster node it runs on.
 - A trust domain of Wardyn's own. As SPIRE admin, wardynd can mint any SVID in its trust domain, so share it with nothing else. Set `WARDYN_TRUST_DOMAIN` to it.
 - An admin entry for wardynd, described [below](#the-admin-entry-for-wardynd).
@@ -29,7 +29,7 @@
 | `WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT` | `spire.proxyServiceAccount` | The account each proxy pod runs as. The agent pod stays on `default`. |
 
 - The two `WARDYN_K8S_SPIFFE_*` variables are set together or not at all; one alone refuses boot. `wardyn-runnerd` refuses either.
-- Every proxy dials `unix:///spiffe-workload-api/spire-agent.sock`, so the agent's socket must have that name in the CSI volume.
+- Each proxy pod mounts the agent's socket at `/spiffe-workload-api/spire-agent.sock`; nothing in the proxy reads it yet. Keep that file name in the CSI volume for the release that does.
 
 ## Workload attestation selectors
 
@@ -86,6 +86,9 @@
 - A kill writes the run to the deny-list first, then deletes its entry.
 - A certificate is not revoked. A run's X.509-SVID can outlive the kill by up to its 10 minutes, so Wardyn never takes it alone as a run's authority: the bearer and the deny-list are checked on every request.
 - The ground-truth sensor's token makes no entry.
+- A mint that races a kill deletes the run's entry again and returns no token.
+- A few cleanup paths revoke a run's identity on a best-effort basis and do not retry. When one fails, the run's entry stays until you remove it by hand. Its tokens stay refused, and no live pod carries its run label.
+- To find such entries, list the entries under `WARDYN_SPIRE_PARENT_ID` that carry a `k8s:pod-label:wardyn.run-id:<run id>` selector, and delete any whose run has ended or no longer exists.
 
 ## Boot refusals
 
