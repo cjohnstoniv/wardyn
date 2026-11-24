@@ -889,4 +889,6 @@ const (
 	reasonAssistantSessionsUnavailable    = "assistant_sessions_unavailable"     // this server's store keeps no assistant sessions
 	reasonAssistantSessionEventsFull      = "assistant_session_events_full"      // the run's session holds as many events as it may
 	reasonAssistantStreamUnavailable      = "assistant_stream_unavailable"       // this server cannot stream the session's events; read them by long-poll
+	reasonAssistantToolUnknown            = "assistant_tool_unknown"             // the run called a tool the server does not have
+	reasonAssistantToolRefused            = "assistant_tool_refused"             // the session's purpose or the organisation's settings keep that tool from the run
 )

@@ -906,6 +906,8 @@ start.
 | `assistant_sessions_unavailable` | `501`: this server's store keeps no assistant sessions. |
 | `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. Start a new session. |
 | `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
+| `assistant_tool_unknown` | `POST /internal/assistant/tools/{name}` (`404`): the run called a tool the server does not have. |
+| `assistant_tool_refused` | `POST /internal/assistant/tools/{name}` (`403`): a review session called `draft`, or the organisation keeps run history from the assistant. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
