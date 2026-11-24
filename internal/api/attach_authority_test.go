@@ -948,6 +948,9 @@ func TestAttachAuthority_MissingRunEndsAtOnce(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
 			rig.budget(time.Hour, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			// The attach-mode frame comes before the exec opens: a first opening whose last read finds the run gone
+			// is a failed attach (1011, webAttach.open), not the re-check this pins. Both execs open first.
+			waitForSession(t, rig.srv.cfg.Runner.(*holderTestRunner), 1)
 			rig.ast.mu.Lock()
 			delete(rig.ast.runs, rig.run.ID)
 			rig.ast.mu.Unlock()

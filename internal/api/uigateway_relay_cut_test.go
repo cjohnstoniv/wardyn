@@ -801,7 +801,7 @@ func TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd(t *testing.T) {
 	if line, _ := bufio.NewReader(conn).ReadString('\n'); !strings.Contains(line, "101") {
 		t.Fatalf("no 101: %q", line)
 	}
-	end := rig.wall(a.ExpiresAt) // as the gateway converted it at admission
+	end := rig.wall(cookieEnd(a.ExpiresAt)) // renewal off: the cookie's signed expiry, as the gateway converted it at admission
 	go sendLines(conn)
 	waitWithin(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(time.Now().Add(-time.Minute)) > 0 })
 	at := waitEnded(t, ended, 10*time.Second, "quiet 101")

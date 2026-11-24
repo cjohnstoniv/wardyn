@@ -81,8 +81,10 @@ func TestPreflight_ExecTaskModeSkipsLLMAccess(t *testing.T) {
 // — dropping it would leave a member launching a silently-narrowed policy
 // with no explanation. The exfil pairing
 // (a real operator secret pinned to an allowlisted attacker host) is dropped by
-// filterUserGrants for the member and kept for the admin, so warnings are
-// present for one and absent for the other.
+// filterUserGrants for the member and kept for the admin, so clamp warnings are
+// present for one and absent for the other. The admin's kept api_key for a host
+// outside the baseline raises CC2 to CC3, so its one warning is the blast-radius
+// floor's.
 func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
@@ -108,7 +110,7 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 		t.Fatalf("member preflight: Warnings empty, want the dropped-grant clamp notice surfaced")
 	}
 
-	// Admin (ceiling authority) is unclamped, so there is nothing to warn about.
+	// Admin (ceiling authority) is unclamped: no clamp notice, only the floor's raise for the grant it kept.
 	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("admin preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
@@ -117,8 +119,9 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &adminResp); err != nil {
 		t.Fatalf("decode admin response: %v; body=%s", err, w.Body.String())
 	}
-	if len(adminResp.Warnings) != 0 {
-		t.Fatalf("admin preflight: Warnings=%v, want none (unclamped)", adminResp.Warnings)
+	if want := blastRadiusRaiseWarning(true); !slices.Equal(adminResp.Warnings, want) || adminResp.ConfinementRaiseCause != "blast_radius_floor" {
+		t.Fatalf("admin preflight: Warnings=%v, confinement_raise_cause=%q; want only %v (unclamped, grant kept) and blast_radius_floor",
+			adminResp.Warnings, adminResp.ConfinementRaiseCause, want)
 	}
 }
 
