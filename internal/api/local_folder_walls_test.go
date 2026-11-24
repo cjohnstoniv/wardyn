@@ -960,14 +960,12 @@ func TestComputerFolderPass_SizeCapsEndEachWay(t *testing.T) {
 		if capped != 1<<20 || free != over {
 			t.Errorf("%s: capped way copied %d, want %d; the other way %d, want %d", tc.wall, capped, 1<<20, free, over)
 		}
-		audit.mu.Lock()
 		rows := 0
-		for _, ev := range audit.events {
-			if ev.Action == "run.local_folder.deny" && strings.Contains(string(ev.Data), `"wall":"`+tc.wall+`"`) {
+		for _, ev := range audit.eventsFor(runID, "run.local_folder.deny") {
+			if strings.Contains(string(ev.Data), `"wall":"`+tc.wall+`"`) {
 				rows++
 			}
 		}
-		audit.mu.Unlock()
 		if rows != 1 {
 			t.Errorf("%s: %d run.local_folder.deny rows naming the wall, want 1", tc.wall, rows)
 		}
