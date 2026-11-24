@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -298,10 +299,13 @@ func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context
 				return unconfirmed(errAttachForwardReadFailed)
 			}
 		}
-		// liveRunForExec answers notFound on any GetRun error, so that answer covers a failed store read too.
+		// liveRunForExec answers notFound on any GetRun error. A run that is gone ends the forward, as it ends an SSH
+		// key connection and the terminal; any other failed read rides the session budget.
 		if _, msg := s.liveRunForExec(lctx, runID, forwardLiveRunWords); msg != "" {
 			if msg == forwardLiveRunWords.notFound {
-				return unconfirmed(errAttachForwardReadFailed)
+				if _, err := s.cfg.Store.GetRun(lctx, runID); !errors.Is(err, store.ErrNotFound) {
+					return unconfirmed(errAttachForwardReadFailed)
+				}
 			}
 			return stop(errAttachForwardRunEnded)
 		}

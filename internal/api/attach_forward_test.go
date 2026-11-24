@@ -831,6 +831,11 @@ func TestAttachForward_RecheckReadFailures(t *testing.T) {
 		want error
 	}{
 		{"run_read_fails", func(fr *forwardRig) { fr.st.getRunErr.Store(true) }, errAttachForwardReadFailed},
+		{"run_gone", func(fr *forwardRig) {
+			fr.ast.mu.Lock()
+			delete(fr.ast.runs, fr.runID)
+			fr.ast.mu.Unlock()
+		}, errAttachForwardRunEnded},
 		{"run_completed", func(fr *forwardRig) { fr.setRun(fr.runID, func(r *types.AgentRun) { r.State = types.RunCompleted }) }, errAttachForwardRunEnded},
 		{"rule_read_fails", func(fr *forwardRig) { fr.st.ruleErr.Store(true) }, errAttachForwardReadFailed},
 		{"rule_blocked", func(fr *forwardRig) { fr.st.rule.Store(types.TransferBlocked) }, errAttachForwardDataOut},
