@@ -31,7 +31,7 @@ import (
 // off and the operator's WARDYN_ATTACH_FORWARD on, over the organisation. It
 // reaches nothing the gateway's -L does not already allow (docs/SSH.md, section 4).
 func runForwardCmd(client clientFn) *cobra.Command {
-	var advertisedProxy bool
+	var advertisedProxy, forceKey bool
 	cmd := &cobra.Command{
 		Use:   "forward <run-id> [<local-port>:]<sandbox-port>...",
 		Short: "Forward local ports to a running sandbox over the SSH gateway, or the organisation",
@@ -49,6 +49,13 @@ use ends the command instead of leaving a forward that does not exist.
 Without the gateway, and without WARDYN_ATTACH_FORWARD, or without a registered
 key on the gateway path, it stops with one line saying so. The key is made by
 'wardyn ssh-key ensure', never by this command.
+
+When the deployment turns SSH tickets on (WARDYN_SSH_TICKETS), the gateway path
+needs no registered key: the command takes a 30-second single-use ticket that
+forwards only the sandbox ports named here (at most 16), and ssh reaches the run
+through 'wardyn run ssh-proxy' over the HTTPS API. The ticket is never on the
+command line, in a URL or in a file, and an advertised ProxyCommand is not run.
+--key uses your registered key instead.
 `,
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -69,9 +76,22 @@ key on the gateway path, it stops with one line saying so. The key is made by
 			if _, err := resolveSSHGateway(cmd.Context(), c); errors.Is(err, errSSHGatewayOff) {
 				return forwardOverOrganisation(cmd, c, args[0], pairs)
 			}
-			acc, err := resolveSSHAccess(cmd.Context(), c, "forward", args[0], advertisedProxy)
+			acc, err := resolveSSHAccessKey(cmd.Context(), c, "forward", args[0], advertisedProxy, forceKey)
 			if err != nil {
 				return err
+			}
+			if acc.ticket {
+				ports, err := ticketPorts(pairs)
+				if err != nil {
+					return err
+				}
+				front := []string{"-N", "-o", "ExitOnForwardFailure=yes"}
+				for _, f := range forwards {
+					front = append(front, "-L", f)
+					fmt.Fprintf(cmd.ErrOrStderr(), "forwarding %s (Ctrl-C to stop)\n", f)
+				}
+				q := url.Values{"purpose": {sshTicketPurposes["forward"]}, "ports": {ports}}
+				return runTicketSSH(cmd.Context(), c, acc.gw, "forward", args[0], q, front, nil)
 			}
 			for _, f := range forwards {
 				fmt.Fprintf(cmd.ErrOrStderr(), "forwarding %s (Ctrl-C to stop)\n", f)
@@ -80,6 +100,7 @@ key on the gateway path, it stops with one line saying so. The key is made by
 		},
 	}
 	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "connect through the ProxyCommand this deployment advertises (it runs on this computer)")
+	cmd.Flags().BoolVar(&forceKey, "key", false, "connect with your registered SSH key even when the deployment offers SSH tickets")
 	return cmd
 }
 
@@ -181,7 +202,7 @@ func forwardOverOrganisation(cmd *cobra.Command, c *sdk.Client, runID string, pa
 // forwardPreCheck mints one ticket and asks the route to run its checks without opening anything (?check=1), so a
 // deployment that has not turned forwarding on, or an older server, ends the command before any port is bound.
 func forwardPreCheck(ctx context.Context, c *sdk.Client, runID string, port int) error {
-	t, err := mintAttachTicket(ctx, c, runID)
+	t, err := mintForwardTicket(ctx, c, runID, port)
 	if err != nil {
 		return fmt.Errorf("forward: %w", err)
 	}
@@ -215,12 +236,23 @@ func forwardPreCheck(ctx context.Context, c *sdk.Client, runID string, port int)
 	return fmt.Errorf("forward: %w", apiErr)
 }
 
+// mintForwardTicket mints the organisation forward's ticket for one sandbox port: purpose attach-forward, which takes
+// none of the run's terminal slots. A server with the forward door but no purposes answers with no echo and a
+// terminal ticket, used as before. "" and nil when the answer held no usable ticket (forwardNoTicket).
+func mintForwardTicket(ctx context.Context, c *sdk.Client, runID string, port int) (string, error) {
+	t, echo, err := mintTicket(ctx, c, runID, url.Values{"purpose": {"attach-forward"}, "ports": {strconv.Itoa(port)}})
+	if errors.As(err, new(*ticketInconclusive)) || (err == nil && echo != "" && echo != "attach-forward") {
+		return "", nil
+	}
+	return t, err
+}
+
 // forwardConn relays one accepted local connection over its own WebSocket and ticket, and closes it. A refusal
 // prints one line and leaves the listener running.
 func forwardConn(ctx context.Context, c *sdk.Client, runID string, remote int, local net.Conn, logf func(string, ...any)) {
 	defer local.Close()
 	mctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	t, err := mintAttachTicket(mctx, c, runID)
+	t, err := mintForwardTicket(mctx, c, runID, remote)
 	cancel()
 	if err != nil {
 		logf("forward: %d: %s", remote, apiSentence(err))

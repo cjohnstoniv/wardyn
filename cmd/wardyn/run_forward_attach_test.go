@@ -44,6 +44,7 @@ type forwardOrgFixture struct {
 	ports   []string
 	tickets []string
 	echoed  atomic.Int32
+	mintQ   []string // each mint's query, encoded
 }
 
 func newForwardOrgFixture(t *testing.T) *forwardOrgFixture {
@@ -60,7 +61,10 @@ func newForwardOrgFixture(t *testing.T) *forwardOrgFixture {
 		_, _ = w.Write([]byte(gatewayOffHealthz))
 	})
 	mux.HandleFunc("/api/v1/me/ssh-keys", func(w http.ResponseWriter, _ *http.Request) { f.keyGET.Add(1) })
-	mux.HandleFunc("/api/v1/runs/"+testRunID+"/attach/ticket", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v1/runs/"+testRunID+"/attach/ticket", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.mintQ = append(f.mintQ, r.URL.Query().Encode())
+		f.mu.Unlock()
 		f.mint(int(f.mints.Add(1)), w)
 	})
 	mux.HandleFunc("/api/v1/runs/"+testRunID+"/attach/forward", func(w http.ResponseWriter, r *http.Request) {
@@ -437,4 +441,39 @@ func TestRunForward_TransportErrorNeverPrintsTheTicket(t *testing.T) {
 		cancel()
 		<-done
 	})
+}
+
+// TestRunForward_OrganisationMintsAttachForward: every mint asks for an attach-forward ticket for the port it
+// serves, so no terminal slot is taken; the ticket is used with the server's echo and, from an older server that
+// echoes nothing, without it.
+func TestRunForward_OrganisationMintsAttachForward(t *testing.T) {
+	for _, echo := range []string{`,"purpose":"attach-forward"`, ""} {
+		t.Run("echo "+strconv.Quote(echo), func(t *testing.T) {
+			f := newForwardOrgFixture(t)
+			f.mint = func(n int, w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"ticket":"ticket-%d"%s}`, n, echo)
+			}
+			port, stderr, cancel, done := startForwardFree(t, f, "4000")
+			waitForText(t, stderr, "through the organisation (Ctrl-C to stop)")
+			echoOnce(t, port, "hello")
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Ctrl-C ended with %v, want nil", err)
+			}
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if len(f.mintQ) < 2 {
+				t.Fatalf("mints = %q, want the check's and the connection's", f.mintQ)
+			}
+			for i, q := range f.mintQ {
+				if q != "ports=4000&purpose=attach-forward" {
+					t.Errorf("mint %d query = %q, want purpose=attach-forward for port 4000", i, q)
+				}
+			}
+			if len(f.tickets) != 1 || f.tickets[0] != "ticket-2" {
+				t.Errorf("dial tickets = %q, want the connection's own ticket-2", f.tickets)
+			}
+		})
+	}
 }

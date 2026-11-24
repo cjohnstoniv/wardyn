@@ -15,6 +15,7 @@ import (
 // The purposes a ticket may be minted for, and the door each opens. A purpose is stored with the ticket and checked
 // at redemption, so a ticket spent at any other door is refused after it is burned.
 const (
+	ticketPurposeSSHShell      = "ssh-shell"
 	ticketPurposeSSHExec       = "ssh-exec"
 	ticketPurposeSSHForward    = "ssh-forward"
 	ticketPurposeSSHEditor     = "ssh-editor"
@@ -23,6 +24,7 @@ const (
 
 // sshTicketKinds is the channel kinds each SSH purpose serves on GET /runs/{id}/ssh.
 var sshTicketKinds = map[string][]sshChannelKind{
+	ticketPurposeSSHShell:   {sshKindShell},
 	ticketPurposeSSHExec:    {sshKindExec},
 	ticketPurposeSSHForward: {sshKindForward},
 	ticketPurposeSSHEditor:  {sshKindShell, sshKindExec, sshKindSFTP, sshKindForward},
@@ -30,7 +32,10 @@ var sshTicketKinds = map[string][]sshChannelKind{
 
 // ticketPurposeWords names a purpose in the sentence a refused channel gets.
 var ticketPurposeWords = map[string]string{
-	ticketPurposeSSHExec: "one command", ticketPurposeSSHForward: "port forwarding", ticketPurposeSSHEditor: "an editor",
+	ticketPurposeSSHShell:   "a terminal",
+	ticketPurposeSSHExec:    "one command",
+	ticketPurposeSSHForward: "port forwarding",
+	ticketPurposeSSHEditor:  "an editor",
 }
 
 // ticketScope is what a mint's purpose adds to the ticket: the purpose and its ports.
@@ -78,7 +83,7 @@ func (s *Server) mintScope(w http.ResponseWriter, r *http.Request, purpose strin
 	case purpose == ticketPurposeAttachForward:
 		return s.attachForwardScope(w, r, ports)
 	case strings.HasPrefix(purpose, "ssh-"):
-		writeErrorReason(w, http.StatusBadRequest, reasonAttachTicketPurposeInvalid, "Purpose must be ssh-exec, ssh-forward, ssh-editor or attach-forward.")
+		writeErrorReason(w, http.StatusBadRequest, reasonAttachTicketPurposeInvalid, "Purpose must be ssh-shell, ssh-exec, ssh-forward, ssh-editor, ssh-sync, ssh-sync-git or attach-forward.")
 		return ticketScope{}, false
 	case ports != "":
 		refuseTicketPorts(w)

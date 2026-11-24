@@ -25,7 +25,7 @@ const wardynSSHConfig = "~/.wardyn/ssh_config"
 // to ~/.wardyn/ssh_config and open VS Code Remote-SSH on it over the SSH gateway.
 func runEditorCmd(client clientFn) *cobra.Command {
 	var dir string
-	var advertisedProxy bool
+	var advertisedProxy, forceKey bool
 	cmd := &cobra.Command{
 		Use:   "editor <run-id>",
 		Short: "Open VS Code on a running sandbox over the SSH gateway",
@@ -47,13 +47,21 @@ sandbox has no internet); see docs/SSH.md.
 
 Without the gateway or a registered key it stops with one line saying so. The
 key is made by 'wardyn ssh-key ensure', never by this command.
+
+When the deployment turns SSH tickets on (WARDYN_SSH_TICKETS), no registered
+key is needed: the Host block's ProxyCommand is 'wardyn run ssh-proxy', which
+takes a 30-second single-use ticket with your sign-in (wardyn login) for each
+connection VS Code opens and reaches the run over the HTTPS API. The block holds
+no ticket and no key, and pins the gateway's host key in ~/.wardyn/known_hosts.
+An advertised ProxyCommand is not written. --key writes the key form instead.
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !strings.HasPrefix(dir, "/") || strings.ContainsAny(dir, "\r\n") {
 				return fmt.Errorf("editor: --dir %q must be an absolute path in the sandbox", dir)
 			}
-			acc, err := resolveSSHAccess(cmd.Context(), client(), "editor", args[0], advertisedProxy)
+			api := client()
+			acc, err := resolveSSHAccessKey(cmd.Context(), api, "editor", args[0], advertisedProxy, forceKey)
 			if err != nil {
 				return err
 			}
@@ -65,7 +73,13 @@ key is made by 'wardyn ssh-key ensure', never by this command.
 			if acc.identity != "" {
 				identity = defaultSSHKeyPath
 			}
-			if err := upsertSSHHost(cfg, sshConfigBlock(acc.gw, args[0], identity)); err != nil {
+			block := sshConfigBlock(acc.gw, args[0], identity)
+			if acc.ticket {
+				if block, err = editorTicketBlock(api.BaseURL, acc.gw, args[0]); err != nil {
+					return err
+				}
+			}
+			if err := upsertSSHHost(cfg, block); err != nil {
 				return fmt.Errorf("editor: write %s: %w", cfg, err)
 			}
 			included, err := ensureSSHInclude(cmd, cfg)
@@ -88,6 +102,7 @@ key is made by 'wardyn ssh-key ensure', never by this command.
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "/home/agent/work", "folder in the sandbox to open")
+	cmd.Flags().BoolVar(&forceKey, "key", false, "write the Host block with your registered SSH key even when the deployment offers SSH tickets")
 	cmd.Flags().BoolVar(&advertisedProxy, "advertised-proxy", false, "write the ProxyCommand this deployment advertises into the Host block; it stays in ~/.wardyn/ssh_config and VS Code (or any ssh wardyn-<run-id>) runs it on this computer on every connection until you remove the block")
 	return cmd
 }

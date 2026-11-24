@@ -298,7 +298,7 @@ func runCmd(client clientFn) *cobra.Command {
 
 	cmd.AddCommand(runListCmd(client), runGetCmd(client), runKillCmd(client),
 		runGrantsCmd(client), runRecordingCmd(client), runWaitReadyCmd(client), runPolicyCmd(client),
-		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), sshCmd(client), runExecCmd(client), runForwardCmd(client), runEditorCmd(client), runSupportCmd(client))
+		runLogsCmd(client), runOutputCmd(client), runSignInCmd(client), sshCmd(client), runExecCmd(client), runForwardCmd(client), runEditorCmd(client), runSupportCmd(client), sshProxyCmd(client))
 	return cmd
 }
 

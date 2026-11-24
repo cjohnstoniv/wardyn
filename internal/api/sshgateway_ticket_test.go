@@ -797,3 +797,29 @@ func TestSSHTicketDoor_Healthz(t *testing.T) {
 		t.Errorf("healthz ssh with tickets off = %v, want no host_key", off)
 	}
 }
+
+// TestSSHTicketDoor_ShellPurpose: an ssh-shell ticket serves a terminal, its pty-req included, and no command.
+func TestSSHTicketDoor_ShellPurpose(t *testing.T) {
+	rig := newTicketDoorRig(t)
+	client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHShell), rig.run.ID.String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.RequestPty("xterm", 24, 80, ssh.TerminalModes{}); err != nil {
+		t.Fatalf("pty-req: %v", err)
+	}
+	if err := sess.Shell(); err != nil {
+		t.Fatalf("shell: %v", err)
+	}
+	_ = sess.Close()
+	if err := execRuns(t, client, "true"); err == nil {
+		t.Error("an ssh-shell ticket ran a command")
+	}
+	if row := rig.waitRow(t, "ssh.channel.reject", "failure", "ticket_purpose"); row["purpose"] != ticketPurposeSSHShell {
+		t.Errorf("row = %v, want purpose ssh-shell", row)
+	}
+}
