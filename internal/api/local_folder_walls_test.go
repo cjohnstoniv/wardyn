@@ -743,7 +743,7 @@ func TestBridgeSSHSync_DenyPullStartsReadDenied(t *testing.T) {
 
 // TestBridgeSSHSync_DenyPullGuardNamesTheWall: under deny_pull with data_out allowed, the first content reply ends the
 // sync with the deny_pull sentence naming its layer and one run.local_folder.deny row, never a data_out row; with
-// data_out review the data_out guard answers as before.
+// data_out review or blocked the session starts read-denied and the data_out guard and audit answer as before.
 func TestBridgeSSHSync_DenyPullGuardNamesTheWall(t *testing.T) {
 	rec := types.LocalFolderWallsRecord{Walls: &types.LocalFolderRules{DenyPull: true}, Layers: map[string]types.LocalFolderWallLayer{wallDenyPull: {Layer: policyref.LayerUnit, Name: "eng"}}}
 	d := newLFWSSH(t, rec, nil, types.TransferAllowed, nil, types.Runner{})
@@ -762,15 +762,24 @@ func TestBridgeSSHSync_DenyPullGuardNamesTheWall(t *testing.T) {
 		t.Error("a data_out row was written for the walls' guard")
 	}
 
-	r := newLFWSSH(t, rec, nil, types.TransferReview, nil, types.Runner{})
-	r.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return sftpDataThenName(), nil }
-	_, _, _, out = r.openSync(t, "pull")
-	_, _ = io.ReadAll(out)
-	if waitForAudit(t, r.h.audit, r.run.ID, "run.data_out.deny", "denied") == nil {
-		t.Errorf("data_out review: no data_out row; events=%s", auditDump(r.h.audit.snapshot(), r.run.ID))
-	}
-	if findAudit(r.h.audit.snapshot(), r.run.ID, "run.local_folder.deny", "denied") != nil {
-		t.Error("data_out review: the walls' guard answered instead of data_out's")
+	// Under review or blocked, the session starts read-denied as before and data_out's guard and audit win.
+	for _, rule := range []types.TransferRule{types.TransferReview, types.TransferBlocked} {
+		r := newLFWSSH(t, rec, nil, rule, nil, types.Runner{})
+		r.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return sftpDataThenName(), nil }
+		_, stderr, _, out := r.openSync(t, "pull")
+		_, _ = io.ReadAll(out)
+		if argv, _ := r.fr.lastCall(); !slices.Equal(argv, []string{sftpServerPath, "-e", "-d", "/home/agent/work/proj", "-P", "read,readlink"}) {
+			t.Errorf("data_out %s: argv = %v, want read-denied", rule, argv)
+		}
+		if got, _ := io.ReadAll(stderr); !strings.Contains(string(got), "data_out rule keeps content in") {
+			t.Errorf("data_out %s: stderr = %q, want data_out's sentence", rule, got)
+		}
+		if waitForAudit(t, r.h.audit, r.run.ID, "run.data_out.deny", "denied") == nil {
+			t.Errorf("data_out %s: no data_out row; events=%s", rule, auditDump(r.h.audit.snapshot(), r.run.ID))
+		}
+		if findAudit(r.h.audit.snapshot(), r.run.ID, "run.local_folder.deny", "denied") != nil {
+			t.Errorf("data_out %s: the walls' guard answered instead of data_out's", rule)
+		}
 	}
 }
 

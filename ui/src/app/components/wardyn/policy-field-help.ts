@@ -233,4 +233,11 @@ export const FIELD_HELP = {
     doc: "data_out",
     snippet: "review",
   },
+  local_folders: {
+    what: "Walls for folders from a person's computer. A layer above can only add walls.",
+    values:
+      "deny_remote: true, not allowed for a run on another machine. deny_pull: true, changes in the sandbox don't sync back to your computer. max_push_mib, max_pull_mib: 1 to 1048576 MiB per session. deny: patterns skipped by wardyn sync and the runner. Omitted: no walls beyond the organisation's.",
+    doc: "local_folders",
+    snippet: { deny_pull: true },
+  },
 } satisfies Record<keyof RunPolicySpec, FieldHelp>;
