@@ -96,9 +96,7 @@ func (s *Server) stepWindowsImage(f *runFold, _ *foldRecorder) bool {
 		f.windowsRef, f.windowsLaunch = launch.Image.Ref, &launch
 		return true
 	}
-	if f.mode == foldCreate {
-		s.auditWindowsDenied(f.r, *f.req, rf)
-	}
+	s.auditWindowsDenied(f.r, *f.req, rf, f.mode == foldCreate)
 	return !rf.write(s, f.w, f.r)
 }
 
@@ -269,9 +267,9 @@ func writeWindowsLicenceRefusal(w http.ResponseWriter, err error) bool {
 }
 
 // auditWindowsDenied writes the run.create denied row for a refused Windows VM launch, naming the image asked
-// for and the reason. A refused run has no run row.
-func (s *Server) auditWindowsDenied(r *http.Request, req createRunRequest, rf *runRefusal) {
-	if s.cfg.Audit == nil || rf.body.Reason == "" { // a server error is logged by its writer, not denied
+// for and the reason. A refused run has no run row. The dry doors pass create false and write none.
+func (s *Server) auditWindowsDenied(r *http.Request, req createRunRequest, rf *runRefusal, create bool) {
+	if !create || s.cfg.Audit == nil || rf.body.Reason == "" { // a server error is logged by its writer, not denied
 		return
 	}
 	at, principal := actorFromRequest(r)
@@ -294,9 +292,7 @@ func (s *Server) stepWindowsPlacement(f *runFold, _ *foldRecorder) bool {
 	if rf == nil {
 		return true
 	}
-	if f.mode == foldCreate {
-		s.auditWindowsDenied(f.r, *f.req, rf)
-	}
+	s.auditWindowsDenied(f.r, *f.req, rf, f.mode == foldCreate)
 	return !rf.write(s, f.w, f.r)
 }
 
