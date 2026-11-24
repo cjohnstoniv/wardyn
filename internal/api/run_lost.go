@@ -390,7 +390,7 @@ func (s *Server) stopLostSandbox(ctx context.Context, run types.AgentRun) error 
 	if end != lostEndPast {
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 		if ok {
-			cutErr = stopper.StopProxy(ctx, run.SandboxRef)
+			cutErr = runner.CutEgress(ctx, stopper, run.SandboxRef)
 		}
 		switch end {
 		case lostEndOpen:

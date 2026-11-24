@@ -63,7 +63,7 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.AzureSettings]():        strings.Fields("Endpoint Route"),
 	reflect.TypeFor[types.BedrockSettings]():      strings.Fields("Region BaseURL SSOStartURL SSOAccountID SSORoleName"),
 	reflect.TypeFor[types.CLIServiceAccount]():    strings.Fields("Namespace Name"),
-	reflect.TypeFor[types.ComponentSettings]():    strings.Fields("RequireVaultForCredentials DenyResidentDelivery AutonomyCap"),
+	reflect.TypeFor[types.ComponentSettings]():    strings.Fields("RequireVaultForCredentials DenyResidentDelivery AutonomyCap LocalMCPServers"),
 	reflect.TypeFor[types.ComponentMCPLaunch]():   strings.Fields("Command Args"),
 	reflect.TypeFor[types.EgressRedirect]():       strings.Fields("From To TokenSecretRef TokenIntegrationRef Ecosystem GoChecksumDBOff"),
 	reflect.TypeFor[types.EphemeralProvider]():    strings.Fields("DefaultDiskMiB MaxDiskMiB"),

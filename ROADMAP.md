@@ -57,7 +57,7 @@ Built, from 0.10.0-rc.1 to rc.13:
 | A governed local-model endpoint for the person's own GPU | Built |
 | Folders on your computer in remote sandboxes | Built |
 | Desktop in the console, Needs you with take-over, clipboard and file-transfer controls, desktop recording, sign-ins inside a desktop | Built |
-| Scheduled runs (`WARDYN_SCHEDULED_RUNS`), several agents in one run (`WARDYN_MULTI_AGENT_TASKS`), in-sandbox MCP servers (`WARDYN_MCP_LOCAL_SERVERS`), kubectl (`WARDYN_KUBECTL_CLI`) | Built, off by default |
+| Scheduled runs (`WARDYN_SCHEDULED_RUNS`), several agents in one run (`WARDYN_MULTI_AGENT_TASKS`), MCP servers in a sandbox of their own (`WARDYN_MCP_OWN_SANDBOX`), kubectl (`WARDYN_KUBECTL_CLI`) | Built, off by default |
 | Team-shared drives, keeping a run's work folder as a drive, services and inbound apps | Built |
 | Session continuity across sign-ins (#1995) and session lifetime (#1996, `WARDYN_OIDC_SESSION_RENEW_CAP`, `WARDYN_OIDC_SESSION_IDLE_TIMEOUT`) | Built |
 

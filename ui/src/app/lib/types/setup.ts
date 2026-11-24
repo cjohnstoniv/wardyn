@@ -351,8 +351,12 @@ export interface SetupStatus {
     kubectl_cli?: boolean;
     /** WARDYN_MULTI_AGENT_TASKS: a background agent task may give each agent its own task. */
     multi_agent_tasks?: boolean;
-    /** WARDYN_MCP_LOCAL_SERVERS: a component may define an MCP server that runs in the run's sandbox. Optional for fixtures. */
+    /** WARDYN_MCP_LOCAL_SERVERS, removed: always false. Optional for fixtures. */
     mcp_local_servers?: boolean;
+    /** WARDYN_MCP_OWN_SANDBOX: an MCP server that starts from a command may run in a sandbox of its own. Absent when off. */
+    mcp_own_sandbox?: boolean;
+    /** The switch and the organisation's Local MCP servers setting are both on. Absent when off. */
+    local_mcp_servers?: boolean;
     /** WARDYN_MACOS_VMS: a run may ask for a macOS virtual machine. Absent when off. */
     macos_vms?: boolean;
     /** The site config's macos_vm.allow_attended_window: a macOS VM run's owner may open a window on their Mac. Absent when off. */

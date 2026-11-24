@@ -38,6 +38,8 @@ type Capabilities struct {
 	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
 	UserDrives   bool `json:"user_drives,omitempty"`
 	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
+	// MCPSandboxKinds are the machine kinds whose runs can have MCP sandboxes (MCPSandboxer). Fail closed: absent means none.
+	MCPSandboxKinds []types.MachineKind `json:"mcp_sandbox_kinds,omitempty"`
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.

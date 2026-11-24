@@ -727,7 +727,7 @@ func TestSetupStatus_MacWindowFeature(t *testing.T) {
 			}
 		})
 	}
-	if f := setupFeatures(false, false); f.MacWindow {
+	if f := setupFeatures(false, false, false); f.MacWindow {
 		t.Error("a site config that could not be read reads the switch on")
 	}
 }

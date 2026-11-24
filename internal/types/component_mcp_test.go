@@ -216,3 +216,64 @@ func TestComponentMCP_GatewayAudience(t *testing.T) {
 		t.Errorf("a stdio server: want an mcp.gateway_audience refusal, got %v", err)
 	}
 }
+
+// TestComponentMCP_Sandbox: the sandbox block is a stdio server's alone; its mode is one of the three, an
+// overlay rides narrower and a spec own; a spec leaves empty what an MCP sandbox cannot have; and neither
+// carries a hold rule.
+func TestComponentMCP_Sandbox(t *testing.T) {
+	with := func(d types.ComponentDefinition, p types.ComponentMCPSandboxPolicy) types.ComponentDefinition {
+		d.MCP.Sandbox = &types.ComponentMCPSandbox{Policy: p}
+		return d
+	}
+	stdio := func() types.ComponentDefinition { return localMCP("npx", "@example/mcp-server@1.4.2") }
+	hosts := []string{"docs.example.com"}
+	hold := []types.HostRuleSet{{Rules: []types.HostRule{{Host: "docs.example.com", Effect: types.HostRuleAllow}, {Host: "x.example.com", Effect: types.HostRuleHold}}}}
+	ok := map[string]types.ComponentDefinition{
+		"no block":            stdio(),
+		"same":                with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame}),
+		"narrower, overlay":   with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Overlay: &types.CeilingOverlay{AllowedDomains: &hosts}}),
+		"own, egress spec":    with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{AllowedDomains: hosts}}),
+		"own, allow and deny": with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Spec: &types.RunPolicySpec{HostRules: hold[:0]}}),
+	}
+	for name, d := range ok {
+		if err := d.Validate(proxy.ValidDomainEntry, true); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	bad := map[string]struct {
+		def  types.ComponentDefinition
+		want string
+	}{
+		"on a remote server": {with(mcpDef("https://mcp.linear.app/mcp", "mcp.linear.app"), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame}), "mcp.sandbox: "},
+		"empty mode":         {with(stdio(), types.ComponentMCPSandboxPolicy{}), "mcp.sandbox.policy.mode: "},
+		"unknown mode":       {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: "wider"}), "mcp.sandbox.policy.mode: "},
+		"overlay on same":    {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxSame, Overlay: &types.CeilingOverlay{}}), "mcp.sandbox.policy.overlay: "},
+		"overlay on own":     {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn, Overlay: &types.CeilingOverlay{}}), "mcp.sandbox.policy.overlay: "},
+		"spec on narrower":   {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower, Spec: &types.RunPolicySpec{}}), "mcp.sandbox.policy.spec: "},
+		"spec, tool rules": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+			Spec: &types.RunPolicySpec{ToolRules: []types.ToolRule{{Tool: "*", Effect: types.ToolDeny}}}}), "mcp.sandbox.policy.spec.tool_rules: "},
+		"spec, desktop": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+			Spec: &types.RunPolicySpec{Desktop: &types.DesktopControls{}}}), "mcp.sandbox.policy.spec.desktop: "},
+		"spec, recording": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+			Spec: &types.RunPolicySpec{Recording: "terminal"}}), "mcp.sandbox.policy.spec.recording: "},
+		"spec, hold rule": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxOwn,
+			Spec: &types.RunPolicySpec{HostRules: hold}}), "mcp.sandbox.policy.spec.host_rules[0].rules[1].effect: "},
+		"overlay, hold rule": {with(stdio(), types.ComponentMCPSandboxPolicy{Mode: types.ComponentMCPSandboxNarrower,
+			Overlay: &types.CeilingOverlay{HostRules: &hold}}), "mcp.sandbox.policy.overlay.host_rules[0].rules[1].effect: "},
+	}
+	for name, tc := range bad {
+		err := tc.def.Validate(proxy.ValidDomainEntry, true)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want an error starting %q", name, err, tc.want)
+		}
+	}
+}
+
+// TestValidComponentEnvName: the exported rule is the component rule.
+func TestValidComponentEnvName(t *testing.T) {
+	for name, ok := range map[string]bool{"FILES_ROOT": true, "ANTHROPIC_API_KEY": true, "WARDYN_X": false, "LD_PRELOAD": false, "lower": false} {
+		if err := types.ValidComponentEnvName(name); (err == nil) != ok {
+			t.Errorf("%s: %v, want ok %v", name, err, ok)
+		}
+	}
+}

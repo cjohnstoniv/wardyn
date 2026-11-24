@@ -407,6 +407,10 @@ func validHeaderHost(host string, hosts []string) error {
 	return fmt.Errorf("%q must be one of this component's hosts, listed bare or with :443 — the port a header credential is sent on", host)
 }
 
+// ValidComponentEnvName is validComponentEnvName for other packages: an MCP
+// sandbox's own variables are held to the same rule.
+func ValidComponentEnvName(name string) error { return validComponentEnvName(name) }
+
 // validComponentEnvName is the rule for a name written into the sandbox's
 // environment, as a delivered secret's variable or as a config key.
 // WARDYN_* names configure the sandbox harness itself, so authoring one would
@@ -848,15 +852,14 @@ const (
 //     is configured with the proxy's broker route, which adds the server's
 //     header credential, applies the run's tool rules to its tools and is the
 //     only network path to the server.
-//   - stdio: a local server. Launch is the command its harness starts inside
-//     the run's sandbox, as the agent's user, with the agent's access; the
-//     harness, not the proxy, applies the run's rules to its tools. Its hosts
-//     join the run's allowlist and its secrets are delivered as any
-//     component's are.
+//   - stdio: a server that starts from a command. Launch is the command, run
+//     in a sandbox of its own, never in the agent's; the agent's proxy reaches
+//     it only through the relay, where the run's tool rules apply. Its hosts
+//     go to its own sandbox's policy, not the run's allowlist.
 //
-// Launch and Transport are one seam: a later placement (the server in a
-// container of its own, bridged to the broker) adds a field beside them and
-// keeps both.
+// Sandbox is the seam beside Launch and Transport: a stdio server runs in a
+// sandbox of its own, behind its own proxy, and Sandbox holds the policy that
+// sandbox gets.
 type ComponentMCP struct {
 	// URL is a remote server's streamable HTTP address: https, no userinfo,
 	// its host one of the component's hosts.
@@ -869,6 +872,8 @@ type ComponentMCP struct {
 	// It is valid on an organisation's remote server alone: a person's own server
 	// could name a real gateway's audience and be handed a token good at that gateway.
 	GatewayAudience string `json:"gateway_audience,omitempty"`
+	// Sandbox is a stdio server's own sandbox policy; absent reads "same".
+	Sandbox *ComponentMCPSandbox `json:"sandbox,omitempty"`
 }
 
 // MCPURLDestination checks an MCP server URL and returns its host and port as

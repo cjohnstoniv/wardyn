@@ -283,7 +283,20 @@ type ComponentSettings struct {
 	// a governance profile: "" no cap (default), "L1" holds tool calls, "L0"
 	// refuses unattended runs. No other value is accepted: the cap only tightens.
 	AutonomyCap AutonomyLevel `json:"autonomy_cap,omitempty"`
+	// LocalMCPServers is the organisation's Local MCP servers setting: "off" refuses an MCP server that
+	// starts from a command; "on", "" and an absent key read on. A pointer, so a write that leaves the key
+	// out keeps the stored value.
+	LocalMCPServers *LocalMCPSetting `json:"local_mcp_servers,omitempty"`
 }
+
+// LocalMCPSetting is ComponentSettings.LocalMCPServers.
+type LocalMCPSetting string
+
+// The Local MCP servers values.
+const (
+	LocalMCPOff LocalMCPSetting = "off"
+	LocalMCPOn  LocalMCPSetting = "on"
+)
 
 // InternalHost is one SiteConfig.InternalHosts entry — see that field's doc.
 type InternalHost struct {

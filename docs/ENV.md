@@ -55,7 +55,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Unset or empty (`docker run -e VAR` / compose `VAR=`) keeps the default quietly.
 - Every boolean `wardynd` and the runner substrates read goes through that one parser (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off`, anything else exits 2 at boot).
 - The exception is `WARDYN_ENVBUILD_REGISTRY_INSECURE`: it takes Go's `strconv.ParseBool` forms (`1`/`t`/`true`, `0`/`f`/`false`, no `yes` or `on`) and fails the build on anything else.
-- The ten `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_LOCAL_SERVERS`, `WARDYN_MACOS_VMS`, `WARDYN_SUPPORT_SESSIONS`) are also read once at boot so a bad value is refused there.
+- The ten `internal/api` switches read per request (`WARDYN_EGRESS_SECOND_HUMAN`, `WARDYN_CAPABILITY_SECOND_HUMAN`, `WARDYN_GOVERNANCE_SECOND_HUMAN`, `WARDYN_ALLOW_USER_ENV_SECRET`, `WARDYN_ALLOW_AGENT_TELEMETRY`, `WARDYN_GIT_PAT_API_BITBUCKET_SERVER`, `WARDYN_SCHEDULED_RUNS`, `WARDYN_MCP_OWN_SANDBOX`, `WARDYN_MACOS_VMS`, `WARDYN_SUPPORT_SESSIONS`) are also read once at boot so a bad value is refused there.
 - So are `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` and `WARDYN_KUBECTL_CLI`, read on every component check.
 - Two `wardyn-proxy` parsers are kept on purpose.
 - `WARDYN_LLM_SCAN` is a kill switch that can only disable.
@@ -338,7 +338,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_KUBECTL_CLI` | bool | off | Opt in to the kubectl component kind: a registered cluster's namespaces, reached through the proxy. Off, a kubectl row is refused as an unknown `cli.kind`. A garbage value exits 2 at boot. [Details](#wardyn_kubectl_cli) |
 | `WARDYN_COMPONENT_ENV_RESERVE_EDITORS` | bool | off | reserves `EDITOR`, `VISUAL`, `PAGER`, `GIT_EDITOR`, `GIT_PAGER` and `GIT_SEQUENCE_EDITOR`: no component may set them. A stored component that does is refused at its next save or attach |
 | `WARDYN_ALLOW_USER_ENV_SECRET` | bool | (unset) | let MEMBERS hold `env_secret` and `file_secret` grants. Default-unset DROPS a member's `env_secret` or `file_secret` grant even when the operator's ceiling lists the exact pairing (`dropAdminOnlyEnvSecretGrants`, `inline_policy_bounds.go`). [Details](#wardyn_allow_user_env_secret) |
-| `WARDYN_MCP_LOCAL_SERVERS` | bool | off | Sandboxed MCP servers (`transport: stdio`). **Each has the agent's access; the harness applies tool rules.** Off: saving one, a new run, a queued run's admission and a revive refuse it; a run already running keeps it until it ends. [Details](#wardyn_mcp_local_servers) |
+| `WARDYN_MCP_OWN_SANDBOX` | bool | off | MCP servers that start from a command (`transport: stdio`), each in a sandbox of its own, never the agent's. The organisation's Local MCP servers setting must be on too. [Details](#wardyn_mcp_own_sandbox) |
+| `WARDYN_MCP_LOCAL_SERVERS` | bool | (removed) | No longer read. Set, it logs one warning at boot and changes nothing. [Details](#wardyn_mcp_local_servers) |
 | `WARDYN_MACOS_VMS` | bool | off | Lets a run ask for a macOS virtual machine (`machine_kind: macos_vm`) on a registered, company-managed Mac. Off: create refuses the kind with `400` `machine_kind_unknown`. A Mac also needs its own opt-in. [Details](#wardyn_macos_vms) |
 | `WARDYN_SUPPORT_SESSIONS` | bool | off | Lets a super admin ask to help inside a person's running run, and its owner accept for 15, 30 or 60 minutes. Off: a request or accept is refused with `409` `support_disabled`, and open help sessions close. [Details](#wardyn_support_sessions) |
 | `WARDYN_EGRESS_SECOND_HUMAN` | bool | (unset) | four-eyes on egress approvals: the human who DECIDES an `egress_domain` approval must not be the human who created the run (`requireSecondHuman`, `approvals_second_human.go`). **Local mode REFUSES it**, and the `admin-token` principal BYPASSES it. [Details](#wardyn_egress_second_human) |
@@ -1662,28 +1663,26 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Needs migration `0293_run_support_grants`.
 - A value that is not a bool exits 2 at boot.
 
+### `WARDYN_MCP_OWN_SANDBOX`
+
+- Turns on MCP servers that start from a command: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
+- Each such server runs in a sandbox of its own, never inside the agent's sandbox.
+- The organisation's Local MCP servers setting (`components.local_mcp_servers` in site config, `off` or `on`) must be on too. Unset reads on.
+- `command` is `npx` or the absolute path of a program in the image. A package `npx` fetches names one exact version, such as `@example/mcp-server@1.4.2`; a range, a tag or no version is refused.
+- Off (the default), or the setting off: saving such a component is refused with `component_definition_invalid`, and a run that attaches one with `mcp_own_sandbox_off`. A site config that cannot be read counts as off.
+- A run is refused with `mcp_own_sandbox_unsupported` on a macOS VM, on a Linux VM, on a person's own runner, or on a runner that cannot start such a sandbox.
+- A run may have at most four such servers (`mcp_sandbox_limit`).
+- Such a server's hosts are not added to the agent's allowlist.
+- A rebooted run's revive is refused while the switch or the setting is off, and for a run whose server ran inside the agent's sandbox before this release.
+- `GET /setup/status` publishes it as `features.mcp_own_sandbox`, and `features.local_mcp_servers` when the setting is on as well.
+- A value that is not a bool exits 2 at boot.
+
 ### `WARDYN_MCP_LOCAL_SERVERS`
 
-- Turns on MCP servers that run inside the run's sandbox: a component's `mcp` block with `transport: stdio` and a `launch` command (`command` and `args`, no shell) instead of a `url`.
-- `command` is `npx` or the absolute path of a program in the image. A package `npx` fetches names one exact version, such as `@example/mcp-server@1.4.2`; a range, a tag or no version is refused. The pin applies to the `npx` form only; an absolute program is trusted as the image is.
-- An organisation's row or a person's own may define one. A person's row keeps every cap a self-defined component has.
-- An organisation's MCP servers that run in the sandbox are refused on a person's own runner (`placement_credential`); they run on a remote-hosted runner.
-- **Before you upgrade, know what turning it on means:**
-  - A local server runs as the agent's user, with the agent's access: the run's network allowlist, its files, and every variable in its environment.
-  - The harness, not Wardyn's proxy, applies the run's rules to the server's tools.
-  - Claude Code applies them through its managed settings in an interactive run, and through the in-sandbox approval relay, which is cooperative, on the gated lane.
-  - A run is refused, never silently loosened, when its rules hold or block a local server's tools for a harness that can't apply them: Codex CLI in any mode, or any harness a command starts.
-  - Its `env` and `file` secrets are delivered inside the sandbox; a `header` secret for one of its hosts is added at the proxy like any component's.
-  - Fetching a package needs the registry on the run's allowlist, which comes from the organisation's policy.
-  - The person chooses which package runs. A pinned version and the organisation's registry access bound that supply-chain risk; they don't remove it.
-- Off (the default): saving such a component, attaching one to a new run, a queued run's admission and a rebooted run's revive are refused with `component_definition_invalid`.
-- A run already running keeps its server until it ends, as does a revive that leaves its agent running.
-- A rebooted run whose MCP components were erased is not revived while the switch is off, even when the erased server was remote.
-- The refusal says "MCP servers that run in the sandbox are off on this deployment; an operator turns them on with WARDYN_MCP_LOCAL_SERVERS".
-- What dispatch writes for remote servers is unchanged either way.
-- Each harness the server is turned on for is configured to start it: Claude Code's MCP file gets a `stdio` entry, Codex CLI a table in `config.toml` ([`WARDYN_MCP_STDIO_TOML`](#wardyn_mcp_stdio_toml)).
-- `GET /setup/status` publishes it as `features.mcp_local_servers`, and only the API takes local servers.
-- A value that is not a bool exits 2 at boot.
+- Removed: MCP servers no longer run inside the agent's sandbox, and this switch is not read.
+- Set, it logs one warning at boot and changes nothing else. The server does not exit for it.
+- An MCP server that starts from a command runs only in a sandbox of its own, behind [`WARDYN_MCP_OWN_SANDBOX`](#wardyn_mcp_own_sandbox) and the organisation's Local MCP servers setting.
+- `GET /setup/status` still carries `features.mcp_local_servers`, always `false`.
 
 ### `WARDYN_ALLOW_USER_ENV_SECRET`
 
@@ -2701,7 +2700,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_CODEX_BASE_URL` | string (URL) | (unset) | the base URL a `codex-cli` run's codex is pointed at: the brokered `<proxy>/wardyn/llm/openai` route plus the path the final upstream needs (`codexBaseURL`, [`internal/api/runs_dispatch_provider.go`](../internal/api/runs_dispatch_provider.go)). [Details](#wardyn_codex_base_url) |
 | `WARDYN_CODEX_MODEL` | string | (unset) | the model a `codex-cli` run starts on, from the stored harness model: `local_model` always, `custom_endpoint` and `openai_api_key` when one is stored. `azure_foundry` is switched off: it answers `400` "the azure_foundry kind is not available in this release". [Details](#wardyn_codex_model) |
 | `WARDYN_MCP_SERVERS_JSON` 🔒 | string (JSON) | (unset) | a `codex-cli` run's MCP servers as `{"<server key>":"<broker URL>"}`, set only when a server is on for Codex CLI; each URL carries Codex's own broker token, so it rides the secret env (`dispatchMCP`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_servers_json) |
-| `WARDYN_MCP_STDIO_TOML` | string (TOML) | (unset) | a `codex-cli` run's MCP servers that run in the sandbox, as the `[mcp_servers.<key>]` tables its agent-run adds to `config.toml`; set only when such a server is on for Codex CLI ([`WARDYN_MCP_LOCAL_SERVERS`](#wardyn_mcp_local_servers)). No credential, so plain env (`codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)). [Details](#wardyn_mcp_stdio_toml) |
+| `WARDYN_MCP_STDIO_TOML` | string (TOML) | (unset) | The control plane no longer sets it: an MCP server that starts from a command is never in the agent's sandbox. [Details](#wardyn_mcp_stdio_toml) |
 | `WARDYN_TOOL_APPROVALS` | string | (unset) | `hold` routes an AUTONOMOUS (non-interactive) Claude Code run's own tool calls to a Wardyn approval instead of running unsupervised; unset/`auto` is today's `--dangerously-skip-permissions` behavior. Never set for an interactive run or for codex-cli. [Details](#wardyn_tool_approvals) |
 | `WARDYN_HARNESS_SANDBOX` | string | (unset) | `read-only` / `workspace-write`: a background `codex-cli` run's `codex exec` runs in Codex's own sandbox in that mode, after a check that it starts; set from the run's `harness_inner_walls`, beside `/etc/codex/requirements.toml`. Unset is today's launch. |
 | `WARDYN_TOOLGATE_CREDENTIAL` | secret | (unset) | The started harness's approval credential (two or more harnesses), sent by `wardyn-toolgate` as a Bearer. Not container env: the file `/run/wardyn/secrets/wardyn-toolgate-<harness>` its launch reads; Docker 0400 agent uid, Kubernetes 0440 fsGroup 1000 from the run Secret. Never set by hand |
@@ -2785,10 +2784,8 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_MCP_STDIO_TOML`
 
-- A `codex-cli` run's local MCP servers: one `[mcp_servers.<key>]` table each, with `command`, `args` and `env_vars`, rendered by dispatch (`codexLocalTOML`, [`internal/api/run_mcp.go`](../internal/api/run_mcp.go)).
-- `env_vars` names every variable of the sandbox's environment and the server's own, except the broker URLs.
-- Codex CLI starts a server with only a few variables of its own, and a local server runs with the agent's access.
-- `prepare_codex_config` ([`deploy/images/codex-cli/agent-run`](../deploy/images/codex-cli/agent-run)) appends the tables after the broker tables, replacing a table of the same key.
+- The control plane no longer sets it: an MCP server that starts from a command runs only in a sandbox of its own ([`WARDYN_MCP_OWN_SANDBOX`](#wardyn_mcp_own_sandbox)).
+- The Codex CLI image no longer reads it. The macOS VM guest still reads it when it is present.
 
 ### `WARDYN_TOOL_APPROVALS`
 
