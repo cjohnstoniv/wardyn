@@ -124,7 +124,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/sigstore/timestamp-authority/v2/pkg` | Apache-2.0 | https://github.com/sigstore/timestamp-authority/blob/v2.2.0/LICENSE |
 | `github.com/spf13/cobra` | Apache-2.0 | https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt |
 | `github.com/spf13/pflag` | BSD-3-Clause | https://github.com/spf13/pflag/blob/v1.1.0/LICENSE |
-| `github.com/spiffe/go-spiffe/v2/spiffeid` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
+| `github.com/spiffe/go-spiffe/v2` | Apache-2.0 | https://github.com/spiffe/go-spiffe/blob/v2.9.0/LICENSE |
+| `github.com/spiffe/spire-api-sdk/proto/spire/api` | Apache-2.0 | https://github.com/spiffe/spire-api-sdk/blob/v1.16.0/LICENSE |
 | `github.com/theupdateframework/go-tuf/v2/metadata` | Apache-2.0 | https://github.com/theupdateframework/go-tuf/blob/v2.4.2/LICENSE |
 | `github.com/transparency-dev/formats/log` | Apache-2.0 | https://github.com/transparency-dev/formats/blob/v0.1.1/LICENSE |
 | `github.com/transparency-dev/merkle` | Apache-2.0 | https://github.com/transparency-dev/merkle/blob/v0.0.2/LICENSE |
