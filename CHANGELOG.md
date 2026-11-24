@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- A governance limit set after a session opened now closes an open UI-app socket, noVNC or sign-in display, or inbound app socket within about a minute, and ends a desktop sign-in as an expired one ends; an open SSH connection made with a registered key still runs until it ends (#3943).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
