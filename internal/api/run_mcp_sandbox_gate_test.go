@@ -186,7 +186,7 @@ func (mcpSiteErrComponentStore) GetSiteConfig(context.Context) (types.SiteConfig
 }
 
 // TestLinuxVMRunGetsD3VM: with the switch and the setting on, a Linux VM run with such a server answers
-// D3-vm whatever its placement, before the executor's kinds and the count are read.
+// the Linux VM sentence whatever its placement, before the executor's kinds and the count are read.
 func TestLinuxVMRunGetsD3VM(t *testing.T) {
 	t.Setenv(envMCPOwnSandbox, "1")
 	const want = "Local MCP servers can't run beside a Linux VM yet. Choose a container machine, use a remote (HTTPS) MCP server, or remove files."
@@ -198,7 +198,7 @@ func TestLinuxVMRunGetsD3VM(t *testing.T) {
 			req.Placement = pl.req
 			got := s.mcpSandboxRefusal(context.Background(), req, pl.place, stdioComps(5))
 			if got == nil || got.body.Reason != reasonMCPOwnSandboxUnsupported || got.body.Error != want {
-				t.Errorf("%s, kinds %v: %+v, want D3-vm", pl.name, kinds, got)
+				t.Errorf("%s, kinds %v: %+v, want the Linux VM sentence", pl.name, kinds, got)
 			}
 		}
 	}
@@ -370,8 +370,8 @@ func TestSetupFeatures_MCPOwnSandbox(t *testing.T) {
 }
 
 // TestReviveMCPSandboxRefusal: a rebooted revive of a run with a server that starts from a command is refused
-// with D6 while the switch or the setting is off (a site config that cannot be read reads as off), and with
-// D6-legacy otherwise, since every such run held its server inside the agent's sandbox. The agent is not
+// with the switch-off sentence while the switch or the setting is off (a site config that cannot be read reads
+// as off), and with the earlier-release sentence otherwise, since every such run held its server inside the agent's sandbox. The agent is not
 // started. An erased MCP row is refused the same way; an erased row with no MCP server, and a revive that
 // leaves the agent running, are unchanged.
 func TestReviveMCPSandboxRefusal(t *testing.T) {
@@ -421,7 +421,7 @@ func TestReviveMCPSandboxRefusal(t *testing.T) {
 		cs.siteErr = errors.New("site config unreadable")
 		got := f.srv.reviveMCPSandboxRefusal(context.Background(), f.run, true, types.ActorHuman, "admin")
 		if got == nil || got.reason != reasonComponentDefinitionInvalid || got.msg != d6 {
-			t.Fatalf("refusal %+v, want D6", got)
+			t.Fatalf("refusal %+v, want the switch-off sentence", got)
 		}
 	})
 	t.Run("erased non-MCP row", func(t *testing.T) {
@@ -449,9 +449,10 @@ func TestEnvTogglesMCPOwnSandbox(t *testing.T) {
 	}
 }
 
-// TestMCPSandboxSentencesMatchCanon compares each sentence const with the approved strings, byte for byte:
-// the D table's templates (D5 with its drawn field path) and the table of strings with no frame. It reads
-// the approved strings file named by MCP_SANDBOX_STRINGS and is skipped where it is not set.
+// TestMCPSandboxSentencesMatchCanon finds each sentence const, byte for byte, among the approved strings: the
+// templates of the refusal sentence table (the narrower overlay's with its drawn field path) and the table of
+// strings with no frame. It reads the approved strings file named by MCP_SANDBOX_STRINGS and is skipped where
+// it is not set.
 func TestMCPSandboxSentencesMatchCanon(t *testing.T) {
 	path := os.Getenv("MCP_SANDBOX_STRINGS")
 	if path == "" {
@@ -461,26 +462,23 @@ func TestMCPSandboxSentencesMatchCanon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := mcpCanonTable(t, string(raw), "## D sentences", 2, "| D")
-	none := mcpCanonTable(t, string(raw), "## Strings with no frame", 2, "| ")
-	for id, got := range map[string]string{
-		"D1": mcpOwnSandboxOffSentence, "D3": mcpOwnSandboxUnsupportedSentence, "D3-mac": mcpOwnSandboxMacSentence,
-		"D3-vm": mcpOwnSandboxLinuxVMSentence, "D4": mcpSandboxLimitSentence, "D6": mcpReviveOffSentence,
-		"D5": "mcp.sandbox.policy.overlay.allowed_domains: " + mcpNarrowerWidensSentence,
-	} {
-		if d[id] != got {
-			t.Errorf("%s: const %q, canon %q", id, got, d[id])
-		}
+	canon := map[string]bool{}
+	for _, cell := range append(mcpCanonColumn(t, string(raw), "## D sentences", 2), mcpCanonColumn(t, string(raw), "## Strings with no frame", 2)...) {
+		canon[strings.Trim(cell, "`")] = true
 	}
-	for id, got := range map[string]string{"S-save": mcpSaveOffSentence, "S-runner": mcpRunnerUnnamed, "D6-legacy": mcpReviveLegacySentence} {
-		if strings.Trim(none[id], "`") != got {
-			t.Errorf("%s: const %q, canon %q", id, got, none[id])
+	for _, got := range []string{
+		mcpOwnSandboxOffSentence, mcpOwnSandboxUnsupportedSentence, mcpOwnSandboxMacSentence, mcpOwnSandboxLinuxVMSentence,
+		mcpSandboxLimitSentence, mcpReviveOffSentence, mcpReviveLegacySentence, mcpSaveOffSentence, mcpRunnerUnnamed,
+		"mcp.sandbox.policy.overlay.allowed_domains: " + mcpNarrowerWidensSentence,
+	} {
+		if !canon[got] {
+			t.Errorf("const %q is not an approved string", got)
 		}
 	}
 }
 
-// mcpCanonTable reads the table under heading: each row's first cell to its cell col.
-func mcpCanonTable(t *testing.T, doc, heading string, col int, rowPrefix string) map[string]string {
+// mcpCanonColumn is cell col of each row of the table under heading.
+func mcpCanonColumn(t *testing.T, doc, heading string, col int) []string {
 	t.Helper()
 	_, after, ok := strings.Cut(doc, "\n"+heading)
 	if !ok {
@@ -489,15 +487,17 @@ func mcpCanonTable(t *testing.T, doc, heading string, col int, rowPrefix string)
 	if next := strings.Index(after, "\n## "); next >= 0 {
 		after = after[:next]
 	}
-	out := map[string]string{}
+	var out []string
 	for _, line := range strings.Split(after, "\n") {
-		if !strings.HasPrefix(line, rowPrefix) || strings.HasPrefix(line, "|---") {
+		if !strings.HasPrefix(line, "| ") {
 			continue
 		}
-		cells := strings.Split(strings.Trim(line, "|"), "|")
-		if len(cells) > col {
-			out[strings.TrimSpace(cells[0])] = strings.TrimSpace(cells[col])
+		if cells := strings.Split(strings.Trim(line, "|"), "|"); len(cells) > col {
+			out = append(out, strings.TrimSpace(cells[col]))
 		}
+	}
+	if len(out) < 3 {
+		t.Fatalf("%q: read %d rows; the table is not where the test looks", heading, len(out))
 	}
 	return out
 }

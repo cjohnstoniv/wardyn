@@ -155,7 +155,7 @@ func (s *Server) mcpSandboxRefusal(ctx context.Context, req createRunRequest, pl
 	return runError(http.StatusUnprocessableEntity, st.reason, mcpSandboxSentence(st.sentence, server, runnerName))
 }
 
-// mcpRunnerName is the run's runner or executor name for D3, else "This runner".
+// mcpRunnerName is the run's runner or executor name for the unsupported-runner sentence, else "This runner".
 func (s *Server) mcpRunnerName(ctx context.Context, req createRunRequest, place runPlacement) string {
 	run := types.AgentRun{Placement: requestPlacement(req)}
 	switch {

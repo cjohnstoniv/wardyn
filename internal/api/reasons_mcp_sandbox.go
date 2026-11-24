@@ -27,7 +27,7 @@ const (
 	mcpReviveLegacySentence          = "<server> was not restarted: it ran inside the agent's sandbox, which this version no longer allows. End the run, then start a new one."
 	// mcpSaveOffSentence is the component save's refusal while the switch is off, in the validator's form.
 	mcpSaveOffSentence = "mcp.transport: MCP servers that start from a command are turned off here."
-	// mcpRunnerUnnamed is D3's runner when the run's runner has no name to show.
+	// mcpRunnerUnnamed is the unsupported-runner sentence's runner when the run's runner has no name to show.
 	mcpRunnerUnnamed = "This runner"
 )
 
