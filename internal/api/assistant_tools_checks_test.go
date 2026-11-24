@@ -195,3 +195,36 @@ func TestAssistantValidateRestrictionReadFailureIsAnError(t *testing.T) {
 		t.Errorf("failed read refusal = %+v, want a 500 without the store's text", ref)
 	}
 }
+
+// validate on a run draft runs the policy save's validator: a grant that names owner_only_refs, which Wardyn sets
+// at launch, and an api_key grant that requires approval, which no run could use, each answer valid: false with
+// the save's own message, where the plain run check would pass both.
+func TestAssistantValidateRunDraftIsTheSaveCheck(t *testing.T) {
+	ssh := types.GrantSpec{Kind: types.GrantSSHKey, OwnerOnlyRefs: []string{"k"},
+		Scope: json.RawMessage(`{"host":"github.com","key_secret_ref":"k","known_hosts_secret_ref":"kh"}`)}
+	for _, c := range []struct {
+		name  string
+		grant types.GrantSpec
+		want  string
+	}{
+		{"owner_only_refs", ssh, "eligible_grants[0]: owner_only_refs is set by Wardyn at launch, never authored; mark the grant owner_only instead"},
+		{"approval-gated api_key", gatedAPIKey(t, true), apiKeyApprovalRefusal},
+	} {
+		spec := types.RunPolicySpec{MinConfinementClass: types.CC2, EligibleGrants: []types.GrantSpec{c.grant}}
+		if err := validatePolicySpec(spec); err != nil {
+			t.Fatalf("%s: the plain run check refuses the draft (%v), so the case proves nothing", c.name, err)
+		}
+		f, srv, s, run := assistantToolSession(t, types.AssistantCompose)
+		s.TargetKind, s.TargetKey = types.AssistantTargetRun, ""
+		f.seed(s)
+		w := assistantToolCall(t, srv, run, types.AssistantToolValidate, s.ID, assistantDraftArgs(types.AssistantTargetRun, spec))
+		var got struct {
+			Valid  bool                  `json:"valid"`
+			Errors []assistantFieldError `json:"errors"`
+		}
+		assistantDecode(t, w, &got)
+		if got.Valid || len(got.Errors) != 1 || got.Errors[0].Message != c.want {
+			t.Errorf("%s: validate = %s, want valid: false with %q", c.name, w.Body, c.want)
+		}
+	}
+}
