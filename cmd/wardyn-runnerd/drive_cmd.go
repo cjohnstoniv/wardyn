@@ -936,6 +936,8 @@ func (j driveOpenJob) run(ctx context.Context, in io.Reader, argv ...string) err
 		return err
 	}
 	defer s.Close()
+	// A cancel closes the session, which wakes a copy parked on a guest that reads none of its input.
+	defer context.AfterFunc(ctx, func() { _ = s.Close() })()
 	stderr := driveOpenDrain(s.Stderr)
 	go func() { _, _ = io.Copy(io.Discard, s.Stdout) }()
 	var sendErr error
