@@ -40,6 +40,11 @@ type assistantClamped struct {
 	draft    json.RawMessage
 	refusals []assistant.Refusal
 	unit     *ResolvedUnit
+	// echo is draft as the person may read it (assistantRecordSpec): the parts the answer and the proposal
+	// event carry are cut from it, never from draft, whose ceiling copies can name what the person's read
+	// withholds. withheld is every such value, for the validator's messages.
+	echo     json.RawMessage
+	withheld []string
 }
 
 // assistantClampDraft bounds a run or template draft's policy as the save route does: first the person's
@@ -47,7 +52,7 @@ type assistantClamped struct {
 // A unit draft, or a template with no policy, comes back as it is.
 func (s *Server) assistantClampDraft(r *http.Request, sub assistantSubject) (assistantClamped, error) {
 	ctx := r.Context()
-	out := assistantClamped{draft: sub.draft}
+	out := assistantClamped{draft: sub.draft, echo: sub.draft}
 	if sub.govKind != "" {
 		return out, nil
 	}
@@ -77,8 +82,45 @@ func (s *Server) assistantClampDraft(r *http.Request, sub assistantSubject) (ass
 	}
 	clamped, refusals := assistantClampSpec(narrowed, ceiling)
 	out.refusals = append(out.refusals, refusals...)
-	out.draft, err = assistantWithSpec(sub, clamped)
+	if out.draft, err = assistantWithSpec(sub, clamped); err != nil {
+		return out, err
+	}
+	read := s.assistantRecordSpec(ctx, clamped)
+	out.withheld = assistantWithheld(clamped, read)
+	out.echo, err = assistantWithSpec(sub, read)
 	return out, err
+}
+
+// assistantWithheld is every secret name full carries that read, its cut for the person, does not show: the
+// inspection's workspace_secret_names and the grants' secret-naming scope fields (memberSecretScopeKeys).
+func assistantWithheld(full, read types.RunPolicySpec) []string {
+	var out []string
+	if li := full.LLMInspection; li != nil && (read.LLMInspection == nil || !slices.Equal(li.WorkspaceSecretNames, read.LLMInspection.WorkspaceSecretNames)) {
+		out = append(out, li.WorkspaceSecretNames...)
+	}
+	for i, g := range full.EligibleGrants {
+		if i < len(read.EligibleGrants) && string(g.Scope) == string(read.EligibleGrants[i].Scope) {
+			continue
+		}
+		var scope map[string]any
+		_ = json.Unmarshal(g.Scope, &scope)
+		for _, k := range memberSecretScopeKeys {
+			if v, ok := scope[k].(string); ok && v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return slices.DeleteFunc(out, func(v string) bool { return v == "" })
+}
+
+// assistantScrubWithheld replaces a validator message that names a withheld value with one that does not.
+func assistantScrubWithheld(errs []assistantFieldError, withheld []string) []assistantFieldError {
+	for i, fe := range errs {
+		if slices.ContainsFunc(withheld, func(v string) bool { return strings.Contains(fe.Message, v) }) {
+			errs[i].Message = "A value your limits set is refused, and your reads do not show it. An admin of your unit can fix it." // PROPOSED
+		}
+	}
+	return errs
 }
 
 // assistantClampSpec bounds spec to ceiling: a host the ceiling's allowlist does not cover
@@ -281,7 +323,9 @@ func (s *Server) assistantPropose(r *http.Request, sub assistantSubject, refusal
 	if err != nil {
 		return assistantProposal{}, assistantCheckFailed(err)
 	}
-	p := assistantProposal{Parts: assistantPartsOf(sub.draft, proposed), Valid: len(errs) == 0, Errors: errs}
+	errs = assistantScrubWithheld(errs, clamped.withheld)
+	// The clamped draft is validated and reviewed; what is echoed is its read cut.
+	p := assistantProposal{Parts: assistantPartsOf(clamped.echo, proposed), Valid: len(errs) == 0, Errors: errs}
 	if p.Valid {
 		if p.Review, p.ApprovalsNeeded, err = s.assistantReview(ctx, sub, caller); err != nil {
 			return assistantProposal{}, assistantCheckFailed(err)

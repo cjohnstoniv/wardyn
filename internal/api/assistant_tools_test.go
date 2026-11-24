@@ -391,3 +391,69 @@ func TestAssistantToolReadAtTheCappedTier(t *testing.T) {
 		})
 	}
 }
+
+// draft validates the draft clamped to the member's ceiling but echoes its read cut: the ceiling's inspection
+// secret names, which the clamp copies in and the member's read withholds, reach neither the answer nor the
+// proposal event, on a run's llm_inspection and on a template's document.
+func TestAssistantToolDraftEchoesTheMembersCut(t *testing.T) {
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "canary-unit", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"},
+		MinConfinementClass: types.CC2, LLMInspection: &types.LLMInspectionSpec{Mode: "alert", DetectSecrets: true,
+			WorkspaceSecretNames: []string{"ceiling-secret-name-canary"}}}}
+	for _, c := range []struct{ kind, args string }{
+		{types.AssistantTargetRun, `{"target_kind":"run","parts":[{"section":"llm_inspection","value":{"mode":"alert","detect_secrets":true}}]}`},
+		{types.AssistantTargetTemplate, `{"target_kind":"template","parts":[{"section":"document","value":{"api_version":"v1","kind":"Template",` +
+			`"intent":{"inline_policy":{"allowed_domains":["pypi.org"],"llm_inspection":{"mode":"alert","detect_secrets":true}}}}}]}`},
+	} {
+		t.Run(c.kind, func(t *testing.T) {
+			f, srv, s, run := assistantToolSession(t, types.AssistantCompose)
+			f.fresh = true
+			f.govProfile, f.govGraph = &unit, []types.GovernanceUnit{unit}
+			s.TargetKind = c.kind
+			f.seed(s)
+			w := assistantToolCall(t, srv, run, types.AssistantToolDraft, s.ID, c.args)
+			if w.Code != http.StatusOK {
+				t.Fatalf("draft = %d %s, want 200", w.Code, w.Body)
+			}
+			var p assistantProposal
+			if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || len(p.Parts) != 1 {
+				t.Fatalf("parts = %+v (%v), want the one proposed section", p.Parts, err)
+			}
+			if !strings.Contains(string(p.Parts[0].Value), "redacted") {
+				t.Errorf("part = %s, want the inspection as the member reads it", p.Parts[0].Value)
+			}
+			bodies := map[string]string{"draft": w.Body.String()}
+			for _, e := range f.eventsOf(s.ID) {
+				bodies[string(e.Kind)+" event"] += string(e.Payload)
+			}
+			if _, ok := bodies[string(types.AssistantEventProposal)+" event"]; !ok {
+				t.Fatal("no proposal event")
+			}
+			for name, body := range bodies {
+				if strings.Contains(body, "ceiling-secret-name-canary") {
+					t.Errorf("%s carries the ceiling's secret name: %s", name, body)
+				}
+			}
+		})
+	}
+}
+
+// A validator message that names a withheld value is replaced; any other is kept.
+func TestAssistantScrubWithheld(t *testing.T) {
+	full := types.RunPolicySpec{LLMInspection: &types.LLMInspectionSpec{WorkspaceSecretNames: []string{"Bad-Name"}},
+		EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: json.RawMessage(`{"host":"git.example","secret_name":"pat-canary"}`)}}}
+	read := redactSpecForRead(full, specReadMember)
+	withheld := assistantWithheld(full, read)
+	if !slices.Contains(withheld, "Bad-Name") || !slices.Contains(withheld, "pat-canary") {
+		t.Fatalf("withheld = %v, want the inspection name and the grant's secret", withheld)
+	}
+	if got := assistantWithheld(full, full); len(got) != 0 {
+		t.Errorf("withheld from a full read = %v, want none", got)
+	}
+	errs := assistantScrubWithheld([]assistantFieldError{
+		{Message: `llm_inspection.workspace_secret_names[0]: "Bad-Name" is not a valid secret name`},
+		{Message: "allowed_domains: too many"},
+	}, withheld)
+	if strings.Contains(errs[0].Message, "Bad-Name") || errs[1].Message != "allowed_domains: too many" {
+		t.Errorf("scrubbed = %+v", errs)
+	}
+}
