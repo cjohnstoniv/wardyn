@@ -93,9 +93,13 @@ func TestDriveSeed_IntoValidation(t *testing.T) {
 	srv, rec := memberDriveServer(st, &fillHolderRunner{}, "docker")
 	srv.memberDriveLimiter.burst, srv.memberDriveLimiter.rate = 1000, 1000 // the limiter runs first; this loop is about into
 	id := fillDrive(t, srv)
-	for _, into := range []string{"/a", "../a", "a/../b", "a//b", "a/", ".", "a/./b", "a\x01b", "a\x7fb", strings.Repeat("x", 256), "a\xffb"} {
+	for _, into := range []string{"/a", "../a", "a/../b", "a//b", "a/", ".", "a/./b", "a\x01b", "a\x7fb", strings.Repeat("x", 256)} {
 		w := fillCall(srv, personCtx(aliceSub), id, fillBody("org/name", into))
 		wantReason(t, w, http.StatusBadRequest, reasonDriveSeedIntoInvalid)
+	}
+	// JSON carries no invalid UTF-8 (both ends replace it with U+FFFD), so that refusal is checked here directly.
+	if driveFillIntoValid("a\xffb") {
+		t.Error("into with invalid UTF-8 accepted, want refused")
 	}
 	for _, into := range []string{"", "a", "a/b", "my dir/it's", strings.Repeat("x", 255)} {
 		if !driveFillIntoValid(into) {
