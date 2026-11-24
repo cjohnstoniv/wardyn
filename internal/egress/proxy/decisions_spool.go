@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,12 @@ const (
 	decisionDrainBackoffMax = 60 * time.Second
 )
 
+// decisionDrainBackoffMin is the drain's first wait after a failed replay; it doubles from here.
+var decisionDrainBackoffMin = time.Second
+
+// decisionSpoolWrite writes buf to the spool file; a test replaces it to fail part way.
+var decisionSpoolWrite = func(f *os.File, buf []byte) (int, error) { return f.Write(buf) }
+
 // decisionSpoolDir is where a server-run proxy keeps its spool; "" turns the spool off.
 var decisionDrainEvery = 5 * time.Second // how often the drain looks for records while any remain
 
@@ -45,6 +52,20 @@ type decisionSpool struct {
 	path    string
 	records int
 	bytes   int64
+}
+
+// tmpPrefix names this spool's temporary files, so opening one run's spool never removes another's.
+func (sp *decisionSpool) tmpPrefix() string {
+	return strings.TrimSuffix(filepath.Base(sp.path), ".jsonl")
+}
+
+// syncDir makes a create or rename in dir durable. It is best effort: a filesystem that cannot sync a directory
+// leaves the spool as safe as it was.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
 }
 
 // openDecisionSpool opens, creating it if need be, the spool of run runID in dir; one file to a run, so a temporary
@@ -60,6 +81,13 @@ func openDecisionSpool(dir string, runID uuid.UUID) (*decisionSpool, uint64, err
 		return nil, 0, err
 	}
 	_ = f.Close()
+	syncDir(dir)
+	// A crash between a rewrite's create and its rename leaves a temporary file of up to the spool's size.
+	if stale, _ := filepath.Glob(filepath.Join(dir, sp.tmpPrefix()+"-*.tmp")); len(stale) > 0 {
+		for _, name := range stale {
+			_ = os.Remove(name)
+		}
+	}
 	lines, bad, err := sp.load()
 	if err != nil {
 		return nil, 0, err
@@ -112,9 +140,16 @@ func (sp *decisionSpool) append(recs []batchRecord) error {
 		buf.Write(r.body)
 		buf.WriteByte('\n')
 	}
-	_, werr := f.Write(buf.Bytes())
+	before, werr := f.Seek(0, io.SeekEnd)
+	if werr == nil {
+		_, werr = decisionSpoolWrite(f, buf.Bytes())
+	}
 	if werr == nil {
 		werr = f.Sync()
+	}
+	if werr != nil {
+		// A part-written batch would leave a line with no newline for the next append to join onto.
+		_ = f.Truncate(before)
 	}
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
@@ -268,7 +303,7 @@ func (sp *decisionSpool) rewriteLocked(lines [][]byte) error {
 
 // rewrite replaces the file with lines. The caller holds sp.mu, or owns sp before it is shared.
 func (sp *decisionSpool) rewrite(lines [][]byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(sp.path), "decisions-*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(sp.path), sp.tmpPrefix()+"-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -288,6 +323,9 @@ func (sp *decisionSpool) rewrite(lines [][]byte) error {
 	}
 	if err == nil {
 		err = os.Rename(tmp.Name(), sp.path)
+	}
+	if err == nil {
+		syncDir(filepath.Dir(sp.path))
 	}
 	if err != nil {
 		_ = os.Remove(tmp.Name())
@@ -364,20 +402,25 @@ func (s *decisionSink) drainLoop() {
 	wait, backoff := decisionDrainEvery, time.Duration(0)
 	for {
 		t := time.NewTimer(wait)
-		select {
-		case <-s.drainStop:
-			t.Stop()
-			return
-		case <-s.drainKick:
-			t.Stop()
-			if backoff > 0 {
-				continue // a failure's wait is not cut short by an answer from the worker
+	waiting:
+		for {
+			select {
+			case <-s.drainStop:
+				t.Stop()
+				return
+			case <-s.drainKick:
+				if backoff > 0 {
+					continue // a failure's wait is neither cut short nor stretched by an answer from the worker
+				}
+				t.Stop()
+				break waiting
+			case <-t.C:
+				break waiting
 			}
-		case <-t.C:
 		}
 		switch s.drainSpool(s.drainStopped) {
 		case drainFailed:
-			backoff = min(max(backoff*2, time.Second), decisionDrainBackoffMax)
+			backoff = min(max(backoff*2, decisionDrainBackoffMin), decisionDrainBackoffMax)
 			wait = backoff
 		default:
 			backoff, wait = 0, decisionDrainEvery

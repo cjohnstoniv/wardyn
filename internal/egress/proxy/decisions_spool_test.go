@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -500,5 +501,87 @@ func TestDecisionSpool_OpenCountsLinesPastTheCaps(t *testing.T) {
 	reopened, dropped, err := openDecisionSpool(dir, runID)
 	if err != nil || dropped != 4 || reopened.pending() != decisionSpoolMaxRecords {
 		t.Fatalf("reopen: dropped %d, held %d, %v; want 4 and %d", dropped, reopened.pending(), err, decisionSpoolMaxRecords)
+	}
+}
+
+// A kick that arrives during a failure's wait does not stretch it: while the control plane keeps flapping the
+// drain still runs when the wait it began ends.
+func TestDecisionSpool_KickDuringBackoffDoesNotStretchTheWait(t *testing.T) {
+	prevEvery, prevMin := decisionDrainEvery, decisionDrainBackoffMin
+	decisionDrainEvery, decisionDrainBackoffMin = 5*time.Millisecond, 600*time.Millisecond
+	t.Cleanup(func() { decisionDrainEvery, decisionDrainBackoffMin = prevEvery, prevMin })
+	var replays atomic.Int32
+	c := newStubCP(t, func(_ int, p cpPost) (int, bool) {
+		if p.replay && replays.Add(1) == 1 {
+			return http.StatusServiceUnavailable, true
+		}
+		return http.StatusAccepted, true
+	})
+	s, _ := spooledSink(t, c, 4)
+	s.batchMax.Store(MaxDecisionBatch)
+	if err := s.spool.append([]batchRecord{mustRecord(t, 0), mustRecord(t, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	s.startSpoolDrain()
+	defer func() { close(s.drainStop); s.drainWG.Wait() }()
+	deadline := time.Now().Add(2500 * time.Millisecond)
+	for s.spool.pending() > 0 && time.Now().Before(deadline) {
+		s.kickDrain() // a kick every few milliseconds, from the flapping control plane
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := s.spool.pending(); n != 0 || replays.Load() != 2 {
+		t.Fatalf("%d records left after %d replays; want the second replay, after the first one's 600ms wait, to drain them", n, replays.Load())
+	}
+}
+
+// A write that fails part way leaves nothing behind for the next append to join onto.
+func TestDecisionSpool_PartialWriteIsTruncated(t *testing.T) {
+	sp, _, err := openDecisionSpool(t.TempDir(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.append([]batchRecord{mustRecord(t, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	prev := decisionSpoolWrite
+	decisionSpoolWrite = func(f *os.File, buf []byte) (int, error) {
+		n, _ := f.Write(buf[:len(buf)/2])
+		return n, errors.New("no space left on device")
+	}
+	err = sp.append([]batchRecord{mustRecord(t, 1)})
+	decisionSpoolWrite = prev
+	if err == nil {
+		t.Fatal("a failed write reported success")
+	}
+	if err := sp.append([]batchRecord{mustRecord(t, 2)}); err != nil {
+		t.Fatal(err)
+	}
+	lines, consumed, bad, err := sp.head(10, maxBatchBody)
+	if err != nil || len(lines) != 2 || consumed != 2 || bad != 0 {
+		t.Fatalf("read: %d lines, consumed %d, bad %d, %v; want 2, 2, 0", len(lines), consumed, bad, err)
+	}
+	if sp.pending() != 2 {
+		t.Fatalf("pending %d, want 2", sp.pending())
+	}
+}
+
+// A temporary file a crash left is removed at open, and only this run's.
+func TestDecisionSpool_OpenRemovesStaleTemporaryFiles(t *testing.T) {
+	dir, run, other := t.TempDir(), uuid.New(), uuid.New()
+	stale := filepath.Join(dir, "decisions-"+run.String()+"-123.tmp")
+	foreign := filepath.Join(dir, "decisions-"+other.String()+"-456.tmp")
+	for _, name := range []string{stale, foreign} {
+		if err := os.WriteFile(name, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := openDecisionSpool(dir, run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("this run's stale temporary file is still there: %v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("another run's temporary file was removed: %v", err)
 	}
 }
