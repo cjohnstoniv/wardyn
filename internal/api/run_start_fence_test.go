@@ -94,10 +94,10 @@ func TestStartFence_SFTPFencesAPersonsChannelNotAFolderPass(t *testing.T) {
 	fr, execs := countingExecs()
 	srv := New(Config{BaseCtx: testBaseCtx(t), Store: st, Runner: fr})
 	l := startEndsRun(srv, run.ID, func() { st.putRun(endedRun(run)) })
-	if _, reason, err := srv.execSFTPServer(t.Context(), run, true, "-d", "%d"); err == nil || reason != "sftp unavailable: the sandbox is gone" || execs.Load() != 0 {
+	if _, reason, err := srv.execSFTPServer(t.Context(), run, &sshLiveRunWords, "-d", "%d"); err == nil || reason != "sftp unavailable: the sandbox is gone" || execs.Load() != 0 {
 		t.Fatalf("a person's channel = %q %v after %d execs, want the gone sandbox's words and none", reason, err, execs.Load())
 	}
-	if sess, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), false, "-d", "/home/agent/work"); err != nil || sess == nil || execs.Load() != 1 {
+	if sess, reason, err := srv.execSFTPServer(t.Context(), endedRun(run), nil, "-d", "/home/agent/work"); err != nil || sess == nil || execs.Load() != 1 {
 		t.Fatalf("a folder pass = %q %v after %d execs, want one started", reason, err, execs.Load())
 	}
 	if asked := l.asked.Load(); asked != 1 {

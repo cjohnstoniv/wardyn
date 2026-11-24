@@ -20,6 +20,9 @@ describe("Ports canon strings", () => {
     expect(NR_RUN.PORTS_HELP).toBe(
       "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
     );
+    expect(NR_RUN.PORTS_HELP_BACKGROUND).toBe(
+      "This run works in the background, so its ports don't open from the run page. Make a port callable from outside the run to reach it through Wardyn's gateway.",
+    );
     expect(NR_RUN.PORT_INBOUND_LABEL).toBe("Callable from outside the run");
     expect(NR_RUN.PORT_INBOUND_HELP).toBe(
       "People and services you name can reach this port through Wardyn's gateway, even when the run has no terminal. Every call is recorded.",
@@ -27,7 +30,7 @@ describe("Ports canon strings", () => {
   });
 });
 
-function Harness({ first }: { first: UIApp[] }) {
+function Harness({ first, background }: { first: UIApp[]; background?: boolean }) {
   const [apps, setApps] = React.useState<UIApp[]>(first);
   return (
     <>
@@ -38,6 +41,7 @@ function Harness({ first }: { first: UIApp[] }) {
         edit={(i, patch) => setApps((a) => a.map((x, n) => (n === i ? { ...x, ...patch } : x)))}
         add={() => setApps((a) => [...a, { name: "app2", port: 0, path: "/" }])}
         remove={(i) => setApps((a) => a.filter((_, n) => n !== i))}
+        background={background}
       />
       <p data-testid="apps">{JSON.stringify(apps)}</p>
     </>
@@ -46,6 +50,12 @@ function Harness({ first }: { first: UIApp[] }) {
 const appsNow = (): UIApp[] => JSON.parse(screen.getByTestId("apps").textContent ?? "[]");
 
 describe("PortsSection", () => {
+  it("a background run's ports say only a port callable from outside can be reached", () => {
+    render(<Harness background first={[{ name: "web", port: 3000, path: "/" }]} />);
+    expect(screen.getByText(NR_RUN.PORTS_HELP_BACKGROUND)).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN.PORTS_HELP)).not.toBeInTheDocument();
+  });
+
   it("draws one bordered card per port, each with its own checkbox and help", () => {
     render(<Harness first={[{ name: "web", port: 3000, path: "/" }, { name: "api", port: 8080, path: "/" }]} />);
     const groups = screen.getAllByRole("group").filter((g) => g.tagName === "DIV");

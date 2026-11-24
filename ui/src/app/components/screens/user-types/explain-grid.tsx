@@ -304,7 +304,7 @@ export function ExplainGrid({ subject, name, disabled }: { subject: string; name
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={busy}
               onClick={(e) => {
                 e.preventDefault();

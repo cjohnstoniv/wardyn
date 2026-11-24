@@ -6,8 +6,10 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -25,6 +27,9 @@ const desktopSigninDisplayPort = 1
 
 // desktopSigninSocket is the person's noVNC (websockify) socket.
 const desktopSigninSocket = runner.SigninStorePath + "/ws.sock"
+
+// signinDisplayRecheck spaces an open sign-in display relay's re-reads of its sign-in (watchSigninDisplay).
+const signinDisplayRecheck = 5 * time.Second
 
 // withDesktopSigninApp adds the sign-in display to apps when principal holds
 // the run's open sign-in. Any read failure leaves apps as they were.
@@ -56,6 +61,33 @@ func (s *Server) holdsDesktopSignin(ctx context.Context, run types.AgentRun, pri
 	return nil
 }
 
+// watchSigninDisplay closes an open sign-in display relay, by closeConn, once principal no longer holds run's open
+// sign-in: its end was asked for, a stop that failed writes `EndRequested` and the end is being retried, its window passed, or its row
+// closed (holdsDesktopSignin answers store.ErrNotFound). A read that fails keeps the relay until a later read answers.
+// It returns when ctx is done or once it has closed the relay.
+func (s *Server) watchSigninDisplay(ctx context.Context, run types.AgentRun, principal string, every time.Duration, closeConn func()) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		err := s.holdsDesktopSignin(ctx, run, principal)
+		if err == nil {
+			continue
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.WarnContext(ctx, "wardynd: an open sign-in display could not re-read its sign-in; it stays open until a read answers", "run_id", run.ID, "err", err)
+			continue
+		}
+		slog.InfoContext(ctx, "wardynd: an open sign-in display closed: its sign-in is ending or over", "run_id", run.ID)
+		closeConn()
+		return
+	}
+}
+
 // desktopSigninDial is uiDial's connection for the sign-in display. The
 // holder is re-checked on every connection, as uiDial re-checks the run.
 func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess uiSession, release func()) (net.Conn, error) {
@@ -85,9 +117,12 @@ func (s *Server) desktopSigninDial(ctx context.Context, run types.AgentRun, sess
 	keepCtx, stopKeepalive := context.WithCancel(context.WithoutCancel(ctx))
 	go s.attachKeepalive(keepCtx, sess.Run)
 	s.auditUISession(sess, "ui.open", desktopSigninSocket, "success", map[string]any{"app": sess.App})
-	return s.uiGate(ctx, &uiConn{execConn: newExecConn(execSess, run.SandboxRef+":"+desktopSigninApp), closeFn: func() {
+	conn := &uiConn{execConn: newExecConn(execSess, run.SandboxRef+":"+desktopSigninApp), closeFn: func() {
 		stopKeepalive()
 		release()
 		s.auditUISession(sess, "ui.close", desktopSigninSocket, "success", map[string]any{"app": sess.App})
-	}}, execSess, sess, desktopSigninSocket), nil
+	}}
+	// The relay closes itself once its sign-in's end is asked for (watchSigninDisplay); closing it ends keepCtx.
+	go s.watchSigninDisplay(keepCtx, run, sess.Principal, signinDisplayRecheck, func() { _ = conn.Close() })
+	return s.uiGate(ctx, conn, execSess, sess, desktopSigninSocket), nil
 }
