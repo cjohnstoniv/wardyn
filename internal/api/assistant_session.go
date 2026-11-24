@@ -399,7 +399,7 @@ func (s *Server) assistantSessionUsable(w http.ResponseWriter, r *http.Request) 
 		return nil, types.AssistantSession{}, false
 	}
 	if sess.State == types.AssistantSessionFetching {
-		writeErrorReason(w, http.StatusConflict, "", "Send the files or start again before you write to the assistant.") // PROPOSED
+		writeErrorReason(w, http.StatusConflict, reasonAssistantBuildFilesPending, "Send the files or start again before you write to the assistant.") // PROPOSED
 		return nil, types.AssistantSession{}, false
 	}
 	if ref := s.assistantStillAvailable(r.Context(), ss, sess); ref != nil {

@@ -314,7 +314,12 @@ func adoBranchTarget(sc types.SiteConfig, a adoEntraRun, repo string) (base, pro
 // adoBranchAuth is the Authorization value for the person's own credential,
 // or the reason there is none. err is a wardynd-side failure.
 func (s *Server) adoBranchAuth(ctx context.Context, a adoEntraRun) (auth, reason string, err error) {
-	rctx := secretstore.WithPurpose(ctx, secretstore.PurposeBranchList)
+	return s.adoAuthFor(ctx, a, secretstore.PurposeBranchList)
+}
+
+// adoAuthFor is adoBranchAuth for a read that names its own purpose, which the secret.read row records.
+func (s *Server) adoAuthFor(ctx context.Context, a adoEntraRun, purpose secretstore.Purpose) (auth, reason string, err error) {
+	rctx := secretstore.WithPurpose(ctx, purpose)
 	if a.tokenMode == types.ADOTokenModeOwnPAT {
 		blob, found, err := s.readADOOwnPAT(rctx, a.owner, a.rowID)
 		if err != nil {

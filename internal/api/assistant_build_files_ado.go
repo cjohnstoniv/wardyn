@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
 	"github.com/cjohnstoniv/wardyn/internal/broker"
+	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -41,7 +42,7 @@ func (s *Server) adoRepoFiles(ctx context.Context, sc types.SiteConfig, a adoEnt
 	if !ok {
 		return out, assistantRepoHostUnsupported()
 	}
-	auth, reason, err := s.adoBranchAuth(ctx, a)
+	auth, reason, err := s.adoAuthFor(ctx, a, secretstore.PurposeBuildFiles)
 	if err != nil {
 		return out, assistantRepoUnreachable()
 	}

@@ -910,6 +910,11 @@ start.
 | `assistant_tool_refused` | `POST /internal/assistant/tools/{name}` (`403`): a review session called `draft` or `build_files`, or the organisation keeps run history from the assistant. |
 | `assistant_repo_host_unsupported` | `POST /assistant/sessions` with a repository (`400`): a draft cannot read files from that repository's host yet. GitHub and Azure DevOps are read. |
 | `assistant_build_files_not_pending` | `POST /assistant/sessions/{id}/build-files/confirm` (`409`): the session is not waiting for its files to be confirmed, or its ten minutes passed and it ended. Start again. |
+| `assistant_repo_no_credential` | `POST /assistant/sessions` with a repository (`409`): no git access is set up for that repository, so its files cannot be read. |
+| `assistant_repo_sign_in_needed` | `POST /assistant/sessions` with a repository (`409`): your Azure DevOps sign-in has lapsed. Sign in again, then start over. |
+| `assistant_repo_read_refused` | `POST /assistant/sessions` with a repository (`502`): the repository host refused the read. |
+| `assistant_repo_unreachable` | `POST /assistant/sessions` with a repository (`502`): the repository host could not be reached. |
+| `assistant_build_files_pending` | A message or an edit on a session (`409`) that still waits for its files to be confirmed. Confirm them, or start again. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |

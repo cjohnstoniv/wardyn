@@ -320,7 +320,7 @@ func (s *Server) assistantToolBuildFiles(e *assistantToolEnv) (any, *assistantRe
 	}
 	var a types.AssistantBuildFilesArgs
 	if err := decodeStrictJSON(e.args, &a); err != nil {
-		return nil, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "build_files takes no arguments.") // PROPOSED
+		return nil, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "This tool takes no arguments.") // PROPOSED
 	}
 	files, err := s.assistantConfirmedFiles(e.ctx(), e)
 	if err != nil {

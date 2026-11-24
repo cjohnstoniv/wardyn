@@ -86,19 +86,19 @@ func assistantRepoHostUnsupported() *assistantRefusal {
 }
 
 func assistantRepoNoCredential() *assistantRefusal {
-	return assistantRefusalFor(http.StatusConflict, "", "No git access is set up for this repository, so its files cannot be read.") // PROPOSED
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantRepoNoCredential, "No git access is set up for this repository, so its files cannot be read.") // PROPOSED
 }
 
 func assistantRepoSignInNeeded() *assistantRefusal {
-	return assistantRefusalFor(http.StatusConflict, "", "Sign in to Azure DevOps again, then start over.") // PROPOSED
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantRepoSignInNeeded, "Sign in to Azure DevOps again, then start over.") // PROPOSED
 }
 
 func assistantRepoReadRefused() *assistantRefusal {
-	return assistantRefusalFor(http.StatusBadGateway, "", "The repository host refused the read.") // PROPOSED
+	return assistantRefusalFor(http.StatusBadGateway, reasonAssistantRepoReadRefused, "The repository host refused the read.") // PROPOSED
 }
 
 func assistantRepoUnreachable() *assistantRefusal {
-	return assistantRefusalFor(http.StatusBadGateway, "", "The repository host could not be reached.") // PROPOSED
+	return assistantRefusalFor(http.StatusBadGateway, reasonAssistantRepoUnreachable, "The repository host could not be reached.") // PROPOSED
 }
 
 func assistantBuildFilesNotPending() *assistantRefusal {
@@ -171,12 +171,9 @@ func assistantScanRepoFiles(read []broker.File) (send []assistant.File, skipped,
 			skipped = append(skipped, f.Name)
 			continue
 		}
-		if f.Text != "" {
-			res, _, err := eng.ScanRequest(contentscan.ChannelGeneric, []byte(f.Text))
-			if err != nil || len(res.Findings) > 0 || res.Skipped || eng.ShouldBlock(res) {
-				held = append(held, f.Name)
-				continue
-			}
+		if f.Text != "" && assistant.HeldBack(eng, f.Text) {
+			held = append(held, f.Name)
+			continue
 		}
 		fit = append(fit, assistant.File{Name: f.Name, Text: f.Text})
 	}
@@ -203,12 +200,12 @@ func (s *Server) assistantBuildFilesAudit(r *http.Request, person string, ws uui
 // that passed, and writes the fetching state and the build_files event. Nothing is sent and no run exists.
 func (s *Server) handleCreateAssistantRepoSession(w http.ResponseWriter, r *http.Request, ss store.AssistantSessionStore, req assistantCreateRequest) {
 	if req.WorkspaceID == nil || req.Repo == nil || *req.Repo == "" || req.Purpose != types.AssistantCompose {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "Files from a repository need a workspace and a repository, on a compose session.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "Files from a repository need a workspace and a repository, for a new draft.") // PROPOSED
 		return
 	}
 	wsID, err := uuid.Parse(*req.WorkspaceID)
 	if err != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "workspace_id is not an id.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "The workspace is not a valid id.") // PROPOSED
 		return
 	}
 	if s.assistantRateRefused(w, oidcHumanFromContext(r.Context())) {
@@ -246,6 +243,8 @@ func (s *Server) handleCreateAssistantRepoSession(w http.ResponseWriter, r *http
 	}
 	sess, ref := s.assistantStartFetching(r.Context(), ss, prep, req.Purpose, ws.ID, *req.Repo, send, ev)
 	if ref != nil {
+		// The read happened, so it is audited, with the names it found, though nothing was held.
+		s.assistantBuildFilesAudit(r, prep.snap.Principal, ws.ID, *req.Repo, read, ev, "failure")
 		ref.write(w, r)
 		return
 	}
@@ -294,6 +293,9 @@ func (s *Server) assistantStartFetching(ctx context.Context, ss store.AssistantS
 			s.assistantDropHeld(ctx, ss, old.ID)
 		}
 		sess, err = ss.ReplaceAssistantSession(ctx, old.ID, row, nil)
+		if err != nil {
+			s.assistantRestoreHeld(ctx, ss, old)
+		}
 		if err == nil {
 			s.assistantChanged(old.ID, old.RunID)
 			s.assistantEndAudit(context.WithoutCancel(ctx), ss, old, types.AssistantEndReplaced)
@@ -334,6 +336,19 @@ func (s *Server) assistantStartFetching(ctx context.Context, ss store.AssistantS
 func (s *Server) assistantDropHeld(ctx context.Context, ss store.AssistantSessionStore, id uuid.UUID) {
 	if err := ss.SetAssistantDraft(context.WithoutCancel(ctx), id, nil); err != nil && !errors.Is(err, store.ErrNotFound) {
 		slog.WarnContext(ctx, "wardynd: could not clear the held build files", slog.String("session", id.String()), slog.Any("err", err))
+	}
+}
+
+// assistantRestoreHeld puts a fetching session's files back after a replace that failed. The files are cleared
+// before a replace because an ended row cannot be written, so the clearing cannot come after it; a replace that
+// fails leaves the row fetching, and it keeps the files the person was asked to confirm. When the row was ended
+// by another request the write finds it ended and does nothing.
+func (s *Server) assistantRestoreHeld(ctx context.Context, ss store.AssistantSessionStore, old types.AssistantSession) {
+	if old.State != types.AssistantSessionFetching || len(old.Draft) == 0 {
+		return
+	}
+	if err := ss.SetAssistantDraft(context.WithoutCancel(ctx), old.ID, old.Draft); err != nil && !errors.Is(err, store.ErrNotFound) {
+		slog.WarnContext(ctx, "wardynd: could not restore the held build files", slog.String("session", old.ID.String()), slog.Any("err", err))
 	}
 }
 
@@ -482,6 +497,9 @@ func (s *Server) assistantLaunchFetched(r *http.Request, ss store.AssistantSessi
 		row.WorkspaceID, row.Repo, row.PreviewDigest = sess.WorkspaceID, sess.Repo, digest
 		s.assistantDropHeld(ctx, ss, sess.ID)
 		out, err = ss.ReplaceAssistantSession(ctx, sess.ID, row, records)
+		if err != nil {
+			s.assistantRestoreHeld(ctx, ss, sess)
+		}
 		if err == nil {
 			s.assistantChanged(sess.ID, nil)
 			s.assistantEndAudit(context.WithoutCancel(ctx), ss, sess, types.AssistantEndReplaced)

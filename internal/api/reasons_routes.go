@@ -893,4 +893,9 @@ const (
 	reasonAssistantToolRefused            = "assistant_tool_refused"             // the session's purpose or the organisation's settings keep that tool from the run
 	reasonAssistantRepoHostUnsupported    = "assistant_repo_host_unsupported"    // a repository draft cannot read this repository host yet
 	reasonAssistantBuildFilesNotPending   = "assistant_build_files_not_pending"  // the session is not waiting for its build files to be confirmed
+	reasonAssistantRepoNoCredential       = "assistant_repo_no_credential"       // no git access is set up to read this repository
+	reasonAssistantRepoSignInNeeded       = "assistant_repo_sign_in_needed"      // the person's Azure DevOps sign-in has lapsed
+	reasonAssistantRepoReadRefused        = "assistant_repo_read_refused"        // the repository host refused the read
+	reasonAssistantRepoUnreachable        = "assistant_repo_unreachable"         // the repository host could not be reached
+	reasonAssistantBuildFilesPending      = "assistant_build_files_pending"      // the session still waits for its build files to be confirmed
 )
