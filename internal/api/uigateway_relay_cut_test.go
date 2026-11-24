@@ -422,11 +422,12 @@ func TestUIRenewal_OpenStreamStopsWithin35s(t *testing.T) {
 	}
 }
 
-// TestUIRenewal_CheckOutageStopsWithin35s: a re-check whose store hangs is cut at its lookup bound: the
-// stream ends within one tick and the bound.
+// TestUIRenewal_CheckOutageStopsWithin35s: a re-check whose store hangs is unconfirmed at its lookup bound, and
+// at a session budget of 0 that ends the stream: within one tick and the bound.
 func TestUIRenewal_CheckOutageStopsWithin35s(t *testing.T) {
 	setRelayWatch(t, relayEvery)
 	rig, c := streamRig(t)
+	rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // a re-check with no answer ends the stream at once
 	srv, ended := serveGateway(t, rig, gwHTTP1, nil)
 	rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, "")
 	requireOpen(t, ended, 300*time.Millisecond)
@@ -800,7 +801,7 @@ func TestUIRelayIssuerPortal_QuietOutputInputStopsAtEnd(t *testing.T) {
 	if line, _ := bufio.NewReader(conn).ReadString('\n'); !strings.Contains(line, "101") {
 		t.Fatalf("no 101: %q", line)
 	}
-	end := rig.wall(a.ExpiresAt) // as the gateway converted it at admission
+	end := rig.wall(cookieEnd(a.ExpiresAt)) // renewal off: the cookie's signed expiry, as the gateway converted it at admission
 	go sendLines(conn)
 	waitWithin(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(time.Now().Add(-time.Minute)) > 0 })
 	at := waitEnded(t, ended, 10*time.Second, "quiet 101")

@@ -62,6 +62,12 @@ source "${ROOT}/scripts/lib/runner-limits.sh"
 if [[ "${WARDYN_TEST_DOCKER:-}" != "1" ]]; then
   skip_lane "run-e2e-ui-sandbox: set WARDYN_TEST_DOCKER=1 to run the Docker-dependent UI-sandbox e2e (skipping)."
 fi
+# WARDYN_E2E_UISBX_BASE_IMAGE: an image named by digest that the background command run starts from, instead of the
+# local build (nightly.yml's released-agent-base-run passes the newest release's agent-base). Checked here, before
+# any docker call; unset, nothing below changes.
+if [[ -n "${WARDYN_E2E_UISBX_BASE_IMAGE:-}" && ! "${WARDYN_E2E_UISBX_BASE_IMAGE}" =~ ^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$ ]]; then
+  die "WARDYN_E2E_UISBX_BASE_IMAGE must name an image by digest (<repo>@sha256:<64 hex>), got '${WARDYN_E2E_UISBX_BASE_IMAGE}'"
+fi
 wardyn_pick_docker_host
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
@@ -88,8 +94,10 @@ REGISTRY_PORT=15011
 AGENT_IMAGE="wardynv06uisbx/agent-vscode:pinned"
 # The background command run has no harness, so it starts from the "base" image. Mapping base too keeps it on
 # the local image: unmapped, it falls back to the published agent-base tagged with the daemon's version, and a
-# release candidate's version has no such tag until it is cut.
-AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" '{"claude-code":$img, base:$img}')"
+# release candidate's version has no such tag until it is cut. WARDYN_E2E_UISBX_BASE_IMAGE (checked above) maps it
+# to a pulled, digest-named image instead.
+BASE_IMAGE="${WARDYN_E2E_UISBX_BASE_IMAGE:-${AGENT_IMAGE}}"
+AGENT_IMAGES="$(jq -nc --arg img "${AGENT_IMAGE}" --arg base "${BASE_IMAGE}" '{"claude-code":$img, base:$base}')"
 # Same reason, for the two images the stack itself runs: reusing wardyn/*:local
 # meant this lane graded whatever another job on the daemon last built.
 # docker-compose.yaml takes these overrides and defaults to the :local names,
@@ -165,6 +173,10 @@ fi
 # old :pinned tag keeps this stack on the code-server image from the first run
 # that ever created it.
 docker tag wardyn/agent-vscode:local "${AGENT_IMAGE}" || die "could not tag ${AGENT_IMAGE}"
+if [[ -n "${WARDYN_E2E_UISBX_BASE_IMAGE:-}" ]]; then
+  docker image inspect "${BASE_IMAGE}" >/dev/null 2>&1 \
+    || die "${BASE_IMAGE} is not on this engine; pull it by digest first (this script never pulls it)"
+fi
 # One age key for the stack's whole life: the host-mode walk recreates wardynd, and with a fresh ephemeral key it
 # refuses to start over the secrets the path-mode walk sealed.
 AGE_KEY="$(docker run --rm --pull=never --entrypoint /wardynd "${WARDYND_IMAGE}" -gen-age-key | grep -E '^AGE-SECRET-KEY-' | head -1)"
@@ -585,6 +597,15 @@ RUN_HM_ID="$(launch_json "$(jq -nc --argjson port "${ECHO_PORT}" --argjson edito
                {name:"api", port:$port, path:"/", inbound:true, callers:["user:e2e-caller"]}]}}')")" \
   || die "could not launch the interactive run with the editor"
 pass "host mode: background run ${RUN_BG_ID} (inbound api) and interactive run ${RUN_HM_ID} (vscode + inbound api) are RUNNING"
+if [[ -n "${WARDYN_E2E_UISBX_BASE_IMAGE:-}" ]]; then
+  want_img="$(docker image inspect --format '{{.Id}}' "${BASE_IMAGE}" 2>/dev/null || true)"
+  got_img="$(docker inspect --format '{{.Image}}' "wardyn-agent-${RUN_BG_ID}" 2>/dev/null || true)"
+  if [[ -n "${want_img}" && "${got_img}" == "${want_img}" ]]; then
+    pass "background run ${RUN_BG_ID} runs ${BASE_IMAGE} (image ${want_img})"
+  else
+    fail "background run ${RUN_BG_ID} runs image '${got_img}', want ${BASE_IMAGE} (${want_img:-not on this engine})"
+  fi
+fi
 
 # ── host-mode request helpers ───────────────────────────────────────────────
 uihost() { printf 'run-%s.localhost:%s' "$1" "${UI_PORT}"; }

@@ -108,6 +108,7 @@ an operator follows to turn one on and run the queue.
     - A stale `If-Match` is refused `412` at proposal as for a direct write; the approval then compares the map's ETag and is serialized by its transaction, not the in-process lock a direct write takes.
   - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit changes, in either direction.
     - Staleness covers the bit and the allow rows naming the value, so a restriction accepted at proposal is applied only while its list is what it was.
+    - A create that restricts its own new value is written directly, never held: an organisation component's create, and `POST /policies` or `PUT /model-providers` with `restricted=true`. Nobody could use the value before, so it narrows nothing.
   - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a priority edit together are one held change).
     - A name or description edit alone applies directly.
   - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload with the before and after it acknowledged, and judged again when the change is applied.

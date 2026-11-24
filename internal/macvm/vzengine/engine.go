@@ -278,10 +278,11 @@ func (*Engine) Install(ctx context.Context, m macvm.Machine, ipswPath string, pr
 	for {
 		select {
 		case err := <-errc:
-			if err == nil {
-				progress(1)
+			if err != nil {
+				return classifyStart(err)
 			}
-			return err
+			progress(1)
+			return nil
 		case <-t.C:
 			progress(inst.FractionCompleted())
 		}
@@ -338,7 +339,7 @@ func (m *machine) Start(context.Context) error {
 	return nil
 }
 
-// classifyStart wraps macvm.ErrVMLimit around a start error that is the framework's VM limit refusal,
+// classifyStart wraps macvm.ErrVMLimit around a start or install error that is the framework's VM limit refusal,
 // matched by the NSError's domain and code; any other error is returned as it is.
 func classifyStart(err error) error {
 	var ns *vz.NSError

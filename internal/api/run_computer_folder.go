@@ -318,7 +318,8 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 	}
 	// Every pass back, the first included, runs with the agent stopped and no egress where the
 	// substrate can do that and keep the folder; where that fails, no pass runs. On a sandbox it
-	// cannot quiesce (on a runner, or on Kubernetes) the first pass runs as it is and is never kept.
+	// cannot quiesce the first pass runs as quiesceKeptSandbox left it and is never kept: on a runner
+	// with its proxy stopped, and where nothing could cut its egress (noProxyStop) only on an ended agent.
 	qctx, qcancel := teardownCtx(ctx)
 	qerr := s.quiesceKeptSandbox(qctx, run, ref)
 	qcancel()
@@ -333,6 +334,7 @@ func (s *Server) bringComputerFolderBackAs(ctx context.Context, runID uuid.UUID,
 			}
 		}
 	}
+	qerr = s.agentEnded(ctx, run, ref, qerr)
 	if qerr != nil && !errors.As(qerr, &cannot) {
 		if s.giveUpKeptUnquiesced(ctx, run, rec) {
 			return false
@@ -524,9 +526,9 @@ const keptAgentStopWait = 2 * time.Second
 // nothing in it has egress, and its agent's processes are killed and seen ended (AgentStatus). The
 // pass back is untouched: it is an exec through the substrate (execSFTPServer), not traffic
 // through the proxy. It answers notQuiescable for a linux_vm run, whose guest the server's Docker
-// cannot reach, and for a run on a runner, whose stop_proxy is a lost run's containment, queued only with its loss (a Kubernetes runner's deletes the agent pod when
-// it cannot prove the stop), and for a substrate that cannot stop its proxy alone (Kubernetes in
-// server mode). An exec-less sandbox, whose agent is its main process, is refused outright: its
+// cannot reach; for an ended run on a runner, as quiesceRunnerRun says; and for a substrate that
+// cannot stop its proxy alone (noProxyStop: Kubernetes in server mode, whose pass runs only on an
+// agent already ended). An exec-less sandbox, whose agent is its main process, is refused outright: its
 // agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
 // errSandboxStopped.
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
@@ -541,10 +543,10 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 		}
 		stopper, ok := s.cfg.Runner.(runner.ProxyStopper)
 		if !ok {
-			return notQuiescable("its substrate cannot stop its proxy alone")
+			return noProxyStop
 		}
 		if err := stopper.StopProxy(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
-			return notQuiescable("its substrate cannot stop its proxy alone")
+			return noProxyStop
 		} else if err != nil {
 			// Not unlessStopped: Docker's StopProxy fails closed by stopping the agent's container, so
 			// a stopped sandbox here is this failure's own doing, and the record names the proxy.
@@ -556,24 +558,14 @@ func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref
 		return notQuiescable("a virtual machine is not quiesced from the server's Docker")
 	}
 	if run.RunnerID != nil {
-		if !s.keepable(run) {
-			return notQuiescable("a sandbox on a runner is not kept")
-		}
-		if kind, err := s.cutAgent(ctx, run); kind != cutFenced || err != nil {
-			return notQuiescable("a sandbox on a runner is not kept")
-		}
-	} else if kind, err := s.cutAgent(ctx, run); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
-		return notQuiescable("its substrate cannot stop its proxy alone")
+		return s.quiesceRunnerRun(ctx, run, ref)
+	}
+	if kind, err := s.cutAgent(ctx, run); kind == cutUnsupported && err == nil || errors.Is(err, runner.ErrEndUnsupported) {
+		return noProxyStop
 	} else if err != nil {
 		return fmt.Errorf("its proxy did not stop: %w", err)
 	}
-	err := s.killKeptAgent(ctx, run, ref)
-	if err != nil && run.RunnerID != nil && !errors.Is(err, errSandboxStopped) {
-		// A runner run answers as one that cannot be quiesced, which takes the unquiesced first pass; a
-		// failed kill after its cut keeps that answer, and the cut stays.
-		return notQuiescable("a sandbox on a runner is not kept: " + err.Error())
-	}
-	return err
+	return s.killKeptAgent(ctx, run, ref)
 }
 
 // killKeptAgent kills every process of a kept sandbox's agent and checks it is gone: the agent kill that

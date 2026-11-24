@@ -227,12 +227,6 @@ func run() error {
 	}
 	defer releaseInstance()
 
-	// bootCtx bounds the REST of the boot sequence (signing-key load, optional
-	// features) — unrelated to the connect/migrate split above, which now runs
-	// under its own two budgets rather than sharing this one.
-	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
 	// can be masked ("<secret-hidden>") from PTY/asciicast captures and audit
@@ -261,6 +255,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// bootCtx bounds the REST of the boot sequence (the boot-key reads, signing-key load,
+	// optional features). It starts once the secret store is open: opening it can convert rows
+	// or prove key domains for longer than this budget, under rootCtx, and must not use it up.
+	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
 	// The key-domain service behind /key-domains: the domains the file
 	// declares (already built and proven by the store above), and the
 	// assignments that place a person's next principal key.
@@ -560,6 +559,7 @@ func run() error {
 		RefuseGitPATBrokerOff:    *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:      *f.proxyResponseScrub,
 		CanonicalPushRepos:       *f.pushHoldCanonicalRepos,
+		PushHoldRemovals:         *f.pushHoldRemovals,
 		AttachLocal:              strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
 		FileSecretPlaceholders:   *f.fileSecretPlaceholders,
@@ -655,7 +655,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, health, gtWrite)
 	// OTLP metrics, off unless the sinks config has an otlp_metrics block; on every replica.
 	startOTLPMetrics(rootCtx, otlpMetrics, srv.MetricsText)
 

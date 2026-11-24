@@ -37,6 +37,13 @@ describe("policy save client methods", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/api/v1/policies");
     expect(init?.method).toBe("POST");
+    expect(String(url)).not.toContain("?");
+  });
+
+  it("createPolicy() asks the server to restrict the new policy when told to", async () => {
+    fetchMock.mockResolvedValueOnce(reply(201));
+    await policies.createPolicy("payments", spec, { restricted: true });
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/api\/v1\/policies\?restricted=true$/);
   });
 
   it("updatePolicy() returns the requirements the server listed", async () => {

@@ -18,7 +18,7 @@ import (
 
 // A sweep that pages by cursor reads every run once however many are created between its pages. 30 runs share
 // one created_at and sit at positions 186-215 of the order, so the first 200-row page ends inside the tie and the
-// id has to break it. The same two pages by OFFSET, after the inserts, repeat 50 runs the first page read.
+// id has to break it. The second page by OFFSET, after the inserts, repeats 150 runs the first page read.
 func TestPG_ListRunsKeysetCoversEveryRunOnceAcrossInserts(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -74,7 +74,8 @@ func TestPG_ListRunsKeysetCoversEveryRunOnceAcrossInserts(t *testing.T) {
 	// 250 runs newer than any read so far arrive between the two pages.
 	insert(1, 250, `$3::timestamptz + g * interval '1 second'`)
 
-	// The control: an OFFSET page after the inserts repeats runs the first page read.
+	// The control: an OFFSET page after the inserts repeats runs the first page read. Its offset skips 200 of the 250
+	// new runs, so it holds the other 50 and then original positions 0-149, every one of them on the first page.
 	offsetPage, err := pg.ListRunsPage(ctx, store.Page{Limit: 200, Offset: 200})
 	if err != nil {
 		t.Fatalf("offset page: %v", err)
@@ -85,8 +86,8 @@ func TestPG_ListRunsKeysetCoversEveryRunOnceAcrossInserts(t *testing.T) {
 			repeated++
 		}
 	}
-	if repeated != 50 {
-		t.Errorf("the OFFSET page after the inserts repeats %d runs of the first page, want 50 (the control the cursor is judged against)", repeated)
+	if repeated != 150 {
+		t.Errorf("the OFFSET page after the inserts repeats %d runs of the first page, want 150 (the control the cursor is judged against)", repeated)
 	}
 
 	page("second page")
@@ -95,6 +96,17 @@ func TestPG_ListRunsKeysetCoversEveryRunOnceAcrossInserts(t *testing.T) {
 		t.Errorf("the cursor pages hold %d runs, not the original %d once each, in order", len(seen), len(original))
 	}
 
+	// The plan is read over a long history: on 700 rows reading the whole table and sorting it is the cheaper plan,
+	// so the index proves nothing there. The history is older than every run above, so no page above changes.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_runs (id, created_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		SELECT gen_random_uuid(), $1::timestamptz - interval '1 day' - g * interval '1 second', 'history-' || (g % 3000), 'claude-code', 'o/r', 'CC2', 'COMPLETED', 'spiffe://x/' || g, 'docker'
+		FROM generate_series(1, 150000) g`, base); err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE agent_runs`); err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
 	plan := planOfCall(t, ctx, pool, func(p store.PG) {
 		if _, err := p.ListRunsKeyset(ctx, store.RunCursor{CreatedAt: base.Add(-time.Hour), ID: original[100]}, 200); err != nil {
 			t.Fatalf("cursor page: %v", err)

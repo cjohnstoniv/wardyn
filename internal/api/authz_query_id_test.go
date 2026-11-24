@@ -254,6 +254,7 @@ var queryParamNotAnID = map[string]string{
 	"partition":                 "GET /audit/export (security tier): the name of one audit partition. Not a principal's entity: a session below the security tier gets the empty export before the value is read, so it names nothing a member can reach",
 	"form":                      "GET /audit/export?partition=: readable|raw projection of that partition (the same security-tier gate)",
 	"force":                     "operator confirmation flag",
+	"restricted":                "POST /policies and PUT /model-providers (operator routes, createRestricted): only \"true\" is accepted, which restricts the policy or each provider the write adds before it is stored; a flag that only closes what the write creates, it names no entity",
 	"confirm":                   "operator confirmation flag",
 	"acknowledge_access_change": "operator confirmation flag",
 	"include":                   "response projection switch",

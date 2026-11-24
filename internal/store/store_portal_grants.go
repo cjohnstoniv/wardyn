@@ -249,11 +249,16 @@ func (s PG) StampPortalUsed(ctx context.Context, id uuid.UUID, at time.Time) err
 	return nil
 }
 
-// SweepExpiredPortalGrants deletes every grant that ended at or before at and reports how many. It runs after
-// a mint commits, never inside it, so two people's mints never wait on each other's deletes; chain inheritance
+// portalGrantSweepBatch is the most ended grants one sweep deletes. An exchange mints at most one grant and
+// sweeps up to this many, so ended grants never pile up faster than they are removed. A var for tests.
+var portalGrantSweepBatch = 500
+
+// SweepExpiredPortalGrants deletes ended grants (at or before at), at most portalGrantSweepBatch of them, and
+// reports how many. It runs after a mint commits, never inside it, and skips a row another sweep holds, so two
+// exchanges never wait on each other's sweep; the rows it takes are still locked in id order. Chain inheritance
 // reads live grants only, so the sweep's timing changes nothing.
 func (s PG) SweepExpiredPortalGrants(ctx context.Context, at time.Time) (int64, error) {
-	tag, err := s.Pool.Exec(ctx, `DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE expires_at <= $1 ORDER BY id FOR UPDATE)`, at)
+	tag, err := s.Pool.Exec(ctx, `DELETE FROM portal_grants WHERE id IN (SELECT id FROM portal_grants WHERE expires_at <= $1 ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED)`, at, portalGrantSweepBatch)
 	if err != nil {
 		return 0, fmt.Errorf("store: sweep portal grants: %w", err)
 	}

@@ -71,9 +71,14 @@ func TestPushHoldSwappedRefsAskAgain(t *testing.T) {
 	// The content rules still read the forge before the hold (gitHits counts
 	// that read); what must not reach it is the push itself.
 	forwarded := strings.HasSuffix(up.gitPath, "/git-receive-pack") || bytes.Equal(up.gitBody, swapped.Bytes())
-	if raises, _ := cp.counts(); second.Code != http.StatusForbidden || raises != 2 || forwarded {
-		t.Fatalf("swapped refs reused the approval: status=%d raises=%d forwarded=%v (last forge request %q), want 403, a second raise and no push forwarded",
-			second.Code, raises, forwarded, up.gitPath)
+	// The paths could not be worked out on this lane, so the refusal is a rejected ref git prints.
+	rejected := second.Code == http.StatusOK &&
+		second.Header().Get("Content-Type") == "application/x-git-receive-pack-result" &&
+		strings.Contains(second.Body.String(), "unpack refused by Wardyn") &&
+		strings.Contains(second.Body.String(), "ng refs/heads/")
+	if raises, _ := cp.counts(); !rejected || raises != 2 || forwarded {
+		t.Fatalf("swapped refs reused the approval: status=%d body %q raises=%d forwarded=%v (last forge request %q), want a rejected ref, a second raise and no push forwarded",
+			second.Code, second.Body.String(), raises, forwarded, up.gitPath)
 	}
 }
 

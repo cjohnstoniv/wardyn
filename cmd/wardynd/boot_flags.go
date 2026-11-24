@@ -299,14 +299,17 @@ type bootFlags struct {
 	// multiAgentTasks lets a background agent task run several agents side by side
 	// (off by default in 0.10.0).
 	multiAgentTasks *bool
+	// pushHoldRemovals holds a push that removes a require_review_paths file from a
+	// branch it updates, on GitHub and Azure DevOps (off by default in 0.10.4).
+	pushHoldRemovals *bool
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
 	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
 	// spelling of its repository (off by default in 0.10.0).
 	pushHoldCanonicalRepos *bool
-	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
-	// default in 0.10.0; only "on" enables it).
+	// attachLocal lets a person's CLI attach to their run on their own runner's computer (on by
+	// default; only "on" enables it, so any other value is off).
 	attachLocal *string
 	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
 	// file secret's value at the proxy (off by default in 0.10.0).
@@ -486,6 +489,9 @@ type bootFlags struct {
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
 	allowUnknownMigrations *bool
+
+	// lockPoolMaxConns is WARDYN_LOCK_POOL_MAX_CONNS (boot_lock_pool.go).
+	lockPoolMaxConns *int
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -548,6 +554,7 @@ func parseBootFlags() *bootFlags {
 		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long a run's output tail is kept after its last output (duration)"),
 		runOutputTailBytes:     flagIntEnv("run-output-tail-bytes", "WARDYN_RUN_OUTPUT_TAIL_BYTES", 65536, "size of each non-interactive run's in-memory output tail and the cap on GET /runs/{id}/output?tail= (bytes, 1024 to 1048576)"),
 		runOutputPersist:       flagBool("run-output-persist", "WARDYN_RUN_OUTPUT_PERSIST", true, `persist each run's final masked output tail in Postgres so it outlives a restart and is readable from any replica; "off" keeps it in memory only`),
+		lockPoolMaxConns:       flagIntEnv("lock-pool-max-conns", "WARDYN_LOCK_POOL_MAX_CONNS", 8, "connections each replica holds for cross-replica locks at once, and guarded credential-write dials (1-64)"),
 		runOutputRetention:     flagIntEnv("run-output-retention-days", "WARDYN_RUN_OUTPUT_RETENTION_DAYS", 30, "delete persisted run output older than this many days (0 keeps it forever)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
@@ -655,9 +662,10 @@ func parseBootFlags() *bootFlags {
 		envSecretPlaceholders:    flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
-		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "on", `"on" (the default): a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; "off" (or any other value) keeps every attach on the relay`),
 		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
+		pushHoldRemovals:         flagBool("push-hold-removals", "WARDYN_PUSH_HOLD_REMOVALS", false, "have each run's egress proxy hold a GitHub or Azure DevOps push that removes a require_review_paths file from a branch it updates, as it holds one that changes it (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
 

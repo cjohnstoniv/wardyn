@@ -6,6 +6,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { KeyRound } from "lucide-react";
 import { HttpError, TIMEOUT_STATUS } from "../../lib/api/core";
 import { EmptyState, ErrorState, STATES, failureSentence } from "./states";
 
@@ -107,5 +108,17 @@ describe("failureSentence", () => {
 
   it("leaves a request that timed out (wfetch's HttpError with the timeout status) to the isn't-answering default", () => {
     expect(failureSentence(new HttpError(TIMEOUT_STATUS, "Could not reach the control plane."))).toBeUndefined();
+  });
+});
+
+describe("ErrorState — icon and retry label", () => {
+  it("ErrorState takes an icon and a retry label, and keeps the triangle and Retry by default", () => {
+    const { container, rerender } = render(<ErrorState icon={KeyRound} retryLabel="Read again" onRetry={() => {}} />);
+    expect(container.querySelector(".lucide-key-round")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Read again" })).toBeInTheDocument();
+    rerender(<ErrorState onRetry={() => {}} />);
+    expect(container.querySelector(".lucide-key-round")).toBeNull();
+    expect(container.querySelector(".lucide-triangle-alert, .lucide-alert-triangle")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

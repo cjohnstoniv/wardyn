@@ -78,18 +78,19 @@ func healthzCacheServer(t *testing.T, ttl time.Duration) (*Server, *capsCounting
 	return New(cfg), rn, clock
 }
 
-func getHealthz(ctx context.Context, srv *Server) *httptest.ResponseRecorder {
+func getHealthz(t testing.TB, ctx context.Context, srv *Server) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil).WithContext(ctx))
+	panicFails(t, srv.Handler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil).WithContext(ctx))
 	return w
 }
 
 // Within the TTL a second request reuses the probe, so the runner is asked once; at the TTL it is asked again.
 func TestHealthz_ProbeIsReadOncePerTTL(t *testing.T) {
 	srv, rn, clock := healthzCacheServer(t, 2*time.Second)
-	first := getHealthz(context.Background(), srv)
+	first := getHealthz(t, context.Background(), srv)
 	clock.advance(1900 * time.Millisecond)
-	second := getHealthz(context.Background(), srv)
+	second := getHealthz(t, context.Background(), srv)
 	if got := rn.calls.Load(); got != 1 {
 		t.Fatalf("Capabilities calls after two requests 1.9 s apart = %d, want 1", got)
 	}
@@ -104,7 +105,7 @@ func TestHealthz_ProbeIsReadOncePerTTL(t *testing.T) {
 		t.Errorf("confinement_classes differ between the two requests: %s then %s", a, b)
 	}
 	clock.advance(100 * time.Millisecond)
-	getHealthz(context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
 	if got := rn.calls.Load(); got != 2 {
 		t.Errorf("Capabilities calls after a request 2 s after the first = %d, want 2", got)
 	}
@@ -121,7 +122,7 @@ func TestHealthz_ProbeReadIsSingleFlight(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			codes[i] = getHealthz(context.Background(), srv).Code
+			codes[i] = getHealthz(t, context.Background(), srv).Code
 		}()
 	}
 	waitFor(t, "the first Capabilities call", func() bool { return rn.calls.Load() >= 1 })
@@ -148,7 +149,7 @@ func TestHealthz_AReadSlowerThanTheTTLServesItsWaiters(t *testing.T) {
 	codes := make([]int, 8)
 	serve := func(i int) {
 		defer wg.Done()
-		codes[i] = getHealthz(context.Background(), srv).Code
+		codes[i] = getHealthz(t, context.Background(), srv).Code
 	}
 	wg.Add(1)
 	go serve(0)
@@ -170,7 +171,7 @@ func TestHealthz_AReadSlowerThanTheTTLServesItsWaiters(t *testing.T) {
 		}
 	}
 	rn.setBlock(nil)
-	getHealthz(context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
 	if got := rn.calls.Load(); got != 2 {
 		t.Errorf("Capabilities calls after a ninth request = %d, want 2 (the entry's start is 3 s old)", got)
 	}
@@ -180,13 +181,13 @@ func TestHealthz_AReadSlowerThanTheTTLServesItsWaiters(t *testing.T) {
 // ends with its own context, so the probe fails as it would with no cache. A read cut short is not kept.
 func TestHealthz_HungProbeIsNeverServedPastTheTTL(t *testing.T) {
 	srv, rn, clock := healthzCacheServer(t, 2*time.Second)
-	getHealthz(context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
 	clock.advance(3 * time.Second)
 	rn.setBlock(make(chan struct{})) // never released
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	getHealthz(ctx, srv)
+	getHealthz(t, ctx, srv)
 	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
 		t.Errorf("the request returned after %v, before its context ended: the old probe was served", elapsed)
 	}
@@ -194,7 +195,7 @@ func TestHealthz_HungProbeIsNeverServedPastTheTTL(t *testing.T) {
 		t.Fatalf("Capabilities calls = %d, want 2 (the expired probe is read again)", got)
 	}
 	rn.setBlock(nil)
-	getHealthz(context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
 	if got := rn.calls.Load(); got != 3 {
 		t.Errorf("Capabilities calls after the hang cleared = %d, want 3 (the cut-short read was not kept)", got)
 	}
@@ -254,8 +255,8 @@ func TestHealthz_SharedProbeKeepsTheAnonymousRedaction(t *testing.T) {
 // With no TTL set, which is every test's default, each request reads the probe.
 func TestHealthz_ZeroTTLReadsEveryRequest(t *testing.T) {
 	srv, rn, _ := healthzCacheServer(t, 0)
-	getHealthz(context.Background(), srv)
-	getHealthz(context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
+	getHealthz(t, context.Background(), srv)
 	if got := rn.calls.Load(); got != 2 {
 		t.Errorf("Capabilities calls with no TTL = %d, want 2", got)
 	}

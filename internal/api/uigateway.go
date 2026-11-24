@@ -368,9 +368,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// operator-owned one, so the governance exemption below cannot reach a
 	// person's run. The sign-in display and a declared noVNC desktop answer to
 	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
-	// its own door); any other declared app is deny_ui_apps' alone.
+	// its own door); any other declared app is deny_ui_apps' alone. A desktop's refusal here is shown as the viewer's
+	// page (uiDesktopDoor).
 	rt := r.WithContext(withTicketActor(r.Context(), ta))
-	if ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app) {
+	desktop := uiDesktopApp(app) || app == uiDesktopAppName
+	if s.uiDesktopDoor(w, r, runID, desktop, func(w http.ResponseWriter) bool {
+		return ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app)
+	}) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -390,13 +394,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, redirectStatus)
+	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, superAdmin, redirectStatus)
 }
 
 // uiEnterDeclaredApp is the tail of uiEnterCommon for a declared (non-desktop) app: the run's effective policy
 // must declare app, and only then does the session cookie start. It writes every refusal itself; actx is the
-// ticket's opening-deadline context uiEnterCommon derived, and r already carries it.
-func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, redirectStatus int) {
+// ticket's opening-deadline context uiEnterCommon derived, and r already carries it. superAdmin is uiEnterCommon's.
+func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, superAdmin bool, redirectStatus int) {
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil && !ta.admitBy.IsZero() {
 		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)
@@ -420,7 +424,12 @@ func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 
-	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	if s.uiDesktopDoor(w, r, runID, true, func(w http.ResponseWriter) bool {
+		return s.refuseDesktopKindApp(w, r, run, ta, declared, superAdmin)
+	}) {
+		return
+	}
+	sess := s.newDeclaredUISession(run, ta, declared)
 	sess.Inbound = declared.Inbound
 	if sess.Caller = ta.caller; sess.Caller != "" {
 		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity
@@ -573,8 +582,11 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// every new connection.
 	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
+	case err != nil:
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonRunUnreadable, "The run could not be read. Try again.")
 	}
 	if de := uiRunGone(run); de != nil {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
