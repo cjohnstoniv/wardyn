@@ -85,11 +85,11 @@ const H = ({ level, ...rest }: React.ComponentProps<"h2"> & { level: Level }) =>
 function Step({ n, title, level, headingRef, children }: { n: number; title: string; level: Level; headingRef?: React.Ref<HTMLHeadingElement>; children: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5">
-      <span aria-hidden className="mt-px inline-grid size-5 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-bold text-primary-foreground">
+      <span aria-hidden className="mt-px inline-grid size-5 shrink-0 place-items-center rounded-full bg-primary text-meta font-bold text-primary-foreground">
         {n}
       </span>
       <div className="min-w-0 flex-1 space-y-1.5">
-        <H level={level} ref={headingRef} tabIndex={-1} className="text-[13px] font-semibold text-foreground outline-none">
+        <H level={level} ref={headingRef} tabIndex={-1} className="text-body font-semibold text-foreground outline-none">
           {title}
         </H>
         {children}
@@ -199,7 +199,7 @@ export function AddComputerBlock({
         </ol>
       )}
       {mdm && (
-        <Disclosure className="border-t border-border pt-3" summary={<span className="text-[13px] font-semibold text-foreground">{ADD_COMPUTER.MDM_TITLE}</span>}>
+        <Disclosure className="border-t border-border pt-3" summary={<span className="text-body font-semibold text-foreground">{ADD_COMPUTER.MDM_TITLE}</span>}>
           <div data-mdm className="space-y-3 pt-2">
             <p className={NOTE}>{ADD_COMPUTER.MDM_LEAD}</p>
             {mdm}

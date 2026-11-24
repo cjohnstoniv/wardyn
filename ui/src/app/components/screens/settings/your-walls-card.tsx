@@ -110,7 +110,7 @@ export function YourWallsCard() {
           {refusal && (
             <p role="alert" className="text-sm text-danger">
               {refusal.message}
-              {refusal.reason && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{refusal.reason}</span>}
+              {refusal.reason && <span className="ml-2 font-mono text-meta text-muted-foreground">{refusal.reason}</span>}
             </p>
           )}
           <div className="flex flex-wrap items-center gap-2">
@@ -139,7 +139,7 @@ export function YourWallsCard() {
           {refusal && (
             <p role="alert" className="text-sm text-danger">
               {refusal.message}
-              {refusal.reason && <span className="ml-2 font-mono text-[11px] text-muted-foreground">{refusal.reason}</span>}
+              {refusal.reason && <span className="ml-2 font-mono text-meta text-muted-foreground">{refusal.reason}</span>}
             </p>
           )}
           <AlertDialogFooter>

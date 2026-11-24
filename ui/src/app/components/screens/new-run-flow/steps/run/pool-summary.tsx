@@ -124,7 +124,7 @@ export function PoolSummary({ pool, runType, allowance, unitName }: { pool: Runn
               >
                 <dt className={LABEL}>{c.label}</dt>
                 <dd className="flex flex-col gap-1">
-                  <strong className="font-mono text-[11px] leading-[1.4] font-medium [overflow-wrap:anywhere]">{c.value}</strong>
+                  <strong className="font-mono text-meta leading-[1.4] font-medium [overflow-wrap:anywhere]">{c.value}</strong>
                   <Sub>{c.note}</Sub>
                   {c.source && <Sub>{c.source}</Sub>}
                 </dd>

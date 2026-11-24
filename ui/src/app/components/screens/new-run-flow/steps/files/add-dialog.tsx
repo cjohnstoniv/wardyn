@@ -312,7 +312,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                 aria-current={active ? "step" : undefined}
                 aria-label={label}
                 onClick={() => go(n)}
-                className={cn("flex items-center gap-1.5 whitespace-nowrap py-0.5 text-[11px] text-muted-foreground disabled:cursor-default", done && "text-success hover:[&>b]:underline", active && "text-foreground")}
+                className={cn("flex items-center gap-1.5 whitespace-nowrap py-0.5 text-meta text-muted-foreground disabled:cursor-default", done && "text-success hover:[&>b]:underline", active && "text-foreground")}
               >
                 {done ? <Check className="size-3.5" aria-hidden="true" /> : <span className="tabular-nums">{n}</span>}
                 <b className="font-semibold max-[520px]:hidden">{label}</b>
@@ -351,7 +351,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                     <span className="flex flex-wrap items-center gap-2">
                       <strong className="text-sm font-semibold">{info.title}</strong>
                     </span>
-                    <span className="text-[13px] text-muted-foreground">{info.body}</span>
+                    <span className="text-body text-muted-foreground">{info.body}</span>
                     {info.sub && <small className="text-xs text-muted-foreground">{info.sub}</small>}
                     {reason && (
                       <small id={reasonId} className="flex items-start gap-1.5 text-xs text-muted-foreground">
@@ -446,7 +446,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                         {o.sharedWith && <span className="text-xs">{o.sharedWith}</span>}
                         {o.othersSee && <span className="text-xs text-warning">{NR_FILES.TEAM_OTHERS_SEE}</span>}
                         {reason && (
-                          <span className="flex items-start gap-1.5 text-[13px]">
+                          <span className="flex items-start gap-1.5 text-body">
                             <Lock className="mt-0.5 size-3 flex-none" aria-hidden="true" />
                             {reason}
                           </span>
@@ -458,7 +458,7 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
                     {o.own && (
                       <button
                         type="button"
-                        className="mt-[11px] mr-[13px] flex-none text-[13px] font-semibold text-primary hover:underline"
+                        className="mt-[11px] mr-[13px] flex-none text-body font-semibold text-primary hover:underline"
                         aria-describedby={nameId}
                         data-own-delete={o.key}
                         onClick={(e) => {
@@ -505,14 +505,14 @@ function DialogBody({ open, onClose, intent, src, items, folderReason, computerA
             <KindTile kind={attachKind} />
             <strong className="text-[15px] font-semibold">{source?.name ?? editing?.name}</strong>
             <Chip>{KIND_LABEL[attachKind]}</Chip>
-            {attachKind === "repo" && <code className="font-mono text-[13px] text-muted-foreground">{s.branch ?? source?.ref ?? editing?.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</code>}
+            {attachKind === "repo" && <code className="font-mono text-body text-muted-foreground">{s.branch ?? source?.ref ?? editing?.branch ?? NR_FILES.BRANCH_PLACEHOLDER}</code>}
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor={DIALOG_PATH_ID} className={FIELD_LABEL}>{NR_FILES.STEP_MOUNT}</label>
             {editable ? (
               <Input
                 id={DIALOG_PATH_ID}
-                className="h-[42px] font-mono text-[13px]"
+                className="h-[42px] font-mono text-body"
                 value={s.path}
                 aria-invalid={(s.attempted && !!error) || undefined}
                 aria-describedby={errorId}
