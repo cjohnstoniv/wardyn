@@ -67,6 +67,11 @@ func scimGroupResource(ctx context.Context, st scimStore, g store.ScimGroup) (sc
 	if err != nil {
 		return scim.Group{}, err
 	}
+	return groupResource(g, ids), nil
+}
+
+// groupResource renders a group with the given member identity ids as a SCIM Group.
+func groupResource(g store.ScimGroup, ids []uuid.UUID) scim.Group {
 	members := make([]scim.Member, 0, len(ids))
 	for _, id := range ids {
 		members = append(members, scim.Member{Value: id.String()})
@@ -74,7 +79,7 @@ func scimGroupResource(ctx context.Context, st scimStore, g store.ScimGroup) (sc
 	return scim.Group{
 		Schemas: []string{scim.SchemaGroup}, ID: g.ID.String(), ExternalID: g.ExternalID, DisplayName: g.DisplayName,
 		Members: members, Meta: &scim.Meta{ResourceType: "Group", Created: g.CreatedAt.UTC().Format(time.RFC3339)},
-	}, nil
+	}
 }
 
 func (s *Server) handleSCIMListGroups(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +204,7 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 		s.scimServerError(w, r, "create the group", err)
 		return
 	}
-	g, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
+	g, members, err := st.CreateScimGroupWithMembers(ctx, in.ExternalID, in.DisplayName, own, now)
 	if errors.Is(err, store.ErrScimGroupExists) {
 		writeSCIMError(w, scim.NewError(http.StatusConflict, "uniqueness", "a group with this externalId already exists"))
 		return
@@ -208,7 +213,9 @@ func (s *Server) handleSCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 		s.scimServerError(w, r, "create the group", err)
 		return
 	}
-	s.writeSCIMGroup(w, r, st, g, http.StatusCreated)
+	// The answer is what the create's own transaction recorded: a read of the members after the commit could
+	// fail, and the identity provider's retry would then meet a 409 for a group that exists.
+	writeSCIM(w, http.StatusCreated, groupResource(g, members))
 }
 
 func (s *Server) handleSCIMPatchGroup(w http.ResponseWriter, r *http.Request) {

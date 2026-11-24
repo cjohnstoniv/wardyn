@@ -1571,7 +1571,7 @@ erases one person's retained records by explicit scope, in one audited act
 - A SCIM request naming a user by id answers not found for a user of another issuer or tenant; group requests ignore such a user named as a member.
 - A group `DELETE` is the one exception: before the group goes, it cuts the browser sessions and revokes the group-holding API tokens of every member it removes, a user of another issuer or tenant included. Until every cut is recorded the group stays, and the answer is a 5xx the identity provider retries.
 - `GET /scim/status` lists only the people of its own SCIM issuer and tenant, and never a person an issuer portal introduced: that person's stuck steps are on [the portal's own status view](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
-- A group lookup by `displayName` that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
+- A group lookup by `displayName` compares the whole name, spaces included, ignoring case. One that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
 - A group `PATCH` whose earlier member operation failed answers that failure first, as a 5xx the identity provider retries. A member add that reaches a group being deleted answers 404 only when nothing earlier failed.
 
 | Provisioning event | What Wardyn does |
@@ -1598,6 +1598,8 @@ erases one person's retained records by explicit scope, in one audited act
      its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
+   - The email a user answers with is the one the last create, update or replace named as primary (else its first
+     email), until the person's next sign-in records the email that sign-in carries.
 5. If you provision groups, map each group's `externalId` to the value the sign-in's groups claim carries for it: the
    group's object id.
    - A SCIM group removal revokes a person's API tokens only when the token's login-time group snapshot holds that
