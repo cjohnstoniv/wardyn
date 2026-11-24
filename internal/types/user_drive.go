@@ -429,6 +429,9 @@ type DriveMount struct {
 	// RunnerID is set on a drive's second place: the one runner it is bound to,
 	// the only one a local plan verifies its path on (drivePathsOn).
 	RunnerID *uuid.UUID `json:"runner_id,omitempty"`
+	// Namespace is set on a drive kept on an organisation runner: the runs namespace its claim is in. RunnerID is then
+	// that runner, and the drive mounts only there.
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // UserDriveHostRootCheck is the signature of the deployment's ENV CEILING over
@@ -579,6 +582,12 @@ func DriveSubjectFoldsOntoASCII(tmpl HomeTemplate, subject string) bool {
 // driveObjectPrefix is shared by every minted object name so an operator can
 // find every Wardyn-created volume or claim with one glob.
 const driveObjectPrefix = "wardyn-drive-"
+
+// DriveClaimNamedByWardyn reports whether name is an object name Wardyn derives for a drive: it begins
+// driveObjectPrefix (DriveObjectName) or drivePortalObjectPrefix (DrivePortalObjectName). A runner mounts no other claim.
+func DriveClaimNamedByWardyn(name string) bool {
+	return strings.HasPrefix(name, driveObjectPrefix) || strings.HasPrefix(name, drivePortalObjectPrefix)
+}
 
 // driveSlugMaxLen bounds the drive-name half of a minted object name. A PVC
 // name is capped at 253 characters (Docker volume at 255) and the home
