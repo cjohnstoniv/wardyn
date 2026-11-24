@@ -918,6 +918,10 @@ row_hash = SHA-256( prev_hash || canonical(id, time, run_id, actor_type,
                                            source_ip, data) )
 ```
 
+- That is format 1, and it is how every row from before 0.11.0 is hashed.
+- A row written by 0.11.0 or later is format 2: the hash also covers a salt Postgres makes for that row, `hash_salt`. Its input is `prev_hash` followed by the JSON array `["v2", hash_salt, id, time_us, run_id, actor_type, actor, action, target, outcome, source_ip, data]` as text, where `time_us` is the time in microseconds since the epoch.
+- The row's `hash_format` column says which: `1` or `2`. A row of any other format never verifies.
+
 - `prev_hash` is the previous row's `row_hash`, so the log is a linked list where each row commits to everything
   before it.
 - Both are computed **inside Postgres**, in the `audit_events` `BEFORE INSERT` trigger — not by the writer — so no
@@ -1080,6 +1084,7 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
   `d_i = sha256(d_(i-1) || row_hash_i)`, which holds in constant memory however large the partition is.
 - A row from before the chain began has no `row_hash`; the archive carries the hash it folds as `fold_hash`.
 - To check each row, recompute `row_hash` from the archive's own columns as the formula above gives it.
+- A format 2 line carries its `hash_format` and `hash_salt` in the raw export, and the formula above then includes the salt. A line whose fields were projected away carries no salt and cannot be recomputed: its stored hash still links the chain and folds into the digest.
 - `time_us` is the `time` in microseconds since the epoch, and `data` is the jsonb text exactly as stored (not
   re-encoded), embedded in the array as a JSON value.
 - Only a security operator may export a partition; anyone else gets an empty export, and `?partition=` with any other
@@ -1281,6 +1286,7 @@ wardyn audit retention                                              # which part
 wardyn audit export-partition audit_events_p202601 --raw -o p.ndjson   # the archive: keep it where your records policy says
 tail -n1 p.ndjson                                                   # the footer: its digest
 # check the archive (see "Verifying an exported audit partition by hand", above): recompute every row hash and the fold
+# (a line with its fields projected away cannot be recomputed; check its link and the fold only)
 wardyn audit retention drop audit_events_p202601 --digest <digest from the footer>
 curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/chain/verify"   # ok, with anchor_seq at the drop
 ```
@@ -2535,6 +2541,8 @@ grep 'daemon egress proxy configured' <logs>
 ```
 
 - A malformed `WARDYN_DAEMON_PROXY_URL` (not `http://`/`https://`, no host, or an embedded credential) refuses boot rather than silently falling back to direct — same posture as `WARDYN_TRUSTED_CA_FILE`.
+
+A server-run egress proxy that cannot reach the control plane keeps up to 50,000 decisions (32 MiB) in its container's temporary directory and sends them once it can, with their own times. Where that directory is not writable, the proxy keeps nothing and reports what it dropped, as before. Decisions still kept when the proxy's container is removed are lost.
 
 ### Control-plane to proxy TLS
 
@@ -3932,6 +3940,13 @@ docker compose -f deploy/compose/docker-compose.yaml up -d wardynd
   plan the window.
 - `--wait` (below) is what keeps it short.
 
+### Upgrading to 0.11.0: audit row hashes
+
+- There is no rolling upgrade across 0.11.0: stop every older replica before the first 0.11.0 one starts. The chart's `Recreate` strategy does this; on Compose, `docker compose up -d` replaces the single `wardynd` container.
+- An older replica still running after the upgrade hashes new rows with the old formula, reports a chain break at the first new row, and its checkpoint signer stops until it restarts.
+- Upgrade the organisation before its devices. A device that has not upgraded keeps sending format 1 rows, which the organisation still accepts.
+- Update the CLI before you verify a new export: an older `wardyn audit verify` cannot check a format 2 row.
+
 ### Upgrading to 0.10.2: drives from before the upgrade
 
 - There is no rolling upgrade across 0.10.2: stop every older replica before the first 0.10.2 one starts. The chart's `Recreate` strategy does this; on Compose, `docker compose up -d` replaces the single `wardynd` container.
@@ -4216,6 +4231,8 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
+- `0410` (`0410_audit_hash_v2`) adds `hash_format`, `hash_salt` and `claim_salt` to `audit_events` (`0001`'s table), and replaces `audit_append`, which `0111` last created, so a new row takes format 2 and its own salt; it also creates `audit_row_hash_v2` and `audit_row_hash_any`. The ten arguments of `audit_append` and its grants do not change.
+- `0412` (`0412_audit_chain_v2`) replaces the chain function `0214` last created, so it picks the hash by the row's format, and creates its trigger on `audit_events` again. It holds the trigger text so that it sorts last among the files the boot replay reads. No grant changes.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
