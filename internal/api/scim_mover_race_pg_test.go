@@ -188,7 +188,7 @@ func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
 			t.Fatalf("remove = %d %s", r.Code, r.Body.String())
 		}
 		_, tid, raw := e.mintTokenAs(e.a, entrafake.Identity{Username: moverEmail, Subject: "sub-mover", Groups: []string{groupClaim}})
-		// A person of another issuer joins in the same add: the delete owes this endpoint no removal of them.
+		// A person of another issuer joins in the same add: the delete cuts them too, before the group goes.
 		var foreign uuid.UUID
 		if err := e.pool.QueryRow(ctx, `INSERT INTO principal_identities (principal, issuer, email_lower)
 			VALUES ('sub-foreign', 'https://idp.other.example', 'foreign@other.example') RETURNING id`).Scan(&foreign); err != nil {
@@ -226,13 +226,14 @@ func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
 		if !e.groupJobsDone(w.moverID, w.group.ID) {
 			t.Error("the member added while the delete ran does not have its 3 removal steps done")
 		}
-		var foreignRows int
-		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2`,
-			foreign, store.JobKindGroupRemove).Scan(&foreignRows); err != nil {
+		var owed int
+		if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM deprovision_jobs WHERE identity_id = $1 AND kind = $2
+			AND step = ANY($3::text[]) AND state = 'pending'`, foreign, store.JobKindGroupRemove,
+			[]string{store.GroupStepSessions, store.GroupStepTokens}).Scan(&owed); err != nil {
 			t.Fatal(err)
 		}
-		if foreignRows != 0 {
-			t.Errorf("the other issuer's member has %d group_remove rows, want 0", foreignRows)
+		if owed != 0 {
+			t.Errorf("the other issuer's member has %d sessions or tokens steps pending after the 204, want 0", owed)
 		}
 		if !e.tokenRevoked(tid) {
 			t.Error("the token of the member added while the delete ran is not revoked")
@@ -242,8 +243,8 @@ func TestPG_SCIMGroupDeleteConcurrentAdd(t *testing.T) {
 				t.Errorf("instance %s: the token of the member added while the delete ran still authenticates", name)
 			}
 		}
-		if got := len(e.rows(e.b, "scim.group.member_remove")); got != 2 {
-			t.Errorf("%d scim.group.member_remove rows from the DELETE, want one per member including the late one", got)
+		if got := len(e.rows(e.b, "scim.group.member_remove")); got != 3 {
+			t.Errorf("%d scim.group.member_remove rows from the DELETE, want one per member, the late one and the other issuer's included", got)
 		}
 	})
 	t.Run("the delete wins first", func(t *testing.T) {

@@ -1569,6 +1569,7 @@ erases one person's retained records by explicit scope, in one audited act
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
 - A SCIM request naming a user by id answers not found for a user of another issuer or tenant; group requests ignore such a user named as a member.
+- A group `DELETE` is the one exception: before the group goes, it cuts the browser sessions and revokes the group-holding API tokens of every member it removes, a user of another issuer or tenant included. Until every cut is recorded the group stays, and the answer is a 5xx the identity provider retries.
 - `GET /scim/status` lists only the people of its own SCIM issuer and tenant, and never a person an issuer portal introduced: that person's stuck steps are on [the portal's own status view](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
 - A group lookup by `displayName` that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
 - A group `PATCH` whose earlier member operation failed answers that failure first, as a 5xx the identity provider retries. A member add that reaches a group being deleted answers 404 only when nothing earlier failed.

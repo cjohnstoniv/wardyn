@@ -34,6 +34,10 @@ const SearchDisplayName = "displayName"
 // ErrScimGroupExists is a create whose externalId already names a group.
 var ErrScimGroupExists = errors.New("store: scim group exists")
 
+// ErrGroupRemovalOwed is a group delete refused because a membership it would remove has not been cut yet: a member
+// is still recorded, or a removal's sessions or tokens step is still pending. The group stays.
+var ErrGroupRemovalOwed = errors.New("store: a scim group member's removal is still owed")
+
 // ScimGroup is a group the identity provider reported. ExternalID is the provider's id for it.
 type ScimGroup struct {
 	ID          uuid.UUID
@@ -57,7 +61,8 @@ type ScimGroupStore interface {
 	StartGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) error
 	ResumeGroupRemoval(ctx context.Context, groupID, identityID uuid.UUID) (bool, error)
 	GroupRemovalIdentities(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error)
-	DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant string) error
+	// DeleteScimGroup deletes the group only when nothing it removes is still owed (ErrGroupRemovalOwed).
+	DeleteScimGroup(ctx context.Context, id uuid.UUID) error
 	PendingGroupRemovals(ctx context.Context, issuer, tenant string, idleFor time.Duration, limit int) ([]PendingGroupRemoval, error)
 	GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionFailure, error)
 }
@@ -338,14 +343,13 @@ func (s PG) GroupRemovalFailures(ctx context.Context, limit int) ([]DeprovisionF
 	})
 }
 
-// DeleteScimGroup removes the group row, or answers ErrNotFound. The row is locked FOR UPDATE first, so a
-// member add in flight (AddScimGroupMembers) commits before the members are read and a later one finds no
-// group. Every member still recorded who is a person of the given issuer (and tenant, as PendingGroupRemovals
-// reads it) then leaves the group in the same transaction, with the ledger StartGroupRemoval opens, so the
-// cascade drops no such membership without its removal owed. Another issuer's member is dropped by the
-// cascade, as its own endpoint never removes it. The ledger rows stay, pending until GroupRemovalIdentities'
-// caller or the sweeper finishes them.
-func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant string) error {
+// DeleteScimGroup removes the group row, or answers ErrNotFound. The row is locked FOR UPDATE first, so a member
+// add in flight (AddScimGroupMembers) commits before the check below and a later one finds no group. The delete is
+// refused with ErrGroupRemovalOwed, and nothing changes, while any member of any issuer is still recorded or any
+// removal from the group has its sessions or tokens step pending: the caller cuts those people first (as a mover,
+// another issuer's included) and asks again. So the group never goes while someone it held still has access
+// through it. A pending audit step does not hold the delete; its row follows.
+func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID) error {
 	return s.inTx(ctx, func(q Querier) error {
 		var one int
 		err := q.QueryRow(ctx, `SELECT 1 FROM scim_groups WHERE id = $1 FOR UPDATE`, id).Scan(&one)
@@ -355,22 +359,16 @@ func (s PG) DeleteScimGroup(ctx context.Context, id uuid.UUID, issuer, tenant st
 		if err != nil {
 			return fmt.Errorf("store: lock scim group for its delete: %w", err)
 		}
-		members, err := collect(ctx, q, "list", "scim group members to remove", `
-			SELECT m.identity_id FROM scim_group_members m JOIN principal_identities pi ON pi.id = m.identity_id
-			 WHERE m.group_id = $1 AND pi.issuer = $2 AND ($3::text = '' OR pi.tenant_id = '' OR pi.tenant_id = $3::text)
-			 ORDER BY 1`, []any{id, issuer, tenant}, func(r pgx.Row) (uuid.UUID, error) {
-			var v uuid.UUID
-			return v, r.Scan(&v)
-		})
-		if err != nil {
-			return err
+		var owed bool
+		if err := q.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM scim_group_members WHERE group_id = $1)
+			    OR EXISTS (SELECT 1 FROM deprovision_jobs WHERE kind = $2 AND target = $3 AND state = 'pending'
+			               AND step = ANY($4::text[]))`,
+			id, JobKindGroupRemove, id.String(), []string{GroupStepSessions, GroupStepTokens}).Scan(&owed); err != nil {
+			return fmt.Errorf("store: read what a scim group delete still owes: %w", err)
 		}
-		// A deadlock with a concurrent removal or purge of one of these people aborts the whole transaction: no
-		// ledger is opened and the group stays, so the 5xx is retried and the retry starts over.
-		for _, m := range members {
-			if err := startGroupRemoval(ctx, q, id, m); err != nil {
-				return err
-			}
+		if owed {
+			return ErrGroupRemovalOwed
 		}
 		if _, err := q.Exec(ctx, `DELETE FROM scim_groups WHERE id = $1`, id); err != nil {
 			return fmt.Errorf("store: delete scim group: %w", err)

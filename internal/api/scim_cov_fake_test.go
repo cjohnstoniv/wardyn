@@ -962,7 +962,7 @@ func (s *scimCovStore) GroupRemovalIdentities(_ context.Context, groupID uuid.UU
 	return out, nil
 }
 
-func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, tenant string) error {
+func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.enter("DeleteScimGroup"); err != nil {
@@ -971,11 +971,14 @@ func (s *scimCovStore) DeleteScimGroup(_ context.Context, id uuid.UUID, issuer, 
 	if _, ok := s.groups[id]; !ok {
 		return store.ErrNotFound
 	}
-	// Every member of the issuer and tenant still recorded leaves with a removal owed, as the store's delete
-	// opens it.
-	for _, m := range slices.Clone(s.members[id]) {
-		if i, known := s.idents[m]; known && i.Issuer == issuer && (tenant == "" || i.TenantID == "" || i.TenantID == tenant) {
-			s.startGroupRemoval(id, m)
+	// As the store's delete: refused while anyone is still a member, of any issuer, or a removal's cut is owed.
+	if len(s.members[id]) > 0 {
+		return store.ErrGroupRemovalOwed
+	}
+	for _, j := range s.jobs {
+		if j.Kind == store.JobKindGroupRemove && j.Target == id.String() && !j.Done &&
+			(j.Step == store.GroupStepSessions || j.Step == store.GroupStepTokens) {
+			return store.ErrGroupRemovalOwed
 		}
 	}
 	delete(s.groups, id)

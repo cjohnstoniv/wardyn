@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A SCIM group delete no longer leaves a member of another identity provider or tenant signed in. Before the group is deleted, Wardyn now cuts the browser sessions and revokes the group-holding API tokens of every member the delete removes, and keeps the group, answering an error the identity provider retries, until every cut is recorded.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

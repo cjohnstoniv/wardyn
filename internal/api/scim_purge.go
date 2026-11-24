@@ -682,7 +682,7 @@ func (s *Server) SweepSCIMPurge(ctx context.Context) error {
 			g, err = store.ScimGroup{ID: p.GroupID}, nil
 		}
 		if err == nil {
-			err = s.removeGroupMember(ctx, st, g, p.IdentityID, scimSweeperSlot, true)
+			err = s.removeGroupMember(ctx, st, g, p.IdentityID, scimSweeperSlot, true, false)
 		}
 		errs = append(errs, err)
 	}
