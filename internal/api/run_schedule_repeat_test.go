@@ -145,6 +145,7 @@ type fakeScheduleStore struct {
 	runs      map[uuid.UUID]types.AgentRun // GetRun's rows
 	getRunErr error                        // GetRun's answer once set
 	kills     int                          // kill claims (UpdateRunStateIf calls)
+	onKill    func(id uuid.UUID)           // once set, a kill claim runs it, under the lock, and loses the race
 }
 
 func newFakeScheduleStore() *fakeScheduleStore {
@@ -247,10 +248,14 @@ func (f *fakeScheduleStore) GetPrincipalGroups(context.Context, string, string) 
 
 func (f *fakeScheduleStore) BlankRunTaskByID(context.Context, uuid.UUID) error { return nil }
 
-func (f *fakeScheduleStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
+func (f *fakeScheduleStore) UpdateRunStateIf(_ context.Context, id uuid.UUID, _, _ types.RunState) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.kills++
+	if f.onKill != nil {
+		f.onKill(id)
+		return false, nil
+	}
 	return false, errors.New("fake: kill claim not expected")
 }
 
@@ -741,6 +746,58 @@ func TestCancelBookedRun_FailedReadClaimsNoKill(t *testing.T) {
 	st.getRunErr = nil
 	if stopped, err := srv.cancelBookedRun(context.Background(), uuid.New(), scheduleCancelPaused); !stopped || err != nil || st.kills != 0 {
 		t.Errorf("a gone run = %v, %v after %d kill claims; want true, nil, no claim", stopped, err, st.kills)
+	}
+}
+
+// A run that started before its booking's cancel (a terminal run with AdmittedAt set) is not stopped and claims no
+// kill; the sweep records the slot booked, with one success fire row naming the cancel as too late.
+func TestRunScheduleSweep_CancelAfterTheStartIsRecordedBooked(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	now := time.Now()
+	admitted := now.Add(-time.Minute)
+	st := newFakeScheduleStore()
+	sc := st.seed(now.Add(time.Minute), false)
+	runID := uuid.New()
+	st.runs = map[uuid.UUID]types.AgentRun{runID: {ID: runID, State: types.RunCompleted, AdmittedAt: &admitted}}
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), runID, scheduleCancelPaused); stopped || err != nil || st.kills != 0 {
+		t.Fatalf("a started run's cancel = %v, %v after %d kill claims; want false, nil, no claim", stopped, err, st.kills)
+	}
+	sw, _ := testSweep(srv, st, now, booking201(runID, false, func() {
+		_, _ = st.PauseRunSchedule(context.Background(), sc.ID, schedulePausedByOwner, time.Now())
+	}), true)
+	sw.cancel = srv.cancelBookedRun
+	if err := sw.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.row(t, sc.ID); got.LastOutcome != scheduleOutcomeBooked || got.LastRunID == nil || *got.LastRunID != runID || got.NextAt.Equal(sc.NextAt) {
+		t.Errorf("the schedule after a cancel that came too late = %+v; want it past the slot, recorded %s", got, scheduleOutcomeBooked)
+	}
+	var fires []types.AuditEvent
+	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+		if ev.Action == "run.schedule.fire" {
+			fires = append(fires, ev)
+		}
+	}
+	if rows := fireRowsNaming(srv, scheduleCancelPaused); len(fires) != 1 || fires[0].Outcome != "success" || len(rows) != 1 ||
+		rows[0]["cancel_too_late"] != scheduleCancelPaused || rows[0]["run_id"] != runID.String() || rows[0]["reason"] != nil {
+		t.Errorf("fire rows = %d (%v); want one success row with cancel_too_late %s for run %s", len(fires), rows, scheduleCancelPaused, runID)
+	}
+	if st.kills != 0 {
+		t.Errorf("kill claims = %d, want none for a run that started", st.kills)
+	}
+}
+
+// A kill that loses its claim reads the run once more: one that the race left stopped (killed before it started) is
+// stopped, after the one claim.
+func TestCancelBookedRun_LostClaimReadsTheRunAgain(t *testing.T) {
+	st := newFakeScheduleStore()
+	runID := uuid.New()
+	st.runs = map[uuid.UUID]types.AgentRun{runID: {ID: runID, State: types.RunQueued}}
+	st.onKill = func(id uuid.UUID) { st.runs[id] = types.AgentRun{ID: id, State: types.RunKilled} }
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), runID, scheduleCancelPaused); !stopped || err != nil || st.kills != 1 {
+		t.Errorf("a lost claim on a run the race stopped = %v, %v after %d kill claims; want true, nil, one claim", stopped, err, st.kills)
 	}
 }
 
