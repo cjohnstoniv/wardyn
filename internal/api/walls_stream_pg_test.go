@@ -75,7 +75,7 @@ func (e *unitAuditEnv) openStream(path string, cookie *http.Cookie) *wallsPipeSt
 	go func() {
 		defer close(done)
 		defer pw.Close()
-		e.srv.Handler().ServeHTTP(w, r)
+		panicFails(e.t, e.srv.Handler()).ServeHTTP(w, r)
 		w.WriteHeader(http.StatusOK)
 	}()
 	s := &wallsPipeStream{t: e.t, br: bufio.NewReader(pr), pr: pr, cancel: cancel, done: done}
