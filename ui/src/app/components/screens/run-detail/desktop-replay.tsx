@@ -226,7 +226,7 @@ function Player({ runId, recKey, doc, audit, onGoAudit }: {
                 }}
                 data-testid="desktop-replay-gap-mark"
               >
-                <span className="absolute left-0 top-[18px] whitespace-nowrap text-[11px] text-warning">{C.GAP(gapDuration(g.endMs - g.startMs))}</span>
+                <span className="absolute left-0 top-[18px] whitespace-nowrap text-meta text-warning">{C.GAP(gapDuration(g.endMs - g.startMs))}</span>
               </button>
             ))}
             {actions.map((a) => (
