@@ -276,7 +276,8 @@ func (s *Server) assistantValidate(r *http.Request, sub assistantSubject, caller
 		if err != nil {
 			return fail(err)
 		}
-		// The policy save's checks (decodePolicyRequest, then ruleUIAppCallers), so a draft called valid saves.
+		// The policy save's spec checks: validateAuthoredPolicySpec (decodePolicyRequest's), then ruleUIAppCallers.
+		// The save's repository canonicalisation and workspace source checks are not run here.
 		if err := validateAuthoredPolicySpec(spec); err != nil {
 			return []assistantFieldError{{Message: err.Error()}}, nil
 		}
