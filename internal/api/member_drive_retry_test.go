@@ -322,3 +322,23 @@ func TestMeDrives_DeletingRowIsNeverListedTwice(t *testing.T) {
 		t.Errorf("with the drive already listed: %+v, want none", got)
 	}
 }
+
+// A caller who is not a person (a device or a service identity, whose runs are created as itself) is listed no drive.
+func TestMeDrives_DeletingRowsNotListedToANonPersonCaller(t *testing.T) {
+	st := newMemberDriveStore()
+	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	heldDrive(st, "Stuck", types.DriveBackendDockerVolume, 10*time.Minute, 1)
+	alice := personCtx(aliceSub)
+	for name, ctx := range map[string]context.Context{
+		"admin token":      context.Background(),
+		"device":           context.WithValue(alice, deviceCtxKey{}, types.Device{ID: uuid.New()}),
+		"service identity": withServiceIdentity(alice, "ci-bot", aliceSub),
+	} {
+		if got := srv.meDeletingDrives(ctx, nil); len(got) != 0 {
+			t.Errorf("%s: listed %+v, want none", name, got)
+		}
+	}
+	if got := srv.meDeletingDrives(alice, nil); len(got) != 1 {
+		t.Errorf("the person: listed %d, want 1", len(got))
+	}
+}
