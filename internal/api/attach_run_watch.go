@@ -81,13 +81,13 @@ type attachRunStateKey struct{}
 
 // sharedCheck decides what a socket does with the shared read st, taken at now. fresh is when the socket's latest read
 // of its own began (zero if none). It returns the context the socket's check runs in and whether it runs at all:
-//   - st began before that fresh read: the check is skipped, for the fresh read is the newer answer and a stale OK must
-//     not close a window the fresh read left open;
+//   - st began before that fresh read and refuses nothing: the check is skipped, for a stale OK must not close a window
+//     the fresh read left open (a stale refusal still ends the socket: that is the safe side);
 //   - st's lookup bound has passed (the socket was busy with a retry): the read is dropped and the check reads afresh;
 //   - otherwise the check runs on st.
 func (s *Server) sharedCheck(ctx context.Context, runID uuid.UUID, st attachRunState, fresh, now time.Time) (context.Context, bool) {
 	switch {
-	case st.at.Before(fresh):
+	case st.at.Before(fresh) && !st.gone && !st.denied:
 		return ctx, false
 	case !now.Before(st.at.Add(s.attachAuthorityLookupBound())):
 		return ctx, true

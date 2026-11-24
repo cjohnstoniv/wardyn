@@ -143,4 +143,9 @@ func TestAttachAuthority_SharedReadIsUsedOnlyWhileItsBoundHolds(t *testing.T) {
 	if ran, _ := check(live, now.Add(-bound/4)); ran {
 		t.Fatal("a shared read older than the socket's fresh read was applied")
 	}
+	// The same, but the shared read refuses: a stale refusal still ends the socket, the safe side.
+	gone := attachRunState{at: live.at, gone: true}
+	if _, ran := srv.sharedCheck(context.Background(), runID, gone, now.Add(-bound/4), now); !ran {
+		t.Fatal("a shared refusal older than the socket's fresh read was skipped")
+	}
 }
