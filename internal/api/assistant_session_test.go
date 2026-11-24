@@ -42,8 +42,9 @@ type assistantFake struct {
 	// runReadErr fails GetRun; afterRunRead runs after each run read GetRun answers, outside amu.
 	runReadErr   error
 	afterRunRead func()
-	// endErr fails EndAssistantSession.
-	endErr error
+	// endErr fails EndAssistantSession; sessReadErr fails GetAssistantSession.
+	endErr      error
+	sessReadErr error
 }
 
 func newAssistantFake(site types.SiteConfig) *assistantFake {
@@ -180,6 +181,9 @@ func (f *assistantFake) AttachAssistantRun(_ context.Context, session, run uuid.
 func (f *assistantFake) GetAssistantSession(_ context.Context, id uuid.UUID, principal string) (types.AssistantSession, error) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
+	if f.sessReadErr != nil {
+		return types.AssistantSession{}, f.sessReadErr
+	}
 	s, ok := f.sessions[id]
 	if principal == "" || !ok || s.Principal != principal {
 		return types.AssistantSession{}, store.ErrNotFound
@@ -298,6 +302,9 @@ func assistantIsTurn(e types.AssistantEvent) bool {
 func (f *assistantFake) NextAssistantTurn(_ context.Context, session uuid.UUID, after int64) (types.AssistantEvent, bool, error) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
+	if s, ok := f.sessions[session]; !ok || !s.Live() {
+		return types.AssistantEvent{}, false, store.ErrNotFound
+	}
 	first := true
 	for _, e := range f.events[session] {
 		if !assistantIsTurn(e) {

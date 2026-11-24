@@ -167,6 +167,28 @@ func TestAssistantEventsAndTurnsPG(t *testing.T) {
 	}
 }
 
+// An ended session yields no turn, so a poll that read the session live just before the end delivers nothing.
+func TestAssistantNextTurnSkipsAnEndedSessionPG(t *testing.T) {
+	ctx, st, newRunID, _ := assistantStore(t)
+	run := newRunID(t)
+	s, err := st.CreateAssistantSession(ctx, newAssistantSession("di-"+uuid.NewString(), &run, types.AssistantCompose))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendAssistantEvent(ctx, s.ID, types.AssistantEventUserMessage, []byte(`{"text":"x"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.NextAssistantTurn(ctx, s.ID, 0); err != nil {
+		t.Fatalf("the live session's turn: %v", err)
+	}
+	if ended, err := st.EndAssistantSession(ctx, s.ID, types.AssistantEndPerson); err != nil || !ended {
+		t.Fatalf("end = %v, %v", ended, err)
+	}
+	if _, _, err := st.NextAssistantTurn(ctx, s.ID, 0); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("an ended session's turn: %v, want ErrNotFound", err)
+	}
+}
+
 // The filtered read takes only the kinds and the seq window it names, never more than the read cap, and the
 // newest ones come back oldest first.
 func TestAssistantFindEventsPG(t *testing.T) {
