@@ -1418,7 +1418,7 @@ The rest reach the wire only through
 | `drive_portal_not_live` | `POST /drives/grants` to a portal, `422`: the portal is unknown or revoked. Allocate to a portal that is registered and live. |
 | `drive_not_allocated_to_portal` | `POST /runs` through an issuer portal, `403`: a `drives[]` entry names a drive no allocation of that portal reaches, or the request asks for the legacy `drive` flag. The body is the same whatever the drive is, so it never says whose it is. Ask a super admin to allocate the drive to the portal, or run without it. |
 | `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
-| `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
+| `event_stream_cap` | The caller already holds 32 open event streams (#1407): run events and Walls view streams count together, and at most 2 may be `GET /walls/stream`. Close one and retry. Answered `422`, not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
 | `governance_unit` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
@@ -1569,7 +1569,7 @@ The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) ans
 
 ### The Walls view
 
-`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. The two stream routes answer 501 `walls_view_unavailable` until the live stream ships. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
+`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. `GET /walls/stream` and `GET /runs/{id}/walls/stream` are `text/event-stream`. Each sends one `frame` event a second, even when nothing happened, and a `notice` event when an approval, a run's policy or a credential changes. A `Last-Event-ID` from the same server replays up to two minutes, shown under your current access; anything older gets a `gap` event, after which you refetch. One person may open 12 Walls view streams a minute and hold 2 `GET /walls/stream` at once. Each stream ends after 5 minutes; reconnect with `Last-Event-ID`. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
 
 | Reason | Meaning |
 |---|---|

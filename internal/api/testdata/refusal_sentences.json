@@ -336,6 +336,21 @@
   },
   {
     "reason": "event_stream_cap",
+    "target": "\"walls\"",
+    "sentence": "fmt.Sprintf(\"too many open Walls view organisation streams (max %d) — close one and retry\", wallsOrgStreamsMax)"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "\"walls\"",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
+  },
+  {
+    "reason": "event_stream_cap",
+    "target": "id.String()",
+    "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
+  },
+  {
+    "reason": "event_stream_cap",
     "target": "id.String()",
     "sentence": "fmt.Sprintf(\"too many open event streams (max %d) — close one and retry\", maxRunEventStreams)"
   },
