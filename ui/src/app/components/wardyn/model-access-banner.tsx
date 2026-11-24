@@ -97,6 +97,14 @@ export function providerStripLine(
       }
       // B1 is the first-run state, the one line with "Not now".
       return { sentence: BANNER.B1(harnesses, name), button: AGENTS.SIGN_IN_AWS, title: "", tone: "warning", dismissible: true };
+    case "azure_foundry":
+      return {
+        sentence: a.state === "expired_signin" ? CONNECTIONS.C6_LINE_AZURE(name) : BANNER.B6(harnesses, name),
+        button: CONNECTIONS.SIGN_IN_AZURE,
+        title: "",
+        tone: "warning",
+        dismissible: false,
+      };
     case "anthropic_subscription":
       return { sentence: BANNER.B5(harnesses), button: CONNECTIONS.SIGN_IN_CLAUDE, title: "", tone: "warning", dismissible: false };
     default: {

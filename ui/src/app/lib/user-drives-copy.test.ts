@@ -377,18 +377,20 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
       Conflict: 409,
       UnprocessableEntity: 422,
     };
+    // Each row's literal and chunks, found once: rebuilding them for every pinned case is what made this test slow.
+    const rowChunks = serverRows.flatMap((row) => {
+      const lit = literalFor(row);
+      return lit ? [{ row, chunks: goLiteralChunks(lit) }] : [];
+    });
     let checked = 0;
-    // Each row's literal is found once: literalFor scans every Go literal, and this loop asks per case.
-    const rowLiterals = serverRows.map((row) => [row, literalFor(row)] as const);
     for (const m of src.matchAll(/want:\s*http\.Status(\w+),\s*msg:\s*(?:"([^"]*)"|`([^`]*)`)/g)) {
       const want = codes[m[1]];
       const msg = m[2] ?? m[3];
-      for (const [row, lit] of rowLiterals) {
-        if (!lit) continue;
+      for (const { row, chunks } of rowChunks) {
         // The pinned message is a SUBSTRING of the refusal, so it either sits
         // inside one fixed run of the literal or starts with one (the case
         // where the test spells a concrete value the literal interpolates).
-        if (!goLiteralChunks(lit).some((c) => c.includes(msg) || msg.startsWith(c))) continue;
+        if (!chunks.some((c) => c.includes(msg) || msg.startsWith(c))) continue;
         checked++;
         expect(`${row.source} -> ${row.status}`).toBe(`${row.source} -> ${want}`);
       }

@@ -98,6 +98,30 @@ export const PROVIDER_EDITOR = {
   ADDRESS_BODY_KEY: (n: number) =>
     `The keys ${n} people added were given for the old address, so they are deleted. Everyone who connected adds theirs again.`,
   ADDRESS_BODY_KEY_ONE: "The key 1 person added was given for the old address, so it is deleted. They add it again.",
+  // Azure Foundry: each person signs in with Microsoft. The route and resource names are shown in code type by the
+  // editor, which splits these sentences around them.
+  PROVIDES_ENTRA: "Each person signs in with Microsoft. Their runs reach Azure as them, with no shared key.",
+  ENTRA_MISSING: "Azure Foundry needs this console's Microsoft Entra sign-in, which isn't set up yet.",
+  ENDPOINT: "Endpoint",
+  ENDPOINT_HINT: "Your Azure resource's https address, with no path.",
+  ROUTE: "Route",
+  ROUTE_HINT: "One route per provider. To serve both agents, add a second provider for the same endpoint.",
+  ROUTE_INCOMPATIBLE: (harness: string, route: string) => `${harness} needs the ${route} route. Add a second provider for it.`,
+  PREREQ: (resource: string) =>
+    `People sign in through the app registration this console already uses. In Microsoft Entra, give it the delegated permission for ${resource} and grant admin consent. Until then, every sign-in is refused.`,
+  PRIVATE_TITLE: "On a private endpoint?",
+  PRIVATE_BODY:
+    "Add its host to internal_hosts in site config so Wardyn may reach a private address. upstream_proxy_no_proxy matters only if traffic goes through a corporate proxy.",
+  SAVED_WARNING_TITLE: "Saved. Check this before people sign in:",
+  DONE: "Done",
+  DEPLOYMENT: "Deployment",
+  DEPLOYMENT_HINT: "The deployment's name on this resource.",
+  FAST_DEPLOYMENT: "Fast deployment (optional)",
+  FAST_DEPLOYMENT_HINT: "A second deployment for quick background requests. Leave empty to use the one above.",
+  ADDRESS_BODY_SIGNIN: (n: number) =>
+    `The sign-ins ${n} people made were for the old address, so they are deleted. Everyone who connected signs in again.`,
+  ADDRESS_BODY_SIGNIN_ONE: "The sign-in 1 person made was for the old address, so it is deleted. They sign in again.",
+  DELETE_BODY_SIGNIN: "Runs that chose it are refused until they choose another. Everyone's sign-ins for it are deleted.",
   // How people connect to your own endpoint: paste a token (the default) or sign in at the endpoint's own
   // authority. The refusals the server sends for the sign-in block are shown as sent, never reworded here.
   OIDC: {
@@ -214,12 +238,14 @@ export const MODEL_PROVIDERS = {
     openai_api_key: "OpenAI API key",
     custom_endpoint: "Your own endpoint",
     local_model: "Local model server",
+    azure_foundry: "Azure Foundry",
   } satisfies Record<ModelProviderKind, string>,
   PROVIDES: {
     SSO: "Each person signs in with one click",
     TOKEN: "Each person adds their own token",
     KEY: "Each person adds their own key",
     SIGN_IN: "Each person signs in with their own account",
+    ENTRA: "Each person signs in with Microsoft",
   },
   CHIP_UNBOUND: "Not bound to sign-in",
   USED_BY: (harnesses: string[]) => `Used by ${harnesses.join(", ")}`,
@@ -250,6 +276,8 @@ export function providesLine(kind: ModelProviderKind, signsIn = false): string {
       return PROVIDER_EDITOR.PROVIDES_CLAUDE;
     case "bedrock_sso":
       return MODEL_PROVIDERS.PROVIDES.SSO;
+    case "azure_foundry":
+      return MODEL_PROVIDERS.PROVIDES.ENTRA;
     case "custom_endpoint":
     case "local_model": // with a token; the list says so for one without (LOCAL_MODEL_LIST.PROVIDES_NONE)
       return MODEL_PROVIDERS.PROVIDES.TOKEN;

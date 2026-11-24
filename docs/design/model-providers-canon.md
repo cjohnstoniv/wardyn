@@ -98,6 +98,7 @@ line is `MODEL_PROVIDERS.PROVIDES.KEY` (each person adds their own Bedrock API k
 | Key | Renders at | Frozen string |
 |---|---|---|
 | `MODEL_PROVIDERS.KIND.bedrock_bearer` | second line, only when the name differs | Amazon Bedrock |
+| `MODEL_PROVIDERS.KIND.azure_foundry` | second line, only when the name differs | Azure Foundry |
 | `MODEL_PROVIDERS.FETCH_FAILED_TITLE` | the list's read failed | Couldn't load model providers |
 | `MODEL_PROVIDERS.FETCH_FAILED_BODY` | the list's read failed | Something went wrong reaching the server. The providers already saved still apply — this list just can't show them right now. |
 
