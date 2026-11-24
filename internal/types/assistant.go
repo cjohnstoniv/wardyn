@@ -42,7 +42,7 @@ const (
 	AssistantReasonSettingsInvalid  = "assistant_settings_invalid"
 )
 
-// PROPOSED sentences.
+// The assistant's refusal sentences.
 const (
 	assistantCannotServeMsg = "This provider can't serve the assistant yet."
 	assistantBedrockMsg     = "Bedrock providers can't serve the assistant, because Wardyn can't inspect their prompts."
@@ -136,10 +136,10 @@ func (a AssistantSettings) Validate(providers []ModelProvider, knownKind func(st
 	seen := map[string]bool{}
 	for _, m := range a.Providers {
 		if _, ok := byID[m.ProviderID]; !ok {
-			return invalidAssistant("provider %q is not a configured model provider", m.ProviderID) // PROPOSED
+			return invalidAssistant("provider %q is not a configured model provider", m.ProviderID)
 		}
 		if seen[m.ProviderID] {
-			return invalidAssistant("provider %q is marked twice", m.ProviderID) // PROPOSED
+			return invalidAssistant("provider %q is marked twice", m.ProviderID)
 		}
 		seen[m.ProviderID] = true
 	}
@@ -154,16 +154,16 @@ func (a AssistantSettings) Validate(providers []ModelProvider, knownKind func(st
 			return &AssistantSettingsError{Reason: AssistantReasonDefersInspection, Msg: assistantDefersMsg}
 		}
 		if err := ValidAllowedModels(m.Models); err != nil {
-			return invalidAssistant("models for provider %q: %s", m.ProviderID, err) // PROPOSED
+			return invalidAssistant("models for provider %q: %s", m.ProviderID, err)
 		}
 	}
 	kinds := map[string]bool{}
 	for _, k := range a.NeverSentKinds {
 		switch {
 		case !knownKind(k):
-			return invalidAssistant("%q is not a record kind the assistant can be kept from", k) // PROPOSED
+			return invalidAssistant("%q is not a record kind the assistant can be kept from", k)
 		case kinds[k]:
-			return invalidAssistant("record kind %q is listed twice", k) // PROPOSED
+			return invalidAssistant("record kind %q is listed twice", k)
 		}
 		kinds[k] = true
 	}

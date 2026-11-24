@@ -61,6 +61,7 @@ const (
 // documented row must be withheld by auditHostViews or named here.
 var auditHostReviewed = map[string]auditHostKeep{
 	"approval.decide":                            {[]string{"host"}, keepEgress},
+	"assistant.settings.write":                   {[]string{"after", "before"}, keepValues},
 	"authz.denied":                               {[]string{"host"}, keepEgress},
 	"branding.write":                             {[]string{"support_url"}, "the support link every console reader is shown"},
 	"cli.session.create":                         {[]string{"machine"}, keepMachine},

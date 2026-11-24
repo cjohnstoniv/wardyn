@@ -53,7 +53,7 @@ type replayResult struct {
 // reached and how many refused today would now be allowed. Only the three host-list rule sources count.
 // The store has already left the excluded runs out of the rows and of both totals, so nothing is dropped
 // here. allowedUnder is the draft's whole host verdict for one attempt, host and port, because the proxy
-// matches a port-qualified allow or deny entry by both (TOOLS builds it from the builtin evaluator's
+// matches a port-qualified allow or deny entry by both (its caller builds it from the builtin evaluator's
 // EvaluateHost); this function never reads a policy. A row with Port 0 has no recorded port and is not
 // compared. Display hosts are aggregated only after every attempt was compared.
 func replayCounts(rows []store.RunHostDecision, totals store.ReplayTotals, allowedUnder func(host string, port int) bool) replayResult {

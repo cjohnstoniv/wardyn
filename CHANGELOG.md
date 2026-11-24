@@ -16,10 +16,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+- The organisation's assistant settings. `GET` and `PUT /assistant/settings` (super admin) hold which purposes (Compose, Review) are on, which model providers may serve each and with which models, whether run history may be sent as host counts, and the record kinds that are never sent. A change that only narrows applies at once; one that widens is held for a second super admin whatever `WARDYN_GOVERNANCE_SECOND_HUMAN` says, and is refused in local mode. `GET /me/assistant?purpose=` tells any signed-in person whether they can use it, and why not. Each applied change writes an `assistant.settings.write` audit row.
 
 ### Changed
 
 - With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
+- `PUT /site-config` carries the stored `assistant` block forward and answers `400 assistant_settings_via_own_route` when the document names a different one.
 
 ## [0.10.4] — 2026-11-24
 

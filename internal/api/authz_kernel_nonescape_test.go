@@ -51,6 +51,8 @@ var kernelDoors = map[string][]string{
 	"inboundDeclaredRefusal":    {"capFeature"}, // an inbound ui_app the request itself declares
 	"workspaceProvidersRefusal": {"capWorkspaceProvider"},
 	"chooseRunModelProvider":    {"capModelProvider"},
+	// GET /me/assistant: a provider the person is not granted counts as denied, as dispatch would refuse it.
+	"handleGetMyAssistant": {"capModelProvider"},
 	// A desktop run's sign-in variant of the person's own image (#2972 M1):
 	// decides the dispatched image, refuses nothing.
 	"signinVariantUngranted": {"capImage"},

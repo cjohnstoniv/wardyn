@@ -421,7 +421,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// which carries no start URL.
 	"GET /api/v1/agent-providers": {class: classAdmin},
 	"PUT /api/v1/agent-providers": {class: classAdmin},
-	// The assistant's settings (0.10.1): which model providers may serve the Compose and Review purposes,
+	// The assistant's settings (0.11.0): which model providers may serve the Compose and Review purposes,
 	// SUPER for the model providers' reason. The availability read is any signed-in person's.
 	"GET /api/v1/assistant/settings": {class: classAdmin},
 	"PUT /api/v1/assistant/settings": {class: classAdmin},
