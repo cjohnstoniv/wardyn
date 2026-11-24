@@ -113,7 +113,7 @@ func watchdogTracker(now time.Time, ticks fakeTicks) *sweephealth.Tracker {
 // has stalled is given up; a family with a fresh sweep, and the audit family, which has no watched sweep, keep
 // running.
 func TestWatchdogResignsOnlyStalledFamily(t *testing.T) {
-	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := time.Now().UTC()
 	stale, fresh := now.Add(-10*time.Minute), now.Add(-30*time.Second)
 	ticks := fakeTicks{
 		sweephealth.RunQueue: {SucceededAt: stale}, sweephealth.RunOutput: {SucceededAt: stale},
@@ -143,7 +143,7 @@ func TestWatchdogResignsOnlyStalledFamily(t *testing.T) {
 // TestWatchdogJudgesSucceededAtNotAttempts: staleness is judged on the last success and the family's acquisition,
 // never the last attempt, which followers write too; and a family with no watched sweep is never given up.
 func TestWatchdogJudgesSucceededAtNotAttempts(t *testing.T) {
-	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	now := time.Now().UTC()
 	stale, fresh, long := now.Add(-10*time.Minute), now.Add(-30*time.Second), now.Add(-time.Hour)
 	all := func(tk sweephealth.Tick) fakeTicks {
 		out := fakeTicks{}
