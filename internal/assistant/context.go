@@ -20,17 +20,17 @@ const (
 
 // The section labels, in the order the records appear, in the words the preview draws.
 const (
-	LabelUnit      = "your unit record"                                   // PROPOSED: the preview's words
-	LabelRun       = "the run's policy record"                            // PROPOSED
-	LabelTemplates = "template records"                                   // PROPOSED: the preview's words
-	LabelAdmins    = "unit admins"                                        // PROPOSED: the preview's words
-	LabelGrants    = "credential grants"                                  // PROPOSED: the preview's words
-	LabelHistory   = "run history, last 30 days (host · decision · runs)" // PROPOSED: the preview's words
-	LabelChange    = "the change under review"                            // PROPOSED: the settings card's words
-	LabelBuild     = "build files"                                        // PROPOSED: the settings card's words
+	LabelUnit      = "your unit record"
+	LabelRun       = "the run's policy record"
+	LabelTemplates = "template records"
+	LabelAdmins    = "unit admins"
+	LabelGrants    = "credential grants"
+	LabelHistory   = "run history, last 30 days (host · decision · runs)"
+	LabelChange    = "the change under review"
+	LabelBuild     = "build files"
 )
 
-const truncatedMark = "\n(cut: too long to send)" // PROPOSED
+const truncatedMark = "\n(cut: too long to send)"
 
 // BuildFile is one confirmed build file of a repository draft.
 type BuildFile struct {
@@ -133,7 +133,7 @@ func adminLine(admins []Person, l *Letters) string {
 func historyText(h []HostCount) string {
 	lines := make([]string, len(h))
 	for i, c := range h {
-		lines[i] = fmt.Sprintf("%s · %s · %d", c.Host, decisionWord(c.Decision), c.Count) // PROPOSED: the preview's words
+		lines[i] = fmt.Sprintf("%s · %s · %d", c.Host, decisionWord(c.Decision), c.Count)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -142,9 +142,9 @@ func historyText(h []HostCount) string {
 func decisionWord(d string) string {
 	switch d {
 	case "allow":
-		return "allowed" // PROPOSED: the preview's words
+		return "allowed"
 	case "deny":
-		return "refused" // PROPOSED
+		return "refused"
 	}
 	return d
 }

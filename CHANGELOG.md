@@ -15,6 +15,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A held governance change can need more than one approver. `WARDYN_GOVERNANCE_MIN_APPROVALS` (flag `-governance-min-approvals`, 0 to 9) sets the fewest approvals a change of a kind with more than one decider needs; the default `0` leaves every change to one approver. An approval counts only while its person is still eligible, and a person can take their own back with `DELETE /governance/changes/{id}/approval`.
+- Assistant sessions. A signed-in person can see the exact records a first message will carry (`POST /assistant/preview`), then start a session that composes a run, unit or template or reviews a held change (`POST /assistant/sessions`, with messages, edits, an event stream, and `DELETE` to end it). A session is its person's own: another person's answers 404. It starts only while the assistant is on in the assistant settings, its run counts against the person's `max_concurrent_runs`, and `assistant.session.start`, `assistant.session.end` and `assistant.suggestion.create` are audited.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
   that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the

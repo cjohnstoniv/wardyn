@@ -45,7 +45,7 @@ func (s *Server) assistantRunSession(w http.ResponseWriter, r *http.Request) (st
 		sess, err = ss.LatestAssistantSessionForRun(r.Context(), claims.RunID)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.") // PROPOSED
+		writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.")
 		return nil, types.AssistantSession{}, false
 	}
 	if err != nil {
@@ -68,7 +68,7 @@ func (s *Server) handleAssistantTurns(w http.ResponseWriter, r *http.Request) {
 	}
 	after, valid := assistantAfter(r)
 	if !valid {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number.")
 		return
 	}
 	deadline := time.NewTimer(assistantLongPoll)
@@ -200,7 +200,7 @@ func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if !sess.Live() || ev.SessionID != sess.ID {
-		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.") // PROPOSED
+		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.")
 		return
 	}
 	payload := ev.Payload
@@ -209,11 +209,11 @@ func (s *Server) handleAssistantPostEvent(w http.ResponseWriter, r *http.Request
 	}
 	stored, err := ss.AppendAssistantRunEvent(r.Context(), sess.ID, ev.Kind, payload)
 	if errors.Is(err, store.ErrAssistantSessionEnded) {
-		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.") // PROPOSED
+		writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "That session is not the live one.")
 		return
 	}
 	if errors.Is(err, store.ErrAssistantSessionFull) {
-		writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantSessionEventsFull, "This session holds as many events as it may. Start a new session.") // PROPOSED
+		writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantSessionEventsFull, "This session holds as many events as it may. Start a new session.")
 		return
 	}
 	if err != nil {

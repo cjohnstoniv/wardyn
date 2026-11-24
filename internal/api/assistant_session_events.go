@@ -177,13 +177,13 @@ func (s *Server) handleAssistantEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	after, valid := assistantAfter(r)
 	if !valid {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "after must be a number.")
 		return
 	}
 	release, ok := s.assistantLive.take(sess.Principal)
 	if !ok {
 		w.Header().Set("Retry-After", "15")
-		writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantRateLimited, "Too many open streams. Close a tab and try again.") // PROPOSED
+		writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantRateLimited, "Too many open streams. Close a tab and try again.")
 		return
 	}
 	defer release()
@@ -227,7 +227,7 @@ func (s *Server) assistantPollStep(w http.ResponseWriter, r *http.Request, ss st
 func (s *Server) assistantStream(w http.ResponseWriter, r *http.Request, ss store.AssistantSessionStore, sess types.AssistantSession, after int64) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
-		writeErrorReason(w, http.StatusNotImplemented, reasonAssistantStreamUnavailable, "Streaming is not available here.") // PROPOSED
+		writeErrorReason(w, http.StatusNotImplemented, reasonAssistantStreamUnavailable, "Streaming is not available here.")
 		return
 	}
 	h := w.Header()

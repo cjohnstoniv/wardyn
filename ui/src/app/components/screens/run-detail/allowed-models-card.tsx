@@ -17,7 +17,7 @@ import { useOperatorResolved, useSecurityOperator } from "../../wardyn/operator-
 import { WidgetCard } from "../../wardyn/primitives";
 
 const NO_PROFILE = "00000000-0000-0000-0000-000000000000";
-const SET_BY_ASSISTANT = "Set by the assistant"; // PROPOSED
+const SET_BY_ASSISTANT = "Set by the assistant";
 
 export function AllowedModelsCard({ run }: { run: RunDetail }) {
   // Resolved too: the security-operator flag reads true until /me answers.

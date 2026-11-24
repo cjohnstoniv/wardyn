@@ -255,7 +255,7 @@ const PROBE_FILES = /\/screens\/walls\/canvas\/webgl-probe(?:-e2e-seam)?\.ts$/;
 // the GPU's identity, or a CDN host.
 const STACK_3D_FORBIDDEN =
   /\bnew Function\s*\(|\beval\s*\(|\bnew (?:Shared)?Worker\s*\(|createObjectURL|data:image\/|WEBGL_debug_renderer_info|cdn\.jsdelivr\.net|unpkg\.com|fonts\.googleapis\.com|fonts\.gstatic\.com|raw\.githubusercontent\.com/;
-// EST, raw bytes of every chunk that carries the stack. The first green run's figure goes in the lane report.
+// EST, raw bytes of every chunk that carries the stack.
 const STACK_3D_BUDGET_BYTES = 1600 * 1024;
 
 // Every entry chunk plus everything it statically imports: what a page loads before any lazy import runs.

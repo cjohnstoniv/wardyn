@@ -20,7 +20,7 @@ import (
 )
 
 // assistantRunTask is the label of an assistant run, and what marks it for the sandbox's WARDYN_ASSISTANT.
-const assistantRunTask = "Assistant session" // PROPOSED
+const assistantRunTask = "Assistant session"
 
 // assistantRunLifetimeSec is how long an assistant run lives: the session's lifetime. The relay ends it
 // sooner after fifteen idle minutes.
