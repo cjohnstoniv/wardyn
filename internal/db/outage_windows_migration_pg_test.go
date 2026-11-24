@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const outageWindowsMigration = "0400"
+const outageWindowsMigration = "0403"
 
 // TestMigration0400_AppRoleOpensAndClosesAWindow_PG: on a split-role install the migration gives the heartbeat and
 // the windows to the role that already updates agent_runs, read from the catalog, so the upgrade needs no hand grant.
