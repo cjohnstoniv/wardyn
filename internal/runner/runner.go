@@ -264,7 +264,7 @@ type ProxyConfig struct {
 	// NoNetwork is proxy.Config.NoNetwork: a run launched with the no-network wall preset.
 	NoNetwork bool `json:"no_network,omitempty"`
 	// Outage is the run's outage terms (#4082); nil for the default ones, so an older proxy never sees the key.
-	Outage *proxy.OutageConfig
+	Outage *proxy.OutageConfig `json:"outage,omitempty"`
 }
 
 // InjectionGrant pairs an api_key grant with its proxy-side injection rule (never the secret value).
