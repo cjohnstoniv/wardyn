@@ -65,6 +65,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.dispatchStartable(ctx, run, ceiling, p) {
 		return
 	}
+	// The start's phases are timed from here (metrics_latency.go).
+	dispatchedAt := s.cfg.Now()
 	p.modelLimit = ceiling.modelLimit // from the ceiling alone, whatever the lane passed
 	// Only the values a phase below REBINDS get a local alias; everything else is
 	// read straight off p (the named-field struct is already self-documenting).
@@ -654,10 +656,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	s.recordRunnerOutputWatermark(ctx, run, spec.ExecOutput != nil)
 	// The lease, the runner_resident values, then the create, in that order: a runner
 	// refuses a create no lease authorizes, and the create names the values.
+	createStart := s.cfg.Now()
 	execution, sb, start, ok := s.createRunSandbox(ctx, createCtx, run, spec, resident, kept, p.RunToken, func() { endStartWait(); stopCreateLease() })
 	if !ok {
 		return
 	}
+	createEnd := s.cfg.Now()
 	created = true
 	s.keptMachineUp(ctx, run, kept, sb)
 
@@ -724,7 +728,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// The run is live: record how long creation -> RUNNING took (image pull,
 	// devcontainer build, sandbox create). This is the one operational number the
 	// audit stream does not carry.
-	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
+	running := s.cfg.Now()
+	s.metrics.sandboxLaunched(running.Sub(run.CreatedAt))
+	s.metrics.runStarted(run.CreatedAt, dispatchedAt, createStart, createEnd, running)
 
 	onPrepared := s.macWindowAtStartOrAfterPrep(ctx, run, p.Interactive, p.DesktopWindowAtStart) // the run is RUNNING
 

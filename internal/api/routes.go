@@ -17,6 +17,8 @@ import (
 func (s *Server) routes() chi.Router {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	// Outside the Recoverer, so a request whose handler panicked is still timed (metrics_latency.go).
+	r.Use(s.timeRoute)
 	// Security: do NOT install middleware.RealIP. It overwrites r.RemoteAddr from
 	// the client-supplied X-Forwarded-For / X-Real-IP headers with no
 	// trusted-proxy allowlist, and r.RemoteAddr is persisted as the append-only
