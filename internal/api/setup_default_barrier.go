@@ -21,8 +21,8 @@ func defaultBarrierUnsetCheck(orgBarrier types.ConfinementClass, offered []types
 	if orgBarrier != "" || best.Rank() < types.CC2.Rank() {
 		return SetupCheck{}, false
 	}
-	return SetupCheck{ID: "default_barrier_unset", Label: "Runs that name no barrier get the strongest class offered", Status: "info",
-		Detail: fmt.Sprintf("The strongest class offered is %s, so a launch that names no barrier gets %s.", best, best),
+	return SetupCheck{ID: "default_barrier_unset", Label: "Runs that name no barrier get the strongest class their runner offers", Status: "info",
+		Detail: fmt.Sprintf("The strongest class offered is %s, so a launch that names no barrier can get up to %s: the strongest its own placement offers.", best, best),
 		Fix:    "Set an organisation default barrier, so offering a stronger class does not move every unnamed run to it."}, true
 }
 
