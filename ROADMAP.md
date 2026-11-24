@@ -37,7 +37,7 @@
 | **v0.10.2** | Issuer portals with their own sign-in issuer, and a client-credentials service grant on a custom model endpoint. | **Shipped (pre-alpha)** — `v0.10.2`, 2026-11-22 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.3** | Issuer portals: a portal's people run in its pinned unit without a membership and read their own command output recovered from the run's recording; refused reads are audited. | **Shipped (pre-alpha)** — `v0.10.3`, 2026-11-23 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.4** | Outages: a lost Kubernetes run's owner can copy its work out, and the orphan sweep holds. Security fixes for sponsor changes, runner revives, relay sources, push removals and the Kubernetes API door. | **Shipped (pre-alpha)** — `v0.10.4`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
-| **v0.10.5** | Faster proxies and Kubernetes waits: no request stalls on a credential refresh, DNS answers and connections are reused, pods are watched. Security fixes for SCIM group deletes, support reads, the Git offline limit, VM folders and sign-in unbinds. | **Shipped (pre-alpha)** — `v0.10.5`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.10.5** | Faster proxies and Kubernetes waits: a still-valid credential's refresh stalls no request, DNS answers and connections are reused, pods are watched. Security fixes for SCIM group deletes, support reads, the Git offline limit, VM folders and sign-in unbinds. | **Shipped (pre-alpha)** — `v0.10.5`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
