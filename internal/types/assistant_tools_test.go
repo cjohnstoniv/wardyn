@@ -52,9 +52,17 @@ func TestAssistantToolSchemasAreClosed(t *testing.T) {
 
 // simulate says, in its own description, that one set of rules judges every counted run.
 func TestAssistantSimulateDescriptionSaysTheApproximation(t *testing.T) {
+	found := false
 	for _, s := range AssistantToolSpecs() {
-		if s.Name == AssistantToolSimulate && !strings.Contains(s.Description, "counts use the proposed rules, not each run's other layers") {
+		if s.Name != AssistantToolSimulate {
+			continue
+		}
+		found = true
+		if !strings.Contains(s.Description, "counts use the proposed rules, not each run's other layers") {
 			t.Errorf("simulate's description = %q", s.Description)
 		}
+	}
+	if !found {
+		t.Error("no simulate tool in the list")
 	}
 }

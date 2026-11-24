@@ -17,22 +17,68 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// assistantToolSpy counts the reads a tool makes of the session's target and of the templates, so a refused
-// call can be shown to have read nothing.
+// assistantToolSpy counts the reads a tool makes: targetReads the target's own records (templates, a change, a
+// unit's chain, a policy, a run), allReads those and the caller's unit, so a refused call can be shown to have read
+// nothing. fresh answers the fresh role's sign-in read with a record, which with no role mapping derives the
+// admin role, so the snapshot's role is the one that counts.
 type assistantToolSpy struct {
 	*assistantFake
 	smu         sync.Mutex
 	targetReads int
+	allReads    int
+	fresh       bool
+}
+
+func (f *assistantToolSpy) count(target bool) {
+	f.smu.Lock()
+	defer f.smu.Unlock()
+	f.allReads++
+	if target {
+		f.targetReads++
+	}
 }
 
 func (f *assistantToolSpy) ListTemplatesVisible(ctx context.Context, p string, g []string) ([]types.RunTemplate, error) {
-	f.smu.Lock()
-	f.targetReads++
-	f.smu.Unlock()
+	f.count(true)
 	return f.assistantFake.ListTemplatesVisible(ctx, p, g)
+}
+
+func (f *assistantToolSpy) GetGovernanceChange(ctx context.Context, id uuid.UUID) (types.GovernanceChange, error) {
+	f.count(true)
+	return f.assistantFake.GetGovernanceChange(ctx, id)
+}
+
+func (f *assistantToolSpy) GetGovernanceUnitChain(ctx context.Context, id uuid.UUID) ([]types.GovernanceUnit, error) {
+	f.count(true)
+	return f.assistantFake.GetGovernanceUnitChain(ctx, id)
+}
+
+func (f *assistantToolSpy) GetPolicy(ctx context.Context, id uuid.UUID) (types.RunPolicy, error) {
+	f.count(true)
+	return f.assistantFake.GetPolicy(ctx, id)
+}
+
+func (f *assistantToolSpy) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	f.count(true)
+	return f.assistantFake.GetRun(ctx, id)
+}
+
+func (f *assistantToolSpy) ResolveGovernanceUnit(ctx context.Context, users, groups []string, userType string) (*types.GovernanceUnit, types.CapabilitySubjectType, error) {
+	f.count(false)
+	return f.assistantFake.ResolveGovernanceUnit(ctx, users, groups, userType)
+}
+
+func (f *assistantToolSpy) GetPrincipalGroups(ctx context.Context, principal, portal string) (store.PrincipalGroups, error) {
+	rec, err := f.assistantFake.GetPrincipalGroups(ctx, principal, portal)
+	if f.fresh {
+		return store.PrincipalGroups{Email: principal + "@corp.example", Groups: []string{}}, nil
+	}
+	return rec, err
 }
 
 // TemplateGroupAdminGroups answers no group: the template caller of a new template draft asks it.
@@ -44,6 +90,12 @@ func (f *assistantToolSpy) reads() int {
 	f.smu.Lock()
 	defer f.smu.Unlock()
 	return f.targetReads
+}
+
+func (f *assistantToolSpy) all() int {
+	f.smu.Lock()
+	defer f.smu.Unlock()
+	return f.allReads
 }
 
 // assistantToolCall posts one tool call on the run's token, as the proxy forwards it.
@@ -237,5 +289,105 @@ func TestAssistantToolResultCapAndLetters(t *testing.T) {
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || !out.Truncated {
 		t.Errorf("a result over the cap = %.80s, want truncated: true", raw)
+	}
+}
+
+// assistantStoredTemplate is a saved template of person whose document still carries a repository URL with a
+// token in it (a row from before the save refused one) and a mount's host path in its inline policy.
+func assistantStoredTemplate(person string) types.RunTemplate {
+	doc := `{"api_version":"v1","kind":"Template","intent":{"repo_url":"https://x-access-token:TOKEN-CANARY-7781@git.example/o/r.git",` +
+		`"inline_policy":{"allowed_domains":["pypi.org"],"min_confinement_class":"CC2",` +
+		`"workspace_mounts":[{"source":"/srv/template-mount-canary","target":"/home/agent/t"}]}}}`
+	return types.RunTemplate{ID: uuid.New(), Owner: types.TemplateOwner{Scope: types.TemplateScopePerson, Person: person},
+		Kind: types.TemplateKindTemplate, Name: "stored", Description: "ask pat@corp.example", Revision: 1, Document: json.RawMessage(doc)}
+}
+
+// draft on a saved template proposes only what the model proposed: a stored field it did not propose, the
+// document with its token and host path among them, reaches neither the answer nor the proposal event, and read
+// target sends neither. The template's description reaches the model through the session's letters.
+func TestAssistantToolDraftNeverEchoesTheStoredTemplate(t *testing.T) {
+	f, srv, s, run := assistantToolSession(t, types.AssistantCompose)
+	tpl := assistantStoredTemplate(s.Principal)
+	f.templates = []types.RunTemplate{tpl}
+	s.TargetKey, s.PersonLetters = tpl.ID.String(), map[string]string{"Person A": "pat@corp.example"}
+	f.seed(s)
+	canaries := []string{"TOKEN-CANARY-7781", "/srv/template-mount-canary"}
+	w := assistantToolCall(t, srv, run, types.AssistantToolDraft, s.ID, `{"target_kind":"template","parts":[{"section":"name","value":"renamed"}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("draft = %d %s, want 200", w.Code, w.Body)
+	}
+	var p assistantProposal
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || len(p.Parts) != 1 || p.Parts[0].Section != "name" {
+		t.Errorf("parts = %+v (%v), want the one proposed section, name", p.Parts, err)
+	}
+	read := assistantToolCall(t, srv, run, types.AssistantToolRead, s.ID, `{"kind":"target"}`)
+	var proposals []string
+	for _, e := range f.eventsOf(s.ID) {
+		if e.Kind == types.AssistantEventProposal {
+			proposals = append(proposals, string(e.Payload))
+		}
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("proposal events = %d, want 1", len(proposals))
+	}
+	for name, body := range map[string]string{"draft": w.Body.String(), "proposal event": proposals[0], "read target": read.Body.String()} {
+		for _, c := range canaries {
+			if strings.Contains(body, c) {
+				t.Errorf("%s carries %q: %s", name, c, body)
+			}
+		}
+	}
+	if !strings.Contains(read.Body.String(), "Person A") || strings.Contains(read.Body.String(), "pat@corp.example") {
+		t.Errorf("read target = %s, want the description's address as its letter", read.Body)
+	}
+}
+
+// The template view is the template read's: no repository URL credential, no mount host path.
+func TestAssistantTemplateViewIsTheReadView(t *testing.T) {
+	srv := &Server{}
+	for _, role := range []string{oidc.RoleUser, oidc.RoleSecurityAdmin} {
+		ctx := withHumanIdentity(context.Background(), "sub-view", "view@corp.example", role, "", nil, false)
+		view := srv.assistantTemplateView(ctx, assistantStoredTemplate("sub-view"))
+		for _, c := range []string{"TOKEN-CANARY-7781", "/srv/template-mount-canary"} {
+			if strings.Contains(string(view.Document), c) {
+				t.Errorf("%s: the view carries %q: %s", role, c, view.Document)
+			}
+		}
+	}
+}
+
+// read answers at the person's tier, capped at the security tier, never the run token's: a member's read of their
+// unit cuts the workspace secret names; a super admin's read of a unit keeps them (the security tier) but never a
+// mount's host path, which only the super admin tier reads; no tier reads a secret value.
+func TestAssistantToolReadAtTheCappedTier(t *testing.T) {
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "canary-unit", Ceiling: types.RunPolicySpec{AllowedDomains: []string{"pypi.org"},
+		MinConfinementClass: types.CC2, WorkspaceMounts: []types.WorkspaceMount{{Source: "/srv/unit-mount-canary", Target: "/home/agent/m"}},
+		LLMInspection: &types.LLMInspectionSpec{Mode: "alert", WorkspaceSecretNames: []string{"SECRET-NAME-CANARY"},
+			WorkspaceSecretValues: []string{"secret-value-canary"}}}}
+	for _, c := range []struct {
+		name, role, kind, key string
+		names                 bool
+	}{
+		{"member, their own unit", oidc.RoleUser, types.AssistantTargetTemplate, "", false},
+		{"super admin, capped", oidc.RoleAdmin, types.AssistantTargetUnit, unit.ID.String(), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, srv, s, run := assistantToolSession(t, types.AssistantCompose)
+			f.fresh = true
+			f.govProfile, f.govGraph = &unit, []types.GovernanceUnit{unit}
+			s.Role, s.TargetKind, s.TargetKey = c.role, c.kind, c.key
+			f.seed(s)
+			w := assistantToolCall(t, srv, run, types.AssistantToolRead, s.ID, `{"kind":"unit"}`)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "canary-unit") {
+				t.Fatalf("read unit = %d %s, want the unit", w.Code, w.Body)
+			}
+			body := w.Body.String()
+			if strings.Contains(body, "/srv/unit-mount-canary") || strings.Contains(body, "secret-value-canary") {
+				t.Errorf("read unit = %s: a host path or a secret value reached the model", body)
+			}
+			if got := strings.Contains(body, "SECRET-NAME-CANARY"); got != c.names {
+				t.Errorf("secret names read = %v, want %v: %s", got, c.names, body)
+			}
+		})
 	}
 }

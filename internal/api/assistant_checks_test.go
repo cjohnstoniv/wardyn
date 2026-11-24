@@ -49,7 +49,8 @@ func assistantPersonServer(t *testing.T) (*assistantReplaySpy, *Server) {
 }
 
 // A request with no signed-in human (the admin token, local mode) or from a service identity is refused 403
-// assistant_role_denied on both routes, before any read.
+// assistant_role_denied on both routes, with the routes' own sentence, before any read: not the sign-in record,
+// the caller's unit, the target or any run's host decisions.
 func TestAssistantPersonRoutesRefuseNoPerson(t *testing.T) {
 	spy, srv := assistantPersonServer(t)
 	service := withHumanIdentity(withServiceIdentity(context.Background(), "bot", "sub-sponsor"), "svc-bot", "", oidc.RoleUser, "", nil, false)
@@ -58,14 +59,15 @@ func TestAssistantPersonRoutesRefuseNoPerson(t *testing.T) {
 		handle http.HandlerFunc
 	}{{"/api/v1/assistant/checks", srv.handleAssistantChecks}, {"/api/v1/assistant/replay", srv.handleAssistantReplay}} {
 		for name, ctx := range map[string]context.Context{"admin token": context.Background(), "service identity": service} {
-			before := spy.assistantFake.reads()
+			before, all := spy.assistantFake.reads(), spy.all()
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPost, route.path, strings.NewReader(assistantChecksBody("run", "", map[string]any{}))).WithContext(ctx)
 			route.handle(w, r)
-			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonAssistantRoleDenied) {
-				t.Errorf("%s %s = %d %s, want 403 %s", name, route.path, w.Code, w.Body, reasonAssistantRoleDenied)
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonAssistantRoleDenied) ||
+				!strings.Contains(w.Body.String(), "The assistant's checks answer a signed-in person only.") {
+				t.Errorf("%s %s = %d %s, want 403 %s with the routes' sentence", name, route.path, w.Code, w.Body, reasonAssistantRoleDenied)
 			}
-			if spy.assistantFake.reads() != before || len(spy.scopes) != 0 {
+			if spy.assistantFake.reads() != before || spy.all() != all || len(spy.scopes) != 0 {
 				t.Errorf("%s %s read before refusing", name, route.path)
 			}
 		}
@@ -122,10 +124,30 @@ func TestAssistantPersonRoutesCheckTheTarget(t *testing.T) {
 	if len(spy.scopes) != 0 {
 		t.Errorf("host decisions read for a run the caller may not read: %+v", spy.scopes)
 	}
-	// A member with no unit grant is refused at the unit tier, as PUT /governance/units/{id} refuses them.
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/assistant/replay", cookie, assistantChecksBody("unit", uuid.NewString(), map[string]any{"name": "u"}))
-	wantReason(t, w, http.StatusForbidden, "unit_scope_denied")
-	if len(spy.scopes) != 0 {
-		t.Errorf("host decisions read for a unit the caller does not govern: %+v", spy.scopes)
+	// A member with no unit grant is refused at the unit tier, as PUT /governance/units/{id} refuses them, on
+	// both routes, before the unit's chain or any run's host decisions is read.
+	target := spy.reads()
+	for _, path := range []string{"/api/v1/assistant/checks", "/api/v1/assistant/replay"} {
+		w := doSSO(t, srv, http.MethodPost, path, cookie, assistantChecksBody("unit", uuid.NewString(), map[string]any{"name": "u"}))
+		wantReason(t, w, http.StatusForbidden, "unit_scope_denied")
+	}
+	if len(spy.scopes) != 0 || spy.reads() != target {
+		t.Errorf("read a unit the caller does not govern: scopes %+v, %d target reads", spy.scopes, spy.reads()-target)
+	}
+}
+
+// A unit that rules out every marked provider (here: the person is granted neither) refuses each route 409
+// assistant_unit_denies: checks for compose, the replay only when both purposes deny.
+func TestAssistantPersonRoutesUnitDenies(t *testing.T) {
+	spy, srv := assistantPersonServer(t)
+	person := "sub-person-" + uuid.NewString()
+	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
+	for _, p := range []string{"a", "b"} {
+		spy.capStore.grants = append(spy.capStore.grants, types.CapabilityGrant{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: person + "@corp.example",
+			Capability: capModelProvider, Value: p, Effect: types.CapabilityDeny, CreatedBy: "seed"})
+	}
+	body := assistantChecksBody("run", "", map[string]any{})
+	for _, path := range []string{"/api/v1/assistant/checks", "/api/v1/assistant/replay"} {
+		wantReason(t, doSSO(t, srv, http.MethodPost, path, cookie, body), http.StatusConflict, reasonAssistantUnitDenies)
 	}
 }

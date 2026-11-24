@@ -28,8 +28,8 @@ func TestAssistantReviewCallerValueTable(t *testing.T) {
 		snap, fresh string
 		want        reviewCaller
 	}{
+		// A unit admin of the target is a member here too; their row runs on the store (TestAssistantUnitAdminHeldWithTheSwitchOff_PG).
 		{"member", oidc.RoleUser, oidc.RoleUser, reviewCaller{unitAdmin: true}},
-		{"unit admin of the target", oidc.RoleUser, oidc.RoleUser, reviewCaller{unitAdmin: true}},
 		{"security admin", oidc.RoleSecurityAdmin, oidc.RoleSecurityAdmin, reviewCaller{}},
 		{"super admin, capped", oidc.RoleAdmin, oidc.RoleAdmin, reviewCaller{}},
 		// A cli_access token publishes the member tier; the user view publishes the viewed role.
