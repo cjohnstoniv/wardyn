@@ -33,7 +33,7 @@ func TestPG_DeleteScimGroup_RefusesWhileARemovalIsOwed(t *testing.T) {
 		return id
 	}
 	own, foreign := identity("sub-own", "https://idp.example"), identity("sub-foreign", "https://idp.other.example")
-	grp, err := st.CreateScimGroupWithMembers(ctx, "eng", "Engineering", []uuid.UUID{own, foreign}, now)
+	grp, _, err := st.CreateScimGroupWithMembers(ctx, "eng", "Engineering", []uuid.UUID{own, foreign}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

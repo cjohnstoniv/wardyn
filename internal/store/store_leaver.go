@@ -47,6 +47,11 @@ type IdentityUpdate struct {
 	ExternalID string
 	UserName   string
 	Emails     []string
+	// PrimaryEmail is the address the identity provider names as the person's own, when it names one: it is
+	// recorded as an alias and becomes email_lower, so the SCIM reply and the next read show it. The address it
+	// replaces stays an alias (every write of email_lower records one), and the next sign-in records the email
+	// it carries. Empty leaves email_lower as the Emails loop leaves it.
+	PrimaryEmail string
 	// Reactivate clears the deactivation and the purge schedule on the identity and on every row
 	// bound to the same principal. A purged identity is ErrIdentityPurged.
 	Reactivate bool
@@ -320,6 +325,14 @@ func applyIdentityUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, u Ident
 			return PrincipalIdentity{}, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE principal_identities SET email_lower = $2 WHERE id = $1 AND email_lower = ''`, id, e); err != nil {
+			return PrincipalIdentity{}, fmt.Errorf("store: set identity email: %w", err)
+		}
+	}
+	if e := strings.ToLower(strings.TrimSpace(u.PrimaryEmail)); e != "" {
+		if err = upsertScimAlias(ctx, tx, id, "email", e, now); err != nil {
+			return PrincipalIdentity{}, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE principal_identities SET email_lower = $2 WHERE id = $1`, id, e); err != nil {
 			return PrincipalIdentity{}, fmt.Errorf("store: set identity email: %w", err)
 		}
 	}

@@ -51,7 +51,8 @@ type ScimGroupStore interface {
 	CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error)
 	// CreateScimGroupWithMembers stores a group and records identities as its members in one transaction: a
 	// failure leaves no group, so the create can be retried. An externalId a group holds is ErrScimGroupExists.
-	CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, error)
+	// It returns the members it recorded, in ScimGroupMembers' order.
+	CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, []uuid.UUID, error)
 	GetScimGroup(ctx context.Context, id uuid.UUID) (ScimGroup, error)
 	SearchScimGroups(ctx context.Context, attr, value string, limit int) ([]ScimGroup, error)
 	RenameScimGroup(ctx context.Context, id uuid.UUID, displayName string) error
@@ -95,15 +96,18 @@ func scanScimGroup(r pgx.Row) (ScimGroup, error) {
 // CreateScimGroup stores a group. An externalId any group already holds, in any case, is
 // ErrScimGroupExists.
 func (s PG) CreateScimGroup(ctx context.Context, externalID, displayName string, now time.Time) (ScimGroup, error) {
-	return s.CreateScimGroupWithMembers(ctx, externalID, displayName, nil, now)
+	g, _, err := s.CreateScimGroupWithMembers(ctx, externalID, displayName, nil, now)
+	return g, err
 }
 
 // CreateScimGroupWithMembers stores a group and its initial members in one transaction; an id that names
-// no identity row is skipped, as AddScimGroupMembers skips it.
-func (s PG) CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, error) {
+// no identity row is skipped, as AddScimGroupMembers skips it. The member ids come from the insert itself,
+// ordered by id, which is ScimGroupMembers' order for a group whose members were all added at now: the
+// caller answers with them and never reads the members again after the commit.
+func (s PG) CreateScimGroupWithMembers(ctx context.Context, externalID, displayName string, identities []uuid.UUID, now time.Time) (ScimGroup, []uuid.UUID, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	g, err := scanScimGroup(tx.QueryRow(ctx, `
@@ -111,20 +115,27 @@ func (s PG) CreateScimGroupWithMembers(ctx context.Context, externalID, displayN
 		RETURNING `+scimGroupCols, strings.TrimSpace(externalID), displayName, now))
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return ScimGroup{}, ErrScimGroupExists
+		return ScimGroup{}, nil, ErrScimGroupExists
 	}
 	if err != nil {
-		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
 	}
+	var members []uuid.UUID
 	if len(identities) > 0 {
-		if _, err := tx.Exec(ctx, scimAddMembersSQL, g.ID, identities, now); err != nil {
-			return ScimGroup{}, fmt.Errorf("store: add scim group members: %w", err)
+		members, err = collect(ctx, tx, "add", "scim group members",
+			`WITH added AS (`+scimAddMembersSQL+` RETURNING identity_id) SELECT identity_id FROM added ORDER BY identity_id`,
+			[]any{g.ID, identities, now}, func(r pgx.Row) (uuid.UUID, error) {
+				var v uuid.UUID
+				return v, r.Scan(&v)
+			})
+		if err != nil {
+			return ScimGroup{}, nil, err
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ScimGroup{}, fmt.Errorf("store: create scim group: %w", err)
+		return ScimGroup{}, nil, fmt.Errorf("store: create scim group: %w", err)
 	}
-	return g, nil
+	return g, members, nil
 }
 
 // GetScimGroup is the group stored under id, or ErrNotFound.
@@ -133,20 +144,21 @@ func (s PG) GetScimGroup(ctx context.Context, id uuid.UUID) (ScimGroup, error) {
 }
 
 // SearchScimGroups is the groups a SCIM filter `attr eq value` selects, at most limit. Both attributes
-// match case-insensitively.
+// match case-insensitively. An externalId ignores outer spaces, as its unique key does; a displayName is
+// compared whole, spaces included, since a create stores the name as sent.
 func (s PG) SearchScimGroups(ctx context.Context, attr, value string, limit int) ([]ScimGroup, error) {
-	var where string
+	var where, arg string
 	switch attr {
 	case SearchExternalID:
-		where = `lower(btrim(external_id)) = $1`
+		where, arg = `lower(btrim(external_id)) = $1`, strings.ToLower(strings.TrimSpace(value))
 	case SearchDisplayName:
-		where = `lower(display_name) = $1`
+		where, arg = `lower(display_name) = lower($1)`, value
 	default:
 		return nil, fmt.Errorf("store: search scim groups: unknown attribute %q", attr)
 	}
 	return collect(ctx, s.Pool, "search", "scim groups", `SELECT `+scimGroupCols+` FROM scim_groups
 		WHERE `+where+` ORDER BY created_at, id LIMIT $2`,
-		[]any{strings.ToLower(strings.TrimSpace(value)), limit}, scanScimGroup)
+		[]any{arg, limit}, scanScimGroup)
 }
 
 // RenameScimGroup changes a group's display name; its externalId never changes.

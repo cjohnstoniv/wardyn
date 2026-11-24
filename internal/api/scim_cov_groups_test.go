@@ -154,7 +154,7 @@ func TestSCIMCovCreateGroup(t *testing.T) {
 }
 
 func TestSCIMCovCreateGroupStoreFailures(t *testing.T) {
-	for _, method := range []string{"CreateScimGroup", "AddScimGroupMembers", "ScimGroupMembers"} {
+	for _, method := range []string{"CreateScimGroup", "AddScimGroupMembers"} {
 		t.Run(method, func(t *testing.T) {
 			st := newSCIMCovStore()
 			e := newSCIMCovEnv(t, st)
@@ -175,6 +175,24 @@ func TestSCIMCovCreateGroupMemberFailureLeavesNoGroup(t *testing.T) {
 		t.Fatalf("the retry = %d %s, want 201", w.Code, w.Body.String())
 	}
 	scimCovWantError(t, e.scim(http.MethodPost, "/scim/v2/Groups", body), http.StatusConflict, "uniqueness")
+}
+
+// The create answers with what it recorded: no read of the members follows the commit, so a read that would fail
+// cannot turn a stored group into a 500 whose retry is a 409.
+func TestSCIMCovCreateGroupAnswersWhatItRecorded(t *testing.T) {
+	st := newSCIMCovStore()
+	pat := scimCovPerson(st, "sub-p")
+	e := newSCIMCovEnv(t, st)
+	st.failNext("ScimGroupMembers", errSCIMCovBoom, -1)
+	body := fmt.Sprintf(`{"externalId":"g1","displayName":"G","members":[{"value":%q},{"value":%q}]}`, pat.ID, uuid.New())
+	w := e.scim(http.MethodPost, "/scim/v2/Groups", body)
+	got := scimCovDecode[scimCovGroupBody](t, w)
+	if w.Code != http.StatusCreated || len(got.Members) != 1 || got.Members[0].Value != pat.ID.String() {
+		t.Fatalf("POST with the member read failing = %d %s, want 201 with the one recorded member", w.Code, w.Body.String())
+	}
+	if n := st.callCount("ScimGroupMembers"); n != 0 {
+		t.Errorf("the create read its members back %d time(s)", n)
+	}
 }
 
 func TestSCIMCovPatchGroupRefusals(t *testing.T) {
