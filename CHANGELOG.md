@@ -11,6 +11,16 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- The control plane records when it could not be reached, when each runner's link was down and when its own proxies stopped renewing, so that a later release can tell an outage from a failed proxy (#4082).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
+
 ### Changed
 
 - The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
