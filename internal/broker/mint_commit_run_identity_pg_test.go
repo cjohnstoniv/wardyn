@@ -16,8 +16,9 @@ import (
 )
 
 // TestAudit_MintRowCarriesRunIdentity_PG: the credential.mint row is written on the mint's own transaction,
-// past the recorders, so the mint stamps the run identity itself, from the context a verified run token made.
-// With no run identity on the context its data is as it was.
+// past the recorders and their sealer, so the mint stamps only the run's workload, from the context a verified
+// run token made, and never the owner or sponsor, which would stay in clear under full audit sealing. With no
+// run identity on the context its data is as it was.
 func TestAudit_MintRowCarriesRunIdentity_PG(t *testing.T) {
 	for name, tc := range map[string]struct {
 		id      *audit.RunIdentity
@@ -25,9 +26,9 @@ func TestAudit_MintRowCarriesRunIdentity_PG(t *testing.T) {
 		wantNot []string
 	}{
 		"person-owned run": {&audit.RunIdentity{Owner: "alice@example.com", Sponsor: "ignored", Workload: "spiffe://wardyn.test/agent-run/x"},
-			map[string]string{"run_owner": "alice@example.com", "run_workload": "spiffe://wardyn.test/agent-run/x"}, []string{"sponsor"}},
+			map[string]string{"run_workload": "spiffe://wardyn.test/agent-run/x"}, []string{"run_owner", "sponsor"}},
 		"service-owned run": {&audit.RunIdentity{Owner: "service:ci", Sponsor: "boss@example.com", Workload: "spiffe://wardyn.test/agent-run/y"},
-			map[string]string{"run_owner": "service:ci", "sponsor": "boss@example.com", "run_workload": "spiffe://wardyn.test/agent-run/y"}, nil},
+			map[string]string{"run_workload": "spiffe://wardyn.test/agent-run/y"}, []string{"run_owner", "sponsor"}},
 		"no run identity": {nil, nil, []string{"run_owner", "run_workload", "sponsor"}},
 	} {
 		t.Run(name, func(t *testing.T) {
