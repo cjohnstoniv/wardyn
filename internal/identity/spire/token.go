@@ -272,6 +272,11 @@ func (p *Provider) deleteEntries(ctx context.Context, runID uuid.UUID) error {
 
 // RevokeJTI revokes one token without revoking its run (a revive retiring the run's old token).
 func (p *Provider) RevokeJTI(ctx context.Context, jti string, runID uuid.UUID) error {
+	// A mint asks the denylist about the run with an empty jti, and the store matches the jti or the run,
+	// so a row with an empty jti would refuse every later mint.
+	if jti == "" {
+		return fmt.Errorf("spire identity: revoke jti for run %s: the jti is empty", runID)
+	}
 	if err := p.revocations.RevokeJTI(ctx, jti, runID); err != nil {
 		p.audit(ctx, runID, p.adHocID(runID), "identity.jti.revoke", jti, "failure")
 		return fmt.Errorf("spire identity: revoke jti for run %s: %w", runID, err)

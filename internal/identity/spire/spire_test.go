@@ -267,3 +267,49 @@ func TestSpire_SensorMintMakesNoEntry(t *testing.T) {
 		t.Fatalf("revoke of the sensor run = %v with calls %+v, want no entry call", err, h.srv.Calls())
 	}
 }
+
+// switchRevocations is a denylist that can be made to fail after the mint.
+type switchRevocations struct {
+	*identitytest.MemRevocationStore
+	fail bool
+}
+
+func (s *switchRevocations) IsRevoked(ctx context.Context, jti string, run uuid.UUID) (bool, error) {
+	if s.fail {
+		return false, errors.New("denylist unavailable")
+	}
+	return s.MemRevocationStore.IsRevoked(ctx, jti, run)
+}
+
+// Verify fails closed when the denylist fails after the mint: an ordinary error, never a RevokedTokenError,
+// and no claims.
+func TestSpire_VerifyFailsClosedOnDenylistError(t *testing.T) {
+	ctx := context.Background()
+	rev := &switchRevocations{MemRevocationStore: identitytest.NewMemRevocationStore()}
+	h := newHarness(t, rev, jose.ES256)
+	ri, err := h.p.MintRunIdentity(ctx, uuid.New(), "alice", "", aud, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev.fail = true
+	cl, err := h.p.Verify(ctx, ri.Token, aud)
+	var revoked *identity.RevokedTokenError
+	if err == nil || cl != nil || errors.As(err, &revoked) {
+		t.Fatalf("verify with a failing denylist = (%+v, %v), want an ordinary error and no claims", cl, err)
+	}
+}
+
+// An empty jti is refused: the store matches the jti or the run, so such a row would refuse every mint.
+func TestSpire_RevokeJTIRefusesEmptyJTI(t *testing.T) {
+	ctx := context.Background()
+	h := newHarness(t, identitytest.NewMemRevocationStore(), jose.ES256)
+	run := uuid.New()
+	if err := h.p.(interface {
+		RevokeJTI(context.Context, string, uuid.UUID) error
+	}).RevokeJTI(ctx, "", run); err == nil {
+		t.Fatal("RevokeJTI with an empty jti succeeded")
+	}
+	if _, err := h.p.MintRunIdentity(ctx, run, "alice", "", aud, false); err != nil {
+		t.Fatalf("mint after a refused empty-jti revoke: %v", err)
+	}
+}
