@@ -21,6 +21,9 @@ import { RoleProvider, type Role } from "./components/wardyn/operator-context";
 import { baseStatus } from "./lib/test-fixtures";
 import type { SetupStatus } from "./lib/types";
 import { setField } from "../test/set-field";
+import { COMPOSER_PATH, composerHref } from "./lib/composer-url";
+import { ASSISTANT } from "./components/wardyn/copy/assistant";
+import { NR_START } from "./components/wardyn/copy/new-run/start";
 
 // H1/H2/M2 — full App mount, real onUnauthorized wiring, mocked fetch. The
 // board itself (RunsScreen) is stubbed: these cases only care about the
@@ -131,7 +134,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 // mid-session case can wait for the console to be genuinely authed and
 // rendered before ever letting the 401 land. `probeUnauthed` (cold-mount
 // case) needs no such control: nothing has rendered yet either way.
-function mockFetch(opts: { probeUnauthed?: boolean; probeReason?: string; me?: typeof ME_ADMIN; on401?: string }): {
+function mockFetch(opts: { probeUnauthed?: boolean; probeReason?: string; me?: typeof ME_ADMIN; on401?: string; assistant?: object }): {
   fetch: Mock;
   resolve401: () => void;
 } {
@@ -146,6 +149,9 @@ function mockFetch(opts: { probeUnauthed?: boolean; probeReason?: string; me?: t
     if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
     if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
     if (u.includes("/setup/status")) return Promise.resolve(jsonResponse(200, SETUP_STATUS_READY));
+    // The AI composer's two reads: whether the assistant is ready (off unless a case says otherwise) and what it would send.
+    if (u.includes("/me/assistant")) return Promise.resolve(jsonResponse(200, opts.assistant ?? { state: "off" }));
+    if (u.includes("/assistant/preview")) return Promise.resolve(jsonResponse(200, { provider: "Org provider", model: "model-name", sections: [], digest: "d", letters: {}, never_sent: [], tools: [] }));
     if (u.includes("/me")) return Promise.resolve(jsonResponse(200, opts.me ?? ME_ADMIN));
     if (u.includes("/approvals")) return Promise.resolve(jsonResponse(200, []));
     if (u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
@@ -694,6 +700,33 @@ describe("App — the Templates route table", () => {
   it("a member reaches /templates and nothing under /admin/templates", () => {
     expect(roleCanReach("/templates", "user")).toBe(true);
     expect(roleCanReach("/admin/templates", "user")).toBe(false);
+  });
+});
+
+// The AI composer: one literal route, opened from the New run card and from the Governance and Templates doors.
+describe("App — the AI composer route", () => {
+  const ready = { state: "ready", provider_name: "Org provider", model: "model-name" };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    cleanup();
+  });
+  const expectComposer = async () => {
+    expect(await screen.findByRole("heading", { level: 1, name: ASSISTANT.COMPOSER_TITLE })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Page not found" })).toBeNull();
+  };
+
+  it("opens from the AI composer card on the New run start screen", async () => {
+    vi.stubGlobal("fetch", mockFetch({ assistant: ready }).fetch);
+    renderApp("/runs/new");
+    await userEvent.click(await screen.findByRole("link", { name: NR_START.AI_FOOT }));
+    await expectComposer();
+  });
+
+  it.each([composerHref({ kind: "unit" }), composerHref({ kind: "template" })])("mounts the composer at the Governance and Templates door link %s", async (href) => {
+    expect(href.startsWith(COMPOSER_PATH)).toBe(true);
+    vi.stubGlobal("fetch", mockFetch({ assistant: ready }).fetch);
+    renderApp(href);
+    await expectComposer();
   });
 });
 

@@ -192,6 +192,12 @@ const GettingStarted = React.lazy(() =>
     default: m.GettingStarted,
   })),
 );
+// The AI composer: opened from a door on New run, Governance or Templates, never from the nav.
+const ComposerScreen = React.lazy(() =>
+  import("./components/screens/composer/composer-screen").then((m) => ({
+    default: m.ComposerScreen,
+  })),
+);
 
 export {
   NewRunRoute,
@@ -223,4 +229,5 @@ export {
   AuditScreen,
   RecordingScreen,
   GettingStarted,
+  ComposerScreen,
 };
