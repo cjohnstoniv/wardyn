@@ -6,9 +6,11 @@ package api
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -117,6 +119,153 @@ func TestLogGrantSwitches_WarnsOnEmailAllowRowsThatNoLongerGrant(t *testing.T) {
 			t.Errorf("%s: want one WARN with rows=2 and both remedies, logged %q", tc.name, out)
 		case !tc.wantWarn && got != 0:
 			t.Errorf("%s: want no warning, logged %q", tc.name, out)
+		}
+	}
+}
+
+// The list filter reads the same email trust rule as capAllowed: an allow on the caller's unverified email
+// keeps nothing with the switch on, and keeps the value with the switch off or email keys opted in.
+func TestCapFilter_EmailAllowFollowsTheEmailTrustRule(t *testing.T) {
+	const p = "5b0f2f6e-5f5e-4c53-9d83-0c5a1d3b7a11"
+	for _, tc := range []struct {
+		name               string
+		switchOff, emailOK bool
+		want               []string
+	}{
+		{"switch on", false, false, []string{}},
+		{"switch off", true, false, []string{p}},
+		{"email keys opted in", false, true, []string{p}},
+	} {
+		srv := capServer(&capStore{
+			grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, types.CapabilityAllow)},
+			enf:    map[string]bool{capPolicy: true},
+		})
+		srv.cfg.UnverifiedEmailCapGrantsMatch, srv.cfg.AllowEmailMappings = tc.switchOff, tc.emailOK
+		got, err := srv.capFilter(memberCtx(nil), capPolicy, []string{p})
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: capFilter = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// The email trust rule holds for every capability kind, not only egress hosts, and a deny on the email
+// binds either way. A kind added to capabilityKinds without a value here fails by name.
+func TestCapAllowed_EmailRuleHoldsForEveryKind(t *testing.T) {
+	const id = "5b0f2f6e-5f5e-4c53-9d83-0c5a1d3b7a11"
+	values := map[string]string{
+		capEgressHost: "pypi.org", capSecret: "s1", capImage: "ghcr.io/acme/x:1", capFeature: "service_attach",
+		capModelProvider: "mp1", capWorkspaceProvider: "gh1", capAgent: "claude-code",
+		capWorkspace: id, capPolicy: id, capComponent: id,
+	}
+	allow, deny := types.CapabilityAllow, types.CapabilityDeny
+	for _, kind := range capabilityKinds {
+		value, ok := values[kind]
+		if !ok {
+			t.Errorf("capability kind %q has no value in this test: add one so the email rule is pinned for it", kind)
+			continue
+		}
+		for _, tc := range []struct {
+			name      string
+			grants    []types.CapabilityGrant
+			switchOff bool
+			want      bool
+		}{
+			{"allow on the email, switch on", []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, kind, value, allow)}, false, false},
+			{"allow on the email, switch off", []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, kind, value, allow)}, true, true},
+			{"deny on the email over an allow on the sub, switch on", []types.CapabilityGrant{
+				grant(types.CapabilitySubjectUser, capSub, kind, value, allow),
+				grant(types.CapabilitySubjectUser, capEmail, kind, value, deny),
+			}, false, false},
+			{"deny on the email over an allow on the sub, switch off", []types.CapabilityGrant{
+				grant(types.CapabilitySubjectUser, capSub, kind, value, allow),
+				grant(types.CapabilitySubjectUser, capEmail, kind, value, deny),
+			}, true, false},
+		} {
+			srv := capServer(&capStore{grants: tc.grants, enf: map[string]bool{kind: true}})
+			srv.cfg.UnverifiedEmailCapGrantsMatch = tc.switchOff
+			if got, err := srv.capAllowed(memberCtx(nil), kind, value); err != nil || got != tc.want {
+				t.Errorf("%s, %s: capAllowed = %v, %v; want %v", kind, tc.name, got, err, tc.want)
+			}
+		}
+	}
+}
+
+// emailTrusted's other arm: sign-in that enforces email_verified vouches for the email, so an allow on it
+// grants with the switch on and no email-keys opt-in.
+func TestCapAllowed_TrustedEmailMatchesThroughOIDC(t *testing.T) {
+	srv := capServer(&capStore{
+		grants: []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capEgressHost, "pypi.org", types.CapabilityAllow)},
+		enf:    map[string]bool{capEgressHost: true},
+	})
+	if got, err := srv.capAllowed(memberCtx(nil), capEgressHost, "pypi.org"); err != nil || got {
+		t.Fatalf("without OIDC enforcing email_verified: capAllowed = %v, %v; want false", got, err)
+	}
+	srv.cfg.OIDC = newAccessAuth(t, nil, "", nil, nil, func(c *oidc.Config) { c.RequireEmailVerified = true })
+	if got, err := srv.capAllowed(memberCtx(nil), capEgressHost, "pypi.org"); err != nil || !got {
+		t.Errorf("with email_verified enforced: capAllowed = %v, %v; want true", got, err)
+	}
+}
+
+// A restricted value is open only to an allow that names it. An allow on the caller's unverified email counts
+// for nothing, so it cannot be the named allow that lets a wildcard allow through.
+func TestCapAllowed_UnverifiedEmailNeverSatisfiesARestriction(t *testing.T) {
+	const p = "5b0f2f6e-5f5e-4c53-9d83-0c5a1d3b7a11"
+	allow := types.CapabilityAllow
+	wildcard := grant(types.CapabilitySubjectAll, "", capPolicy, capWildcard, allow)
+	for _, tc := range []struct {
+		name               string
+		grants             []types.CapabilityGrant
+		switchOff, emailOK bool
+		want               bool
+	}{
+		{"switch on: the named allow is on the unverified email", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, false, false},
+		{"switch off: the old match", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, true, false, true},
+		{"email keys opted in", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, true, true},
+		{"control: the named allow is on the sub", []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capSub, capPolicy, p, allow)}, false, false, true},
+		{"control: no wildcard, the named allow is on the unverified email", []types.CapabilityGrant{grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)}, false, false, false},
+	} {
+		srv := capServer(&capStore{grants: tc.grants, restricted: map[string]map[string]bool{capPolicy: {p: true}}})
+		srv.cfg.UnverifiedEmailCapGrantsMatch, srv.cfg.AllowEmailMappings = tc.switchOff, tc.emailOK
+		if got, err := srv.capAllowed(memberCtx(nil), capPolicy, p); err != nil || got != tc.want {
+			t.Errorf("%s: capAllowed = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	// The list read through the same decision.
+	srv := capServer(&capStore{
+		grants:     []types.CapabilityGrant{wildcard, grant(types.CapabilitySubjectUser, capEmail, capPolicy, p, allow)},
+		restricted: map[string]map[string]bool{capPolicy: {p: true}},
+	})
+	if got := capVisible(memberCtx(nil), srv, capPolicy, []string{p}, func(s string) string { return s }); len(got) != 0 {
+		t.Errorf("capVisible = %v; want none", got)
+	}
+}
+
+// A wildcard image allow on the caller's unverified email grants nothing, so it must not count as a
+// non-prefix allow that skips the refusal of another tag of a restricted repository.
+func TestCapAllowed_UnverifiedEmailWildcardKeepsThePrefixSiblingRule(t *testing.T) {
+	const sibling = "registry.example.com/team/app:2"
+	allow := types.CapabilityAllow
+	prefix := grant(types.CapabilitySubjectUser, capSub, capImage, imgPrefix, allow)
+	for _, tc := range []struct {
+		name               string
+		wildcard           types.CapabilityGrant
+		switchOff, emailOK bool
+		want               bool
+	}{
+		{"switch on: the wildcard is on the unverified email", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), false, false, false},
+		{"switch off", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), true, false, true},
+		{"email keys opted in", grant(types.CapabilitySubjectUser, capEmail, capImage, capWildcard, allow), false, true, true},
+		{"control: the wildcard is on the sub", grant(types.CapabilitySubjectUser, capSub, capImage, capWildcard, allow), false, false, true},
+	} {
+		st := &capStore{
+			grants:     []types.CapabilityGrant{prefix, tc.wildcard},
+			enf:        map[string]bool{capImage: true},
+			restricted: map[string]map[string]bool{capImage: {"registry.example.com/team/app:1": true}},
+		}
+		srv := capServer(st)
+		srv.cfg.UnverifiedEmailCapGrantsMatch, srv.cfg.AllowEmailMappings = tc.switchOff, tc.emailOK
+		if got, err := srv.capGranted(memberCtx(nil), capImage, sibling); err != nil || got != tc.want {
+			t.Errorf("%s: capGranted(%q) = %v, %v; want %v", tc.name, sibling, got, err, tc.want)
 		}
 	}
 }

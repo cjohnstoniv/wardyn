@@ -12,12 +12,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -366,7 +369,11 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 		if err != nil {
 			return contextPick{}, err
 		}
-		pick, _, err := s.pickContext(ctx, activeMemberships(ms), choice)
+		active, err := s.portalPinMemberships(ctx, activeMemberships(ms), choice)
+		if err != nil {
+			return contextPick{}, err
+		}
+		pick, _, err := s.pickContext(ctx, active, choice)
 		return pick, err
 	}
 	// A hidden group row only ever ADDS memberships. So a legacy=false row that matched is a sound
@@ -382,7 +389,11 @@ func (s *Server) selectContext(ctx context.Context, q contextQuery, choice conte
 			if err != nil {
 				return contextPick{}, "", err
 			}
-			pick, sound, err := s.pickContext(ctx, activeMemberships(ms), choice)
+			active, err := s.portalPinMemberships(ctx, activeMemberships(ms), choice)
+			if err != nil {
+				return contextPick{}, "", err
+			}
+			pick, sound, err := s.pickContext(ctx, active, choice)
 			if err != nil && contextRunRefusal(err) == nil {
 				return contextPick{}, "", err
 			}
@@ -672,7 +683,9 @@ func (s *Server) admitGovernanceMaxDepth(w http.ResponseWriter, r *http.Request,
 // membership row on p's path could still match the owner: a user row naming their sub, a row for
 // their stamped type, an `all` row, or, unless the owner is an issuer-portal person, any group row (a
 // restart or revive of a group-keyed owner's run keeps today's reach). An email-keyed user row never counts here: the run does not record the
-// owner's email, so such a row could only admit a guess. The refusal names the arm
+// owner's email, so such a row could only admit a guess. A run an issuer portal started for its own
+// person also passes while that portal is registered and its pin covers the run's unit, unless the run
+// carries a strict workspace or a pinned organisation component (portalPinHoldsOwner). The refusal names the arm
 // taken (owner_session or row_can_match), which a revive audits.
 func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun, p *ResolvedUnit) (*ownerRefusal, error) {
 	if p == nil {
@@ -711,6 +724,13 @@ func (s *Server) ownerMembershipRefusal(ctx context.Context, run types.AgentRun,
 			found = found || (path[m.UnitID] && membershipCanMatchOwner(m, run))
 		}
 	}
+	if !found {
+		held, err := s.portalPinHoldsOwner(ctx, run, path)
+		if err != nil {
+			return nil, err
+		}
+		found = held
+	}
 	if found {
 		return nil, nil
 	}
@@ -732,4 +752,72 @@ func membershipCanMatchOwner(m types.GovernanceMembership, run types.AgentRun) b
 	default: // all
 		return true
 	}
+}
+
+// portalPinMemberships is active with the pin contexts of the issuer portal the request came through added
+// first: one row per unit at or under the pin, nearest the pin first. With no run_in, a row the person holds
+// outside the pin is dropped, so it is never a default pick. A request that is not an issuer portal person's
+// through their own live, pinned portal, or that carries a strict pin, gets active back unchanged.
+func (s *Server) portalPinMemberships(ctx context.Context, active []store.MembershipMatch, choice contextChoice) ([]store.MembershipMatch, error) {
+	via, ok := audit.DelegationFrom(ctx)
+	if !ok {
+		return active, nil
+	}
+	p := oidcHumanFromContext(ctx)
+	if !types.IsPortalPersonPrincipal(p) || len(choice.StrictPins) > 0 {
+		return active, nil
+	}
+	dr, ok := s.cfg.Store.(store.DelegateReader)
+	if !ok {
+		return nil, errPortalUnitUnavailable
+	}
+	d, err := dr.GetDelegateByID(ctx, via.Delegate)
+	if err != nil {
+		slog.ErrorContext(ctx, "portal pin context: read the portal", slog.String("delegate", via.Delegate.String()), slog.Any("err", err))
+		return nil, errPortalUnitUnavailable
+	}
+	if !portalPinsPerson(d, p) {
+		return active, nil
+	}
+	// Full rows, never outlines: a unit with no parent is composed from the row it is handed.
+	rows, err := s.cfg.Store.ListGovernanceUnits(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "portal pin context: read the units", slog.Any("err", err))
+		return nil, errPortalUnitUnavailable
+	}
+	byID := unitsByID(rows)
+	pin := *d.RunInUnder
+	if _, found := byID[pin]; !found {
+		return active, nil
+	}
+	subject := types.CanonicalUserSubject(p)
+	var pinned []store.MembershipMatch
+	depth := map[uuid.UUID]int{}
+	for _, u := range rows {
+		if !onPath(byID, u.ID, pin) {
+			continue
+		}
+		depth[u.ID] = stepsToAncestor(byID, u.ID, pin)
+		pinned = append(pinned, store.MembershipMatch{
+			Membership: types.GovernanceMembership{SubjectType: types.CapabilitySubjectUser, Subject: subject, UnitID: u.ID},
+			Unit:       u,
+		})
+	}
+	sort.SliceStable(pinned, func(i, j int) bool {
+		di, dj := depth[pinned[i].Unit.ID], depth[pinned[j].Unit.ID]
+		if di != dj {
+			return di < dj
+		}
+		return pinned[i].Unit.Name < pinned[j].Unit.Name
+	})
+	kept := active
+	if choice.RunIn == uuid.Nil {
+		kept = nil
+		for _, m := range active {
+			if onPath(byID, m.Unit.ID, pin) {
+				kept = append(kept, m)
+			}
+		}
+	}
+	return append(pinned, kept...), nil
 }

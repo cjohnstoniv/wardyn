@@ -353,7 +353,7 @@ func TestTakeover_SSHPumpDropsKeystrokesAfterEviction(t *testing.T) {
 
 // TestTakeover_SSHPumpDropsResizeAfterEviction: sshShellPump's resize goroutine
 // must gate on holder.canWrite(), not `holder == nil` (in
-// sshgateway_channels.go), or an evicted ssh holder keeps resizing the shared
+// sshgateway_pump.go), or an evicted ssh holder keeps resizing the shared
 // tmux window under the new holder until its channel actually dies. The web
 // lane gates the same frame on canWrite() (attachPump in attach.go); the two
 // lanes must agree.
