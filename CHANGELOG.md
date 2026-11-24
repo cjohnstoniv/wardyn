@@ -16,6 +16,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A SCIM group create now answers with the members it recorded in the same step. Before, a failed read of the members after the group was stored answered 500, and the identity provider's retry then got 409 for a group that existed.
 - A SCIM group lookup by `displayName` now compares the whole name, spaces included, still ignoring case (#4142). Before, the value's outer spaces were dropped, so a group created with a trailing space could not be found and a group named without it could be returned instead.
 - After a SCIM email rename, the user's reply and the next read now show the new address as the primary email. Before, they kept showing the first address Wardyn recorded. The old address still finds the person for a removal, and the person's next sign-in shows the email that sign-in carries.
+- An attended window onto a macOS VM run no longer stays open while the database stops answering. Each re-check of the window now gives up its database reads after 10 seconds and counts as a check that got no answer, so the window ends when the server shuts down, when the run's runner ends it, or when the session budget runs out, as it already did when the database refused connections.
 
 ### Security
 

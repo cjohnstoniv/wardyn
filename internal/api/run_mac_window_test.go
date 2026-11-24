@@ -56,16 +56,18 @@ func (r *macWindowRevocations) set(revoked bool, err error) {
 // presence clock, and a run read a test can fail.
 type macWindowStore struct {
 	*desktopSiteStore
-	mu          sync.Mutex
-	runners     map[uuid.UUID]types.Runner
-	runnerErr   error
-	prefs       map[string]json.RawMessage
-	getRunErr   error
-	tokens      map[uuid.UUID]bool
-	cliSessions map[uuid.UUID]store.CLISessionRow
-	stamps      atomic.Int32
-	touched     atomic.Int32
-	prefsWrite  atomic.Int32
+	mu           sync.Mutex
+	runners      map[uuid.UUID]types.Runner
+	runnerErr    error
+	prefs        map[string]json.RawMessage
+	getRunErr    error
+	stallRunRead bool         // GetRun waits for its context to end, as a database that stops answering
+	stalledReads atomic.Int32 // stalled GetRun calls that have returned
+	tokens       map[uuid.UUID]bool
+	cliSessions  map[uuid.UUID]store.CLISessionRow
+	stamps       atomic.Int32
+	touched      atomic.Int32
+	prefsWrite   atomic.Int32
 }
 
 func (s *macWindowStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
@@ -89,8 +91,13 @@ func (s *macWindowStore) setRunner(rn types.Runner) {
 
 func (s *macWindowStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	s.mu.Lock()
-	err := s.getRunErr
+	err, stall := s.getRunErr, s.stallRunRead
 	s.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		s.stalledReads.Add(1)
+		return types.AgentRun{}, ctx.Err()
+	}
 	if err != nil {
 		return types.AgentRun{}, err
 	}
@@ -164,6 +171,12 @@ func (s *macWindowStore) failRunRead(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getRunErr = err
+}
+
+func (s *macWindowStore) stallRunReads(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stallRunRead = on
 }
 
 func (s *macWindowStore) GetPrincipalPref(_ context.Context, principal, key string) (json.RawMessage, error) {
@@ -1766,4 +1779,54 @@ func TestMacWindowEndsWithItsCredential(t *testing.T) {
 			t.Fatalf("authority = %+v, want bound to token %s", a, tok)
 		}
 	})
+}
+
+// A re-check whose run read never returns gives up at its bound and counts as unread: at budget 0 the window ends
+// as refused_on_recheck, instead of the watch waiting on the database for good.
+func TestMacWindowRecheck_AStalledReadIsBounded(t *testing.T) {
+	prev := macWindowRecheckWait
+	macWindowRecheckWait = 50 * time.Millisecond
+	t.Cleanup(func() { macWindowRecheckWait = prev })
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a re-check that can't read ends the window at once
+	r.mustOpen()
+	r.st.stallRunReads(true)
+	r.tick()
+	c := r.closeRow()
+	if c["reason"] != macWindowRefusedRecheck || c["refused_by"] != reasonRunUnreadable {
+		t.Errorf("close = reason %v refused_by %v, want %q %q", c["reason"], c["refused_by"], macWindowRefusedRecheck, reasonRunUnreadable)
+	}
+	if !r.sub.session(0).closed.Load() {
+		t.Error("the runner's session was not closed, so its view stays up")
+	}
+}
+
+// After a stalled re-check gave up, the watch still sees wardynd go down and closes the window with its row.
+func TestMacWindowRecheck_ShutdownAfterAStalledRead(t *testing.T) {
+	prev := macWindowRecheckWait
+	macWindowRecheckWait = 50 * time.Millisecond
+	t.Cleanup(func() { macWindowRecheckWait = prev })
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), time.Hour // the window rides the budget
+	base, down := context.WithCancel(context.Background())
+	defer down()
+	r.h.srv.cfg.BaseCtx = base
+	w := r.mustOpen()
+	r.st.stallRunReads(true)
+	r.tick()
+	macWindowEventually(t, "the stalled run read to give up", func() bool { return r.st.stalledReads.Load() >= 1 })
+	if len(r.rows("takeover.close")) != 0 || r.h.srv.macWindows.open(r.h.run.ID) != w {
+		t.Fatal("the window ended on one unread check inside an hour's budget")
+	}
+	down()
+	c := r.closeRow()
+	if c["reason"] != macWindowLinkLost {
+		t.Errorf("close reason %v, want %q", c["reason"], macWindowLinkLost)
+	}
+}
+
+func TestMacWindowRecheckWaitStaysUnderTheInterval(t *testing.T) {
+	if macWindowRecheckWait != 10*time.Second || macWindowRecheckWait >= macWindowRecheckEvery {
+		t.Fatalf("macWindowRecheckWait = %v, want 10s and under the %v re-check interval", macWindowRecheckWait, macWindowRecheckEvery)
+	}
 }
