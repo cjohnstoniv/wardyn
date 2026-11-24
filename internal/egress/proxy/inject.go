@@ -124,6 +124,17 @@ type injEntry struct {
 	// Guarded by reMu.
 	staleJTI string
 	staleAt  time.Time
+	// refreshing is open while one caller re-resolves this entry, and closed when its answer is on the entry.
+	// Another caller serves the header meanwhile if it is still good, or waits on it with its own ctx.
+	// Guarded by reMu (resolveCtx, reresolve).
+	refreshing chan struct{}
+}
+
+// stillGood reports whether e's header may still be sent: there is one, and neither its lease nor the
+// credential's own stated expiry has passed. Caller holds reMu.
+func (e *injEntry) stillGood(now time.Time) bool {
+	return e.header.value != "" && now.Before(time.UnixMilli(e.expiresAt)) &&
+		(e.credExpiresAt == 0 || now.Before(time.UnixMilli(e.credExpiresAt)))
 }
 
 // install writes a re-resolved credential onto e, pacing like an outage if the answer is already
@@ -262,8 +273,9 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		return injectedHeader{}, false, nil
 	}
 
-	// reMu single-flights the ordinary re-resolve but never spans a HOLD — that would queue every later
-	// caller on an uncancellable mutex for the whole re-auth budget, so a hung-up SDK would never release.
+	// reMu guards the entry but is never held across a control-plane call or a HOLD: the re-resolve is a single
+	// flight (e.refreshing) that a caller with a still-good header does not wait for, and one whose header has
+	// run out waits for with its own ctx, so a hung-up SDK always leaves.
 	for {
 		e.reMu.Lock()
 		now := time.Now()
@@ -293,65 +305,93 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			return i.installHeader(e, wf, resolved), true, nil
 		}
 
+		// One re-resolve is out: serve the header while it is still good, otherwise wait with the caller's ctx.
+		if ch := e.refreshing; ch != nil {
+			if e.stillGood(now) {
+				h := e.header
+				e.reMu.Unlock()
+				return h, true, nil
+			}
+			e.reMu.Unlock()
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, ctx.Err())
+			}
+		}
+		// This caller re-resolves, and learns the answer itself: a refusal or failure reaches the request that asked.
 		var query url.Values
 		if e.staleJTI != "" {
 			query = url.Values{"stale_jti": {e.staleJTI}}
 		}
-		resolved, err := resolveInjectionQuery(ctx, i.base, i.token.Get(), e.grantID, query, i.client)
-		if err == nil {
-			e.install(resolved, time.Now())
-			h := e.header
-			e.reMu.Unlock()
-			registerHeaderCredentialFor(i.maskKey, resolved.Value)
-			return h, true, nil
-		}
-		if ctx.Err() != nil && transientResolveFailure(err) {
-			// The caller went away mid-ask, which says nothing about the control plane: arm neither
-			// last-good nor its pacing, and leave the entry for the next caller to re-resolve.
-			e.reMu.Unlock()
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
-		}
-		if e.lastGood(err, time.Now()) {
-			h, until := e.header, e.lastGoodDeadline()
-			e.reMu.Unlock()
-			slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
-				slog.String("host", key), slog.Time("until", until), slog.Any("err", err))
-			return h, true, nil
-		}
-		// Definitive, or grace spent: drop the header now so nothing later serves it as last-good (a 423 counts).
-		e.header, e.retryAt = injectedHeader{}, time.Time{}
-		var pending errReauthPending
-		if !errors.As(err, &pending) {
-			e.reMu.Unlock()
-			// errReauthTimedOut travels out wrapped but intact: errors.Is still answers true on a wrapped sentinel.
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
-		}
-		// 423: the control plane needs a human — open or join the workflow by approval id, publish it, release reMu before waiting.
-		if i.reauth == nil || i.approvals == nil {
-			e.reMu.Unlock()
-			// No hold lane on this injector: the 423 is a refusal to report, but nothing expired.
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
-				errReauthEnded{reason: "this proxy has no re-auth hold lane"})
-		}
-		wf, fresh, admitted := i.reauth.admit(pending.approvalID, holdCap(ctx, credentialReauthBudget()))
-		if !admitted {
-			e.reMu.Unlock()
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthCapped)
-		}
-		e.reauth = wf
+		e.refreshing = make(chan struct{})
 		e.reMu.Unlock()
-		if fresh {
-			go wf.run(i.base, i.token, e.grantID, i.client, i.approvals)
-		}
-		// Wait here, not around the loop: looping back would re-read the entry, see the terminal sticky
-		// workflow, drop it and re-resolve — round and round.
-		held, herr := wf.await(ctx)
-		if herr != nil {
-			e.dropIfFinished(wf)
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, herr)
-		}
-		return i.installHeader(e, wf, held), true, nil
+		return i.reresolve(ctx, e, key, query)
 	}
+}
+
+// reresolve asks the control plane for e's credential with reMu released. The caller has opened e.refreshing;
+// reresolve closes it once the answer is on the entry, before any re-auth wait, so later callers join that hold.
+func (i *injector) reresolve(ctx context.Context, e *injEntry, key string, query url.Values) (injectedHeader, bool, error) {
+	resolved, err := resolveInjectionQuery(ctx, i.base, i.token.Get(), e.grantID, query, i.client)
+	e.reMu.Lock()
+	close(e.refreshing)
+	e.refreshing = nil
+	if err == nil {
+		// Masked before the header is visible to any other caller.
+		registerHeaderCredentialFor(i.maskKey, resolved.Value)
+		e.install(resolved, time.Now())
+		h := e.header
+		e.reMu.Unlock()
+		return h, true, nil
+	}
+	if ctx.Err() != nil && transientResolveFailure(err) {
+		// The caller went away mid-ask, which says nothing about the control plane: arm neither
+		// last-good nor its pacing, and leave the entry for the next caller to re-resolve.
+		e.reMu.Unlock()
+		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+	}
+	if e.lastGood(err, time.Now()) {
+		h, until := e.header, e.lastGoodDeadline()
+		e.reMu.Unlock()
+		slog.WarnContext(ctx, "wardyn-proxy: re-resolving an injected credential failed transiently; serving the last-good value",
+			slog.String("host", key), slog.Time("until", until), slog.Any("err", err))
+		return h, true, nil
+	}
+	// Definitive, or grace spent: drop the header now so nothing later serves it as last-good (a 423 counts).
+	e.header, e.retryAt = injectedHeader{}, time.Time{}
+	var pending errReauthPending
+	if !errors.As(err, &pending) {
+		e.reMu.Unlock()
+		// errReauthTimedOut travels out wrapped but intact: errors.Is still answers true on a wrapped sentinel.
+		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+	}
+	// 423: the control plane needs a human — open or join the workflow by approval id, publish it, release reMu before waiting.
+	if i.reauth == nil || i.approvals == nil {
+		e.reMu.Unlock()
+		// No hold lane on this injector: the 423 is a refusal to report, but nothing expired.
+		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
+			errReauthEnded{reason: "this proxy has no re-auth hold lane"})
+	}
+	wf, fresh, admitted := i.reauth.admit(pending.approvalID, holdCap(ctx, credentialReauthBudget()))
+	if !admitted {
+		e.reMu.Unlock()
+		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthCapped)
+	}
+	e.reauth = wf
+	e.reMu.Unlock()
+	if fresh {
+		go wf.run(i.base, i.token, e.grantID, i.client, i.approvals)
+	}
+	// Wait here, not around resolveCtx's loop: looping back would re-read the entry, see the terminal sticky
+	// workflow, drop it and re-resolve — round and round.
+	held, herr := wf.await(ctx)
+	if herr != nil {
+		e.dropIfFinished(wf)
+		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, herr)
+	}
+	return i.installHeader(e, wf, held), true, nil
 }
 
 // dropStale drops host's header after Azure DevOps refused the credential named jti, so the host's
