@@ -86,7 +86,8 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan \
- && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-assist ./cmd/wardyn-assist
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
@@ -449,6 +450,8 @@ COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 # wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
 COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
+# wardyn-assist: the governed assistant run's relay and its read-only tool server.
+COPY --from=builder /out/wardyn-assist     /usr/local/bin/wardyn-assist
 # wardyn: the in-sandbox `wardyn needs-you <reason>` ("Needs you" takeover request), run by wardyn-toolgate.
 COPY deploy/images/common/wardyn-in-sandbox /usr/local/bin/wardyn
 
@@ -464,6 +467,7 @@ RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
            /usr/local/bin/wardyn-toolgate \
+           /usr/local/bin/wardyn-assist \
            /usr/local/bin/wardyn \
            /usr/local/bin/agent-run
 
