@@ -9,6 +9,7 @@
 import * as React from "react";
 import { Button } from "../app/components/ui/button";
 import { Chip } from "../app/components/wardyn/primitives";
+import { DesktopWatermark, WatermarkControl } from "../app/components/wardyn/desktop-watermark";
 import { originWS } from "../app/lib/base-path";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
 import { isEscapeChord, keysymOf } from "./keysym";
@@ -18,7 +19,8 @@ import { RfbClient, type RfbDisplay } from "./rfb";
 // `view_only`: the gateway keeps this session's input from the desktop.
 // `background`: this session is a watch of a background run's desktop; it always comes with view_only.
 // `run_title` and `run_href`: the run's name and its page, for the way back to it; both or neither.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string } | { state: "refused"; said: string };
+// `watermark`: who is looking and at which run, and whether the organisation requires the mark; absent from an older gateway.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string; watermark?: { who: string; run: string; required: boolean } } | { state: "refused"; said: string };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -187,6 +189,10 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
 
   const input = viewOnly || phase !== "connected" ? {} : inputHandlers(canvas, client, pressed.current, wheel.current);
   const ended = phase === "closed" || phase === "expired" || phase === "run_ended" || phase === "refused";
+  // Optional means a per-view choice, off to start and not stored; required is always on.
+  const [markOn, setMarkOn] = React.useState(false);
+  const mark = boot.watermark;
+  const showMark = !!mark && (mark.required || markOn);
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
@@ -196,6 +202,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           <a href={boot.run_href} className="text-muted-foreground underline underline-offset-2">{DESKTOP.backToRun(boot.run_title)}</a>
         )}
         <span className="flex-1" />
+        {mark && <WatermarkControl required={mark.required} on={markOn} onToggle={() => setMarkOn((on) => !on)} />}
         <div className="inline-flex rounded-[9px] border border-border bg-surface-2 p-[3px]">
           {[[true, DESKTOP.fit], [false, DESKTOP.actualSize]].map(([value, label]) => (
             <button key={String(value)} type="button" aria-pressed={fit === value} onClick={() => setFit(value as boolean)}
@@ -221,24 +228,28 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           {focused && <span className="block">{DESKTOP.escapeHint}</span>}
         </p>
       )}
-      <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
-        <canvas
-          ref={canvas}
-          data-testid="desktop-canvas"
-          tabIndex={viewOnly ? -1 : 0}
-          aria-label={DESKTOP.canvasLabel}
-          className={fit ? "max-h-full max-w-full object-contain" : undefined}
-          hidden={phase !== "connected"}
-          onContextMenu={(e) => e.preventDefault()}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false);
-            releaseAll(client, pressed.current);
-          }}
-          {...input}
-        />
-        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
-      </main>
+      {/* The picture area: it does not scroll, so the watermark beside <main> stays over what is visible in Actual size. */}
+      <div className="relative flex min-h-0 flex-1 flex-col" data-testid="desktop-picture">
+        <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
+          <canvas
+            ref={canvas}
+            data-testid="desktop-canvas"
+            tabIndex={viewOnly ? -1 : 0}
+            aria-label={DESKTOP.canvasLabel}
+            className={fit ? "max-h-full max-w-full object-contain" : undefined}
+            hidden={phase !== "connected"}
+            onContextMenu={(e) => e.preventDefault()}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false);
+              releaseAll(client, pressed.current);
+            }}
+            {...input}
+          />
+          {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
+        </main>
+        {showMark && phase === "connected" && <DesktopWatermark className="absolute inset-0" who={mark.who} run={mark.run} />}
+      </div>
     </div>
   );
 }
