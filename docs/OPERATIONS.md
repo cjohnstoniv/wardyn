@@ -1599,7 +1599,8 @@ erases one person's retained records by explicit scope, in one audited act
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
    - The email a user answers with is the one the last create, update or replace named as primary (else its first
-     email), until the person's next sign-in records the email that sign-in carries.
+     email), or for a PATCH the last address it sets, until the person's next sign-in records the email that sign-in
+     carries.
 5. If you provision groups, map each group's `externalId` to the value the sign-in's groups claim carries for it: the
    group's object id.
    - A SCIM group removal revokes a person's API tokens only when the token's login-time group snapshot holds that
