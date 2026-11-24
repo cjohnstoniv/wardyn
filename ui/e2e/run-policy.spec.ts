@@ -122,6 +122,8 @@ async function openFixture(page: Page, task: string): Promise<void> {
 }
 
 test.describe("Run detail — the Policy tab (#1425)", () => {
+  // A first attempt here once failed with no cause found in code (#4017): keep its trace, so the next one shows it.
+  test.use({ trace: "retain-on-failure" });
   // The real flow, with no splice on the policy read: a saved policy, a run
   // launched from it (its run.create row carries a real policy_source), the
   // envelope dispatch would write (the `none` runner never dispatches, so
