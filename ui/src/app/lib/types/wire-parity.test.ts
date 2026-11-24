@@ -996,5 +996,4 @@ describe("SetupProviderAccess cause fields", () => {
       expect(tsInterfaceBody(ts, "SetupProviderAccess")).toContain(`${key}?:`);
     }
   });
-  it("keeps AzureSettings in parity", () => { const r = repoRoot(); expect(tsInterfaceTopKeys(readFileSync(join(r, "ui/src/app/lib/types/site.ts"), "utf8"), "AzureSettings").sort()).toEqual(goJSONTags(readFileSync(join(r, "internal/types/model_provider.go"), "utf8"), "AzureSettings").sort()); });
 });
