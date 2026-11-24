@@ -45,7 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Security
 
 - The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
-  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and can refuse to admit.
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and CVE-2026-97045 and can refuse to admit.
 
 ### Before you upgrade
 
