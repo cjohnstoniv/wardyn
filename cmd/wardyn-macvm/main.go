@@ -74,6 +74,9 @@ type deps struct {
 	powerSource macvm.PowerSource
 	// editScreen replaces the Mac's edit-base window (tests).
 	editScreen macvm.WindowScreen
+	// identities replaces the System keychain's MDM identities and now the clock, for device-identity (tests).
+	identities identitySource
+	now        func() time.Time
 }
 
 func (d deps) power() macvm.PowerSource {
@@ -101,7 +104,7 @@ func mainDeps() deps {
 
 func run(ctx context.Context, args []string, d deps) int {
 	if len(args) == 0 {
-		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|drive-open|probe|ledger-setup|version [flags]")
+		fmt.Fprintln(d.stderr, "usage: wardyn-macvm run|status|prepare|update-tools|edit-base|drive-open|probe|ledger-setup|device-identity|version [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -126,6 +129,8 @@ func run(ctx context.Context, args []string, d deps) int {
 		return cmdProbe(d)
 	case "ledger-setup":
 		return cmdLedgerSetup(args[1:], d)
+	case "device-identity":
+		return cmdDeviceIdentity(args[1:], d)
 	}
 	fmt.Fprintf(d.stderr, "wardyn-macvm: unknown command %q\n", args[0])
 	return 2

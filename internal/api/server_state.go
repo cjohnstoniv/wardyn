@@ -14,6 +14,8 @@ import (
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
+	// mdmCRL is the MDM device CRL cache, made on first use (runner_device_cert.go).
+	mdmCRL          atomic.Pointer[mdmCRLCache]
 	svcGrant        serviceGrantRuntime
 	runnerStreams   runnerStreamState
 	gatewayIdentity gatewayIdentityState

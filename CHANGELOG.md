@@ -20,6 +20,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
   run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
   the runner connects; a server with no remote runners loses only the windows.
+- A macOS sandbox can require the Mac's MDM device certificate: set the MDM CA and its CRL URL in the runner settings; a missing, expired or revoked certificate, or one whose revocation cannot be checked, refuses the sandbox. Off until set. The macOS runner presents the Mac's MDM device certificate. Not yet tried on a real Mac. Migration `0400_runner_device_cert` adds the columns `device_cert` and `device_cert_reported_at` to `runners`. (#2975)
 
 ### Changed
 
@@ -29,6 +30,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0400_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
+- Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
 
 ## [0.11.0-rc.2] — 2026-11-24
 
