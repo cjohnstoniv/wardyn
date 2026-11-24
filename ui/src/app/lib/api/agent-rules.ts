@@ -27,7 +27,7 @@ export const agentRules = {
 
   // PUT /api/v1/agent-rules/{harness}: version 0 creates; the saved rules answer 200, a held write 202.
   async put(harness: string, write: AgentRulesWrite): Promise<AgentRules> {
-    return asJson<AgentRules>(await wfetch(`/agent-rules/${encodeURIComponent(harness)}`, { method: "PUT", body: JSON.stringify(write) }));
+    return asJson<AgentRules>(await wfetch(`/agent-rules/${encodeURIComponent(harness)}`, { method: "PUT", asPerson: true, body: JSON.stringify(write) }));
   },
 
   // DELETE /api/v1/agent-rules/{harness}?version=n -> 204, or 202 when held.
