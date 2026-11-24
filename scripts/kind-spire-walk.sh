@@ -6,23 +6,23 @@
 # in deploy/kind/spire/values.yaml), then Wardyn with spire.enabled and the ground-truth sensor on, then
 # real runs. docs/operations/spire.md is what it proves.
 #
-#   W1  /healthz reports identity spire, source configured.
-#   W2  an exec run reaches RUNNING and completes; its spiffe_id is the agent-run form, with at least two
+#   step 1  /healthz reports identity spire, source configured.
+#   step 2  an exec run reaches RUNNING and completes; its spiffe_id is the agent-run form, with at least two
 #       identity.mint rows (the mint and the proxy's start renew).
-#   W3  while the run lives, exactly one SPIRE entry carries its ID, with k8s:ns:, k8s:sa: and both proxy labels.
-#   W4  probe pods with the CSI volume and the proxy's container name: (a) the proxy's labels and account in
+#   step 3  while the run lives, exactly one SPIRE entry carries its ID, with k8s:ns:, k8s:sa: and both proxy labels.
+#   step 4  probe pods with the CSI volume and the proxy's container name: (a) the proxy's labels and account in
 #       the runs namespace get the run's X.509-SVID; (b) the same labels and account name in another namespace
 #       get none; (c) the proxy's labels on default get none; (d) wardyn.component=agent gets none; (e) the
 #       (a) probe gets no control-plane SVID, and that entry selects on wardynd's account. The agent pod has
 #       no csi.spiffe.io volume and runs as default.
-#   W5  after the kill the entry is gone, and the (a) probe stops receiving the run's SVID.
-#   W6  20 back-to-back runs leave no entry; none carries the host sensor's nil run id; no binding row is past
+#   step 5  after the kill the entry is gone, and the (a) probe stops receiving the run's SVID.
+#   step 6  20 back-to-back runs leave no entry; none carries the host sensor's nil run id; no binding row is past
 #       its lapse.
-#   W7  a workload's two runs carry the workload form, with different IDs and the same workload; the probe's
+#   step 7  a workload's two runs carry the workload form, with different IDs and the same workload; the probe's
 #       URI SAN is the run's ID.
 #
-# Bounds are configured limits, overridable: SPIRE_WALK_NEGATIVE_WAIT (W4b, W4e, default 10 s: wardynd's boot
-# wait for SPIRE) and SPIRE_WALK_REVOKE_BOUND (W5, default 600 s: a run's X.509-SVID lifetime).
+# Bounds are configured limits, overridable: SPIRE_WALK_NEGATIVE_WAIT (step 4b, step 4e, default 10 s: wardynd's boot
+# wait for SPIRE) and SPIRE_WALK_REVOKE_BOUND (step 5, default 600 s: a run's X.509-SVID lifetime).
 #
 # GUARD: self-skips (exit 77) unless WARDYN_TEST_K8S=1 and WARDYN_ACK_SHARED_QUICKSTART=1. It creates and
 # deletes its own cluster (never wardyn-quickstart), builds images and installs charts, so the second switch
@@ -194,74 +194,74 @@ EOF
   k -n "${ns}" logs "${name}" 2>/dev/null | tee "${EVIDENCE_DIR}/probe-${name}.log" | sed -n 's/^SPIFFE ID:[[:space:]]*//p'
 }
 
-# ── W1 ──────────────────────────────────────────────────────────────────────
-step "W1: /healthz"
+# ── step 1 ──────────────────────────────────────────────────────────────────────
+step "step 1: /healthz"
 [[ "$(api GET /healthz)" == 200 ]] && jq -e '.components.identity.selected == "spire" and .components.identity.source == "configured"' "${TMPDIR}/resp.json" >/dev/null
-check "W1 identity selected spire, source configured" $?
+check "step 1 identity selected spire, source configured" $?
 
-# ── W2 ──────────────────────────────────────────────────────────────────────
-step "W2: an exec run under spire"
+# ── step 2 ──────────────────────────────────────────────────────────────────────
+step "step 2: an exec run under spire"
 R2="$(launch 'sleep 20')"
 [[ -n "${R2}" ]] || die "the run did not launch"
-wait_state "${R2}" RUNNING 300; check "W2 run ${R2} reached RUNNING" $?
-wait_state "${R2}" COMPLETED 300; check "W2 run ${R2} completed" $?
+wait_state "${R2}" RUNNING 300; check "step 2 run ${R2} reached RUNNING" $?
+wait_state "${R2}" COMPLETED 300; check "step 2 run ${R2} completed" $?
 wardyn run get "${R2}" --json >"${EVIDENCE_DIR}/run-w2.json"
-jq -e --arg s "spiffe://${TD}/agent-run/${R2}" '.spiffe_id == $s' "${EVIDENCE_DIR}/run-w2.json" >/dev/null; check "W2 spiffe_id is the agent-run form" $?
+jq -e --arg s "spiffe://${TD}/agent-run/${R2}" '.spiffe_id == $s' "${EVIDENCE_DIR}/run-w2.json" >/dev/null; check "step 2 spiffe_id is the agent-run form" $?
 wardyn audit "${R2}" --json >"${EVIDENCE_DIR}/audit-w2.json" 2>/dev/null
-jq -e '[.[] | select(.action == "identity.mint")] | length >= 2' "${EVIDENCE_DIR}/audit-w2.json" >/dev/null; check "W2 at least two identity.mint rows" $?
+jq -e '[.[] | select(.action == "identity.mint")] | length >= 2' "${EVIDENCE_DIR}/audit-w2.json" >/dev/null; check "step 2 at least two identity.mint rows" $?
 
-# ── W3-W5: one live run ─────────────────────────────────────────────────────
+# ── step 3-step 5: one live run ─────────────────────────────────────────────────────
 RID="$(launch 'sleep 300')"
 [[ -n "${RID}" ]] || die "the run did not launch"
 wait_state "${RID}" RUNNING 300 || die "run ${RID} did not reach RUNNING"
 RUN_ID_URI="spiffe://${TD}/agent-run/${RID}"
 
-step "W3: the run's entry"
+step "step 3: the run's entry"
 e="$(entries "${RUN_ID_URI}")"; echo "${e}" >"${EVIDENCE_DIR}/entry.json"
 sels='[.[0].selectors[] | .type + ":" + .value]'
 jq -e --arg ns "${RUNS_NAMESPACE}" --arg sa "${PROXY_SA}" --arg r "${RID}" "length == 1 and (${sels} | index(\"k8s:ns:\" + \$ns) and index(\"k8s:sa:\" + \$sa) and index(\"k8s:pod-label:wardyn.component:proxy\") and index(\"k8s:pod-label:wardyn.run-id:\" + \$r))" <<<"${e}" >/dev/null
-check "W3 exactly one entry with k8s:ns:, k8s:sa: and both proxy labels" $?
+check "step 3 exactly one entry with k8s:ns:, k8s:sa: and both proxy labels" $?
 
-step "W4: attestation probes"
+step "step 4: attestation probes"
 k create namespace "${OTHER_NS}" >/dev/null 2>&1; k -n "${OTHER_NS}" create serviceaccount "${PROXY_SA}" >/dev/null 2>&1
-probe w4a "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${RID}" 60 | grep -qxF "${RUN_ID_URI}"; check "W4a proxy labels + account in the runs namespace get the run's SVID" $?
-! probe w4b "${OTHER_NS}" "${PROXY_SA}" proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "W4b another namespace gets none within ${NEGATIVE_WAIT}s" $?
-! probe w4c "${RUNS_NAMESPACE}" default proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "W4c the default account gets none" $?
-! probe w4d "${RUNS_NAMESPACE}" "${PROXY_SA}" agent "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "W4d wardyn.component=agent gets none" $?
-! probe w4e "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${CP_ID}"; check "W4e the proxy probe gets no control-plane SVID within ${NEGATIVE_WAIT}s" $?
+probe w4a "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${RID}" 60 | grep -qxF "${RUN_ID_URI}"; check "step 4a proxy labels + account in the runs namespace get the run's SVID" $?
+! probe w4b "${OTHER_NS}" "${PROXY_SA}" proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "step 4b another namespace gets none within ${NEGATIVE_WAIT}s" $?
+! probe w4c "${RUNS_NAMESPACE}" default proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "step 4c the default account gets none" $?
+! probe w4d "${RUNS_NAMESPACE}" "${PROXY_SA}" agent "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${RUN_ID_URI}"; check "step 4d wardyn.component=agent gets none" $?
+! probe w4e "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${RID}" "${NEGATIVE_WAIT}" | grep -qxF "${CP_ID}"; check "step 4e the proxy probe gets no control-plane SVID within ${NEGATIVE_WAIT}s" $?
 jq -e --arg sa "${WARDYN_SA}" 'length >= 1 and all(.[]; [.selectors[] | .type + ":" + .value] | index("k8s:sa:" + $sa))' <<<"$(entries "${CP_ID}")" >/dev/null
-check "W4e the control-plane entry selects on wardynd's account" $?
+check "step 4e the control-plane entry selects on wardynd's account" $?
 agent_pod="$(k -n "${RUNS_NAMESPACE}" get pods -l "wardyn.run-id=${RID},wardyn.component=agent" -o json | jq -c '.items[0].spec')"
 jq -e '((.serviceAccountName // "default") == "default") and ([.volumes[]? | select(.csi.driver == "csi.spiffe.io")] | length == 0)' <<<"${agent_pod}" >/dev/null
-check "W4 the agent pod runs as default with no csi.spiffe.io volume" $?
+check "step 4 the agent pod runs as default with no csi.spiffe.io volume" $?
 
-step "W5: kill"
+step "step 5: kill"
 wardyn run kill "${RID}" >/dev/null 2>&1; wait_state "${RID}" KILLED 120 || true
 gone=1
 for ((t = 0; t < 60; t += 3)); do [[ "$(entries "${RUN_ID_URI}" | jq length)" == 0 ]] && { gone=0; break; }; sleep 3; done
-check "W5 the entry is gone after the kill" "${gone}"
+check "step 5 the entry is gone after the kill" "${gone}"
 stopped=1
 for ((t = 0; t < REVOKE_BOUND; t += 15)); do
   if ! probe w5 "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${RID}" 10 | grep -qxF "${RUN_ID_URI}"; then stopped=0; break; fi
 done
-check "W5 the probe stops receiving the run's SVID within ${REVOKE_BOUND}s" "${stopped}"
+check "step 5 the probe stops receiving the run's SVID within ${REVOKE_BOUND}s" "${stopped}"
 
-# ── W6: churn ───────────────────────────────────────────────────────────────
-step "W6: 20 back-to-back runs, with the ground-truth sensor's token in rotation"
+# ── step 6: churn ───────────────────────────────────────────────────────────────
+step "step 6: 20 back-to-back runs, with the ground-truth sensor's token in rotation"
 for i in $(seq 1 20); do
-  r="$(launch 'true')"; [[ -n "${r}" ]] || { check "W6 run ${i} launched" 1; continue; }
-  wait_state "${r}" COMPLETED 300 || check "W6 run ${r} completed" 1
+  r="$(launch 'true')"; [[ -n "${r}" ]] || { check "step 6 run ${i} launched" 1; continue; }
+  wait_state "${r}" COMPLETED 300 || check "step 6 run ${r} completed" 1
 done
 sleep 10
 all="$(srv entry show -output json 2>/dev/null | jq -c '[.entries[]? | .spiffe_id | "spiffe://" + .trust_domain + .path]')"
 echo "${all}" >"${EVIDENCE_DIR}/entries-after-churn.json"
-jq -e '[.[] | select(test("/agent-run/"))] | length == 0' <<<"${all}" >/dev/null; check "W6 no run entry left behind" $?
-jq -e --arg n "/agent-run/${NIL_RUN}" '[.[] | select(endswith($n))] | length == 0' <<<"${all}" >/dev/null; check "W6 no entry for the host sensor's nil run id" $?
+jq -e '[.[] | select(test("/agent-run/"))] | length == 0' <<<"${all}" >/dev/null; check "step 6 no run entry left behind" $?
+jq -e --arg n "/agent-run/${NIL_RUN}" '[.[] | select(endswith($n))] | length == 0' <<<"${all}" >/dev/null; check "step 6 no entry for the host sensor's nil run id" $?
 stale="$(k -n "${NAMESPACE}" exec deploy/postgres -- psql -U wardyn -d wardyn -tAc "SELECT count(*) FROM identity_token_bindings WHERE expires_at < now() - interval '65 minutes'" 2>/dev/null | tr -d '[:space:]')"
-[[ "${stale}" == 0 ]]; check "W6 no binding row past its lapse (got '${stale}')" $?
+[[ "${stale}" == 0 ]]; check "step 6 no binding row past its lapse (got '${stale}')" $?
 
-# ── W7: a workload's runs ───────────────────────────────────────────────────
-step "W7: two runs of one workload"
+# ── step 7: a workload's runs ───────────────────────────────────────────────────
+step "step 7: two runs of one workload"
 cat >"${TMPDIR}/workload.yaml" <<'EOF'
 api_version: wardyn/v1
 kind: Workload
@@ -275,15 +275,15 @@ EOF
 wardyn apply -f "${TMPDIR}/workload.yaml" >/dev/null || die "workload apply failed"
 wl_run() { wardyn workload get spire-walk --json 2>/dev/null | jq -r '.run.id // .run_id // empty'; }
 w1=""; for _ in $(seq 1 60); do w1="$(wl_run)"; [[ -n "${w1}" ]] && break; sleep 2; done
-wait_state "${w1}" RUNNING 300; check "W7 the workload's first run ${w1} reached RUNNING" $?
+wait_state "${w1}" RUNNING 300; check "step 7 the workload's first run ${w1} reached RUNNING" $?
 id1="$(wardyn run get "${w1}" --json | jq -r '.spiffe_id')"
-[[ "${id1}" =~ ^spiffe://${TD}/workload/[^/]+/spire-walk/run/${w1}$ ]]; check "W7 first run's ID is the workload form (${id1})" $?
-probe w7 "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${w1}" 60 | grep -qxF "${id1}"; check "W7 the probe's URI SAN is the run's ID" $?
+[[ "${id1}" =~ ^spiffe://${TD}/workload/[^/]+/spire-walk/run/${w1}$ ]]; check "step 7 first run's ID is the workload form (${id1})" $?
+probe w7 "${RUNS_NAMESPACE}" "${PROXY_SA}" proxy "${w1}" 60 | grep -qxF "${id1}"; check "step 7 the probe's URI SAN is the run's ID" $?
 wardyn workload restart spire-walk >/dev/null || die "workload restart failed"
 w2=""; for _ in $(seq 1 90); do w2="$(wl_run)"; [[ -n "${w2}" && "${w2}" != "${w1}" ]] && break; sleep 2; done
 id2="$(wardyn run get "${w2}" --json | jq -r '.spiffe_id')"
 wl() { sed -E 's#^spiffe://[^/]+/workload/(.+)/run/[^/]+$#\1#' <<<"$1"; }
-[[ -n "${id2}" && "${id2}" != "${id1}" && "$(wl "${id1}")" == "$(wl "${id2}")" ]]; check "W7 the second run has a different ID and the same workload ($(wl "${id2}"))" $?
+[[ -n "${id2}" && "${id2}" != "${id1}" && "$(wl "${id1}")" == "$(wl "${id2}")" ]]; check "step 7 the second run has a different ID and the same workload ($(wl "${id2}"))" $?
 wardyn workload delete spire-walk >/dev/null 2>&1 || true
 
 [[ "${fail}" == 0 ]] || die "one or more assertions failed (evidence in ${EVIDENCE_DIR})"
