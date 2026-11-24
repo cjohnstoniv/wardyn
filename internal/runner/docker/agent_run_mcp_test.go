@@ -101,3 +101,27 @@ func TestCodexAgentRun_MCPServersRenderedOnceAfterTables(t *testing.T) {
 		t.Fatalf("config.toml:\n%s", first)
 	}
 }
+
+// TestCodexAgentRun_IgnoresMCPStdioTOML: an MCP server that starts from a command never runs inside the agent's
+// sandbox, so agent-run writes no table from WARDYN_MCP_STDIO_TOML, alone or beside the broker's servers.
+func TestCodexAgentRun_IgnoresMCPStdioTOML(t *testing.T) {
+	const stdio = "[mcp_servers.files]\ncommand = \"npx\"\nargs = [\"-y\",\"@example/mcp-files@1.4.2\"]\nenv_vars = [\"HTTPS_PROXY\",\"PATH\"]\n"
+	for name, env := range map[string][]string{
+		"alone":       {"WARDYN_MCP_STDIO_TOML=" + stdio},
+		"with remote": {"WARDYN_MCP_STDIO_TOML=" + stdio, `WARDYN_MCP_SERVERS_JSON={"linear":"http://wardyn-proxy:3128/wardyn/mcp/Ab-_9/linear"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home, binDir, codexLog := cxFakeCodex(t)
+			cfgPath := filepath.Join(home, ".codex", "config.toml")
+			cxWrite(t, cfgPath, "model = \"x\"\n")
+			cxRunTask(t, home, binDir, codexLog, env...)
+			got := ccRead(t, cfgPath)
+			if strings.Contains(got, "[mcp_servers.files]") || strings.Contains(got, "npx") || !strings.HasPrefix(got, "model = \"x\"\n") {
+				t.Fatalf("config.toml took the stdio server:\n%s", got)
+			}
+			if remote := len(env) > 1; remote != strings.Contains(got, "[mcp_servers.linear]\nurl = ") {
+				t.Fatalf("broker table present %v, want %v:\n%s", !remote, remote, got)
+			}
+		})
+	}
+}

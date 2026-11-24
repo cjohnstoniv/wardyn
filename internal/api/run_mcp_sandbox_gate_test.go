@@ -17,8 +17,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -366,6 +368,61 @@ func TestSetupFeatures_MCPOwnSandbox(t *testing.T) {
 		if err := json.Unmarshal(m["features"], &features); err != nil || !features.Own || features.Local != want || features.Old == nil || *features.Old {
 			t.Errorf("setting %q: features %s", setting, m["features"])
 		}
+	}
+}
+
+// siteErrCapStore is carrierServer's store with a site config that cannot be read.
+type siteErrCapStore struct{ *capStore }
+
+func (siteErrCapStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, errors.New("site config unreadable")
+}
+
+// TestSetupStatusLocalMCPServers: features.local_mcp_servers is the switch and the organisation's setting
+// together, through GET /setup/status: the switch off with the setting on reads false, both on read true, and a
+// site config that cannot be read reads false while mcp_own_sandbox still shows the switch.
+func TestSetupStatusLocalMCPServers(t *testing.T) {
+	type features struct {
+		Own   bool `json:"mcp_own_sandbox"`
+		Local bool `json:"local_mcp_servers"`
+	}
+	read := func(srv *Server) features {
+		_, m := getJSON(t, srv, "/api/v1/setup/status", memberCookie(t))
+		var f features
+		if err := json.Unmarshal(m["features"], &f); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	for _, tc := range []struct {
+		name, flag string
+		readErr    bool
+		want       features
+	}{
+		{"own sandbox off, setting on", "", false, features{}},
+		{"both on", "1", false, features{Own: true, Local: true}},
+		{"site config unreadable", "1", true, features{Own: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envMCPOwnSandbox, tc.flag)
+			srv := carrierServer(t, localMCPSite("on"), nil, nil)
+			if tc.readErr {
+				h := newHarness(t)
+				cfg := baseTestConfig(h, siteErrCapStore{&capStore{Store: r3IntegStore{}, site: localMCPSite("on")}})
+				cfg.OIDC = &oidc.Authenticator{}
+				cfg.ADOEntra = adoTestEntraSource
+				cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+				cfg.MaskRegistry = secretmask.NewRegistry()
+				srv = New(cfg)
+			}
+			if got := read(srv); got != tc.want {
+				t.Errorf("features = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+	t.Setenv(envMCPOwnSandbox, "1")
+	if setupFeatures(false, false, localMCPOnRead(localMCPSite("on"), false)).LocalMCPServers {
+		t.Error("a site config that could not be read turned local_mcp_servers on")
 	}
 }
 
