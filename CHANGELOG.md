@@ -11,6 +11,21 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- The per-commit `wardynd` image that main publishes (`:sha-<commit>`) is now pushed by digest and named only after it has been checked and signed, as `:latest` already was. Before, the per-commit name pointed at the image before its check and its signature.
+- `wardyn ssh-key ensure` refuses a `.pub` file beside the key that is not exactly that key's public line: another key's, an unreadable one, or the key followed by more. It names both fingerprints, registers nothing and changes no file. Move the `.pub` aside and it is written again.
+
+### Fixed
+
+- `wardyn run logs --follow` against a server older than 0.9.4 says it needs 0.9.4 or later, instead of printing the trail once and then nothing (#4146).
+- `wardyn run logs --follow` reads a quiet run less often: the wait doubles from `--interval` up to 10 seconds and returns to `--interval` once anything new arrives, and each read after the first asks for 20 events instead of the server's default 1,000. A quiet minute now costs the server under a third of the requests and a tenth of the rows (#4147).
+- The CLI's version notice prints nothing when it cannot tell which of the two versions is newer, instead of the advice for a newer server (#4155).
+- The Windows installer, `install-cli.ps1`, puts `wardyn.exe` back when the swap fails or is interrupted, and a run after one that stopped mid-swap restores the parked `wardyn.exe.old` before it downloads anything (#4156).
+- The Helm chart's probes use HTTPS when the server serves TLS itself, that is when `WARDYN_TLS_CERT` and `WARDYN_TLS_KEY` are both set by a value or a `valueFrom`. A name-only `extraEnv` entry counts as unset. Before, such a pod never became ready (#4158).
+- A refused `wardyn apply` or `wardyn workload restart` of a workload with no running run says no run was started, instead of saying the previous run keeps running (#4164).
+- A killed `wardyn sync --git` send no longer leaves its bundle-scan directory in the sync state directory for good: the next send removes it once it is ten minutes old and no running send holds it (#4173).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

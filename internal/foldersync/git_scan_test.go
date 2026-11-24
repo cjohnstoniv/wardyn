@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 )
 
 // A replace ref or a graft in the laptop's checkout changes what git shows of its history, not what the
@@ -371,5 +374,73 @@ func TestCheckBundleAllowed_PinsTheScanInitAndFetch(t *testing.T) {
 	}
 	if listed == 0 {
 		t.Fatalf("saw no rev-list, diff-tree or ls-tree call:\n%s", b)
+	}
+}
+
+// TestCheckBundleAllowed_SweepsAbandonedScans: a send killed mid-scan leaves its scan directory beside the bundle.
+// The next scan removes each such directory that is old enough and whose lock no live send holds, and leaves a young
+// one, one whose lock is held, a symbolic link with the name, and any other name alone.
+func TestCheckBundleAllowed_SweepsAbandonedScans(t *testing.T) {
+	beside := t.TempDir()
+	old := time.Now().Add(-time.Hour)
+	mk := func(name string, at time.Time, inside func(dir string)) string {
+		t.Helper()
+		p := filepath.Join(beside, name)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "HEAD"), []byte("ref: refs/heads/x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if inside != nil {
+			inside(p)
+		}
+		if err := os.Chtimes(p, at, at); err != nil { // last: a file made inside moves the directory's time
+			t.Fatal(err)
+		}
+		return p
+	}
+	abandoned := mk("wardyn-bundle-scan-killed", old, nil)
+	unlocked := mk("wardyn-bundle-scan-unlocked", old, func(p string) {
+		if err := os.WriteFile(filepath.Join(p, "owner.lock"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	live := mk("wardyn-bundle-scan-live", old, func(p string) {
+		f, err := os.OpenFile(filepath.Join(p, "owner.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = f.Close() })
+		if err := filelock.TryLock(f); err != nil {
+			t.Fatal(err)
+		}
+	})
+	young := mk("wardyn-bundle-scan-young", time.Now(), nil)
+	other := mk("keep-me", old, nil)
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "precious"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(beside, "wardyn-bundle-scan-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+
+	_ = checkBundleAllowed(t.Context(), filepath.Join(beside, "missing.bundle"), "feature/x", strings.Repeat("a", 40), []string{"*.pem"})
+
+	for _, gone := range []string{abandoned, unlocked} {
+		if _, err := os.Lstat(gone); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there (%v), want it swept", filepath.Base(gone), err)
+		}
+	}
+	for _, kept := range []string{live, young, other, link, filepath.Join(target, "precious")} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Errorf("%s was removed: %v", kept, err)
+		}
+	}
+	m, _ := filepath.Glob(filepath.Join(beside, "wardyn-bundle-scan-*"))
+	if len(m) != 3 { // live, young and the link: the scan's own directory is gone too
+		t.Errorf("scan directories left: %v, want the live, young and link entries only", m)
 	}
 }

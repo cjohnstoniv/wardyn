@@ -129,6 +129,18 @@ chart can read.
 {{- range .Values.extraEnv }}{{ if hasKey . "value" }}{{ $_ := set $eff (.name | toString) (toString .value) }}{{ else }}{{ $_ := set $eff (.name | toString) "<valueFrom>" }}{{ end }}{{ end -}}
 {{- $xeLast := dict -}}
 {{- range $i, $e := .Values.extraEnv }}{{ $_ := set $xeLast ($e.name | toString) $i }}{{ end -}}
+{{- /*
+wardynd serves TLS on its public listener when WARDYN_TLS_CERT and WARDYN_TLS_KEY are both non-empty, and answers a
+plaintext probe with 400: the pod would never become ready and the startup probe would restart it. $tlsEff is env, then
+extraEnv (last wins), with an entry set only by a non-empty value or a valueFrom: a name-only extraEnv entry is an empty
+variable in the pod and reads as unset, unlike $eff, whose guards refuse it. A valueFrom marked optional whose key is
+missing resolves empty in the pod yet reads as set here, so point such a reference at a key that exists. Behind a
+terminating ingress (WARDYN_TLS_TERMINATED) the listener stays plain HTTP and the probes keep the default scheme.
+*/ -}}
+{{- $tlsEff := dict -}}
+{{- range $k, $v := .Values.env }}{{ $_ := set $tlsEff $k (toString $v) }}{{ end -}}
+{{- range .Values.extraEnv }}{{ if hasKey . "valueFrom" }}{{ $_ := set $tlsEff (.name | toString) "<valueFrom>" }}{{ else }}{{ $_ := set $tlsEff (.name | toString) (toString (.value | default "")) }}{{ end }}{{ end -}}
+{{- $nativeTLS := and (ne (get $tlsEff "WARDYN_TLS_CERT") "") (ne (get $tlsEff "WARDYN_TLS_KEY") "") -}}
 {{- if hasKey $eff "WARDYN_HA" -}}
 {{- fail "wardyn: WARDYN_HA is set through env or extraEnv. Do not set it by hand: the chart's multi-replica guards read ha.enabled, so a hand-set WARDYN_HA would lift the daemon's single-instance lock without them. Set ha.enabled=true instead." -}}
 {{- end -}}
@@ -793,6 +805,9 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -811,6 +826,9 @@ spec:
             httpGet:
               path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/healthz") | quote }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             initialDelaySeconds: 3
             periodSeconds: 10
             timeoutSeconds: 3
@@ -827,6 +845,9 @@ spec:
             httpGet:
               path: {{ printf "%s/healthz" $basePath }}
               port: http
+              {{- if $nativeTLS }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 5
             # 5s periods over 30s connect + WARDYN_MIGRATE_TIMEOUT + 120s slack (see $startupFailureThreshold).
             failureThreshold: {{ $startupFailureThreshold }}

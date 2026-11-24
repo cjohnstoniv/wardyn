@@ -310,6 +310,12 @@ fi
 awk '/ErrorActionPreference = .Continue./{c=NR} /& cosign verify-blob/{v=NR} /\$vrc = \$LASTEXITCODE/{l=NR} /ErrorActionPreference = \$prevEap/{r=NR} END{exit !(c && v && l && r && c<v && v<l && l<r)}' "$PS1_SCRIPT" \
   || fail "install-cli.ps1: the cosign call is not wrapped Continue ... exit code read ... Stop restored"
 grep -qE '2>\$errFile' "$PS1_SCRIPT" || fail "install-cli.ps1: cosign's stderr does not go to a file"
+# A parked wardyn.exe.old is put back before anything is fetched, and the park and the move share one try whose finally
+# restores it; text pins, as pwsh is not on every box.
+awk '/if \(-not \(Test-Path \$target\) -and \(Test-Path \$old\)\)/{if(!p)p=NR} /Get-Asset .SHA256SUMS. /{if(!g)g=NR} END{exit !(p && g && p<g)}' "$PS1_SCRIPT" \
+  || fail "install-cli.ps1: a parked wardyn.exe.old is not put back before the first download"
+awk '/^    try \{$/{t=NR} /Move-Item -Force -Path \$target -Destination \$old/{k=NR} /Move-Item -Force -Path \$stage -Destination \$target/{s=NR} /^    \} finally \{$/{f=NR} /Move-Item -Force -Path \$old -Destination \$target/{r=NR} END{exit !(t && k && s && f && r && t<k && k<s && s<f && f<r)}' "$PS1_SCRIPT" \
+  || fail "install-cli.ps1: the park and the move are not inside one try whose finally restores wardyn.exe"
 grep -qF 'matches the SHA256SUMS list that cosign verified' "$PS1_SCRIPT" || fail "install-cli.ps1 lost the signed-list checksum line"
 pass "install-cli.ps1 carries the same checks (parsed by pwsh when present)"
 

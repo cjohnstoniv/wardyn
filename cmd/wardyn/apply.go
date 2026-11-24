@@ -113,7 +113,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 		Short: "Create or update the workloads in a file, and start a run when one is new or changed",
 		Long: "Store each workload the file names and keep it running. An unchanged workload does nothing; a new or\n" +
 			"changed one starts a new run and then ends the old one. If the organisation refuses the new run, the\n" +
-			"spec is still stored, the old run keeps running, and the command exits 1.\n\n" +
+			"spec is still stored, the old run (if any) keeps running, and the command exits 1.\n\n" +
 			"    wardyn apply -f web.yaml\n" +
 			"    wardyn apply -f - --wait < web.yaml\n\n" +
 			"--wait follows each launched run until it completes, or until it is running when the workload is a\n" +
@@ -135,7 +135,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 			}
 			c := client()
 			results := make([]sdk.WorkloadApplyResult, 0, len(docs))
-			refused := 0
+			var refusals []string
 			for _, d := range docs {
 				res, err := c.ApplyWorkload(cmd.Context(), d.Name, d.Request())
 				if err != nil {
@@ -146,7 +146,7 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 				}
 				results = append(results, res)
 				if res.Launch.State == sdk.WorkloadRefused {
-					refused++
+					refusals = append(refusals, fmt.Sprintf("workload/%s: %s", d.Name, refusalLeft(res.Workload)))
 				}
 				printWorkloadResult(cmd, d.Name, string(res.Outcome), res, asJSON)
 			}
@@ -165,8 +165,8 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 					}
 				}
 			}
-			if refused > 0 {
-				return &exitError{code: 1, err: fmt.Errorf("%d workload(s) refused: the spec is stored and the previous run keeps running", refused)}
+			if len(refusals) > 0 {
+				return &exitError{code: 1, err: fmt.Errorf("%d workload(s) refused, each spec is stored: %s", len(refusals), strings.Join(refusals, "; "))}
 			}
 			return nil
 		},
@@ -178,6 +178,15 @@ func workloadApplyCmd(client clientFn) *cobra.Command {
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the results as a JSON array (progress goes to stderr)")
 	usageExitsTwo(cmd)
 	return cmd
+}
+
+// refusalLeft says what a refused launch left running, from the workload as the answer reads it: its current run
+// while that run has not ended, and nothing when it has none (a first apply, or a restart after its run ended).
+func refusalLeft(w sdk.Workload) string {
+	if w.RunID != nil && !types.RunState(w.State).IsTerminal() {
+		return "the previous run keeps running"
+	}
+	return "no run was started"
 }
 
 // printWorkloadResult says what an apply or restart did: one line on stdout (none with --json,
