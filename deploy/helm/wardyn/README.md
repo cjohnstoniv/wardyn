@@ -1096,7 +1096,8 @@ uiSandbox:
   - A render with `replicas > 1` and no `ha.enabled` fails with an explicit message.
   - wardynd also takes a Postgres advisory lock at boot ([`cmd/wardynd/single_instance.go`](../../../cmd/wardynd/single_instance.go)) and refuses to serve if it can't get it, so a replica added by `kubectl scale` without HA mode exits instead of serving.
 - `ha.enabled`: **high availability.**
-  - Runs two or more replicas so that one node failing does not stop the control plane.
+  - Lets the Deployment run two or more replicas. It does not raise `replicas`, which keeps its value (1 by default): set it to 2 or more.
+  - A node failure stops the control plane only when every ready replica was on that node, and the anti-affinity below prefers separate nodes without requiring them.
   - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
   - The PodDisruptionBudget renders only at two or more replicas, since one pod would block every node drain.
   - Default `false`.

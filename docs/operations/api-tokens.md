@@ -32,11 +32,11 @@ it honest, tokens for a person who never signs in, and the portals that act for 
 - Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also revokes their API tokens, removes their registered SSH keys, and refuses their UI-app sessions at the next re-check, whether the revoke names the subject or the email.
   - The `all` arm applies all three actions deployment-wide, including the calling admin's own credentials.
   - Plan to re-mint tokens and re-register SSH keys after a global revoke.
-- To end only a person's browser sessions, send `"sessions_only": true` with `sub`: a session-only cut is stamped and nothing else changes.
-  - Their browser sessions end on every instance; their API tokens, SSH keys, portal-delegated tokens and sponsored services keep working; an API token can still approve a governance change.
-  - No token-borne credential is refused by the cut; an event stream a token opened before the cut closes at its next keepalive and reconnects.
+- To end only a person's sign-ins, send `"sessions_only": true` with `sub`: a session-only cut ends their browser and CLI sign-ins, and nothing else changes.
+  - Their browser sessions end on every instance, and each CLI sign-in ends at once with the tokens it holds. Their personal API tokens, SSH keys, portal-delegated tokens and sponsored services keep working; a personal API token can still approve a governance change.
+  - No personal API token is refused by the cut; an event stream one opened before the cut closes at its next keepalive and reconnects.
   - It is refused (`sessions_revoke_param_invalid`) with `all`.
-  - The audit row is the usual `session.revoke`, with `sessions_only` set and both counts `0`.
+  - The audit row is the usual `session.revoke`, with `sessions_only` set, `tokens_revoked` and `ssh_keys_deleted` both `0`, and `cli_sessions_ended` counting the CLI sign-ins it ended.
   - The People drawer's "Sign out everywhere" sends it.
 - **No `role` parameter on `POST /me/tokens`.**
   - A token always mints at the caller's own current role; there is no deliberately-downgraded mint.
@@ -194,7 +194,7 @@ a new login ends the last.
   secret; an old secret presented again ends the session (`cli.session.reuse_detected`).
 - **Ending it.** `POST /sessions/revoke` (every scope, including `sessions_only`), a console sign-out, Signed-in CLIs
   (`DELETE /me/cli-sessions/{id}`) and SCIM deactivation end the session and its tokens at once. A sessions-only cut
-  leaves the person's own API tokens working, as before; `session.revoke` counts `cli_sessions_ended`.
+  leaves the person's personal API tokens and SSH keys working; `session.revoke` counts `cli_sessions_ended`.
   The CLI then says why only when the sign-in was signed out, reached its lifetime or went unused past its idle
   lifetime; every other end reads the same.
 - **Admins.** An admin's CLI acts as role `user`. `wardyn login --admin` asks for a fresh approval and gives a 1-hour
