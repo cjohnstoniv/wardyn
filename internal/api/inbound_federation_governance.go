@@ -52,7 +52,7 @@ func (s *Server) holdInboundFederationOn(w http.ResponseWriter, r *http.Request,
 func (s *Server) holdInboundTrustCreate(w http.ResponseWriter, r *http.Request, t types.InboundTrust, now time.Time) {
 	dry := t
 	if err := s.confirmNewTrust(r, &dry, principalFromRequest(r), now); err != nil {
-		writeServerError(w, r, "read the revocation sequence", err)
+		writeConfirmNewTrustError(w, r, err)
 		return
 	}
 	err := s.readGovernanceState(r, func(q store.Querier) error {
@@ -74,7 +74,8 @@ func (s *Server) holdInboundTrustCreate(w http.ResponseWriter, r *http.Request, 
 // must be a signed-in person: the admin token skips the approver predicate, so this is the check that covers it.
 // A trust create applies only while it still validates against this deployment's addresses, the name and triple
 // are free and the identity is usable; anything else is store.ErrGovernanceChangeStale. ErrInboundTrustInvalid,
-// which ends the transaction, is returned as it is, so the decision rolls back.
+// which ends the transaction, and a revocation sequence read below zero are returned as errors, so the decision
+// rolls back and the change stays pending.
 func applyInboundFederationChange(s *Server, r *http.Request, q store.Querier, ch types.GovernanceChange) (govApplied, error) {
 	if !inboundPerson(r.Context()) {
 		return govApplied{}, &govRefusal{why: "inbound federation approver is not a signed-in person", write: func(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +112,11 @@ func applyInboundTrustCreate(s *Server, r *http.Request, q store.Querier, ch typ
 	if reason != "" {
 		return govApplied{}, store.ErrGovernanceChangeStale
 	}
-	if err := s.confirmNewTrust(r, &t, ch.ProposedBy, s.cfg.Now().UTC()); err != nil {
+	if err := s.confirmNewTrust(r, &t, ch.ProposedBy, s.cfg.Now().UTC()); errors.Is(err, errInboundSeqUnreadable) {
+		return govApplied{}, &govRefusal{why: "revocation sequence unreadable", write: func(w http.ResponseWriter, _ *http.Request) {
+			writeInboundSeqUnreadable(w)
+		}}
+	} else if err != nil {
 		return govApplied{}, err
 	}
 	created, sponsor, err := store.CreateInboundTrustQ(r.Context(), q, t)

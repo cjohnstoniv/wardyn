@@ -458,15 +458,37 @@ func (s *Server) inboundTrustReserved(t types.InboundTrust) string {
 	return ""
 }
 
+// errInboundSeqUnreadable is a revocation sequence read below zero. A sequence never is, so the order a trust would
+// be confirmed at is unknown, and nothing is created or confirmed on it.
+var errInboundSeqUnreadable = errors.New("the revocation sequence read below zero")
+
+// writeInboundSeqUnreadable answers errInboundSeqUnreadable.
+func writeInboundSeqUnreadable(w http.ResponseWriter) {
+	writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "The revocation order could not be read; retry later")
+}
+
+// writeConfirmNewTrustError answers confirmNewTrust's error.
+func writeConfirmNewTrustError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errInboundSeqUnreadable) {
+		writeInboundSeqUnreadable(w)
+		return
+	}
+	writeServerError(w, r, "read the revocation sequence", err)
+}
+
 // confirmNewTrust sets where a new trust starts against its sponsor's revocations: the current sequence (the request
 // never speaks for the service principal) at now, confirmed by its creator. A revoke of the sponsor that commits
-// after this read stops the trust; one before it does not, as for any token the sponsor holds.
+// after this read stops the trust; one before it does not, as for any token the sponsor holds. A negative sequence
+// is errInboundSeqUnreadable.
 func (s *Server) confirmNewTrust(r *http.Request, t *types.InboundTrust, by string, now time.Time) error {
 	issue, err := s.mintIssue(r.Context(), types.ServicePrincipalPrefix+t.ServiceIdentity, now)
 	if err != nil {
 		return err
 	}
-	t.CreatedBy, t.ConfirmedBy, t.ConfirmedAt, t.ConfirmedSeq = by, by, now, max(issue.Seq, 0)
+	if issue.Seq < 0 {
+		return errInboundSeqUnreadable
+	}
+	t.CreatedBy, t.ConfirmedBy, t.ConfirmedAt, t.ConfirmedSeq = by, by, now, issue.Seq
 	return nil
 }
 
@@ -523,7 +545,7 @@ func (s *Server) handleCreateInboundTrust(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := s.confirmNewTrust(r, &t, principalFromRequest(r), now); err != nil {
-		writeServerError(w, r, "read the revocation sequence", err)
+		writeConfirmNewTrustError(w, r, err)
 		return
 	}
 	created, sponsor, err := its.CreateInboundTrust(r.Context(), t)
@@ -684,10 +706,13 @@ func (s *Server) handleConfirmInboundTrust(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	// A sequence is never negative; one that were would fail the table's check, so it is read as none (the trust is
-	// then compared on time) rather than answered as a server error.
+	// A sequence is never negative; one that were leaves the order unknown, so nothing is confirmed on it.
+	if issue.Seq < 0 {
+		writeInboundSeqUnreadable(w)
+		return
+	}
 	t, err := its.ConfirmInboundTrust(r.Context(), store.InboundTrustConfirm{ID: id, Service: si.Name, Sponsor: sub,
-		At: issue.At, Seq: max(issue.Seq, 0)})
+		At: issue.At, Seq: issue.Seq})
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		writeErrorReason(w, http.StatusNotFound, reasonInboundTrustNotFound, inboundTrustNotFoundMsg)

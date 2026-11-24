@@ -172,6 +172,16 @@ func (s *Server) inboundExchangeVerify(w http.ResponseWriter, r *http.Request, i
 		s.inboundExchangeDeny(w, r, &trust, "audience_not_this_deployment", nil)
 		return types.InboundTrust{}, oidc.WorkloadSubject{}, false
 	}
+	// The create's portal rule again, for a portal registered after the trust.
+	reserved, err := s.portalHoldsAudience(r.Context(), trust.Audience)
+	if err != nil {
+		writeErrorReason(w, http.StatusServiceUnavailable, reasonTokenLookupUnavailable, "inbound federation lookup failed")
+		return types.InboundTrust{}, oidc.WorkloadSubject{}, false
+	}
+	if reserved {
+		s.inboundExchangeDeny(w, r, &trust, "audience_reserved", nil)
+		return types.InboundTrust{}, oidc.WorkloadSubject{}, false
+	}
 	v, ok := s.cfg.PortalIssuers.(workloadVerifier)
 	if !ok {
 		w.Header().Set("Retry-After", "30")
@@ -196,6 +206,26 @@ func (s *Server) inboundExchangeVerify(w http.ResponseWriter, r *http.Request, i
 		return types.InboundTrust{}, oidc.WorkloadSubject{}, false
 	}
 	return trust, subj, true
+}
+
+// portalHoldsAudience reports whether a live portal's client id or audience is aud: the predicate the store's trust
+// create refuses on (store.ErrInboundTrustAudienceReserved), read here at each exchange so it holds whichever was
+// registered first. A store with no portals holds none.
+func (s *Server) portalHoldsAudience(ctx context.Context, aud string) (bool, error) {
+	ds, ok := s.cfg.Store.(store.DelegateStore)
+	if !ok {
+		return false, nil
+	}
+	list, err := ds.ListDelegates(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, d := range list {
+		if d.RevokedAt == nil && (d.IdPClientID == aud || d.Audience == aud) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // inboundExchangeLateChecks reads the trust's identity and the issue the token records, then checks the identity

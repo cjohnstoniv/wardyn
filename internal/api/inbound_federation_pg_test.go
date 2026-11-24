@@ -67,6 +67,8 @@ type inbEnv struct {
 func newInbEnv(t *testing.T) *inbEnv {
 	t.Helper()
 	e := &inbEnv{svcGovEnv: newSvcGovEnv(t), fake: &fakeWorkloadVerifier{}}
+	// Provider tokens live two hours, so the trust's lifetime is the binding cap unless a test sets a nearer exp.
+	e.fake.set(oidc.PortalRefusal{}, time.Now().Add(2*time.Hour))
 	e.h.srv.cfg.PortalIssuers = e.fake
 	e.h.srv.cfg.RunnerOrgURL = inboundTestOrigin
 	return e
@@ -206,10 +208,15 @@ func (e *inbEnv) refillAuthFailed() {
 	l.mu.Unlock()
 }
 
-// drainAuthFailed empties the refusal-row bucket.
+// drainAuthFailed empties the refusal-row bucket and sets its clock an hour ahead, so it refills nothing before the
+// next refusal however long that request takes.
 func (e *inbEnv) drainAuthFailed() {
 	for e.h.srv.authFailedLimiter.allow(e.h.srv.cfg.Now()) {
 	}
+	l := &e.h.srv.authFailedLimiter
+	l.mu.Lock()
+	l.last = e.h.srv.cfg.Now().Add(time.Hour)
+	l.mu.Unlock()
 }
 
 // onlyDenied fails unless exactly one denied row was written since before, with reason word and the trust named.
@@ -308,6 +315,16 @@ func inboundHeldChange(t *testing.T, w *httptest.ResponseRecorder) types.Governa
 		t.Errorf("target_kind %q, want %q", body.PendingChange.TargetKind, govKindInboundFederation)
 	}
 	return body.PendingChange
+}
+
+// pendingInbound counts the pending changes of kind inbound_federation.
+func (e *inbEnv) pendingInbound(t *testing.T) (n int) {
+	t.Helper()
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM governance_changes WHERE target_kind = $1 AND state = $2`,
+		govKindInboundFederation, types.GovernanceChangePending).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 func (e *inbEnv) changeState(t *testing.T, id uuid.UUID) string {
@@ -836,6 +853,9 @@ func TestPG_InboundFederation_PutOnWhileOnWritesNothing(t *testing.T) {
 	if !after.UpdatedAt.Equal(before.UpdatedAt) || len(e.auditRows("inbound_federation.update")) != rows {
 		t.Errorf("turn-on while on wrote: updated_at %v -> %v, rows %d -> %d", before.UpdatedAt, after.UpdatedAt, rows, len(e.auditRows("inbound_federation.update")))
 	}
+	if n := e.pendingInbound(t); n != 0 {
+		t.Errorf("turn-on while on held %d changes, want none", n)
+	}
 }
 
 // TestPG_InboundTrust_ConfirmNeedsSponsorPerson: only the sponsor's own signed-in session confirms a trust.
@@ -1146,6 +1166,13 @@ func TestPG_InboundFederation_PutOffRevokes(t *testing.T) {
 	if d := inboundRowData(t, rows[len(rows)-1]); d["tokens_revoked"] != float64(2) || d["enabled"] != false {
 		t.Errorf("switch-off row %v, want tokens_revoked 2", d)
 	}
+	calls, exchangeRows := e.fake.calls.Load(), len(e.auditRows("inbound.exchange"))
+	if w := e.exchange(t, inboundTestOrigin, "repo:org/app", ""); w.Code != http.StatusNotFound || respReason(w) != reasonInboundFederationOff {
+		t.Errorf("exchange after the off: %d %s, want 404 %s", w.Code, w.Body.String(), reasonInboundFederationOff)
+	}
+	if e.fake.calls.Load() != calls || len(e.auditRows("inbound.exchange")) != exchangeRows {
+		t.Error("the exchange after the off reached the verifier or wrote a row")
+	}
 }
 
 // TestPG_InboundTrust_CreateAuditNamesSponsor: the create row names the identity's sponsor.
@@ -1260,5 +1287,73 @@ func TestPG_ServiceIdentityUpdate_AuditCountsTrustsRemoved(t *testing.T) {
 	ret := e.auditRows("service_identity.retire")
 	if len(ret) != 1 || inboundRowData(t, ret[0])["trusts_removed"] != float64(2) {
 		t.Errorf("retire rows %+v, want trusts_removed 2", ret)
+	}
+}
+
+// negativeSeqRevocations is the rig's revocation store reading its sequence below zero.
+type negativeSeqRevocations struct{ *pgTestRevocations }
+
+func (negativeSeqRevocations) RevocationSeq(context.Context) (int64, error) { return -1, nil }
+
+// TestPG_InboundTrust_NegativeSeqRefused: a revocation sequence read below zero creates no trust: the direct create
+// answers 503, and a held create's approval answers 503 and rolls back, leaving the change pending.
+func TestPG_InboundTrust_NegativeSeqRefused(t *testing.T) {
+	e := newInbEnv(t)
+	e.identity(t, svcName)
+	e.h.srv.cfg.SessionRevocations = negativeSeqRevocations{e.rev}
+	w := e.createTrust(t, e.sec, trustBody("direct", svcName, "repo:org/direct", ""))
+	if w.Code != http.StatusServiceUnavailable || respReason(w) != reasonTokenLookupUnavailable {
+		t.Errorf("direct create: %d %s, want 503 %s", w.Code, w.Body.String(), reasonTokenLookupUnavailable)
+	}
+	e.h.srv.cfg.SessionRevocations = e.rev
+	e.on(t)
+	ch := inboundHeldChange(t, e.createTrust(t, e.sec, trustBody("held", svcName, "repo:org/held", "")))
+	e.h.srv.cfg.SessionRevocations = negativeSeqRevocations{e.rev}
+	if w := e.decide(t, e.sec2, ch.ID); w.Code != http.StatusServiceUnavailable || respReason(w) != reasonTokenLookupUnavailable {
+		t.Errorf("held approval: %d %s, want 503 %s", w.Code, w.Body.String(), reasonTokenLookupUnavailable)
+	}
+	if st := e.changeState(t, ch.ID); st != types.GovernanceChangePending {
+		t.Errorf("held create state %q, want pending", st)
+	}
+	if n := e.trustCount(t); n != 0 {
+		t.Errorf("trusts = %d, want 0", n)
+	}
+	if n := len(e.auditRows("inbound_trust.create")); n != 0 {
+		t.Errorf("inbound_trust.create rows = %d, want 0", n)
+	}
+}
+
+// TestPG_InboundExchange_RefusesPortalAudienceRegisteredAfter: a portal registered after a trust, whose client id or
+// audience is that trust's audience, stops the trust at the exchange before the verifier runs.
+func TestPG_InboundExchange_RefusesPortalAudienceRegisteredAfter(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		d    types.Delegate
+	}{
+		{"client id", types.Delegate{IdPClientID: inboundTestOrigin}},
+		{"audience", types.Delegate{IdPClientID: "portal-client", Audience: inboundTestOrigin}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := newInbEnv(t)
+			e.identity(t, svcName)
+			e.switchOn(t)
+			tr := e.mustTrust(t, "gh-deploy", svcName, "repo:org/app", "")
+			d := c.d
+			d.ID, d.Name, d.Group = uuid.New(), "portal", "portal-users"
+			if _, err := e.st.CreateDelegate(context.Background(), d, newBearer(delegateCredentialPrefix)); err != nil {
+				t.Fatal(err)
+			}
+			w := e.exchange(t, inboundTestOrigin, "repo:org/app", "")
+			if w.Code != http.StatusUnauthorized || respReason(w) != reasonInboundSubjectTokenInvalid {
+				t.Fatalf("exchange: %d %s, want 401 %s", w.Code, w.Body.String(), reasonInboundSubjectTokenInvalid)
+			}
+			if n := e.fake.calls.Load(); n != 0 {
+				t.Errorf("verifier calls = %d, want 0", n)
+			}
+			if n := e.exchangedCount(t, svcName); n != 0 {
+				t.Errorf("token rows = %d, want 0", n)
+			}
+			e.onlyDenied(t, 0, "audience_reserved", &tr)
+		})
 	}
 }
