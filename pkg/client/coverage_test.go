@@ -54,6 +54,8 @@ var (
 	_ client.RunPolicyView
 	_ []client.Device
 	_ []client.RunnerView
+	_ client.RunnerDrain
+	_ client.RunnerDrainRequest
 	_ client.RunnerSettings
 	_ []client.RunnerRegistrationToken
 	_ client.DeviceEnrolmentToken
@@ -145,7 +147,7 @@ func routeFamilies() map[string][]string {
 		"service-ids":     {"CreateServiceIdentity", "ListServiceIdentities", "ListServiceIdentitiesPage", "GetServiceIdentity", "UpdateServiceIdentity", "RetireServiceIdentity", "ListMyServiceIdentities", "MintServiceToken", "ListServiceTokens", "ListServiceTokensPage", "RevokeServiceToken", "MoveToken", "CreateAPIToken", "RevokeAPIToken"},
 		"workloads":       {"ApplyWorkload", "PreviewWorkload", "ListWorkloads", "ListWorkloadsPage", "GetWorkload", "WorkloadHistory", "WorkloadHistoryPage", "DeleteWorkload", "RestartWorkload", "PinWorkloadPolicy", "UnpinWorkloadPolicy", "CreateWorkloadBinding", "ListWorkloadBindings", "ListWorkloadBindingsPage", "DeleteWorkloadBinding"},
 		"components":      {"MyComponents", "SaveMyComponent", "UpdateMyComponent", "DeleteMyComponent", "ListComponents", "PutComponent", "DeleteComponent", "SetComponentOwningUnit"},
-		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust"},
+		"runners":         {"MintRunnerToken", "RegisterRunner", "ClaimRunner", "ListRunners", "ListRunnersPage", "GetRunner", "ListMyRunners", "ListMyRunnersPage", "GetMyRunner", "SetMyRunnerLimits", "ListRunnerTokens", "ListRunnerTokensPage", "RevokeMyRunner", "RevokeRunnerToken", "GetRunnerSettings", "SetRunnersEnabled", "MintOrgRunnerToken", "ClaimOrgRunner", "SetRunnerTrust", "DrainRunner", "UndrainRunner"},
 		"runner-pools":    {"ListRunnerPools", "ListRunnerPoolsPage", "ListRunnerPoolsFor", "ListMyRunnerPools", "GetRunnerPool", "CreateRunnerPool", "UpdateRunnerPool", "DeleteRunnerPool", "CreateMyRunnerPool", "UpdateMyRunnerPool", "DeleteMyRunnerPool", "OwnRunnerPool", "AddMyRunnerToPool", "RemoveMyRunnerFromPool", "AddRunnerPoolRunner", "RemoveRunnerPoolRunner", "GetOrgRunnerPoolDefaults", "SetOrgRunnerPoolDefaults", "GetMyRunnerPoolDefaults", "SetMyRunnerPoolDefaults", "ClearMyRunnerPoolDefaults", "AddRunnerPoolRemoteRunner", "RemoveRunnerPoolRemoteRunner", "AddMyPoolRemoteRunner", "RemoveMyPoolRemoteRunner", "ListRunnerPoolMembers", "GetRunnerPoolUsePolicy", "SetRunnerPoolUsePolicy", "ClearRunnerPoolUsePolicy"},
 		"remote-runners":  {"ListRemoteRunners", "GetRemoteRunner", "UpdateRemoteRunner", "SetRemoteRunnerPeoplePolicy", "ClearRemoteRunnerPeoplePolicy", "ListMyRemoteRunners"},
 		"devices":         {"MintDeviceEnrolmentToken", "ListDeviceEnrolmentTokens", "RevokeDeviceEnrolmentToken", "ListDevices", "RevokeDevice"},

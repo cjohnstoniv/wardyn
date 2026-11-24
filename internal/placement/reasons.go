@@ -31,6 +31,8 @@ const (
 	ReasonRunnerTrustRequired          Reason = "runner_trust_required"
 	ReasonRunnerKeystoreUnavailable    Reason = "runner_keystore_unavailable"
 	ReasonRunnerActionPending          Reason = "runner_action_pending"
+	// ReasonRunnerDraining: an administrator drained the runner for maintenance; it takes no new sandbox.
+	ReasonRunnerDraining Reason = "runner_draining"
 	// ReasonRunnerRecordingOff: the organisation or the pool requires recording, and no runner that
 	// could take the run records it (--recording-store off, or a runner older than per-run recording).
 	ReasonRunnerRecordingOff Reason = "runner_recording_off"
@@ -70,6 +72,7 @@ var reasonStatus = map[Reason]int{
 	ReasonRunnerTrustRequired:          http.StatusUnprocessableEntity,
 	ReasonRunnerKeystoreUnavailable:    http.StatusUnprocessableEntity,
 	ReasonRunnerActionPending:          http.StatusConflict,
+	ReasonRunnerDraining:               http.StatusConflict,
 	ReasonRunnerRecordingOff:           http.StatusUnprocessableEntity,
 	ReasonRecordingStoreOff:            http.StatusUnprocessableEntity,
 	ReasonRelayRunnerMismatch:          http.StatusForbidden,

@@ -135,6 +135,7 @@ var namespaceCensusColumns = []censusColumn{
 var namespaceCensusExempt = map[string]string{
 	"portal_issuers.created_by":                 "the admin who bound the issuer; this table is the registry the census consults",
 	"run_support_grants.owner_email":            "an email address; a principal is never stored in it",
+	"runner_drains.created_by":                  "the administrator who drained a runner; it confers and restricts nothing about that person",
 	"runner_pending_actions.subject":            "the action's subject kind (run or asserted), not a person",
 	"runner_registration_tokens.owner_kind":     "a kind word, not a principal",
 	"runners.owner_kind":                        "a kind word, not a principal",

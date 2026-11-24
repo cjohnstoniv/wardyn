@@ -92,6 +92,8 @@ var sealFields = map[string][]SealField{
 	"person.attach": {{Path: "sub", Subject: SubjectActor}},
 	// The free text the security admin typed to justify a runner's trust change.
 	"runner.trust.write": {{Path: "reason", Subject: SubjectActor}},
+	// The free text an administrator typed to say why a runner is drained.
+	"runner.drain": {{Path: "reason", Subject: SubjectActor}},
 	// The run's title before and after a rename, which the owner typed or copied from the task.
 	"run.title.set": {{Path: "from", Subject: SubjectActor}, {Path: "to", Subject: SubjectActor}},
 }

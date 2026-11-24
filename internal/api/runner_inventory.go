@@ -22,6 +22,7 @@ import (
 //	GET /runners, /runners/{id}, /runners/tokens, /runners/settings   security (admin or security_admin)
 //	DELETE /runners/tokens/{id}                                        security
 //	PUT /runners/settings                                              admin (SUPER)
+//	PUT, DELETE /runners/{id}/drain                                   admin (SUPER): drain or undrain (runner_drain.go)
 //	GET /me/runners, /me/runners/{id}                                  the caller's own runners only
 //	GET /me/runners/{id}/folders                                       a folder-only runner's folders (run_computer_folder.go)
 //	PUT /me/runners/{id}                                               the runner's owner (runner_limits.go)
@@ -31,6 +32,8 @@ func (s *Server) mountRunnerInventoryRoutes(r, operatorOnly, securityOps chi.Rou
 	securityOps.Delete("/runners/tokens/{id}", s.handleRevokeRunnerToken)
 	securityOps.Get("/runners/settings", s.handleGetRunnerSettings)
 	operatorOnly.Put("/runners/settings", s.handlePutRunnerSettings)
+	operatorOnly.Put("/runners/{id}/drain", s.handlePutRunnerDrain)
+	operatorOnly.Delete("/runners/{id}/drain", s.handleDeleteRunnerDrain)
 	securityOps.Get("/runners/{id}", s.handleGetRunner)
 	r.Get("/me/runners", s.handleListMyRunners)
 	r.Get("/me/runners/{id}", s.handleGetMyRunner)
@@ -180,6 +183,11 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 		writeServerError(w, r, "list runner pool memberships", err)
 		return nil, false
 	}
+	drains, err := s.runnerDrainsOf(r.Context(), ids)
+	if err != nil {
+		writeServerError(w, r, "read runner drains", err)
+		return nil, false
+	}
 	out := make([]types.RunnerView, len(rows))
 	emails := map[string]string{}
 	// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
@@ -194,6 +202,13 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 	for i, row := range rows {
 		out[i] = s.runnerView(row, used[row.ID.String()], admin)
 		out[i].Pools = append([]types.RunnerPoolRef{}, pools[row.ID]...)
+		if d := drains[row.ID]; d != nil {
+			shown := *d
+			if !admin {
+				shown.CreatedBy = ""
+			}
+			out[i].Drain = &shown
+		}
 		if admin {
 			continue
 		}

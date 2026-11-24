@@ -111,6 +111,21 @@ type RunnerView struct {
 	// or incomplete incarnation on every try for about ten minutes, kept, and no longer retried. Set on a
 	// one-runner read only; absent for none.
 	ParkedExits int `json:"parked_exits,omitempty"`
+	// Drain is set while an administrator has drained the runner: it takes no new sandbox, and its running
+	// runs go on. CreatedBy is on the administrators' routes only.
+	Drain *RunnerDrain `json:"drain,omitempty"`
+}
+
+// RunnerDrain is an administrator's drain of a runner (the runner_drains table).
+type RunnerDrain struct {
+	CreatedBy string    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	Reason    string    `json:"reason"`
+}
+
+// RunnerDrainRequest is PUT /runners/{id}/drain: why the runner is drained, kept in its audit row.
+type RunnerDrainRequest struct {
+	Reason string `json:"reason"`
 }
 
 // MaxRunnerReason bounds the reason of an offline summary or a relay status, in bytes, and

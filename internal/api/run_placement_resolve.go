@@ -781,6 +781,8 @@ func targetRefusal(reason placement.Reason, pool string, scope types.RunnerPoolS
 		return runError(reason.Status(), string(reason), runnerpool.RunnerLimitsUnsetMsg(pool))
 	case placement.ReasonRunnerRecordingOff:
 		return runError(reason.Status(), string(reason), runnerpool.RunnerRecordingOffMsg(pool))
+	case placement.ReasonRunnerDraining:
+		return runError(reason.Status(), string(reason), "Every runner in "+pool+" that could take this run is drained for maintenance. Choose another pool, or launch it again once a runner is undrained.")
 	}
 	return runError(reason.Status(), string(reason), "This run cannot be placed in "+pool+".")
 }
@@ -807,7 +809,8 @@ type placementDemand struct {
 // union: a pool's strongest barrier and its largest machine are not summed into a target that does not
 // exist. A candidate whose facts are unknown is refused as offline, never read as zero or as everything.
 // A runner refused only for being at its max_runs could take the run once one of its runs ends, so that
-// is the answer whenever one candidate was refused for it alone.
+// is the answer whenever one candidate was refused for it alone. A drained runner's reason is the pool's
+// answer only when every refusing runner is drained.
 func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, placement.Reason) {
 	var out []poolTarget
 	var first placement.Reason
@@ -817,7 +820,10 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 			out = append(out, d.withFit(t))
 			continue
 		}
-		if reason == placement.ReasonRunnerAtCapacity {
+		// At capacity can clear on its own; any reason but the drain says more than the drain, which an
+		// undrain of that one runner would not fix. So a pool answers runner_draining only when every
+		// refusing runner is drained.
+		if reason == placement.ReasonRunnerAtCapacity || first == placement.ReasonRunnerDraining {
 			first = reason
 		}
 		first = cmp.Or(first, reason)
@@ -826,6 +832,9 @@ func eligibleTargets(targets []poolTarget, d placementDemand) ([]poolTarget, pla
 }
 
 func (d placementDemand) refusal(t poolTarget) placement.Reason {
+	if t.draining {
+		return placement.ReasonRunnerDraining
+	}
 	if t.offline {
 		return placement.ReasonRunnerOffline
 	}

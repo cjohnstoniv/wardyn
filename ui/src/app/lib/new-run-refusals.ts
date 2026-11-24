@@ -85,6 +85,7 @@ export const PLACEMENT_REASONS = [
   "runner_trust_required",
   "runner_keystore_unavailable",
   "runner_action_pending",
+  "runner_draining",
   "runner_recording_off",
   "recording_store_off",
   "relay_runner_mismatch",

@@ -160,9 +160,11 @@ func TestReasonsMatchDesign(t *testing.T) {
 		"runner_trust_changed": 409,
 		// runner_trust_required is a new local run refused on a personal-trust runner while the organisation requires a managed device.
 		"runner_trust_required": 422,
+		// runner_draining is a runner an administrator drained for maintenance.
+		"runner_draining": 409,
 	}
 	if got := Reasons(); len(got) != len(want) {
-		t.Fatalf("%d reasons, the closed set lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off, recording_store_off, runner_trust_changed and runner_trust_required", len(got), len(want)-6)
+		t.Fatalf("%d reasons, the closed set lists %d plus runner_at_capacity, runner_limits_unset, runner_recording_off, recording_store_off, runner_trust_changed, runner_trust_required and runner_draining", len(got), len(want)-7)
 	}
 	for r, status := range want {
 		if r.Status() != status || !r.Valid() {

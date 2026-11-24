@@ -61,6 +61,8 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/runners/tokens", "`POST /runners/tokens`"},
 	// Runners management (0.9): the switch write is SUPER, the reads and the token revoke the security tier's.
 	{"PUT /api/v1/runners/settings", "`PUT /runners/settings`"},
+	{"PUT /api/v1/runners/{id}/drain", "`PUT /runners/{id}/drain`"},
+	{"DELETE /api/v1/runners/{id}/drain", "`DELETE /runners/{id}/drain`"},
 	// Runner pools (0.9): the writes are SUPER, the use policy is the security tier's.
 	{"POST /api/v1/runner-pools", "the `/runner-pools` writes"},
 	{"PUT /api/v1/runner-pools/{id}", "the `/runner-pools` writes"},

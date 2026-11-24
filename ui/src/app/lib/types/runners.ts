@@ -104,6 +104,15 @@ export interface RunnerView {
   relay_status?: RunnerRelayStatus;
   /** One-runner reads only: how many of its exit receipts the organisation parked (refused on every try, no longer retried); absent for none. */
   parked_exits?: number;
+  /** Set while an administrator has drained the runner: it takes no new sandbox, and its running runs go on. created_by is on the administrators' routes only. */
+  drain?: RunnerDrain;
+}
+
+/** An administrator's drain of a runner (Go types.RunnerDrain). */
+export interface RunnerDrain {
+  created_by?: string;
+  created_at: string;
+  reason: string;
 }
 
 /** The `wardyn-runnerd doctor` stage names an offline summary names. Go: types.RunnerStages. */

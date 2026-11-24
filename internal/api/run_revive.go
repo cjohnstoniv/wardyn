@@ -202,6 +202,9 @@ func (s *Server) reviveRunProxy(ctx context.Context, run types.AgentRun, actorTy
 	if rerr != nil {
 		return reviveResult{}, rerr
 	}
+	if rerr := s.reviveDrainRefusal(ctx, run, actorType, actor); rerr != nil {
+		return reviveResult{}, rerr
+	}
 	if rerr := s.markReviving(run); rerr != nil {
 		return reviveResult{}, rerr
 	}

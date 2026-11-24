@@ -34,6 +34,9 @@ type poolTarget struct {
 	// full: a runner with no room for the run now (its Runs at once, or a total), as last read without
 	// a lock. The insert, the promotion and the start count again under the runner's row lock.
 	full bool
+	// draining: an administrator drained the runner; it takes no new sandbox (runner_draining). A promoted
+	// run's own runner is not draining for that run: its place was taken before the drain.
+	draining bool
 	// limits is the runner's declared limit set, nil for none (set by placementDemand.withFit).
 	limits *types.RunnerLimits
 	// trust is a registered runner's stored trust class, which its credential plan is judged at.
@@ -292,6 +295,13 @@ func (s *Server) registeredRunnerTargets(ctx context.Context, ids []uuid.UUID, r
 	if bound := promotedRunner(ctx); bound != nil && held[*bound] > 0 {
 		held[*bound]--
 	}
+	drains, err := s.runnerDrainsOf(ctx, ids)
+	if err != nil {
+		return nil, runServerError("read runner drains", err)
+	}
+	if bound := promotedRunner(ctx); bound != nil {
+		delete(drains, *bound)
+	}
 	out := make([]poolTarget, 0, len(ids))
 	for _, id := range ids {
 		id := id
@@ -301,7 +311,7 @@ func (s *Server) registeredRunnerTargets(ctx context.Context, ids []uuid.UUID, r
 			continue
 		}
 		full := runners[i].MaxRuns > 0 && held[id] >= runners[i].MaxRuns
-		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full, trust: runners[i].TrustClass, ownerKind: runners[i].OwnerKind})
+		out = append(out, poolTarget{id: id.String(), runnerID: &id, facts: facts, offline: !known || !s.runnerOnline(id), full: full, draining: drains[id] != nil, trust: runners[i].TrustClass, ownerKind: runners[i].OwnerKind})
 	}
 	slices.SortFunc(out, func(a, b poolTarget) int { return cmp.Compare(a.id, b.id) })
 	return out, nil

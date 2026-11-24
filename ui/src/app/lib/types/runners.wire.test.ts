@@ -42,6 +42,7 @@ const ts = read("ui/src/app/lib/types/runners.ts");
 describe("runners management wire", () => {
   it.each([
     ["internal/types/runner_inventory.go", "RunnerView", "RunnerView"],
+    ["internal/types/runner_inventory.go", "RunnerDrain", "RunnerDrain"],
     ["internal/types/runner_inventory.go", "RunnerSettingsRequest", "RunnerSettingsRequest"],
     ["internal/types/runner_registration.go", "RunnerRegistrationToken", "RunnerRegistrationToken"],
     ["internal/types/runner.go", "RunnerPosture", "RunnerPosture"],

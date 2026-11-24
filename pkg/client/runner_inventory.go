@@ -17,6 +17,12 @@ import (
 // everything else a runner says about itself is as reported, never verified.
 type RunnerView = types.RunnerView
 
+// RunnerDrain is an administrator's drain of a runner, and RunnerDrainRequest the body that sets one.
+type (
+	RunnerDrain        = types.RunnerDrain
+	RunnerDrainRequest = types.RunnerDrainRequest
+)
+
 // RunnerSettings is the runners on/off switch.
 type RunnerSettings = types.RunnerSettings
 
