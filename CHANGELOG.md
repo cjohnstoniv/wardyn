@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.10.5] — 2026-11-24
+
 ### Added
 
 - `/metrics` has three latency histograms: `wardyn_run_start_phase_seconds` splits a run's start into its phases, `wardyn_http_request_seconds` times each API route, and `wardyn_egress_decision_record_seconds` times an egress decision from the proxy to its audit row. See the monitoring page. (#4062)
