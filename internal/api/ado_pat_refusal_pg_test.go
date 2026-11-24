@@ -46,7 +46,7 @@ func TestPG_ADOPATRefusal_ARowIngestedFromADeviceIsNotARefusal(t *testing.T) {
 		forged.Action, forged.Target, forged.Outcome, forged.SourceIP, []byte(forged.Data)).Scan(&forged.RowHash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pg.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
+	if _, err := pg.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditRow{{FederatedAuditEvent: types.FederatedAuditEvent{AuditEvent: forged, Seq: 1}}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 

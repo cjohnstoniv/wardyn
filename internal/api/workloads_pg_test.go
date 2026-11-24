@@ -308,7 +308,7 @@ func TestPG_Workload_HistoryIgnoresARowAForwardingDeviceClaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.st.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditEvent{{AuditEvent: forged, Seq: 1}}); err != nil {
+	if _, err := e.st.IngestDeviceAudit(ctx, dev.ID, "10.9.9.9", []types.FederatedAuditRow{{FederatedAuditEvent: types.FederatedAuditEvent{AuditEvent: forged, Seq: 1}}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	own := refused(7)

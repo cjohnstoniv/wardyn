@@ -39,7 +39,7 @@ func TestPG_Devices_ForwardedRowNeverReadsAsAnOrgPrincipal(t *testing.T) {
 		ActorType: types.ActorHuman, Actor: admin, Action: action, Target: "profile:default", Outcome: "success",
 		Data: json.RawMessage(`{"k":1}`)}
 	ev.RowHash = auditRowHash(t, pool, "", ev)
-	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}}); err != nil {
+	if _, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{{AuditEvent: ev, Seq: 1}}); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	// The organisation's own row for the same action, by the real admin, with

@@ -9,6 +9,8 @@ package store_test
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/auditreceipt"
@@ -347,5 +350,260 @@ func TestAuditReceipt_V2VerifiesOffline_PG(t *testing.T) {
 	rep := auditreceipt.VerifyBundle(auditreceipt.Bundle{Format: auditreceipt.ReceiptFormat, Checkpoints: []auditreceipt.Checkpoint{cp}}, keys)
 	if !rep.OK() || !rep.Complete() {
 		t.Fatalf("receipt of format 1 and 2 rows: failures %+v", rep.Failures)
+	}
+}
+
+// v2Claim is a device's format 2 claim: a genuine hash over exactly what it says, made with salt.
+func v2Claim(t *testing.T, pool *pgxpool.Pool, prev string, seq int64, action, salt string) types.FederatedAuditRow {
+	t.Helper()
+	ev := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC().Truncate(time.Microsecond), ActorType: types.ActorSystem,
+		Actor: "device-forwarder", Action: action, Outcome: "success", SourceIP: "10.9.9.9", PrevHash: prev,
+		Data: json.RawMessage(fmt.Sprintf(`{"seq": %d}`, seq))}
+	if err := pool.QueryRow(context.Background(), `SELECT audit_row_hash_v2($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,
+		prev, salt, ev.ID, ev.Time, ev.RunID, string(ev.ActorType), ev.Actor, ev.Action, ev.Target, ev.Outcome, ev.SourceIP, []byte(ev.Data)).Scan(&ev.RowHash); err != nil {
+		t.Fatalf("hash a format 2 claim: %v", err)
+	}
+	return types.FederatedAuditRow{FederatedAuditEvent: types.FederatedAuditEvent{AuditEvent: ev, Seq: seq}, HashFormat: 2, HashSalt: salt}
+}
+
+type storedClaim struct {
+	format        int16
+	salt          string
+	claim         *string
+	originFormat  *string
+	claimRechecks bool
+}
+
+func readStoredClaim(t *testing.T, pool *pgxpool.Pool, id uuid.UUID) storedClaim {
+	t.Helper()
+	var c storedClaim
+	if err := pool.QueryRow(context.Background(), `SELECT e.hash_format, e.hash_salt, e.claim_salt, e.data->'device_origin'->>'hash_format',
+		`+store.FederatedClaimHashSQL+` = e.data->'device_origin'->>'row_hash' FROM audit_events e WHERE e.id = $1`, id).
+		Scan(&c.format, &c.salt, &c.claim, &c.originFormat, &c.claimRechecks); err != nil {
+		t.Fatalf("read the stored claim: %v", err)
+	}
+	return c
+}
+
+func TestIngestDeviceAudit_V2ClaimVerifies_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	saltA, saltB := strings.Repeat("a1", 32), strings.Repeat("b2", 32)
+	r1 := v2Claim(t, pool, "", 1, "dev.v2.1", saltA)
+	r2 := v2Claim(t, pool, r1.RowHash, 2, "dev.v2.2", saltB)
+	res, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{r1, r2})
+	if err != nil || res.Accepted != 2 {
+		t.Fatalf("ingest of two format 2 claims: %+v, %v", res, err)
+	}
+	wantVerifies(t, pool, "after a device's format 2 rows")
+}
+
+func TestIngestDeviceAudit_V2ClaimTamperedRefused_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	salt := strings.Repeat("a1", 32)
+	r := v2Claim(t, pool, "", 1, "dev.v2.tamper", salt)
+	edited := r
+	edited.Action = "dev.v2.edited"
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{edited}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("an edited format 2 claim: err = %v, want ErrConflict", err)
+	}
+	wrongSalt := r
+	wrongSalt.HashSalt = strings.Repeat("c3", 32)
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{wrongSalt}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a format 2 claim with another salt: err = %v, want ErrConflict", err)
+	}
+	asV1 := r
+	asV1.HashFormat, asV1.HashSalt = 0, ""
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{asV1}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a format 2 claim passed off as format 1: err = %v, want ErrConflict", err)
+	}
+	if n := scalar[int64](t, pool, `SELECT count(*) FROM audit_events WHERE action = 'dev.v2.tamper' OR action = 'dev.v2.edited'`); n != 0 {
+		t.Fatalf("%d rows of a refused claim were stored", n)
+	}
+}
+
+func TestIngestDeviceAudit_V1DeviceStillAccepted_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	r := chainedRow(t, pool, "", 1, "dev.v1.still")
+	if res, err := ingestEvents(ctx, st, d.ID, testPeer, []types.FederatedAuditEvent{r}); err != nil || res.Accepted != 1 {
+		t.Fatalf("a format 1 device row with no format field: %+v, %v", res, err)
+	}
+	c := readStoredClaim(t, pool, r.ID)
+	if c.originFormat != nil || c.claim != nil || !c.claimRechecks || c.format != 2 {
+		t.Fatalf("stored claim = %+v, want no hash_format in device_origin, no claim_salt, a claim that re-checks, the organisation's own format 2", c)
+	}
+}
+
+// TestIngestDeviceAudit_ControlPlaneRowTakesFreshSalt_PG: the stored row's salt is the control plane's own,
+// never the device's; the device's goes to claim_salt, and both the row and the claim re-check.
+func TestIngestDeviceAudit_ControlPlaneRowTakesFreshSalt_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	claimed := strings.Repeat("a1", 32)
+	r := v2Claim(t, pool, "", 1, "dev.v2.fresh", claimed)
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{r}); err != nil {
+		t.Fatal(err)
+	}
+	c := readStoredClaim(t, pool, r.ID)
+	if c.format != 2 || !salt64.MatchString(c.salt) || c.salt == claimed {
+		t.Errorf("stored row: format %d, a 64-hex salt %v, the device's own salt %v; want format 2 and the control plane's salt", c.format, salt64.MatchString(c.salt), c.salt == claimed)
+	}
+	if c.claim == nil || *c.claim != claimed {
+		t.Errorf("claim_salt is not the device's salt")
+	}
+	if c.originFormat == nil || *c.originFormat != "2" || !c.claimRechecks {
+		t.Errorf("device_origin hash_format %v, claim re-checks %v; want 2 and true", c.originFormat, c.claimRechecks)
+	}
+	wantVerifies(t, pool, "after a device's format 2 row")
+}
+
+func TestIngestDeviceAudit_BadFormatOrSaltIsInvalidRow_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	good := strings.Repeat("a1", 32)
+	for name, mutate := range map[string]func(*types.FederatedAuditRow){
+		"format 3":            func(r *types.FederatedAuditRow) { r.HashFormat = 3 },
+		"a 63-character salt": func(r *types.FederatedAuditRow) { r.HashSalt = good[:63] },
+		"an upper-case salt":  func(r *types.FederatedAuditRow) { r.HashSalt = strings.ToUpper(good) },
+		"a salt on format 1":  func(r *types.FederatedAuditRow) { r.HashFormat = 1 },
+	} {
+		action := "dev.v2.bad." + uuid.NewString()
+		r := v2Claim(t, pool, "", 1, action, good)
+		mutate(&r)
+		_, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{r})
+		if !errors.Is(err, store.ErrFederatedRowInvalid) {
+			t.Errorf("%s: err = %v, want ErrFederatedRowInvalid", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), good) {
+			t.Errorf("%s: the error names the salt", name)
+		}
+		if n := scalar[int64](t, pool, `SELECT count(*) FROM audit_events WHERE action = $1`, action); n != 0 {
+			t.Errorf("%s: %d rows were inserted", name, n)
+		}
+	}
+}
+
+func TestFederatedClaimHash_V2RecheckableFromStoredRow_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	d := federationDevice(t, st)
+	r1 := v2Claim(t, pool, "", 1, "dev.v2.recheck.1", strings.Repeat("a1", 32))
+	r2 := v2Claim(t, pool, r1.RowHash, 2, "dev.v2.recheck.2", strings.Repeat("b2", 32))
+	old := chainedRow(t, pool, r2.RowHash, 3, "dev.v1.recheck")
+	if _, err := st.IngestDeviceAudit(ctx, d.ID, testPeer, []types.FederatedAuditRow{r1, r2, {FederatedAuditEvent: old}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uuid.UUID{r1.ID, r2.ID, old.ID} {
+		if c := readStoredClaim(t, pool, id); !c.claimRechecks {
+			t.Errorf("row %s: the claim does not re-check from the stored row (%+v)", id, c)
+		}
+	}
+	// The claim salt is part of the re-check: change it and the claim no longer holds, with no chain verdict moved.
+	tamperAudit(t, pool, `UPDATE audit_events SET claim_salt = repeat('f', 64) WHERE id = $1`, r1.ID)
+	if c := readStoredClaim(t, pool, r1.ID); c.claimRechecks {
+		t.Errorf("a rewritten claim_salt still re-checks")
+	}
+	wantVerifies(t, pool, "after a claim_salt edit, which the control plane's own hash does not cover")
+}
+
+func TestAuditAppend_ClaimSaltMalformedRaises_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	before := scalar[int64](t, pool, `SELECT count(*) FROM audit_events`)
+	for _, bad := range []string{"xyz", strings.Repeat("A", 64), strings.Repeat("a", 63)} {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT pg_catalog.set_config('wardyn.audit_claim_salt', $1, true)`, bad)
+		if err == nil {
+			_, err = tx.Exec(ctx, `SELECT seq FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'probe', 'claim.bad', '', 'success', '', NULL)`)
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "22023" {
+			t.Errorf("claim salt %q: err = %v, want SQLSTATE 22023", bad, err)
+		}
+		if err != nil && strings.Contains(err.Error(), bad) && len(bad) > 3 {
+			t.Errorf("the error names the value")
+		}
+		_ = tx.Rollback(ctx)
+	}
+	if after := scalar[int64](t, pool, `SELECT count(*) FROM audit_events`); after != before {
+		t.Fatalf("%d rows were written by a refused append", after-before)
+	}
+}
+
+func TestAuditAppend_ClaimSaltClearedAfterUse_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	claim := strings.Repeat("a1", 32)
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx, `SELECT pg_catalog.set_config('wardyn.audit_claim_salt', $1, true)`, claim); err != nil {
+		t.Fatal(err)
+	}
+	var first, second int64
+	q := `SELECT seq FROM audit_append(gen_random_uuid(), now(), NULL, 'system', 'probe', 'claim.cleared', '', 'success', '', NULL)`
+	if err := tx.QueryRow(ctx, q).Scan(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.QueryRow(ctx, q).Scan(&second); err != nil {
+		t.Fatal(err)
+	}
+	var c1, c2 *string
+	if err := tx.QueryRow(ctx, `SELECT (SELECT claim_salt FROM audit_events WHERE seq = $1), (SELECT claim_salt FROM audit_events WHERE seq = $2)`, first, second).Scan(&c1, &c2); err != nil {
+		t.Fatal(err)
+	}
+	if c1 == nil || *c1 != claim || c2 != nil {
+		t.Fatalf("claim_salt of the two rows = %v, %v; want the device's salt, then NULL", c1, c2)
+	}
+}
+
+// TestListAuditEventsAfterSeq_NoSalt_PG: the acknowledged sink's read marshals no salt; the forwarder's read
+// returns each row's format and salt.
+func TestListAuditEventsAfterSeq_NoSalt_PG(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	base := maxAuditSeq(t, pool)
+	one := types.AuditEvent{ID: uuid.New(), Time: time.Now().UTC(), ActorType: types.ActorSystem, Actor: "v2-probe", Action: "list.salt", Outcome: "success"}
+	if err := store.InsertAuditEvent(ctx, pool, &one); err != nil {
+		t.Fatal(err)
+	}
+	events, err := st.ListAuditEventsAfterSeq(ctx, base, 1000)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("list: %d rows, %v", len(events), err)
+	}
+	b, _ := json.Marshal(events)
+	for _, key := range []string{"hash_salt", "claim_salt", "hash_format"} {
+		if strings.Contains(string(b), key) {
+			t.Errorf("ListAuditEventsAfterSeq marshals %q", key)
+		}
+	}
+	rows, err := st.ListFederatedAuditRowsAfterSeq(ctx, base, 1000)
+	if err != nil || len(rows) != len(events) {
+		t.Fatalf("forwarder read: %d rows, %v", len(rows), err)
+	}
+	for _, r := range rows {
+		want := scalar[string](t, pool, `SELECT hash_salt FROM audit_events WHERE seq = $1`, r.Seq)
+		if r.HashFormat != 2 || r.HashSalt != want {
+			t.Errorf("seq %d: format %d, salt matches %v; want 2 and the stored salt", r.Seq, r.HashFormat, r.HashSalt == want)
+		}
 	}
 }

@@ -162,7 +162,7 @@ func TestDevices_IngestFailureRowsAreBoundedPerDevice(t *testing.T) {
 // "revoked", never as a chain mismatch.
 type revokeDuringIngest struct{ *authzStore }
 
-func (s revokeDuringIngest) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+func (s revokeDuringIngest) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditRow) (store.DeviceIngestResult, error) {
 	if _, err := s.authzStore.RevokeDevice(ctx, id, time.Now().UTC()); err != nil {
 		return store.DeviceIngestResult{}, err
 	}
@@ -300,7 +300,7 @@ type blockingIngestStore struct {
 	release chan struct{}
 }
 
-func (s blockingIngestStore) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditEvent) (store.DeviceIngestResult, error) {
+func (s blockingIngestStore) IngestDeviceAudit(ctx context.Context, id uuid.UUID, peer string, rows []types.FederatedAuditRow) (store.DeviceIngestResult, error) {
 	s.entered <- id
 	<-s.release
 	return s.authzStore.IngestDeviceAudit(ctx, id, peer, rows)
@@ -398,6 +398,44 @@ func TestDevices_IngestRefusesClaimsThatCannotReCheck(t *testing.T) {
 	rows[0].Data = json.RawMessage(`null`)
 	if got := ackedSeq(t, do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(rows)))); got != 2 {
 		t.Fatalf("acked %d, want 2", got)
+	}
+}
+
+// A device's hash format and salt are checked at the door: a format outside 1 and 2, a format 2 row without a
+// 64-hex salt and a salt on a format 1 row are each a 400 invalid_row before any database work, and neither the
+// answer nor the failure row carries the salt.
+func TestDevices_IngestRefusesBadHashFormatOrSalt(t *testing.T) {
+	srv, st, rec := newDeviceTestServer(t, false)
+	srv.ingestFailureLimiter.burst, srv.ingestFailureLimiter.rate = 1000, 1000
+	id, tok := enrolTestDevice(t, srv, "laptop")
+	good := strings.Repeat("ab", 32)
+	for name, mutate := range map[string]func(*types.FederatedAuditRow){
+		"format 3":            func(r *types.FederatedAuditRow) { r.HashFormat, r.HashSalt = 3, good },
+		"a 63-character salt": func(r *types.FederatedAuditRow) { r.HashFormat, r.HashSalt = 2, good[:63] },
+		"an upper-case salt":  func(r *types.FederatedAuditRow) { r.HashFormat, r.HashSalt = 2, strings.ToUpper(good) },
+		"a salt on format 1":  func(r *types.FederatedAuditRow) { r.HashFormat, r.HashSalt = 1, good },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var rows []types.FederatedAuditRow
+			for _, e := range chainRows(1, 1, "") {
+				rows = append(rows, types.FederatedAuditRow{FederatedAuditEvent: e})
+			}
+			mutate(&rows[0])
+			w := do(t, srv, http.MethodPost, "/api/v1/devices/"+id.String()+"/audit", tok, string(mustJSON(rows)))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+			}
+			fails := auditRows(rec, "device.audit.ingest", "failure")
+			if len(fails) == 0 || auditReason(t, fails[len(fails)-1]) != "invalid_row" {
+				t.Fatalf("want an invalid_row failure row, have %d rows", len(fails))
+			}
+			if strings.Contains(w.Body.String(), good) || strings.Contains(string(mustJSON(fails)), good) {
+				t.Fatal("the answer or the failure row carries the salt")
+			}
+			if st.ingestedFor(id) != 0 {
+				t.Fatal("a refused claim reached the store")
+			}
+		})
 	}
 }
 
