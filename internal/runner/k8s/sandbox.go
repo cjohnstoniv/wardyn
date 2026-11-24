@@ -112,6 +112,9 @@ func proxyConfigStagedPath() string { return proxyConfigStagedMountDir + "/" + p
 func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (runtimeClassName, runtimeHandler string, enforced types.ConfinementClass, err error) {
 	enforced = spec.ConfinementClass
 	if spec.MachineKind.Normalize() != "" {
+		if len(spec.Containers) > 0 {
+			return "", "", "", fmt.Errorf("k8s: a Linux VM: %w", runner.ErrExtraContainersUnsupported)
+		}
 		if err := d.refuseVMSpec(spec); err != nil {
 			return "", "", "", err
 		}
@@ -128,6 +131,9 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 		return "", "", "", fmt.Errorf("k8s: %w", err)
 	}
 	if err := validateDriveSet(spec.Drives); err != nil {
+		return "", "", "", err
+	}
+	if _, err := agentResources(spec); err != nil {
 		return "", "", "", err
 	}
 	if n := len(mitmCAPEMEnv) + 1 + len(d.withRunnerTrustedCA(spec.Env)[mitmCAPEMEnv]); n >= maxEnvString {
@@ -353,6 +359,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		slog.Warn("wardynd: k8s substrate: PidsLimit requested but not enforced (Kubernetes has no per-container pids ResourceName; the fork-bomb guard is a node-level kubelet setting, not a per-pod one); running WITHOUT a pids cap",
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))
 	}
+	agentRes, err := agentResources(spec) // createPreflight refused a split that fails
+	if err != nil {
+		return fail(err)
+	}
 	agentPod := &corev1.Pod{
 		// The agent is owned by the proxy pod, so deleting the proxy by any route (Destroy, the
 		// sweep, kubectl, a node drain) garbage-collects the agent with it. The reference needs the
@@ -380,7 +390,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 				// ephemeral container it adds.
 				Env:             append(envVars(d.withRunnerTrustedCA(d.proxyWaitEnv(spec))), secretEnvVars(spec.RunID, spec.SecretEnv)...),
 				SecurityContext: agentSecurityContext(),
-				Resources:       resourceRequirements(spec.Resources),
+				Resources:       resourceRequirements(agentRes),
 			}},
 		},
 	}
@@ -407,6 +417,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	for i := range spec.Drives {
 		applyDriveToPod(agentPod, &spec.Drives[i], i, runtimeHandler)
 	}
+	shareWorkFolder(agentPod, spec, keptWork)
+	addExtraContainers(agentPod, spec, d.withRunnerTrustedCA(spec.Env))
 	if runtimeClassName != "" {
 		agentPod.Spec.RuntimeClassName = &runtimeClassName
 	}
@@ -446,6 +458,11 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// Attach/ExecStream would hit "container not found" against a pod still Pending.
 	if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
+	}
+	for _, c := range spec.Containers {
+		if err := d.waitContainerRunning(ctx, clock, ns, agentPodName(spec.RunID), c.Name, spec.NotifyWaiting); err != nil {
+			return fail(fmt.Errorf("k8s: extra container %q never started: %w", c.Name, err))
+		}
 	}
 	if err := recheckDriveClaims(ctx, d.clientset, ns, spec.Drives, claims); err != nil {
 		return fail(err)
