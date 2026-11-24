@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -673,5 +675,67 @@ func TestAgentRulesFor_NoBindableHarnessReadsNothing(t *testing.T) {
 	}
 	if _, err := srv.liveWithholding(ctx, claude); err == nil {
 		t.Error("live mint of a claude-code run read nothing from an unreadable table")
+	}
+}
+
+// ruleRowQuerier answers the first QueryRow with a stored claude-code row and every later one with no row, as
+// a write or delete that lost a race sees it; Exec (the target lock) succeeds.
+type ruleRowQuerier struct {
+	row   types.AgentRules
+	calls int
+}
+
+func (q *ruleRowQuerier) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (q *ruleRowQuerier) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, errors.New("not used")
+}
+
+func (q *ruleRowQuerier) QueryRow(context.Context, string, ...any) pgx.Row {
+	q.calls++
+	if q.calls > 1 {
+		return ruleRow{err: pgx.ErrNoRows}
+	}
+	return ruleRow{row: q.row}
+}
+
+type ruleRow struct {
+	row types.AgentRules
+	err error
+}
+
+func (r ruleRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	spec, _ := json.Marshal(r.row.Spec)
+	*dest[0].(*string), *dest[1].(*[]byte), *dest[3].(*int), *dest[4].(*string) = r.row.Harness, spec, r.row.Version, r.row.UpdatedBy
+	return nil
+}
+
+// TestApplyAgentRulesChange_RaceIsStale: a held update or delete whose write finds the rules at another version
+// or gone (a write between the read and the write) is the stale answer, never a server error.
+func TestApplyAgentRulesChange_RaceIsStale(t *testing.T) {
+	stored := types.AgentRules{Harness: "claude-code", Spec: types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com")}, Version: 2, UpdatedBy: "sub-admin"}
+	hash := computeETag(agentRulesState(&stored))
+	write := types.AgentRulesWrite{Spec: types.PersonalWallsSpec{DeniedDomains: wallsList("worse.example.com")}, Version: 2}
+	for _, tc := range []struct {
+		op      string
+		payload agentRulesChangePayload
+	}{
+		{"update", agentRulesChangePayload{Harness: "claude-code", Write: &write}},
+		{"delete", agentRulesChangePayload{Harness: "claude-code", Version: 2}},
+	} {
+		raw, _ := json.Marshal(tc.payload)
+		ch := types.GovernanceChange{ID: uuid.New(), Op: tc.op, Payload: raw, BaseHash: hash, ProposedBy: "sub-alice"}
+		_, err := applyAgentRulesChange(nil, governReq(context.Background()), &ruleRowQuerier{row: stored}, ch)
+		if !errors.Is(err, store.ErrGovernanceChangeStale) {
+			t.Errorf("%s that lost the race = %v, want store.ErrGovernanceChangeStale", tc.op, err)
+		}
+	}
+	if err := agentRulesApplyError(errors.New("the store is down")); errors.Is(err, store.ErrGovernanceChangeStale) {
+		t.Error("an unrelated failure was answered as stale")
 	}
 }

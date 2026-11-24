@@ -338,14 +338,24 @@ func applyAgentRulesChange(_ *Server, r *http.Request, q store.Querier, ch types
 	if del {
 		gone, err := store.DeleteAgentRulesQ(ctx, q, p.Harness, cur.Version)
 		if err != nil {
-			return govApplied{}, err
+			return govApplied{}, agentRulesApplyError(err)
 		}
 		return govApplied{action: agentRulesDeleteAction, target: p.Harness, data: agentRulesDeleteData(gone)}, nil
 	}
 	saved, err := store.PutAgentRulesQ(ctx, q, types.AgentRules{Harness: p.Harness, Spec: p.Write.Spec, InnerWalls: p.Write.InnerWalls,
 		UpdatedBy: ch.ProposedBy}, agentRulesVersionOf(cur))
 	if err != nil {
-		return govApplied{}, err
+		return govApplied{}, agentRulesApplyError(err)
 	}
 	return govApplied{action: agentRulesWriteAction, target: p.Harness, data: agentRulesWriteData(cur, saved)}, nil
+}
+
+// agentRulesApplyError is a failed write of a held change: the rules moved to another version or went away
+// between the read and the write, which is the same stale answer (409) as a base hash that no longer matches,
+// never a server error.
+func agentRulesApplyError(err error) error {
+	if errors.Is(err, store.ErrAgentRulesVersion) || errors.Is(err, store.ErrNotFound) {
+		return store.ErrGovernanceChangeStale
+	}
+	return err
 }
