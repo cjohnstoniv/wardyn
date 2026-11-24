@@ -267,8 +267,8 @@ type runContainersReader interface {
 	RunContainers(ctx context.Context, runID uuid.UUID) ([]types.RunExtraContainer, error)
 }
 
-// dispatchContainers is the run's extras as the runner takes them. A store that cannot read them answers none:
-// only the Postgres store creates runs, and it can.
+// dispatchContainers is the run's extras as the runner takes them. A store without the reader answers none: only
+// the Postgres store creates runs, and it has the reader.
 func (s *Server) dispatchContainers(ctx context.Context, runID uuid.UUID) ([]runner.ExtraContainer, error) {
 	rd, ok := s.cfg.Store.(runContainersReader)
 	if !ok {

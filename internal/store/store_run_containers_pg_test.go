@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,8 +163,19 @@ func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 		t.Errorf("read without any grant = %+v, %v; want an error with code 42501", got, err)
 	}
 	exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends, run_harnesses TO ` + role)
-	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); !errors.As(err, &pgErr) || pgErr.Code != "42501" {
-		t.Errorf("erasure blank without access to run_containers: %v; want it to fail with code 42501", err)
+	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); !errors.As(err, &pgErr) || pgErr.Code != "42501" ||
+		!strings.Contains(err.Error(), "extra container commands") {
+		t.Errorf("erasure blank without access to run_containers: %v; want it to fail on the extra container commands with code 42501", err)
+	}
+	// The failed blank left every command in place (read as the table's owner).
+	if got, err := store.NewPG(pool).RunContainers(ctx, r.ID); err != nil || len(got) != len(r.Containers) {
+		t.Fatalf("extras after the failed blank = %+v, %v; want the %d extras", got, err, len(r.Containers))
+	} else {
+		for i, c := range got {
+			if !slices.Equal(c.Command, r.Containers[i].Command) {
+				t.Errorf("extra %d command after the failed blank = %q, want %q", i, c.Command, r.Containers[i].Command)
+			}
+		}
 	}
 	exec(`GRANT SELECT ON run_containers TO ` + role)
 	if got, err := pg.RunContainers(ctx, r.ID); err != nil || len(got) != len(r.Containers) {
