@@ -36,6 +36,15 @@ func TestPG_ListRunsFiltered_SponsoredMemberUsesTheCreatorIndex(t *testing.T) {
 		FROM generate_series(1, 150000) g`); err != nil {
 		t.Fatalf("seed history: %v", err)
 	}
+	// Live runs, each of its own creator, so the live arm has rows to discard too. With no live run the live arm's
+	// cheapest read is the empty partial index of live runs, agent_runs_watcher_sweep_idx (the live clause implies its
+	// predicate), and the plan would say nothing about that arm and the creator index.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO agent_runs (id, created_at, created_by, agent, repo, confinement_class, state, spiffe_id, runner_target)
+		SELECT gen_random_uuid(), now() - g * interval '1 second', 'live-' || g, 'claude-code', 'o/r', 'CC2', 'RUNNING', 'spiffe://x/live-' || g, 'docker'
+		FROM generate_series(1, 50000) g`); err != nil {
+		t.Fatalf("seed live runs: %v", err)
+	}
 	if _, err := pool.Exec(ctx, `ANALYZE agent_runs`); err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
