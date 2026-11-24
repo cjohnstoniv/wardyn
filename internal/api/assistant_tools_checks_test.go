@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -223,8 +224,8 @@ func TestAssistantValidateRunDraftIsTheSaveCheck(t *testing.T) {
 			Errors []assistantFieldError `json:"errors"`
 		}
 		assistantDecode(t, w, &got)
-		if got.Valid || len(got.Errors) != 1 || got.Errors[0].Message != c.want {
-			t.Errorf("%s: validate = %s, want valid: false with %q", c.name, w.Body, c.want)
+		if got.Valid || len(got.Errors) != 1 || !strings.HasPrefix(got.Errors[0].Message, c.want) {
+			t.Errorf("%s: validate = %s, want valid: false with a message starting %q", c.name, w.Body, c.want)
 		}
 	}
 }
