@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
+	"github.com/cjohnstoniv/wardyn/internal/egress/domainmatch"
 	"github.com/cjohnstoniv/wardyn/internal/ghscope"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -314,12 +316,12 @@ func TestAgentRulesRunStep_NarrowsEveryKnob(t *testing.T) {
 					}
 					continue
 				}
-				// A policy open to all egress already reaches every name on 80 and 443, so the meet seeds the
-				// rule's list into it before closing it (composer.MeetWalls); Leq reads an open base's own list
-				// only, so it judges the result against that seeded base.
+				// A policy open to all egress already reaches every name on 80 and 443, so the meet seeds those
+				// entries of the rule's list into it before closing it (composer.MeetWalls); Leq reads an open
+				// base's own list only, so it judges the result against that seeded base.
 				within := base.Clone()
 				if base.AllowAllEgress && !got.AllowAllEgress && row.rule.AllowedDomains != nil {
-					within.AllowedDomains = append(within.AllowedDomains, *row.rule.AllowedDomains...)
+					within.AllowedDomains = openEgressSeed(within.AllowedDomains, *row.rule.AllowedDomains)
 				}
 				if !composer.Leq(got, within, types.GovernanceLimits{}, types.GovernanceLimits{}) {
 					t.Errorf("%s: %+v is wider than %+v", kind, got, base)
@@ -355,6 +357,24 @@ func TestAgentRulesRunStep_NarrowsEveryKnob(t *testing.T) {
 			}
 		})
 	}
+}
+
+// openEgressSeed is own plus each entry of list that open egress reaches, filtered as composer's openSeed
+// (internal/composer/meet.go:124-133) filters it: a name or wildcard with no port, 80 or 443; an IP literal
+// or another port is left out, so a rule naming one is not judged within an open policy by accident.
+func openEgressSeed(own, list []string) []string {
+	out := slices.Clone(own)
+	for _, s := range list {
+		exact, wild, port := domainmatch.Classify(s)
+		host := exact
+		if wild != "" {
+			host = wild
+		}
+		if host != "" && (port == 0 || port == 80 || port == 443) && net.ParseIP(strings.Trim(host, "[]")) == nil {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // httpRequestAs is a request from principal, for the reads that name the caller.
