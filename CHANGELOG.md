@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- An attended window onto a macOS VM run no longer stays open while the database stops answering. Each re-check of the window now gives up its database reads after 10 seconds and counts as a check that got no answer, so the window ends when the server shuts down, when the run's runner ends it, or when the session budget runs out, as it already did when the database refused connections.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
