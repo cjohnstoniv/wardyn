@@ -150,6 +150,20 @@ func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
 	return release, ok
 }
 
+// uiSlotAfterIdleClose closes the shared pool's idle connections once and retries the run's slot. An idle pooled
+// connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle pool could refuse another app
+// of the same run, or the run's desktop. The trade-off: it drops every run's idle connections, but only when a run
+// hits its cap, and an idle connection simply redials, so a run at its cap is never wedged by its own idle pool.
+// Not for an issuer portal's request, which must not wait on the close (uiIdleCloseAsync).
+func (s *Server) uiSlotAfterIdleClose(runID uuid.UUID) (func(), bool) {
+	tr, ok := s.uiReverseProxy().Transport.(*http.Transport)
+	if !ok {
+		return nil, false
+	}
+	tr.CloseIdleConnections() // each close releases its slot (uiConn.Close) before this returns
+	return s.acquireUIConn(runID)
+}
+
 // tryUIConn is acquireUIConn, and with the slots full also the channel the next release closes, taken under
 // the same uiConnsMu hold as the refusal, so a dial that waits on it misses no release (acquireUIConnBy).
 func (s *Server) tryUIConn(runID uuid.UUID) (func(), bool, <-chan struct{}) {

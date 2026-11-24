@@ -618,14 +618,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 
 	release, ok := s.uiDialSlot(ctx, sess.Run)
 	if _, gated := uiDispatchFrom(ctx); !ok && !gated { // a portal dial waited for its slot (uiDialSlot)
-		// An idle pooled connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle
-		// pool could refuse another app of the same run. Close the idle pool once and retry. The trade-off:
-		// it drops every run's idle connections, but only when a run hits its cap, and an idle connection
-		// simply redials, so a run at its cap is never wedged by its own idle pool.
-		if tr, isTransport := s.uiReverseProxy().Transport.(*http.Transport); isTransport {
-			tr.CloseIdleConnections() // each close releases its slot (uiConn.Close) before this returns
-			release, ok = s.acquireUIConn(sess.Run)
-		}
+		release, ok = s.uiSlotAfterIdleClose(sess.Run)
 	}
 	if !ok {
 		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonUIGatewayConnCapReached, uiConnCapMsg)
@@ -701,20 +694,33 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 //	3   the image has no launcher at the convention path (the BYOI case)
 //	4   the launcher ran but nothing opened the port in time
 //
-// A successful probe is cached briefly (uiReadyTTL) so a browser opening six
-// connections at once does not re-probe six times.
-//
-// ponytail: two simultaneous cold connections can both launch, since each
-// probes before either launches. Harmless — the port is exclusive, so exactly
-// one process keeps it and the loser exits; a per-app lock would buy nothing
-// but contention.
+// A successful probe is cached briefly (uiReadyTTL), and a connection that
+// finds no cached answer while another connection is probing the same app waits
+// for that probe instead of running its own (uiProbeTurn): a browser opening
+// many connections at once, cold or past the cache, runs one probe. Each waits
+// under its own uiEnsureTimeout and its caller's bound (an issuer portal's
+// dispatch time, uiEnsureAppBy). A probe that failed caches nothing, so the
+// next waiter probes again and gets its own answer.
 func (s *Server) uiEnsureApp(ctx context.Context, run types.AgentRun, sess uiSession) error {
 	key := sess.Run.String() + "/" + sess.App
-	if s.uiAppReady(key) {
-		return nil
-	}
 	ctx, cancel := context.WithTimeout(ctx, uiEnsureTimeout)
 	defer cancel()
+	for {
+		ready, probing := s.uiProbeTurn(key)
+		if ready {
+			return nil
+		}
+		if probing == nil {
+			break // this connection probes; uiProbeDone wakes the rest
+		}
+		select {
+		case <-probing:
+		case <-ctx.Done():
+			return uiFail(ctx, http.StatusBadGateway, reasonUIGatewayLauncherProbeFailed,
+				fmt.Sprintf("could not start UI app %q inside the sandbox: another connection's start of it did not finish in time", sess.App))
+		}
+	}
+	defer s.uiProbeDone(key)
 
 	launcher := uiLauncherPrefix + sess.App
 	// A run with a boot seed (an application's startup command, #1994) brings
@@ -838,6 +844,11 @@ exit 4
 func (s *Server) uiAppReady(key string) bool {
 	s.uiReadyMu.Lock()
 	defer s.uiReadyMu.Unlock()
+	return s.uiReadyLocked(key)
+}
+
+// uiReadyLocked is uiAppReady with s.uiReadyMu held.
+func (s *Server) uiReadyLocked(key string) bool {
 	at, ok := s.uiReady[key]
 	return ok && s.cfg.Now().Sub(at) < uiReadyTTL
 }
@@ -851,4 +862,30 @@ func (s *Server) markUIAppReady(key string) {
 	}
 	pruneStale(s.uiReady, stampTime, uiReadyTTL, now, &s.uiReadySwept)
 	s.uiReady[key] = now
+}
+
+// uiProbeTurn says whether key's app is known ready (inside uiReadyTTL). Otherwise it returns the channel of the
+// probe already running for key, or nil when the caller now runs the probe and must call uiProbeDone.
+func (s *Server) uiProbeTurn(key string) (ready bool, probing <-chan struct{}) {
+	s.uiReadyMu.Lock()
+	defer s.uiReadyMu.Unlock()
+	if s.uiReadyLocked(key) {
+		return true, nil
+	}
+	if ch, ok := s.uiProbing[key]; ok {
+		return false, ch
+	}
+	if s.uiProbing == nil {
+		s.uiProbing = map[string]chan struct{}{}
+	}
+	s.uiProbing[key] = make(chan struct{})
+	return false, nil
+}
+
+// uiProbeDone ends key's probe and wakes every connection waiting on it (uiProbeTurn).
+func (s *Server) uiProbeDone(key string) {
+	s.uiReadyMu.Lock()
+	defer s.uiReadyMu.Unlock()
+	close(s.uiProbing[key])
+	delete(s.uiProbing, key)
 }

@@ -64,6 +64,7 @@ type Server struct {
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
+	keepalives     runKeepaliveState // this replica's one keepalive writer per run (attachKeepalive)
 	// pingEvery overrides attachPingInterval for THIS server only (the liveness
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
