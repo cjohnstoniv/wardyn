@@ -312,7 +312,7 @@ func recheckLiteral(body *ast.BlockStmt, expr ast.Expr) *ast.FuncLit {
 
 // TestSupportCensus_RunExecKeepsItsRecheck: handleRunExec asks the arm twice, once at the door and once in the
 // func literal its open command hands to holdAttachAuthority, which ends the command when the grant does. The
-// re-check is the check argument of that call (holdAttachAuthority(ctx, check, end)): a func literal that calls
+// re-check is the check argument of that call (holdAttachAuthority(ctx, b, check, end)): a func literal that calls
 // the arm, or an identifier assigned once from one. A literal that calls the arm and is never handed over is no
 // re-check, and the door's call alone must not satisfy the census.
 func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
@@ -327,11 +327,11 @@ func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
 	var handed []*ast.FuncLit
 	for _, site := range holds {
 		call := site.(*ast.CallExpr)
-		if len(call.Args) != 3 {
-			t.Errorf("handleRunExec calls holdAttachAuthority with %d arguments, want (ctx, check, end). %s", len(call.Args), supportCensusEdit)
+		if len(call.Args) != 4 {
+			t.Errorf("handleRunExec calls holdAttachAuthority with %d arguments, want (ctx, b, check, end). %s", len(call.Args), supportCensusEdit)
 			continue
 		}
-		lit := recheckLiteral(body, call.Args[1])
+		lit := recheckLiteral(body, call.Args[2])
 		if lit == nil {
 			t.Errorf("handleRunExec hands holdAttachAuthority a check that is not a func literal calling supportMayEnter, nor a name assigned once from one: the open command's re-check is gone. %s", supportCensusEdit)
 			continue

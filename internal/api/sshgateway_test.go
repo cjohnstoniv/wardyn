@@ -2059,7 +2059,7 @@ func TestSSHProbeConnContainsAPanickingRequest(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
 	c := panicConn{closed: make(chan struct{})}
-	go sshProbeConn(context.Background(), c, nil)
+	go sshProbeConn(context.Background(), c, nil, nil)
 	select {
 	case <-c.closed:
 	case <-time.After(5 * time.Second):
@@ -2076,11 +2076,12 @@ type livePeerConn struct {
 func (livePeerConn) SendRequest(string, bool, []byte) (bool, []byte, error) { return true, nil, nil }
 func (c livePeerConn) Close() error                                         { close(c.closed); return nil }
 
-// The keepalive recheck tells "unknown" from "gone": a failed store read keeps an idle connection,
-// every other reason closes it. One case per arm.
+// The keepalive recheck tells "unknown" from "gone": a failed store read keeps an idle connection for the session
+// budget (an hour here), every other reason closes it. One case per arm.
 func TestSSHProbeConnRecheckArms(t *testing.T) {
 	prev := setSSHKeepaliveEvery(20 * time.Millisecond)
 	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	srv := newHarness(t).srv
 	for _, tc := range []struct {
 		name, reason string
 		wantClosed   bool
@@ -2096,7 +2097,8 @@ func TestSSHProbeConnRecheckArms(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var checks atomic.Int32
-			go sshProbeConn(ctx, c, func() string { checks.Add(1); return tc.reason })
+			b := testBudget(srv, time.Hour, 5*time.Millisecond)
+			go sshProbeConn(ctx, c, b, func() (string, bool) { checks.Add(1); return tc.reason, sshRecheckUnread(nil, tc.reason) })
 			select {
 			case <-c.closed:
 				if !tc.wantClosed {

@@ -208,7 +208,7 @@ func (s *Server) saveDesktopRecording(ctx context.Context, run types.AgentRun, s
 		return
 	}
 	key := recording.CastKey(run.ID.String(), session)
-	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
+	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait())
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, run.ID.String(), session, bytes.NewReader(doc))
 	cancel()
 	outcome, data := "success", map[string]any{"session": session, "key": key, "bytes": len(doc), "format": "novnc-playback",

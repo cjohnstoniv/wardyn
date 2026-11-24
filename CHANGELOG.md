@@ -28,6 +28,18 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
 - Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once for as long as the run stays on its runner. Revocations still end a runner's session within one check (15 seconds).
+- An open terminal, desktop, window on a Mac, app session or SSH connection no longer ends at the first check of the person's access that gets no answer from the database. It asks again every 5 seconds and ends only when no check has answered for the session budget, then closes in a way the console reconnects on; a terminal takes no input meanwhile. A revoked person is still cut off at the next check. Set the budget with `sessions.unconfirmed_budget_s` in the site config or in Settings: 0 to 120 seconds, default 30, and 0 ends a session at the first check that gets no answer; an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each such wait writes a `session.unconfirmed` audit row, at a budget of 0 too. (#4057)
+- A terminal or desktop that ends because access could not be confirmed now closes in a way the console reconnects on. (#4057)
+- A request to a UI app whose run cannot be read is answered 503, not 404, and so is a UI session check whose sponsor cannot be read (403 before). A UI session check whose run's profile composition nothing satisfies is answered 403 `governance_overlay_unsatisfiable`, not 503. (#4057)
+- An inbound caller that keeps calling a run already at its request limit now uses up its own limit as well. (#3766)
+
+### Fixed
+
+- A rare crash of the server when an issuer portal's relayed request reached its dispatch time just as its connection to the run opened.
+
+### Before you upgrade
+
+- An owner's idle SSH connection now closes when the database stays unreachable for the session budget (30 seconds by default) after a check that got no answer; before, it stayed open. Raise `sessions.unconfirmed_budget_s` (up to 120) to give it longer.
 
 ## [0.10.2] — 2026-11-22
 

@@ -60,6 +60,10 @@ const (
 	// retryable condition, said as one: the relay fails CLOSED rather than
 	// serving a credential an admin may have just cancelled.
 	uiSessionUnverifiableMsg = "Could not verify this UI session; try again"
+	// uiUnitUnsatisfiableMsg is the 403 body when the run's governance profile cannot be composed at all, for an
+	// error that is not the curated overlayUnsatisfiableError (a restriction that meets to nothing). The composer's
+	// own text names the profiles' entries, so it goes to the log only.
+	uiUnitUnsatisfiableMsg = "This run's governance restrictions cannot be applied together, so it is refused until an administrator fixes them."
 )
 
 // The ui.authorize/denied `reason` values a refused re-check writes are
@@ -464,9 +468,15 @@ func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.Ag
 			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		}
-	} else if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
-		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
-			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	} else if sess.Caller == "" {
+		ok, err := s.sponsorEntry(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC())
+		switch {
+		case err != nil:
+			slog.ErrorContext(ctx, "wardynd: ui gateway sponsor lookup failed", "run_id", sess.Run, "err", err)
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		case !ok:
+			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		}
 	}
 	if sess.backgroundWatch() {
 		if de := s.uiBackgroundWatchDenies(ctx, sess, run); de != nil {
@@ -523,6 +533,14 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	}
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
+		if !unitReadFailed(err) {
+			msg := uiUnitUnsatisfiableMsg
+			if u, ok := isOverlayUnsatisfiable(err); ok {
+				msg = u.Error() // the curated sentence (governance_compose.go)
+			}
+			slog.WarnContext(ctx, "wardynd: ui gateway: the run's governance profile cannot be composed", "run_id", run.ID, "err", err)
+			return s.uiDenyReassert(sess, string(authz.ReasonGovernanceOverlayUnsatisfiable), http.StatusForbidden, msg)
+		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
 		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
