@@ -3304,7 +3304,11 @@ jobs:
             # ^origin/main: commits already on main passed main's own gate (every PR
             # commit is checked; a push exempts only GitHub's merges). Without it a
             # release PR that merges main re-judges GitHub's merge commits (the 0.8.2 cut).
-            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main"
+            # ^origin/release/*: the same for a release line's commits, which passed that branch's
+            # own gate (release-branch-checks.yml); a train into main that carries a patch line
+            # would otherwise re-judge GitHub's merges of that line's release PRs.
+            RELEASE_LINES=$(git for-each-ref --format='^%(refname:short)' 'refs/remotes/origin/release/*' | tr '\n' ' ')
+            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main $RELEASE_LINES"
           elif [ -n "$BASE" ]; then
             # merge_group: the queue's own merge commits are committed by GitHub
             # and carry no Signed-off-by — exempt only those.
