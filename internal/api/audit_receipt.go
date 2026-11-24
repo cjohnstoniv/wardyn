@@ -150,6 +150,7 @@ func receiptEvent(row store.AuditPartitionRow, project func(string, []byte) ([]b
 	ev := auditreceipt.Event{Row: auditreceipt.Row{
 		Seq: l.Seq, ID: l.ID, TimeUS: l.TimeUS, RunID: l.RunID, ActorType: l.ActorType, Actor: l.Actor, Action: l.Action,
 		Target: &l.Target, Outcome: l.Outcome, SourceIP: &l.SourceIP, Data: l.Data, PrevHash: l.PrevHash, RowHash: l.RowHash,
+		HashFormat: l.HashFormat, HashSalt: l.HashSalt,
 	}}
 	if *redacted > before {
 		ev.RedactedFields = redactedFieldsOf(l.Data)

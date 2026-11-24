@@ -15,6 +15,7 @@ const (
 	auditRetentionFile  = "0123_audit_retention.sql"
 	auditDropActorFile  = "0146_audit_retention_drop_actor_type.sql"
 	auditChainHeadFile  = "0214_audit_chain_head_lazy.sql"
+	auditChainLastFile  = "0412_audit_chain_v2.sql"
 )
 
 // TestChainTriggerReplaySetExcludesTheConversion pins the property the whole conversion rests on.
@@ -39,9 +40,9 @@ func TestChainTriggerReplaySetExcludesTheConversion(t *testing.T) {
 	if !hasReplayable {
 		t.Errorf("the replay set %v lacks %s: a restored trigger would be bound to a pre-partition function body", names, auditReplayableFile)
 	}
-	if names[len(names)-1] != auditChainHeadFile {
+	if names[len(names)-1] != auditChainLastFile {
 		t.Errorf("the replay set ends with %s, want %s last: whatever is last is the body the database is left with",
-			names[len(names)-1], auditChainHeadFile)
+			names[len(names)-1], auditChainLastFile)
 	}
 	if strings.Contains(readMigration(t, auditConversionFile), "TRIGGER "+auditChainTrigger) {
 		t.Errorf("%s spells TRIGGER %s", auditConversionFile, auditChainTrigger)

@@ -107,7 +107,7 @@ func (s PG) AuditCheckpointRange(ctx context.Context, afterSeq int64, afterHash 
 		       prev_hash IS NULL,
 		       COALESCE(prev_hash,''),
 		       COALESCE(row_hash,''),
-		       COALESCE(audit_row_hash(prev_hash, id, time, run_id, actor_type, actor,
+		       COALESCE(audit_row_hash_any(hash_format, hash_salt, prev_hash, id, time, run_id, actor_type, actor,
 		                               action, target, outcome, source_ip, data), '')
 		FROM audit_events
 		WHERE seq > $1 AND seq <= $2

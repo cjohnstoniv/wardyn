@@ -109,6 +109,10 @@ type AuditPartitionRow struct {
 	RowHash  *string
 	// FoldHash is what the digest folds: RowHash, or for a hashless row the hash it would have had.
 	FoldHash string
+	// HashFormat is the formula RowHash was made with (1 or 2) and HashSalt a format 2 row's salt, nil for
+	// format 1. They are the raw partition export's and a receipt's alone: no other reader selects them.
+	HashFormat int
+	HashSalt   *string
 }
 
 // AuditPartitionExporter is the OPTIONAL store capability behind GET /audit/export?partition=. A test
@@ -221,7 +225,8 @@ func (s PG) partitionPage(ctx context.Context, table string, after, seqHi int64)
 		       id, run_id, actor_type, actor, action, target, outcome, source_ip, data::text,
 		       prev_hash, row_hash,
 		       COALESCE(row_hash, audit_row_hash(NULL, id, time, run_id, actor_type, actor, action, target,
-		                                         outcome, source_ip, data))
+		                                         outcome, source_ip, data)),
+		       hash_format, hash_salt
 		  FROM `+table+` WHERE seq > $1 AND seq <= $2 ORDER BY seq LIMIT $3`, after, seqHi, AuditPartitionPageSize)
 	if err != nil {
 		return nil, fmt.Errorf("store: read audit partition: %w", err)
@@ -231,7 +236,7 @@ func (s PG) partitionPage(ctx context.Context, table string, after, seqHi int64)
 	for rows.Next() {
 		var r AuditPartitionRow
 		if err := rows.Scan(&r.Seq, &r.RecordedUS, &r.TimeUS, &r.ID, &r.RunID, &r.ActorType, &r.Actor, &r.Action,
-			&r.Target, &r.Outcome, &r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.FoldHash); err != nil {
+			&r.Target, &r.Outcome, &r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.FoldHash, &r.HashFormat, &r.HashSalt); err != nil {
 			return nil, fmt.Errorf("store: scan audit partition row: %w", err)
 		}
 		page = append(page, r)

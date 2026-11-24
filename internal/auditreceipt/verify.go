@@ -336,8 +336,12 @@ func (r *Report) checkEvent(i int, st Statement, c Checkpoint, ev Event, linked 
 		} else {
 			er.Withheld = true
 		}
-	} else if ev.Row.RowHash != nil && RowHash(ev.Row) != *ev.Row.RowHash {
-		r.fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
+	} else if ev.Row.RowHash != nil {
+		if h, err := RowHashOf(ev.Row); err != nil {
+			r.fail(i, seq, ReasonFormat, "%v", err)
+		} else if h != *ev.Row.RowHash {
+			r.fail(i, seq, ReasonRowHash, "the row's content does not hash to its row_hash (it was altered)")
+		}
 	}
 	er.OK = len(r.Failures) == evBefore && res.Signed && res.Inclusion && !er.Withheld
 	return er
