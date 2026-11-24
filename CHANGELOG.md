@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- With `WARDYN_START_AFTER_READBACK=on`, an interactive run with a task is no longer refused. Its starting prompt or startup command waits in the sandbox until the run's proxy confirms its policy, then starts, so an application can be served with the setting on. This needs a Wardyn agent image from 0.11.0 or later; with an older image the run fails with its sandbox stopped and a hint to rebuild it. An interactive VM run with a task is still refused.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
