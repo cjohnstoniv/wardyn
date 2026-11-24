@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
@@ -24,12 +25,16 @@ func refuseSpireOffKubernetes(runnerSel string) error {
 	return nil
 }
 
-// newIdentityProvider is identity.New behind refuseSpireOffKubernetes.
+// newIdentityProvider is identity.New behind refuseSpireOffKubernetes, and it refuses the proxy SPIFFE
+// mount under any other provider: proxies would run on the proxy account with the socket mounted and no
+// entry to attest them.
 func newIdentityProvider(identitySel, runnerSel string, d identity.Deps) (identity.Provider, error) {
 	if identitySel == "spire" {
 		if err := refuseSpireOffKubernetes(runnerSel); err != nil {
 			return nil, err
 		}
+	} else if os.Getenv("WARDYN_K8S_SPIFFE_CSI_DRIVER") != "" || os.Getenv("WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT") != "" {
+		return nil, errors.New("WARDYN_K8S_SPIFFE_CSI_DRIVER and WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT need WARDYN_IDENTITY=spire")
 	}
 	return identity.New(identitySel, d)
 }
