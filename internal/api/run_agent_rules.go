@@ -39,9 +39,32 @@ type agentRulesSourceRecord struct {
 	Harness string `json:"harness"`
 	Version int    `json:"version"`
 	*WallsSourceRecord
-	// policySetInnerWalls is whether the run's policy already set harness_inner_walls before these rules
-	// met into it; the inner-walls refusal then names both (agentRulesInnerWallsFor). Never on the wire.
-	policySetInnerWalls bool
+	// policySetInnerWalls is which harness_inner_walls axes the run's policy already set before these rules
+	// met into it; the inner-walls refusal then names both for that axis (agentRulesInnerWallsFor). Never on
+	// the wire.
+	policySetInnerWalls innerAxesSet
+}
+
+// innerAxesSet is which axes of harness_inner_walls a policy set.
+type innerAxesSet struct{ sandboxMode, approvals bool }
+
+func innerAxesOf(w *types.HarnessInnerWalls) innerAxesSet {
+	if w == nil {
+		return innerAxesSet{}
+	}
+	return innerAxesSet{sandboxMode: w.SandboxMode != "", approvals: w.Approvals != ""}
+}
+
+// has reports whether the policy set axis ("sandbox_mode" or "approvals"); any other axis, one a refusal does
+// not name, asks whether it set either.
+func (a innerAxesSet) has(axis string) bool {
+	switch axis {
+	case "sandbox_mode":
+		return a.sandboxMode
+	case "approvals":
+		return a.approvals
+	}
+	return a.sandboxMode || a.approvals
 }
 
 // includedHarnessIDs is the ids of the harnesses req includes: its run-mode set, else its agent.
@@ -128,7 +151,7 @@ func (s *Server) agentRulesRunStep(ctx context.Context, req createRunRequest, sp
 	var warns []string
 	// Whether the run's own policy set the agent's walls, read before any rule meets into it: a later rule is not
 	// the policy, and a refusal names the policy only when the policy itself set the axis.
-	policySet := spec.HarnessInnerWalls != nil && *spec.HarnessInnerWalls != (types.HarnessInnerWalls{})
+	policySet := innerAxesOf(spec.HarnessInnerWalls)
 	for _, rule := range rules {
 		who, whoStart := agentRulesLabel(rule.Harness)
 		if refusal := validateAgentRulesWrite(rule.Harness, types.AgentRulesWrite{Spec: rule.Spec, InnerWalls: rule.InnerWalls}); refusal != nil {
@@ -153,7 +176,7 @@ func (s *Server) agentRulesRunStep(ctx context.Context, req createRunRequest, sp
 					spec.HarnessInnerWalls = met
 				}
 			})
-			if axis != "" && !policySet {
+			if axis != "" && !policySet.has(axis) {
 				return nil, runError(http.StatusUnprocessableEntity, reasonAgentRulesConflict,
 					whoStart+" set harness_inner_walls."+axis+" to a value that the rules of another agent in this run do not allow. Ask a security admin to change the agent rules, or launch without one of the agents.")
 			}
@@ -184,12 +207,12 @@ func agentRulesInnerWallsFor(req createRunRequest, spec types.RunPolicySpec, har
 	}
 	h := source.knobs["harness_inner_walls"].Name
 	who, whoStart := agentRulesLabel(h)
-	axis := "they bind every agent in the run"
+	axis, named := "they bind every agent in the run", ""
 	if m := innerWallsAxisRE.FindStringSubmatch(refusal.body.Error); m != nil {
-		axis = "the agent cannot meet the " + m[1] + " rule"
+		axis, named = "the agent cannot meet the "+m[1]+" rule", m[1]
 	}
 	for _, rec := range source.AgentRules {
-		if rec.Harness == h && rec.policySetInnerWalls {
+		if rec.Harness == h && rec.policySetInnerWalls.has(named) {
 			return nil, runError(http.StatusUnprocessableEntity, reasonAgentRulesConflict,
 				"This run's policy and "+who+" together set the agent's own walls, and this run cannot launch with them: "+axis+
 					". Change the policy's harness_inner_walls, or launch without the agent.")
