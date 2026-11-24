@@ -173,13 +173,16 @@ func TestDecisionBatch_RowsMatchSinglePosts(t *testing.T) {
 	single, recA := newBatchServer(h, stA)
 	batched, recB := newBatchServer(h, stB)
 	const path = "/api/v1/internal/decisions"
-	for _, dl := range batchCases() {
+	// One set of cases for both doors: a case carrying an approval id mints it once, so a row can only differ
+	// between the doors by what the doors did.
+	cases := batchCases()
+	for _, dl := range cases {
 		raw, _ := json.Marshal(dl)
 		if w := doWithHeaders(t, single, http.MethodPost, path, tok, string(raw), nil); w.Code != http.StatusAccepted {
 			t.Fatalf("single post %s = %d %s", dl.Request.Host, w.Code, w.Body.String())
 		}
 	}
-	body, _ := batchBody(t, time.Now().UTC(), batchCases()...)
+	body, _ := batchBody(t, time.Now().UTC(), cases...)
 	if w := doWithHeaders(t, batched, http.MethodPost, path, tok, body, batchHeaders(false)); w.Code != http.StatusAccepted {
 		t.Fatalf("batch post = %d %s", w.Code, w.Body.String())
 	}
