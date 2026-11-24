@@ -201,13 +201,14 @@ func (s *Server) targetsOwnedBy(ctx context.Context, p runPlacement, principal s
 	return true, nil
 }
 
-// localFolderLayer names a wall's layer in a sentence: the boundary, a unit by name, or this run's policy for every
-// other layer, with " (locked)" when the knob is locked. Its arguments are one wall's LocalFolderWallLayer fields.
+// localFolderLayer names a wall's layer in a sentence, in the console's words (its layer chips): the Wardyn boundary
+// for the boundary and the deployment layer, a unit by name, or this run's policy for every other layer, with
+// " (locked)" when the knob is locked. Its arguments are one wall's LocalFolderWallLayer fields.
 func localFolderLayer(layer, name string, locked bool) string {
 	out := "this run's policy"
 	switch {
-	case layer == policyref.LayerBoundary:
-		out = "your organisation's boundary"
+	case layer == policyref.LayerBoundary || layer == policyref.LayerDeployment:
+		out = "the Wardyn boundary"
 	case layer == policyref.LayerUnit && name != "":
 		out = "the " + name + " unit"
 	}
@@ -333,9 +334,10 @@ func (s *Server) runLocalFolderWalls(ctx context.Context, runID uuid.UUID) (type
 	return st.RunLocalFolderWalls(ctx, runID)
 }
 
-// runOnOwnComputer reports whether run is on its person's own runner: placement local, a runner bound, and that
-// runner person-owned by the run's creator. A read error is returned.
-func (s *Server) runOnOwnComputer(ctx context.Context, run types.AgentRun) (bool, error) {
+// runOnOwnComputer reports whether run is on the own runner of principal, the person opening its sync: placement
+// local, a runner bound, and that runner person-owned by principal. A support helper or an admin who opens the sync
+// of a run on someone else's computer is not on their own computer. A read error is returned.
+func (s *Server) runOnOwnComputer(ctx context.Context, run types.AgentRun, principal string) (bool, error) {
 	if run.Placement != types.PlacementLocal || run.RunnerID == nil {
 		return false, nil
 	}
@@ -347,7 +349,7 @@ func (s *Server) runOnOwnComputer(ctx context.Context, run types.AgentRun) (bool
 	if err != nil {
 		return false, err
 	}
-	return rn.OwnerKind == types.RunnerOwnerPerson && rn.Owner == run.CreatedBy, nil
+	return rn.OwnerKind == types.RunnerOwnerPerson && rn.Owner == principal, nil
 }
 
 // localFolderByteCap passes at most left bytes of r; the next byte returns errLocalFolderCap and calls over once.
@@ -451,6 +453,27 @@ func (s *Server) passCapped(runID uuid.UUID, rec types.LocalFolderWallsRecord, w
 	}}
 }
 
+// passStream is a computer-folder pass's stream to the runner (runnerwire.Stream).
+type passStream interface {
+	io.ReadWriter
+	CloseWrite() error
+}
+
+// passPipes copies one computer-folder pass both ways, each through its cap: the runner's stream into the
+// sandbox's sftp-server (push), and its replies back to the runner (pull). wait returns once both copies end.
+func (s *Server) passPipes(runID uuid.UUID, rec types.LocalFolderWallsRecord, stream passStream, stdin io.WriteCloser, stdout io.Reader) (wait func()) {
+	var joined sync.WaitGroup
+	joined.Go(func() {
+		_, _ = io.Copy(stdin, s.passCapped(runID, rec, "push", stream))
+		_ = stdin.Close()
+	})
+	joined.Go(func() {
+		_, _ = io.Copy(stream, s.passCapped(runID, rec, "pull", stdout))
+		_ = stream.CloseWrite()
+	})
+	return joined.Wait
+}
+
 // syncWalls reads the run's walls for its sync channel and answers the client's sentence when they refuse it: an
 // unreadable record, deny_remote for a run not on its person's own runner (audited), or an over-long deny union.
 func (s *Server) syncWalls(ctx context.Context, run types.AgentRun, principal string) (types.LocalFolderWallsRecord, string) {
@@ -463,7 +486,7 @@ func (s *Server) syncWalls(ctx context.Context, run types.AgentRun, principal st
 		return rec, ""
 	}
 	if rec.Walls.DenyRemote {
-		own, err := s.runOnOwnComputer(ctx, run)
+		own, err := s.runOnOwnComputer(ctx, run, principal)
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: a run's runner is unreadable; its sync is refused", "run_id", run.ID, "err", err)
 			return rec, localFolderWallsUnreadableMsg
@@ -545,10 +568,12 @@ func servedSyncDeny(deploy, run []string) ([]string, error) {
 	return unionSyncDeny(deploy, run), nil
 }
 
-// folderPassArgs is a computer-folder pass's sftp-server argv: started in dir, and read-closed under deny_pull.
-func folderPassArgs(dir string, walls *types.LocalFolderRules) []string {
+// folderPassArgs is a computer-folder pass's sftp-server argv: started in dir, and read-closed under deny_pull or a
+// data_out rule other than allowed, as the sync channel is (bridgeSSHSync).
+func (s *Server) folderPassArgs(ctx context.Context, runID uuid.UUID, dir string, walls *types.LocalFolderRules) []string {
 	args := []string{"-d", dir}
-	if walls != nil && walls.DenyPull {
+	rule, _, err := s.runDataOutRule(ctx, runID) // an unreadable rule keeps content in, as the sync channel reads it
+	if err != nil || rule.DataOut() != types.TransferAllowed || walls != nil && walls.DenyPull {
 		args = append(args, "-P", sftpServerDeny)
 	}
 	return args

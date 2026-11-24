@@ -111,10 +111,13 @@ func TestSyncMaxPullBytesTakesTheRunCap(t *testing.T) {
 	}
 }
 
-// A --pull sync of a run whose walls keep the sandbox's changes in exits with the server's sentence before it
-// connects to the gateway; without --pull it goes on.
-func TestSyncPullRefusedBeforeConnect(t *testing.T) {
-	const text = "local_folder: bringing the sandbox's changes back to your computer is walled off by your organisation's boundary"
+// denyPullText is the server's --pull sentence for a run whose walls keep the sandbox's changes in.
+const denyPullText = "local_folder: bringing the sandbox's changes back to your computer is walled off by the Wardyn boundary"
+
+// syncUnderDenyPull runs `wardyn sync` with flag against a run whose walls keep the sandbox's changes in, and
+// returns how many times it dialed the gateway and its error.
+func syncUnderDenyPull(t *testing.T, flag string) (int32, error) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +136,7 @@ func TestSyncPullRefusedBeforeConnect(t *testing.T) {
 	}()
 	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/runs/") {
-			_ = json.NewEncoder(w).Encode(map[string]any{"sync": map[string]any{"deny_pull": true, "deny_pull_text": text}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"sync": map[string]any{"deny_pull": true, "deny_pull_text": denyPullText}})
 			return
 		}
 		host, port, _ := net.SplitHostPort(ln.Addr().String())
@@ -144,16 +147,40 @@ func TestSyncPullRefusedBeforeConnect(t *testing.T) {
 	t.Cleanup(web.Close)
 	t.Setenv("HOME", t.TempDir())
 	cmd := syncCmd(func() *sdk.Client { return &sdk.Client{BaseURL: web.URL, HTTPClient: web.Client()} })
-	cmd.SetArgs([]string{testRunID, t.TempDir(), "--pull"})
+	cmd.SetArgs([]string{testRunID, t.TempDir(), flag})
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
-	if err := cmd.Execute(); err == nil || err.Error() != text {
-		t.Fatalf("sync --pull = %v, want %q", err, text)
+	err = cmd.Execute()
+	return dialed.Load(), err
+}
+
+// A --pull sync of a run whose walls keep the sandbox's changes in exits with the server's sentence before it
+// connects to the gateway; without --pull it goes on.
+func TestSyncPullRefusedBeforeConnect(t *testing.T) {
+	dialed, err := syncUnderDenyPull(t, "--pull")
+	if err == nil || err.Error() != denyPullText {
+		t.Fatalf("sync --pull = %v, want %q", err, denyPullText)
 	}
-	if n := dialed.Load(); n != 0 {
-		t.Errorf("the gateway was dialed %d times before the refusal", n)
+	if dialed != 0 {
+		t.Errorf("the gateway was dialed %d times before the refusal", dialed)
 	}
 	f := syncFlags{maxPullBytes: foldersync.DefaultMaxPullBytes}
-	if err := applySyncRules(&f, sdk.RunSyncRules{DenyPull: true, DenyPullText: text}); err != nil {
+	if err := applySyncRules(&f, sdk.RunSyncRules{DenyPull: true, DenyPullText: denyPullText}); err != nil {
 		t.Errorf("a push-only sync was refused: %v", err)
+	}
+}
+
+// A --pull-commits sync brings the sandbox's commits back, so a run whose walls keep its changes in refuses it the
+// same way, before it connects.
+func TestSyncPullCommitsRefusedBeforeConnect(t *testing.T) {
+	dialed, err := syncUnderDenyPull(t, "--pull-commits")
+	if err == nil || err.Error() != denyPullText {
+		t.Fatalf("sync --pull-commits = %v, want %q", err, denyPullText)
+	}
+	if dialed != 0 {
+		t.Errorf("the gateway was dialed %d times before the refusal", dialed)
+	}
+	f := syncFlags{maxPullBytes: foldersync.DefaultMaxPullBytes, pullCommits: true}
+	if err := applySyncRules(&f, sdk.RunSyncRules{DenyPull: true, DenyPullText: denyPullText}); err == nil || err.Error() != denyPullText {
+		t.Errorf("applySyncRules with --pull-commits = %v, want the refusal", err)
 	}
 }

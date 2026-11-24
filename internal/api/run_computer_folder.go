@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -830,7 +829,7 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 	if pull && rec.Walls != nil && rec.Walls.DenyPull {
 		return runnerwire.FolderPass{}, false, true, errors.New(localFolderBackText(rec))
 	}
-	sess, reason, err := s.execSFTPServer(ctx, run, nil, folderPassArgs(folder.RemoteDir, rec.Walls)...)
+	sess, reason, err := s.execSFTPServer(ctx, run, nil, s.folderPassArgs(ctx, run.ID, folder.RemoteDir, rec.Walls)...)
 	if err != nil {
 		return runnerwire.FolderPass{}, false, true, errors.New(reason)
 	}
@@ -851,19 +850,11 @@ func (s *Server) computerFolderPass(ctx, account context.Context, run types.Agen
 		return runnerwire.FolderPass{}, false, runnerReplied(err), fmt.Errorf("the runner could not start the sync: %w", err)
 	}
 	defer func() { _ = pass.Stream.Close() }()
-	var joined sync.WaitGroup
-	joined.Go(func() {
-		_, _ = io.Copy(sess.Stdin, s.passCapped(run.ID, rec, "push", pass.Stream))
-		_ = sess.Stdin.Close()
-	})
-	joined.Go(func() {
-		_, _ = io.Copy(pass.Stream, s.passCapped(run.ID, rec, "pull", sess.Stdout))
-		_ = pass.Stream.CloseWrite()
-	})
+	joined := s.passPipes(run.ID, rec, pass.Stream, sess.Stdin, sess.Stdout)
 	res, err := pass.Wait(ctx)
 	_ = pass.Stream.Close()
 	_ = sess.Close()
-	joined.Wait()
+	joined()
 	if cut = err != nil && ctx.Err() != nil; cut {
 		actx, cancel := context.WithTimeout(account, computerFolderAccountTime)
 		defer cancel()

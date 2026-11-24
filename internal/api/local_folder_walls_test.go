@@ -140,7 +140,7 @@ func TestLocalFolderWalls_RefusalNamesLayer(t *testing.T) {
 		locked   bool
 		want     string
 	}{
-		{"boundary", hard(&types.LocalFolderRules{DenyPull: true}), nil, false, "walled off by your organisation's boundary"},
+		{"boundary", hard(&types.LocalFolderRules{DenyPull: true}), nil, false, "walled off by the Wardyn boundary"},
 		{"a unit", types.Boundary{}, &types.LocalFolderRules{DenyPull: true}, false, "walled off by the eng unit"},
 		{"a locked unit", types.Boundary{}, &types.LocalFolderRules{DenyPull: true}, true, "walled off by the eng unit (locked)"},
 		{"an inline policy", types.Boundary{}, nil, false, "walled off by this run's policy"},
@@ -169,7 +169,7 @@ func TestLocalFolderWalls_RefusalNamesLayer(t *testing.T) {
 	u.Ceiling.LocalFolders = &types.LocalFolderRules{MaxPushMiB: 10}
 	f.ceiling.Unit = &u
 	s := &Server{cfg: Config{Store: lfwBoundaryStore{b: hard(&types.LocalFolderRules{DenyPull: true})}}}
-	if s.stepLocalFolderWalls(f, nil) || !strings.Contains(w.Body.String(), "walled off by your organisation's boundary") {
+	if s.stepLocalFolderWalls(f, nil) || !strings.Contains(w.Body.String(), "walled off by the Wardyn boundary") {
 		t.Errorf("two layers: the deny_pull refusal = %s, want the boundary named", w.Body)
 	}
 	capText := localFolderCapText(10<<20, "push", f.source.localFolderLayers[wallMaxPush])
@@ -383,7 +383,7 @@ func TestLocalFolderByteCap_EndsAtCap(t *testing.T) {
 		}
 	}
 	msg := localFolderCapText(100<<20, "push", types.LocalFolderWallLayer{Layer: policyref.LayerBoundary})
-	if msg != "This sync session reached its 100.0 MB limit for sending in, set by your organisation's boundary" || strings.Contains(msg, "local_folder:") {
+	if msg != "This sync session reached its 100.0 MB limit for sending in, set by the Wardyn boundary" || strings.Contains(msg, "local_folder:") {
 		t.Errorf("cap sentence = %q", msg)
 	}
 	if got := consoleBytes(1536); got != "1.5 KB" {
@@ -689,7 +689,7 @@ func TestBridgeSSHSync_DenyRemoteRefusesChannel(t *testing.T) {
 	if err := sess.Wait(); err == nil {
 		t.Error("the sync ended 0")
 	}
-	if got, _ := io.ReadAll(stderr); !strings.Contains(string(got), "a folder from your computer for a run on another machine is walled off by your organisation's boundary") {
+	if got, _ := io.ReadAll(stderr); !strings.Contains(string(got), "a folder from your computer for a run on another machine is walled off by the Wardyn boundary") {
 		t.Errorf("stderr = %q", got)
 	}
 	if argv, _ := d.fr.lastCall(); argv != nil {
@@ -806,7 +806,7 @@ func TestBridgeSSHSync_ByteCapEndsSession(t *testing.T) {
 		if err := sess.Wait(); !errors.As(err, &exit) || exit.ExitStatus() != syncCapExitStatus {
 			t.Errorf("%s: Wait = %v, want exit status %d", tc.wall, err, syncCapExitStatus)
 		}
-		if !strings.Contains(string(errOut), "This sync session reached its 1.0 MB "+tc.what+", set by your organisation's boundary") {
+		if !strings.Contains(string(errOut), "This sync session reached its 1.0 MB "+tc.what+", set by the Wardyn boundary") {
 			t.Errorf("%s: stderr = %q", tc.wall, errOut)
 		}
 		if d.wallDenied(t, tc.wall) == nil {
@@ -841,6 +841,190 @@ func TestBridgeSSHSync_ByteCapRowCarriesSentence(t *testing.T) {
 		}
 		if got := sshAuditData(t, ev)["error"]; got != tc.want {
 			t.Errorf("%s: row error = %q, want %q", tc.wall, got, tc.want)
+		}
+	}
+}
+
+// TestLocalFolderLayer_DeploymentIsTheWardynBoundary: a wall from the deployment layer or the boundary reads as the
+// Wardyn boundary, the console's word for both, in every sentence that names it.
+func TestLocalFolderLayer_DeploymentIsTheWardynBoundary(t *testing.T) {
+	for _, layer := range []string{policyref.LayerDeployment, policyref.LayerBoundary} {
+		if got := localFolderLayer(layer, "", false); got != "the Wardyn boundary" {
+			t.Errorf("%s: %q, want the Wardyn boundary", layer, got)
+		}
+		rec := types.LocalFolderWallsRecord{Walls: &types.LocalFolderRules{DenyPull: true}, Layers: map[string]types.LocalFolderWallLayer{wallDenyPull: {Layer: layer, Locked: true}}}
+		if got := localFolderBackText(rec); got != "Bringing the sandbox's changes back to your computer is walled off by the Wardyn boundary (locked)." {
+			t.Errorf("%s: %q", layer, got)
+		}
+	}
+	if got := localFolderLayer(policyref.LayerMember, "", false); got != "this run's policy" {
+		t.Errorf("member: %q", got)
+	}
+}
+
+// TestRunOnOwnComputer_ComparesThePrincipal: the runner must be the own computer of the person opening the sync,
+// not only of the run's creator: a helper or an admin who opens it is not on their own computer.
+func TestRunOnOwnComputer_ComparesThePrincipal(t *testing.T) {
+	id := uuid.New()
+	s := &Server{cfg: Config{Store: lfwRunnerStore{runners: map[uuid.UUID]types.Runner{
+		id: {ID: id, Owner: "alice@example.com", OwnerKind: types.RunnerOwnerPerson},
+	}}}}
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: "alice@example.com", Placement: types.PlacementLocal, RunnerID: &id}
+	for _, tc := range []struct {
+		principal string
+		want      bool
+	}{{"alice@example.com", true}, {"helper@example.com", false}} {
+		if got, err := s.runOnOwnComputer(context.Background(), run, tc.principal); err != nil || got != tc.want {
+			t.Errorf("%s: %v, %v; want %v", tc.principal, got, err, tc.want)
+		}
+	}
+}
+
+// TestComputerFolderPass_DataOutStartsReadDenied: under data_out review or blocked every computer-folder pass starts
+// its sftp-server read-closed, as the sync channel does; allowed with no walls does not.
+func TestComputerFolderPass_DataOutStartsReadDenied(t *testing.T) {
+	for _, tc := range []struct {
+		rule   types.TransferRule
+		closed bool
+	}{{types.TransferReview, true}, {types.TransferBlocked, true}, {"", false}} {
+		s, cs, run, _ := scriptedFolderFixture(t, runnerwire.FolderPass{})
+		cs.dataOut = tc.rule
+		ar := &lfwArgvRunner{Runner: s.cfg.Runner}
+		s.cfg.Runner = ar
+		s.cfg.Store = &lfwFolderStore{computerFolderStore: cs}
+		if _, _, settled, err := s.computerFolderPass(context.Background(), context.Background(), run, *cs.folder, false, passGuard{}); err != nil || !settled {
+			t.Fatalf("%q: settled %v, err %v", tc.rule, settled, err)
+		}
+		got := ar.sftpArgv()
+		if closed := len(got) >= 2 && slices.Equal(got[len(got)-2:], []string{"-P", sftpServerDeny}); closed != tc.closed {
+			t.Errorf("data_out %q: argv = %v, want read-closed %v", tc.rule, got, tc.closed)
+		}
+	}
+}
+
+// lfwPassStream is a pass's runner stream: reads come from in, writes are counted.
+type lfwPassStream struct {
+	in io.Reader
+	lfwCountWriter
+}
+
+func (p *lfwPassStream) Read(b []byte) (int, error) { return p.in.Read(b) }
+func (p *lfwPassStream) CloseWrite() error          { return p.Close() }
+
+// lfwCountWriter counts what is written to it.
+type lfwCountWriter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (w *lfwCountWriter) Write(b []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.n += len(b)
+	return len(b), nil
+}
+func (w *lfwCountWriter) Close() error { return nil }
+func (w *lfwCountWriter) count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.n
+}
+
+// TestComputerFolderPass_SizeCapsEndEachWay: a computer-folder pass copies at most max_push_mib into the sandbox and
+// max_pull_mib back to the runner, and the cap writes one run.local_folder.deny row naming its wall; the other way
+// is not capped.
+func TestComputerFolderPass_SizeCapsEndEachWay(t *testing.T) {
+	const over = 1<<20 + 4096
+	for _, tc := range []struct {
+		wall  string
+		walls *types.LocalFolderRules
+		push  bool
+	}{
+		{wallMaxPush, &types.LocalFolderRules{MaxPushMiB: 1}, true},
+		{wallMaxPull, &types.LocalFolderRules{MaxPullMiB: 1}, false},
+	} {
+		h := newHarness(t)
+		runID := uuid.New()
+		audit := &syncAudit{}
+		cfg := baseTestConfig(h, &dispatchTestStore{run: types.AgentRun{ID: runID, CreatedBy: "t@example.com"}, state: types.RunRunning})
+		cfg.Audit = audit
+		cfg.Broker = h.broker
+		srv := New(cfg)
+		rec := types.LocalFolderWallsRecord{Walls: tc.walls, Layers: map[string]types.LocalFolderWallLayer{tc.wall: {Layer: policyref.LayerBoundary}}}
+		stream, stdin, stdout := &lfwPassStream{in: bytes.NewReader(make([]byte, over))}, &lfwCountWriter{}, bytes.NewReader(make([]byte, over))
+		srv.passPipes(runID, rec, stream, stdin, stdout)()
+		capped, free := stream.count(), stdin.count()
+		if tc.push {
+			capped, free = free, capped
+		}
+		if capped != 1<<20 || free != over {
+			t.Errorf("%s: capped way copied %d, want %d; the other way %d, want %d", tc.wall, capped, 1<<20, free, over)
+		}
+		audit.mu.Lock()
+		rows := 0
+		for _, ev := range audit.events {
+			if ev.Action == "run.local_folder.deny" && strings.Contains(string(ev.Data), `"wall":"`+tc.wall+`"`) {
+				rows++
+			}
+		}
+		audit.mu.Unlock()
+		if rows != 1 {
+			t.Errorf("%s: %d run.local_folder.deny rows naming the wall, want 1", tc.wall, rows)
+		}
+	}
+}
+
+// lfwCreateStore is the create harness's store with a Wardyn boundary, and the walls dispatch stores per run.
+type lfwCreateStore struct {
+	*ownerStore
+	b    types.Boundary
+	mu   sync.Mutex
+	kept map[uuid.UUID]types.LocalFolderWallsRecord
+}
+
+func (s *lfwCreateStore) GetBoundary(context.Context) (types.Boundary, error) { return s.b, nil }
+func (s *lfwCreateStore) PutBoundary(context.Context, types.BoundaryWrite, string) (types.Boundary, error) {
+	return s.b, nil
+}
+func (s *lfwCreateStore) KeepRunLocalFolderWalls(_ context.Context, id uuid.UUID, rec types.LocalFolderWallsRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.kept[id] = rec
+	return nil
+}
+func (s *lfwCreateStore) RunLocalFolderWalls(_ context.Context, id uuid.UUID) (types.LocalFolderWallsRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.kept[id], nil
+}
+
+// TestCreateRun_StoresLocalFolderWallsWithEachLayer: a run created through POST /runs and dispatched stores its
+// clamped walls before its sandbox, each wall with its own layer: the boundary's deny_pull names the boundary and the
+// run's own cap does not, so the layers create hands dispatch reach the stored record.
+func TestCreateRun_StoresLocalFolderWallsWithEachLayer(t *testing.T) {
+	root, project := memberProjectRoot(t)
+	srv, st, fr := userDispatchHarness(t, runner.UserMountPolicy{Roots: []string{root}})
+	srv.cfg.DefaultPolicy.LocalFolders = &types.LocalFolderRules{MaxPushMiB: 5}
+	cs := &lfwCreateStore{ownerStore: st, kept: map[uuid.UUID]types.LocalFolderWallsRecord{},
+		b: types.Boundary{Mode: types.BoundaryHardLimits, Spec: types.BoundarySpec{LocalFolders: &types.LocalFolderRules{DenyPull: true}}}}
+	srv.cfg.Store = cs
+	createMemberRun(t, srv, fr, nil, memberOwnedWorkspace(st, "", project))
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if len(cs.kept) != 1 {
+		t.Fatalf("stored walls for %d runs, want 1", len(cs.kept))
+	}
+	for _, rec := range cs.kept {
+		if rec.Walls == nil || !rec.Walls.DenyPull || rec.Walls.MaxPushMiB != 5 {
+			t.Errorf("stored walls = %+v, want deny_pull and a 5 MiB push cap", rec.Walls)
+		}
+		pull, okPull := rec.Layers[wallDenyPull]
+		push, okPush := rec.Layers[wallMaxPush]
+		if !okPull || pull.Layer != policyref.LayerBoundary {
+			t.Errorf("deny_pull layer = %+v (%v), want the boundary", pull, okPull)
+		}
+		if !okPush || push.Layer == "" || push.Layer == policyref.LayerBoundary {
+			t.Errorf("max_push_mib layer = %+v (%v), want the run's own layer, not the boundary", push, okPush)
 		}
 	}
 }

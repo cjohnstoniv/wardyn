@@ -134,7 +134,7 @@ func TestRunSyncView_DenyIsUnion(t *testing.T) {
 	if v.MaxPushBytes != 2<<20 || v.MaxPullBytes != 3<<20 || !v.DenyPull || !reflect.DeepEqual(v.WallLayers, layers) {
 		t.Errorf("view = %+v", v)
 	}
-	if !strings.Contains(v.DenyPullText, "walled off by your organisation's boundary") || v.Open == nil {
+	if !strings.Contains(v.DenyPullText, "walled off by the Wardyn boundary") || v.Open == nil {
 		t.Errorf("deny_pull_text %q, open %v", v.DenyPullText, v.Open)
 	}
 	raw, _ := json.Marshal(v)

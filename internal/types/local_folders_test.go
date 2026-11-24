@@ -54,7 +54,7 @@ func TestLocalFolderRulesMeet(t *testing.T) {
 }
 
 // TestLocalFolderRulesAtLeastAsStrict: the whole-spec order reads an omitted field as no wall, so a spec that only
-// sets deny_pull is not at least as strict as one that caps pushes (the partial row of I1).
+// sets deny_pull is not at least as strict as one that caps pushes.
 func TestLocalFolderRulesAtLeastAsStrict(t *testing.T) {
 	for _, c := range []struct {
 		name string

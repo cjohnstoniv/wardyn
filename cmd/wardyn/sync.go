@@ -300,11 +300,11 @@ func portOr22(port string) string {
 	return port
 }
 
-// applySyncRules holds this sync to the run's folder walls before it connects: a --pull sync of a run whose walls
-// keep the sandbox's changes in exits with their sentence, and one pass pulls at most the smaller of the flag and the
-// run's cap. The server holds both anyway.
+// applySyncRules holds this sync to the run's folder walls before it connects: a --pull or --pull-commits sync of a
+// run whose walls keep the sandbox's changes in exits with their sentence, and one pass pulls at most the smaller of
+// the flag and the run's cap. The server holds both anyway.
 func applySyncRules(f *syncFlags, rules sdk.RunSyncRules) error {
-	if f.pull && rules.DenyPull {
+	if (f.pull || f.pullCommits) && rules.DenyPull {
 		return errors.New(rules.DenyPullText)
 	}
 	if rules.MaxPullBytes > 0 {

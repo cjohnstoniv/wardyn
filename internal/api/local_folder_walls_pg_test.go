@@ -45,7 +45,7 @@ func TestBringComputerFolderBack_DenyPullRefused_PG(t *testing.T) {
 	}
 	w := e.call(e.person, http.MethodPost, "/api/v1/runs/"+run.String()+"/computer-folder/bring-back", "")
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), reasonLocalFolderWalled) ||
-		!strings.Contains(w.Body.String(), "walled off by your organisation's boundary") {
+		!strings.Contains(w.Body.String(), "walled off by the Wardyn boundary") {
 		t.Fatalf("bring-back under deny_pull = %d %s, want 403 %s naming the boundary", w.Code, w.Body, reasonLocalFolderWalled)
 	}
 	got, err := e.pg.GetRun(ctx, run)
