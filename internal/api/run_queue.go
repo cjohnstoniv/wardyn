@@ -272,6 +272,10 @@ type queuedCreate struct {
 // promotion attempt, and answers 201: QUEUED with the wait sentence, or PENDING if a slot was free.
 func (q queuedCreate) answer(s *Server, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	if name, ok := driveFillLaunchFrom(ctx); ok { // a drive fill never waits in a queue
+		driveFillNoCapacity(q.f.place, name).write(s, w, r)
+		return
+	}
 	qs, ok := s.queueStore()
 	if !ok {
 		writeServerError(w, r, "queue run", errors.New("this store cannot hold a queue"))
