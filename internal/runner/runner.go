@@ -36,8 +36,9 @@ type Capabilities struct {
 	NetworkPolicyAcknowledged bool                              `json:"network_policy_acknowledged,omitempty"` // operator accepted a canary failure as expected rather than proven
 	SessionRecording          bool                              `json:"session_recording"`                     // wardyn-rec sidecar support
 	// UserDrives and ManagedFiles are fail-closed: false means the control plane refuses rather than admit a request the driver would reject.
-	UserDrives   bool `json:"user_drives,omitempty"`
-	ManagedFiles bool `json:"managed_files,omitempty"` // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
+	UserDrives      bool `json:"user_drives,omitempty"`
+	ManagedFiles    bool `json:"managed_files,omitempty"`    // can deliver SandboxSpec.ManagedFiles: root-owned ceilings the agent cannot modify, and agent-owned secret files (ManagedFile.AgentOwned)
+	ExtraContainers bool `json:"extra_containers,omitempty"` // fail-closed like UserDrives, AND-aggregated: runs SandboxSpec.Containers (extra_containers.go)
 	// EphemeralDiskEnforcement names what binds Resources.DiskMiB:
 	// `filesystem` (docker quota), `eviction` (k8s, never refuses the write),
 	// or `none`/empty. Aggregated as the WEAKEST across substrates.
@@ -106,6 +107,7 @@ type SandboxSpec struct {
 	// POLICY-controlled. A driver that doesn't advertise
 	// Capabilities.ManagedFiles MUST refuse rather than start without them.
 	ManagedFiles []ManagedFile
+	Containers   []ExtraContainer `json:"containers,omitempty"` // beside the agent; omitted when empty, so an older runner gets the bytes it always did (extra_containers.go)
 	// OnWaiting, non-nil, reports WHY the sandbox isn't up yet, each time the
 	// reason CHANGES. Called SYNCHRONOUSLY on CreateSandbox's own goroutine
 	// (must not block). Call NotifyWaiting, never the field.
