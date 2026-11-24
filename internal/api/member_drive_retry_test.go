@@ -189,6 +189,8 @@ func TestHeldDriveRetry_NotDeletableHereTakesNothing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, hf, _ := heldServer(tc.rn, tc.target)
+			// New turns an empty target into "docker"; the case needs the empty one.
+			srv.cfg.RunnerTarget = tc.target
 			d := heldDrive(hf.memberDriveStore, "Notes", types.DriveBackendDockerVolume, 6*time.Minute, 1)
 			if err := srv.sweepHeldMemberDriveDeletes(context.Background()); err != nil {
 				t.Fatalf("sweep: %v", err)
