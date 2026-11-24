@@ -75,7 +75,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 		erasure.Recordings: s.eraseRecordingsOf,
 	}
 	if s.cfg.Secrets != nil {
-		steps[erasure.Credentials] = func(ctx context.Context, person string) (any, error) {
+		steps[erasure.Credentials] = s.alsoEraseRunTokenBindings(func(ctx context.Context, person string) (any, error) {
 			var rep secretstore.EraseReport
 			history := map[string]any{}
 			fenced, revokeFailed, err := s.eraseCredentialsScope(ctx, person, want, &rep)
@@ -100,7 +100,7 @@ func (s *Server) erasureOrchestratorLeaving(credRep *secretstore.EraseReport, wa
 				data["tokens_revocation_failed"], data["detail"] = true, erasureTokensNotRevoked
 			}
 			return data, err
-		}
+		})
 	}
 	if _, ok := s.cfg.Store.(store.ComponentStore); ok {
 		steps[erasure.Components] = s.alsoEraseLaunchIntents(s.eraseComponentsOf)
@@ -275,6 +275,24 @@ func (s *Server) alsoEraseLaunchIntents(step erasure.Step) erasure.Step {
 		case store.RunSetupsErased:
 			d.LaunchIntents = n
 			detail = d
+		}
+		return detail, err
+	}
+}
+
+// alsoEraseRunTokenBindings wraps the credentials step: it also deletes the spire token bindings whose
+// subject or sponsor is the person, so any live token of theirs, or one they sponsored, is refused at its
+// next verify. A store that keeps no bindings does nothing.
+func (s *Server) alsoEraseRunTokenBindings(step erasure.Step) erasure.Step {
+	return func(ctx context.Context, person string) (any, error) {
+		detail, err := step(ctx, person)
+		bs, ok := s.cfg.Store.(store.TokenBindingEraser)
+		if err != nil || !ok {
+			return detail, err
+		}
+		n, err := bs.DeleteTokenBindingsOf(ctx, person)
+		if d, isMap := detail.(map[string]any); isMap {
+			d["token_bindings_deleted"] = n
 		}
 		return detail, err
 	}
