@@ -149,7 +149,7 @@
   - It pays off when an organisation already sends all model and MCP traffic through one gateway.
   - For a single team, a provider's settings in Wardyn are enough.
 - LiteLLM, Portkey, OpenRouter and Presidio recipes, with the versions checked, are in [Model gateways and detectors](operations/model-gateways.md).
-- Wardyn's CI has no green run against an external gateway yet. A nightly job for one is new, and [AI gateway setup](operations/ai-gateway.md) is the config it runs. The model route is the same path as any internal gateway.
+- Wardyn's CI runs this setup in the nightly `ai-gateway-kind` job, which release candidates also run. Governed runs send a model request and an MCP tool call through the pinned image; the job checks the audit rows and the gateway log. [gateway.yaml](../deploy/kind/gateway/gateway.yaml) is the config, set out in [AI gateway setup](operations/ai-gateway.md). The model route is the one any internal gateway uses.
 
 ### A Kubernetes sandbox controller (for example agent-sandbox)
 
