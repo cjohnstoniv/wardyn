@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/runnerspool"
@@ -65,6 +67,15 @@ func (s PG) IngestRunnerDecisionUsage(ctx context.Context, runnerID uuid.UUID, r
 	if err != nil {
 		return false, false, err
 	}
+	// The run's identity comes from the stored run, never from the runner: a spooled row carries the same
+	// run_owner, run_workload and sponsor a row written under the run's own token does.
+	identity, err := runnerRunIdentity(ctx, tx, run)
+	if err != nil {
+		return false, false, err
+	}
+	for i := range events {
+		events[i].Data = audit.StampRunIdentity(events[i].Data, identity)
+	}
 	// Every event is prepared (sealed, masked) before the chain lock is asked for, so the lock is held only across
 	// the inserts and the commit. A failed prepare fails before any write.
 	for i := range events {
@@ -94,6 +105,20 @@ func (s PG) IngestRunnerDecisionUsage(ctx context.Context, runnerID uuid.UUID, r
 		}
 	}
 	return true, usageStored, nil
+}
+
+// runnerRunIdentity is the identity of run as its rows name it: its owner, its workload id, and for a run owned by a
+// service identity that identity's sponsor as the row stands in this transaction.
+func runnerRunIdentity(ctx context.Context, tx pgx.Tx, run types.AgentRun) (audit.RunIdentity, error) {
+	id := audit.RunIdentity{Owner: run.CreatedBy, Workload: run.SPIFFEID}
+	if !strings.HasPrefix(run.CreatedBy, types.ServicePrincipalPrefix) {
+		return id, nil
+	}
+	err := tx.QueryRow(ctx, `SELECT COALESCE(sponsor, '') FROM service_identities WHERE name = $1`, strings.TrimPrefix(run.CreatedBy, types.ServicePrincipalPrefix)).Scan(&id.Sponsor)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return audit.RunIdentity{}, err
+	}
+	return id, nil
 }
 
 func validRunnerDecision(r runnerspool.Record) bool {

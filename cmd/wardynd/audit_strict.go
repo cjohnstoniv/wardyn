@@ -31,7 +31,7 @@ func strictAuditRecorder(on bool, pool *pgxpool.Pool, fan *sinks.Fanout, maskReg
 		rec = storedFanoutRecorder{pool: pool, fanout: fan}
 	}
 	masked := maskingRecorder{inner: sealingRecorder{inner: rec, src: seal}, reg: maskReg, scope: scope}
-	return audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: withPolicyStamp(pool, masked)}}
+	return audit.RunIdentityRecorder{Inner: audit.DelegationRecorder{Inner: audit.DryRunRecorder{Inner: withPolicyStamp(pool, masked)}}}
 }
 
 // storedFanoutRecorder is fanoutRecorder for strict mode: the sinks get a row only after the store took
