@@ -86,10 +86,11 @@ var errSigninNotStarted = errors.New("wardyn-signin did not start")
 
 // End reasons, in desktop_signins.end_reason and the desktop_signin.close row.
 const (
-	signinEndDone     = "done"
-	signinEndExpired  = "expired"
-	signinEndRunEnded = "run_ended"
-	signinEndFailed   = "failed"
+	signinEndDone       = "done"
+	signinEndExpired    = "expired"
+	signinEndRunEnded   = "run_ended"
+	signinEndFailed     = "failed"
+	signinEndGovernance = "governance_unit" // the run's profile now denies interactive sessions (run_desktop_signin_sweep.go)
 )
 
 // signinContinueTries is how many sweep passes retry a sign-in whose agent is
