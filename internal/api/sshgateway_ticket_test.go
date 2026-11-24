@@ -192,7 +192,7 @@ func (rig *ticketDoorRig) waitRow(t *testing.T, action, outcome, reason string) 
 	return got
 }
 
-// TestSSHTicketDoor_Refusals: value rows D1-D13. Each refusal's status, reason and ssh.authenticate row, whether the
+// TestSSHTicketDoor_Refusals: each refusal's status, reason and ssh.authenticate row, whether the
 // ticket was spent, and that every one gave the handshake and source slots back.
 func TestSSHTicketDoor_Refusals(t *testing.T) {
 	const invalidRow = "invalid, expired, or already-used SSH ticket"
@@ -322,7 +322,7 @@ func TestSSHTicketDoor_Refusals(t *testing.T) {
 	}
 }
 
-// TestSSHTicketDoor_GatewayBounds: value rows D3 and D4. A replica whose gateway is not serving yet, and a gateway
+// TestSSHTicketDoor_GatewayBounds: a replica whose gateway is not serving yet, and a gateway
 // whose handshake bound is full, answer 503 before any ticket work.
 func TestSSHTicketDoor_GatewayBounds(t *testing.T) {
 	t.Run("not serving", func(t *testing.T) {
@@ -366,7 +366,7 @@ func TestSSHTicketDoor_SlotReleasedAfterFailedAccept(t *testing.T) {
 	rig.slotsFree(t)
 }
 
-// TestSSHTicketDoor_AttachForwardTicketIsNotAnSSHTicket: value row F5's door half.
+// TestSSHTicketDoor_AttachForwardTicketIsNotAnSSHTicket: a port forward's ticket opens no SSH connection.
 func TestSSHTicketDoor_AttachForwardTicketIsNotAnSSHTicket(t *testing.T) {
 	rig := newTicketDoorRig(t)
 	tok := rig.ticket(t, ticketPurposeAttachForward, 3000)
@@ -406,7 +406,7 @@ func TestSSHTicketDoor_TCPConfigStaysPublicKeyOnly(t *testing.T) {
 	}
 }
 
-// TestSSHTicketDoor_Admits: the admitted row and D14. The username must be the ticket's run id; the success row
+// TestSSHTicketDoor_Admits: the username must be the ticket's run id; the success row
 // names the purpose, the connection counts against its person's share of the gateway, and the TCP key path's
 // success row carries no auth.
 func TestSSHTicketDoor_Admits(t *testing.T) {
@@ -509,7 +509,7 @@ func execRuns(t *testing.T, client *ssh.Client, cmd string) error {
 	return sess.Run(cmd)
 }
 
-// TestSSHTicketDoor_ChannelPurpose: value rows 23-27. A ticket opens only its purpose's kinds; ssh-exec runs one
+// TestSSHTicketDoor_ChannelPurpose: a ticket opens only its purpose's kinds; ssh-exec runs one
 // command; ssh-forward reaches only its ports.
 func TestSSHTicketDoor_ChannelPurpose(t *testing.T) {
 	t.Run("ssh-exec", func(t *testing.T) {
@@ -559,7 +559,7 @@ func TestSSHTicketDoor_ChannelPurpose(t *testing.T) {
 	})
 }
 
-// TestSSHTicketDoor_SwitchAndDataOutFirst: value rows 28 and 29. WARDYN_SSH_CHANNELS refuses before the purpose,
+// TestSSHTicketDoor_SwitchAndDataOutFirst: WARDYN_SSH_CHANNELS refuses before the purpose,
 // with its own row, and data_out applies to a ticket connection as to a key's.
 func TestSSHTicketDoor_SwitchAndDataOutFirst(t *testing.T) {
 	t.Run("switch", func(t *testing.T) {
@@ -594,7 +594,7 @@ func TestSSHTicketDoor_SwitchAndDataOutFirst(t *testing.T) {
 	})
 }
 
-// TestSSHTicketDoor_Recheck: value row 30 and the re-check. A revoked sign-in refuses the next channel with the
+// TestSSHTicketDoor_Recheck: a revoked sign-in refuses the next channel with the
 // ticket's sentence and closes an idle connection; deny_interactive set after the connection opened closes it too.
 func TestSSHTicketDoor_Recheck(t *testing.T) {
 	prev := setSSHKeepaliveEvery(100 * time.Millisecond)
