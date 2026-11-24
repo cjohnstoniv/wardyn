@@ -17,3 +17,14 @@ func machineKindDenialsOf(cfg types.SiteConfig) []types.MachineKindDenial {
 	}
 	return slices.Clone(cfg.Runners.MachineKindDenials)
 }
+
+// withDenialList is rs with runners.machine_kind_denials a list, [] when none, so a site-config answer never says
+// null. It is a copy: rs may be the store's own.
+func withDenialList(rs *types.RunnerSettings) *types.RunnerSettings {
+	if rs == nil || rs.MachineKindDenials != nil {
+		return rs
+	}
+	c := *rs
+	c.MachineKindDenials = []types.MachineKindDenial{}
+	return &c
+}

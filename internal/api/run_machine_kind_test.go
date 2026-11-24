@@ -546,3 +546,21 @@ func TestSiteConfigCannotChangeMachineKindDenials(t *testing.T) {
 		}
 	}
 }
+
+// GET /site-config and the PUT answer carry runners.machine_kind_denials as a list, [] when none is stored, and
+// never null.
+func TestSiteConfigServesMachineKindDenialsAsAList(t *testing.T) {
+	for name, stored := range map[string]*types.RunnerSettings{
+		"none stored":  {Enabled: true},
+		"an empty one": {Enabled: true, MachineKindDenials: []types.MachineKindDenial{}},
+	} {
+		fake := &fakeSiteConfigStore{cfg: types.SiteConfig{Runners: stored}}
+		srv, _ := newSiteConfigHarness(t, fake)
+		for method, body := range map[string]string{http.MethodGet: "", http.MethodPut: `{"runners":{"enabled":true}}`} {
+			w := do(t, srv, method, "/api/v1/site-config", adminToken, body)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"machine_kind_denials":[]`) || strings.Contains(w.Body.String(), `"machine_kind_denials":null`) {
+				t.Errorf("%s, %s: %d %s, want machine_kind_denials []", name, method, w.Code, w.Body)
+			}
+		}
+	}
+}
