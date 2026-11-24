@@ -64,14 +64,14 @@ func TestMetricsListenerHandler(t *testing.T) {
 // a scrape gets, the live health gauges included.
 func TestMetricsText_IsTheScrapeBody(t *testing.T) {
 	h := newHarness(t)
-	// A scrape records its own latency once its body is written, so the scrape compared below follows one
-	// that leaves the same /metrics sample in both bodies.
+	// A scrape records its own latency only after its body is written, so the push text is read before the
+	// compared scrape: both then hold the warm-up scrape's /metrics sample and nothing later.
 	do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
+	text := string(h.srv.MetricsText(context.Background()))
 	console := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
 	if console.Code != http.StatusOK {
 		t.Fatalf("admin console /metrics = %d, want 200", console.Code)
 	}
-	text := string(h.srv.MetricsText(context.Background()))
 	if text != console.Body.String() {
 		t.Errorf("MetricsText differs from the scrape:\nMetricsText:\n%s\nscrape:\n%s", text, console.Body)
 	}
