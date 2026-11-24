@@ -840,7 +840,7 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 		}
 		var r *sourceRefusal
 		if !errors.As(err, &r) || r.status != http.StatusUnprocessableEntity || r.reason != reasonAgentRulesConflict || calls != 0 ||
-			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") {
+			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") || strings.Contains(r.Error(), "launch without") {
 			t.Errorf("%s: %d sandboxes, err %v, want a 422 %s refusal naming the rule (%q) and no sandbox", name, calls, err, reasonAgentRulesConflict, tc.want)
 		}
 	}
@@ -860,7 +860,8 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 	}
 	invalid.mu.Unlock()
 	var refusal *sourceRefusal
-	if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonAgentRulesInvalid || calls != 0 {
+	if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonAgentRulesInvalid || calls != 0 ||
+		strings.Contains(refusal.Error(), "launch without") {
 		t.Errorf("an invalid stored rule: %d sandboxes, err %v, want a 422 %s refusal and no sandbox", calls, err, reasonAgentRulesInvalid)
 	}
 }

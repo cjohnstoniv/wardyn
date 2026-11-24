@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -303,9 +304,12 @@ func agentRulesReassertFlag(data map[string]any, layers []sealLayer) {
 // recordBoundPolicy is the policy a workspace record or verify session launches under: the session's own, met
 // with the rules of the agent it runs (stepRunAgent) as a run's policy is, then held inside the boundary. It
 // only narrows. The session launches at the strongest class the runner offers (class, of caps). A rule it cannot
-// meet refuses the launch with agent_rules_conflict or agent_rules_invalid: a confinement floor above that class,
-// or inner walls the interactive claude-code session cannot launch with. Rules that cannot be read fail it as a
-// server error, never launch without them.
+// meet refuses the launch: a confinement floor above that class, or inner walls the interactive claude-code
+// session cannot launch with (agent_rules_conflict), a stored rule that no longer passes (agent_rules_invalid), or
+// an allowlist with nothing in common with the session's (403, the create door's reason). The status and reason
+// are the create door's; the text is the create door's with the "workspace: " prefix every record refusal
+// carries, and with no "launch without this agent" remedy, which a record session has no way to take. Rules that
+// cannot be read fail it as a server error, never launch without them.
 func (s *Server) recordBoundPolicy(ctx context.Context, ceiling governanceCeiling, policy types.RunPolicySpec, class types.ConfinementClass, caps runner.Capabilities) (types.RunPolicySpec, error) {
 	source := policySourceRecord{knobs: startProvenance(memberProvenance)}
 	if _, refusal := s.agentRulesRunStep(ctx, createRunRequest{Agent: stepRunAgent}, &policy, &source); refusal != nil {
@@ -331,5 +335,11 @@ func recordRulesRefusal(refusal *runRefusal) error {
 	if refusal.err != nil {
 		return fmt.Errorf("%s: %w", refusal.operation, refusal.err)
 	}
-	return &sourceRefusal{status: refusal.status, reason: refusal.body.Reason, err: errors.New(refusal.body.Error)}
+	return &sourceRefusal{status: refusal.status, reason: refusal.body.Reason, err: errors.New(recordRemedy.Replace(refusal.body.Error))}
 }
+
+// recordRemedy swaps the remedies a record session cannot take (launching without the agent) for the one it can.
+var recordRemedy = strings.NewReplacer(
+	", or launch without this agent.", ".",
+	" Launch the agent on a lane that meets them, or launch without it.", " Ask a security admin to change the agent rules.",
+)
