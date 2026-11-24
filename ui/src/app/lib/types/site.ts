@@ -316,7 +316,8 @@ export type ModelProviderKind =
   | "openai_api_key"
   | "bedrock_bearer"
   | "custom_endpoint"
-  | "local_model";
+  | "local_model"
+  | "azure_foundry";
 
 // A provider's opt-in to run identity. audience is the token's aud: what this
 // provider's gateway looks for, and no other address's.
@@ -397,6 +398,8 @@ export interface ModelProvider {
   extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
+  // azure_foundry only: the data-plane endpoint and the one route it serves.
+  azure?: AzureSettings;
   // local_model only: the model allowlist and the caps on each request.
   local?: LocalModelSettings;
   // The agents this provider may serve, with the settings for each.
@@ -432,6 +435,12 @@ export interface BedrockSettings {
   sso_start_url?: string;
   sso_account_id?: string;
   sso_role_name?: string;
+}
+
+/** Go: types.AzureSettings (ModelProvider.azure). */
+export interface AzureSettings {
+  endpoint?: string;
+  route?: "anthropic" | "openai_v1";
 }
 
 // Go's types.ProviderHeader (internal/types/model_provider.go).

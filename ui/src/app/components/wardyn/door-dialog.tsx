@@ -21,14 +21,16 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-pane";
+import { ADO } from "../../lib/ado-entra-copy";
 import { modelProviderCredentials } from "../../lib/api/model-provider-credentials";
+import { apiURL } from "../../lib/base-path";
 import { HttpError } from "../../lib/api/core";
 import { getErrorMessage } from "../../lib/format";
 import type { DoorTarget } from "../../lib/model-access";
 import { modelConnectionCause } from "../../lib/model-connection-cause";
 import type { SetupModelProvider, SetupStatus } from "../../lib/types";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { CLAUDE_DOOR, CONNECTIONS, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";
+import { AZURE_DOOR, CLAUDE_DOOR, CONNECTIONS, CRED_NOTICE, DOOR, KEY_DOOR, REMOVE_CONFIRM, WRITE_ONLY } from "./copy/door";
 import { OIDC_SIGN_IN } from "./copy/oidc-signin";
 import { OidcDoor } from "./oidc-door";
 
@@ -48,7 +50,12 @@ const SIGNS_IN_REASON = "model_provider_credential_signs_in";
 
 const providerName = (p: SetupModelProvider) => p.name || p.id;
 
+// An Azure Foundry row is signed in to with Microsoft, never a pasted key: the key target the setup status resolves
+// to for it is shown as its own door.
+const isAzureDoor = (t: DoorTarget | null): boolean => t?.kind === "key" && t.provider.kind === "azure_foundry";
+
 function doorTitle(t: DoorTarget, confirmingRemove: boolean): string {
+  if (isAzureDoor(t)) return AZURE_DOOR.TITLE(providerName(t.provider));
   if (t.kind === "key") {
     // The remove confirm gets its OWN title (packet F §3) —
     // not the Add/Replace title behind it, which the confirm has replaced.
@@ -89,6 +96,35 @@ export function doorToast(t: DoorTarget): string {
   if (t.kind === "key") return KEY_DOOR.SAVED_TOAST(t.token);
   if (t.login === "oidc") return OIDC_SIGN_IN.DONE_TOAST(providerName(t.provider));
   return t.login === "aws" ? MODEL_ACCESS_BANNER.SIGNED_IN_TOAST : CLAUDE_DOOR.SIGNED_IN_TOAST;
+}
+
+/** Azure Foundry's door: Continue sends the browser to Microsoft's sign-in for this provider row and back to the console. */
+function AzureDoor({ provider, onCancel }: { provider: SetupModelProvider; onCancel: () => void }) {
+  const [busy, setBusy] = React.useState(false);
+  const name = providerName(provider);
+  return (
+    <div className="space-y-3">
+      <DialogDescription className="text-body text-muted-foreground">{AZURE_DOOR.BODY(name)}</DialogDescription>
+      <p className="text-meta text-muted-foreground">{AZURE_DOOR.NOTE}</p>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
+          {KEY_DOOR.CANCEL}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={busy || !provider.uid}
+          onClick={() => {
+            setBusy(true);
+            window.location.assign(apiURL(`/model-providers-entra/signin?uid=${encodeURIComponent(provider.uid ?? "")}`));
+          }}
+        >
+          {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />}
+          {ADO.CONNECT_CTA}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function SignInHeader({ target, forHarnesses }: { target: DoorTarget & { kind: "signin" }; forHarnesses?: string }) {
@@ -437,7 +473,8 @@ export function DoorDialog({
           ? <DialogDescription>{cause.line}</DialogDescription>
           : <p className="text-body text-muted-foreground">{cause.line}</p>)}
         {unreadable && <Button variant="outline" disabled={checking} onClick={() => void recheck()}>{CONNECTIONS.RECHECK}</Button>}
-        {t?.kind === "key" && target && !unreadable && (
+        {t && isAzureDoor(t) && target && !unreadable && <AzureDoor key={t.provider.id} provider={t.provider} onCancel={onCancel} />}
+        {t?.kind === "key" && !isAzureDoor(t) && target && !unreadable && (
           <KeyDoor
             key={t.provider.id}
             target={t}

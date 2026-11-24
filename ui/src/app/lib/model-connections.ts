@@ -196,6 +196,25 @@ function connectionRowCopyByKind(
     }
   }
 
+  // Azure Foundry: one Microsoft sign-in per provider row, so two rows on one endpoint are two doors.
+  if (provider.kind === "azure_foundry") {
+    switch (access.state) {
+      case "live":
+      case "expiring":
+        return { chip: { label: CONNECTIONS.SIGNED_IN, tone: "success" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AGAIN };
+      case "expired_signin":
+        return {
+          chip: { label: CONNECTIONS.SIGNED_OUT, tone: "danger" },
+          forLine,
+          line: CONNECTIONS.C6_LINE_AZURE(name),
+          title: "",
+          button: CONNECTIONS.SIGN_IN_AZURE,
+        };
+      default:
+        return { chip: { label: CONNECTIONS.NOT_SIGNED_IN, tone: "neutral" }, forLine, line: "", title: "", button: CONNECTIONS.SIGN_IN_AZURE };
+    }
+  }
+
   if (provider.kind === "anthropic_subscription") {
     switch (access.state) {
       case "live":
