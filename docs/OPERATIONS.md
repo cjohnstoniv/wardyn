@@ -740,11 +740,15 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A request-path audit write that cannot get the lock within 5s **fails, and the event goes to the local spool** to
     be replayed when the lock clears.
   - That is the same degraded path a store outage uses, not a dropped event.
+  - At most four of a replica's own audit writes (those not made inside a larger transaction) wait for the lock at once (half the database pool when that is smaller).
+  - A write that finds every turn taken waits inside the same 5 seconds and then goes to the spool the same way.
+  - Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
   - The one exception is a **credential mint**, whose audit row shares the mint's transaction: there the timeout
     refuses the mint, because a credential that could not be audited is not one to issue.
   - The bound is `lock_timeout`, set `LOCAL` on the audit transaction, so it fires only while WAITING for the lock.
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
+  - The wait for a turn is not `lock_timeout`: a write queued behind four slow but progressing writes can go to the spool after 5 seconds with no lock stuck.
 
 - **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
   - With strict mode on, a covered change is refused if its audit intent row cannot be written first.
@@ -1086,6 +1090,7 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
   at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
   [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
   `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
+- Withheld is not hidden from a reader who can guess the value: the stored hashes take no key, so a candidate value can be checked against a marked row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -2280,7 +2285,7 @@ predates it.
 - Every control a source or workspace can carry — a secret by name, an egress host, write access to a directory, a named integration — is a row with ONE axis.
 - **Required** rides along with every run that attaches the workspace, **Optional** is a per-run opt-in.
 - `PUT /api/v1/workspaces/{id}/requirements` writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`, [`internal/api/workspace_requirements.go`](../internal/api/workspace_requirements.go)); the workspace detail page is the surface that writes them.
-  - A `write:<path>` key is checked against the server's own files. For a folder on a person's runner, use the source's `--writable` instead: such a key can be refused ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
+  - A `write:<path>` key is checked against the server's own files, unless the path is a folder the workspace binds to a person's runner or a path inside one: such a key is checked by its text alone ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
 - Launch and preflight both read `effectiveRequirements(ws)` — the same fold — so Review can never predict something launch won't do.
 - A `scan_seeded` requirement can never auto-grant a secret on its own: the scanner reads untrusted repo content, so only an operator's direct declaration attaches a credential (the fail-closed provenance rule above).
 
@@ -3229,7 +3234,7 @@ Or leave `daemon.json` alone and give Wardyn its own range:
 - Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
 - Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
 - A full range refuses the run with a sentence naming the setting.
-- The orphan sweep removes the network of a run that is gone, which hands its subnet back.
+- The orphan sweep removes the network of a run that is gone, which hands its subnet back. It does so with or without this range.
 
 ### The start deadlines
 
@@ -4235,6 +4240,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
+- `0300` (`0300_agent_runs_end_time_idx`) adds `agent_runs_end_time_idx` on `agent_runs` (`0001`'s table): the end time the Runs board orders and windows ended runs by, then `id`. It is built without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds. On a large table, run `CREATE INDEX CONCURRENTLY IF NOT EXISTS agent_runs_end_time_idx ON agent_runs ((CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END) DESC, id DESC);` before you upgrade, and the migration finds it built. No grant changes. If that build fails, drop the index and run it again.
 - `0400` (`0400_outage_windows`) creates `cp_heartbeat`, the row each replica beats every 10 seconds, and `outage_windows`, the recorded outage windows. The migration grants `SELECT, INSERT, UPDATE` on `cp_heartbeat` and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows` to every role granted `UPDATE` on `agent_runs`, other than that table's owner. The window id is an identity column, so no sequence grant is needed. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when the runner connects.
 - `0401` (`0401_run_outage_terms`) creates `run_outage_terms`: each run's outage terms (the allowance in seconds, strict, and whether a long outage ends it when unattended), written once at dispatch and removed with the run. The migration grants `SELECT, INSERT` on it to every role granted `UPDATE` on `agent_runs`, other than that table's owner. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand. Until then a run whose terms are not the default ones is refused at start, a default run starts with a warning in the log, and a run on a connected runner cannot be leased: it does not start, or it stops when its current lease runs out.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
@@ -4978,6 +4984,16 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
 - A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
 
+**A delete that did not finish.**
+
+- A delete whose answer is not a confirmed delete keeps the drive deleting once the call to the runner was made: a daemon or API error, the 30-second time-out, or an unknown reply. No run attaches it, and it counts toward `max_per_person`. The answer is 503 `member_drive_delete_failed`, and a Kubernetes claim that is already terminating answers the same. A 503 before that call gives the drive back, and the list does not show it as deleting.
+- The drive is missing from its owner's drives and from New Run. The member drives list (`GET /api/v1/drives/member`, `wardyn drive member list`) shows it with `deleting: true` and its `object`.
+- The kept work folder of a run that ended before it started is left the same way if the server stops before deleting it.
+- Nothing retries it on Docker or Kubernetes. A delete a minute after the last try does: the owner's `DELETE /api/v1/me/drives/{id}`, or a super admin's `DELETE /api/v1/drives/member/{id}` (`wardyn drive member delete <id> --yes`). Sooner, the answer is 409 `member_drive_busy`. Every try that takes the delete over writes `drive.member.delete`; a 409 `member_drive_busy` writes none.
+- A disk drive kept on a Mac waits for its Mac instead, and the delete finishes when the Mac reconnects.
+- If the retry keeps failing on Docker, check that `docker volume inspect --format '{{ index .Labels "wardyn.drive" }}' <object>` prints the drive's id. Remove the volume with `docker volume rm <object>`, never `-f`: Docker refuses a volume a container still uses, and that refusal is the check that no run holds it. Then delete the drive again: a super admin's delete answers `already_absent`, the owner's answers 204, and the record goes.
+- On Kubernetes, wait until the claim has finished terminating, then delete the drive again.
+
 **Keep a run's work folder.**
 
 - With `keep_main_drive: true`, a run that asks for `keep_work_folder` gets a member drive, named after the run, mounted at `/home/agent/work` in place of scratch.
@@ -5010,7 +5026,6 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 **Orphans.**
 
-- A delete that stops part way leaves the drive hidden from its owner. A second delete after one minute takes it over. The admin list shows it as `deleting`.
 - A drive deleted while a run was launching against it can leave an object with no row. Find it by the `wardyn.drive` label and remove it by hand, as in "User drives on Docker".
 - Nothing sweeps these for you.
 

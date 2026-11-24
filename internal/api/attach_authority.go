@@ -358,7 +358,7 @@ func (s *Server) attachIssuerCut(r *http.Request, w http.ResponseWriter, runID u
 	}
 	every := s.attachAuthorityEvery()
 	b := s.newSessionBudget(ctx, attachWatchID(r, runID))
-	b.fence = cut.fenced
+	b.fence = cut.budgetFenced
 	cut.watch(ctx, start.Add(every), every, s.attachAuthorityLookupBound(), b, check)
 	return ctx, cut.Writer(w), cut, func() {
 		defer cancel()

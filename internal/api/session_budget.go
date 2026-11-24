@@ -126,7 +126,7 @@ func (b *sessionBudget) observe(check string, err error) budgetVerdict {
 		b.stopTimer()
 		if !b.since.IsZero() {
 			// A refusal that ends a window writes its row here, so a watch calls end() only on budgetSpent.
-			b.audit("refused", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
+			b.auditWindow("refused", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
 			b.since = time.Time{}
 		}
 		return budgetRefused
@@ -143,12 +143,13 @@ func (b *sessionBudget) observe(check string, err error) budgetVerdict {
 		delete(b.failing, check)
 		if len(b.failing) == 0 {
 			if !b.since.IsZero() {
-				b.audit("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
-				clear(b.seen)
-				b.since = time.Time{}
+				// The fence opens before the row is written: a rode_through row means input is taken again.
 				if b.fence != nil {
 					b.fence(false)
 				}
+				b.auditWindow("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
+				clear(b.seen)
+				b.since = time.Time{}
 			}
 			b.stopTimer()
 			return budgetHolds
@@ -194,7 +195,7 @@ func (b *sessionBudget) end() {
 		return
 	}
 	b.stopTimer()
-	b.audit("ended", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
+	b.auditWindow("ended", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
 	b.since = time.Time{}
 }
 
@@ -206,7 +207,7 @@ func (b *sessionBudget) leave() {
 	}
 	b.stopTimer()
 	if !b.since.IsZero() {
-		b.audit("closed", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
+		b.auditWindow("closed", time.Since(b.since), slices.Sorted(maps.Keys(b.failing)))
 		b.since = time.Time{}
 	}
 }
@@ -234,9 +235,9 @@ func (b *sessionBudget) stopTimer() {
 	}
 }
 
-// audit writes the window's row off the watch, within sessionUnconfirmedAuditWait: a write that waits on a store
+// auditWindow writes the window's row off the watch, within sessionUnconfirmedAuditWait: a write that waits on a store
 // that is down holds up no close. The recorder chain spools a row it cannot write (recordAuditDurably).
-func (b *sessionBudget) audit(result string, d time.Duration, checks []string) {
+func (b *sessionBudget) auditWindow(result string, d time.Duration, checks []string) {
 	s, id := b.s, b.id
 	data := mustJSON(map[string]any{"surface": id.Surface, "result": result, "unconfirmed_ms": d.Milliseconds(),
 		"budget_s": int(b.n / time.Second), "checks": checks})

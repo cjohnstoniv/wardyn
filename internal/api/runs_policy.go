@@ -325,6 +325,9 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		Machine *runMachineView `json:"machine,omitempty"`
 		// DesktopWatermark is who is viewing and whether the organisation requires the watermark; a desktop run only.
 		DesktopWatermark *desktopWatermarkView `json:"desktop_watermark,omitempty"`
+		// KeptCopyOut is true when this caller may copy work out of this kept run now (run_kept_copy_out.go): its
+		// owner, on a Kubernetes runner that lost it to an outage, before its end. Absent on every other run.
+		KeptCopyOut bool `json:"kept_copy_out,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
@@ -345,6 +348,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		WallPreset:       s.runWallPresetViewLabelled(r, run),
 		Machine:          s.runMachineOf(r.Context(), run),
 		DesktopWatermark: s.runDesktopWatermark(r, run),
+		KeptCopyOut:      s.keptCopyOutOpen(r.Context(), run, principalFromRequest(r)),
 	})
 }
 

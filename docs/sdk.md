@@ -277,10 +277,17 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   The runner that served the run decides between `stdout` and `recording`:
   only a recorded run on a Kubernetes runner under the session recorder reads `recording`
   (OPERATIONS.md "Run output").
-  The latter two retain the recording's owner-or-operator privacy
-  gate, even after recording is disabled.
-  A portal's delegated token reads `stdout` output only; for the other two
-  it gets the 409 a run with no such row gives, audited `delegation_scope`.
+  `pane_snapshot` and `recording` keep the recording's owner-or-operator privacy gate,
+  even after recording is disabled. A portal never reads `pane_snapshot`. An issuer
+  portal's grant reads `stdout` and a successful `recording` recovery of its person's
+  own non-interactive runs; a recording that is missing, failed or erased answers it as a run with no
+  recording. A console portal's delegated token reads `stdout` only. A withheld source
+  falls through to the run's stdout tail or shared chunks when there are any (200,
+  `source: stdout`), and otherwise to the answer a run with no such row gives (409).
+  A portal's withheld source writes no refusal row. When a portal's read answers
+  `run_output_not_captured`, `run_output_not_kept`, `run_output_interactive` or the
+  retention window's `run_output_expired`, it writes `run.output.refuse` with the same
+  reason, once per read.
 - `incomplete` on `stdout` says bytes may be missing.
   On `recording` it is always true and says the output cannot be vouched byte-complete.
 - `capture_gap` says capture or recovery
@@ -869,13 +876,13 @@ start.
 | `runner_limits_invalid` | `400`: `limits` is missing or not a valid set (runs at once 1 to 64, at least one CPU, disk in whole GiB, no per-run amount past its total); `422`: a total past what the runner last reported. |
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
-| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
-| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
+| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. A runner on 0.10.4 or later first replaces the proxy pod up to twice, so the reason means every try was given a held address or a pod could not be proven stopped. Launch the run again. |
+| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules`, `push_hold_removals` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run that sets any of these on such a runner is refused `409` with it. |
 | `gateway_identity_changed` | A run asked for a gateway token, or a revive was asked for, and its model provider was changed or turned off after the run started: `403` on the token, `409` on the revive. Create a new run, or edit the provider back. |
 | `gateway_identity_unavailable` | `503`: Wardyn couldn't read what a gateway token depends on, or the save that turns gateway identity on couldn't make the signing key, so nothing was issued or saved. |
 | `gateway_access_cut` | A run asked for a gateway token, or a revive was asked for, and the portal that launched the run was revoked with `?cut_in_flight=true`: `403` on the token, `409` on the revive. Permanent for that run; start a new run. |
 | `invalid_cut_in_flight_param` | `DELETE /admin/delegates/{id}`, `400`: `cut_in_flight` is not `true` or `false`, is given twice, or the query does not parse. Nothing was revoked. |
-| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. |
+| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. A revive of such a run is refused `409` with it. |
 | `node_record_invalid` | `POST /runs/{id}/node-record`, `400`: `attestation` is not `node_powered_off` or `no_prior_holder`, `source` is not `provider_console`, `management_controller` or `other`, `source_id` is missing, longer than 256 characters or holds control characters, or `tuple` is missing. |
 | `node_record_refused` | `POST /runs/{id}/node-record`, `409`: the run is not held as containment pending, the runner's record (`tuple`) changed since the form was loaded, `no_prior_holder` was sent after a recorded name reuse or for a run with a causal node association, or another stop for the run already waits for its runner. A held record whose run moved before its approval is refused at the approval the same way. |
 | `node_record_human_only` | `POST /runs/{id}/node-record`, `403`: the admin token or an API token made it, or approved a held one (a node record is made and approved from a signed-in session), or the record needs two people and the server runs in local mode, which cannot show who they are. |
@@ -947,6 +954,7 @@ start.
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_decidable_by` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `invalid_service_param` | `GET /runs?service=` is present but not `1` or `0`, an empty value included. |
+| `invalid_counts_param` | `GET /runs?counts=`, sent with one of the list parameters, is present but not `skip`. |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals` and `GET /runs`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_run_past_lifetime` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the run reached its lifetime cap first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -1665,6 +1673,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
 - `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
+- `counts=skip` leaves the two hidden-count headers below out, for a poll that already has them. `counts` is read only together with one of the parameters above: on its own it is ignored and does not select this ordered list.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers

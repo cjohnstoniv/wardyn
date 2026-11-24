@@ -245,6 +245,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       // older + 1 killed = "Your runs · 18") — here 3 shown + 4 + 1 = 8.
       hiddenOlder: 4,
       hiddenKilled: 1,
+      countsRead: true,
     });
     renderScreen();
     await screen.findByText("Needs a look");
@@ -315,6 +316,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       truncated: false,
       hiddenOlder: 0,
       hiddenKilled: 1,
+      countsRead: true,
     });
     renderScreen();
     await screen.findByText(/1 killed run is hidden/);
@@ -407,7 +409,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
         listRunsFilteredMock.mockImplementation((f: { service?: boolean }) =>
           Promise.resolve(
             f.service
-              ? { runs: [oldService], truncated: false, ...hidden }
+              ? { runs: [oldService], truncated: false, countsRead: true, ...hidden }
               : { runs: tasks, truncated: true, hiddenOlder: 0, hiddenKilled: 0 },
           ),
         );
@@ -455,7 +457,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
                 (!f.q || r.task.toLowerCase().includes(f.q.toLowerCase())) &&
                 (!f.owner || r.created_by === "me"),
             );
-            return Promise.resolve({ runs: rows, truncated: false, hiddenOlder: 3, hiddenKilled: 0 });
+            return Promise.resolve({ runs: rows, truncated: false, hiddenOlder: 3, hiddenKilled: 0, countsRead: true });
           });
 
         it("status: sends status=failed with the service request and lists only the failed service", async () => {
@@ -513,7 +515,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       });
 
       it("another segment cut short under a filter or hidden runs still says none so far", async () => {
-        listRunsFilteredMock.mockResolvedValue({ runs: tasks, truncated: true, hiddenOlder: 4, hiddenKilled: 0 });
+        listRunsFilteredMock.mockResolvedValue({ runs: tasks, truncated: true, hiddenOlder: 4, hiddenKilled: 0, countsRead: true });
         renderScreen(undefined, "/runs?segment=environments&status=failed");
         await screen.findByText("None in the newest 1000 runs");
         expect(screen.queryByText("No runs match these filters")).toBeNull();
@@ -587,7 +589,7 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
       Promise.resolve(
         f.q
           ? { runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0 }
-          : { runs: [run(), run({ id: "run-2" }), run({ id: "run-3" })], truncated: false, hiddenOlder: 4, hiddenKilled: 1 },
+          : { runs: [run(), run({ id: "run-2" }), run({ id: "run-3" })], truncated: false, hiddenOlder: 4, hiddenKilled: 1, countsRead: true },
       ),
     );
     renderScreen();
@@ -756,5 +758,38 @@ describe("RunsScreen — page states (design.md §2.1)", () => {
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     await screen.findByText("From three days ago");
+  });
+});
+
+describe("RunsScreen — hidden counts", () => {
+  it("reads the hidden counts on load and once a minute, keeping them between polls", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      listRunsFilteredMock.mockImplementation((f: { skipCounts?: boolean }) =>
+        Promise.resolve(
+          f.skipCounts
+            ? { runs: [run()], truncated: false, hiddenOlder: 0, hiddenKilled: 0, countsRead: false }
+            : { runs: [run()], truncated: false, hiddenOlder: 4, hiddenKilled: 0, countsRead: true },
+        ),
+      );
+      renderScreen();
+      await screen.findByText(/4 older runs are hidden/);
+      expect(listRunsFilteredMock.mock.calls[0][0].skipCounts).toBeFalsy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3500);
+      });
+      expect(listRunsFilteredMock.mock.calls.length).toBeGreaterThan(1);
+      expect(listRunsFilteredMock.mock.calls[1][0].skipCounts).toBe(true);
+      expect(screen.getByText(/4 older runs are hidden/)).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(62_000);
+      });
+      expect(listRunsFilteredMock.mock.calls.slice(1).some((c) => c[0].skipCounts === false)).toBe(true);
+      expect(screen.getByText(/4 older runs are hidden/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

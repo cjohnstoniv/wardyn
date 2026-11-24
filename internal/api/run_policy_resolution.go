@@ -73,7 +73,7 @@ func githubCapabilitiesDisjoint(picked, profile []ghscope.Capability) *runRefusa
 // inlinePolicyRefusal is the first reason an inline policy, after its clamp, cannot run: invalid as a spec, a
 // UI app caller the site rules out, a secret reference the caller cannot use, or UI apps the ceiling refuses.
 func (s *Server) inlinePolicyRefusal(ctx context.Context, r *http.Request, req *createRunRequest, spec types.RunPolicySpec, ceiling governanceCeiling, credentials bool) *runRefusal {
-	if err := validatePolicySpec(spec); err != nil {
+	if err := validateRunPolicyBeforeSeed(*req, spec); err != nil {
 		return runError(http.StatusBadRequest, specRefusalReason(err, reasonInlinePolicyInvalid), "invalid inline_policy: "+err.Error())
 	}
 	if err := s.ruleUIAppCallers(ctx, spec); err != nil {
@@ -83,6 +83,18 @@ func (s *Server) inlinePolicyRefusal(ctx context.Context, r *http.Request, req *
 		return runSecretRefsRefusal("invalid inline_policy: ", code, err)
 	}
 	return s.applicationUIAppsRefusal(r, *req, spec, ceiling)
+}
+
+// validateRunPolicyBeforeSeed is the run path's spec check before the request's workspaces are seeded. A run
+// that attaches workspaces has every mount resolved by the seed (seedRequestWorkspace), which knows which
+// folders those workspaces bind to a person's runner and checks those by their text alone; until then a mount
+// is judged by its spelling, never by what this host has at that path. A run that attaches none is never
+// seeded, so its mounts are resolved here.
+func validateRunPolicyBeforeSeed(req createRunRequest, spec types.RunPolicySpec) error {
+	if len(attachedWorkspaceIDs(req)) > 0 {
+		return validatePolicySpecUnresolved(spec)
+	}
+	return validatePolicySpec(spec)
 }
 
 func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req *createRunRequest, dryRun, credentials bool) (types.RunPolicySpec, *uuid.UUID, []string, policySourceRecord, *runRefusal) {

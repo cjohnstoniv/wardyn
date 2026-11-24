@@ -233,7 +233,9 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 		writeErrorReason(w, http.StatusForbidden, reasonDesktopSignInsOff, macOSDesktopSignInsOffMsg(run.Agent))
 		return
 	}
-	if (!superAdmin || !s.adminDoorExempt(run)) && s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run) {
+	if (!superAdmin || !s.adminDoorExempt(run)) && s.uiDesktopDoor(w, r, run.ID, true, func(w http.ResponseWriter) bool {
+		return s.refuseInteractiveAttach(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
+	}) {
 		return
 	}
 	sess := s.newUISession(run, ta, uiDesktopAppName, 0, min(s.uiSessionTTL(), uiDesktopSessionTTL))

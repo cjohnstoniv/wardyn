@@ -143,6 +143,7 @@
 - **Under a governance ceiling that sets no positive maximum of its own, the composer clamp leaves this field exactly as authored**.
   - So a run there is never idle-reaped whether the field is absent, `0`, or negative: the reaper skips every policy value `<= 0`, which makes those three the same run.
 - A ceiling that wants member runs reaped states a positive maximum, which the clamp then binds them to.
+- An outage does not count as idleness: no run is idle-stopped while the database recovers, or while its registered runner cannot reach the server, and its idle time starts again after each ([Run lifetime](operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run)).
 
 ### `git_push_any_branch`
 
@@ -1443,8 +1444,8 @@ Residual: a rule constrains requests addressed to its host name, not every route
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
-| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; on the Azure DevOps Entra lane, a push whose paths could not be worked out is instead a rejected ref whose reason git prints | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
-| A path matched `require_review_paths` on an **unattended** run | `403`; on the Azure DevOps Entra lane, a rejected ref whose reason git prints | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; a push whose paths could not be worked out is instead a rejected ref whose reason git prints; `403` for a client that did not ask for git's push report | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths` on an **unattended** run | A rejected ref whose reason git prints; `403` for a client that did not ask for git's push report | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 - `415` `brokered:git:push-uninspectable`: A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too.
 
@@ -1544,12 +1545,15 @@ So an entry a pattern matches is judged one of two ways:
   - A run that checks out an older commit, or never pulls after a workflow changed on the default branch, can push a branch whose workflows are the older ones.
   - That includes one the default branch has since fixed.
   - The rule is that a push does not *change* a denied path relative to the commit it builds on — not that every branch carries the newest version of it.
-- **Removals are invisible.** These rules judge what a push *introduces*.
+- **Removals are invisible.** These rules judge what a push *introduces*. With `WARDYN_PUSH_HOLD_REMOVALS` on, a review path also holds a removal (below).
 
 **What the person pushing sees.**
 
-- git renders a receive-pack `403` as `error: RPC failed; HTTP 403` without the response body, so the paths are read from the run's decision stream and the sidecar's structured log rather than from the terminal.
-- A sideband report-status would render, and is deliberately not used: it would mean claiming `unpack ok` for a pack the broker never forwarded.
+- A refusal at a review path on an unattended run, and a push whose paths could not be worked out, are answered in git's own terms.
+  - git prints `! [remote rejected] <ref> (<reason>)`, and the reason names the paths and what to do.
+  - The answer says the pack was not unpacked; it never claims `unpack ok` for a pack the broker did not forward.
+  - A client that did not ask for git's push report gets a `403` instead.
+- git renders every other receive-pack `403` as `error: RPC failed; HTTP 403` without the response body, so those paths are read from the run's decision stream and the sidecar's structured log rather than from the terminal.
 
 **Pattern language.**
 
@@ -1573,11 +1577,16 @@ So an entry a pattern matches is judged one of two ways:
   - A decision carries no `decision_scope` (`400` if one is sent): an approval covers exactly the commits it names.
 - **An unattended run does not hold.**
   - A run with a task and nobody driving it (not `interactive`) has nobody to ask, so a review match is refused at once (`brokered:git:push-held-unattended`) and no approval is raised.
+  - Git prints the refusal as a remote rejection that names the paths and how to land them.
   - The control plane refuses such a raise as well.
   - **It cannot be approved later.** A real match on an unattended run stays refused, on every lane and on macOS VM runs too. To land it, remove those paths from the push or run the task interactively so an admin can approve it.
-- **A push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
+- **By default, a push that removes a file at a review path is not held, on any forge.** That means deleting it, renaming it out, or replacing a directory or parent at or above the pattern with a file.
   - These rules judge what a push introduces, so the push goes through. A `**` pattern does hold a push that replaces the directory itself with a file.
   - The forge's own branch policy is what protects that file.
+  - With `WARDYN_PUSH_HOLD_REMOVALS` on, a push to GitHub or Azure DevOps that removes such a file from a branch it updates is held, or refused on an unattended run. That includes a GitHub force-push that rewinds the branch. A branch the push creates has no tip to compare with, so nothing is removed from it.
+  - A `git_pat` remote the broker cannot read is held, or refused on an unattended run, as a push whose paths could not be worked out. That is an Azure DevOps remote not spelled `<project>/_git/<repository>`, such as a `_git/_full/` form, or any Azure DevOps Server remote.
+  - On such a remote every push that moves an existing branch is held, whatever it changes, so an unattended run there can only create branches.
+  - Turn it on only when every runner is 0.10.4 or later: an older runner is refused each run (`runner_proxy_setting_unsupported`).
 - **On Azure DevOps a review pattern holds only a push that touches a matching path.**
   - What the pack does not carry is compared through the Git REST API, so a new branch that touches no matching path goes through, on an unattended run too.
   - When the comparison cannot be made, the push is still held or refused. Git prints the refusal as a remote rejection. It says the paths could not be worked out on this lane, and why, rather than that the push touches them. The listed paths are what could not be cleared. The audit row is the same `brokered:git:push-held-unattended` or `brokered:git:push-held`.

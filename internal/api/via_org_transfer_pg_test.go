@@ -51,14 +51,16 @@ func TestViaOrg_ARunnerTransferServesOnlyTheAuthoritativeRunner(t *testing.T) {
 	}
 	f.srv.releaseViaOrgRun(state, true, false)
 
-	grantsBefore := f.runs.grants.Load()
+	// Only the request's own grant check is counted: the engine the new state builds, and the credential it then
+	// asks the internal routes for, read the grants by their own design.
+	grantsBefore := f.runs.viaOrgGrants.Load()
 	if w := f.forward(t, r2, f.run.ID, f.grant, "/v1/x", viaOrgAPIHost); w.Code != http.StatusOK {
 		t.Fatalf("a forward relayed by the new runner after R's state is gone = %d %s, want 200", w.Code, w.Body)
 	}
 	if hits, _, _ := f.up.seen(); hits != 2 {
 		t.Fatalf("upstream saw %d requests, want 2", hits)
 	}
-	if got := f.runs.grants.Load(); got != grantsBefore+1 {
+	if got := f.runs.viaOrgGrants.Load(); got != grantsBefore+1 {
 		t.Fatalf("grant reads went %d -> %d, want one more for the new state", grantsBefore, got)
 	}
 }

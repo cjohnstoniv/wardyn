@@ -617,10 +617,10 @@ func (s *sponsorLookupStore) ServiceStillSponsored(ctx context.Context, name, sp
 
 // TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship: a terminal a sponsor opened on a service
 // identity's run is checked against the sponsorship as the handshake did, from the ticket's own authority
-// time. A sponsorship that ended (replaced, suspended or retired), one that began again after the ticket
-// (A to B to A), and a lookup that fails each end it at the next check; a sponsor who still is one, and a
-// person on their own run whatever the service store says, keep it. The check is the one a ticket's writer
-// socket and observer socket both run.
+// time. A sponsorship that ended (replaced, suspended or retired) and one that began again after the ticket
+// (A to B to A) each end it at the next check; a lookup that fails is unconfirmed, never a pass, so the session
+// budget ends it (at once at a budget of 0); a sponsor who still is one, and a person on their own run whatever
+// the service store says, keep it. The check is the one a ticket's writer socket and observer socket both run.
 func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 	opened := time.Now().Add(-time.Minute)
 	type sponsorRig struct {
@@ -686,10 +686,16 @@ func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 		g.st.err = store.ErrNotFound
 		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
 	})
-	t.Run("a lookup that fails ends it", func(t *testing.T) {
+	t.Run("a lookup that fails is unconfirmed, never a pass", func(t *testing.T) {
 		g := newRig(t, true)
 		g.st.err = errors.New("store down")
-		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
+		err := checkAs(g, "sponsor-sub")(context.Background())
+		if !errors.Is(err, errSessionUnconfirmed) {
+			t.Fatalf("check = %v, want an unconfirmed error", err)
+		}
+		if v := testBudget(g.h.srv, 0, time.Millisecond).observe("authority", err); v != budgetSpent {
+			t.Fatalf("at a budget of 0 the failed lookup's verdict = %v, want budgetSpent (the session ends)", v)
+		}
 	})
 	t.Run("another person's ticket on a service run ends", func(t *testing.T) {
 		g := newRig(t, true)
@@ -814,7 +820,16 @@ func TestAttachAuthority_RidesAnUnansweredCheck(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
 			rig.budget(time.Minute, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
-			sess := waitForSession(t, rig.srv.cfg.Runner.(*holderTestRunner), 0)
+			// A socket registers before its exec opens, so the writer's exec need not be Attach 0: pick it by its role.
+			fr := rig.srv.cfg.Runner.(*holderTestRunner)
+			waitForSession(t, fr, 1)
+			if fr.attachOpts(0).Observer == fr.attachOpts(1).Observer {
+				t.Fatalf("attach options = %+v, %+v, want one writer and one observer", fr.attachOpts(0), fr.attachOpts(1))
+			}
+			sess := fr.session(0)
+			if fr.attachOpts(0).Observer {
+				sess = fr.session(1)
+			}
 			rig.rev.setFail(1 << 30)
 			time.Sleep(10 * authorityTick) // well past 3 authority intervals
 			for i, ws := range socks {
@@ -942,6 +957,9 @@ func TestAttachAuthority_MissingRunEndsAtOnce(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
 			rig.budget(time.Hour, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
+			// The attach-mode frame comes before the exec opens: a first opening whose last read finds the run gone
+			// is a failed attach (1011, webAttach.open), not the re-check this pins. Both execs open first.
+			waitForSession(t, rig.srv.cfg.Runner.(*holderTestRunner), 1)
 			rig.ast.mu.Lock()
 			delete(rig.ast.runs, rig.run.ID)
 			rig.ast.mu.Unlock()

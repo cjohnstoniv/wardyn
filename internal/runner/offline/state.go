@@ -34,9 +34,14 @@ type localRun struct {
 	Ref             string                       `json:"ref"`
 	Lease           runnerwire.Lease             `json:"lease"`
 	// LapseBy is when Lease lapses on this runner's wall clock, the sooner of its token and ends_at legs, as of
-	// the last lease. A restart's provisional deadline (ProvisionalDeadlines) is never later than it or
-	// restart + restartReadyGrace, whichever is later.
-	LapseBy        time.Time             `json:"lapse_by,omitzero"`
+	// the last lease. A restart's provisional deadline (ProvisionalDeadlines) is never later than it on Docker,
+	// nor more than RunTokenLapseAfter after the restart; with self-lapsing proxies (k8s) it is never later
+	// than it or restart + restartReadyGrace, whichever is later.
+	LapseBy time.Time `json:"lapse_by,omitzero"`
+	// CreateDone is set by Created once the create finished and its ref is bound. A Docker restart gives a
+	// provisional deadline only to such a run: an interrupted create may have left a partial proxy, which is
+	// contained at once. A state file written before this field reads false, which contains as before.
+	CreateDone     bool                  `json:"create_done,omitempty"`
 	ProxyStoppedAt *time.Time            `json:"proxy_stopped_at,omitempty"`
 	Exit           *runnerwire.AgentExit `json:"exit,omitempty"`
 	ExitAcked      bool                  `json:"exit_acked,omitempty"`
@@ -72,8 +77,9 @@ type localRun struct {
 }
 
 // restartReadyGrace is the least time a restart's provisional deadline leaves a run whose LapseBy passed
-// while runnerd was down. The org's READY re-lease may carry an ends_at extended during the outage or a
-// renewal that raced the crash, and the run is lost if its proxy is stopped before that lease arrives.
+// while runnerd was down, for self-lapsing proxies (k8s) only; a Docker restart gives none. The org's READY
+// re-lease may carry an ends_at extended during the outage or a renewal that raced the crash, and the run is
+// lost if its proxy is stopped before that lease arrives.
 const restartReadyGrace = 10 * time.Minute
 
 // proxyExit is one ProxyExited obligation and the evidence that recorded it.

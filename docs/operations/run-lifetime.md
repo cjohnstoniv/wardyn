@@ -240,6 +240,20 @@ The agent-sandbox backend with keep turned on is the exception for some runs ([K
 
 - A Kubernetes run's end and limits still fire on schedule.
 - After a long control-plane outage a server Kubernetes run is still ended.
+- The exception is a registered Kubernetes runner. There a run lost to an outage is kept with its agent running and no network, and cannot be revived.
+- Until the run's end, its owner, and nobody else, can open it to copy work out: the terminal, SSH and the Files panel's download, each where the run's policy allows it.
+- Nothing can be uploaded through the Files panel. The command route (`POST /runs/{id}/exec`), UI apps, a support session and a delegated or issuer portal attach stay closed.
+- A run created with the admin token or in local mode has no personal owner, so nobody can open it this way.
+- `GET /runs/{id}` carries `kept_copy_out: true` for the owner while the door is open. At the run's end the run is ended and torn down.
+
+| The owner is refused when | Answer |
+| --- | --- |
+| The run has reached its end or its maximum age | `409` `attach_run_kept`: "This run has reached its end, so work can no longer be copied out of it." |
+| Its agent was stopped | `409` `attach_run_kept`: "This run's agent has stopped, so there is nothing running to copy work out of." |
+| Wardyn has not confirmed that the network was cut | `409` `attach_run_kept`: "Wardyn has not confirmed that this run's network was cut, so it cannot be opened to copy work out yet. Try again in a minute." |
+| Its runner could not confirm the network was cut, and removed the sandbox | `409` `attach_run_kept`: "This run's runner could not confirm that its network was cut, so it removed the run's sandbox. There is nothing left to copy out." |
+| Wardyn could not read the run's state | `409` `attach_run_kept`: "Wardyn could not check whether this run's agent is still running, so it cannot be opened to copy work out. Try again." |
+
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.
@@ -263,6 +277,9 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - Every attached surface resets the clock when it opens and every 30 seconds while it is held. The surfaces are the browser terminal, an SSH shell, an SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
 - So a run someone is attached to is not idle-stopped, as long as those writes succeed. They are best effort and a failed one is dropped, so a database that refuses them for long enough lets an attached run look idle.
 - A run nobody is attached to is idle like any other, which is why a run can end an hour after its owner last looked at it.
+- An outage does not count as idleness. For 25 minutes after the database is reachable again, and after every start of the server ([`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace); `0` turns this off), no run is idle-stopped. Each run's idle time starts again at the start of that window (with several replicas, once for each).
+- A run on a registered runner that the server has no connection to is not idle-stopped, and its idle time starts again when the runner reconnects. With several replicas, only the replica that holds the runner's connection idle-stops its runs.
+- The run's end and `WARDYN_RUN_MAX_AGE` still apply in both cases.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
 - A pool's Interactive idle stop bounds it: its default applies when the policy sets none, and its maximum is never exceeded.
 - A member under a positive ceiling already holds that ceiling's maximum by then (next bullet), so for a member only the pool's maximum bites; an administrator gets the pool's default.

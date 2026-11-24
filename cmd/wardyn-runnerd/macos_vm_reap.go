@@ -224,3 +224,12 @@ func parseJobArgv(argv []string) (sub, runner, entry string) {
 	}
 	return argv[1], runner, entry
 }
+
+// noteHelperExit records, as soon as a helper this runner started has exited, the bound that lets the
+// ledger free its entry past a Virtualization process created after it (Docker's Linux VM restarting
+// after the job ended, #3871). A failure only leaves the entry to the reclaim's own rule.
+func (m *macOSVMs) noteHelperExit(id string) {
+	if err := m.ledger.MarkHelperEnded(id); err != nil {
+		slog.Warn("macOS VM ledger: note a finished job's helper exit", "entry", id, "error", err.Error())
+	}
+}

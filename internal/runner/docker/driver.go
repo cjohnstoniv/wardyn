@@ -173,9 +173,14 @@ const (
 // (the exec/container really is gone) and is never retried, so a
 // kill/teardown still unblocks Wait immediately.
 const (
-	pollInterval       = 200 * time.Millisecond
+	pollInterval = 200 * time.Millisecond
+	// pollIntervalIdle is the agent Wait's cadence once its exec has run for waitFastFor (pollExecExit).
+	pollIntervalIdle   = 2 * time.Second
 	waitMaxProbeErrors = 300
 )
+
+// waitFastFor is how long the agent's Wait probes at pollInterval before it slows to pollIntervalIdle.
+var waitFastFor = 5 * time.Second
 
 func (c *Config) withDefaults() {
 	if c.InternalNetwork == "" {
@@ -200,7 +205,8 @@ type Driver struct {
 	// proxyReadyWait. Tests shorten it.
 	proxyReady time.Duration
 
-	// subnetMu serialises this driver's run network creates from RunSubnetPool (createPoolRunNetwork).
+	// subnetMu serialises this driver's run network creates: from RunSubnetPool (createPoolRunNetwork) and from the
+	// daemon's own pools (createDaemonRunNetwork).
 	subnetMu sync.Mutex
 
 	// mu guards agentExecs, pending, mainProc, and creating — the driver's

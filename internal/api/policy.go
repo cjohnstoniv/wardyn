@@ -123,6 +123,8 @@ func authoredGrantRefusal(path string, g types.GrantSpec) error {
 // validatePolicySpecUnresolved is validatePolicySpec for a surface that must read no file of this host: a mount
 // source is judged by its spelling alone, and a symlink on the control plane is never followed. Grading uses it, so
 // an answer cannot tell a caller whether a path exists here or where a link points; the save door still resolves.
+// The run path uses it before the seed for a run that attaches workspaces, and the seed then resolves every mount
+// no attached workspace binds to a runner (validateRunPolicyBeforeSeed).
 func validatePolicySpecUnresolved(spec types.RunPolicySpec) error {
 	return validatePolicySpecMode(spec, true, false)
 }

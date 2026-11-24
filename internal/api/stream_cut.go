@@ -141,9 +141,9 @@ func (c *streamCut) watch(ctx context.Context, first time.Time, every, bound tim
 	}()
 }
 
-// fenced is the session budget's fence for a stream whose input holder is made after the watch starts: it keeps
+// budgetFenced is the session budget's fence for a stream whose input holder is made after the watch starts: it keeps
 // the window's state and tells the fence setFence registered, if any.
-func (c *streamCut) fenced(on bool) {
+func (c *streamCut) budgetFenced(on bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.fenceOn = on

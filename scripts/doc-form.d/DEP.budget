@@ -17,7 +17,7 @@ deploy/images/README.md=4814 share=35 # -258 (docs fix), measured: the download-
 # #1987: docs/operations/build-images.md 1836 adds 16 over 1820, measured: the run_harnesses UPDATE grant once WARDYN_MULTI_AGENT_TASKS is on.
 # docs/operations/build-images.md 1932 adds 96 over 1836, measured (0.10 rc.11 wave 2): new refusals and the one-line install's image steps.
 # docs/operations/build-images.md 1953 adds 26 over 1927, measured (0.10.2 baseline): the multiarch target refuses a staged AWS CLI zip.
-docs/operations/build-images.md=1953 share=35 # the toolchain-env history lines and one internal tag cut (-5)
+docs/operations/build-images.md=2010 share=35 # 2010 measured (+57: the installer pin never signs in); earlier: the toolchain-env history lines and one internal tag cut (-5)
 # docs/ENVBUILD.md 3190 adds 1122 over 2068 (0.9 F-1516 B7): the build record, rebuild and refresh sections.
 # docs/ENVBUILD.md 3220 adds 30 over 3190 (0.9.3 FIN-B), measured: one bullet saying a base that exists only on this host cannot be refreshed.
 # docs/ENVBUILD.md 3249 adds 29: the swap-lost-at-launch bullet (0.9.3 FIN-B2).
@@ -25,4 +25,5 @@ docs/operations/build-images.md=1953 share=35 # the toolchain-env history lines 
 # docs/ENVBUILD.md=3324 adds 24 over 3300, measured (0.10 final §3 pre-wrapped images): a pre-wrapped image is not wrapped, is pinned and is checked on the cluster.
 # ENVBUILD.md 3333 adds 9, measured: corrects the image-builder fallback warning to match the code
 # ENVBUILD.md 3384 adds 51, measured: the images a reclaim after a swap keeps, and the failed swap write that keeps the new tag
-docs/ENVBUILD.md=3384 share=35
+# ENVBUILD.md 3619 adds 235 over 3384, measured: the reuse of a per-run build (keys, scope, what still runs every time)
+docs/ENVBUILD.md=3619 share=35

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
@@ -30,7 +31,14 @@ func TestPG_SweepExpiredPortalGrantsSkipsHeldRowsAndStopsAtTheBatch(t *testing.T
 	}
 	expireGrants(t, st, ids...)
 	slices.SortFunc(ids, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
-	tx, err := pool.Begin(ctx)
+	// The hold is on a pool of its own: the sweep asks the store's pool for a connection on this goroutine
+	// (WARDYN_TEST_POOL_GUARD).
+	holder, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	tx, err := holder.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

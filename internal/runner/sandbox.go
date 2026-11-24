@@ -253,6 +253,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		Unattended:           pc.Unattended,
 		ScrubResponses:       pc.ScrubResponses,
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
+		PushHoldRemovals:     pc.PushHoldRemovals,
 		Attribution:          pc.Attribution,
 		Outage:               pc.Outage,
 		PushRuleSets:         pc.PushRuleSets,
@@ -273,4 +274,29 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		cfg.SigninListen = ":" + strconv.Itoa(SigninListenPort)
 	}
 	return cfg
+}
+
+// ProxySettingsOf is the part of a ProxyConfig that a stored proxy.Config still says: every field a run proxy
+// setting gates (runnerwire.ProxySettingsSet, LocalModelRelayNeeded). A revive reads its runner's caps against it,
+// as a create reads them against the spec, so the two checks cannot differ. Fields no setting gates are left zero.
+func ProxySettingsOf(c proxy.Config) ProxyConfig {
+	return ProxyConfig{
+		Policy:             c.Policy,
+		AWSSigV4:           c.AWSSigV4,
+		ScrubResponses:     c.ScrubResponses,
+		VM:                 c.VM,
+		PortRule:           c.PortRule,
+		LocalModels:        c.LocalModels,
+		KubeAPI:            c.KubeAPI,
+		CanonicalPushRepos: c.CanonicalPushRepos,
+		GatewayIdentity:    c.GatewayIdentity,
+		GitPushWithheld:    c.GitPushWithheld,
+		ForgeHosts:         c.ForgeHosts,
+		ModelLimit:         ModelLimitOf(c.AllowedModels, c.BedrockRoutes),
+		MCPApproveEach:     c.MCPApproveEach,
+		LLMHeaders:         c.LLMHeaders,
+		NoNetwork:          c.NoNetwork,
+		PushHoldRemovals:   c.PushHoldRemovals,
+		Outage:             c.Outage,
+	}
 }

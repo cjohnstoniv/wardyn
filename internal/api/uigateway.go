@@ -368,9 +368,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// operator-owned one, so the governance exemption below cannot reach a
 	// person's run. The sign-in display and a declared noVNC desktop answer to
 	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
-	// its own door); any other declared app is deny_ui_apps' alone.
+	// its own door); any other declared app is deny_ui_apps' alone. A desktop's refusal here is shown as the viewer's
+	// page (uiDesktopDoor).
 	rt := r.WithContext(withTicketActor(r.Context(), ta))
-	if ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app) {
+	desktop := uiDesktopApp(app) || app == uiDesktopAppName
+	if s.uiDesktopDoor(w, r, runID, desktop, func(w http.ResponseWriter) bool {
+		return ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app)
+	}) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -420,7 +424,9 @@ func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 
-	if s.refuseDesktopKindApp(w, r, run, ta, declared, superAdmin) {
+	if s.uiDesktopDoor(w, r, runID, true, func(w http.ResponseWriter) bool {
+		return s.refuseDesktopKindApp(w, r, run, ta, declared, superAdmin)
+	}) {
 		return
 	}
 	sess := s.newDeclaredUISession(run, ta, declared)
@@ -839,12 +845,10 @@ func (s *Server) uiAppReady(key string) bool {
 func (s *Server) markUIAppReady(key string) {
 	s.uiReadyMu.Lock()
 	defer s.uiReadyMu.Unlock()
+	now := s.cfg.Now()
 	if s.uiReady == nil {
 		s.uiReady = map[string]time.Time{}
-	} else if len(s.uiReady) > 1024 {
-		// Pruned wholesale past a bound, like shouldTouch's map: the worst case
-		// is one extra probe per live app.
-		clear(s.uiReady)
 	}
-	s.uiReady[key] = s.cfg.Now()
+	pruneStale(s.uiReady, stampTime, uiReadyTTL, now, &s.uiReadySwept)
+	s.uiReady[key] = now
 }
