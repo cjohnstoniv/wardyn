@@ -319,7 +319,7 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 	return relaySourceVerdict(got.Status.PodIP, src)
 }
 
-// probeIPPoll is how often watchProbeIP reads the probe pod.
+// probeIPPoll is how often watchProbeIP reads the probe pod while the pod watch is not live.
 const probeIPPoll = 100 * time.Millisecond
 
 // probeIPWait is how long the verdict waits for the IP after the relay saw the connection (a
@@ -328,10 +328,10 @@ var probeIPWait = 30 * time.Second
 
 // watchProbeIP sends the probe pod's IP on seen the first time a read shows one, then returns. A pod
 // that is gone sends "" at once, so the verdict falls through without waiting out probeIPWait. It
-// also returns when ctx ends.
+// reads the pod again on each change the pod watch rings (podwatch.go). It also returns when ctx ends.
 func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- string) {
-	t := time.NewTicker(probeIPPoll)
-	defer t.Stop()
+	bell := d.podBell(ns, name)
+	defer bell.stop()
 	for {
 		got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
@@ -342,10 +342,8 @@ func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- 
 			seen <- ""
 			return
 		}
-		select {
-		case <-ctx.Done():
+		if bell.sleep(ctx, probeIPPoll, podWatchResync) != nil {
 			return
-		case <-t.C:
 		}
 	}
 }

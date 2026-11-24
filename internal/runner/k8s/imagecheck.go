@@ -19,7 +19,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
@@ -149,11 +148,15 @@ func (d *Driver) checkImageOnArch(ctx context.Context, attempt uuid.UUID, ref, a
 	return v
 }
 
-// waitImageCheck polls the check pod to a verdict.
+// waitImageCheck reads the check pod to a verdict: at once, then on each change the pod watch rings and on its
+// resync, or every k8sPollInterval while the watch is not live (pollUntil).
 func (d *Driver) waitImageCheck(ctx context.Context, podName string) (code, detail string) {
 	var unschedulableSince time.Time
-	pollErr := wait.PollUntilContextTimeout(ctx, k8sPollInterval, imageCheckWait, true, func(pollCtx context.Context) (bool, error) {
-		pod, err := d.clientset.CoreV1().Pods(d.defaultNamespace()).Get(pollCtx, podName, metav1.GetOptions{})
+	ns := d.defaultNamespace()
+	bell := d.podBell(ns, podName)
+	defer bell.stop()
+	pollErr := pollUntil(ctx, bell, k8sPollInterval, imageCheckWait, func(pollCtx context.Context) (bool, error) {
+		pod, err := d.clientset.CoreV1().Pods(ns).Get(pollCtx, podName, metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}
