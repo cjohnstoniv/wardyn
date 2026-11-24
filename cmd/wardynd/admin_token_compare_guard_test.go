@@ -67,7 +67,7 @@ var adminTokenCompareAllowed = map[string]string{
 	"internal/api/runs_policy.go|const adminTokenPrincipal = \"admin-token\"":                                                                                       "the constant's own declaration",
 	"internal/api/runs_policy.go|return types.ActorSystem, adminTokenPrincipal":                                                                                     "records the admin bearer as the typed ActorSystem, never read back as a grant",
 	"internal/api/sshgateway.go|if s.cfg.OIDC != nil && s.isReservedPrincipal(key.Principal) {":                                                                     "refuses a key stored under a reserved principal",
-	"internal/identity/identitytest/conformance.go|ri, err := p.MintRunIdentity(ctx, uuid.New(), \"admin-token\", \"admin-token\", aud, true)":                      "conformance fixture minting an identity for the mechanism, granting nothing",
+	"internal/identity/identitytest/conformance.go|ri := mint(t, p, uuid.New(), \"admin-token\", \"admin-token\", true)":                                            "conformance fixture minting an identity for the mechanism, granting nothing",
 	"cmd/wardynd/boot_flags.go|adminToken:             flagEnv(\"admin-token\", \"WARDYN_ADMIN_TOKEN\", \"\", \"admin bearer token gating the public API\"),":       "the --admin-token flag's name, not a principal",
 }
 
