@@ -456,7 +456,7 @@ func TestBackchannelPending_AuditRows(t *testing.T) {
 	d := auditDataMap(t, applied)
 	var queuedSHA any
 	for _, ev := range rowsOf(rec, "session.revoke.hold") {
-		if dd := auditDataMap(t, ev); dd["state"] == "queued" {
+		if dd := auditDataMap(t, ev); dd["state"] == "queued" && dd["sub_unverified"] == "pairwise-1" { // the forged token is queued too
 			queuedSHA = dd["token_sha256"]
 		}
 	}
@@ -617,10 +617,11 @@ func TestBackchannelPending_ExemptRequestChargedAfterPublish(t *testing.T) {
 	rev := &fakeSessionRevocations{}
 	pc := newPendingConsole(t, rev)
 	srv, _ := pendingServer(t, pc, rev)
-	// Control: a request whose body is read while still pending is not charged.
-	postHeldLogout(t, srv, "garbage")
+	// Control: a well-formed token whose body is read while still pending is held and not charged. A malformed one
+	// is charged after its refusal even while pending (logoutQueueSink.Noted), so it cannot be the control.
+	postHeldLogout(t, srv, pc.token(t, "u0", "j0", nil))
 	if _, charged := backchannelBucketTokens(srv); charged {
-		t.Fatal("a malformed request under the pending exemption charged the limiter before the first refusal")
+		t.Fatal("a held request under the pending exemption charged the limiter")
 	}
 	w := postWithBodyHook(t, srv, "garbage", func() { pc.recoverProvider(t) })
 	if w.Code != http.StatusBadRequest {

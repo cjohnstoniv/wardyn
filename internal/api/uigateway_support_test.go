@@ -553,9 +553,11 @@ func TestSupportUI_WatchRidesTheBudget(t *testing.T) {
 		ended := rig.openStream("events", rig.helperSession("code"))
 		requireStreamOpen(t, ended)
 		rig.grants.failOn("SupportGrantLive", errors.New("db down"))
-		time.Sleep(100 * time.Millisecond)
-		rig.grants.failOn("SupportGrantLive", nil)
+		waitFor(t, "the window to open", func() bool { return rig.grants.failedLives() >= 1 })
+		// Revoked while the read still fails, so the first read that answers finds the revoke inside the window. Restoring
+		// the read first let a check land between the two, ride through and close the window before the revoke.
 		rig.endGrant("revoked")
+		rig.grants.failOn("SupportGrantLive", nil)
 		_ = wantStreamEnded(t, ended)
 		_, data := wantUnconfirmedRows(t, rig.audit, 1)
 		if data[0]["result"] != "refused" {
