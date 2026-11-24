@@ -15,7 +15,7 @@ import type { AzureSettings, ModelProvider, ModelProviderKind, ProviderHarness }
 import { agentCapabilityFor } from "../providers/agents-tab";
 
 // The seven kinds the editor draws, in the kind step's order (mp-packet-B.html
-// §"Case (a) first", M9's one added row, and the Azure Foundry row after it): Claude subscription, Amazon
+// "Case (a) first", M9's one added row, and the Azure Foundry row after it): Claude subscription, Amazon
 // Bedrock, Anthropic API key, OpenAI API key, Your own endpoint, Local model
 // server, Azure Foundry. "Amazon Bedrock" is ONE kind-step option
 // that starts a bedrock_sso draft — the "How people sign in" toggle inside the
