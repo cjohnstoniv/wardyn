@@ -126,3 +126,79 @@ func TestPG_RunContainersCascade(t *testing.T) {
 		t.Errorf("run_containers rows after the run's delete = %d, want 0", n)
 	}
 }
+
+// TestPG_RunContainersWithoutTheGrant: a role without INSERT on run_containers (a split-role app role the grant
+// loop missed) reads none, so a start does not fail; a role that can insert but not select fails, so stored extras
+// are never silently dropped; with SELECT too it reads them. The erasure blank skips the table for the role without
+// INSERT instead of failing.
+func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
+	pool := runsPGPoolIsolated(t)
+	ctx := context.Background()
+	r := newRun(types.RunPending)
+	r.Containers = extrasFixture()
+	persistRun(t, ctx, pool, r)
+	role := "wardyn_nogrant_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`CREATE ROLE ` + role + ` NOLOGIN`)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DROP OWNED BY `+role+`; DROP ROLE IF EXISTS `+role) })
+	cfg := pool.Config()
+	cfg.ConnConfig.RuntimeParams["role"] = role // every connection of this pool runs as the role
+	restricted, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restricted.Close)
+	pg := store.NewPG(restricted)
+
+	if got, err := pg.RunContainers(ctx, r.ID); err != nil || got != nil {
+		t.Errorf("read without INSERT = %+v, %v; want none and no error", got, err)
+	}
+	exec(`GRANT SELECT, UPDATE ON agent_runs, mcp_call_sends, run_harnesses TO ` + role)
+	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); err != nil {
+		t.Errorf("erasure blank without INSERT on run_containers: %v; want it skipped", err)
+	}
+	exec(`GRANT INSERT ON run_containers TO ` + role)
+	if got, err := pg.RunContainers(ctx, r.ID); err == nil {
+		t.Errorf("read with INSERT and no SELECT = %+v, nil; want an error", got)
+	}
+	exec(`GRANT SELECT ON run_containers TO ` + role)
+	if got, err := pg.RunContainers(ctx, r.ID); err != nil || len(got) != len(r.Containers) {
+		t.Errorf("read with INSERT and SELECT = %+v, %v; want the %d extras", got, err, len(r.Containers))
+	}
+}
+
+// TestPG_BlankRunTasksStripsContainerCommands: the erasure blank drops each extra's command on the person's runs
+// and keeps the rest of the entry, in order; another person's run keeps its command.
+func TestPG_BlankRunTasksStripsContainerCommands(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+	person := "erased-" + uuid.NewString()
+	mine := newRun(types.RunRunning)
+	mine.CreatedBy, mine.Containers = person, extrasFixture()
+	persistRun(t, ctx, pool, mine)
+	theirs := newRun(types.RunRunning)
+	theirs.CreatedBy, theirs.Containers = "kept-"+uuid.NewString(), extrasFixture()
+	persistRun(t, ctx, pool, theirs)
+	if _, err := pg.BlankRunTasks(ctx, person); err != nil {
+		t.Fatalf("BlankRunTasks: %v", err)
+	}
+	want := extrasFixture()
+	for i := range want {
+		want[i].Command = nil
+	}
+	if got, err := pg.RunContainers(ctx, mine.ID); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("the person's extras after the blank = %+v (%v); want %+v", got, err, want)
+	}
+	if got, err := pg.RunContainers(ctx, theirs.ID); err != nil || !reflect.DeepEqual(got, theirs.Containers) {
+		t.Errorf("another person's extras after the blank = %+v (%v); want them unchanged", got, err)
+	}
+	if _, err := pg.BlankRunTasks(ctx, person); err != nil {
+		t.Errorf("a second BlankRunTasks: %v", err)
+	}
+}

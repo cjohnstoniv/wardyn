@@ -707,8 +707,12 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 		if err != nil {
 			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
 		}
-		if _, err := q.Exec(ctx, `UPDATE run_containers SET containers = $2 WHERE run_id = $1`, id, doc); err != nil {
+		tag, err := q.Exec(ctx, `UPDATE run_containers SET containers = $2 WHERE run_id = $1`, id, doc)
+		if err != nil {
 			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %d stored rows, want 1", tag.RowsAffected())
 		}
 		run.Containers = st.Containers
 	}
