@@ -335,7 +335,7 @@ func (s *Server) handleUpdateServiceIdentity(w http.ResponseWriter, r *http.Requ
 // serviceUpdateAuditData is service_identity.update's data without the state: the tokens revoked, and
 // what changed.
 func serviceUpdateAuditData(changed store.ServiceIdentityChanged) map[string]any {
-	data := map[string]any{"tokens_revoked": changed.TokensRevoked}
+	data := map[string]any{"tokens_revoked": changed.TokensRevoked, "trusts_removed": changed.TrustsRemoved}
 	if changed.After.Sponsor != changed.Before.Sponsor {
 		data["sponsor_from"], data["sponsor_to"] = changed.Before.Sponsor, changed.After.Sponsor
 	}
@@ -386,7 +386,7 @@ func (s *Server) handleRetireServiceIdentity(w http.ResponseWriter, r *http.Requ
 		return
 	default:
 		s.recordAudit(ctx, s.auditEvent(nil, actorType, actor, "service_identity.retire", retired.After.Principal(), "success",
-			mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked})))
+			mustJSON(map[string]any{"tokens_revoked": retired.TokensRevoked, "trusts_removed": retired.TrustsRemoved})))
 	}
 	// So do its runs waiting in a pool's queue: a retired identity's run never starts.
 	if _, err := s.cancelQueuedRunsOf(ctx, retired.After.Principal(), queueCancelServiceRetired); err != nil {

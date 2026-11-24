@@ -106,6 +106,10 @@
 //     self-service half, wrapped only for CreateAPIToken and RevokeAPIToken (listing stays unwrapped)
 //   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
 //     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
+//   - /api/v1/inbound-federation, /api/v1/inbound-trusts — inbound federation's switch and trusts (security tier);
+//     a sponsor's view of an identity's trusts sits under /api/v1/me
+//   - /api/v1/inbound        — POST /exchange: an organization's own provider token swapped for a short-lived inbound
+//     token, with no Wardyn credential
 //   - /api/v1/service-grant-cleanups — POST /{uid}/retry (admin): one more try at deleting the secret of a service
 //     grant removed from a model provider. Admin maintenance, like the service-grant routes under /api/v1/model-providers
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above

@@ -320,6 +320,12 @@ var docTierRows = []struct{ route, token string }{
 	{"GET /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
 	{"PATCH /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
 	{"DELETE /api/v1/service-identities/{name}", "`DELETE /service-identities/{name}`"},
+	{"GET /api/v1/inbound-federation", "`PUT /inbound-federation`"},
+	{"PUT /api/v1/inbound-federation", "`PUT /inbound-federation`"},
+	{"POST /api/v1/inbound-trusts", "`POST /inbound-trusts`"},
+	{"GET /api/v1/inbound-trusts", "`GET /inbound-trusts`"},
+	{"GET /api/v1/inbound-trusts/{id}", "`DELETE /inbound-trusts/{id}`"},
+	{"DELETE /api/v1/inbound-trusts/{id}", "`DELETE /inbound-trusts/{id}`"},
 	{"POST /api/v1/tokens/{id}/move", "`POST /tokens/{id}/move`"},
 	// Workload bindings (0.10): standing authority over a service identity, the security tier's.
 	{"POST /api/v1/workload-bindings", "the `/workload-bindings` routes"},

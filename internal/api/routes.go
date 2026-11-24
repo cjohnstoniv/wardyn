@@ -679,7 +679,8 @@ func (s *Server) routes() chi.Router {
 		// device routes, each in its own group — see mountDeviceRoutes.
 		s.mountDeviceRoutes(r)
 		s.mountRunnerRegistrationRoutes(r)
-		s.mountCLISignInRoutes(r) // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
+		s.mountInboundExchangeRoute(r) // a provider token swapped for an inbound token, no credential (inbound_exchange.go)
+		s.mountCLISignInRoutes(r)      // wardyn login: anonymous request, token and refresh; the approve page and Signed-in CLIs
 		s.mountRunnerStreamRoutes(r)
 		s.mountDelegationRoutes(r)   // a portal acting for a person (delegation*.go, #1142)
 		s.mountPortalIssuerRoutes(r) // the issuer-portal registry's admin routes (portal_issuer_*.go)
