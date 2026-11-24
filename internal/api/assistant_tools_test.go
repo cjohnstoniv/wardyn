@@ -24,14 +24,16 @@ import (
 
 // assistantToolSpy counts the reads a tool makes: targetReads the target's own records (templates, a change, a
 // unit's chain, a policy, a run), allReads those and the caller's unit, so a refused call can be shown to have read
-// nothing. fresh answers the fresh role's sign-in read with a record, which with no role mapping derives the
+// nothing. templateReads is the templates' reads alone: a call that ends its session also reads its own run to
+// stop it. fresh answers the fresh role's sign-in read with a record, which with no role mapping derives the
 // admin role, so the snapshot's role is the one that counts.
 type assistantToolSpy struct {
 	*assistantFake
-	smu         sync.Mutex
-	targetReads int
-	allReads    int
-	fresh       bool
+	smu           sync.Mutex
+	targetReads   int
+	allReads      int
+	templateReads int
+	fresh         bool
 }
 
 func (f *assistantToolSpy) count(target bool) {
@@ -45,6 +47,9 @@ func (f *assistantToolSpy) count(target bool) {
 
 func (f *assistantToolSpy) ListTemplatesVisible(ctx context.Context, p string, g []string) ([]types.RunTemplate, error) {
 	f.count(true)
+	f.smu.Lock()
+	f.templateReads++
+	f.smu.Unlock()
 	return f.assistantFake.ListTemplatesVisible(ctx, p, g)
 }
 
@@ -221,11 +226,16 @@ func TestAssistantToolTurnedOffBetweenCalls(t *testing.T) {
 	if w := assistantToolCall(t, srv, run, types.AssistantToolRead, s.ID, `{"kind":"templates"}`); w.Code != http.StatusOK {
 		t.Fatalf("first call = %d %s, want 200", w.Code, w.Body)
 	}
-	before := f.reads()
+	// The target's reads alone: ending the session as turned_off stops its run, which reads that run.
+	templates := func() int { f.smu.Lock(); defer f.smu.Unlock(); return f.templateReads }
+	before := templates()
+	if before == 0 {
+		t.Fatal("the first call read no template, so the refused call's count proves nothing")
+	}
 	f.site.Assistant.Compose = false
 	wantReason(t, assistantToolCall(t, srv, run, types.AssistantToolRead, s.ID, `{"kind":"templates"}`), http.StatusConflict, reasonAssistantOff)
-	if f.reads() != before {
-		t.Errorf("the refused call read the templates %d times", f.reads()-before)
+	if got := templates(); got != before {
+		t.Errorf("the refused call read the templates %d times", got-before)
 	}
 	if got := f.session(s.ID); got.Live() || got.EndReason != types.AssistantEndTurnedOff {
 		t.Errorf("session = %s/%s, want ended as turned_off", got.State, got.EndReason)

@@ -81,7 +81,8 @@ func TestAssistantPersonRoutesSwitches(t *testing.T) {
 	spy, srv := assistantPersonServer(t)
 	person := "sub-person-" + uuid.NewString()
 	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
-	body := assistantChecksBody("run", "", map[string]any{})
+	// The replay resolves the draft as the run route does, which refuses a policy with no confinement class.
+	body := assistantChecksBody("run", "", map[string]any{"min_confinement_class": "CC2"})
 
 	spy.site.Assistant.RunHistoryCounts = false
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/assistant/replay", cookie, body)
