@@ -133,6 +133,18 @@ jobs:
         run: |
           mkdir -p test/reports/e2e
           make test-e2e 2>&1 | tee test/reports/e2e/security-e2e.log
+      # The start-latency lines the suite printed (each START_MS, the START_LATENCY p50/p95/max, and the start-phase
+      # and egress-decision sums and counts from /metrics), on the run's summary page.
+      - name: Start latency summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Start latency (warm Docker, sequential runs)'
+            echo '```'
+            grep -E '^(START_MS=|START_LATENCY |METRIC )' test/reports/e2e/security-e2e.log || echo 'no start-latency lines: the suite stopped before them'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload e2e results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `/metrics` has three latency histograms: `wardyn_run_start_phase_seconds` splits a run's start into its phases, `wardyn_http_request_seconds` times each API route, and `wardyn_egress_decision_record_seconds` times an egress decision from the proxy to its audit row. See the monitoring page. (#4062)
+
 ### Fixed
 
 - A SCIM group create now answers with the members it recorded in the same step. Before, a failed read of the members after the group was stored answered 500, and the identity provider's retry then got 409 for a group that existed.
