@@ -138,6 +138,9 @@ func TestHeldDriveRetry_FinishesOnAffirmativeOutcome(t *testing.T) {
 			if len(rn.calls) != 1 {
 				t.Errorf("substrate calls = %d, want 1", len(rn.calls))
 			}
+			if ev := driveAuditEvent(t, rec, "drive.member.delete"); ev.ActorType != types.ActorSystem || ev.Actor != "wardynd" {
+				t.Errorf("audit actor = %s %q, want system wardynd", ev.ActorType, ev.Actor)
+			}
 			data := driveAuditData(t, rec, "drive.member.delete")
 			if data["by"] != memberDriveByRetrySweep || data["outcome"] != string(tc.outcome) {
 				t.Errorf("audit by = %v, outcome = %v; want %s, %s", data["by"], data["outcome"], memberDriveByRetrySweep, tc.outcome)

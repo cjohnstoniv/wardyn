@@ -55,6 +55,8 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 		return nil
 	}
 	defer end()
+	// The attempt is the server's own, as other sweeps' rows are: actor system, wardynd.
+	ctx = withActor(ctx, types.ActorSystem, "wardynd")
 	// The pass is bounded: a slow substrate must not hold the tick, and a lost lease ends it too. Rows not taken keep
 	// their mark and come first on the next pass. A delete already begun finishes on its own clock (deleteMemberDrive).
 	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
