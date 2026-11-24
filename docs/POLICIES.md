@@ -683,8 +683,11 @@ What the check does and does not settle:
 
 **Runs the rules bind.**
 
-- A workspace record or verify session runs the agent, so the rules for `claude-code` narrow its policy as they narrow a run's. A rule it cannot meet refuses the launch (`422`).
-- A harness login is a run of the vendor CLI, so the rules for that agent bind it.
+- A workspace record or verify session runs the agent, so the rules for `claude-code` narrow its policy as they narrow a run's. A rule it cannot meet refuses the launch before it is claimed:
+  - `422` `agent_rules_conflict` for a confinement floor the runner cannot give, or inner walls the session cannot launch with.
+  - `422` `agent_rules_invalid` for a stored rule that no longer passes.
+  - `403` `governance_overlay_unsatisfiable` when a rule's allowlist has nothing in common with the confined session's.
+- A harness login is a run of the vendor CLI. The rules for that agent bind it through the seal, the recording floor and the mint only: no create step narrows its allowlist or tool rules.
 - A source scan and a workspace step that is not an interactive session start no agent. They carry the step's default agent name but are not bound, so a withheld credential cannot fail their clone.
 
 **Routes**, on the security tier (`admin` or `security_admin`). Writes and deletes are audited and covered by strict audit; `GET /agent-rules` is not audited:
