@@ -198,6 +198,22 @@ func agentRulesInnerWallsFor(req createRunRequest, spec types.RunPolicySpec, har
 		whoStart+" set the agent's own walls, and this run cannot launch with them: "+axis+". Launch the agent on a lane that meets them, or launch without it.")
 }
 
+// agentRulesReadError is a read of the agent rules (or of the run's harness rows they are keyed by) that
+// failed, kept apart from a failed read of the person's walls so the refusal names what could not be read.
+type agentRulesReadError struct{ err error }
+
+func (e *agentRulesReadError) Error() string { return "read the agent rules: " + e.err.Error() }
+func (e *agentRulesReadError) Unwrap() error { return e.err }
+
+// recordingFloorReadFailure names what a failed recording floor read could not read: the operation (audit row
+// and server error) and the sentence the run fails with.
+func recordingFloorReadFailure(err error) (operation, sentence string) {
+	if errors.As(err, new(*agentRulesReadError)) {
+		return "read the agent rules", "the rules of the run's agents could not be read, so the run's recording level cannot be set; rules that cannot be read refuse the run"
+	}
+	return "read the run owner's walls", "your walls could not be read, so the run's recording level cannot be set"
+}
+
 // agentRulesRecordingFloor is the highest recording level the rules of the run's harnesses name, "" when none.
 // harnesses nil reads the run's own. A read that fails is returned, never ignored.
 func (s *Server) agentRulesRecordingFloor(ctx context.Context, run types.AgentRun, harnesses []string) (types.RecordingLevel, error) {
@@ -207,12 +223,12 @@ func (s *Server) agentRulesRecordingFloor(ctx context.Context, run types.AgentRu
 	if harnesses == nil {
 		var err error
 		if harnesses, err = s.runHarnessIDs(ctx, run); err != nil {
-			return "", err
+			return "", &agentRulesReadError{err}
 		}
 	}
 	rules, err := s.agentRulesFor(ctx, harnesses)
 	if err != nil {
-		return "", err
+		return "", &agentRulesReadError{err}
 	}
 	var floor types.RecordingLevel
 	for _, r := range rules {

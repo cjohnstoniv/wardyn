@@ -122,11 +122,11 @@ func recordingChoice(run types.AgentRun, policy types.RunPolicySpec, c dispatchC
 func (s *Server) applyDispatchRecording(ctx context.Context, run *types.AgentRun, spec *runner.SandboxSpec, policy types.RunPolicySpec, c dispatchCeiling, site types.SiteConfig, siteErr error) bool {
 	floor, err := s.wallsRecordingFloor(ctx, *run, nil)
 	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: read the run owner's walls and the agent rules for the recording floor; the run is refused",
-			slog.String("run_id", run.ID.String()), slog.Any("err", err))
-		s.failAndRevoke(ctx, run.ID, types.RunStarting, "your walls or the rules of the run's agents could not be read, so the run's recording level cannot be set; rules that cannot be read refuse the run")
+		operation, sentence := recordingFloorReadFailure(err)
+		slog.ErrorContext(ctx, "wardynd: "+operation+" for the recording floor; the run is refused", slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, sentence)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "read the run owner's walls"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": operation})))
 		return false
 	}
 	return s.applyRunRecording(ctx, run, spec, recordingChoice(*run, policy, c, site, siteErr, floor))
@@ -414,7 +414,11 @@ func (s *Server) createRecordingChoice(ctx context.Context, r *http.Request, pol
 	}
 	_, principal := actorFromRequest(r)
 	if choice.WallsFloor, err = s.wallsRecordingFloor(ctx, types.AgentRun{CreatedBy: principal}, harnesses); err != nil {
-		return choice, runServerError("read your walls", err)
+		operation, _ := recordingFloorReadFailure(err)
+		if operation == "read the run owner's walls" {
+			operation = "read your walls"
+		}
+		return choice, runServerError(operation, err)
 	}
 	return choice, nil
 }
