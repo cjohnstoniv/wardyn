@@ -11,6 +11,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- After an audit signing break, the server's log line now names the live chain check, `GET /api/v1/audit/chain/verify`, and says to read its `ok` field, instead of a CLI command that does not exist (#4150).
+- `wardyn doctor`'s help says it changes no setting and that, like every command, it may renew a saved sign-in, instead of saying it writes nothing (#4180).
+
+### Documentation
+
+- The Compose backup and restore recipe reaches the installation you name: database commands go through that Compose project's `postgres` service, the recordings volume is the one `WARDYN_NS` names, and the dump and archive names carry it. On a host running two installations it no longer reads or writes the default one by mistake (#4176).
+- Both Helm upgrade recipes say to set `image.digest` to the new release's verified digest when your values pin one, and how to check the image that runs. A new tag beside the old digest ran the old image (#4178).
+- The audit retention status call is described as counting every retained partition; a session-only cut as ending browser and CLI sign-ins, with the CLI sign-ins' tokens, while personal API tokens and SSH keys keep working; and the recovery rehearsal as opening stored credentials and live principal keys, not run masking records (#4179).
+- The re-sign-in metrics guide no longer reads a low average wait beside rising timeouts as proof that the agent gives up early: the wait counts answered requests only (#4141).
+- `docs/ENV.md` writes the CLI's URL flag as `--url` (#4180).
+- The Helm chart's high-availability text says `ha.enabled` does not raise `replicas`, and that surviving a node failure needs ready replicas on separate nodes, which the default placement prefers but does not require (#4143).
+- The managed desktop's recovery row says what a restore brings back on the same device and on a replacement device (#4152).
+- The Kubernetes runner guide checks that the runner is Online after install and after an upgrade, instead of reading a running pod as a passed network-policy check (#4170).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

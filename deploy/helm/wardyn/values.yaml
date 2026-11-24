@@ -35,8 +35,10 @@ image:
 # render time by templates/deployment.yaml.
 replicas: 1
 
-# High availability: two or more wardynd replicas on this cluster, so one node
-# failing does not stop the control plane. Replaces `allowMultiReplica`, which
+# High availability: lets wardynd run two or more replicas on this cluster. It
+# does not raise `replicas` (set that to 2 or more), and a node failure stops the
+# control plane only when every ready replica was on that node: the anti-affinity
+# below prefers separate nodes but does not require them. Replaces `allowMultiReplica`, which
 # is removed (a values file that still sets it true is refused, with a pointer
 # here). Sets WARDYN_HA=true on the container, lifts the `replicas > 1`
 # refusal, and (at two or more replicas) adds a PodDisruptionBudget (minAvailable 1) and a preferred pod

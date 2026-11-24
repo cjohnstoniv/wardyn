@@ -380,19 +380,28 @@ The items to collect on each deployment are listed in
 Compose recipe.
 
 ```sh
+# Name the installation first. A host can run several (scripts/ci-run.sh gives each
+# its own COMPOSE_PROJECT_NAME and WARDYN_NS): set both as that installation was
+# started, or leave both unset for the default one. Every command below then reaches
+# that installation's containers and volumes only.
+export COMPOSE_PROJECT_NAME WARDYN_NS
+NS="${WARDYN_NS:-wardyn}"
+
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
-# 1. Postgres (the container name is ${WARDYN_NS:-wardyn}-postgres)
-docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
+# 1. Postgres, through this project's postgres service
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql"
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
-#    (`recordings` is the ONE explicitly-named volume, so no project prefix —
-#     see docker-compose.yaml)
-docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
-  tar czf /to/recordings-$(date +%F).tar.gz -C /from .
+#    (`recordings` is the ONE explicitly-named volume, $NS-recordings, so no
+#     project prefix — see docker-compose.yaml; the inspect stops on a name
+#     this host does not have)
+docker volume inspect "$NS-recordings" >/dev/null &&
+docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
+  tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
@@ -404,6 +413,9 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 #        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
 #          tar czf "/to/$v-$(date +%F).tar.gz" -C /from .
 #      done
+#    Drive volumes carry no installation label: on a host with two
+#    installations, keep only the volumes whose wardyn.drive id this
+#    installation's GET /api/v1/drives lists.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
@@ -424,12 +436,19 @@ boots against the restored data, and Postgres as the ONLY thing running while th
 dump loads.
 
 ```sh
+# Name the installation first. A host can run several (scripts/ci-run.sh gives each
+# its own COMPOSE_PROJECT_NAME and WARDYN_NS): set both as that installation was
+# started, or leave both unset for the default one. Every command below then reaches
+# that installation's containers and volumes only.
+export COMPOSE_PROJECT_NAME WARDYN_NS
+NS="${WARDYN_NS:-wardyn}"
+
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
 #    high-water mark: every session it issued sits at or below it. (That
 #    database is gone? See "Revocation order" below the block.)
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -Atc \
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
 
 # 1. Age key FIRST, before anything boots against the restored data — copy
@@ -447,20 +466,20 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
 #    it and leaving a partial database with no error.
-docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$NS-<date>.sql"
 
 # 3b. A restore rewinds the sequence that orders revocations against sessions. Before any
 #     wardynd starts, set it strictly above step 0's mark. A fixed increment cannot prove
 #     that: restoring the same dump twice lands on the same value, below sessions issued
 #     after the first restore. A dump from a release that predates the sequence has none:
 #     run `wardynd -migrate-only` first, then this step.
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c \
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c \
   "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $(cat revocation-hwm.txt)) + 1)"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
-docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
-  tar xzf /from/recordings-<date>.tar.gz -C /to
+docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
+  tar xzf "/from/$NS-recordings-<date>.tar.gz" -C /to
 
 # 5. User drives — backup step 4's tarballs. The dump in step 3 brought back
 #    the drive ROWS; it holds none of the BYTES. Skip this and the runner
@@ -489,7 +508,7 @@ docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
 make setup
 
 # 7. Verify — row count first:
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
 #    Startup already decrypts the persisted signing key and fails closed if
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
@@ -522,7 +541,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 | Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
 |---|---|---|---|---|---|
 | **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit`, `azurekv` or `awskms`, the key lives in the external key service (Vault, Azure Key Vault or AWS KMS), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
-| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
+| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)). Restored on the same device, with its `age.key` in place, the stored secrets open again and the console comes back. Restored onto a replacement device, which mints its own `age.key`, wardynd cannot open the boot keys in the restored database and stops before it serves, so there is no console; the recordings, the drive volumes and the database's rows other than its sealed values stay readable offline. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
 | **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit, Azure Key Vault or AWS KMS. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
@@ -548,7 +567,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   has loaded the dump and before step 3b, replace the session key the way
   [the boot keys are replaced](operations/secrets-and-keys.md), so the next boot
   mints a new one:
-  `docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`.
+  `docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`,
+  with the installation named as in the block above.
   Then run step 3b with `0` in place of the mark. Every person then signs in again.
 - **Drives.** Record the volume to drive id to person map at backup time. After
   a restore, a volume you recreate by hand is adopted by name, so the
@@ -1296,7 +1316,8 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
 - `GET /audit/retention` lists every partition with its row count, state (`closed`, `open` or `future`) and whether a
   drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
 - The two answers are the same function's, so they cannot disagree.
-- The row counts are exact (a scan of each partition), so the status call costs as much as the largest partition.
+- The row counts are exact: the call counts every retained partition in turn, so its cost grows with the total rows
+  retained and with the number of partitions.
 
 - **Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade.
   - It becomes droppable once the upgrade itself is older than the window, and it is dropped whole;
@@ -1704,7 +1725,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their browser and CLI sign-ins and leaves their personal API tokens and SSH keys (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
@@ -3470,8 +3491,9 @@ Naming these is the point of the walk, not a caveat on it:
   - So `timeout` always means "the owner had the whole window".
 - **`timeout` is the label to alert on**, and the one to tune `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` against: it means a sandbox's model call was FAILED because nobody signed in inside the budget.
   - A rising `timeout` beside a `wait_seconds` average near the budget says people are only just making it — lengthen the budget, or make the request more visible.
-  - A rising `timeout` with a LOW `wait_seconds` says the opposite.
-  - The agent's SDK is giving up before the hold does, and the knob should come DOWN below that SDK's own patience so the call fails fast instead of late.
+  - `wait_seconds` samples only the requests a sign-in answered; a request that timed out adds nothing to it.
+  - So a rising `timeout` with a LOW `wait_seconds` average can mean the agent's SDK gives up before the hold does, and a few prompt sign-ins beside many unanswered requests look the same.
+  - Bring the knob DOWN below that SDK's own patience, so the call fails fast instead of late, only once the agent's own log shows its model call timing out first.
 - A series that is mostly `expired` is a deployment whose people never see the request at all — check that the console is reachable and that the roster names real principals.
   - Mostly `cancelled` means the runs are ending (killed, or finishing) before anyone answers.
 - **A hold expiry is deliberately NOT counted on `wardyn_egress_denies_total`.**
@@ -4452,6 +4474,26 @@ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
   -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
 ```
 
+If your values pin `image.digest`, change the digest in the same upgrade. The chart pulls the digest
+(`repo:tag@digest`), so a new tag beside the old digest runs the old image, which may then refuse the database the
+new release migrated. Read the new digest from the registry, verify that digest, upgrade with it, and check what
+runs:
+
+```sh
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:<new-tag>     # the "Digest:" line is <new-digest>
+cosign verify \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<new-tag>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/cjohnstoniv/wardynd@<new-digest>"
+helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
+  -f your-values.yaml --set image.tag=<new-tag> --set image.digest=<new-digest> --wait --timeout 5m
+kubectl -n wardyn get deploy/wardyn \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="wardynd")].image}'   # ends in @<new-digest>
+```
+
+`/healthz`'s `version` field then names the new release. A mirror works the same way with its own repository in
+place of `ghcr.io/cjohnstoniv/wardynd`; verify the digest, which a mirror keeps.
+
 Keeping the values in a version-controlled file makes what is deployed reviewable,
 and it steps around two Helm sharp edges.
 
@@ -4585,7 +4627,10 @@ kubectl -n wardyn scale deploy/wardyn --replicas=0
 # 2. Run the migration once, from the NEW image, with the DSN the Deployment uses
 #    (WARDYN_PG_MIGRATE_DSN when you split roles). Any Job that runs
 #    `wardynd -migrate-only` in the new image works; wait for it to complete.
-# 3. Upgrade the release; the new pod finds nothing left to migrate.
+#    Values that pin image.digest: run it from ghcr.io/cjohnstoniv/wardynd@<new-digest>,
+#    the digest verified as above.
+# 3. Upgrade the release; the new pod finds nothing left to migrate. Values that
+#    pin image.digest add --set image.digest=<new-digest>, the digest step 2 ran.
 helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
 ```
 
@@ -5551,8 +5596,10 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 
 ## High availability
 
-- `ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
-  node does not stop the control plane.
+- `ha.enabled` lets wardynd run two or more replicas on Kubernetes; set `replicas` to
+  2 or more yourself (the chart keeps your value, 1 by default).
+- A node failure then stops the control plane only when every ready replica was on that
+  node: the default anti-affinity prefers separate nodes and does not require them.
 - It is one documented switch: the chart sets
   `WARDYN_HA=true`, the daemon skips the single-instance lock, and both refuse every
   configuration that would make a second replica unsafe.
