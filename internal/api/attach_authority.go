@@ -204,7 +204,9 @@ func (s *Server) holdAttachAuthority(ctx context.Context, b *sessionBudget, chec
 
 // holdAuthorityOn is holdAttachAuthority on runID's shared read (watchAttachRun): each tick is the shared read's,
 // and check runs with that read in its context, so every socket on the run costs one run read and one profile read
-// per interval between them. A retry on b's clock reads afresh. uuid.Nil keeps a timer of the socket's own.
+// per interval between them. A retry on b's clock reads afresh,
+// as does a check whose shared read's lookup bound has passed; a shared read older than the socket's latest fresh read
+// is not used. uuid.Nil keeps a timer of the socket's own.
 func (s *Server) holdAuthorityOn(ctx context.Context, runID uuid.UUID, b *sessionBudget, check func(context.Context) error, end func(spent bool)) func() string {
 	var ended atomic.Pointer[string]
 	reason := func() string {
@@ -229,6 +231,7 @@ func (s *Server) holdAuthorityOn(ctx context.Context, runID uuid.UUID, b *sessio
 			defer leave()
 			shared = ch
 		}
+		var fresh time.Time // when this socket's latest read of its own began
 		for {
 			cctx := ctx
 			select {
@@ -236,10 +239,22 @@ func (s *Server) holdAuthorityOn(ctx context.Context, runID uuid.UUID, b *sessio
 				return
 			case <-tick:
 			case st := <-shared:
-				cctx = withAttachRunState(ctx, runID, st)
+				var run bool
+				if cctx, run = s.sharedCheck(ctx, runID, st, fresh, time.Now()); !run {
+					continue
+				}
 			case <-b.retryC():
 			}
-			lctx, cancel := context.WithTimeout(cctx, s.attachAuthorityLookupBound())
+			// One lookup bound covers the whole check: from the shared read's start when the check uses it (the run's
+			// half was already spent in it), else from now.
+			started := time.Now()
+			deadline := started.Add(s.attachAuthorityLookupBound())
+			if st, ok := attachRunStateFrom(cctx, runID); ok {
+				deadline = st.at.Add(s.attachAuthorityLookupBound())
+			} else {
+				fresh = started
+			}
+			lctx, cancel := context.WithDeadline(cctx, deadline)
 			err := check(lctx)
 			cancel()
 			if ctx.Err() != nil {

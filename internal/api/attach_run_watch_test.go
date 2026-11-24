@@ -101,3 +101,46 @@ func TestAttachAuthority_OneSocketsCredentialEndsOnlyThatSocket(t *testing.T) {
 	default:
 	}
 }
+
+// TestAttachAuthority_SharedReadIsUsedOnlyWhileItsBoundHolds: a socket runs its check on the shared read only while
+// that read's lookup bound has not passed and no read of the socket's own began after it. A read whose bound has
+// passed (the socket was busy with a retry) is dropped and the check reads the run afresh; a read older than the
+// socket's latest fresh read is not applied at all.
+func TestAttachAuthority_SharedReadIsUsedOnlyWhileItsBoundHolds(t *testing.T) {
+	var reads *runReadCounter
+	rig := newAuthorityRigWith(t, 0, func(c *Config) {
+		reads = &runReadCounter{authorityUnits: c.Store.(*authorityUnits)}
+		c.Store = reads
+	})
+	srv, runID := rig.srv, rig.run.ID
+	bound := srv.attachAuthorityLookupBound()
+	now := time.Now()
+	exempt := func(types.AgentRun) bool { return true }
+	check := func(st attachRunState, fresh time.Time) (ran bool, runReads int64) {
+		t.Helper()
+		before := reads.runReads.Load()
+		cctx, ran := srv.sharedCheck(context.Background(), runID, st, fresh, now)
+		if !ran {
+			return false, 0
+		}
+		if err := srv.attachUnitCheck(cctx, runID, nil, exempt); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+		return true, reads.runReads.Load() - before
+	}
+
+	// Within its bound and newer than the socket's fresh read: used, so the check reads nothing itself.
+	live := attachRunState{at: now.Add(-bound / 2), run: rig.run}
+	if ran, n := check(live, now.Add(-bound)); !ran || n != 0 {
+		t.Fatalf("a read inside its bound: ran=%v, %d run reads, want ran with 0", ran, n)
+	}
+	// Its bound has passed: dropped, the check reads the run afresh.
+	late := attachRunState{at: now.Add(-bound), run: rig.run}
+	if ran, n := check(late, time.Time{}); !ran || n != 1 {
+		t.Fatalf("a read past its bound: ran=%v, %d run reads, want ran with 1", ran, n)
+	}
+	// A fresh read began after the shared one: the shared read is not applied, even though its bound still holds.
+	if ran, _ := check(live, now.Add(-bound/4)); ran {
+		t.Fatal("a shared read older than the socket's fresh read was applied")
+	}
+}
