@@ -11,6 +11,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The egress proxy reuses a host's DNS answer for up to 30 seconds and checks it against the address guard on every use, as it checks a fresh one. A lookup that does not answer gives up after 10 seconds. (#4051)
+- The egress proxy keeps up to 32 idle connections per upstream host and resumes upstream TLS sessions, except on connections that present a client certificate. HTTP/2 upstream connections that stop answering are pinged and closed. (#4051)
+
 ### Fixed
 
 - An upload through an inspected host is no longer cut after five minutes in total: the read time now counts from the last bytes received, so only an upload that stops sending is cut. (#4052)
