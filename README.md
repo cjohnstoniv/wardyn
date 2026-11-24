@@ -193,7 +193,7 @@ wardyn setup status   # what's configured + the next command per unmet check
   - **`deploy/compose`** is the local 10-minute trial. It runs on a laptop without a cluster and has the Getting Started demo steps.
   - **Kubernetes** is the signed OCI chart above. See [`deploy/helm/wardyn`](deploy/helm/wardyn/README.md): `make kind-quickstart` for a one-command real-cluster install, or a production Helm install onto your own cluster. It is not yet at Compose parity (the chart README's "Known gaps").
 
-- Not built yet: SPIRE, OpenBao, mediation of local tools (a remote MCP server attached through the proxy is mediated), arbitrary-domain TLS interception, an OCSF sink, SAML team SSO, and Compose's own L1 default-deny.
+- Not built yet: OpenBao, mediation of local tools (a remote MCP server attached through the proxy is mediated), arbitrary-domain TLS interception, an OCSF sink, SAML team SSO, and Compose's own L1 default-deny.
 - SCIM only removes leavers today and does not provision joiners ([OPERATIONS.md](docs/OPERATIONS.md#leavers-and-scim)).
 - [ROADMAP.md](ROADMAP.md) has the list, and [CHANGELOG.md](CHANGELOG.md) what each release added.
 

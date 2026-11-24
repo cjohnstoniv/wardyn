@@ -77,11 +77,19 @@ Not built:
 | Google Cloud CLI access | #1990 |
 | The AI composer | #1993 |
 
+### v0.11
+
+Built, experimental, off by default:
+
+| Item | Status |
+|---|---|
+| SPIRE identity provider (`WARDYN_IDENTITY=spire`, Kubernetes only): run tokens are SPIRE JWT-SVIDs, and each run's proxy pod is attested for its own X.509-SVID. See [SPIRE identity](docs/operations/spire.md) | Built, experimental, off by default |
+
 ### v1.0
 
 | Item | Status |
 |---|---|
-| SPIRE identity provider and OpenBao secret store | Not built; the `identity.Provider` and `secretstore.Store` seams ship |
+| OpenBao secret store | Not built; the `secretstore.Store` seam ships |
 | L3 MCP and tool gateway | Partly built: the per-tool-call decision plane ships. Interception of tool-call egress that bypasses the proxy does not ([THREAT-MODEL.md](threatmodel/THREAT-MODEL.md)) |
 | Arbitrary-domain L2 TLS interception | Not built; targeted model and registry interception ships, opt-in |
 | Cloud STS federation | Not built |
