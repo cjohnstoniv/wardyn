@@ -338,7 +338,10 @@ func TestRunScheduleCreate_RefusesALongName(t *testing.T) {
 	if len(st.rows) != 0 {
 		t.Errorf("a refused create stored %d schedules", len(st.rows))
 	}
-	if w := createScheduleAs(memberCtxFor("sub-person"), scheduleTestServer(st), body(strings.Repeat("é", maxRunTitleLen))); errorReason(w) == reasonRunFieldTooLong {
+	// The length check is the body decode's last step, so a name at the cap is read here and not sent on to the
+	// launch's refusals, which this fake store does not answer.
+	w = httptest.NewRecorder()
+	if _, _, ok := decodeRunScheduleBody(w, scheduleRequest(memberCtxFor("sub-person"), http.MethodPost, "/api/v1/run-schedules", "", body(strings.Repeat("é", maxRunTitleLen)))); !ok {
 		t.Errorf("a 200-character name of 400 bytes = %d %s; want it past the length check", w.Code, w.Body)
 	}
 }
