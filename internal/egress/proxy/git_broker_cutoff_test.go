@@ -112,6 +112,9 @@ func TestGitBrokerOfflineBoundAfterTheVet(t *testing.T) {
 		t.Fatalf("(a) status %d, want 200: %s", rec.Code, rec.Body)
 	}
 	_, hits := offlineCounts(up)
+	// The proxy reuses an answer for dnsCacheTTL: the vet below looks github.com up again once that has passed,
+	// which an empty cache over the same resolver stands for.
+	p.res = newCachedResolver(gate, time.Now)
 
 	setQuiet(p, 29*time.Minute)
 	gate.armed.Store(true)

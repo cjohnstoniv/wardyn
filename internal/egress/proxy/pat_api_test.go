@@ -726,6 +726,9 @@ func TestPATAPIOfflineBoundAfterTheVet(t *testing.T) {
 		t.Fatalf("(a) status %d (%s), want 200", rec.Code, rec.Body)
 	}
 	hits, mints := h.forgeHits(), h.mints()
+	// The proxy reuses an answer for dnsCacheTTL: the vet below looks the forge host up again once that has
+	// passed, which an empty cache over the same resolver stands for.
+	p.res = newCachedResolver(gate, time.Now)
 
 	var release sync.Once
 	t.Cleanup(func() { release.Do(func() { close(gate.release) }) }) // a failed wait still lets the held lookup go
