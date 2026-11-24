@@ -9,7 +9,9 @@
 # early and read an in-progress run's empty conclusion. A single failed read is
 # retried, so one API error cannot end the wait early; MAX_READ_FAILS failed
 # reads in a row (a deleted run, a 404, a revoked token) fail the step naming
-# the last error, rather than holding a runner until the job timeout. One line
+# the last error, rather than holding a runner until the job timeout. A status
+# this script does not know (empty, or one GitHub adds) counts against the same
+# bound, so a run that never reads `completed` cannot hold it either. One line
 # is printed per poll.
 #
 # Env: POLL_SECS (60) between status polls, RETRY_SECS (15) between conclusion
@@ -34,16 +36,22 @@ read_field() {
 fails=0
 while :; do
   if read_field status; then
-    fails=0
     echo "run $id: status ${val:-unknown}"
-    [ "$val" != completed ] || break
+    case "$val" in
+      completed) break ;;
+      queued | in_progress | waiting | requested | pending) fails=0 ;;
+      *)
+        fails=$((fails + 1))
+        err="unknown status '${val}'"
+        ;;
+    esac
   else
     fails=$((fails + 1))
     echo "run $id: status read failed ($fails/$max): $err"
-    if [ "$fails" -ge "$max" ]; then
-      echo "::error::reading run $id failed $max times in a row; last error: $err"
-      exit 1
-    fi
+  fi
+  if [ "$fails" -ge "$max" ]; then
+    echo "::error::reading run $id failed $max times in a row; last error: $err"
+    exit 1
   fi
   sleep "$poll"
 done

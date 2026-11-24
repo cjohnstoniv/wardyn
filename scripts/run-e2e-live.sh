@@ -84,7 +84,7 @@ else
     sleep 2
   done
   [[ -n "${pg_ready}" ]] || { docker compose -f deploy/compose/docker-compose.yaml logs --tail 40 postgres; die "postgres did not accept connections within 120s"; }
-  [[ -d ui/dist ]] || { log "building the UI (ui/dist absent)"; (cd ui && pnpm install --frozen-lockfile && pnpm build) || log "WARNING: UI build failed (output above); wardynd starts without ui/dist"; }
+  [[ -d ui/dist ]] || { log "building the UI (ui/dist absent)"; (cd ui && pnpm install --frozen-lockfile && pnpm build) || die "the console build failed (output above)"; }
   nohup ./scripts/run-host.sh >"${WARDYND_LOG}" 2>&1 &
   STARTED_WARDYND=$!
   wait_healthy "${BASE}" 30 || { tail -20 "${WARDYND_LOG}"; die "wardynd did not become healthy"; }

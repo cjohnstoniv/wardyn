@@ -15,6 +15,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - `/metrics` has three latency histograms: `wardyn_run_start_phase_seconds` splits a run's start into its phases, `wardyn_http_request_seconds` times each API route, and `wardyn_egress_decision_record_seconds` times an egress decision from the proxy to its audit row. See the monitoring page. (#4062)
 
+### Documentation
+
+- docs/AUDIT-ACTIONS.md says the refused service-renewal `run.end.set` row's hourly limit is kept per wardynd process, so a restart or another replica can repeat it within the hour (#3912).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
