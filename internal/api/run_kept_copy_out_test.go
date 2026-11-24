@@ -305,7 +305,7 @@ func TestKeptCopyOut_TheCommandRouteAndUIAppsStayClosed(t *testing.T) {
 	if _, msg := srv.liveRunForExec(ctx, run.ID, uiLiveRunWords); msg != uiLiveRunWords.ended {
 		t.Errorf("the UI gateway = %q, want %q", msg, uiLiveRunWords.ended)
 	}
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/exec", ses["owner"], `{"argv":["true"]}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/"+run.ID.String()+"/exec", ses["owner"], `{"command":"true"}`)
 	if w.Code < 400 || !strings.Contains(w.Body.String(), execLiveRunWords.ended) || execs.Load() != 0 {
 		t.Errorf("POST /exec as the owner: %d %s after %d execs, want it refused as %q", w.Code, w.Body.String(), execs.Load(), execLiveRunWords.ended)
 	}
