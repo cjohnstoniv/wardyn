@@ -3304,11 +3304,17 @@ jobs:
             # ^origin/main: commits already on main passed main's own gate (every PR
             # commit is checked; a push exempts only GitHub's merges). Without it a
             # release PR that merges main re-judges GitHub's merge commits (the 0.8.2 cut).
-            # ^origin/release/*: the same for a release line's commits, which passed that branch's
-            # own gate (release-branch-checks.yml); a train into main that carries a patch line
-            # would otherwise re-judge GitHub's merges of that line's release PRs.
-            RELEASE_LINES=$(git for-each-ref --format='^%(refname:short)' 'refs/remotes/origin/release/*' | tr '\n' ' ')
-            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main $RELEASE_LINES"
+            # ^origin/release/*: a release line's commits are left out of this strict pass, so a
+            # train into main that carries a patch line does not re-judge GitHub's merges of that
+            # line's release PRs. The loop after it checks the commits the PR carries from each
+            # line the way release-branch-checks.yml does (GitHub's own merges exempt), so an
+            # unsigned commit pushed straight to a release branch still reds the PR.
+            RELEASE_LINES=$(git for-each-ref --format='%(refname:short)' 'refs/remotes/origin/release/*')
+            make dco DCO_RANGE="$BASE..$PR_HEAD ^origin/main $(printf '^%s ' $RELEASE_LINES)"
+            for line in $RELEASE_LINES; do
+              carried=$(git merge-base "$PR_HEAD" "$line" || true)
+              [ -z "$carried" ] || make dco DCO_RANGE="$carried ^origin/main ^$BASE" DCO_ALLOW_GITHUB_MERGES=1
+            done
           elif [ -n "$BASE" ]; then
             # merge_group: the queue's own merge commits are committed by GitHub
             # and carry no Signed-off-by — exempt only those.
