@@ -677,6 +677,9 @@ func TestRefreshGatewayHostKey_KeepsOtherLinesAndRefusesAMismatch(t *testing.T) 
 	home := homeWithKey(t, false)
 	hk := newTestHostKey(t)
 	path := filepath.Join(home, ".wardyn", "known_hosts")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	const base = "https://Wardyn.Example.test:8443"
 	alias := "wardyn-gateway-wardyn.example.test_3a8443"
 	old := "other.example ssh-ed25519 AAAAother\n" + alias + " ssh-ed25519 AAAAold\n# a comment\n"
