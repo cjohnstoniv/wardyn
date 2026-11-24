@@ -79,14 +79,19 @@ func outageDispatch(t *testing.T, siteMinutes int) (*Server, *outageDispatchStor
 // policy's keys.
 func renderedOutage(t *testing.T, srv *Server, fr *fakeRunner, run types.AgentRun, policy types.RunPolicySpec) (top, pol map[string]json.RawMessage) {
 	t.Helper()
+	fr.mu.Lock()
+	before := fr.createCalls
+	fr.lastSpec = runner.SandboxSpec{}
+	fr.mu.Unlock()
 	srv.dispatchRun(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), dispatchParams{
 		RunToken: "run-token", Image: "wardyn/claude-code:latest", Policy: policy,
 	})
 	fr.mu.Lock()
-	spec := fr.lastSpec
+	spec, calls := fr.lastSpec, fr.createCalls-before
 	fr.mu.Unlock()
-	if spec.RunID != run.ID {
-		t.Fatalf("the run's sandbox was never asked for (last spec is for %s)", spec.RunID)
+	// Zeroed before, so a dispatch that never reached CreateSandbox cannot pass on the previous one's spec.
+	if calls != 1 || spec.RunID != run.ID {
+		t.Fatalf("this dispatch asked for %d sandboxes (last spec is for %s), want one for %s", calls, spec.RunID, run.ID)
 	}
 	raw, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, 3128)
 	if err != nil {

@@ -236,8 +236,9 @@ const (
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
 	// ProxySettingOutage is outage, the run's outage terms (#4082). Dropped, the run's proxy keeps the default
-	// terms, a longer allowance than the policy set or not strict, so such a runner is refused a run whose terms
-	// are not the default ones; a default run writes no key and is not refused.
+	// terms, a longer allowance than the policy set or not strict, so such a runner is refused a run whose allowance
+	// is not the default one or whose terms are strict. Any other run writes no key and is not refused, one that
+	// only ends unattended runs included: that choice is the control plane's alone.
 	ProxySettingOutage = "outage"
 )
 

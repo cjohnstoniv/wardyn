@@ -192,7 +192,7 @@ func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, genera
 	if run.EndsAt != nil {
 		l.EndsAt = *run.EndsAt
 	}
-	terms, err := s.runOutageTerms(ctx, run.ID)
+	terms, err := heldRead(ctx, func(ctx context.Context) (types.OutageTerms, error) { return s.runOutageTerms(ctx, run.ID) })
 	if err != nil {
 		return err
 	}
