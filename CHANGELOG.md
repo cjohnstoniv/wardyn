@@ -89,6 +89,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Helm chart's high-availability text says `ha.enabled` does not raise `replicas`, and that surviving a node failure needs ready replicas on separate nodes, which the default placement prefers but does not require (#4143).
 - The managed desktop's recovery row says what a restore brings back on the same device and on a replacement device (#4152).
 - The Kubernetes runner guide checks that the runner is Online after install and after an upgrade, instead of reading a running pod as a passed network-policy check (#4170).
+- docs/AUDIT-ACTIONS.md says the refused service-renewal `run.end.set` row's hourly limit is kept per wardynd process, so a restart or another replica can repeat it within the hour (#3912).
 
 ### Before you upgrade
 
