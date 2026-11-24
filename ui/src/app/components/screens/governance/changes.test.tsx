@@ -19,11 +19,12 @@ vi.mock("../../../lib/api/runner-pools", () => ({
 }));
 
 import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
+import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { aheadByHours } from "../../../lib/test-clock";
-import { ChangesTab } from "./changes";
+import { ChangesTab, queueStanding } from "./changes";
 import { SubmittedNote } from "./submitted-note";
 
 function change(over: Partial<GovernanceChange> = {}): GovernanceChange {
@@ -247,5 +248,120 @@ describe("the submitted-for-approval note", () => {
     render(<SubmittedNote />);
     expect(screen.getByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
+type Viewer = NonNullable<NonNullable<GovernanceChange["approvals"]>["viewer"]>["state"];
+
+function counted(id: string, state: Viewer, have = 1, required = 2, over: Partial<GovernanceChange> = {}): GovernanceChange {
+  return change({ id, target_key: id, approvals: { required, have, require_security: false, viewer: { state } }, diff: { changed: [] }, ...over });
+}
+
+describe("queueStanding", () => {
+  const withApprovals = (state: Viewer, proposed_by = "ana@example.com") => counted("q", state, 1, 2, { proposed_by });
+  const cases: [string, GovernanceChange, string, string][] = [
+    ["a row with approvals, viewer can_approve: needs_you", withApprovals("can_approve"), "bo@example.com", "needs_you"],
+    ["a row with approvals, viewer approved: waiting", withApprovals("approved"), "bo@example.com", "waiting"],
+    ["a row with approvals, viewer proposer: waiting", withApprovals("proposer"), "bo@example.com", "waiting"],
+    ["a row with approvals, viewer not_eligible: none", withApprovals("not_eligible"), "bo@example.com", "none"],
+    ["no approvals, known viewer who proposed it: waiting", change({ proposed_by: "bo@example.com" }), "bo@example.com", "waiting"],
+    ["no approvals, known viewer who did not propose it: needs_you", change(), "bo@example.com", "needs_you"],
+    ["no approvals, unknown viewer, a proposer: none", change(), "", "none"],
+    ["no approvals, unknown viewer, no proposer: needs_you", change({ proposed_by: "" }), "", "needs_you"],
+  ];
+  it.each(cases)("%s", (_name, row, principal, want) => {
+    expect(queueStanding(row, principal)).toBe(want);
+  });
+
+  it("a row with approvals but no viewer standing (the admin token) is none", () => {
+    expect(queueStanding(change({ approvals: { required: 2, have: 0, require_security: false } }), "bo@example.com")).toBe("none");
+  });
+});
+
+describe("the Approvals column and its marks", () => {
+  it("sits after Proposed by and reads have of required, with the viewer's mark", () => {
+    renderTab([counted("a", "can_approve"), counted("b", "approved", 1, 3), counted("c", "proposer", 0, 2), counted("d", "not_eligible")]);
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.indexOf(CHANGES.COL_APPROVALS)).toBe(heads.indexOf(CHANGES.COL_BY) + 1);
+    const cell = (i: number) => within(screen.getAllByRole("row")[i + 1]).getAllByRole("cell")[heads.indexOf(CHANGES.COL_APPROVALS)];
+    expect(cell(0)).toHaveTextContent(CHANGES.APPROVED(1, 2));
+    expect(cell(0)).toHaveTextContent(CHANGES.NEEDS_YOU);
+    expect(cell(1)).toHaveTextContent(CHANGES.APPROVED(1, 3));
+    expect(cell(1)).toHaveTextContent(CHANGES.YOU_APPROVED);
+    expect(cell(2)).toHaveTextContent(CHANGES.APPROVED(0, 2));
+    expect(cell(2)).toHaveTextContent(CHANGES.YOU_PROPOSED);
+    expect(cell(3)).toHaveTextContent(CHANGES.APPROVED(1, 2));
+    expect(within(cell(3)).queryByTestId("changes-mark")).toBeNull();
+  });
+
+  it("a row with no approvals says one person decides, as the viewer's own and as another's", () => {
+    renderTab([change({ id: "own", proposed_by: "bo@example.com" }), change({ id: "other" })]);
+    const cells = screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[4]);
+    expect(cells[0]).toHaveTextContent(CHANGES.ONE_PERSON_DECIDES);
+    expect(cells[0]).toHaveTextContent(CHANGES.YOU_PROPOSED);
+    expect(cells[1]).toHaveTextContent(CHANGES.ONE_PERSON_DECIDES);
+    expect(cells[1]).toHaveTextContent(CHANGES.NEEDS_YOU);
+  });
+});
+
+describe("the Needs you and Waiting on others filters", () => {
+  const rows = () => [
+    counted("a", "can_approve"),
+    counted("b", "approved"),
+    counted("c", "proposer"),
+    counted("d", "not_eligible"),
+    change({ id: "e", target_key: "e", diff: { changed: [] }, proposed_by: "bo@example.com" }),
+    change({ id: "f", target_key: "f", diff: { changed: [] } }),
+  ];
+  const shownKeys = () => screen.getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[2].textContent);
+
+  it("keep exactly the rows whose mark says so, and All changes keeps every row", async () => {
+    renderTab(rows());
+    expect(shownKeys()).toEqual(["a", "b", "c", "d", "e", "f"]);
+    await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_NEEDS_YOU }));
+    expect(shownKeys()).toEqual(["a", "f"]);
+    expect(screen.getAllByTestId("changes-mark").map((m) => m.textContent)).toEqual([CHANGES.NEEDS_YOU, CHANGES.NEEDS_YOU]);
+    await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_WAITING }));
+    expect(shownKeys()).toEqual(["b", "c", "e"]);
+    expect(screen.getAllByTestId("changes-mark").map((m) => m.textContent)).toEqual([CHANGES.YOU_APPROVED, CHANGES.YOU_PROPOSED, CHANGES.YOU_PROPOSED]);
+    await userEvent.click(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_ALL }));
+    expect(shownKeys()).toHaveLength(6);
+  });
+
+  it("agree with the mark on every row: a row is kept by the filter its mark names", async () => {
+    renderTab(rows());
+    const marked = (label: string) =>
+      screen.getAllByRole("row").slice(1).filter((r) => within(r).queryByTestId("changes-mark")?.textContent === label).map((r) => within(r).getAllByRole("cell")[2].textContent);
+    const needs = marked(CHANGES.NEEDS_YOU);
+    await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_NEEDS_YOU }));
+    expect(shownKeys()).toEqual(needs);
+  });
+
+  it("an empty result says so and offers the whole queue", async () => {
+    renderTab([counted("d", "not_eligible")]);
+    await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_NEEDS_YOU }));
+    expect(screen.getByText(CHANGES.FILTER_EMPTY_NEEDS_YOU)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.FILTERED_EMPTY_ACTION }));
+    expect(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_ALL })).toBeChecked();
+  });
+
+  it("every viewer has them, while Only security can decide stays a security operator's", () => {
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator={false} principal="bo@example.com">
+          <ChangesTab changes={[change()]} loadError={null} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("radio", { name: CHANGES.FILTER_WAITING })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY })).toBeNull();
+  });
+});
+
+describe("the lead and the empty state", () => {
+  it("say a change needs the approvals its kind needs, and never a second person", () => {
+    expect(CHANGES.LEAD).not.toMatch(/second person/i);
+    expect(CHANGES.EMPTY_TITLE).not.toMatch(/second person/i);
+    expect(CHANGES.EMPTY_BODY).not.toMatch(/second person/i);
   });
 });

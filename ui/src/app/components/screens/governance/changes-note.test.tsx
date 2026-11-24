@@ -217,9 +217,11 @@ describe("an own change that only security can decide", () => {
 });
 
 describe("the Only security can decide filter", () => {
-  it("is drawn only for a security operator", () => {
+  it("is offered only to a security operator, beside the filters everyone has", () => {
     const { unmount } = render(ui([change()], { security: false }));
-    expect(screen.queryByRole("radiogroup", { name: CHANGE_NOTE.FILTER_LABEL })).toBeNull();
+    const own = screen.getByRole("radiogroup", { name: CHANGE_NOTE.FILTER_LABEL });
+    expect(within(own).getByRole("radio", { name: CHANGE_NOTE.FILTER_ALL })).toBeChecked();
+    expect(within(own).queryByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY })).toBeNull();
     unmount();
     render(ui([change()], { security: true }));
     const group = screen.getByRole("radiogroup", { name: CHANGE_NOTE.FILTER_LABEL });

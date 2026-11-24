@@ -4,7 +4,7 @@
  */
 
 // The Governance screen's Changes tab: the covered governance writes held
-// for a second person, one row each. A row opens the change on its own page (change-review-page.tsx), where it is
+// for approval, one row each. A row opens the change on its own page (change-review-page.tsx), where it is
 // read and decided; the helpers that read a request's person, unit and length out of the server's diff are shared
 // with that page from here.
 //
@@ -28,7 +28,7 @@ import { Mono } from "../../wardyn/code-block";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { IMG } from "../../wardyn/copy/image-request";
 import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
-import { useSecurityOperator } from "../../wardyn/operator-context";
+import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { RiskChip, VerdictChip } from "./change-review-sections";
@@ -98,6 +98,28 @@ export function isRequest(c: GovernanceChange): boolean {
   return c.target_kind === "governance_elevation" || c.target_kind === "governance_image_request";
 }
 
+// Where a row stands for the viewer, the one answer the marker and both filters read. A row with approvals
+// follows the viewer's state in them. A row with none is decided by one person (a request, or no minimum in
+// force): it needs the viewer unless they proposed it. An unknown viewer (no principal) is never told a row
+// needs them while it may be theirs, so such a row with a proposer stands as none.
+export function queueStanding(row: GovernanceChange, principal: string): "needs_you" | "waiting" | "none" {
+  if (row.approvals) {
+    switch (row.approvals.viewer?.state) {
+      case "can_approve":
+        return "needs_you";
+      case "approved":
+      case "proposer":
+        return "waiting";
+      default:
+        return "none";
+    }
+  }
+  if (principal) return row.proposed_by === principal ? "waiting" : "needs_you";
+  return row.proposed_by ? "none" : "needs_you";
+}
+
+type Standing = "all" | "needs_you" | "waiting" | "security";
+
 // The proposer's reason, cut with an ellipsis, then the ticket in mono.
 function NoteLine({ note }: { note: NonNullable<GovernanceChange["note"]> }) {
   return (
@@ -113,35 +135,75 @@ function NoteLine({ note }: { note: NonNullable<GovernanceChange["note"]> }) {
   );
 }
 
-// "Who can decide": the all/only-security pill group, the look of the runners screen's filter.
-function DeciderFilter({ onlySecurity, onChange }: { onlySecurity: boolean; onChange: (only: boolean) => void }) {
-  const options = [
-    { only: false, label: CHANGE_NOTE.FILTER_ALL },
-    { only: true, label: CHANGE_NOTE.FILTER_SECURITY },
+// "Who can decide": the pill group over the queue, the look of the runners screen's filter. "Only security can
+// decide" is a security operator's; the other three are every viewer's.
+function DeciderFilter({
+  value,
+  security,
+  onChange,
+}: {
+  value: Standing;
+  security: boolean;
+  onChange: (value: Standing) => void;
+}) {
+  const options: { value: Standing; label: string }[] = [
+    { value: "all", label: CHANGE_NOTE.FILTER_ALL },
+    { value: "needs_you", label: CHANGES.FILTER_NEEDS_YOU },
+    { value: "waiting", label: CHANGES.FILTER_WAITING },
+    ...(security ? [{ value: "security" as const, label: CHANGE_NOTE.FILTER_SECURITY }] : []),
   ];
-  const group = useRovingRadio(options.length, onlySecurity ? 1 : 0, (i) => onChange(options[i].only));
+  const group = useRovingRadio(
+    options.length,
+    Math.max(0, options.findIndex((o) => o.value === value)),
+    (i) => onChange(options[i].value),
+  );
   return (
-    <div role="radiogroup" aria-label={CHANGE_NOTE.FILTER_LABEL} className="flex gap-1.5" {...group.containerProps}>
+    <div role="radiogroup" aria-label={CHANGE_NOTE.FILTER_LABEL} className="flex flex-wrap gap-1.5" {...group.containerProps}>
       {options.map((o, i) => {
         const { tabIndex, radioRef } = group.itemProps(i);
         return (
           <button
-            key={o.label}
+            key={o.value}
             ref={radioRef}
             tabIndex={tabIndex}
             type="button"
             role="radio"
-            aria-checked={onlySecurity === o.only}
-            onClick={() => onChange(o.only)}
+            aria-checked={value === o.value}
+            onClick={() => onChange(o.value)}
             className={cn(
               "rounded-full border px-2.5 py-0.5 text-xs",
-              onlySecurity === o.only ? "border-primary text-foreground" : "border-border text-muted-foreground",
+              value === o.value ? "border-primary text-foreground" : "border-border text-muted-foreground",
             )}
           >
             {o.label}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// The Approvals cell: how many have approved of how many are needed (or that one person decides), then the mark.
+function ApprovalsCell({ change, standing }: { change: GovernanceChange; standing: "needs_you" | "waiting" | "none" }) {
+  const a = change.approvals;
+  const mark =
+    standing === "needs_you"
+      ? CHANGES.NEEDS_YOU
+      : standing === "waiting"
+        ? a?.viewer?.state === "approved"
+          ? CHANGES.YOU_APPROVED
+          : CHANGES.YOU_PROPOSED
+        : null;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-foreground">
+        {a ? CHANGES.APPROVED(a.have, a.required) : CHANGES.ONE_PERSON_DECIDES}
+      </span>
+      {mark && (
+        <span data-testid="changes-mark" className={cn("text-xs", standing === "needs_you" ? "font-medium text-primary" : "text-muted-foreground")}>
+          {mark}
+        </span>
+      )}
     </div>
   );
 }
@@ -161,9 +223,12 @@ export function ChangesTab({
   const navigate = useNavigate();
   const open = (c: GovernanceChange) => navigate(`/admin/governance/changes/${encodeURIComponent(c.id)}`);
   const securityOperator = useSecurityOperator();
+  const principal = usePrincipal();
   // "Only security can decide" is a request of its own: the list rows do not say who could decide them, so the
-  // server answers which ones are security's alone. It is read again whenever the parent reloads the list.
-  const [onlySecurity, setOnlySecurity] = React.useState(false);
+  // server answers which ones are security's alone. It is read again whenever the parent reloads the list. "Needs
+  // you" and "Waiting on others" read the rows already loaded.
+  const [standing, setStanding] = React.useState<Standing>("all");
+  const onlySecurity = standing === "security";
   const [filtered, setFiltered] = React.useState<GovernanceChangeList | null>(null);
   const [filterError, setFilterError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -181,12 +246,19 @@ export function ChangesTab({
       live = false;
     };
   }, [onlySecurity, changes]);
-  const chooseFilter = (only: boolean) => {
-    setOnlySecurity(only);
+  const chooseFilter = (next: Standing) => {
+    setStanding(next);
     setFiltered(null);
     setFilterError(null);
   };
-  const shown = onlySecurity ? filtered : changes;
+  const base = onlySecurity ? filtered : changes;
+  const shown =
+    base && (standing === "needs_you" || standing === "waiting")
+      ? Object.assign(
+          base.filter((c) => queueStanding(c, principal) === standing),
+          { truncated: base.truncated },
+        )
+      : base;
   const shownError = onlySecurity ? filterError : loadError;
   const removalNames = useRemovalNames(shown ?? NONE);
   const hasList = changes.length > 0 || (filtered?.length ?? 0) > 0;
@@ -194,10 +266,10 @@ export function ChangesTab({
     <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card">
       {/* The lead describes the list, so it rides with the list; with nothing waiting the empty block
           below says the same thing once (#2907). */}
-      {(hasList || (securityOperator && onlySecurity)) && (
+      {(hasList || onlySecurity) && (
         <div className="flex flex-wrap items-start justify-between gap-3 px-6 pt-5">
           {hasList && <p className="max-w-[82ch] text-body text-muted-foreground">{CHANGES.LEAD}</p>}
-          {securityOperator && <DeciderFilter onlySecurity={onlySecurity} onChange={chooseFilter} />}
+          <DeciderFilter value={standing} security={securityOperator} onChange={chooseFilter} />
         </div>
       )}
       {shownError && (
@@ -224,7 +296,20 @@ export function ChangesTab({
               title={CHANGE_NOTE.FILTERED_EMPTY_TITLE}
               description={CHANGE_NOTE.FILTERED_EMPTY_BODY}
               action={
-                <Button variant="outline" size="sm" onClick={() => chooseFilter(false)}>
+                <Button variant="outline" size="sm" onClick={() => chooseFilter("all")}>
+                  {CHANGE_NOTE.FILTERED_EMPTY_ACTION}
+                </Button>
+              }
+            />
+          </div>
+        ) : shown.length === 0 && standing !== "all" ? (
+          <div data-testid="changes-empty-filtered">
+            <EmptyState
+              size="compact"
+              icon={Inbox}
+              title={standing === "needs_you" ? CHANGES.FILTER_EMPTY_NEEDS_YOU : CHANGES.FILTER_EMPTY_WAITING}
+              action={
+                <Button variant="outline" size="sm" onClick={() => chooseFilter("all")}>
                   {CHANGE_NOTE.FILTERED_EMPTY_ACTION}
                 </Button>
               }
@@ -259,6 +344,7 @@ export function ChangesTab({
                 <TableHead>{CHANGE_REVIEW.COL_EFFECT}</TableHead>
                 <TableHead>{CHANGES.COL_TARGET}</TableHead>
                 <TableHead>{CHANGES.COL_BY}</TableHead>
+                <TableHead>{CHANGES.COL_APPROVALS}</TableHead>
                 <TableHead>{CHANGES.COL_PROPOSED}</TableHead>
                 <TableHead>{CHANGES.COL_EXPIRES}</TableHead>
               </TableRow>
@@ -313,6 +399,9 @@ export function ChangesTab({
                       )}
                     </TableCell>
                     <TableCell>{c.proposed_by}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <ApprovalsCell change={c} standing={queueStanding(c, principal)} />
+                    </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={absoluteTime(c.proposed_at)}>
                       {relativeTime(c.proposed_at)}
                     </TableCell>
