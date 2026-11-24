@@ -853,7 +853,7 @@ func (s *scimCovStore) SearchScimGroups(_ context.Context, attr, value string, l
 	var out []store.ScimGroup
 	for _, g := range s.groups {
 		if (attr == store.SearchExternalID && strings.ToLower(strings.TrimSpace(g.ExternalID)) == v) ||
-			(attr == store.SearchDisplayName && strings.ToLower(g.DisplayName) == strings.ToLower(value)) {
+			(attr == store.SearchDisplayName && strings.EqualFold(g.DisplayName, value)) {
 			out = append(out, *g)
 		}
 	}

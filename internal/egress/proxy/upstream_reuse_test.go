@@ -248,8 +248,10 @@ func TestHTTP2UpstreamsArePinged(t *testing.T) {
 	if h := p.transport.HTTP2; h == nil || h.SendPingTimeout <= 0 || h.PingTimeout <= 0 {
 		t.Errorf("egress transport HTTP2 config %+v, want a ping after silence and a ping timeout", h)
 	}
-	if tr := p.h2.transport; tr.ReadIdleTimeout <= 0 || tr.PingTimeout <= 0 {
-		t.Errorf("h2 fallback ReadIdleTimeout %v PingTimeout %v, want both set", tr.ReadIdleTimeout, tr.PingTimeout)
+	//lint:ignore SA1019 the fallback's transport is h2Fallback's deprecated http2.Transport (see h2Fallback)
+	idle, ping := p.h2.transport.ReadIdleTimeout, p.h2.transport.PingTimeout
+	if idle <= 0 || ping <= 0 {
+		t.Errorf("h2 fallback ReadIdleTimeout %v PingTimeout %v, want both set", idle, ping)
 	}
 }
 
