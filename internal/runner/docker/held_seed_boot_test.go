@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,6 +55,12 @@ func heldSeedRun(t *testing.T, home, script string, env ...string) string {
 	return string(out)
 }
 
+// startedLine reports whether out has the script's own "started" line; the not-confirmed sentence also holds
+// the word.
+func startedLine(out string) bool {
+	return slices.Contains(strings.Split(out, "\n"), "started")
+}
+
 func writeSeedRelease(t *testing.T, home string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Join(home, ".wardyn"), 0o755); err != nil {
@@ -83,7 +90,7 @@ func TestHeldSeed_ReleasedStartsAtOnce(t *testing.T) {
 	home := t.TempDir()
 	writeSeedRelease(t, home)
 	out := heldSeedRun(t, home, `boot_seed_wait_for_release; echo started`, "WARDYN_HELD_SEED=echo hi")
-	if !strings.Contains(out, "started") || strings.Contains(out, heldSeedHeld) {
+	if !startedLine(out) || strings.Contains(out, heldSeedHeld) {
 		t.Errorf("output = %q, want started and no waiting sentence", out)
 	}
 }
@@ -126,7 +133,7 @@ func TestHeldSeed_HoldsUntilTheMarker(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the pane did not go on within 5 s of the marker")
 	}
-	if got := out.String(); !strings.Contains(got, "started") || !strings.Contains(got, heldSeedHeld) {
+	if got := out.String(); !startedLine(got) || !strings.Contains(got, heldSeedHeld) {
 		t.Errorf("output = %q, want the waiting sentence, then started", got)
 	}
 }
@@ -139,7 +146,7 @@ func TestHeldSeed_IdleGoneNeverStarts(t *testing.T) {
 	}
 	out := heldSeedRun(t, t.TempDir(), `boot_seed_wait_for_release; echo started`,
 		"WARDYN_HELD_SEED=echo hi", "WARDYN_IDLE_PID="+strconv.Itoa(gone.Process.Pid))
-	if !strings.Contains(out, heldSeedGone) || strings.Contains(out, "started") {
+	if !strings.Contains(out, heldSeedGone) || startedLine(out) {
 		t.Errorf("output = %q, want the not-confirmed sentence and no started", out)
 	}
 }
