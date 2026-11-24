@@ -107,7 +107,7 @@ function AzureDoor({ provider, onCancel }: { provider: SetupModelProvider; onCan
       <DialogDescription className="text-body text-muted-foreground">{AZURE_DOOR.BODY(name)}</DialogDescription>
       <p className="text-meta text-muted-foreground">{AZURE_DOOR.NOTE}</p>
       <div className="flex justify-end gap-2">
-        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onCancel}>
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
           {KEY_DOOR.CANCEL}
         </Button>
         {/* Default focus is Continue (F13), not the first control in the dialog. */}

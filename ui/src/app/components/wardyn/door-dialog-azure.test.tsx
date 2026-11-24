@@ -79,6 +79,8 @@ describe("the Azure Foundry door", () => {
     expect(assign).toHaveBeenCalledTimes(1);
     expect(String(assign.mock.calls[0][0])).toMatch(/\/api\/v1\/model-providers-entra\/signin\?uid=u-az%201$/);
     expect(screen.getByRole("button", { name: ADO.CONNECT_CTA })).toBeDisabled();
+    // Cancel stays available while the redirect starts (F16).
+    expect(screen.getByRole("button", { name: KEY_DOOR.CANCEL })).toBeEnabled();
   });
 
   it("Cancel closes it without leaving", async () => {
