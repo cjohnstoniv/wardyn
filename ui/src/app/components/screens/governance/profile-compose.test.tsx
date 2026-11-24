@@ -261,8 +261,17 @@ describe("ProfileEditor — authoring an overlay", { timeout: 20_000 }, () => {
     expect(GOV.LIMIT_INTERACTIVE_INBOUND).toBe("Inbound ports are turned off too, since a port can serve a shell.");
     expect(GOV.LIMIT_UI_APPS_HINT).toBe("Also turns off inbound ports.");
     expect(LIMITS_CHIP.UI_APPS).toBe("Deny UI apps");
-    expect(screen.getByText(`${GOV.LIMIT_INTERACTIVE_HINT} ${GOV.LIMIT_INTERACTIVE_INBOUND}`)).toBeInTheDocument();
-    expect(screen.getByText("Also turns off inbound ports.")).toBeInTheDocument();
+    expect(GOV.LIMIT_INTERACTIVE_OPEN).toBe(
+      "A desktop, terminal or inbound browser session already open closes within about a minute, and an open desktop sign-in ends. An SSH connection made with an SSH key is not closed: it runs until it disconnects.",
+    );
+    expect(GOV.LIMIT_UI_APPS_OPEN).toBe("An app window already open closes within about a minute.");
+    expect(
+      screen.getByText(`${GOV.LIMIT_INTERACTIVE_HINT} ${GOV.LIMIT_INTERACTIVE_INBOUND} ${GOV.LIMIT_INTERACTIVE_OPEN}`),
+    ).toBeInTheDocument();
+    expect(screen.getByText(`${GOV.LIMIT_UI_APPS_HINT} ${GOV.LIMIT_UI_APPS_OPEN}`)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: GOV.LIMIT_INTERACTIVE_LABEL })).toHaveAccessibleDescription(
+      expect.stringContaining(GOV.LIMIT_INTERACTIVE_OPEN),
+    );
     expect(screen.queryByText("deny_ui_apps")).toBeNull();
     await userEvent.click(screen.getByRole("switch", { name: "Deny UI apps" }));
     typeValue(GOV.FIELD_NAME, "Team A");

@@ -179,6 +179,9 @@ export const GOVERNANCE = {
   // r16 T2-e: what the two doors also turn off. Said after LIMIT_INTERACTIVE_HINT, and as the hint of the Deny UI apps row.
   LIMIT_INTERACTIVE_INBOUND: "Inbound ports are turned off too, since a port can serve a shell.",
   LIMIT_UI_APPS_HINT: "Also turns off inbound ports.",
+  // #3943: what a limit set later does to a session already open. Said after each row's hint.
+  LIMIT_INTERACTIVE_OPEN: "A desktop, terminal or inbound browser session already open closes within about a minute, and an open desktop sign-in ends. An SSH connection made with an SSH key is not closed: it runs until it disconnects.",
+  LIMIT_UI_APPS_OPEN: "An app window already open closes within about a minute.",
   GRADE_NOTE: "Grades this ceiling as written — advisory, the same meter the policy editor shows.",
   SAVE: "Save profile",
   LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
