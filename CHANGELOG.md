@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- UI apps: a run's open relay connections now share one activity keepalive and one app start check, so a browser opening many connections at once writes the run's row once per interval and starts the app check once. Idle relay connections are kept for every run instead of at most 32 across all runs, and a run's desktop opens even when its idle relay connections hold all of the run's connection slots (#4056).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
