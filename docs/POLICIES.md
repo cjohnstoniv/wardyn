@@ -1177,15 +1177,17 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - A run's network pauses at its allowance, unless the terms are strict, and comes back by itself within about two
   minutes of Wardyn checking the run again.
 - A strict run's network stops at its allowance, and the run is ended when its token lapses, about 65 minutes after its
-  last renew. On a runner, the run is marked lost, its proxy is stopped and its sandbox is ended on the runner. A strict
-  run lost to an outage cannot be revived once its allowance has run out.
+  last renew, or when its allowance runs out if that is later.
+- On a runner, a strict run that is ended is marked lost, its proxy is stopped and its sandbox is ended on the runner. A
+  strict run lost to an outage cannot be revived once its allowance has run out.
 - A strict run whose allowance runs out is ended, or on a runner marked lost, stopped and ended there, whether or not
   Wardyn recorded an outage, and with every identity provider, SPIRE included. So is an unattended server run under
   `unattended: end` after an outage.
 - A token is recovered only if it expired less than 24 hours ago. A run already lost to an outage comes back only when
   its owner revives it.
 - Until a run's proxy has reported that it can pause, which it does once it starts, the run is treated as before: its
-  network stops when its token lapses.
+  network stops when its token lapses. On a runner this lasts until the run's first renew lease, 10 to 15 minutes after
+  its start.
 - A runner agent older than this release ignores the lease's pause flag and stops a pausing proxy at the usual 65
   minutes, so upgrade runner agents with the server.
 - Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail
