@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- Terminals: the open terminal sessions on one run now share one read of the run and its profile at each re-check instead of one read per session. A profile that stops allowing interactive sessions still ends every open session at the next check.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

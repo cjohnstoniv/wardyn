@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -25,6 +24,8 @@ import (
 // ends it. A lookup that failed or timed out ends it only once no check has answered for the site's session
 // budget (session_budget.go); it closes 1013, which the console reconnects on. A dropped terminal reconnects
 // through a fresh ticket, which is checked anew.
+// The run's half of the check (the run row and its profile's deny_interactive) is read once per interval for every
+// socket on the run (attach_run_watch.go); each socket still asks its own credential's half.
 const (
 	attachAuthorityInterval = 30 * time.Second
 	attachAuthorityLookup   = 5 * time.Second
@@ -168,33 +169,13 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 // returns errAttachAuthorityEnded once either refuses or the run is gone, and an unconfirmed error when the
 // run or its profile cannot be read; a profile composition that nothing satisfies is a refusal, not a failed
 // read. exempt is the door's exemption from deny_interactive, asked of the run.
+// The run and profile reads are the shared read ctx carries for runID, when it carries one (attach_run_watch.go).
 func (s *Server) attachUnitCheck(ctx context.Context, runID uuid.UUID, entry func(types.AgentRun) error, exempt func(types.AgentRun) bool) error {
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if errors.Is(err, store.ErrNotFound) {
-		return errAttachAuthorityEnded
+	st, ok := attachRunStateFrom(ctx, runID)
+	if !ok {
+		st = s.readAttachRunState(ctx, runID)
 	}
-	if err != nil {
-		return unconfirmed(err)
-	}
-	if entry != nil {
-		if err := entry(run); err != nil {
-			return err
-		}
-	}
-	if exempt(run) {
-		return nil
-	}
-	p, err := s.interactiveDeniedBy(ctx, run)
-	if err != nil {
-		if unitReadFailed(err) {
-			return unconfirmed(err)
-		}
-		return errAttachAuthorityEnded
-	}
-	if p != nil {
-		return errAttachAuthorityEnded
-	}
-	return nil
+	return st.verdict(entry, exempt)
 }
 
 // sessionDeadline is a session cookie's deadline: the earlier of its expiry and issuedAt + ttl (ttl > 0).
@@ -218,6 +199,13 @@ func earlierDeadline(a, b time.Time) time.Time {
 // b's budget ran out. The returned func reports why the socket ended: "", attachAuthEndedReason or
 // sessionUnconfirmedReason.
 func (s *Server) holdAttachAuthority(ctx context.Context, b *sessionBudget, check func(context.Context) error, end func(spent bool)) func() string {
+	return s.holdAuthorityOn(ctx, uuid.Nil, b, check, end)
+}
+
+// holdAuthorityOn is holdAttachAuthority on runID's shared read (watchAttachRun): each tick is the shared read's,
+// and check runs with that read in its context, so every socket on the run costs one run read and one profile read
+// per interval between them. A retry on b's clock reads afresh. uuid.Nil keeps a timer of the socket's own.
+func (s *Server) holdAuthorityOn(ctx context.Context, runID uuid.UUID, b *sessionBudget, check func(context.Context) error, end func(spent bool)) func() string {
 	var ended atomic.Pointer[string]
 	reason := func() string {
 		if p := ended.Load(); p != nil {
@@ -229,17 +217,29 @@ func (s *Server) holdAttachAuthority(ctx context.Context, b *sessionBudget, chec
 		return reason
 	}
 	go func() {
-		t := time.NewTicker(s.attachAuthorityEvery())
-		defer t.Stop()
 		defer b.leave()
+		var tick <-chan time.Time
+		var shared <-chan attachRunState
+		if runID == uuid.Nil {
+			t := time.NewTicker(s.attachAuthorityEvery())
+			defer t.Stop()
+			tick = t.C
+		} else {
+			ch, leave := s.watchAttachRun(runID)
+			defer leave()
+			shared = ch
+		}
 		for {
+			cctx := ctx
 			select {
 			case <-ctx.Done():
 				return
-			case <-t.C:
+			case <-tick:
+			case st := <-shared:
+				cctx = withAttachRunState(ctx, runID, st)
 			case <-b.retryC():
 			}
-			lctx, cancel := context.WithTimeout(ctx, s.attachAuthorityLookupBound())
+			lctx, cancel := context.WithTimeout(cctx, s.attachAuthorityLookupBound())
 			err := check(lctx)
 			cancel()
 			if ctx.Err() != nil {
@@ -289,7 +289,7 @@ func (s *Server) attachEnders(ctx context.Context, r *http.Request, runID uuid.U
 	} else {
 		b := s.newSessionBudget(ctx, attachWatchID(r, runID))
 		b.fence = holder.unconfirmed.Store
-		authEnded = s.holdAttachAuthority(ctx, b, s.attachAuthority(r, runID), func(spent bool) { endAttachAuthority(c, holder, cancel, spent) })
+		authEnded = s.holdAuthorityOn(ctx, runID, b, s.attachAuthority(r, runID), func(spent bool) { endAttachAuthority(c, holder, cancel, spent) })
 	}
 	return func(reason string) string {
 		if maskFenced() {
