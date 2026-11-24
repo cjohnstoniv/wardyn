@@ -91,6 +91,7 @@ func wantOneRefusedRow(t *testing.T, rec *recRecorder, reason string) {
 func TestDriveSeed_IntoValidation(t *testing.T) {
 	st := newMemberDriveStore()
 	srv, rec := memberDriveServer(st, &fillHolderRunner{}, "docker")
+	srv.memberDriveLimiter.burst, srv.memberDriveLimiter.rate = 1000, 1000 // the limiter runs first; this loop is about into
 	id := fillDrive(t, srv)
 	for _, into := range []string{"/a", "../a", "a/../b", "a//b", "a/", ".", "a/./b", "a\x01b", "a\x7fb", strings.Repeat("x", 256), "a\xffb"} {
 		w := fillCall(srv, personCtx(aliceSub), id, fillBody("org/name", into))
@@ -203,22 +204,31 @@ func TestDriveSeed_NoAuditBeforeTheDrive(t *testing.T) {
 	st := newMemberDriveStore()
 	st.site = memberDriveSite(20, 0)
 	srv, rec := memberDriveServer(st, &fillHolderRunner{}, "docker")
-	at := time.Now()
-	srv.cfg.Now = func() time.Time { return at }
+	srv.memberDriveLimiter.burst, srv.memberDriveLimiter.rate = 1000, 1000 // the limiter runs first; the 400s below must reach the body checks
 	id := fillDrive(t, srv)
 	alice := personCtx(aliceSub)
 	wantReason(t, fillCall(srv, context.Background(), id, fillBody("org/name", "")), http.StatusForbidden, reasonMemberDriveRequiresPerson)
 	wantReason(t, fillCall(srv, alice, id, `{"workspace_id":"nope","repo":"org/name"}`), http.StatusBadRequest, reasonDriveSeedInvalid)
 	wantReason(t, fillCall(srv, alice, id, `{"workspace_id":"`+fillWorkspace+`","repo":"org/name","ref":"-x"}`), http.StatusBadRequest, reasonDriveSeedInvalid)
 	wantReason(t, fillCall(srv, alice, id, fmt.Sprintf(`{"workspace_id":%q}`, fillWorkspace)), http.StatusBadRequest, reasonDriveSeedInvalid)
-	for i := 0; i < 80; i++ { // spend the person's tokens; the bucket refills with the clock, which stands still
-		if w := fillCall(srv, alice, id, `{"workspace_id":"nope"}`); w.Code == http.StatusTooManyRequests {
+	if rows := seedRows(t, rec); len(rows) != 0 {
+		t.Fatalf("drive.seed rows after the 403 and the body 400s: %v", rows)
+	}
+	// A server with the real limiter: spend the person's tokens, then the 429.
+	stLimited := newMemberDriveStore()
+	stLimited.site = memberDriveSite(20, 0)
+	srvLimited, recLimited := memberDriveServer(stLimited, &fillHolderRunner{}, "docker")
+	at := time.Now()
+	srvLimited.cfg.Now = func() time.Time { return at }
+	idLimited := fillDrive(t, srvLimited)
+	for i := 0; i < 80; i++ { // the bucket refills with the clock, which stands still
+		if w := fillCall(srvLimited, alice, idLimited, `{"workspace_id":"nope"}`); w.Code == http.StatusTooManyRequests {
 			break
 		}
 	}
-	wantReason(t, fillCall(srv, alice, id, fillBody("org/name", "")), http.StatusTooManyRequests, reasonMemberDriveRateLimited)
-	if rows := seedRows(t, rec); len(rows) != 0 {
-		t.Fatalf("drive.seed rows before the drive decision: %v", rows)
+	wantReason(t, fillCall(srvLimited, alice, idLimited, fillBody("org/name", "")), http.StatusTooManyRequests, reasonMemberDriveRateLimited)
+	if rows := seedRows(t, recLimited); len(rows) != 0 {
+		t.Fatalf("drive.seed rows after the 429: %v", rows)
 	}
 	st2 := newMemberDriveStore()
 	srv2, rec2 := memberDriveServer(st2, &fillHolderRunner{}, "docker")
