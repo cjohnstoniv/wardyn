@@ -95,13 +95,14 @@ func assistantDecode(t *testing.T, w *httptest.ResponseRecorder, v any) {
 	}
 }
 
-// assistantDBDigest is a hash of every table's rows but assistant_events: any write anywhere else changes it,
+// assistantDBDigest is a hash of every table's rows but assistant_session_events (migration 0401), which
+// assistantEventRows reads apart: any write anywhere else changes it,
 // whatever store method or querier made it.
 func assistantDBDigest(t *testing.T, pool *pgxpool.Pool) map[string]string {
 	t.Helper()
 	ctx := context.Background()
 	rows, err := pool.Query(ctx, `SELECT table_name FROM information_schema.tables
-		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name <> 'assistant_events'`)
+		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name <> 'assistant_session_events'`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +122,28 @@ func assistantDBDigest(t *testing.T, pool *pgxpool.Pool) map[string]string {
 	return out
 }
 
+// assistantEventRows is every assistant event row, session and seq to kind.
+func assistantEventRows(t *testing.T, pool *pgxpool.Pool) map[string]string {
+	t.Helper()
+	rows, err := pool.Query(context.Background(), `SELECT session_id::text || '/' || seq::text, kind FROM assistant_session_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, kind string
+		if err := rows.Scan(&k, &kind); err != nil {
+			t.Fatal(err)
+		}
+		out[k] = kind
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 func assistantChangeRows(t *testing.T, pool *pgxpool.Pool) int {
 	t.Helper()
 	var n int
@@ -131,8 +154,9 @@ func assistantChangeRows(t *testing.T, pool *pgxpool.Pool) int {
 }
 
 // Every tool in the registry, on a new template's session and on a unit admin's session over their unit,
-// answers 200 and writes nothing: every table but assistant_events hashes the same before and after, the events
-// it adds are its own tool_record and proposal events, and no audit row is written. draft on a widening the save
+// answers 200 and writes nothing: every table but assistant_session_events hashes the same before and after,
+// every event row it adds is this session's, a tool_record per call and draft's one proposal, and no audit row
+// is written. draft on a widening the save
 // would hold keeps it, held, and no governance_changes row appears.
 func TestAssistantToolsWriteNothing_PG(t *testing.T) {
 	a := newAssistantPGEnv(t, newUnitAdminEnv(t, false))
@@ -158,6 +182,7 @@ func TestAssistantToolsWriteNothing_PG(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			s, run := a.session(c.person, oidc.RoleUser, types.UserTypeStandard, types.AssistantCompose, c.kind, c.key)
 			before, changes, audits := assistantDBDigest(t, a.pool), assistantChangeRows(t, a.pool), len(a.h.audit.snapshot())
+			eventsBefore := assistantEventRows(t, a.pool)
 			for _, name := range slices.Sorted(maps.Keys(assistantToolRegistry())) {
 				args := assistantDraftArgs(c.kind, c.draft)
 				switch name {
@@ -192,14 +217,19 @@ func TestAssistantToolsWriteNothing_PG(t *testing.T) {
 			if n := len(a.h.audit.snapshot()); n != audits {
 				t.Errorf("audit rows = %d, want %d", n, audits)
 			}
-			evs, err := a.pg.ListAssistantEvents(context.Background(), s.ID, 0, 100)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, e := range evs {
-				if e.Kind != types.AssistantEventToolRecord && e.Kind != types.AssistantEventProposal {
-					t.Errorf("a tool appended a %s event", e.Kind)
+			kinds := map[string]int{}
+			for k, kind := range assistantEventRows(t, a.pool) {
+				if _, old := eventsBefore[k]; old {
+					continue
 				}
+				if !strings.HasPrefix(k, s.ID.String()+"/") {
+					t.Errorf("a tool appended event %s (%s) to another session", k, kind)
+				}
+				kinds[kind]++
+			}
+			calls := len(assistantToolRegistry())
+			if kinds[types.AssistantEventToolRecord] != calls || kinds[types.AssistantEventProposal] != 1 || len(kinds) != 2 {
+				t.Errorf("events added = %v, want %d %s and 1 %s", kinds, calls, types.AssistantEventToolRecord, types.AssistantEventProposal)
 			}
 		})
 	}
@@ -375,10 +405,26 @@ func TestAssistantCappedSuperAdminHostPath_PG(t *testing.T) {
 func TestAssistantToolImpactCarriesCountsOnly_PG(t *testing.T) {
 	a := newAssistantPGEnv(t, newUnitAdminEnv(t, false))
 	treeMember(t, a.govEnv, a.a1, types.CapabilitySubjectUser, "sub-ua-impact@corp.example", 1, false)
+	// A live run in the unit, so a planted run list would carry its id.
+	live := uuid.New()
+	if _, err := a.pg.CreateRun(context.Background(), types.AgentRun{ID: live, CreatedAt: time.Now(), CreatedBy: "sub-ua-impact", Agent: "claude-code",
+		ConfinementClass: types.CC2, State: types.RunRunning, RunnerTarget: "docker", Task: "t", Title: "impact canary",
+		SPIFFEID: "spiffe://wardyn.local/agent-run/" + live.String(), SandboxRef: "wardyn-agent-" + live.String(), UnitID: &a.a1.ID}); err != nil {
+		t.Fatal(err)
+	}
 	s, run := a.session(uaSubAdminA, oidc.RoleUser, types.UserTypeStandard, types.AssistantCompose, types.AssistantTargetUnit, a.a1.ID.String())
 	w := a.tool(s, run, types.AssistantToolImpact, assistantDraftArgs(types.AssistantTargetUnit, assistantUnitDraft("ua-a1", a.a.ID, "pypi.org")))
 	if w.Code != http.StatusOK {
 		t.Fatalf("impact = %d %s", w.Code, w.Body)
+	}
+	var counts struct {
+		LiveRunsTotal int `json:"live_runs_total"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &counts); err != nil || counts.LiveRunsTotal < 1 {
+		t.Errorf("impact = %s (%v), want live_runs_total >= 1 for the run in the narrowed unit", w.Body, err)
+	}
+	if strings.Contains(w.Body.String(), "impact canary") {
+		t.Errorf("impact = %s, want no run title", w.Body)
 	}
 	leak := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|@|Person `)
 	if leak.Match(w.Body.Bytes()) {
