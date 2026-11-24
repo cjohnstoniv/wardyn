@@ -765,7 +765,7 @@ func parseBootFlags() *bootFlags {
 
 		sshBindEarly:           flagBool("ssh-bind-early", "WARDYN_SSH_BIND_EARLY", false, "bind the SSH gateway before the background workers start; if its port is taken, keep booting and stop advertising SSH on /healthz instead of only logging at accept time (default false)"),
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
-		sshTickets:             flagBool("ssh-tickets", "WARDYN_SSH_TICKETS", false, "let a person reach a run over the SSH gateway with no registered key, through GET /runs/{id}/ssh and a 30-second single-use ticket minted at POST /runs/{id}/attach/ticket; needs the gateway on (WARDYN_SSH_LISTEN). Off (default): SSH needs a registered key"),
+		sshTickets:             flagBool("ssh-tickets", "WARDYN_SSH_TICKETS", false, "let a person reach a run over the SSH gateway with no registered key: wardyn run ssh, exec, forward and editor and wardyn sync take a 30-second single-use ticket minted at POST /runs/{id}/attach/ticket and connect through GET /runs/{id}/ssh; needs the gateway on (WARDYN_SSH_LISTEN). Off (default): SSH needs a registered key"),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
 		outage:                 registerOutageFlags(),

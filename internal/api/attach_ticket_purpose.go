@@ -19,6 +19,8 @@ const (
 	ticketPurposeSSHExec       = "ssh-exec"
 	ticketPurposeSSHForward    = "ssh-forward"
 	ticketPurposeSSHEditor     = "ssh-editor"
+	ticketPurposeSSHSync       = "ssh-sync"
+	ticketPurposeSSHSyncGit    = "ssh-sync-git"
 	ticketPurposeAttachForward = "attach-forward"
 )
 
@@ -28,6 +30,8 @@ var sshTicketKinds = map[string][]sshChannelKind{
 	ticketPurposeSSHExec:    {sshKindExec},
 	ticketPurposeSSHForward: {sshKindForward},
 	ticketPurposeSSHEditor:  {sshKindShell, sshKindExec, sshKindSFTP, sshKindForward},
+	ticketPurposeSSHSync:    {sshKindSync},
+	ticketPurposeSSHSyncGit: {sshKindSync, sshKindExec},
 }
 
 // ticketPurposeWords names a purpose in the sentence a refused channel gets.
@@ -36,6 +40,8 @@ var ticketPurposeWords = map[string]string{
 	ticketPurposeSSHExec:    "one command",
 	ticketPurposeSSHForward: "port forwarding",
 	ticketPurposeSSHEditor:  "an editor",
+	ticketPurposeSSHSync:    "wardyn sync",
+	ticketPurposeSSHSyncGit: "wardyn sync with git",
 }
 
 // ticketScope is what a mint's purpose adds to the ticket: the purpose and its ports.

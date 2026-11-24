@@ -126,14 +126,15 @@ func proxyMint(ctx context.Context, c *sdk.Client, runID, verb, purpose, ports s
 	return mintSSHTicket(ctx, c, verb, runID, q)
 }
 
-// proxyRefusal is the door's own refusal: its sentence, and the API error that sets the exit code.
-type proxyRefusal struct {
-	msg string
-	err error
+// doorRefusal is the ticket door's own refusal: its sentence after the verb, and the API error that sets the exit
+// code.
+type doorRefusal struct {
+	verb, msg string
+	err       error
 }
 
-func (e *proxyRefusal) Error() string { return "ssh-proxy: " + e.msg }
-func (e *proxyRefusal) Unwrap() error { return e.err }
+func (e *doorRefusal) Error() string { return e.verb + ": " + e.msg }
+func (e *doorRefusal) Unwrap() error { return e.err }
 
 // sshTunnel dials the ticket door, with the ticket in a header and never in the URL, and copies bytes both ways until
 // either side ends.
@@ -146,7 +147,7 @@ func sshTunnel(ctx context.Context, base, door, tok string, in io.Reader, out io
 		if resp != nil {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 			ae := sdk.NewAPIError(resp.StatusCode, body)
-			return &proxyRefusal{msg: apiSentence(ae), err: ae}
+			return &doorRefusal{verb: "ssh-proxy", msg: apiSentence(ae), err: ae}
 		}
 		return fmt.Errorf("ssh-proxy: %w", err)
 	}

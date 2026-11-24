@@ -375,7 +375,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | `WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE` | int | `16` | SSH gateway handshakes in progress per source address, per replica (flag `-ssh-max-handshakes-per-source`) |
 | `WARDYN_SSH_MAX_SESSIONS_PER_RUN` | int | `8` | most concurrent SSH channels one run may hold, a `POST /runs/{id}/exec` command counting as one, 1 to 64 (flag `-ssh-max-sessions-per-run`); boot refuses others. [Details](#wardyn_ssh_max_sessions_per_run) |
 | `WARDYN_SSH_CHANNELS` | string | (unset: all four) | comma list of the SSH channel kinds the gateway serves: `shell`, `exec`, `sftp`, `forward` (flag `-ssh-channels`); unset (or empty) serves all four; boot refuses an unknown name or an empty item. [Details](#wardyn_ssh_channels) |
-| `WARDYN_SSH_TICKETS` | bool | off | lets a person reach a run over the SSH gateway with no registered key: `GET /runs/{id}/ssh` takes a 30-second single-use ticket from `POST /runs/{id}/attach/ticket` (flag `-ssh-tickets`); needs `WARDYN_SSH_LISTEN`; boot refuses it without. [Details](#wardyn_ssh_tickets) |
+| `WARDYN_SSH_TICKETS` | bool | off | lets a person reach a run over the SSH gateway with no registered key: the CLI's SSH commands and `wardyn sync` take a 30-second single-use ticket for `GET /runs/{id}/ssh` (flag `-ssh-tickets`); needs `WARDYN_SSH_LISTEN`; boot refuses it without. [Details](#wardyn_ssh_tickets) |
 | `WARDYN_SYNC_DIR` | path | `/home/agent/work` | not daemon env: an SSH `env` request read only by the `wardyn-sync` subsystem; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DIRECTION` | enum | `unknown` | not daemon env: as `WARDYN_SYNC_DIR`; client-declared `push` or `pull`; see [SSH.md](SSH.md) |
 | `WARDYN_SYNC_DENY` | string | (unset) | comma-separated ignore patterns `wardyn sync` always leaves out (flag `-sync-deny`), and `--git` refuses a branch whose history holds a matching path. [Details](#wardyn_sync_deny) |
@@ -2008,9 +2008,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 
 ### `WARDYN_SSH_TICKETS`
 
-- Off by default (flag `-ssh-tickets`). On, a person can reach a run over SSH with no registered key: a client mints a single-use ticket that lives 30 s at `POST /runs/{id}/attach/ticket`, and `GET /runs/{id}/ssh` carries the SSH connection over a WebSocket.
+- Off by default (flag `-ssh-tickets`). On, a person can reach a run over SSH with no registered key: `wardyn run ssh`, `exec`, `forward` and `editor` and `wardyn sync` mint a single-use ticket that lives 30 s at `POST /runs/{id}/attach/ticket`, and `GET /runs/{id}/ssh` carries the SSH connection over a WebSocket. `--key` on each keeps the registered key.
 - The TCP listener stays public key only.
-- A ticket opens only the channel kinds its purpose names: `ssh-exec` one command, `ssh-forward` the ports it was minted for, `ssh-editor` a terminal, commands, file transfer and port forwarding. `wardyn sync` stays on keys.
+- A ticket opens only the channel kinds its purpose names: `ssh-shell` a terminal, `ssh-exec` one command, `ssh-forward` the ports it was minted for, `ssh-editor` a terminal, commands, file transfer and port forwarding, `ssh-sync` the `wardyn sync` subsystem, and `ssh-sync-git` that subsystem and commands.
 - `WARDYN_SSH_CHANNELS` and the run's `data_out` rule apply to a ticket connection as they do to a key's.
 - A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 - It needs the SSH gateway on (`WARDYN_SSH_LISTEN`); boot refuses it without.
@@ -2018,7 +2018,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Turn it on only after every replica runs this release.
 - A ticket for SSH asks the `ssh_key` capability, as adding a key does: a person denied `ssh_key` gets `403` `capability_feature` and no ticket.
 - Behind a reverse proxy, set `WARDYN_TRUSTED_PROXIES`; without it the door's per-source handshake bound (16 at once) counts the proxy as one source for every ticket user.
-- See [SSH over an attach ticket](sdk.md#ssh-over-an-attach-ticket).
+- See [SSH over an attach ticket](sdk.md#ssh-over-an-attach-ticket) and [SSH tickets](SSH.md#ssh-tickets).
 
 ### `WARDYN_SYNC_DENY`
 

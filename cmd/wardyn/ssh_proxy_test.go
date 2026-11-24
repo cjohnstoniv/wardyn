@@ -759,6 +759,19 @@ func TestTicketMint_CapabilityDenied(t *testing.T) {
 			}
 		})
 	}
+	t.Run("sync", func(t *testing.T) {
+		homeWithKey(t, false)
+		f := newSyncTicketFixture(t, syncHealthz(""))
+		f.mint = func(w http.ResponseWriter, _ url.Values) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"` + sentence + `","reason":"capability_feature","feature":"ssh_key"}`))
+		}
+		err := runTicketSync(t, f)
+		if err == nil || err.Error() != "sync: "+sentence || exitCodeFor(err) != 1 || f.dials.Load() != 0 {
+			t.Errorf("error = %v (exit %d), dials %d; want %q, exit 1, no dial", err, exitCodeFor(err), f.dials.Load(), "sync: "+sentence)
+		}
+	})
 }
 
 func TestTicketMint_NoEchoRefuses(t *testing.T) {

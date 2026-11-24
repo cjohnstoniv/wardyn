@@ -1779,6 +1779,7 @@ These risks are **not closed by v1 Wardyn**.
 - The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`).
 - Attach tickets now carry a purpose, and a ticket minted for a purpose and spent at any other door is refused after it is burned; a terminal ticket with no purpose still opens the forward door.
 - SSH tickets ride a header, never a URL.
+- The CLI passes the ticket to ssh(1) in its child environment. That is acceptable because the ticket is single-use, lives 30 seconds and is spent before any SSH byte, so a copy read later is worthless. For this case that replaces the rule that a credential in a child's environment is a leak.
 - `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17).
 - And "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run.
 
