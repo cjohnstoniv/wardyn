@@ -98,15 +98,6 @@ func (s *Server) decisionRunOver(ctx context.Context) (types.MachineKind, func()
 	}
 }
 
-// recordLLMScanAudit shares the content-free payload and finding cap with
-// runner replay; no matched bytes or reversible hashes enter either path.
-func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor, sourceIP string, sc *egress.ScanSummary, host string) {
-	if sc == nil {
-		return
-	}
-	s.recordAudit(ctx, s.llmScanAuditEvent(runID, actor, sourceIP, sc, host))
-}
-
 // groundtruthBatch is the POST /api/v1/internal/groundtruth body: a batch of
 // kernel-derived audit events from the host eBPF sensor (wardyn-tetragon-ingest).
 type groundtruthBatch struct {
