@@ -43,9 +43,12 @@ func TestParseCapturedStream(t *testing.T) {
 	var text []string
 	ends, calls := 0, 0
 	for _, st := range steps {
-		events = append(events, st.Events...)
-		if st.Text != "" {
-			text = append(text, st.Text)
+		for _, ev := range st.Events {
+			if ev.Kind == kindText {
+				text = append(text, ev.Payload["text"].(string))
+				continue
+			}
+			events = append(events, ev)
 		}
 		calls += st.ToolCalls
 		if st.EndTurn {
@@ -94,7 +97,8 @@ func TestParseEndConversationEndsTheTurnOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !st.EndTurn || !st.EndConversation || st.ToolCalls != 0 || len(st.Events) != 0 || st.Text != "bye" {
+	want := []Event{{Kind: kindText, Payload: map[string]any{"text": "bye"}}}
+	if !st.EndTurn || !st.EndConversation || st.ToolCalls != 0 || !reflect.DeepEqual(st.Events, want) {
 		t.Fatalf("step = %+v; want the turn ended, no tool call counted or shown", st)
 	}
 }
@@ -133,5 +137,22 @@ func TestParseOtherLines(t *testing.T) {
 	st, err := p.Line([]byte(`{"type":"result","subtype":"error_max_turns","is_error":true}`))
 	if err != nil || !st.EndTurn || !st.Failed {
 		t.Fatalf("failed result = %+v, %v; want an end that failed", st, err)
+	}
+}
+
+// TestParseKeepsLineOrder: text and tool uses come out in the order the message gives them.
+func TestParseKeepsLineOrder(t *testing.T) {
+	st, err := NewParser().Line([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"A"},` +
+		`{"type":"tool_use","id":"t1","name":"mcp__wardyn__read","input":{}},{"type":"text","text":"B"}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, ev := range st.Events {
+		kinds = append(kinds, ev.Kind)
+	}
+	if !reflect.DeepEqual(kinds, []string{kindText, kindToolCall, kindText}) || st.Events[0].Payload["text"] != "A" ||
+		st.Events[2].Payload["text"] != "B" || st.ToolCalls != 1 {
+		t.Fatalf("events %+v; want text A, the tool call, text B", st.Events)
 	}
 }

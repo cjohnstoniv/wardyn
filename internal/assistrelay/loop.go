@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -46,6 +47,8 @@ const (
 	maxPollFails = 5
 	// harnessLineMax bounds one line of the harness stream.
 	harnessLineMax = 8 << 20
+	// textPostMax bounds one text event's encoded text, well under the proxy's and the server's 256 KiB body cap.
+	textPostMax = 200 << 10
 )
 
 // API is the relay's client of the brokered assistant route on the run's proxy.
@@ -268,7 +271,9 @@ func (r *Relay) Run(ctx context.Context) int {
 		if turn == nil {
 			if r.Now().Sub(r.lastTurn) >= r.IdleAfter {
 				r.stopHarness()
-				r.post(ctx, Event{Kind: kindNotice, Payload: map[string]any{"notice": "idle"}})
+				if r.session != "" { // with no session there is nothing to end, and the server refuses an empty id
+					r.post(ctx, Event{Kind: kindNotice, Payload: map[string]any{"notice": "idle"}})
+				}
 				r.logf("idle; exiting")
 				return ExitOK
 			}
@@ -321,6 +326,7 @@ func (r *Relay) begin(ctx context.Context, t *Turn) (int, bool) {
 	}
 	r.session, r.model, r.system, r.records = t.SessionID, t.Model, t.System, t.Records
 	r.harness, r.fresh = r.NewUUID(), true
+	r.lastTurn = r.Now() // a new session's idle clock starts at its start, not at the old session's last turn
 	if _, status, err := r.API.Tools(ctx); err != nil {
 		r.post(ctx, Event{Kind: kindError, Payload: map[string]any{"code": "tools_unavailable", "status": status}})
 		r.logf("tools unavailable (status %d); exiting", status)
@@ -376,8 +382,14 @@ func (r *Relay) resumeTurn(ctx context.Context, text string) (int, bool) {
 		r.logf("the harness did not start")
 		return ExitOK, false
 	}
-	r.fresh = false
 	out := r.watch(ctx, run)
+	// A first harness that ended before its init line may have kept no session: the next turn starts over,
+	// fresh, under a new id, with the records again. Any other outcome leaves a session to resume.
+	if r.fresh && run.session == "" && out == turnExited {
+		r.harness = r.NewUUID()
+	} else {
+		r.fresh = false
+	}
 	if err := r.stopHarness(); err != nil {
 		r.logf("the harness did not exit; exiting")
 		return ExitFailed, true
@@ -427,6 +439,9 @@ func (r *Relay) streamTurn(ctx context.Context, text string) (int, bool) {
 	return ExitOK, false
 }
 
+// afterTurn posts the end of a turn that did not reach the harness's result line: its notice or error, then
+// turn_end with no usage, so the server closes the turn (its suggestion record and per-turn digests) as for
+// any other.
 func (r *Relay) afterTurn(ctx context.Context, out outcome) {
 	switch out {
 	case turnLimit:
@@ -435,7 +450,10 @@ func (r *Relay) afterTurn(ctx context.Context, out outcome) {
 	case turnExited:
 		r.post(ctx, Event{Kind: kindError, Payload: map[string]any{"code": "harness_exited"}})
 		r.logf("the harness stream ended before its result")
+	default:
+		return
 	}
+	r.post(ctx, Event{Kind: kindTurnEnd, Payload: map[string]any{}})
 }
 
 // start launches a harness tree and begins reading its stream.
@@ -478,12 +496,7 @@ func (r *Relay) watch(ctx context.Context, run *running) outcome {
 	tick := time.NewTicker(r.TextEvery)
 	defer tick.Stop()
 	var text strings.Builder
-	flush := func() {
-		if text.Len() > 0 {
-			r.post(ctx, Event{Kind: kindText, Payload: map[string]any{"text": text.String()}})
-			text.Reset()
-		}
-	}
+	flush := func() { r.postText(ctx, &text) }
 	defer flush()
 	calls := 0
 	for {
@@ -504,11 +517,13 @@ func (r *Relay) watch(ctx context.Context, run *running) outcome {
 				return turnLimit
 			}
 			calls += st.ToolCalls
-			text.WriteString(st.Text)
-			if len(st.Events) > 0 {
+			for _, ev := range st.Events { // in line order: text is batched, anything else posts after the text before it
+				if ev.Kind == kindText {
+					s, _ := ev.Payload["text"].(string)
+					text.WriteString(s)
+					continue
+				}
 				flush()
-			}
-			for _, ev := range st.Events {
 				r.post(ctx, ev)
 			}
 			if st.EndTurn {
@@ -527,10 +542,7 @@ func (r *Relay) watch(ctx context.Context, run *running) outcome {
 // endTurn posts a turn's end: the text so far, an error when the harness says the turn failed, then turn_end
 // with the harness's usage numbers.
 func (r *Relay) endTurn(ctx context.Context, text *strings.Builder, st Step) outcome {
-	if text.Len() > 0 {
-		r.post(ctx, Event{Kind: kindText, Payload: map[string]any{"text": text.String()}})
-		text.Reset()
-	}
+	r.postText(ctx, text)
 	if st.Failed {
 		r.post(ctx, Event{Kind: kindError, Payload: map[string]any{"code": "harness_error"}})
 	}
@@ -543,6 +555,42 @@ func (r *Relay) endTurn(ctx context.Context, text *strings.Builder, st Step) out
 		return turnEndConv
 	}
 	return turnDone
+}
+
+// postText posts the batched text, if any, as text events of at most textPostMax bytes once JSON-encoded, cut
+// on rune boundaries, and empties the batch.
+func (r *Relay) postText(ctx context.Context, text *strings.Builder) {
+	if text.Len() == 0 {
+		return
+	}
+	for _, piece := range textPieces(text.String(), textPostMax) {
+		r.post(ctx, Event{Kind: kindText, Payload: map[string]any{"text": piece}})
+	}
+	text.Reset()
+}
+
+// textPieces cuts s into pieces whose JSON-encoded text is at most limit bytes each, never inside a rune. Each
+// rune is counted at its largest encoded size, so the bound holds for any text.
+func textPieces(s string, limit int) []string {
+	var out []string
+	start, size := 0, 0
+	for i, c := range s {
+		n := utf8.RuneLen(c)
+		switch {
+		case c == utf8.RuneError && !strings.HasPrefix(s[i:], string(utf8.RuneError)):
+			n = 6 // an invalid byte, encoded as \ufffd
+		case c < 0x20 || c == '<' || c == '>' || c == '&' || c == 0x2028 || c == 0x2029:
+			n = 6 // \u00XX at most
+		case c == '"' || c == '\\':
+			n = 2
+		}
+		if size+n > limit && i > start {
+			out = append(out, s[start:i])
+			start, size = i, 0
+		}
+		size += n
+	}
+	return append(out, s[start:])
 }
 
 // post posts one event for the current session. A refused post is counted, never retried: the server answers

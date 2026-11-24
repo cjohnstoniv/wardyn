@@ -50,9 +50,8 @@ type Usage struct {
 
 // Step is what one line of the harness stream carries.
 type Step struct {
-	// Text is assistant text, for the batcher.
-	Text string
-	// Events are the line's tool calls and tool results, in order.
+	// Events are the line's text pieces, tool calls and tool results, in the order the line gives them. The
+	// relay batches text events and posts the others as they are.
 	Events []Event
 	// ToolCalls counts the line's tool uses, an EndConversation use excluded.
 	ToolCalls int
@@ -136,7 +135,9 @@ func (p *Parser) Line(line []byte) (Step, error) {
 func (p *Parser) assistantBlock(st *Step, b contentBlock) {
 	switch b.Type {
 	case "text":
-		st.Text += b.Text
+		if b.Text != "" {
+			st.Events = append(st.Events, Event{Kind: kindText, Payload: map[string]any{"text": b.Text}})
+		}
 	case "tool_use":
 		if b.Name == endConversation {
 			st.EndTurn, st.EndConversation = true, true

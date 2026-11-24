@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -47,6 +48,7 @@ type postedEvent struct {
 	Session string
 	Kind    string
 	Payload map[string]any
+	Bytes   int // the request body's length
 }
 
 type postedCall struct {
@@ -85,9 +87,10 @@ func (f *fakeWardyn) serve(w http.ResponseWriter, r *http.Request) {
 			Kind      string         `json:"kind"`
 			Payload   map[string]any `json:"payload"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&ev)
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &ev)
 		f.mu.Lock()
-		f.events = append(f.events, postedEvent{Session: ev.SessionID, Kind: ev.Kind, Payload: ev.Payload})
+		f.events = append(f.events, postedEvent{Session: ev.SessionID, Kind: ev.Kind, Payload: ev.Payload, Bytes: len(body)})
 		n, live := len(f.events), f.live
 		f.mu.Unlock()
 		if ev.SessionID != live {
@@ -559,9 +562,13 @@ func TestRelayTurnLimits(t *testing.T) {
 			r.TurnTime = 200 * time.Millisecond
 			done := runRelay(t, r)
 			f.turns <- &Turn{Seq: 1, Kind: "user", SessionID: s1, Model: "m", System: "p", Text: "go"}
-			f.waitFor(t, "the limit notice", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindNotice) == 1 })
+			f.waitFor(t, "the limit notice and its turn_end", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+			if evs, _ := f.snapshot(); countKind(evs, kindNotice) != 1 || evs[len(evs)-2].Kind != kindNotice ||
+				evs[len(evs)-1].Kind != kindTurnEnd || len(evs[len(evs)-1].Payload) != 0 {
+				t.Fatalf("turn 1 ended with %q; want the turn_limit notice, then turn_end with no usage", kinds(evs))
+			}
 			f.turns <- &Turn{Seq: 2, Kind: "user", SessionID: s1, Text: "again"}
-			f.waitFor(t, "turn 2", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+			f.waitFor(t, "turn 2", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 2 })
 			f.turns <- &Turn{Seq: 3, Kind: "end", SessionID: s1}
 			exitCode(t, done)
 			evs, _ := f.snapshot()
@@ -827,5 +834,187 @@ func TestRelayStreamMode(t *testing.T) {
 	}
 	if want := StreamArgs("claude", "m", "p", mcpPathOf(launches[0].argv)); !reflect.DeepEqual(launches[0].argv, want) {
 		t.Fatalf("argv %q\nwant %q", launches[0].argv, want)
+	}
+}
+
+// TestRelayResetRestartsTheIdleClock: a session that begins just before the old one's idle limit is not ended
+// as idle; its own 15 minutes start at its start.
+func TestRelayResetRestartsTheIdleClock(t *testing.T) {
+	f, fl := newFakeWardyn(t), &fakeLauncher{script: oneTurnScript}
+	s1, s2 := uuid.NewString(), uuid.NewString()
+	f.setLive(s1)
+	r, _ := newTestRelay(t, f, fl)
+	c := &clock{now: time.Unix(1_000_000, 0)}
+	r.Now = c.Now
+	done := runRelay(t, r)
+	f.turns <- &Turn{Seq: 1, Kind: "user", SessionID: s1, Model: "m", System: "p", Text: "hi"}
+	f.waitFor(t, "session 1's turn", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+	c.advance(14*time.Minute + 40*time.Second)
+	f.setLive(s2)
+	f.turns <- &Turn{Seq: 2, Kind: "reset", SessionID: s2, Model: "m", System: "p"}
+	f.waitFor(t, "session 2 ready", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindState) == 2 })
+	c.advance(30 * time.Second) // past 15 minutes since session 1's last turn
+	time.Sleep(100 * time.Millisecond)
+	if evs, _ := f.snapshot(); countKind(evs, kindNotice) != 0 {
+		t.Fatalf("session 2 was ended as idle 30 s after it began: %q", kinds(evs))
+	}
+	c.advance(defaultIdleAfter)
+	if code := exitCode(t, done); code != ExitOK {
+		t.Fatalf("exit %d", code)
+	}
+	evs, _ := f.snapshot()
+	if last := evs[len(evs)-1]; last.Kind != kindNotice || last.Payload["notice"] != "idle" || last.Session != s2 {
+		t.Fatalf("last event %+v, want session 2's idle notice", last)
+	}
+}
+
+// TestRelayNoIdleNoticeWithoutASession: with no session ever begun, the idle exit posts nothing.
+func TestRelayNoIdleNoticeWithoutASession(t *testing.T) {
+	f, fl := newFakeWardyn(t), &fakeLauncher{script: oneTurnScript}
+	r, _ := newTestRelay(t, f, fl)
+	c := &clock{now: time.Unix(1_000_000, 0)}
+	r.Now = c.Now
+	done := runRelay(t, r)
+	time.Sleep(50 * time.Millisecond)
+	c.advance(defaultIdleAfter)
+	if code := exitCode(t, done); code != ExitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if evs, _ := f.snapshot(); len(evs) != 0 {
+		t.Fatalf("events %+v; want none", evs)
+	}
+}
+
+// TestRelayHarnessExitEndsTheTurn: a harness that ends before its result line gives harness_exited, then
+// turn_end with no usage. A first harness that ended before its init line leaves the next turn fresh, under a
+// new id with the records again; one that wrote its init line is resumed.
+func TestRelayHarnessExitEndsTheTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		init              bool
+		wantFlag, wantID  string
+		wantRecordsResent bool
+	}{
+		{"before init", false, "--session-id", "harness-2", true},
+		{"after init", true, "--resume", "harness-1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeWardyn(t)
+			n := 0
+			fl := &fakeLauncher{script: func(l *launch, out io.Writer) {
+				n++
+				if n == 1 {
+					if tc.init {
+						writeLines(out, initLine("harness-1"))
+					}
+					writeLines(out, textLine("partial"))
+					return // the stream ends with no result line
+				}
+				oneTurnScript(l, out)
+			}}
+			s1 := uuid.NewString()
+			f.setLive(s1)
+			r, _ := newTestRelay(t, f, fl)
+			done := runRelay(t, r)
+			f.turns <- &Turn{Seq: 1, Kind: "user", SessionID: s1, Model: "m", System: "p", Records: testRecords, Text: "one"}
+			f.waitFor(t, "turn 1's end", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+			evs, _ := f.snapshot()
+			if want := []string{kindState, kindText, kindError, kindTurnEnd}; !reflect.DeepEqual(kinds(evs), want) ||
+				evs[2].Payload["code"] != "harness_exited" || len(evs[3].Payload) != 0 {
+				t.Fatalf("turn 1 events %+v; want text, harness_exited, then turn_end with no usage", evs)
+			}
+			f.turns <- &Turn{Seq: 2, Kind: "user", SessionID: s1, Text: "two"}
+			f.waitFor(t, "turn 2", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 2 })
+			f.turns <- &Turn{Seq: 3, Kind: "end", SessionID: s1}
+			exitCode(t, done)
+			_, launches := fl.snapshot()
+			argv := launches[1].argv
+			if len(launches) != 2 || argv[len(argv)-2] != tc.wantFlag || argv[len(argv)-1] != tc.wantID {
+				t.Fatalf("turn 2 argv %q; want %s %s", argv, tc.wantFlag, tc.wantID)
+			}
+			wantStdin := "two"
+			if tc.wantRecordsResent {
+				wantStdin = assistant.RecordBytes(testRecords) + "two"
+			}
+			if launches[1].stdin != wantStdin {
+				t.Fatalf("turn 2 stdin %q, want %q", launches[1].stdin, wantStdin)
+			}
+		})
+	}
+}
+
+// TestRelayTextIsSplitUnderTheBodyCap: a message far over the 256 KiB event cap is posted as text events that
+// each fit under it, cut on rune boundaries, together the whole message.
+func TestRelayTextIsSplitUnderTheBodyCap(t *testing.T) {
+	big := strings.Repeat("é<\"", 100<<10) + "end"
+	f := newFakeWardyn(t)
+	fl := &fakeLauncher{script: func(l *launch, out io.Writer) { writeLines(out, textLine(big), resultLine) }}
+	s1 := uuid.NewString()
+	f.setLive(s1)
+	r, _ := newTestRelay(t, f, fl)
+	done := runRelay(t, r)
+	f.turns <- &Turn{Seq: 1, Kind: "user", SessionID: s1, Model: "m", System: "p", Text: "go"}
+	f.waitFor(t, "the turn", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+	f.turns <- &Turn{Seq: 2, Kind: "end", SessionID: s1}
+	exitCode(t, done)
+	evs, _ := f.snapshot()
+	var got strings.Builder
+	pieces := 0
+	for _, e := range evs {
+		if e.Kind != kindText {
+			continue
+		}
+		pieces++
+		s, _ := e.Payload["text"].(string)
+		if e.Bytes > 262144 || !utf8.ValidString(s) {
+			t.Fatalf("a text event of %d bytes (valid UTF-8 %v); want each under 262144", e.Bytes, utf8.ValidString(s))
+		}
+		got.WriteString(s)
+	}
+	if pieces < 2 || got.String() != big {
+		t.Fatalf("%d text pieces, %d bytes joined; want the %d-byte message whole, split", pieces, got.Len(), len(big))
+	}
+}
+
+func TestTextPiecesKeepRunesWhole(t *testing.T) {
+	for _, s := range []string{"", "abc", strings.Repeat("é", 10), strings.Repeat("<", 10), "a\xffb\xfe" + strings.Repeat("日", 5)} {
+		pieces := textPieces(s, 7)
+		if strings.Join(pieces, "") != s {
+			t.Fatalf("%q: pieces %q do not join to the text", s, pieces)
+		}
+		for _, p := range pieces {
+			if len(s) > 0 && p == "" {
+				t.Fatalf("%q: an empty piece in %q", s, pieces)
+			}
+			if utf8.ValidString(s) && !utf8.ValidString(p) {
+				t.Fatalf("%q: piece %q cuts a rune", s, p)
+			}
+			if b, _ := json.Marshal(p); len(b)-2 > 7 && utf8.RuneCountInString(p) > 1 {
+				t.Fatalf("%q: piece %q encodes to %d bytes, over 7", s, p, len(b)-2)
+			}
+		}
+	}
+}
+
+// TestRelayKeepsLineOrder: a message laid out text, tool use, text posts in that order.
+func TestRelayKeepsLineOrder(t *testing.T) {
+	f := newFakeWardyn(t)
+	fl := &fakeLauncher{script: func(l *launch, out io.Writer) {
+		writeLines(out, `{"type":"assistant","message":{"content":[{"type":"text","text":"A"},`+
+			`{"type":"tool_use","id":"t1","name":"mcp__wardyn__read","input":{}},{"type":"text","text":"B"}]}}`,
+			toolResultLine("t1"), resultLine)
+	}}
+	s1 := uuid.NewString()
+	f.setLive(s1)
+	r, _ := newTestRelay(t, f, fl)
+	done := runRelay(t, r)
+	f.turns <- &Turn{Seq: 1, Kind: "user", SessionID: s1, Model: "m", System: "p", Text: "go"}
+	f.waitFor(t, "the turn", func(e []postedEvent, _ []postedCall) bool { return countKind(e, kindTurnEnd) == 1 })
+	f.turns <- &Turn{Seq: 2, Kind: "end", SessionID: s1}
+	exitCode(t, done)
+	evs, _ := f.snapshot()
+	if want := []string{kindState, kindText, kindToolCall, kindText, kindToolResult, kindTurnEnd}; !reflect.DeepEqual(kinds(evs), want) ||
+		evs[1].Payload["text"] != "A" || evs[3].Payload["text"] != "B" {
+		t.Fatalf("events %+v; want text A, the tool call, text B, then the result", evs)
 	}
 }
