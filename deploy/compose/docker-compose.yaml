@@ -520,6 +520,8 @@ services:
       # latter.
       WARDYN_SSH_LISTEN: "${WARDYN_SSH_LISTEN:-}"
       WARDYN_SSH_ADVERTISE: "${WARDYN_SSH_ADVERTISE:-}"
+      # 1 lets a person connect with a single-use ticket, no registered key; needs WARDYN_SSH_LISTEN.
+      WARDYN_SSH_TICKETS: "${WARDYN_SSH_TICKETS:-}"
       # Optional ProxyCommand the card and `wardyn run ssh` show (docs/SSH.md,
       # "SSH on a 443-only estate"); advisory copy, wardynd never runs it.
       WARDYN_SSH_PROXY_COMMAND: "${WARDYN_SSH_PROXY_COMMAND:-}"
