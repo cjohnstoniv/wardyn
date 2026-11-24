@@ -617,10 +617,10 @@ func (s *sponsorLookupStore) ServiceStillSponsored(ctx context.Context, name, sp
 
 // TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship: a terminal a sponsor opened on a service
 // identity's run is checked against the sponsorship as the handshake did, from the ticket's own authority
-// time. A sponsorship that ended (replaced, suspended or retired), one that began again after the ticket
-// (A to B to A), and a lookup that fails each end it at the next check; a sponsor who still is one, and a
-// person on their own run whatever the service store says, keep it. The check is the one a ticket's writer
-// socket and observer socket both run.
+// time. A sponsorship that ended (replaced, suspended or retired) and one that began again after the ticket
+// (A to B to A) each end it at the next check; a lookup that fails is unconfirmed, never a pass, so the session
+// budget ends it (at once at a budget of 0); a sponsor who still is one, and a person on their own run whatever
+// the service store says, keep it. The check is the one a ticket's writer socket and observer socket both run.
 func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 	opened := time.Now().Add(-time.Minute)
 	type sponsorRig struct {
@@ -686,10 +686,16 @@ func TestAttachAuthority_SponsorTerminalEndsWithTheSponsorship(t *testing.T) {
 		g.st.err = store.ErrNotFound
 		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
 	})
-	t.Run("a lookup that fails ends it", func(t *testing.T) {
+	t.Run("a lookup that fails is unconfirmed, never a pass", func(t *testing.T) {
 		g := newRig(t, true)
 		g.st.err = errors.New("store down")
-		ended(t, checkAs(g, "sponsor-sub")(context.Background()))
+		err := checkAs(g, "sponsor-sub")(context.Background())
+		if !errors.Is(err, errSessionUnconfirmed) {
+			t.Fatalf("check = %v, want an unconfirmed error", err)
+		}
+		if v := testBudget(g.h.srv, 0, time.Millisecond).observe("authority", err); v != budgetSpent {
+			t.Fatalf("at a budget of 0 the failed lookup's verdict = %v, want budgetSpent (the session ends)", v)
+		}
 	})
 	t.Run("another person's ticket on a service run ends", func(t *testing.T) {
 		g := newRig(t, true)
