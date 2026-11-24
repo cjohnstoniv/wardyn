@@ -12,4 +12,7 @@ const (
 	reasonSSHGatewayOff              = "ssh_gateway_off"               // 409: the SSH gateway is off (WARDYN_SSH_LISTEN)
 	reasonSSHTicketsOff              = "ssh_tickets_off"               // 409: WARDYN_SSH_TICKETS is off
 	reasonSSHTicketChannelOff        = "ssh_ticket_channel_off"        // 409: a kind the purpose needs is left out of WARDYN_SSH_CHANNELS
+	reasonSSHGatewayUnavailable      = "ssh_gateway_unavailable"       // 503: the gateway's serve loop is not up on this replica
+	reasonSSHGatewayBusy             = "ssh_gateway_busy"              // 503: the handshake bounds are full
+	reasonSSHTicketUnverifiable      = "ssh_ticket_unverifiable"       // 503: the run or the governance profile could not be read
 )

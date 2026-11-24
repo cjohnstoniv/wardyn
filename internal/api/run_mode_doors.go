@@ -94,8 +94,8 @@ var backgroundDoors = []backgroundDoor{
 	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
 	// the exec channel over HTTP (run_exec.go) and the contract's third exception: its
 	// read is execFreshRun, which takes a background run (TestBackgroundExecIsTheDoorsThirdException).
-	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
-		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun", "sshRunEntryRefusal"},
+		Routes: []string{"POST /runs/{id}/exec", "GET /runs/{id}/ssh"}, Enforced: true},
 	// Port forwarding over the organisation (#3281): an SSH -L channel's reach over the attach family, for a deployment
 	// whose gateway is off. handleAttachForward asks the predicate itself, after the entry rule.
 	{Door: "port forwarding", Owner: "#3281", Symbols: []string{"handleAttachForward"},

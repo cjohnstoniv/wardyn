@@ -2012,6 +2012,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The TCP listener stays public key only.
 - A ticket opens only the channel kinds its purpose names: `ssh-exec` one command, `ssh-forward` the ports it was minted for, `ssh-editor` a terminal, commands, file transfer and port forwarding. `wardyn sync` stays on keys.
 - `WARDYN_SSH_CHANNELS` and the run's `data_out` rule apply to a ticket connection as they do to a key's.
+- A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 - It needs the SSH gateway on (`WARDYN_SSH_LISTEN`); boot refuses it without.
 - With it on, SSH is reachable wherever the HTTPS API is, whatever guards `WARDYN_SSH_LISTEN`.
 - Turn it on only after every replica runs this release.
