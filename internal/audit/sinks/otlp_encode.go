@@ -6,6 +6,8 @@ package sinks
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
+	"slices"
 	"strconv"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -89,9 +91,29 @@ func correlationID(data json.RawMessage) string {
 	return d.CorrelationID
 }
 
+// runnerLabelAttrs are data.runner_labels as wardyn.runner_label.<key> attributes, sorted by key: the
+// operator labels of the run's runner, which run.create and run.queue.start record. A row without them, or
+// one past types.MaxRunnerLabels or outside label syntax, adds none.
+func runnerLabelAttrs(data json.RawMessage) []otlpAttr {
+	if !bytes.Contains(data, []byte(`"runner_labels"`)) {
+		return nil
+	}
+	var d struct {
+		RunnerLabels map[string]string `json:"runner_labels"`
+	}
+	if json.Unmarshal(data, &d) != nil || types.ValidateRunnerLabels(d.RunnerLabels) != nil {
+		return nil
+	}
+	out := make([]otlpAttr, 0, len(d.RunnerLabels))
+	for _, k := range slices.Sorted(maps.Keys(d.RunnerLabels)) {
+		out = append(out, otlpAttr{"wardyn.runner_label." + k, otlpValue{d.RunnerLabels[k]}})
+	}
+	return out
+}
+
 // logRecord turns one audit row into a LogRecord. It exports the row's
 // identity fields and outcome and nothing from the per-action data except the
-// correlation id: the webhook sink's full payload is the ceiling, not the aim.
+// correlation id and the runner's operator labels: the webhook sink's full payload is the ceiling, not the aim.
 // withTraceIDs adds the trace and span ids the row's span carries.
 func logRecord(ev types.AuditEvent, withTraceIDs bool) otlpLogRecord {
 	sev, sevText := severityForOutcome(ev.Outcome)
@@ -108,6 +130,7 @@ func logRecord(ev types.AuditEvent, withTraceIDs bool) otlpLogRecord {
 	if id := correlationID(ev.Data); id != "" {
 		attrs = append(attrs, otlpAttr{"wardyn.correlation_id", otlpValue{id}})
 	}
+	attrs = append(attrs, runnerLabelAttrs(ev.Data)...)
 	rec := otlpLogRecord{
 		TimeUnixNano:         ts,
 		ObservedTimeUnixNano: ts,

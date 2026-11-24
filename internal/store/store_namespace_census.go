@@ -190,6 +190,8 @@ var namespaceCensusExempt = map[string]string{
 	"runner_health.relay_status":                "runner, run-containment and sweep telemetry; not an authority source",
 	"runner_inventory_observations.assertion":   "runner, run-containment and sweep telemetry; not an authority source",
 	"runner_inventory_observations.containment": "runner, run-containment and sweep telemetry; not an authority source",
+	"runner_labels.created_by":                  "the runner or the security operator who wrote a runner's labels; it confers and restricts nothing about that person",
+	"runner_labels.labels":                      "a runner's Kubernetes-syntax labels; never a principal",
 	"runner_pending_actions.proof":              "runner, run-containment and sweep telemetry; not an authority source",
 	"runner_pools.limits":                       "limits, contact details and boundary settings; no person list (a boundary spec has no ui_apps field)",
 	"runner_spool_cursors.recent_hashes":        "runner, run-containment and sweep telemetry; not an authority source",

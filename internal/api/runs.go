@@ -622,6 +622,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	stampHarnessSet(createData, f.harnesses, f.image)
 	a.comps.stampRunCreate(createData)
 	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
+	s.stampRunnerLabels(ctx, a.created, createData)
 	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
 	stampImageAdmission(createData, f.admission)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)

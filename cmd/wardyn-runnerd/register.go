@@ -32,6 +32,7 @@ import (
 func newRegisterCommand() *cobra.Command {
 	var org, tokenFile, stateDir, name, sub, arch, trustedCAFile, orgCAFile string
 	var ifUnregistered bool
+	var labelFlags []string
 	var flags registerLimits
 	cmd := &cobra.Command{Use: "register", Short: "Register this host with its limits; its owner must then verify and claim it", Args: cobra.NoArgs}
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
@@ -61,7 +62,11 @@ func newRegisterCommand() *cobra.Command {
 				return nil
 			}
 		}
-		args := registerArgs{org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, orgCAFile: orgCAFile, reuseKey: ifUnregistered}
+		labels, err := parseLabelFlags(labelFlags)
+		if err != nil {
+			return err
+		}
+		args := registerArgs{labels: labels, org: org, tokenFile: tokenFile, stateDir: stateDir, name: name, limits: &flags, noMeasure: sub == "k8s", arch: arch, trustedCAFile: trustedCAFile, orgCAFile: orgCAFile, reuseKey: ifUnregistered}
 		done, err := registerRunner(cmd, args)
 		// The chart's init container: a registration that could not reach the organisation is retried
 		// with the same key a bounded number of times, each failure logged, before the pod restarts
@@ -94,11 +99,32 @@ func newRegisterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&arch, "arch", os.Getenv(archEnv), "k8s, required: the sandbox node architecture this runner reports, amd64 or arm64")
 	cmd.Flags().StringVar(&orgCAFile, "org-ca-file", os.Getenv("WARDYN_ORG_CA_FILE"), "PEM file of extra roots the registration call trusts, as serve's flag of the same name: for the runner's own connection to the organisation only")
 	cmd.Flags().StringVar(&trustedCAFile, "trusted-ca-file", "", "PEM bundle of extra roots (e.g. a TLS-inspecting corporate proxy's CA) the registration call trusts, as serve's flag of the same name")
+	cmd.Flags().StringArrayVar(&labelFlags, "label", nil, "a label this runner proposes, key=value (repeat it); a security operator confirms it, and only confirmed labels reach audit")
 	cmd.Flags().BoolVar(&ifUnregistered, "if-unregistered", false, "do nothing when this state directory already holds an identity for --org")
 	flags.register(cmd)
 	_ = cmd.MarkFlagRequired("org")
 	_ = cmd.MarkFlagRequired("token-file")
 	return cmd
+}
+
+// parseLabelFlags is the --label values as a label set: key=value, each key once, in Kubernetes label syntax, so a
+// runner fails before it spends its token on what the organisation would refuse.
+func parseLabelFlags(flags []string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(flags))
+	for _, f := range flags {
+		k, v, ok := strings.Cut(f, "=")
+		if _, dup := labels[k]; !ok || dup {
+			return nil, fmt.Errorf("--label %q: want key=value, each key once", f)
+		}
+		labels[k] = v
+	}
+	if err := types.ValidateRunnerLabels(labels); err != nil {
+		return nil, fmt.Errorf("labels: %w", err)
+	}
+	return labels, nil
 }
 
 func readRegistrationToken(path string) (string, error) {
@@ -180,6 +206,8 @@ type registerArgs struct {
 	noMeasure bool
 	// arch (k8s) is --arch, reported in place of the engine's.
 	arch string
+	// labels are --label: what this runner proposes, which a security operator confirms.
+	labels map[string]string
 	// trustedCAFile is --trusted-ca-file: extra roots the registration call trusts beside the system's.
 	trustedCAFile string
 	// orgCAFile is --org-ca-file: roots for this call, as for the runner's own connection, and for nothing else.
@@ -317,7 +345,7 @@ func registerRunner(cmd *cobra.Command, a registerArgs) (registeredRunner, error
 	if arch == "" && !a.noMeasure {
 		arch = engineArch(cmd.Context())
 	}
-	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch})
+	registered, err := client.RegisterRunner(cmd.Context(), sdk.RunnerRegisterRequest{Token: token, PublicKey: key.Public().(ed25519.PublicKey), Name: name, Limits: &limits, MachineName: machine, Arch: arch, Labels: a.labels})
 	if err != nil {
 		dropUnsentKey(err, a, stateDir)
 		return registeredRunner{}, registrationFailure(err)

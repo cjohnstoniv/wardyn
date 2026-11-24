@@ -111,6 +111,14 @@ type RunnerView struct {
 	// or incomplete incarnation on every try for about ten minutes, kept, and no longer retried. Set on a
 	// one-runner read only; absent for none.
 	ParkedExits int `json:"parked_exits,omitempty"`
+	// Labels are the operator labels, written by a security operator: the only labels run.create, the run
+	// read, the audit export and placement rules read. AssertedLabels are what the runner proposed at
+	// registration (runner_asserted): shown, never trusted. LabelsSetBy and LabelsSetAt name the operator
+	// labels' last writer, on the administrators' routes only.
+	Labels         map[string]string `json:"labels,omitempty"`
+	AssertedLabels map[string]string `json:"asserted_labels,omitempty"`
+	LabelsSetBy    string            `json:"labels_set_by,omitempty"`
+	LabelsSetAt    *time.Time        `json:"labels_set_at,omitempty"`
 }
 
 // MaxRunnerReason bounds the reason of an offline summary or a relay status, in bytes, and

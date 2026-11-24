@@ -562,6 +562,7 @@ func (s *Server) auditQueuedCreate(ctx context.Context, q queuedCreate, created 
 	createData["queue"] = queue
 	q.f.comps.stampRunCreate(createData)
 	maps.Copy(createData, q.f.place.auditFields(created, s.runnerNameOf(ctx, created)))
+	s.stampRunnerLabels(ctx, created, createData)
 	s.markRunCreateExempt(ctx, createDigestInput(q.req, q.f.carriedImage), createData)
 	stampImageAdmission(createData, q.f.admission)
 	s.stampBreakGlass(ctx, created.ID, q.createdByType, created.CreatedBy, createData)

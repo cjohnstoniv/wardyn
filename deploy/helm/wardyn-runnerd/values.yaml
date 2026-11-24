@@ -33,6 +33,11 @@ sandbox:
   # Upper bound on both pods' activeDeadlineSeconds (--max-pod-lifetime).
   maxPodLifetime: 168h
 
+# labels are what this runner proposes at registration, for example {cluster: eu-1, region: west}. A security
+# operator confirms them; only confirmed labels reach audit. Kubernetes label syntax, at most 16. Read once:
+# a runner already registered keeps what it proposed. Set them only when the control plane runs 0.11 or later.
+labels: {}
+
 image:
   repository: ghcr.io/cjohnstoniv/wardyn-runnerd
   # Empty means .Chart.AppVersion. The proxy image always takes the same tag.

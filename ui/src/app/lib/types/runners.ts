@@ -104,6 +104,13 @@ export interface RunnerView {
   relay_status?: RunnerRelayStatus;
   /** One-runner reads only: how many of its exit receipts the organisation parked (refused on every try, no longer retried); absent for none. */
   parked_exits?: number;
+  /** The operator labels a security operator confirmed: the only labels audit rows, the export and placement rules read. */
+  labels?: Record<string, string>;
+  /** What the runner proposed at registration: shown, never trusted. */
+  asserted_labels?: Record<string, string>;
+  /** Administrators' routes only: who last wrote the operator labels, and when. */
+  labels_set_by?: string;
+  labels_set_at?: string;
 }
 
 /** The `wardyn-runnerd doctor` stage names an offline summary names. Go: types.RunnerStages. */
@@ -261,4 +268,5 @@ export type RunnerManagementReason =
   | "runners_org_url_invalid"
   | "runners_enabled_required"
   | "runner_limits_invalid"
-  | "runner_trust_invalid";
+  | "runner_trust_invalid"
+  | "runner_labels_invalid";

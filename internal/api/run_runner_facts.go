@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -25,6 +26,14 @@ func (s *Server) projectRunnerFacts(r *http.Request, runs []types.AgentRun) {
 		return
 	}
 	rows := map[uuid.UUID]*types.Runner{}
+	var runnerIDs []uuid.UUID
+	for i := range runs {
+		if runs[i].Placement == types.PlacementLocal && runs[i].RunnerID != nil && !slices.Contains(runnerIDs, *runs[i].RunnerID) {
+			runnerIDs = append(runnerIDs, *runs[i].RunnerID)
+		}
+	}
+	// A failed read leaves the labels off every run, never fails the response.
+	sets, _ := s.runnerLabelsOf(r.Context(), runnerIDs)
 	for i := range runs {
 		run := &runs[i]
 		if run.Placement != types.PlacementLocal || run.RunnerID == nil {
@@ -42,6 +51,7 @@ func (s *Server) projectRunnerFacts(r *http.Request, runs []types.AgentRun) {
 			continue
 		}
 		run.RunnerName, run.RunnerLastSeenAt = row.Name, row.LastSeenAt
+		run.RunnerLabels = sets[id][types.RunnerLabelsOperator].Labels
 		online := row.State == types.RunnerClaimed && s.runnerOnline(id)
 		// Under WARDYN_HA a replica that does not hold the runner's session answers offline for a runner
 		// connected to another, so there false is a guess and stays unset (unknown); true is always a fact.
