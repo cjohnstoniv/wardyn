@@ -112,7 +112,7 @@ func TestVerify_V1RowsUnchanged_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if f != 2 || !salt64.MatchString(salt) {
-		t.Fatalf("new row: format %d, salt %q, want 2 and 64 lowercase hex", f, len(salt))
+		t.Fatalf("new row: format %d, a 64-hex salt %v (%d chars), want format 2 and a 64 lowercase hex salt", f, salt64.MatchString(salt), len(salt))
 	}
 }
 
