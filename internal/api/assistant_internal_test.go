@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -66,6 +67,47 @@ func TestAssistantInternalRefusals(t *testing.T) {
 	if w := post(`{"session_id":"` + s.ID.String() + `","kind":"text","payload":{"text":"hi"}}`); w.Code != http.StatusAccepted {
 		t.Errorf("a text event = %d %s, want 202", w.Code, w.Body)
 	}
+}
+
+// A turn poll whose session read fails answers 500 and no turn. A session that erasure renamed while a poll held
+// it reads as not found, which is ended, so its unconsumed person turn is never delivered.
+func TestAssistantTurnsFailClosedOnSessionReadError(t *testing.T) {
+	f := newAssistantFake(types.SiteConfig{})
+	srv, _ := assistantSessionServer(t, f)
+	person := "sub-turn-read-" + uuid.NewString()
+	run := f.seedRun(t, person)
+	s := assistantLiveSession(person, &run, types.AssistantBinding{})
+	f.seed(s, types.AssistantEvent{Seq: 1, Kind: types.AssistantEventUserMessage, Payload: json.RawMessage(`{"turn":"hi"}`)})
+	f.amu.Lock()
+	f.sessReadErr = fmt.Errorf("store down")
+	f.amu.Unlock()
+	w := httptest.NewRecorder()
+	srv.handleAssistantTurns(w, assistantRunRequest(http.MethodGet, "/api/v1/internal/assistant/turns", "", run))
+	wantReason(t, w, http.StatusInternalServerError, reasonInternalError)
+	var turn types.AssistantTurn
+	if json.Unmarshal(w.Body.Bytes(), &turn) == nil && turn.Kind == types.AssistantTurnUser {
+		t.Errorf("a failed session read delivered the person's turn: %s", w.Body)
+	}
+	f.amu.Lock()
+	f.sessReadErr = nil
+	f.amu.Unlock()
+
+	t.Run("erased mid-poll", func(t *testing.T) {
+		held := f.session(s.ID) // the poll's copy, read before the erasure
+		if _, _, err := f.EraseAssistantSessionPersonalFields(context.Background(), []string{person}); err != nil {
+			t.Fatal(err)
+		}
+		deadline := make(chan time.Time)
+		close(deadline)
+		w := httptest.NewRecorder()
+		if !srv.assistantTurnsStep(w, assistantRunRequest(http.MethodGet, "/api/v1/internal/assistant/turns", "", run), f, &held, 0, deadline) {
+			t.Fatal("the poll read again instead of answering")
+		}
+		var turn types.AssistantTurn
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &turn) != nil || turn.Kind != types.AssistantTurnEnd || turn.SessionID != s.ID {
+			t.Errorf("the poll of an erased session = %d %s, want the end turn of %s", w.Code, w.Body, s.ID)
+		}
+	})
 }
 
 // Past 5000 events a turn's digests and tool names are read from the turn alone: the tools are the server's

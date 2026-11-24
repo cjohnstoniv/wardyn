@@ -144,15 +144,49 @@ func (s *Server) assistantDispatch(ctx context.Context, l assistantLaunch) types
 // assistantRunLimited reports whether err is max_concurrent_runs refusing the run.
 func assistantRunLimited(err error) bool { return errors.Is(err, errRecordCeilingLimit) }
 
-// stopAssistantRun stops the run of a session, as DELETE /runs/{id} does, unless it already ended.
-func (s *Server) stopAssistantRun(ctx context.Context, runID uuid.UUID) {
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.State.IsTerminal() {
-		return
+// assistantStopAttempts bounds stopAssistantRun's kills that lose the state race to a dispatch step.
+const assistantStopAttempts = 3
+
+// stopAssistantRun stops the run of a session, as DELETE /runs/{id} does, unless it already ended or no longer
+// exists. A kill that loses the state race to a dispatch step reads the run again, at most three times.
+func (s *Server) stopAssistantRun(ctx context.Context, runID uuid.UUID) error {
+	for range assistantStopAttempts {
+		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read assistant run: %w", err)
+		}
+		if run.State.IsTerminal() {
+			return nil
+		}
+		applied, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "the assistant session ended"})
+		if err != nil {
+			return fmt.Errorf("stop assistant run: %w", err)
+		}
+		if applied {
+			return nil
+		}
 	}
-	if _, _, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": "the assistant session ended"}); err != nil {
-		slog.WarnContext(ctx, "wardynd: could not stop an assistant run", slog.String("run_id", runID.String()), slog.Any("err", err))
+	return fmt.Errorf("stop assistant run %s: the run kept changing state", runID)
+}
+
+// stopUnusedAssistantRun stops sess's run unless a newer live session uses it. A read of the run's live session
+// that fails stops the run, unless failClosed is set: then it returns the error and stops nothing, for a caller
+// whose session may have been replaced and whose run may be the replacement's.
+func (s *Server) stopUnusedAssistantRun(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession, failClosed bool) error {
+	if sess.RunID == nil {
+		return nil
 	}
+	live, err := ss.LiveAssistantSessionForRun(ctx, *sess.RunID)
+	switch {
+	case err == nil && live.ID != sess.ID:
+		return nil
+	case err != nil && !errors.Is(err, store.ErrNotFound) && failClosed:
+		return fmt.Errorf("read the assistant run's live session: %w", err)
+	}
+	return s.stopAssistantRun(ctx, *sess.RunID)
 }
 
 // assistantTokens sums the run's counted model tokens: input and output.
@@ -191,27 +225,28 @@ func (s *Server) assistantEndAudit(ctx context.Context, ss store.AssistantSessio
 }
 
 // endAssistantSession ends sess once, writes assistant.session.end, and stops its run when stopRun is set and
-// no newer live session uses it. It reports whether this call ended it.
-func (s *Server) endAssistantSession(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession, reason string, stopRun bool) bool {
+// no newer live session uses it. It reports whether this call ended it, and the error of an end or a stop that
+// failed.
+func (s *Server) endAssistantSession(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession, reason string, stopRun bool) (bool, error) {
 	ctx = context.WithoutCancel(ctx)
 	ended, err := ss.EndAssistantSession(ctx, sess.ID, reason)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: could not end an assistant session", slog.String("session", sess.ID.String()), slog.Any("err", err))
-		return false
+		return false, err
 	}
 	if !ended {
-		return false
+		return false, nil
 	}
 	s.assistantChanged(sess.ID, sess.RunID)
 	s.assistantEndAudit(ctx, ss, sess, reason)
-	if !stopRun || sess.RunID == nil {
-		return true
+	if !stopRun {
+		return true, nil
 	}
-	if live, err := ss.LiveAssistantSessionForRun(ctx, *sess.RunID); err == nil && live.ID != sess.ID {
-		return true
+	if err := s.stopUnusedAssistantRun(ctx, ss, sess, false); err != nil {
+		slog.WarnContext(ctx, "wardynd: could not stop an assistant run", slog.String("session", sess.ID.String()), slog.Any("err", err))
+		return true, err
 	}
-	s.stopAssistantRun(ctx, *sess.RunID)
-	return true
+	return true, nil
 }
 
 // assistantRunsOf is the distinct run ids of the sessions, for a caller that stops them.

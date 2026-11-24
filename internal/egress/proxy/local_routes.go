@@ -44,6 +44,8 @@ const (
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run. Same brokered shape as the scan result upload.
 	routeSSOToken = "/wardyn/v1/sso-token/"
+	// routeAssistant carries a governed assistant run's turns, events and tool calls.
+	routeAssistant = "/wardyn/v1/assistant/"
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
 	ruleSourceMint        = "brokered:mint"
@@ -66,6 +68,8 @@ const (
 	// Appended, not slotted beside its siblings: docs/AUDIT-ACTIONS.md cites
 	// each by LINE, so inserting above rots citations.
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
+	// ruleSourceAssistant: a brokered call of a governed assistant run.
+	ruleSourceAssistant = "brokered:assistant"
 
 	// maxBrokeredBody caps mint/approvals forward bodies. LLM bodies are
 	// unbounded (streamed) — Anthropic is the size authority there.
@@ -101,6 +105,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
 		p.handleBrokerSSOToken(w, r)
+	case strings.HasPrefix(path, routeAssistant):
+		p.handleBrokerAssistant(w, r)
 	case strings.HasPrefix(path, routeVMNetPrefix):
 		p.handleVMNetReport(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):

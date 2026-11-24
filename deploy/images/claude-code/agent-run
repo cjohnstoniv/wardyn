@@ -728,6 +728,8 @@ maybe_exec_task_mode "$task"
 ANTHROPIC_MODE=""
 apply_anthropic_mode
 echo "agent-run: anthropic auth mode = $ANTHROPIC_MODE" >&2
+# The governed assistant run: the relay replaces this script, after the auth mode above has set its env.
+if [[ "${WARDYN_ASSISTANT:-}" == "1" ]]; then exec wardyn-assist relay; fi
 
 # Tool-approval HOLD mode (tool_approvals=hold): instead of skipping claude's
 # per-tool approvals, every gated tool call is parked on a Wardyn approval an

@@ -531,14 +531,26 @@ func (s *Server) assistantPendingEdits(ctx context.Context, ss store.AssistantSe
 }
 
 // handleDeleteAssistantSession is DELETE .../{id}: it ends the session and stops its run unless a newer live
-// session uses it.
+// session uses it. An end or a stop that fails answers 500, and a DELETE of an ended session tries the stop again.
 func (s *Server) handleDeleteAssistantSession(w http.ResponseWriter, r *http.Request) {
 	ss, sess, ok := s.assistantOwned(w, r)
 	if !ok {
 		return
 	}
+	var err error
+	ended := false
 	if sess.Live() {
-		s.endAssistantSession(r.Context(), ss, sess, types.AssistantEndPerson, true)
+		ended, err = s.endAssistantSession(r.Context(), ss, sess, types.AssistantEndPerson, true)
+	}
+	if err == nil && !ended {
+		// A repeated DELETE, or one another path ended the session before, finishes the stop: the session ended,
+		// its run may not have. The session may have been replaced, so a failed read of the run's live session
+		// answers 500 rather than stop a run the replacement uses.
+		err = s.stopUnusedAssistantRun(context.WithoutCancel(r.Context()), ss, sess, true)
+	}
+	if err != nil {
+		writeServerError(w, r, "end assistant session", err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -87,7 +87,12 @@ func (s *Server) assistantTurnsStep(w http.ResponseWriter, r *http.Request, ss s
 	wake, unwatch := s.assistantLive.watch(run)
 	defer unwatch()
 	cur, err := ss.GetAssistantSession(r.Context(), sess.ID, sess.Principal)
-	if err == nil && !cur.Live() {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeServerError(w, r, "read assistant session", err)
+		return true
+	}
+	// Not found is a session erasure renamed while this poll held it: it has ended.
+	if err != nil || !cur.Live() {
 		next, nerr := ss.LiveAssistantSessionForRun(r.Context(), run)
 		if nerr == nil && next.ID != sess.ID {
 			*sess = next
@@ -97,7 +102,7 @@ func (s *Server) assistantTurnsStep(w http.ResponseWriter, r *http.Request, ss s
 			writeServerError(w, r, "read assistant session", nerr)
 			return true
 		}
-		writeJSON(w, http.StatusOK, types.AssistantTurn{Kind: types.AssistantTurnEnd, SessionID: cur.ID})
+		writeJSON(w, http.StatusOK, types.AssistantTurn{Kind: types.AssistantTurnEnd, SessionID: sess.ID})
 		return true
 	}
 	ev, first, err := ss.NextAssistantTurn(r.Context(), sess.ID, after)

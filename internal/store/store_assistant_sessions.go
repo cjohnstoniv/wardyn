@@ -94,7 +94,7 @@ type AssistantSessionStore interface {
 	FindAssistantEvents(ctx context.Context, session uuid.UUID, f AssistantEventFilter) ([]types.AssistantEvent, error)
 	// NextAssistantTurn is the first event above after that the relay must act on: a person's message or a
 	// reset. first reports that no earlier turn of the session exists, so the turn carries the records.
-	// ErrNotFound when there is none.
+	// ErrNotFound when there is none, or the session has ended.
 	NextAssistantTurn(ctx context.Context, session uuid.UUID, after int64) (ev types.AssistantEvent, first bool, err error)
 	// AssistantTurnCount is how many turn_end events the session holds.
 	AssistantTurnCount(ctx context.Context, session uuid.UUID) (int, error)
@@ -398,6 +398,7 @@ func (s PG) NextAssistantTurn(ctx context.Context, session uuid.UUID, after int6
 				AND (p.kind = 'user_message' OR (p.kind = 'state' AND p.payload->>'turn' = 'reset')))
 		FROM assistant_session_events e
 		WHERE e.session_id = $1 AND e.seq > $2 AND (e.kind = 'user_message' OR (e.kind = 'state' AND e.payload->>'turn' = 'reset'))
+			AND EXISTS (SELECT 1 FROM assistant_sessions s WHERE s.id = e.session_id AND s.state <> 'ended')
 		ORDER BY e.seq LIMIT 1`, session, after).Scan(&e.SessionID, &e.Seq, &e.Kind, &e.Payload, &e.CreatedAt, &first)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, false, ErrNotFound
