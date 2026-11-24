@@ -11,10 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
-## [0.11.0-rc.2] — 2026-11-24
+## [0.11.0-rc.1] — 2026-11-24
 
 ### Added
 
+- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+- The organisation's assistant settings. `GET` and `PUT /assistant/settings` (super admin) hold which purposes (Compose, Review) are on, which model providers may serve each and with which models, whether run history may be sent as host counts, and the record kinds that are never sent. A change that only narrows applies at once; one that widens is held for a second super admin whatever `WARDYN_GOVERNANCE_SECOND_HUMAN` says, and is refused in local mode. `GET /me/assistant?purpose=` tells any signed-in person whether they can use it, and why not. Each applied change writes an `assistant.settings.write` audit row.
 - A held governance change can need more than one approver. `WARDYN_GOVERNANCE_MIN_APPROVALS` (flag `-governance-min-approvals`, 0 to 9) sets the fewest approvals a change of a kind with more than one decider needs; the default `0` leaves every change to one approver. An approval counts only while its person is still eligible, and a person can take their own back with `DELETE /governance/changes/{id}/approval`.
 - Assistant sessions. A signed-in person can see the exact records a first message will carry (`POST /assistant/preview`), then start a session that composes a run, unit or template or reviews a held change (`POST /assistant/sessions`, with messages, edits, an event stream, and `DELETE` to end it). A session is its person's own: another person's answers 404. It starts only while the assistant is on in the assistant settings, its run counts against the person's `max_concurrent_runs`, and `assistant.session.start`, `assistant.session.end` and `assistant.suggestion.create` are audited.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
@@ -40,30 +42,20 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
+- With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
+- `PUT /site-config` carries the stored `assistant` block forward and answers `400 assistant_settings_via_own_route` when the document names a different one.
 - wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
+
+### Security
+
+- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and CVE-2026-97045 and can refuse to admit.
 
 ### Before you upgrade
 
 - The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
 - A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
 - A migration adds two columns to attach tickets; older replicas ignore them. Turn on `WARDYN_SSH_TICKETS` only after every replica runs this release. An older replica does not read a ticket's purpose: while one is serving, a ticket minted for a port forward also opens a terminal there (its minter may open that terminal anyway). Turn on `WARDYN_ATTACH_FORWARD` only after every replica runs this release, or turn it off for the upgrade if it is already on.
-
-## [0.11.0-rc.1] — 2026-11-24
-
-### Added
-
-- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
-- The organisation's assistant settings. `GET` and `PUT /assistant/settings` (super admin) hold which purposes (Compose, Review) are on, which model providers may serve each and with which models, whether run history may be sent as host counts, and the record kinds that are never sent. A change that only narrows applies at once; one that widens is held for a second super admin whatever `WARDYN_GOVERNANCE_SECOND_HUMAN` says, and is refused in local mode. `GET /me/assistant?purpose=` tells any signed-in person whether they can use it, and why not. Each applied change writes an `assistant.settings.write` audit row.
-
-### Changed
-
-- With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
-- `PUT /site-config` carries the stored `assistant` block forward and answers `400 assistant_settings_via_own_route` when the document names a different one.
-
-### Security
-
-- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
-  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and CVE-2026-97045 and can refuse to admit.
 
 ## [0.10.4] — 2026-11-24
 
