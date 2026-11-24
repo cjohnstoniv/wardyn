@@ -27,7 +27,8 @@ import (
 // superseded or abandoned start, or no report by the wait's end) fails the run with its sandbox stopped.
 // What still runs at create is the sandbox's own idle main process (runner.AgentIdleScript, or agent-run
 // --idle's workspace prep for an interactive run). An interactive run's boot seed starts the agent from
-// that process, so with the hold on it is refused before the create.
+// that process, so with the hold on an interactive container run's task is held in the sandbox until the
+// release after the readback (run_held_seed.go), and an interactive VM run with a task is refused.
 
 // startReadbackPoll is how often a held dispatch reads its start, and startReadbackWait bounds the hold
 // past the start's own deadline. Variables so a test can shorten them.
@@ -39,13 +40,20 @@ var (
 // envInteractiveSeed is the sandbox variable an interactive run's boot seed rides (applyDispatchModeEnv).
 const envInteractiveSeed = "WARDYN_INTERACTIVE_SEED"
 
-// startAfterReadbackSeedHint fails an interactive run whose task would start its agent as the sandbox boots.
-const startAfterReadbackSeedHint = "This deployment starts an agent only after the run's proxy confirms its policy (WARDYN_START_AFTER_READBACK=on), and an interactive run's task starts its agent as the sandbox boots, before that. Start the interactive run without a task, or ask an admin to turn the setting off"
+// startAfterReadbackSeedHint fails an interactive VM run whose task would start its agent as the machine boots.
+const startAfterReadbackSeedHint = "This deployment starts an agent only after the run's proxy confirms its policy (WARDYN_START_AFTER_READBACK=on), and an interactive VM run's task starts its agent as the machine boots, before that. Start the interactive run without a task, or ask an admin to turn the setting off"
 
-// startAfterReadbackRefused fails, before any create, a run whose sandbox would start its agent at boot
-// while the hold is on. true is a run already failed; done is called first, as on every create failure.
+// startAfterReadbackRefused runs before any create while the hold is on. A container run's boot seed is moved
+// to envHeldSeed, which a current agent image holds until releaseHeldSeed (run_held_seed.go). spec.Env is the map
+// dispatchRun's own spec holds, so the move is seen there too. A VM run whose sandbox would start its agent at boot
+// is failed: true is a run already failed, and done is called first, as on every create failure.
 func (s *Server) startAfterReadbackRefused(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec, done func()) bool {
 	if !s.cfg.StartAfterReadback || spec.Env[envInteractiveSeed] == "" {
+		return false
+	}
+	if !run.MachineKind.IsVM() {
+		spec.Env[envHeldSeed] = spec.Env[envInteractiveSeed]
+		delete(spec.Env, envInteractiveSeed)
 		return false
 	}
 	done()

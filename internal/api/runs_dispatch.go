@@ -726,6 +726,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// audit stream does not carry.
 	s.metrics.sandboxLaunched(s.cfg.Now().Sub(run.CreatedAt))
 
+	// A boot seed held for the readback starts now, after it (run_held_seed.go).
+	if !s.releaseHeldSeed(ctx, run, sb.Ref, spec) {
+		return
+	}
+
 	onPrepared := s.macWindowAtStartOrAfterPrep(ctx, run, p.Interactive, p.DesktopWindowAtStart) // the run is RUNNING
 
 	// INTERACTIVE vs task exec vs BYOI selftest — see startAgentOrIdle.
