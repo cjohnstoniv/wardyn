@@ -232,8 +232,9 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt); !ok {
 		return
 	}
-	// A sponsor reaches the terminal and the UI app only: no SSH or port forward ticket.
-	if (sshTicketPurpose(scope.purpose) || scope.purpose == ticketPurposeAttachForward) && asSponsor {
+	// A sponsor reaches the terminal and the UI app only: no SSH or port forward ticket (the only purposes a scope
+	// carries).
+	if scope.purpose != "" && asSponsor {
 		s.refuseRunOwnerOnly(w, r, run)
 		return
 	}
@@ -262,7 +263,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// spent on a terminal still meets the upgrade's own check. An SSH or attach-forward ticket skips them too: SSH
 	// has its own caps, and a forward holds one of the run's SSH channels.
 	at, principal := actorFromRequest(r)
-	if purpose != "ui" && scope.purpose == "" {
+	if scope.takesTerminalSlot(purpose) {
 		if refused := s.attachSlotsFull(run, principal); refused != "" {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 			return

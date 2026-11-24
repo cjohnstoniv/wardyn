@@ -39,6 +39,12 @@ type ticketScope struct {
 	ports   []int
 }
 
+// takesTerminalSlot reports whether a ticket minted for purpose holds one of the run's terminal slots: every one but a
+// UI ticket and the purposes a scope carries (SSH and attach-forward have their own caps).
+func (sc ticketScope) takesTerminalSlot(purpose string) bool {
+	return purpose != "ui" && sc.purpose == ""
+}
+
 // sshTicketPurpose reports whether p is one of the purposes GET /runs/{id}/ssh redeems.
 func sshTicketPurpose(p string) bool { _, ok := sshTicketKinds[p]; return ok }
 

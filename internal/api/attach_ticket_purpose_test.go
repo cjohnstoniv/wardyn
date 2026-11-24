@@ -162,36 +162,36 @@ func TestAttachTicketPurpose_Mint(t *testing.T) {
 		seventeen[i] = fmt.Sprint(3000 + i)
 	}
 	for _, row := range []purposeMintRow{
-		// Value rows 6-10, 12, 14, 15 and the mint's own refusals (M1-M6).
-		{name: "6 tickets off", query: "purpose=ssh-exec", configure: ticketsOff, status: 409, reason: reasonSSHTicketsOff},
-		{name: "7 ssh-exec", query: "purpose=ssh-exec", status: 200, purpose: ticketPurposeSSHExec},
-		{name: "7 ssh-editor", query: "purpose=ssh-editor", status: 200, purpose: ticketPurposeSSHEditor},
-		{name: "8 ssh-editor with sftp off", query: "purpose=ssh-editor", configure: sftpOff, status: 409, reason: reasonSSHTicketChannelOff},
+		// The SSH purposes and the mint's own refusals.
+		{name: "tickets off", query: "purpose=ssh-exec", configure: ticketsOff, status: 409, reason: reasonSSHTicketsOff},
+		{name: "ssh-exec", query: "purpose=ssh-exec", status: 200, purpose: ticketPurposeSSHExec},
+		{name: "ssh-editor", query: "purpose=ssh-editor", status: 200, purpose: ticketPurposeSSHEditor},
+		{name: "ssh-editor with sftp off", query: "purpose=ssh-editor", configure: sftpOff, status: 409, reason: reasonSSHTicketChannelOff},
 		{name: "ssh-forward with forward off", query: "purpose=ssh-forward&ports=3000", configure: forwardOff, status: 409, reason: reasonSSHTicketChannelOff},
-		{name: "9 ssh-forward without ports", query: "purpose=ssh-forward", status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "ssh-forward without ports", query: "purpose=ssh-forward", status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-forward with ports", query: "purpose=ssh-forward&ports=3000,5000", status: 200, purpose: ticketPurposeSSHForward, ports: []int{3000, 5000}},
 		{name: "ssh-forward with a repeated port", query: "purpose=ssh-forward&ports=3000,3000", status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-forward with port 0", query: "purpose=ssh-forward&ports=0", status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-forward with a signed port", query: "purpose=ssh-forward&ports=%2B80", status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-forward with 17 ports", query: "purpose=ssh-forward&ports=" + strings.Join(seventeen, ","), status: 400, reason: reasonAttachTicketPortsInvalid},
 		{name: "ssh-exec with ports", query: "purpose=ssh-exec&ports=22", status: 400, reason: reasonAttachTicketPortsInvalid},
-		{name: "10 ssh-bogus", query: "purpose=ssh-bogus", status: 400, reason: reasonAttachTicketPurposeInvalid},
+		{name: "ssh-bogus", query: "purpose=ssh-bogus", status: 400, reason: reasonAttachTicketPurposeInvalid},
 		{name: "gateway off", query: "purpose=ssh-exec", configure: gatewayOff, status: 409, reason: reasonSSHGatewayOff},
-		{name: "12 sponsor ssh-exec", cookie: sponsorCookie, run: serviceRun, query: "purpose=ssh-exec", status: 403, reason: runOwnerOnlyReason},
-		{name: "14 member on a foreign run", cookie: func(t *testing.T) *http.Cookie { return purposeCookie(t, "sub-other", oidc.RoleUser) },
+		{name: "sponsor ssh-exec", cookie: sponsorCookie, run: serviceRun, query: "purpose=ssh-exec", status: 403, reason: runOwnerOnlyReason},
+		{name: "member on a foreign run", cookie: func(t *testing.T) *http.Cookie { return purposeCookie(t, "sub-other", oidc.RoleUser) },
 			query: "purpose=ssh-exec", status: 404, reason: reasonRunNotFound},
-		{name: "14 admin on a person's run", cookie: func(t *testing.T) *http.Cookie { return purposeCookie(t, "sub-admin", oidc.RoleAdmin) },
+		{name: "admin on a person's run", cookie: func(t *testing.T) *http.Cookie { return purposeCookie(t, "sub-admin", oidc.RoleAdmin) },
 			query: "purpose=ssh-exec", status: 403, reason: runOwnerOnlyReason},
-		{name: "15 background run", run: backgroundRun, query: "purpose=ssh-exec", status: 409, reason: reasonRunBackgroundOnly},
-		// The forward purpose (value rows F1, F2, F10, F11).
-		{name: "F1 attach-forward", query: "purpose=attach-forward&ports=3000", forwardOn: true, status: 200, purpose: ticketPurposeAttachForward, ports: []int{3000}},
-		{name: "F2 attach-forward with the switch off", query: "purpose=attach-forward&ports=3000", status: 409, reason: reasonRunForwardOff},
+		{name: "background run", run: backgroundRun, query: "purpose=ssh-exec", status: 409, reason: reasonRunBackgroundOnly},
+		// The forward purpose.
+		{name: "attach-forward", query: "purpose=attach-forward&ports=3000", forwardOn: true, status: 200, purpose: ticketPurposeAttachForward, ports: []int{3000}},
+		{name: "attach-forward with the switch off", query: "purpose=attach-forward&ports=3000", status: 409, reason: reasonRunForwardOff},
 		{name: "attach-forward with forward left out", query: "purpose=attach-forward&ports=3000", configure: forwardOff, forwardOn: true, status: 409, reason: reasonRunForwardOff},
-		{name: "F10 attach-forward without ports", query: "purpose=attach-forward", forwardOn: true, status: 400, reason: reasonAttachTicketPortsInvalid},
-		{name: "F10 ports on ui", query: "purpose=ui&ports=3000", status: 400, reason: reasonAttachTicketPortsInvalid},
-		{name: "F10 ports on a terminal ticket", query: "ports=3000", status: 400, reason: reasonAttachTicketPortsInvalid},
-		{name: "F11 sponsor attach-forward", cookie: sponsorCookie, run: serviceRun, query: "purpose=attach-forward&ports=3000", forwardOn: true, status: 403, reason: runOwnerOnlyReason},
-		// The unchanged paths (rows 11 and 14 cover the refusals): a terminal, a UI and any other purpose mint as before.
+		{name: "attach-forward without ports", query: "purpose=attach-forward", forwardOn: true, status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "ports on ui", query: "purpose=ui&ports=3000", status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "ports on a terminal ticket", query: "ports=3000", status: 400, reason: reasonAttachTicketPortsInvalid},
+		{name: "sponsor attach-forward", cookie: sponsorCookie, run: serviceRun, query: "purpose=attach-forward&ports=3000", forwardOn: true, status: 403, reason: runOwnerOnlyReason},
+		// The unchanged paths: a terminal, a UI and any other purpose mint as before.
 		{name: "terminal ticket", query: "", status: 200},
 		{name: "ui ticket", query: "purpose=ui", status: 200},
 		{name: "another purpose is a terminal ticket", query: "purpose=notebook", status: 200},
@@ -235,7 +235,7 @@ func TestAttachTicketPurpose_Mint(t *testing.T) {
 	}
 }
 
-// TestAttachTicketPurpose_UnsupportedCallers: value rows 13 and F9 and M3's device arm. A person through a portal
+// TestAttachTicketPurpose_UnsupportedCallers: a person through a portal
 // gets no SSH or forward ticket, and a device (or any actor that is not a person) no SSH ticket.
 func TestAttachTicketPurpose_UnsupportedCallers(t *testing.T) {
 	t.Setenv(envAttachForward, "on")
@@ -250,8 +250,8 @@ func TestAttachTicketPurpose_UnsupportedCallers(t *testing.T) {
 		status      int
 		reason      string
 	}{
-		{"13 portal ssh-exec", "purpose=ssh-exec", func(c context.Context) context.Context { return withTicketActor(c, portal) }, 403, reasonSSHTicketUnsupportedCaller},
-		{"F9 portal attach-forward", "purpose=attach-forward&ports=3000", func(c context.Context) context.Context { return withTicketActor(c, portal) }, 403, reasonAttachTicketNotYourRun},
+		{"portal ssh-exec", "purpose=ssh-exec", func(c context.Context) context.Context { return withTicketActor(c, portal) }, 403, reasonSSHTicketUnsupportedCaller},
+		{"portal attach-forward", "purpose=attach-forward&ports=3000", func(c context.Context) context.Context { return withTicketActor(c, portal) }, 403, reasonAttachTicketNotYourRun},
 		{"device ssh-exec", "purpose=ssh-exec", func(c context.Context) context.Context {
 			return context.WithValue(c, deviceCtxKey{}, types.Device{ID: uuid.New()})
 		}, 403, reasonSSHTicketUnsupportedCaller},
@@ -268,7 +268,7 @@ func TestAttachTicketPurpose_UnsupportedCallers(t *testing.T) {
 	}
 }
 
-// TestAttachTicketPurpose_HelperMints: value rows 11 and F8. A helper under a live grant gets no SSH or forward
+// TestAttachTicketPurpose_HelperMints: a helper under a live grant gets no SSH or forward
 // ticket, with every switch on: the support arm knows no such door.
 func TestAttachTicketPurpose_HelperMints(t *testing.T) {
 	for _, query := range []string{"?purpose=ssh-exec", "?purpose=ssh-editor", "?purpose=attach-forward&ports=3000"} {
@@ -288,7 +288,7 @@ func TestAttachTicketPurpose_HelperMints(t *testing.T) {
 	}
 }
 
-// TestAttachTicketPurpose_SSHKeyCapability: value row K1. With tickets on, an SSH mint asks ssh_key as a key's
+// TestAttachTicketPurpose_SSHKeyCapability: with tickets on, an SSH mint asks ssh_key as a key's
 // registration does, and a person a deny covers gets the key door's 403 and row; an attach-forward mint is not asked;
 // with tickets off the switch answers first.
 func TestAttachTicketPurpose_SSHKeyCapability(t *testing.T) {
@@ -336,7 +336,7 @@ func TestAttachTicketPurpose_SSHKeyCapability(t *testing.T) {
 	})
 }
 
-// TestAttachTicketPurpose_SkipsTerminalCap: value row F3. With every terminal slot held, an attach-forward and an
+// TestAttachTicketPurpose_SkipsTerminalCap: with every terminal slot held, an attach-forward and an
 // SSH ticket still mint (neither holds a terminal slot), and a terminal ticket is refused as before.
 func TestAttachTicketPurpose_SkipsTerminalCap(t *testing.T) {
 	t.Setenv(envAttachForward, "on")
@@ -375,7 +375,7 @@ func (pr *purposeRig) get(t *testing.T, path string) *httptest.ResponseRecorder 
 	return w
 }
 
-// TestAttachTicketPurpose_WrongDoorBurns: value rows 19, F4 and F5. A ticket minted for one door, spent at another,
+// TestAttachTicketPurpose_WrongDoorBurns: a ticket minted for one door, spent at another,
 // gets the bad-ticket answer byte for byte with the bad-ticket row, and is burned. The server has no runner, so the
 // terminal's own handler would answer 503 attach_no_runner: the 403 is the route's redemption, before the handler.
 func TestAttachTicketPurpose_WrongDoorBurns(t *testing.T) {
@@ -400,10 +400,10 @@ func TestAttachTicketPurpose_WrongDoorBurns(t *testing.T) {
 		name, purpose, door string
 		ports               []int
 	}{
-		{"19 ssh-exec at the terminal", ticketPurposeSSHExec, "/attach?ticket=", nil},
-		{"19 ssh-forward at the forward door", ticketPurposeSSHForward, "/attach/forward?port=3000&ticket=", []int{3000}},
-		{"19 ssh-editor at the terminal", ticketPurposeSSHEditor, "/attach?ticket=", nil},
-		{"F4 attach-forward at the terminal", ticketPurposeAttachForward, "/attach?ticket=", []int{3000}},
+		{"ssh-exec at the terminal", ticketPurposeSSHExec, "/attach?ticket=", nil},
+		{"ssh-forward at the forward door", ticketPurposeSSHForward, "/attach/forward?port=3000&ticket=", []int{3000}},
+		{"ssh-editor at the terminal", ticketPurposeSSHEditor, "/attach?ticket=", nil},
+		{"attach-forward at the terminal", ticketPurposeAttachForward, "/attach?ticket=", []int{3000}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rows := invalidRows()
@@ -420,7 +420,7 @@ func TestAttachTicketPurpose_WrongDoorBurns(t *testing.T) {
 			}
 		})
 	}
-	t.Run("19 and F5 the UI gateway's redemption", func(t *testing.T) {
+	t.Run("the UI gateway's redemption", func(t *testing.T) {
 		for _, p := range []string{ticketPurposeSSHExec, ticketPurposeAttachForward} {
 			tok := pr.ticketWith(t, p, []int{3000})
 			if _, v, err := pr.srv.redeemAttachTicket(context.Background(), tok, pr.run.ID); err != nil || v != verdictInvalid {
