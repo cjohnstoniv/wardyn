@@ -45,6 +45,7 @@ function outcomeWord(outcome: string): string {
   if (outcome === "refused") return RUN_SCHEDULE.OUTCOME_REFUSED;
   if (outcome.startsWith("skipped:")) return RUN_SCHEDULE.OUTCOME_SKIPPED;
   if (outcome.startsWith("cancelled:")) return RUN_SCHEDULE.OUTCOME_CANCELLED;
+  if (outcome.startsWith("cancel_pending:")) return RUN_SCHEDULE.OUTCOME_CANCEL_PENDING;
   return outcome;
 }
 

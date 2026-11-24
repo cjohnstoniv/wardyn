@@ -117,6 +117,13 @@ describe("SchedulesScreen", () => {
     expect(screen.getByText("example_reason")).toBeInTheDocument();
   });
 
+  it("says a start whose cancel is still being tried as Cancel pending, never its raw token", async () => {
+    api.list.mockResolvedValue([{ ...active, last: { due_at: "2026-11-27T09:00:00Z", run_id: "r-1", outcome: "cancel_pending:schedule_paused" } }]);
+    show();
+    expect(await screen.findByText(new RegExp(`^${RUN_SCHEDULE.OUTCOME_CANCEL_PENDING}`))).toBeInTheDocument();
+    expect(screen.queryByText(/cancel_pending/)).not.toBeInTheDocument();
+  });
+
   it("admin view: the owner column, no Resume, the admin sentences and per-row names with the owner", async () => {
     mode.view = "admin";
     api.list.mockResolvedValue([{ ...active, owner: "sub-alex" }, { ...paused, owner: "sub-sam" }]);
