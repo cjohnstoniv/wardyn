@@ -920,8 +920,8 @@ func appInstallSteps(argv []string) []installStep {
 	}
 }
 
-// clearOldSteps are the rm -rf argvs, one per top-level entry of the unpacked stage, that remove its
-// counterpart in /Applications before the copy.
+// clearOldSteps are the rm -rf argvs, one per top-level app bundle (ItemAppPattern) of the unpacked stage, that
+// remove its counterpart in /Applications before the copy.
 func (t *Tools) clearOldSteps(stage string) ([][]string, error) {
 	list := t.listDir
 	if list == nil {
@@ -940,7 +940,9 @@ func (t *Tools) clearOldSteps(stage string) ([][]string, error) {
 	}
 	argvs := make([][]string, 0, len(names))
 	for _, n := range names {
-		argvs = append(argvs, []string{"/bin/rm", "-rf", MacApplications + "/" + n})
+		if ItemAppPattern.MatchString(n) { // only an app bundle: a top-level Utilities or other folder is never removed
+			argvs = append(argvs, []string{"/bin/rm", "-rf", MacApplications + "/" + n})
+		}
 	}
 	return argvs, nil
 }

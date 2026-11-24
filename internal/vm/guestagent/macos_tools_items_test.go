@@ -83,7 +83,6 @@ func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
 			{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage},
 			{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage},
 			{"/bin/rm", "-rf", MacApplications + "/Tool.app"},
-			{"/bin/rm", "-rf", MacApplications + "/Helper.pkg"},
 			{"/usr/bin/ditto", stage, MacApplications},
 		}},
 		{"dmg", []string{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Tool.app"}, [][]string{
@@ -104,7 +103,7 @@ func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
 				if dir != stage {
 					t.Errorf("listed %q, want the stage %q", dir, stage)
 				}
-				return []string{"Tool.app", "Helper.pkg"}, nil
+				return []string{"Tool.app", "Helper.pkg", "Utilities"}, nil
 			}
 			if w := rig.exec(c.argv...); w.Code != 200 || !strings.Contains(w.Body.String(), `"exit_code":0`) {
 				t.Fatalf("%q = %d %s, want 200 exit 0", c.argv, w.Code, w.Body)
