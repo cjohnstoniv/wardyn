@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,37 @@ func (f *fillPG) accepted(w *httptest.ResponseRecorder) uuid.UUID {
 	return uuid.MustParse(got.RunID)
 }
 
+// fillIntegration is a corporate package feed that delivers its token by proxy header.
+func fillIntegration() types.Integration {
+	return types.Integration{ID: "corp-feed", Name: "Corp feed", Kind: "artifactory", Egress: []string{"feed.corp.example"},
+		Secrets: []types.IntegrationSecret{{Role: types.IntegrationCredentialToken, SecretName: "feed-token",
+			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}}}
+}
+
+// wantEgress asserts the sandbox the fill started was given exactly github.com, *.githubusercontent.com and the
+// requirement hosts in extra, nothing else.
+func (f *fillPG) wantEgress(extra ...string) {
+	f.t.Helper()
+	var got []string
+	waitFor(f.t, "the fill's sandbox", func() bool {
+		f.rn.mu.Lock()
+		defer f.rn.mu.Unlock()
+		got = slices.Clone(f.rn.lastSpec.ProxyConfig.Policy.AllowedDomains)
+		return len(got) > 0
+	})
+	want := append([]string{"github.com", "*.githubusercontent.com"}, extra...)
+	for _, h := range got {
+		if !slices.Contains(want, h) {
+			f.t.Errorf("egress %v holds %q, outside the exact set %v", got, h, want)
+		}
+	}
+	for _, h := range append([]string{"github.com"}, extra...) {
+		if !slices.Contains(got, h) {
+			f.t.Errorf("egress %v lacks %q, the fill needs it", got, h)
+		}
+	}
+}
+
 // patGrants is the run's grants, each with its git_pat scope decoded.
 func (f *fillPG) grants(run uuid.UUID) []types.CredentialGrant {
 	f.t.Helper()
@@ -238,6 +270,7 @@ func TestDriveSeed_RunCarriesOnlyTheOwnToken_PG(t *testing.T) {
 			t.Fatalf("grants = %+v, want exactly one", grants)
 		}
 		wantOwnTokenGrant(t, grants[0])
+		f.wantEgress()
 	})
 	t.Run("a workspace with a required egress row", func(t *testing.T) {
 		f := newFillPG(t)
@@ -249,6 +282,47 @@ func TestDriveSeed_RunCarriesOnlyTheOwnToken_PG(t *testing.T) {
 			t.Fatalf("grants = %+v, want exactly the git_pat", grants)
 		}
 		wantOwnTokenGrant(t, grants[0])
+		f.wantEgress("registry.example")
+	})
+	t.Run("a workspace with a required integration", func(t *testing.T) {
+		f := newFillPG(t)
+		if _, err := f.pg.PutSiteConfig(context.Background(), types.SiteConfig{Integrations: []types.Integration{fillIntegration()},
+			WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{ghOwnTestRow()}}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.sec.Put(context.Background(), "feed-token", []byte("operator-feed-token")); err != nil {
+			t.Fatal(err)
+		}
+		ws := f.workspace(&types.WorkspaceBaseImage{Kind: "custom", Image: "ubuntu:24.04"},
+			map[string]types.WorkspaceRequirement{"integration:corp-feed": {Level: "required", Provenance: "operator_set"}})
+		// The post-create check passes: the run is accepted, not ended, and holds the own token plus the feed's api_key.
+		run := f.accepted(f.fillAs(fillPGAlice, f.drive.ID, f.body(ws.ID, fillPGRepo, "")))
+		if state := f.count(`SELECT count(*) FROM agent_runs WHERE state = 'KILLED'`); state != 0 {
+			t.Errorf("killed runs = %d, want the post-create check to pass", state)
+		}
+		var pats, keys []types.CredentialGrant
+		for _, g := range f.grants(run) {
+			switch g.Spec.Kind {
+			case types.GrantGitPAT:
+				pats = append(pats, g)
+			case types.GrantAPIKey:
+				keys = append(keys, g)
+			default:
+				t.Errorf("unexpected grant kind %s", g.Spec.Kind)
+			}
+		}
+		if len(pats) != 1 || len(keys) != 1 {
+			t.Fatalf("git_pat grants %d, api_key grants %d; want exactly [git_pat, the feed's api_key]", len(pats), len(keys))
+		}
+		wantOwnTokenGrant(t, pats[0])
+		var sc struct {
+			Host       string `json:"host"`
+			SecretName string `json:"secret_name"`
+		}
+		if err := json.Unmarshal(keys[0].Spec.Scope, &sc); err != nil || sc.Host != "feed.corp.example" || sc.SecretName != "feed-token" {
+			t.Errorf("api_key scope = %s (%v), want the feed's host and secret", keys[0].Spec.Scope, err)
+		}
+		f.wantEgress("feed.corp.example")
 	})
 	t.Run("two pairings where only the second covers the repository", func(t *testing.T) {
 		f := newFillPG(t)
@@ -398,9 +472,10 @@ func TestDriveSeed_NoBaseImageRefuses_PG(t *testing.T) {
 	f.noRunYet()
 }
 
-// TestDriveSeed_QueuedCreateIsRefused_PG: a fill whose create would wait in a capped pool's queue is refused 409
-// before any run row or queue row, and writes one refused row.
-func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
+// newFillQueuePG is the fill fixture over the pool test environment: the person has a drive, a workspace, an own
+// token and a ceiling that pairs the shared github.com secret.
+func newFillQueuePG(t *testing.T) (*queueEnv, *fillPG) {
+	t.Helper()
 	e := newQueueEnv(t)
 	ctx := context.Background()
 	id, err := age.GenerateX25519Identity()
@@ -418,7 +493,8 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 	srv.cfg.DefaultPolicy = types.RunPolicySpec{MinConfinementClass: types.CC1, AllowedDomains: []string{"github.com"},
 		EligibleGrants: []types.GrantSpec{fillCeilingPairing(fillPGSharedS)}}
 	srv.router = srv.routes()
-	if _, err := e.pg.PutSiteConfig(ctx, adoSite(ghOwnTestRow())); err != nil {
+	if _, err := e.pg.PutSiteConfig(ctx, types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true},
+		WorkspaceProviders: &types.WorkspaceProviders{Git: []types.GitProvider{ghOwnTestRow()}}}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(types.GitHubOwnToken{Token: "github_pat_p", AccountID: 7, Login: "p", ExpiresOn: time.Now().AddDate(0, 0, 5), StoredAt: time.Now()})
@@ -430,16 +506,46 @@ func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
 		OwnerSubject: e.personP, CreatedBy: e.personP}, 3); err != nil {
 		t.Fatal(err)
 	}
-	pool := e.cappedPool("Busy", 1)
-	e.orgDefaults(`{"pool_id":"` + pool.ID.String() + `"}`)
-	w := e.call(e.person, http.MethodPost, "/api/v1/me/drives/"+f.drive.ID.String()+"/seed", f.body(f.ws.ID, fillPGRepo, ""))
+	return e, f
+}
+
+// wantNoQueuedFill asserts a refused fill left no run row and no queue row, and answered 409 with the reason and
+// sentence.
+func (f *fillPG) wantNoQueuedFill(w *httptest.ResponseRecorder, sentence string) {
+	f.t.Helper()
 	f.wantReason(w, http.StatusConflict, reasonDriveSeedNoCapacity)
-	if !strings.Contains(w.Body.String(), "Busy starts every run from its queue") {
-		t.Errorf("body = %s, want the capped pool sentence", w.Body.String())
+	if !strings.Contains(w.Body.String(), sentence) {
+		f.t.Errorf("body = %s, want the sentence %q", w.Body.String(), sentence)
 	}
 	if runs, queued := f.count(`SELECT count(*) FROM agent_runs`), f.count(`SELECT count(*) FROM run_queue`); runs != 0 || queued != 0 {
-		t.Errorf("a queued fill left %d runs and %d queue rows", runs, queued)
+		f.t.Errorf("a queued fill left %d runs and %d queue rows", runs, queued)
 	}
+	if rows := f.rows("drive.seed"); len(rows) != 1 || rows[0].Outcome != "failure" {
+		f.t.Errorf("drive.seed rows = %+v, want one refused", rows)
+	}
+}
+
+// TestDriveSeed_QueuedCreateIsRefused_PG: a fill whose create would wait in a pool's queue is refused 409 before any
+// run row or queue row, and writes one refused row: in a capped pool the sentence names the pool, and in an uncapped
+// pool whose every runner is full it says every runner is busy.
+func TestDriveSeed_QueuedCreateIsRefused_PG(t *testing.T) {
+	t.Run("a capped pool", func(t *testing.T) {
+		e, f := newFillQueuePG(t)
+		pool := e.cappedPool("Busy", 1)
+		e.orgDefaults(`{"pool_id":"` + pool.ID.String() + `"}`)
+		w := e.call(e.person, http.MethodPost, "/api/v1/me/drives/"+f.drive.ID.String()+"/seed", f.body(f.ws.ID, fillPGRepo, ""))
+		f.wantNoQueuedFill(w, driveFillCappedPoolMsg("Busy", "Notes"))
+	})
+	t.Run("every runner of an uncapped pool is busy", func(t *testing.T) {
+		e, f := newFillQueuePG(t)
+		pool := e.createPool("Roomy", types.RunnerPoolOrganization)
+		e.addExecutors(pool.ID, "alpha")
+		pool = e.reread(pool)
+		occupyRemote(e.placementEnv, pool, "alpha")
+		e.orgDefaults(`{"pool_id":"` + pool.ID.String() + `"}`)
+		w := e.call(e.person, http.MethodPost, "/api/v1/me/drives/"+f.drive.ID.String()+"/seed", f.body(f.ws.ID, fillPGRepo, ""))
+		f.wantNoQueuedFill(w, driveFillRunnersBusyMsg("Notes"))
+	})
 }
 
 // TestDriveSeed_PostCreateCheckEndsRun_PG: a created run whose grants are not exactly the own-token git_pat is ended
