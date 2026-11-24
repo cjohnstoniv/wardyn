@@ -11,6 +11,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- An opaque CONNECT tunnel now copies socket to socket once the proxy's checks of its first bytes are done, so the kernel moves the bytes: about twice the throughput through one tunnel on loopback. The checks, the run's activity mark and how a failed tunnel is recorded are unchanged. (#4070)
+- Inspected LLM request bodies are scanned side by side while their sizes, plus 1 MiB each, fit within the largest inspected body (32 MiB), so four 1 MiB bodies sent at once take about as long as one. A push is still inspected alone. (#4070)
+- A push held for review that is over 1 MiB no longer keeps its bytes, or its share of the run's inspection memory, while it waits. Once an admin approves it, git prints that the same commits must be pushed again, and that push goes through without a second question. A held push of 1 MiB or less is still forwarded the moment it is approved. (#4070)
+
 ### Fixed
 
 - An upload through an inspected host is no longer cut after five minutes in total: the read time now counts from the last bytes received, so only an upload that stops sending is cut. (#4052)

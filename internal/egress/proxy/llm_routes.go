@@ -654,11 +654,11 @@ func (p *Proxy) scanBufferedBodyWith(w http.ResponseWriter, r *http.Request, hos
 		return io.MultiReader(bytes.NewReader(buffered), unread),
 			p.skipSummary("skip", "body_oversize", channel), release, false
 	}
-	// The scan slot (maxConcurrentScans) bounds extraction's live heap against
-	// the sidecar's cgroup cap. Waited through the request ctx AND a wall-clock
-	// bound (scanQueueWait); fails CLOSED on either, since an uninspectable
-	// request must not be forwarded.
-	free, err := p.scan.takeSlot(r.Context())
+	// The scan budget (scanOverhead), charged by the body's size, bounds
+	// extraction's live heap against the sidecar's cgroup cap. Waited through
+	// the request ctx AND a wall-clock bound (scanQueueWait); fails CLOSED on
+	// either, since an uninspectable request must not be forwarded.
+	free, err := p.scan.takeSlot(r.Context(), int64(len(buffered)))
 	if err != nil {
 		release()
 		emit(egress.Deny, ruleSourceLLM, nil)

@@ -3705,7 +3705,7 @@ Claude sign-in's token, each the person's own on their model provider.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy memory vs. the prior streaming path.
   - It is bounded per-request AND in aggregate.
     - The extractor's live-heap amplification (~5.3x, and independent of which detectors are on) means two concurrent in-cap bodies would exceed the proxy sidecar's 256 MiB cgroup cap.
-    - So concurrent extraction is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
+    - So scans run side by side only while their bodies, plus 1 MiB each, fit within one largest body (`scanOverhead`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)), and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
     - The buffered bytes are charged to a retained-bytes budget (`maxRetainedScanBytes`) from before the read until the request is done with them.
   - The slot and the budget belong to one engine (`scanBudget`): the sidecar's single proxy, or one run's `via_org` engine inside wardynd. One run's inspections never wait on another run's.
   - A body is read before the slot is taken, so a body that arrives slowly holds only the bytes it has sent, never the slot.
@@ -3985,7 +3985,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
     - Four compressed 31 MiB blobs are a 34 KB request.
     - And the proxy sidecar has a hard 256 MiB cap.
   - Inspection takes the same process-wide slot and retained-bytes budget as LLM request scanning, and a push that cannot get them in time is refused, never forwarded unread.
-  - The slot is one wide (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a time.
+  - A push takes the whole slot (`internal/egress/proxy`'s `inspectPush`), so it is inspected alone.
   - One inspection is bounded beyond its body at about 296 MiB, as `internal/gitpack`'s package comment breaks down:
     - `maxInflatedBytes` (128 MiB) of inflated objects,
     - per-object bookkeeping held under 160 bytes an object by `maxObjects` (200,000; about 30 MiB),
@@ -4035,11 +4035,11 @@ The residuals particular to holding:
   - A non-interactive run (`proxy.Config.Unattended`, stamped at dispatch from the run's own flag) has nobody to ask.
     - So a review match is refused with no approval raised, and the control plane refuses such a raise too (`admitPushContentRaise`).
   - The flag is control-plane-authored; the sandbox cannot set it.
-- **A hold costs the sidecar a connection and its buffer.**
-  - The buffer stays charged to the process-wide retained-bytes budget for the whole hold (at most 600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past that a push is refused, never forwarded.
+- **A hold costs the sidecar a connection, and its buffer only when small.**
+  - A push of at most 1 MiB (`maxHeldPushBytes`) stays charged to the retained-bytes budget for the whole hold (at most 600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past that a push is refused, never forwarded.
+  - A larger push gives its buffer back once the hold starts, so it cannot crowd out LLM inspection.
+    - Approved, it is refused with a reason git prints: push the same commits again, which the approval lets through.
   - The hold is taken after the inspection slot is given back, so it does not hold the slot.
-    - But the held pack stays charged to the retained-scan budget (the engine's `scanBudget`) for the whole hold, up to 600 seconds,
-      - so while held packs fill that budget other buffered scans on the run's sidecar (an LLM request body, another push) cannot retain theirs and fail closed (refused, never forwarded unread) until the hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   - `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before `awaitADOCapability`, so nobody is asked for `code_write` on a push the rules refuse, and a review hold is decided before any capability hold.
   - Its refusals are the plain `403` the other lanes give, so git prints `HTTP 403`, with two exceptions the agent can act on.
