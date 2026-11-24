@@ -211,6 +211,10 @@ func TestUILimitWatch_DenyInteractiveClosesNoVNC(t *testing.T) {
 	if ds.resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade = %d, want 101", ds.resp.StatusCode)
 	}
+	// Past the RFB handshake and carrying frames before the limit: after ServerInit the desktop's Bell reaches the browser.
+	if bell, err := readWSFrame(ds.br); err != nil || string(bell) != string([]byte{2}) {
+		t.Fatalf("before the limit the desktop carried %q (err %v), want the Bell", bell, err)
+	}
 	h.setLimits(types.GovernanceLimits{DenyInteractive: true})
 	if !closesWithin(ds.conn, ds.br, limitWatchBound) {
 		t.Fatal("the desktop socket outlived the deny_interactive limit")
@@ -262,16 +266,19 @@ func TestUILimitWatch_ExemptAdminKeepsItsSocket(t *testing.T) {
 func TestUILimitWatch_UnreadKeepsTheSocketAndWritesNothing(t *testing.T) {
 	faults := []struct {
 		name  string
+		wait  time.Duration // the watch's bound on one check; 0 keeps limitWatchWait
 		apply func(rig *limitWatchRig)
 		clear func(rig *limitWatchRig)
 	}{
-		{"the run read fails",
+		{"the run read fails", 0,
 			func(rig *limitWatchRig) { rig.faults.mode.Store(limitFaultErr) },
 			func(rig *limitWatchRig) { rig.faults.mode.Store(limitFaultNone) }},
-		{"the profile read fails",
+		{"the profile read fails", 0,
 			func(rig *limitWatchRig) { rig.failProfileRead(errors.New("db down")) },
 			func(rig *limitWatchRig) {}}, // setLimits clears it
-		{"the run read blocks past the wait",
+		// The wait is shorter than the 500 ms the socket is watched, so a stuck read times out inside the window
+		// (several times) and the socket must stay open and write nothing.
+		{"the run read blocks past the wait", 100 * time.Millisecond,
 			func(rig *limitWatchRig) { rig.faults.mode.Store(limitFaultHang) },
 			func(rig *limitWatchRig) { rig.faults.mode.Store(limitFaultNone) }},
 	}
@@ -290,6 +297,9 @@ func TestUILimitWatch_UnreadKeepsTheSocketAndWritesNothing(t *testing.T) {
 				} else {
 					rig = newLimitWatchRig(t)
 					cookie = rig.openSession()
+				}
+				if fault.wait > 0 {
+					setSupportWatch(t, limitWatchEvery, fault.wait)
 				}
 				rig.setLimits(types.GovernanceLimits{}) // a profile with no limit, so its read has something to fail
 				conn, br := rig.upgradeSocket("code", cookie)

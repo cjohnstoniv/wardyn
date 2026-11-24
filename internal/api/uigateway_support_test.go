@@ -627,6 +627,8 @@ func TestSupportUI_EveryHelperRequestRechecksWithNoDebounce(t *testing.T) {
 func TestSupportUI_OwnersStreamGetsOnlyTheLimitWatch(t *testing.T) {
 	setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
 	rig := newSupportUIRig(t, "web_apps")
+	counted := &helperRunCountStore{supportGrantedStore: rig.srv.cfg.Store.(*supportGrantedStore)}
+	rig.srv.cfg.Store = counted // the limit watch reads the run on each tick, so its reads show whether it runs
 	parent, cancelParent := context.WithCancel(context.Background())
 	defer cancelParent()
 	ctx, stop := rig.srv.supportWatchCtx(parent, uiSession{})
@@ -642,14 +644,27 @@ func TestSupportUI_OwnersStreamGetsOnlyTheLimitWatch(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("stop did not cancel the limit watch's context")
 	}
+	time.Sleep(100 * time.Millisecond) // the stopped watch's last read, if one was in flight
+	reads := counted.n.Load()
 	parent2, cancelParent2 := context.WithCancel(context.Background())
 	ctx2, stop2 := rig.srv.supportWatchCtx(parent2, uiSession{})
 	defer stop2()
+	for deadline := time.Now().Add(time.Second); counted.n.Load() == reads; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the limit watch never read the run: it is not running")
+		}
+	}
 	cancelParent2()
 	select {
 	case <-ctx2.Done():
 	case <-time.After(time.Second):
 		t.Fatal("cancelling the parent did not cancel the limit watch's context")
+	}
+	time.Sleep(100 * time.Millisecond) // a read in flight at the cancel
+	reads = counted.n.Load()
+	time.Sleep(100 * time.Millisecond) // five ticks
+	if got := counted.n.Load(); got != reads {
+		t.Fatalf("run reads went from %d to %d after the parent was cancelled: the watch goroutine did not end", reads, got)
 	}
 	owner := rig.session(rig.ticket(rig.run.ID, rig.owner, oidc.RoleUser), "code")
 	ended := rig.openStream("events", owner)
