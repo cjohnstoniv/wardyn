@@ -19,4 +19,14 @@ func (s *Server) mountAssistantRoutes(r chi.Router) {
 	r.Post("/assistant/sessions/{id}/edits", s.handleAssistantEdits)
 	r.Get("/assistant/sessions/{id}/events", s.handleAssistantEvents)
 	r.Delete("/assistant/sessions/{id}", s.handleDeleteAssistantSession)
+	// The checks strip and the replay answer the signed-in person with no model, and write nothing.
+	r.Post("/assistant/checks", s.handleAssistantChecks)
+	r.Post("/assistant/replay", s.handleAssistantReplay)
+}
+
+// mountAssistantToolRoutes registers the run-token tool routes: the tool list and one tool call, each for the
+// session the token's run id names. mountAssistantInternalRoutes calls it. Neither is ever relayed.
+func (s *Server) mountAssistantToolRoutes(r chi.Router) {
+	r.Get("/internal/assistant/tools", s.handleAssistantToolList)
+	r.Post("/internal/assistant/tools/{name}", s.handleAssistantToolCall)
 }

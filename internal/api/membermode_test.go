@@ -795,6 +795,8 @@ func TestMemberMode_AssistantSessionsAreAMemberRoute(t *testing.T) {
 		{http.MethodPost, session + "/edits", `{"draft":{},"changed":[]}`},
 		{http.MethodGet, session + "/events", ""},
 		{http.MethodDelete, session, ""},
+		{http.MethodPost, "/api/v1/assistant/checks", `{"target_kind":"run","draft":{}}`},
+		{http.MethodPost, "/api/v1/assistant/replay", `{"target_kind":"run","draft":{}}`},
 	} {
 		w := doSSO(t, srv, c.method, c.path, on, c.body)
 		if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {

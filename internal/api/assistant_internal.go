@@ -26,6 +26,7 @@ const assistantEventMax = 256 << 10
 func (s *Server) mountAssistantInternalRoutes(r chi.Router) {
 	r.Get("/internal/assistant/turns", s.handleAssistantTurns)
 	r.Post("/internal/assistant/events", s.handleAssistantPostEvent)
+	s.mountAssistantToolRoutes(r)
 }
 
 // assistantRunSession is the session the run's token speaks for: its live session, else its newest, else the same
