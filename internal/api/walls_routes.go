@@ -22,9 +22,9 @@ import (
 func (s *Server) mountWallsRoutes(r chi.Router) {
 	unit := r.With(s.requireUnitScope)
 	unit.Get("/walls/topology", s.handleWallsTopology)
-	unit.Get("/walls/stream", s.handleWallsStreamStub)
+	unit.Get("/walls/stream", s.handleWallsStream)
 	r.Get("/runs/{id}/walls", s.handleRunWalls)
-	r.Get("/runs/{id}/walls/stream", s.handleRunWallsStreamStub)
+	r.Get("/runs/{id}/walls/stream", s.handleRunWallsStream)
 }
 
 // The fallback: mount the stub in place of a handler whose body is held back; the gate, and every access row,
@@ -98,6 +98,7 @@ type wallsState struct {
 	wallsRunLimiter          principalLimiter   // a run's walls: 30 a minute, burst 10, per caller
 	wallsContinuationLimiter principalLimiter   // topology continuation pages: 60 a minute, burst 10, per caller
 	wallsSnapshots           wallsSnapshotCache // walls_topology.go
+	wallsLive                wallsLiveState     // the live streams' sampler, ring and limits (walls_stream.go)
 	wallsCaps                wallsCaps          // a zero field takes wallsDefaultCaps' value; tests set smaller ones
 }
 
