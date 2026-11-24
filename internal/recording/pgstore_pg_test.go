@@ -447,3 +447,44 @@ func TestPGStore_StatJoinedStopsWhereReplayStops(t *testing.T) {
 		})
 	}
 }
+
+// TestPGStore_StatJoinedJoinsMatchingHeaders: parts with one header are both counted, whether the header is short or
+// longer than the 4 KiB head the store probes first (but inside the bound it searches), and a part with no
+// newline in its first 64 KiB counts alone.
+func TestPGStore_StatJoinedJoinsMatchingHeaders(t *testing.T) {
+	s := recording.NewPGStore(pgPool(t))
+	ctx := context.Background()
+	line := func(n int) string { return `{"version":2,"title":"` + strings.Repeat("x", n) + `"}` + "\n" }
+	ev1, ev2 := `[0.5,"o","one"]`+"\n", `[1.5,"o","two"]`+"\n"
+	for name, c := range map[string]struct {
+		parts  [2]string
+		joined bool
+	}{
+		"short header":             {[2]string{line(0) + ev1, line(0) + ev2}, true},
+		"header over 4KiB":         {[2]string{line(20000) + ev1, line(20000) + ev2}, true},
+		"no newline in 128 KiB":    {[2]string{strings.Repeat("x", 128<<10), strings.Repeat("x", 128<<10)}, false},
+		"identical 100 KiB header": {[2]string{line(100<<10) + ev1, line(100<<10) + ev2}, false},
+	} {
+		parts := c.parts
+		t.Run(name, func(t *testing.T) {
+			runID := uuid.NewString()
+			if err := s.SaveCast(ctx, runID, strings.NewReader(parts[0])); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SaveCastNamed(ctx, runID, recording.PartSuffix(2), strings.NewReader(parts[1])); err != nil {
+				t.Fatal(err)
+			}
+			size, _, err := recording.StatJoined(ctx, s, runID, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := int64(len(parts[0]))
+			if c.joined {
+				want += int64(len(parts[1]))
+			}
+			if size != want {
+				t.Errorf("size = %d, want %d", size, want)
+			}
+		})
+	}
+}

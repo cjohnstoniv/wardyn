@@ -82,3 +82,30 @@ func TestStatJoinedReadsEachPartFromOneRevision(t *testing.T) {
 		t.Errorf("%d separate opens or stats, want 0: a part's header, size and tail come from one read", s.splitReads)
 	}
 }
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// TestReadJoinHeaderReadsAtMostItsBound: a body with no newline for 128 KiB is read for no more than the bound
+// and has no header; a short line comes back through its newline.
+func TestReadJoinHeaderReadsAtMostItsBound(t *testing.T) {
+	c := &countingReader{r: strings.NewReader(strings.Repeat("x", 128<<10))}
+	if h, err := readJoinHeader(c); err != nil || h != nil {
+		t.Fatalf("readJoinHeader = %q, %v; want nil", h[:min(len(h), 8)], err)
+	}
+	if c.n > maxJoinHeaderBytes+1 {
+		t.Errorf("read %d bytes, want at most %d", c.n, maxJoinHeaderBytes+1)
+	}
+	if h, err := readJoinHeader(strings.NewReader("{}\n[0,\"o\",\"a\"]\n")); err != nil || string(h) != "{}\n" {
+		t.Errorf("readJoinHeader = %q, %v; want the first line", h, err)
+	}
+}

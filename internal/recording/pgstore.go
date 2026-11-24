@@ -450,9 +450,14 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 // always all of it, and a TOAST prefix slice reads no more of the payload.
 const castHeadProbe = 4 << 10
 
+// maxJoinHeaderBytes bounds the header line StatJoined reads from a part, newline included. A cast header is one
+// short JSON line; a part with none inside this bound has no header the list compares, so a recording list never
+// reads a whole body to find one. Replay's own join (joinedHeader) keeps its larger bound.
+const maxJoinHeaderBytes = 64 << 10
+
 // statHeadTail is StatAndTail plus the cast's header line, read in one statement, so all three come from one row
-// version. The header ends at its newline: inside the probe when it fits, otherwise searched in the payload, never
-// past replay's bound (maxCastBytes); a header longer than that comes back nil.
+// version. The header ends at its newline: inside the probe when it fits, otherwise searched in the payload's first
+// maxJoinHeaderBytes+1 bytes, never further; a header longer than maxJoinHeaderBytes comes back nil.
 func (s *PGStore) statHeadTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, []byte, error) {
 	if err := validKey(key); err != nil {
 		return 0, nil, nil, err
@@ -468,14 +473,14 @@ func (s *PGStore) statHeadTail(ctx context.Context, key string, tailBytes int64)
 		       END,
 		       CASE WHEN position('\x0a'::bytea in probe) > 0
 		            THEN substring(probe from 1 for position('\x0a'::bytea in probe))
-		            ELSE substring(payload from 1 for least(
-		                     coalesce(nullif(position('\x0a'::bytea in payload), 0), octet_length(payload)),
+		            ELSE substring(substring(payload from 1 for $4::int + 1) from 1 for coalesce(
+		                     nullif(position('\x0a'::bytea in substring(payload from 1 for $4::int + 1)), 0),
 		                     $4::int + 1))
 		       END
 		FROM (SELECT payload, size_bytes, tail, stat_updated_at = updated_at AS fresh,
 		             substring(payload from 1 for $5::int) AS probe
 		      FROM recordings WHERE cast_key = $1) r`,
-			key, tailBytes, castTailKept, maxCastBytes, castHeadProbe,
+			key, tailBytes, castTailKept, maxJoinHeaderBytes, castHeadProbe,
 		).Scan(&size, &tail, &header)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -484,8 +489,8 @@ func (s *PGStore) statHeadTail(ctx context.Context, key string, tailBytes int64)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("recording: stat cast %q: %w", key, err)
 	}
-	if len(header) > maxCastBytes {
-		header = nil // longer than replay reads (joinedHeader): not a header it would match
+	if len(header) > maxJoinHeaderBytes {
+		header = nil // longer than the list compares: part 1 counts alone
 	}
 	return size, header, tail, nil
 }
