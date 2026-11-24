@@ -80,3 +80,36 @@ func (s *Server) agentEnded(ctx context.Context, run types.AgentRun, ref string,
 	}
 	return errEgressOpen
 }
+
+// restartFencedForPass starts again, for its pass back, a server sandbox a lease end stopped (EndSandbox keeps its
+// container and files): cut off every network and with its task idle main process alone (runner.FencedStarter), then
+// with everything but its init ended and proven gone (stopAgentForPass). restarted is true once a start was asked
+// for; its error is then errSandboxStopped's, so the record says what it says for a stopped sandbox, and the caller's
+// teardown stops the sandbox. restarted is false, with a nil error, where it does not apply: a sandbox that runs or
+// whose state cannot be read, a run on a runner (its protocol has no such start) or on a virtual machine, an agent
+// with no exec of its own, and a substrate without the start.
+func (s *Server) restartFencedForPass(ctx context.Context, run types.AgentRun, ref string) (restarted bool, err error) {
+	if run.RunnerID != nil || run.MachineKind.IsVM() || run.AgentExecID == "" || run.AgentExecID == runner.MainProcessExecID {
+		return false, nil
+	}
+	starter, ok := s.cfg.Runner.(runner.FencedStarter)
+	if !ok {
+		return false, nil
+	}
+	if st, err := s.cfg.Runner.Status(ctx, ref); err != nil || (st.State != types.RunStopped && st.State != types.RunFailed) {
+		return false, nil
+	}
+	if err := starter.StartFenced(ctx, ref); errors.Is(err, runner.ErrEndUnsupported) {
+		return false, nil
+	} else if err != nil {
+		return true, fmt.Errorf("%w; it could not be started again with no network: %w", errSandboxStopped, err)
+	}
+	run.SandboxRef = ref
+	if !s.agentStoppable(ctx, run) {
+		return true, fmt.Errorf("%w; started again, its main process is not the idle one", errSandboxStopped)
+	}
+	if err := s.stopAgentForPass(ctx, ref); err != nil {
+		return true, fmt.Errorf("%w; started again, what it started could not be stopped: %w", errSandboxStopped, err)
+	}
+	return true, nil
+}
