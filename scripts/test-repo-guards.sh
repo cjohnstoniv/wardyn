@@ -158,7 +158,6 @@ NIGHTLY=.github/workflows/nightly.yml
 # in watched= from day one, and is promoted after a scheduled green, not before. Its own
 # notify-ai-gateway-kind job opens the issue for a scheduled red, and the date below is renewed or the
 # job promoted before it passes.
-# kind-outage-recover-walk (#4082): new, never run on a hosted runner, and kept off candidates the same way.
 NOTIFY_EXEMPT="e2e-live notify-new-lanes migration-merge-check test-e2e-concurrent ci-mode-dogfood-model-fake published-image-scan notify-published-image-scan k6-rerun-rate ai-gateway-kind notify-ai-gateway-kind kind-node-restart kind-agent-sandbox-keep-walk released-agent-base-run kind-outage-recover-walk"
 # A job waiting on the promotion rule above carries a date here, job=YYYY-MM-DD, at most 14 days out
 # (the e2e quarantine's rule, #3219). Past it this guard fails until the job joins notify-new-lanes.needs
