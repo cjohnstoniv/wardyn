@@ -221,6 +221,7 @@ var queryParamNotAnID = map[string]string{
 	"from":                      "GET /runs/{id}/recording-chain: an RFC 3339 time where the recording started; it bounds the range to the path run's own rows and names no entity",
 	"agent":                     "GET /runs/{id}/output: a harness id whose lines to keep from the run's own output; the run is the path's, already authorised, and the id names no entity",
 	"purpose":                   "POST /runs/{id}/attach/ticket: ui marks a UI-app ticket, which skips the terminal session cap; the run is the path's, already authorised, and the word names no entity",
+	"ports":                     "POST /runs/{id}/attach/ticket: the port numbers an ssh-forward or attach-forward ticket may reach, on the path run's own sandbox; it names no entity",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
 	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
 	"filter":                    "GET /scim/v2/Users and GET /scim/v2/Groups (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter (displayName or externalId for Groups); the routes admit no human credential at all (classSCIM)",

@@ -24,7 +24,7 @@ the ADMIN pre-authorized.
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) |
-| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
+| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, take an SSH ticket (`ssh_key`, while `WARDYN_SSH_TICKETS` is on), mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam) |
 | `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)) |
 
@@ -257,6 +257,7 @@ the ADMIN pre-authorized.
 
 - whether a member may add an SSH key (`POST /me/ssh-keys`), mint an API token (`POST /me/tokens`) or define a custom component of their own at all
 - One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key).
+- `ssh_key` also gates the SSH ticket mint (`POST /runs/{id}/attach/ticket` with an `ssh-*` purpose, target `runs.ssh_ticket`) while `WARDYN_SSH_TICKETS` is on; an `attach-forward` ticket is not asked. A connection already open is not closed by a later deny.
 - Mint only: a key or token that already exists keeps working until it is removed or revoked.
 - `custom_component` gates saving a component (`POST`/`PUT /me/components`) and attaching one the person defined, inline or saved, to a run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)).
   - It is on for everyone from the release that adds it, until a deny row names it. This is the one value that sets aside "an upgrade with no configuration changes nothing".

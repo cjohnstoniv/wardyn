@@ -592,6 +592,7 @@ func run() error {
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
 		SSHChannels:          sshChannelSet(f.sshChannels),
+		SSHTickets:           *f.sshTickets,
 		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		ComputerFolders:      *f.computerFolders,

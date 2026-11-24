@@ -90,7 +90,8 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 	}
 	return ticketActor{actorType: t.ActorType, principal: t.Principal, role: t.Role, via: t.Via,
 		authorizedAt: t.AuthorizedAt, revSeq: t.RevSeq, email: t.Email, caller: t.Caller, app: t.App,
-		tokenID: t.TokenID, cliSessionID: t.CLISessionID, support: t.SupportGrant, supportExpires: t.SupportExpires}, true, nil
+		tokenID: t.TokenID, cliSessionID: t.CLISessionID, support: t.SupportGrant, supportExpires: t.SupportExpires,
+		purpose: t.Purpose, ports: t.Ports}, true, nil
 }
 
 // ticketActorCtxKey carries the ticket's minting principal through to
@@ -136,6 +137,10 @@ type ticketActor struct {
 	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
 	support        uuid.UUID
 	supportExpires time.Time
+	// purpose is the one door the ticket opens and ports the ports a forwarding purpose may reach
+	// (attach_ticket_purpose.go); "" and nil on a terminal or UI ticket.
+	purpose string
+	ports   []int
 	// renewChain is the chain of the issuer-portal grant the ticket was minted under when its portal renews
 	// browser-app sessions (uiRenewalChain), uuid.Nil otherwise; checkStart is when redemption began, the
 	// anchor an issuer-portal terminal's re-checks are timed from. Both are set by redeemAttachTicket.
@@ -190,6 +195,10 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	purpose := r.URL.Query().Get("purpose")
+	scope, ok := s.mintScope(w, r, purpose)
+	if !ok {
+		return
+	}
 	// The support arm (support_terminal.go): a super admin signed in as a person who is not the run's creator
 	// asks it first. supportNone, which is every caller without a grant, goes on to admitRunEntry's owner rule
 	// unchanged; any other answer but supportOK is a refusal.
@@ -223,6 +232,11 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	} else if run, asSponsor, ok = s.admitRunEntry(w, r, id, authorizedAt); !ok {
 		return
 	}
+	// A sponsor reaches the terminal and the UI app only: no SSH or port forward ticket.
+	if (sshTicketPurpose(scope.purpose) || scope.purpose == ticketPurposeAttachForward) && asSponsor {
+		s.refuseRunOwnerOnly(w, r, run)
+		return
+	}
 	// Same fail-closed gate as the WS itself: a ticket for a non-attachable run
 	// is useless, so refuse to mint one (clean 409 now beats a WS error later).
 	if run.State != types.RunRunning {
@@ -245,9 +259,10 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them
 	// again, since slots can fill between the ticket and the upgrade. A ticket asked for a UI app
 	// (?purpose=ui) skips them: a UI session holds no terminal slot, and a ticket that names ui but is
-	// spent on a terminal still meets the upgrade's own check.
+	// spent on a terminal still meets the upgrade's own check. An SSH or attach-forward ticket skips them too: SSH
+	// has its own caps, and a forward holds one of the run's SSH channels.
 	at, principal := actorFromRequest(r)
-	if purpose != "ui" {
+	if purpose != "ui" && scope.purpose == "" {
 		if refused := s.attachSlotsFull(run, principal); refused != "" {
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonAttachSessionCapReached, refused)
 			return
@@ -267,6 +282,7 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		role = oidc.RoleAdmin
 	}
 	t := store.AttachTicket{RunID: id, ActorType: at, Principal: principal, Role: role}
+	t.Purpose, t.Ports = scope.purpose, scope.ports
 	if asSupport {
 		t.SupportGrant, t.SupportExpires = supportTicketGrant(grant)
 	}
@@ -315,10 +331,11 @@ func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t sto
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ticket":             tok,
-		"expires_in_seconds": int(attachTicketTTL / time.Second),
-	})
+	out := map[string]any{"ticket": tok, "expires_in_seconds": int(attachTicketTTL / time.Second)}
+	if t.Purpose != "" {
+		out["purpose"] = t.Purpose // a client dials a purpose only when it is echoed: an older server mints a terminal ticket
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sponsorMayEnter is the ticket mint's sponsor arm: ok when the caller is the current sponsor of the active
@@ -373,36 +390,42 @@ func (s *Server) sponsorMayEnter(w http.ResponseWriter, r *http.Request, run typ
 // handler (handleAttachWS, attach.go) ALSO re-checks the ticket's own stamped
 // role/principal against the run it names, since this lane never runs
 // humanOrAdminAuth/requireOperator at all and the ticket's stamped data is the
-// only signal left to check. Redemption (redeemAttachTicket, run_entry.go) also
+// only signal left to check. Redemption (redeemTicketFor, run_entry.go) also
 // refuses a ticket admitted before a revoke or minted through a portal whose
-// grant has since ended.
-func (s *Server) ticketOrHumanAuth(next http.Handler) http.Handler {
-	human := s.humanOrAdminAuth(s.requireOperator(next))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok := r.URL.Query().Get("ticket")
-		if tok == "" {
-			human.ServeHTTP(w, r)
-			return
-		}
-		id, ok := parseIDParam(w, r, "id", "run")
-		if !ok {
-			return
-		}
-		ta, v, err := s.redeemAttachTicket(r.Context(), tok, id)
-		if err != nil {
-			// A store failure is not a bad ticket: say so, and never leak the
-			// database error to an as-yet-unauthenticated caller — but DO log it,
-			// or the operator sees a bare 500 with no cause anywhere.
-			slog.ErrorContext(r.Context(), "wardynd: attach ticket lookup failed", "run_id", id, "err", err)
-			writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
-			return
-		}
-		if v != verdictOK {
-			s.refuseAttachTicket(w, r, id, ta, v)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))
-	})
+// grant has since ended. Each route names its door, so a ticket minted for another
+// door is refused here.
+//
+// ticketOrHumanAuthFor is the attach ticket group's auth for one door: a ticket minted for another purpose is
+// refused at redemption, before the handler runs (redeemTicketFor). door "" is the terminal's.
+func (s *Server) ticketOrHumanAuthFor(door string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		human := s.humanOrAdminAuth(s.requireOperator(next))
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tok := r.URL.Query().Get("ticket")
+			if tok == "" {
+				human.ServeHTTP(w, r)
+				return
+			}
+			id, ok := parseIDParam(w, r, "id", "run")
+			if !ok {
+				return
+			}
+			ta, v, err := s.redeemTicketFor(r.Context(), tok, id, door)
+			if err != nil {
+				// A store failure is not a bad ticket: say so, and never leak the
+				// database error to an as-yet-unauthenticated caller — but DO log it,
+				// or the operator sees a bare 500 with no cause anywhere.
+				slog.ErrorContext(r.Context(), "wardynd: attach ticket lookup failed", "run_id", id, "err", err)
+				writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayTicketLookupFailed, "attach ticket lookup failed")
+				return
+			}
+			if v != verdictOK {
+				s.refuseAttachTicket(w, r, id, ta, v)
+				return
+			}
+			next.ServeHTTP(w, r.WithContext(withTicketActor(r.Context(), ta)))
+		})
+	}
 }
 
 // auditAttachDenied records an authorization REFUSAL in the ?ticket= attach

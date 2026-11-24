@@ -537,6 +537,9 @@ func validateSSHSessionFlags(f *bootFlags) error {
 			return err
 		}
 	}
+	if f.sshTickets != nil && *f.sshTickets && flagValue(f.sshListen) == "" {
+		return fmt.Errorf("refusing to start: WARDYN_SSH_TICKETS needs the SSH gateway on (WARDYN_SSH_LISTEN)")
+	}
 	return nil
 }
 
