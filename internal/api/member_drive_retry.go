@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -53,6 +54,7 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 	}
 	ctx, end, leader := s.beginLeaderSweep(ctx)
 	if !leader {
+		sweephealth.NotOwner(ctx)
 		return nil
 	}
 	defer end()
