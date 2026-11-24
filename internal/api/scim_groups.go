@@ -343,7 +343,8 @@ func (s *Server) handleSCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The cuts are recorded. A removal whose audit row is still owed is finished here before the 204; one that
-	// fails stays pending for the sweeper, and the 5xx says so.
+	// fails stays pending, and the 5xx says so. The sweeper finishes this issuer's; another issuer's member's owed
+	// row is left for an operator (/scim/status lists it).
 	ids, err := st.GroupRemovalIdentities(ctx, g.ID)
 	if err == nil {
 		err = s.removeGroupMembers(ctx, st, g, ids, slot, true, true)
