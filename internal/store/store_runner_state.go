@@ -42,8 +42,9 @@ func (s PG) reconcileRunnerStateRowTx(ctx context.Context, tx pgx.Tx, runnerID u
 	if row.Execution != nil && (row.Execution.Generation != current.Generation || row.Execution.Operation != current.Operation || !row.Execution.Attempted || (current.ExecID != "" && current.ExecID != row.Execution.ExecID)) {
 		return nil, false, ErrRunnerExecutionRefused
 	}
-	var lapsed bool
-	if err = tx.QueryRow(ctx, `SELECT token_renewed_at < clock_timestamp()-$2::interval FROM agent_runs WHERE id=$1`, row.RunID, identity.RunTokenLapseAfter.String()).Scan(&lapsed); err != nil {
+	var lapsed, held bool
+	if err = tx.QueryRow(ctx, `SELECT a.token_renewed_at < clock_timestamp()-$2::interval, `+recoveryHeldExpr("false")+`
+		FROM agent_runs a LEFT JOIN run_outage_terms t ON t.run_id = a.id WHERE a.id=$1`, row.RunID, identity.RunTokenLapseAfter.String()).Scan(&lapsed, &held); err != nil {
 		return nil, false, err
 	}
 	var request *RunnerContainment
@@ -52,7 +53,12 @@ func (s PG) reconcileRunnerStateRowTx(ctx context.Context, tx pgx.Tx, runnerID u
 	}
 	// A timestamp is an assertion, never an ACK: H3's exact action reconciliation
 	// alone clears pending_runner. Live missing sandboxes also require recovery.
-	needsLoss := run.State == types.RunRunning && run.LostAt == nil && (lapsed || !row.SandboxPresent)
+	// A lapsed run held for its proxy to recover (#4082, recoveryHeldExpr) is not a fault while its runner reports the
+	// sandbox and its proxy still up and nothing pending containment: the runner may become ready, and the proxy's
+	// recovery reaches the control plane through it. The hold ends on its own, and the next report or lapse sweep then
+	// marks the run as before.
+	held = held && row.SandboxPresent && row.ProxyStoppedAt == nil && row.ContainmentPending == nil
+	needsLoss := run.State == types.RunRunning && run.LostAt == nil && ((lapsed && !held) || !row.SandboxPresent)
 	return request, needsLoss, nil
 }
 

@@ -629,6 +629,9 @@ type Lease struct {
 	// older runner reads as today's deadline.
 	OutageAllowanceS int64 `json:"outage_allowance_s,omitempty"`
 	OutageStrict     bool  `json:"outage_strict,omitempty"`
+	// ProxyPauses is whether the run's proxy pauses at its allowance and recovers by itself (#4082), so the runner
+	// keeps it past today's deadline; false for an older proxy or server, which keep today's deadline.
+	ProxyPauses bool `json:"proxy_pauses,omitempty"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.

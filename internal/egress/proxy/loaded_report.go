@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"time"
 )
@@ -42,7 +43,9 @@ func ConfigSHA256(b []byte) string {
 
 // LoadedReport is what a started proxy tells the control plane it loaded: ConfigSHA256 of the
 // raw config bytes, its own version, and the deployment switches (by env name, as set) it
-// applied after the load, which are not part of the run's policy.
+// applied after the load, which are not part of the run's policy. Switches also carries
+// outage_pause ("on"), a capability of this build rather than an environment switch: the
+// proxy pauses at its outage allowance and recovers by itself (#4082).
 type LoadedReport struct {
 	ConfigSHA256 string            `json:"config_sha256"`
 	ProxyVersion string            `json:"proxy_version"`
@@ -56,8 +59,15 @@ func (s *Server) ReportLoaded(ctx context.Context, r LoadedReport) {
 	s.proxy.reportLoaded(ctx, r, loadedReportTiming())
 }
 
+// outagePauseSwitch is LoadedReport.Switches' capability key: this proxy pauses and recovers (#4082).
+const outagePauseSwitch = "outage_pause"
+
 // reportLoaded is ReportLoaded: one POST per attempt over p.localClient, retried with backoff.
 func (p *Proxy) reportLoaded(ctx context.Context, r LoadedReport, t reportTiming) {
+	switches := make(map[string]string, len(r.Switches)+1)
+	maps.Copy(switches, r.Switches)
+	switches[outagePauseSwitch] = "on"
+	r.Switches = switches
 	body, err := json.Marshal(r)
 	if err != nil {
 		slog.Error("wardyn-proxy: encode the loaded-config report", slog.Any("err", err))

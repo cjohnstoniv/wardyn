@@ -346,15 +346,21 @@ func (s PG) LastRunnerTeardown(ctx context.Context, runID uuid.UUID, ref string)
 // lease ends its session.
 func (s PG) RunHeldContainedOnRunner(ctx context.Context, runID uuid.UUID) (bool, error) {
 	var held bool
-	err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = $1
-		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
-		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
-			AND r.outcome = 'success' AND r.queue_seq > c.queue_seq))
-		OR EXISTS (SELECT 1 FROM run_containment_pending WHERE run_id = $1)`, runID).Scan(&held)
+	err := s.Pool.QueryRow(ctx, `SELECT `+runnerHeldContainedSQL("$1"), runID).Scan(&held)
 	if err != nil {
 		return false, fmt.Errorf("store: check runner containment: %w", err)
 	}
 	return held, nil
+}
+
+// runnerHeldContainedSQL is RunHeldContainedOnRunner's test as a SQL boolean for the run whose id is the expression
+// run: a placeholder there, and a column in the recovery hold (recoveryHeldExpr), so the two cannot drift.
+func runnerHeldContainedSQL(run string) string {
+	return `EXISTS (SELECT 1 FROM runner_pending_actions c WHERE c.run_id = ` + run + `
+		AND c.kind IN ('kill', 'end', 'stop_proxy', 'quarantine_run')
+		AND NOT EXISTS (SELECT 1 FROM runner_pending_actions r WHERE r.run_id = c.run_id AND r.kind = 'recover_containment'
+			AND r.outcome = 'success' AND r.queue_seq > c.queue_seq))
+		OR EXISTS (SELECT 1 FROM run_containment_pending p WHERE p.run_id = ` + run + `)`
 }
 
 // RecordRunnerActionResult records an authenticated action_result: runnerID is

@@ -207,7 +207,7 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 	t.Run("lapses at firstRenewWithin", func(t *testing.T) {
 		rp := newRenewPlane(t, http.StatusServiceUnavailable, false)
 		clock := &fakeBoot{}
-		g := newLapseGate(clock, 1<<62)
+		g := newLapseGate(clock, 1<<62, gateOpts{})
 		tune := renewerTuning{firstRetry: 5 * time.Millisecond, maxInterval: 20 * time.Millisecond, giveUpAfter: time.Hour,
 			expiryMargin: time.Minute, closedRetry: 5 * time.Millisecond, now: time.Now}
 		go runTokenRenewerGated(t.Context(), newTokenSource("seed"), rp.srv.URL, http.DefaultClient, tune, g)
@@ -231,8 +231,9 @@ func TestSidecar_RetiredOrRevokedTokenNeverServes(t *testing.T) {
 	})
 }
 
-// TestSidecar_OpenStaysOpenAfterLaterFailures: once the first renewal landed, no later failure and
-// no passage of time closes the gate: a server-mode proxy has no deadline and keeps today's give-up.
+// TestSidecar_OpenStaysOpenAfterLaterFailures: once the first renewal landed, no later failure closes
+// the gate before its outage allowance; past it the gate pauses (#4082), and a pause never ends the
+// process.
 func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 	t.Run("through the server", func(t *testing.T) {
 		rp := newRenewPlane(t, http.StatusOK, false)
@@ -241,13 +242,17 @@ func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 			t.Fatal("the sidecar never served")
 		}
 		rp.status.Store(http.StatusServiceUnavailable)
-		sc.clock.advance(24 * time.Hour)
+		sc.clock.advance(30 * time.Minute)
 		if !sc.srv.proxy.lapse.serving() {
-			t.Fatalf("the gate closed after a day (reason %q)", sc.srv.proxy.lapse.reason)
+			t.Fatalf("the gate closed inside its allowance (reason %q)", sc.srv.proxy.lapse.reason)
+		}
+		sc.clock.advance(24 * time.Hour)
+		if sc.srv.proxy.lapse.serving() || !sc.srv.proxy.lapse.paused() {
+			t.Fatal("the gate did not pause past its allowance")
 		}
 		select {
 		case <-sc.srv.Lapsed():
-			t.Fatal("an open server-mode gate lapsed on time alone")
+			t.Fatal("a paused server-mode gate ended the process")
 		default:
 		}
 	})
@@ -256,7 +261,7 @@ func TestSidecar_OpenStaysOpenAfterLaterFailures(t *testing.T) {
 		for _, status := range []int{http.StatusServiceUnavailable, http.StatusForbidden} {
 			rp := newRenewPlane(t, http.StatusOK, false)
 			clock := &fakeBoot{}
-			g := newLapseGate(clock, 1<<62)
+			g := newLapseGate(clock, 1<<62, gateOpts{})
 			ts := newTokenSource("seed")
 			tune := renewerTuning{firstRetry: 5 * time.Millisecond, maxInterval: 10 * time.Millisecond, giveUpAfter: time.Hour,
 				expiryMargin: time.Minute, closedRetry: 5 * time.Millisecond, now: time.Now}
@@ -336,12 +341,12 @@ func TestSidecar_OneRefusalThenAnswerOpensQuickly(t *testing.T) {
 }
 
 // TestSidecar_FlagUnsetServesAtOnce: without FirstRenewGateEnv (a create, or an older runner) a
-// sidecar binds before its renewal answers, as before.
+// sidecar binds before its renewal answers, as before: its gate starts open.
 func TestSidecar_FlagUnsetServesAtOnce(t *testing.T) {
 	rp := newRenewPlane(t, http.StatusOK, true)
 	sc := startSidecar(t, rp.srv.URL, true, false)
-	if sc.srv.proxy.lapse != nil {
-		t.Fatal("a sidecar without the flag has a gate")
+	if !sc.srv.proxy.lapse.serving() || sc.srv.proxy.lapse.isClosed() {
+		t.Fatal("a sidecar without the flag does not serve from its start")
 	}
 	if !gateEventually(5*time.Second, sc.listening.Load) {
 		t.Fatal("a sidecar without the flag did not bind at once")

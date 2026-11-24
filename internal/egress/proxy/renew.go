@@ -140,7 +140,11 @@ type renewerTuning struct {
 	// closedTimeout bounds one request while the gate is closed, so a hung first renewal cannot use up
 	// the replace's whole wait before the next try. Zero means renewTimeout.
 	closedTimeout time.Duration
-	now           func() time.Time
+	// recoverEvery and recoverJitter are recover mode's cadence (recover.go): every recoverEvery plus a uniform
+	// jitter of up to ±recoverJitter, with no growth.
+	recoverEvery, recoverJitter time.Duration
+	jitter                      func(d time.Duration) time.Duration // nil: uniformJitter
+	now                         func() time.Time
 }
 
 func defaultRenewerTuning() renewerTuning {
@@ -152,6 +156,8 @@ func defaultRenewerTuning() renewerTuning {
 		closedRetry:   time.Second,
 		nudgeFloor:    renewNudgeFloor,
 		closedTimeout: renewClosedTimeout,
+		recoverEvery:  recoverEvery,
+		recoverJitter: recoverJitter,
 		now:           time.Now,
 	}
 }
@@ -186,19 +192,36 @@ func (tune renewerTuning) retryGap(backoff time.Duration, heldExp, now time.Time
 	return backoff
 }
 
+// renewSuccessGap is the wait after a renew or recovery that returned a token expiring at exp: half its
+// remaining life, clamped to [firstRetry, maxInterval].
+func renewSuccessGap(exp time.Time, tune renewerTuning) time.Duration {
+	next := tune.maxInterval
+	if half := time.Until(exp) / 2; half < tune.firstRetry {
+		next = tune.firstRetry
+	} else if half < tune.maxInterval {
+		next = half
+	}
+	return next
+}
+
 // runTokenRenewerTuned is runTokenRenewer with its timing injected; see renewerTuning.
 func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning) {
 	runTokenRenewerGated(ctx, ts, base, client, tune, nil)
 }
 
-// runTokenRenewerGated is runTokenRenewerTuned for a proxy that stays closed until its first renewal:
-// g opens on the first success. Until then it retries every tune.closedRetry, lapses g once its next
-// try would pass firstRenewWithin, and lapses it at once on a permanent refusal; once open, later
-// failures never close it. A nil g is the plain loop.
+// runTokenRenewerGated is runTokenRenewerTuned for a gated proxy (self_lapse.go). A gate that starts
+// closed opens on the first success: until then the loop retries every tune.closedRetry, lapses g once
+// its next try would pass firstRenewWithin, and lapses it at once on a permanent refusal; once open,
+// later renew failures never close it. Past giveUpAfter from the last good token, or on a 401 once
+// the held token's known expiry has passed, the loop enters recover mode (#4082): it asks the recover
+// door every tune.recoverEvery until a recovery (back to renewing, g reopened), a 409 (the token is
+// still live: back to renewing), or a final 403 or 501, which lapses g. g's hardEnd bounds it. A nil g
+// is the plain loop, which has no such bound and so gives up past giveUpAfter instead.
 func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning, g *lapseGate) {
 	lastGood := tune.now() // the startup token is the first "last good token"
 	var heldExp time.Time  // the held token's expiry; unknown for the startup token
 	backoff := tune.firstRetry
+	recovering := false
 	for {
 		// A wake that came before this try is answered by it.
 		select {
@@ -215,10 +238,23 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			timeout = tune.closedTimeout
 		}
 		rctx, cancel := context.WithTimeout(ctx, timeout)
-		tok, exp, err := renewToken(rctx, base, ts.Get(), client)
-		cancel()
 		var next time.Duration
-		if err != nil {
+		if recovering {
+			tok, exp, err := recoverToken(rctx, base, ts.Get(), client)
+			cancel()
+			var stop bool
+			if next, stop = recoverAnswer(ctx, ts, g, sent, tok, err, tune); stop {
+				return
+			}
+			if err == nil || isRecoverStatus(err, http.StatusConflict) {
+				recovering, backoff = false, tune.firstRetry
+			}
+			if err == nil {
+				lastGood, heldExp = tune.now(), exp
+				next = renewSuccessGap(exp, tune)
+			}
+		} else if tok, exp, err := renewToken(rctx, base, ts.Get(), client); err != nil {
+			cancel()
 			var se *renewStatusError
 			if errors.As(err, &se) && se.permanent() {
 				slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, giving up",
@@ -226,29 +262,38 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 				g.refuseIfClosed(renewCause(err, ts.Get()))
 				return
 			}
-			if held := tune.now().Sub(lastGood); held >= tune.giveUpAfter {
+			held := tune.now().Sub(lastGood)
+			switch {
+			case held >= tune.giveUpAfter && g == nil:
 				slog.ErrorContext(ctx, "wardyn-proxy: run token renew has failed for longer than a token's lifetime, giving up",
 					slog.Duration("failing_for", held), slog.Any("err", err))
 				return
-			}
-			closed := g.isClosed()
-			next = tune.retryGap(backoff, heldExp, tune.now())
-			if closed {
-				// Nothing has been served and the replace is waiting on this: keep asking quickly.
-				next = tune.closedRetry
-			}
-			if g != nil {
+			case g != nil && (held >= tune.giveUpAfter || isRecoverStatus(err, http.StatusUnauthorized) && !heldExp.IsZero() && tune.now().After(heldExp)):
+				recovering, next = true, tune.recoverGap()
 				g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
-			}
-			// SECURITY: do not log the token; the error carries status + body only.
-			slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off (a refused Git request can bring the next try sooner)",
-				slog.Duration("retry_in", next), slog.Any("err", err))
-			if !closed {
-				if backoff = backoff * 2; backoff > tune.maxInterval {
-					backoff = tune.maxInterval
+				slog.WarnContext(ctx, "wardyn-proxy: the held run token can no longer renew, asking to recover it",
+					slog.Duration("failing_for", held), slog.Duration("retry_in", next), slog.Any("err", err))
+			default:
+				closed := g.isClosed()
+				next = tune.retryGap(backoff, heldExp, tune.now())
+				if closed {
+					// Nothing has been served and the replace is waiting on this: keep asking quickly.
+					next = tune.closedRetry
+				}
+				if g != nil {
+					g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
+				}
+				// SECURITY: do not log the token; the error carries status + body only.
+				slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off (a refused Git request can bring the next try sooner)",
+					slog.Duration("retry_in", next), slog.Any("err", err))
+				if !closed {
+					if backoff = backoff * 2; backoff > tune.maxInterval {
+						backoff = tune.maxInterval
+					}
 				}
 			}
 		} else {
+			cancel()
 			ts.Set(tok)
 			// A wake that arrived while this renewal was in flight is already answered.
 			select {
@@ -260,15 +305,15 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			}
 			lastGood, heldExp = tune.now(), exp
 			backoff = tune.firstRetry
-			next = tune.maxInterval
-			if half := time.Until(exp) / 2; half < tune.firstRetry {
-				next = tune.firstRetry
-			} else if half < tune.maxInterval {
-				next = half
-			}
+			next = renewSuccessGap(exp, tune)
 		}
 		// A wake (a refused Git request) cuts the wait short, but never below nudgeFloor since the last try.
-		// runSelfLapseRenewer (self_lapse.go) already retries every 30 s after a failure, so it takes no nudge.
+		// runSelfLapseRenewer (self_lapse.go) already retries every 30 s after a failure, so it takes no nudge,
+		// and neither does recover mode, which keeps its own cadence.
+		nudge := ts.nudged()
+		if recovering {
+			nudge = nil
+		}
 		timer := time.NewTimer(next)
 		select {
 		case <-ctx.Done():
@@ -278,7 +323,7 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			timer.Stop()
 			return
 		case <-timer.C:
-		case <-ts.nudged():
+		case <-nudge:
 			floor := time.NewTimer(max(tune.nudgeFloor-time.Since(lastTry), 0))
 			select {
 			case <-ctx.Done():
@@ -326,8 +371,13 @@ func (g *lapseGate) refuseIfClosed(cause string) {
 // plus its expiry. Any non-200 becomes a *renewStatusError carrying status, so the caller can tell a
 // permanent refusal from a blip.
 func renewToken(ctx context.Context, base, token string, client *http.Client) (string, time.Time, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		controlPlaneEndpoint(base, "/api/v1/internal/token/renew"), nil)
+	return tokenDoor(ctx, base, "/api/v1/internal/token/renew", token, client)
+}
+
+// tokenDoor POSTs path (the renew or the recover door) with token and returns the fresh token plus its
+// expiry; any non-200 is a *renewStatusError.
+func tokenDoor(ctx context.Context, base, path, token string, client *http.Client) (string, time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, controlPlaneEndpoint(base, path), nil)
 	if err != nil {
 		return "", time.Time{}, err
 	}

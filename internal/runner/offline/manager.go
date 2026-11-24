@@ -276,7 +276,10 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
 		return errors.New("containment-only identity cannot receive a lease")
 	}
-	tokenLeft, err := m.clock.TokenRemaining(l.TokenRenewedAt)
+	if l.OutageAllowanceS != 0 && (l.OutageAllowanceS < 1800 || l.OutageAllowanceS > 86400) {
+		return errors.New("runner lease outage allowance is outside 30 minutes to 24 hours")
+	}
+	tokenLeft, err := m.leaseTokenLeft(l)
 	if err != nil {
 		return err
 	}
@@ -312,6 +315,25 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 		return m.save()
 	}
 	return nil
+}
+
+// outageRecoveryLimit is how long after its expiry a run token may still be recovered: the control plane's
+// store.RecoveryLimit (24 h), kept here because the runner does not import the store.
+const outageRecoveryLimit = 24 * time.Hour
+
+// leaseTokenLeft is how long l lets the run's proxy keep its network without a newer lease (#4082). An older proxy, or
+// a lease from an older server, keeps today's deadline: it cannot recover, so a longer one gains it nothing. A pausing
+// proxy under strict terms stops at its allowance. Any other pausing proxy pauses by itself, so the runner keeps it to
+// the last moment a recovery could succeed (expiry + outageRecoveryLimit + the stamp margin), as a backstop.
+func (m *Manager) leaseTokenLeft(l runnerwire.Lease) (time.Duration, error) {
+	switch {
+	case !l.ProxyPauses:
+		return m.clock.TokenRemaining(l.TokenRenewedAt)
+	case l.OutageStrict:
+		return m.clock.AllowanceRemaining(l.TokenRenewedAt, time.Duration(l.OutageAllowanceS)*time.Second)
+	default:
+		return m.clock.AllowanceRemaining(l.TokenRenewedAt, identity.RunTokenTTL+outageRecoveryLimit+5*time.Minute)
+	}
 }
 
 // BeforeCreate commits a creation intent before any substrate side effect.
@@ -647,6 +669,8 @@ func (m *Manager) SetOptions(o Options) error {
 //     defers containment only (cleanupOnly), and only for a run whose create finished and that carries no
 //     containment, failure or hold; any other run, and one with no LapseBy or past it, gets none and is
 //     contained at once.
+//   - A pausing proxy's last lease (Lease.ProxyPauses) keeps its LapseBy uncapped by the token's lifetime: the
+//     sooner bound would stop a proxy that pauses and recovers by itself an hour into an outage.
 func (m *Manager) ProvisionalDeadlines() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -656,13 +680,20 @@ func (m *Manager) ProvisionalDeadlines() {
 			continue
 		}
 		if !m.selfLapse {
-			if left := min(r.LapseBy.Sub(now), identity.RunTokenLapseAfter); restartKeepable(r) && left > 0 {
+			left := min(r.LapseBy.Sub(now), identity.RunTokenLapseAfter)
+			if r.Lease.ProxyPauses {
+				left = r.LapseBy.Sub(now)
+			}
+			if restartKeepable(r) && left > 0 {
 				m.deadlines[id] = deadline{receipt: now, tokenLeft: left, cleanupOnly: true}
 			}
 			continue
 		}
 		left := identity.RunTokenTTL
-		if !r.LapseBy.IsZero() {
+		switch {
+		case !r.LapseBy.IsZero() && r.Lease.ProxyPauses:
+			left = max(r.LapseBy.Sub(now), restartReadyGrace)
+		case !r.LapseBy.IsZero():
 			left = min(left, max(r.LapseBy.Sub(now), restartReadyGrace))
 		}
 		m.deadlines[id] = deadline{receipt: now, tokenLeft: left}

@@ -758,7 +758,7 @@ func (s *Server) reviveEligible(ctx context.Context, run types.AgentRun, startAg
 	default:
 		return reviveRefused(http.StatusConflict, reasonReviveUnknownLostReason, "run was lost ("+string(run.LostReason)+") and cannot be revived")
 	}
-	return nil
+	return s.reviveStrictSpent(ctx, run)
 }
 
 // markReviving takes run's reviving mark. It refuses a second revive of the
