@@ -236,7 +236,7 @@
 | Proxy cannot renew its run token at start | It exits about a minute after it starts; the run fails with "the run's proxy could not renew its run token with the organisation:" and its last renew error | Let the cluster reach the host and port the error names |
 | Proxy crashes, runs out of memory or lapses | Terminal: the pod stays `Failed`, runnerd contains the run and settles its decisions | Start a new run |
 | Relay lost | First-use approvals are denied; decisions buffer | Restore the relay Service |
-| New proxy pod's IP still fenced for an earlier run | The runner stops the new run before it opens; the run fails with reason `relay_ip_fenced` | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
+| New proxy pod's IP still fenced for an earlier run | The runner stops that pod, proves it stopped and starts another, preferring another node, up to twice. The run fails with `relay_ip_fenced` only if every try is given a held address or a pod can't be proven stopped | Start the run again. The address frees when the earlier run's stop is confirmed: see [Sandbox node lost or partitioned](#sandbox-node-lost-or-partitioned) |
 | Revoked while online | The org ends the runner's runs `runner_revoked`; runnerd stops every proxy, tears down every sandbox and deletes the per-run and keystore Secrets | Reinstall with a fresh token if wanted |
 | Revoked while offline and never returning | Nothing releases the stop-proof finalizer or the policies | Follow [Revoked and gone](#revoked-and-gone) |
 | A stop an earlier release held | Its proxy pod stays `Failed` and deleting with the proxy never started; its policies and its Secret, with the run's secret values and managed files, stay | Upgrade the runner: it retries the stop when it reconnects. A run still held after that keeps its fence: see [A stop still held after the upgrade](#a-stop-still-held-after-the-upgrade) |
@@ -367,6 +367,6 @@ The run did not cover:
 | R12 | Clusters that rewrite pod-to-ClusterIP source addresses are unsupported |
 | R14 | The ServiceAccount lists every Node and patches pods in its runs namespace |
 | R16 | Reusing a Node name for another machine while a run's pods remain is unsupported |
-| R17 | A run given an address still fenced for an earlier run fails at start; the address can be given again until that run's stop is confirmed |
+| R17 | A proxy pod given an address still fenced for an earlier run is replaced up to twice; the run fails only if every try gets one. Until that stop is confirmed, the cluster may hand the address out again. |
 
 - All residuals, with the rejected alternatives: [the design note](../design/0.9/k8s-runnerd.md#residuals).

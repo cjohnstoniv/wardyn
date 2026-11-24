@@ -92,7 +92,9 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 // set, is the runner's limit set and its Runs at once; without it the runner declares no limits and
 // r.MaxRuns 0 is types.RunnerMaxRunsDefault. r.OwnerKind is the redeemed token's (empty is person); the
 // trust class on r is ignored: a person's runner starts personal and an org runner org_cluster, the only
-// class the coupling CHECK allows it.
+// class the coupling CHECK allows it. With an IdentityGuard on ctx the insert reads the owner's identity
+// rows FOR SHARE in its own transaction and is refused with ErrIdentityDeactivated for a deactivated,
+// purged or cut owner.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
 		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name, arch,
@@ -107,8 +109,12 @@ func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, err
 	if r.OwnerKind == types.RunnerOwnerOrg {
 		kind, trust = types.RunnerOwnerOrg, types.RunnerTrustOrgCluster
 	}
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
-		r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+	var out types.Runner
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanRunner(qr.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
+			r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+		return e
+	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict
@@ -118,6 +124,22 @@ func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, err
 
 func (s PG) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
 	return scanRunner(s.Pool.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE id = $1`, id))
+}
+
+// RunnerBatchReader reads several runners in one statement: the runner hub's stored-row recheck of every live
+// session at once.
+type RunnerBatchReader interface {
+	GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error)
+}
+
+var _ RunnerBatchReader = PG{}
+
+// GetRunnersByID returns the rows of ids that exist, in no set order; an id with no row is left out.
+func (s PG) GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return collect(ctx, s.Pool, "list", "runners", `SELECT `+runnerCols+` FROM runners WHERE id = ANY($1)`, []any{ids}, scanRunner)
 }
 
 // ListRunners returns every runner, newest first, revoked included.

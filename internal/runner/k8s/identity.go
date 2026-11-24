@@ -173,6 +173,9 @@ var errPodUIDChanged = errors.New("k8s: the pod under this name is not the recor
 func (d *Driver) observePod(ctx context.Context, runID uuid.UUID, component string, pod *corev1.Pod) (*runEvidence, error) {
 	var needAfter, needAnchor, needClosing bool
 	ev, err := d.mutate(runID, func(ev *runEvidence) (bool, error) {
+		if component == componentProxy && ev.redrawn(string(pod.UID)) {
+			return false, errRedrawnPod
+		}
 		pe := ev.pod(component, pod.Name)
 		changed := false
 		if pe.UID == "" {
@@ -203,6 +206,9 @@ func (d *Driver) observePod(ctx context.Context, runID uuid.UUID, component stri
 		}
 		if ev, err = d.mutate(runID, func(ev *runEvidence) (bool, error) {
 			p := ev.Pods[component]
+			if p == nil || p.UID != string(pod.UID) {
+				return false, errRedrawnPod
+			}
 			if p.PostBind != nil {
 				return false, nil
 			}
@@ -246,12 +252,16 @@ func (d *Driver) nameList(ctx context.Context, runID uuid.UUID, component string
 	if pe == nil || pe.NodeName == "" {
 		return ev, nil
 	}
+	uid := pe.UID
 	h, err := d.nodeHolderByName(ctx, pe.NodeName)
 	if err != nil {
 		return nil, err
 	}
 	return d.mutate(runID, func(ev *runEvidence) (bool, error) {
 		p := ev.Pods[component]
+		if p == nil || p.UID != uid {
+			return false, errRedrawnPod // the record this list was sent for was closed meanwhile (proxy_redraw.go)
+		}
 		changed := ev.latchReuse(p, h)
 		if use != nil && use(p, h) {
 			changed = true
@@ -419,13 +429,13 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 	// The created set is read before the lists: a UID read first names a pod the list must show
 	// unless it is gone, and one that lands mid-list is left for the next tick.
 	var errs []error
-	created := make(map[uuid.UUID]bool, len(runIDs))
+	drawn := make(map[uuid.UUID]string, len(runIDs))
 	for _, id := range runIDs {
-		held, err := d.proxyCreated(id)
+		uid, err := d.proxyUID(id)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		created[id] = held
+		drawn[id] = uid
 	}
 	byName := map[string]*corev1.Pod{}
 	for _, ns := range d.cfg.Namespaces {
@@ -439,9 +449,16 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 	}
 	out := make(map[uuid.UUID]runner.ProxyObservation, len(runIDs))
 	for _, id := range runIDs {
-		if p := byName[proxyPodName(id)]; p != nil {
+		p := byName[proxyPodName(id)]
+		switch left, err := d.redrawUnderTick(id, drawn[id], p); {
+		case err != nil:
+			errs = append(errs, err)
+		case left:
+			// A fenced draw is being, or was, replaced under this tick (proxy_redraw.go): what the list shows
+			// is the retired draw's, not the run's proxy exiting. Left out; the next tick reads the run's proxy.
+		case p != nil:
 			out[id] = d.classifyProxy(p)
-		} else if created[id] {
+		case drawn[id] != "":
 			// NotFound speaks only for a proxy that was created: a run still inside CreateSandbox
 			// (its Ref stored before any pod exists) is left out, not reported gone.
 			out[id] = runner.ProxyNotFound
@@ -451,25 +468,27 @@ func (d *Driver) ObserveProxies(ctx context.Context, runIDs []uuid.UUID) (map[uu
 			if pod == nil {
 				continue
 			}
-			if _, err := d.observePod(ctx, id, comp, pod); err != nil {
+			if _, err := d.observePod(ctx, id, comp, pod); err != nil && !errors.Is(err, errRedrawnPod) {
 				errs = append(errs, err)
 			}
 		}
-		if err := d.tickNames(ctx, id); err != nil {
+		if err := d.tickNames(ctx, id); err != nil && !errors.Is(err, errRedrawnPod) {
 			errs = append(errs, err)
 		}
 	}
 	return out, errors.Join(errs...)
 }
 
-// proxyCreated reports whether the run's evidence records a proxy pod UID from its create response.
-func (d *Driver) proxyCreated(runID uuid.UUID) (bool, error) {
+// proxyUID is the proxy pod UID the run's evidence records from its create response; "" when none.
+func (d *Driver) proxyUID(runID uuid.UUID) (string, error) {
 	ev, err := d.loadEvidence(runID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	pe := ev.Pods[componentProxy]
-	return pe != nil && pe.UID != "", nil
+	if pe := ev.Pods[componentProxy]; pe != nil {
+		return pe.UID, nil
+	}
+	return "", nil
 }
 
 // tickNames lists each node name a run's unreleased pods hold, latching any reuse.

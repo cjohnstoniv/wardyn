@@ -200,7 +200,8 @@ type attachHolder struct {
 	//
 	// atomic, not mu: the pumps read it on every frame and must never contend
 	// with a resize write.
-	evicted atomic.Bool
+	evicted     atomic.Bool
+	unconfirmed atomic.Bool // set while the socket's access has no confirmed check (the session budget's window): input is dropped and told (onDrop)
 
 	// id and lease are this client's claim on the run's cross-replica writer lease
 	// (attach_lease.go). Both are zero for a store that keeps no leases, and the lease is
@@ -218,9 +219,10 @@ type attachHolder struct {
 // canWrite reports whether this holder may still drive the PTY: it must hold
 // the write slot (writable — an observer never did, a promoted observer does)
 // and must not have been displaced (evicted AT EVICTION, not whenever its
-// socket happens to finish dying). A nil holder is nobody and never writes.
+// socket happens to finish dying), and while the session budget's window is open (unconfirmed: no check of the
+// socket's access has answered). A nil holder is nobody and never writes.
 func (h *attachHolder) canWrite() bool {
-	return h != nil && h.writable.Load() && !h.evicted.Load() && h.lease.live()
+	return h != nil && h.writable.Load() && !h.evicted.Load() && !h.unconfirmed.Load() && h.lease.live()
 }
 
 // canDeliver reports whether input and resizes may reach the sandbox through this holder now: canWrite, and for

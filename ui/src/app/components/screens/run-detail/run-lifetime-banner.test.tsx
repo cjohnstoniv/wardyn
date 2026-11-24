@@ -695,6 +695,42 @@ describe("RunLifetimeBanner: a local run (RS4)", () => {
     expect(listAuditMock).toHaveBeenCalledWith(expect.any(String), { action: "run.containment.reassert" });
   });
 
+  it("a Kubernetes runner run its owner may copy from says so and offers no Revive", async () => {
+    renderBanner(lost({ kept_copy_out: true }));
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("You can copy your work out with the terminal, SSH or the Files panel's download");
+    expect(banner).toHaveTextContent("A run on a Kubernetes runner can't be revived.");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Extend" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "End run" })).toBeInTheDocument();
+  });
+
+  it("without kept_copy_out the stopped banner keeps Revive", async () => {
+    renderBanner(lost());
+    await screen.findByTestId("run-lifetime-local-stopped");
+    expect(screen.getByRole("button", { name: "Revive" })).toBeInTheDocument();
+    expect(screen.queryByText(/copy your work out/)).toBeNull();
+  });
+
+  it("kept_copy_out does not override a containment pending run", async () => {
+    render(
+      <OperatorProvider operator principal={OWNER}>
+        <RunLifetimeBanner run={lost({ kept_copy_out: true })} pending={[]} onChanged={() => {}} containmentPending />
+      </OperatorProvider>,
+    );
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).not.toHaveTextContent("copy your work out");
+    expect(banner).not.toHaveTextContent("reports its runner stopped this run's network");
+  });
+
+  it("kept_copy_out with a failed late-stop read still says the run can be copied from", async () => {
+    listAuditMock.mockRejectedValue(new Error("audit down"));
+    renderBanner(lost({ kept_copy_out: true }));
+    const banner = await screen.findByTestId("run-lifetime-local-stopped");
+    expect(banner).toHaveTextContent("You can copy your work out");
+    expect(screen.queryByRole("button", { name: "Revive" })).toBeNull();
+  });
+
   it("RS4d: a late-stop row says Wardyn had the runner stop the network when it came back", async () => {
     listAuditMock.mockResolvedValue([lateRow(LOST_AT)]);
     renderBanner(lost());

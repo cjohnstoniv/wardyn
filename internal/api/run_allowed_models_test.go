@@ -417,25 +417,42 @@ func TestAllowedModels_ReviveReplaysTheStoredList(t *testing.T) {
 	}
 }
 
-// A revive of a run held to a list is refused before its claim on a connected runner whose
-// wardyn-runnerd does not carry the list; a runner that carries it, a run with no list and a run on no
-// runner are left alone.
-func TestAllowedModels_ReviveNeedsARunnerThatCarriesThem(t *testing.T) {
+// A revive of a run whose stored config sets a run proxy setting is refused before its claim on a connected
+// runner whose wardyn-runnerd does not carry it, with the reason a create gets; a runner that carries it, a runner
+// not connected and a run on no runner are left alone.
+func TestRevive_NeedsARunnerThatCarriesItsProxySettings(t *testing.T) {
 	without := runnerwire.Caps{ProxySettings: []string{runnerwire.ProxySettingAWSSigV4}}
-	with := runnerwire.Caps{ProxySettings: runnerwire.ProxySettings}
-	rerr := modelListRunnerRefusal(without, true)
-	if rerr == nil || rerr.reason != reasonRunnerProxySetting || !strings.Contains(rerr.msg, "too old for allowed_models") {
-		t.Fatalf("refusal = %+v, want %s naming allowed_models", rerr, reasonRunnerProxySetting)
+	hostRules := runner.ProxyConfig{}
+	hostRules.Policy.HostRules = []types.HostRuleSet{{Rules: []types.HostRule{{Host: "api.example.com", Effect: types.HostRuleDeny}}}}
+	laptop := runner.ProxyConfig{LocalModels: map[string]types.LocalModelSettings{
+		"http://host.docker.internal:11434": {Models: []string{"m"}, AllowOnLaptopRunners: true}}}
+	every := append(slices.Clone(runnerwire.ProxySettings), runnerwire.ProxySettingLocalModelRelay)
+	for _, tc := range []struct {
+		name string
+		caps runnerwire.Caps
+		pc   runner.ProxyConfig
+		want string
+	}{
+		{"allowed_models", without, runner.ProxyConfig{ModelLimit: &runner.ModelLimit{Models: []string{"model-a"}}}, "too old for allowed_models"},
+		{"host_rules", without, hostRules, "too old for host_rules"},
+		{"no_network", without, runner.ProxyConfig{NoNetwork: true}, "too old for no_network"},
+	} {
+		rerr := proxySettingRunnerRefusal(tc.caps, true, tc.pc)
+		if rerr == nil || rerr.reason != reasonRunnerProxySetting || !strings.Contains(rerr.msg, tc.want) {
+			t.Errorf("%s: refusal = %+v, want %s naming it", tc.name, rerr, reasonRunnerProxySetting)
+		}
 	}
-	if modelListRunnerRefusal(with, true) != nil || modelListRunnerRefusal(without, false) != nil {
-		t.Error("a runner carrying the list, or one not connected, was refused here")
+	rerr := proxySettingRunnerRefusal(runnerwire.Caps{ProxySettings: every, LocalModelPorts: []uint16{8080}}, true, laptop)
+	if rerr == nil || rerr.reason != reasonRunnerLocalModelPort {
+		t.Errorf("a laptop model on a port not allowed: refusal = %+v, want %s", rerr, reasonRunnerLocalModelPort)
+	}
+	carries := runnerwire.Caps{ProxySettings: every, LocalModelPorts: []uint16{11434}}
+	if proxySettingRunnerRefusal(carries, true, laptop) != nil || proxySettingRunnerRefusal(without, false, hostRules) != nil {
+		t.Error("a runner carrying the settings, or one not connected, was refused here")
 	}
 	s := New(Config{})
-	list := []string{"model-a"}
-	runnerID := uuid.New()
-	if s.reviveModelListRunnerRefusal(types.AgentRun{RunnerID: &runnerID}, &proxy.Config{}) != nil ||
-		s.reviveModelListRunnerRefusal(types.AgentRun{}, &proxy.Config{AllowedModels: &list}) != nil {
-		t.Error("a run with no list, or on no runner, was refused")
+	if s.reviveProxySettingRunnerRefusal(types.AgentRun{}, &proxy.Config{NoNetwork: true}) != nil {
+		t.Error("a run on no runner was refused")
 	}
 }
 

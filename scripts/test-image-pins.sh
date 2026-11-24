@@ -20,7 +20,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib/common.sh"
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+TMP2="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$TMP2"' EXIT
 mkdir -p "$TMP/scripts/lib"
 cp "$ROOT/scripts/check-image-pins.sh" "$TMP/scripts/"
 cp "$ROOT/scripts/lib/common.sh" "$ROOT/scripts/lib/image_downloads.py" "$TMP/scripts/lib/"
@@ -220,5 +221,55 @@ echo "ok  unchecked curl fails through the image-pin gate"
 python3 "$ROOT/scripts/test-image-downloads.py"
 python3 "$ROOT/scripts/test-image-download-safety.py"
 python3 "$ROOT/scripts/test-image-recipes.py"
+
+# ── two release lines: the GPL-offer check reads the tree's own line, not the newest tag ──
+#
+# Once 0.11 is released, a release/0.10 tree must compare its GPL offer with the
+# last 0.10 release's publish matrix, not 0.11's. A scratch repository holds
+# v0.10.3 (publishes "bar") on this branch and v0.11.0 (publishes "foo") on a
+# side branch, so v0.11.0 is the newest final by version and not an ancestor.
+# Auto-maintenance is off, as in scripts/test-kind-follow-main.sh (guard 25).
+export GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=maintenance.auto GIT_CONFIG_VALUE_0=false \
+  GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 GIT_CONFIG_KEY_2=gc.autoDetach GIT_CONFIG_VALUE_2=false
+g2() { git -C "$TMP2" -c user.name=t -c user.email=t@t "$@"; }
+gate_says2() { (cd "$TMP2" && ./scripts/check-image-pins.sh 2>&1 >/dev/null); }
+mkdir -p "$TMP2/scripts/lib" "$TMP2/.github/workflows" "$TMP2/deploy/images" "$TMP2/internal/version"
+cp "$ROOT/scripts/check-image-pins.sh" "$TMP2/scripts/"
+cp "$ROOT/scripts/lib/common.sh" "$ROOT/scripts/lib/image_downloads.py" "$TMP2/scripts/lib/"
+cp "$TMP/Dockerfile" "$TMP2/Dockerfile"
+printf '## `ghcr.io/cjohnstoniv/foo` (not yet published)\n' > "$TMP2/deploy/images/THIRD-PARTY-GPL.md"
+g2 init -q -b main
+printf '          - name: bar\n' > "$TMP2/.github/workflows/release.yml"
+g2 add -A && g2 commit -q -m a && g2 tag v0.10.3
+g2 switch -q -c side
+printf '          - name: foo\n' > "$TMP2/.github/workflows/release.yml"
+g2 commit -q -am b && g2 tag v0.11.0
+g2 switch -q main
+
+# 7. a 0.10.4 tree reads v0.10.3, so foo is not yet published to it.
+printf 'const Version = "0.10.4"\n' > "$TMP2/internal/version/version.go"
+out="$(gate_says2 || true)"
+case "$out" in
+  *"already published"*) fail "a release/0.10 tree read a newer line's publish matrix. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a release/0.10 tree reads its own line's last final"
+
+# 8. a 0.11.1 tree reads v0.11.0, which published foo.
+printf 'const Version = "0.11.1"\n' > "$TMP2/internal/version/version.go"
+out="$(gate_says2 || true)"
+case "$out" in
+  *"that v0.11.0 already published"*) ;;
+  *) fail "a 0.11 tree must read v0.11.0's publish matrix. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a 0.11 tree reads v0.11.0"
+
+# 9. no version line: the gate cannot tell its line and says so.
+rm "$TMP2/internal/version/version.go"
+out="$(gate_says2 || true)"
+case "$out" in
+  *"has no 'const Version"*) ;;
+  *) fail "a tree with no version line must fail loudly. Got: $(printf '%s' "$out" | tr '\n' ' ')" ;;
+esac
+echo "ok  a tree with no version line fails loudly"
 
 echo "test-image-pins: PASS"
