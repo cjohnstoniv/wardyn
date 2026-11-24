@@ -62,6 +62,7 @@ type lapseGate struct {
 	reason      string
 	cause       string        // the last renew error, redacted (renewCause)
 	open        chan struct{} // closes on the first successful renew
+	pause       chan struct{} // closes when the gate pauses; a reopen replaces it
 	done        chan struct{}
 	exit        chan struct{} // closes on a lapse when exitOnLapse holds, or on a lapse while still closed
 	tunnels     map[net.Conn]struct{}
@@ -84,7 +85,8 @@ func newLapseGate(clock bootClock, span time.Duration, opts gateOpts) *lapseGate
 	now := clock.Now()
 	g := &lapseGate{clock: clock, span: span, start: now, deadline: addSat(now, span), hardEnd: addSat(now, recoverHardEnd),
 		pausable: opts.pausable, exitOnLapse: opts.exitOnLapse,
-		open: make(chan struct{}), done: make(chan struct{}), exit: make(chan struct{}), tunnels: map[net.Conn]struct{}{}}
+		open: make(chan struct{}), pause: make(chan struct{}), done: make(chan struct{}), exit: make(chan struct{}),
+		tunnels: map[net.Conn]struct{}{}}
 	if opts.startOpen {
 		g.state = lapseOpen
 		close(g.open)
@@ -126,6 +128,7 @@ func (g *lapseGate) expireLocked() {
 	switch {
 	case g.state == lapseOpen && now >= g.deadline && g.pausable:
 		g.state = lapsePaused
+		close(g.pause)
 		for c := range g.tunnels {
 			_ = c.Close()
 		}
@@ -153,8 +156,11 @@ func (g *lapseGate) renewed(sent time.Duration, apply func()) bool {
 		return false
 	}
 	apply()
-	if g.state == lapseClosed {
+	switch g.state {
+	case lapseClosed:
 		close(g.open)
+	case lapsePaused:
+		g.pause = make(chan struct{})
 	}
 	g.state, g.deadline, g.hardEnd = lapseOpen, addSat(sent, g.span), addSat(sent, recoverHardEnd)
 	return true
@@ -169,6 +175,22 @@ func (g *lapseGate) paused() bool {
 	defer g.mu.Unlock()
 	g.expireLocked()
 	return g.state == lapsePaused
+}
+
+// pausing is a channel that closes when an open pausable gate pauses, so a renew loop that takes it before a try ends
+// that try's wait at the pause and asks the recover door from then on. It is nil, never closing, for a nil gate or one
+// that is not open and pausable (a paused gate's loop already asks at the recover cadence).
+func (g *lapseGate) pausing() <-chan struct{} {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.expireLocked()
+	if g.state != lapseOpen || !g.pausable {
+		return nil
+	}
+	return g.pause
 }
 
 // track registers a hijacked tunnel's client conn, so a pause closes it; the returned func forgets it. A gate that

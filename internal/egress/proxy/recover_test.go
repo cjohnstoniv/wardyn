@@ -337,3 +337,120 @@ func TestRenewer_RecoverModeCadence(t *testing.T) {
 		}
 	})
 }
+
+// rcGo runs loop until the test ends and checks that it stops with its context, as rcStart does.
+func rcGo(t *testing.T, loop func(ctx context.Context)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	ended := make(chan struct{})
+	go func() {
+		loop(ctx)
+		close(ended)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-ended:
+		case <-time.After(5 * time.Second):
+			t.Error("the renewer did not stop with its context")
+		}
+	})
+}
+
+// rcGatedTune is the gated loop's timing for the tests below: fast first retries, a renew backoff that grows to an
+// hour, no give-up within the test, and a recover gap of every (no jitter).
+func rcGatedTune(every time.Duration) renewerTuning {
+	return renewerTuning{firstRetry: time.Millisecond, maxInterval: time.Hour, giveUpAfter: time.Hour, expiryMargin: time.Minute,
+		closedRetry: time.Millisecond, recoverEvery: every, jitter: func(time.Duration) time.Duration { return 0 }, now: time.Now}
+}
+
+// TestRenewer_PausedLiveToken409RenewsOnceAndReopens: on both loops, a paused gate whose token is still live asks the
+// recover door first; its 409 sends the loop to one renew a first retry later, not a recover gap later, and that renew
+// reopens the gate. The recover gap here is 5 s, so a loop that waits it after the 409, or asks the door again instead
+// of renewing, does not reopen within the second the test allows.
+func TestRenewer_PausedLiveToken409RenewsOnceAndReopens(t *testing.T) {
+	for _, kind := range []string{"gated", "self-lapse"} {
+		t.Run(kind, func(t *testing.T) {
+			p := rcNewPlane(t, http.StatusOK, http.StatusConflict)
+			clock := &fakeBoot{}
+			g := newLapseGate(clock, 30*time.Minute, gateOpts{pausable: true, startOpen: true, exitOnLapse: kind == "self-lapse"})
+			clock.set(31 * time.Minute)
+			if !g.paused() {
+				t.Fatal("the gate did not pause")
+			}
+			ts := newTokenSource("seed")
+			rcGo(t, func(ctx context.Context) {
+				if kind == "gated" {
+					runTokenRenewerGated(ctx, ts, p.srv.URL, p.srv.Client(), rcGatedTune(5*time.Second), g)
+					return
+				}
+				runSelfLapseRenewer(ctx, ts, p.srv.URL, p.srv.Client(), g, lapseRenewTuning{success: time.Hour, failure: time.Millisecond,
+					recover: 5 * time.Second, watchEvery: time.Millisecond, jitter: func(time.Duration) time.Duration { return 0 }})
+			})
+			if !gateEventually(time.Second, func() bool { return g.serving() && ts.Get() == "renewed" }) {
+				t.Fatalf("the paused gate did not reopen through a renew within a second: token %q state %v, %d recover asks, %d renews",
+					ts.Get(), pgState(g), p.recovers.Load(), p.renews.Load())
+			}
+			time.Sleep(50 * time.Millisecond)
+			if r, n := p.recovers.Load(), p.renews.Load(); r != 1 || n != 1 {
+				t.Fatalf("%d recover asks and %d renews, want the recover door once and then one renew", r, n)
+			}
+		})
+	}
+}
+
+// TestRenewer_PauseEndsTheGatedLoopsBackoffWait: a gated loop that the control plane's absence has backed off to a
+// wait of seconds asks the recover door as soon as its gate pauses, and a live token is renewed and the gate reopened
+// within a second of the pause, not at the end of that wait.
+func TestRenewer_PauseEndsTheGatedLoopsBackoffWait(t *testing.T) {
+	p := rcNewPlane(t, http.StatusServiceUnavailable, http.StatusConflict)
+	clock := &fakeBoot{}
+	g := newLapseGate(clock, 30*time.Minute, gateOpts{pausable: true, startOpen: true})
+	ts := newTokenSource("seed")
+	rcGo(t, func(ctx context.Context) {
+		runTokenRenewerGated(ctx, ts, p.srv.URL, p.srv.Client(), rcGatedTune(5*time.Second), g)
+	})
+	// The twelfth failed renew backs the loop off for about two seconds.
+	if !gateEventually(10*time.Second, func() bool { return p.renews.Load() >= 12 }) {
+		t.Fatalf("only %d renews in 10 s", p.renews.Load())
+	}
+	if p.recovers.Load() != 0 {
+		t.Fatalf("%d recover asks while the gate was open with a live token, want none", p.recovers.Load())
+	}
+	clock.set(31 * time.Minute)
+	g.check()
+	if !g.paused() {
+		t.Fatal("the gate did not pause")
+	}
+	p.renewStatus.Store(http.StatusOK)
+	if !gateEventually(time.Second, func() bool { return g.serving() && ts.Get() == "renewed" }) {
+		t.Fatalf("the gate did not reopen within a second of its pause: token %q state %v, %d recover asks",
+			ts.Get(), pgState(g), p.recovers.Load())
+	}
+	if p.recovers.Load() == 0 {
+		t.Fatal("the gate reopened without the recover door being asked")
+	}
+}
+
+// TestRenewer_401PastHeldExpiryRecoversBeforeGivingUp: a gated loop whose held token's known expiry has passed takes
+// a renew's 401 as the cue to recover, long before giveUpAfter (an hour here), and the recovery installs its token.
+func TestRenewer_401PastHeldExpiryRecoversBeforeGivingUp(t *testing.T) {
+	p := rcNewPlane(t, http.StatusOK, http.StatusOK)
+	p.renewExp.Store(time.Now().Add(-2 * time.Second).Unix())
+	g := newLapseGate(&fakeBoot{}, testLapseTTL, gateOpts{pausable: true, startOpen: true})
+	ts := newTokenSource("seed")
+	rcGo(t, func(ctx context.Context) {
+		runTokenRenewerGated(ctx, ts, p.srv.URL, p.srv.Client(), rcGatedTune(time.Millisecond), g)
+	})
+	if !gateEventually(5*time.Second, func() bool { return p.renews.Load() >= 1 }) {
+		t.Fatal("the loop never renewed")
+	}
+	p.renewStatus.Store(http.StatusUnauthorized)
+	if !gateEventually(time.Second, func() bool { return ts.Get() == "recovered" }) {
+		t.Fatalf("a 401 after the held token's expiry did not lead to a recovery within a second: token %q, %d recover asks",
+			ts.Get(), p.recovers.Load())
+	}
+	if !g.serving() {
+		t.Fatalf("the gate is %v after the recovery, want open", pgState(g))
+	}
+}

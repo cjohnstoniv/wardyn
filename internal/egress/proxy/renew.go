@@ -215,19 +215,26 @@ func runTokenRenewerTuned(ctx context.Context, ts *tokenSource, base string, cli
 // later renew failures never close it. Past giveUpAfter from the last good token, or on a 401 once
 // the held token's known expiry has passed, the loop enters recover mode (#4082): it asks the recover
 // door every tune.recoverEvery until a recovery (back to renewing, g reopened), a 409 (the token is
-// still live: back to renewing), or a final 403 or 501, which lapses g. g's hardEnd bounds it. A nil g
-// is the plain loop, which has no such bound and so gives up past giveUpAfter instead.
+// still live: one renew next), or a final 403 or 501, which lapses g. g's hardEnd bounds it. A paused g
+// asks the same way, as runSelfLapseRenewer does, and its pause wakes a long wait: a live token is
+// renewed, and g reopened, within a recover gap and a first retry of the control plane coming back,
+// never a renew backoff. A nil g is the plain loop, which has no such bound and so gives up past
+// giveUpAfter instead.
 func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, client *http.Client, tune renewerTuning, g *lapseGate) {
 	lastGood := tune.now() // the startup token is the first "last good token"
 	var heldExp time.Time  // the held token's expiry; unknown for the startup token
 	backoff := tune.firstRetry
 	recovering := false
+	renewNext := false // a 409 from the recover door: the token is live, so renew it
 	for {
 		// A wake that came before this try is answered by it.
 		select {
 		case <-ts.nudged():
 		default:
 		}
+		recovering = recovering || (!renewNext && g.paused())
+		renewNext = false
+		pause := g.pausing() // taken before the try, so a pause during the try ends its wait too
 		lastTry := time.Now()
 		var sent time.Duration
 		if g != nil {
@@ -247,7 +254,7 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 				return
 			}
 			if err == nil || isRecoverStatus(err, http.StatusConflict) {
-				recovering, backoff = false, tune.firstRetry
+				recovering, backoff, renewNext = false, tune.firstRetry, err != nil
 			}
 			if err == nil {
 				lastGood, heldExp = tune.now(), exp
@@ -290,6 +297,7 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			timer.Stop()
 			return
 		case <-timer.C:
+		case <-pause:
 		case <-nudge:
 			floor := time.NewTimer(max(tune.nudgeFloor-time.Since(lastTry), 0))
 			select {
