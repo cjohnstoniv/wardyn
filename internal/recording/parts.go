@@ -178,7 +178,8 @@ func (j *joinedCast) Close() error {
 // StatJoined is StatAndTail over the parts of runID's cast that OpenJoined plays: the size is the bytes stored
 // across them, and the tail is the last one's (event times run on from part to part because every part is cut
 // from one cast file). Like the replay it ends at the first part whose header line is not part 1's, and at a part
-// 1 whose header is not a whole line. Each part's size, header and tail come from one read of one revision of it
+// 1 whose header is not a whole line; unlike the replay it reads a header line only up to maxJoinHeaderBytes, so a
+// longer one counts part 1 alone. Each part's size, header and tail come from one read of one revision of it
 // (headStatter): a revive that replaces part 1 between two parts' reads leaves the answer a true snapshot of one
 // cast, never one part's header paired with another revision's size.
 //
@@ -213,7 +214,7 @@ func StatJoined(ctx context.Context, s Store, runID string, tailBytes int64) (in
 }
 
 // headStatter is a Store that reads a cast's size, its header line (through the newline, as joinedHeader reads
-// it, or nil when longer than replay's bound) and its last tailBytes from one revision of the cast. FSStore and
+// it, or nil when longer than maxJoinHeaderBytes) and its last tailBytes from one revision of the cast. FSStore and
 // PGStore are.
 type headStatter interface {
 	statHeadTail(ctx context.Context, key string, tailBytes int64) (size int64, header, tail []byte, err error)
