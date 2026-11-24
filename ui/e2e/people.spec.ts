@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, gotoConsole, navTo, sql } from "./fixtures";
 
 // 0.8.6 ppl-p2 (mock M12): the admin People page. A person is pre-created through POST /people and holds
@@ -12,8 +12,13 @@ import { test, expect, ADMIN_TOKEN, asRealMember, asRealSecurityAdmin, gotoConso
 // spec asserts the request the page sends. SSH key removal is real, down to its audit row.
 
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
-// The key fixture internal/api/sshkeys_test.go and ssh-keys.spec.ts already use.
-const PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBl3jvXfmZbBd3q5aLKZTv3rIcvKlfz2eYQpuYSGfCPT alice@laptop";
+// A fresh ed25519 public key for each seeded person. A key's fingerprint is unique across all users, so one fixed key
+// is refused (409) the second time it is registered on a backend: by the next test in this serial file, or by a retry.
+function freshPublicKey(): string {
+  const raw = generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  const blob = Buffer.concat([Buffer.from([0, 0, 0, 11]), Buffer.from("ssh-ed25519"), Buffer.from([0, 0, 0, 32]), raw]);
+  return `ssh-ed25519 ${blob.toString("base64")} e2e@people`;
+}
 
 async function seedPerson(request: import("@playwright/test").APIRequestContext) {
   const raw = `wdn_${randomBytes(32).toString("hex")}`;
@@ -27,7 +32,7 @@ async function seedPerson(request: import("@playwright/test").APIRequestContext)
   const own = { Authorization: `Bearer ${raw}` };
   const created = await request.post("/api/v1/people", { headers: auth, data: { principal: subject, email } });
   expect(created.status(), await created.text()).toBeLessThan(300);
-  const key = await request.post("/api/v1/me/ssh-keys", { headers: own, data: { name: "e2e-laptop", public_key: PUBLIC_KEY } });
+  const key = await request.post("/api/v1/me/ssh-keys", { headers: own, data: { name: "e2e-laptop", public_key: freshPublicKey() } });
   expect(key.status(), await key.text()).toBe(201);
   return { own, subject, email };
 }
