@@ -77,8 +77,10 @@ export const ASSISTANT = {
   PREVIEW_TITLE: "What will be sent",
   PREVIEW_LEAD: (provider: string) =>
     `This is what ${provider} receives with your first message. Policy text is cut to what you may read, at most the security tier; people named in it become Person A, Person B. What you type is sent as you type it.`,
+  // The harness's own additions, shown under the lead.
   PREVIEW_ADDITION:
     "Wardyn adds its own instructions and list of tools. Later answers may read more of the kinds of data shown here through Wardyn's read-only tools, never anything on the Never sent list.",
+  // The label on a section whose text the model is told to read as data.
   UNTRUSTED: "Untrusted",
   NEVER_SENT_HEADING: "Never sent",
   NEVER_SECRETS: "Secret values",
@@ -89,6 +91,7 @@ export const ASSISTANT = {
   NEVER_ROWS: "Per-run or per-person rows",
   KINDS_KEPT_AWAY: (kinds: string) => `Kinds your organisation keeps away: ${kinds}`,
   START: "Start",
+  // Shown above the preview again after the records or the serving provider changed.
   PREVIEW_CHANGED: "What will be sent changed. Check it again.",
 
   // ---- the composer: starting ----
@@ -107,6 +110,7 @@ export const ASSISTANT = {
   DRAFT_LEAD: "The editor holds your draft. The assistant proposes parts; nothing is in the draft until you accept it.",
   LEFT_OUT: (host: string, unit: string) =>
     `Left out ${host}: the ceiling for unit ${unit} doesn't allow it, so a run could never reach it. The rest of the draft is as proposed.`,
+  // The chat's end control, and what a collapsed tool line opens to.
   END: "End",
   ARGUMENTS: "Arguments",
   TOKENS_USED: "Tokens used",
@@ -126,10 +130,13 @@ export const ASSISTANT = {
   // ---- the composer: 390 px ----
   DRAFT_BAR: (lines: number, left: number) => `Draft · ${lines} lines · ${left} left out`,
   SHOW_DRAFT: "Show draft",
+  // Closes the full-height draft sheet.
   HIDE_DRAFT: "Back to chat",
 
   // ---- the composer: ending ----
+  // The wording when a session has ended, and the way back to the first step.
   ENDED: "The assistant has ended this conversation. Your draft is kept.",
   START_AGAIN: "Start again",
+  // The relay could not offer the model its tools.
   TOOLS_UNAVAILABLE: "The assistant can't use its tools on this server yet, so it stopped.",
 } as const;
