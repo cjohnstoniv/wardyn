@@ -436,12 +436,7 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	defer db.Rollback(ctx, tx) // a no-op after Commit
-	// The locks a held change's approval takes too, in its order: the upsert and that approval never
-	// interleave, and neither does a profile write.
-	if err := LockGovernanceGraph(ctx, tx); err != nil {
-		return types.GovernanceMembership{}, err
-	}
-	if err := LockGovernanceMembershipKey(ctx, tx, string(a.SubjectType), a.Subject); err != nil {
+	if err := LockGovernanceMembershipWrite(ctx, tx, a.UnitID, string(a.SubjectType), a.Subject); err != nil {
 		return types.GovernanceMembership{}, err
 	}
 	out, err := UpsertGovernanceMembershipQ(ctx, tx, a)
@@ -452,6 +447,17 @@ func (s PG) UpsertGovernanceMembership(ctx context.Context, a types.GovernanceMe
 		return types.GovernanceMembership{}, err
 	}
 	return out, nil
+}
+
+// LockGovernanceMembershipWrite takes the locks a direct assignment write holds (UpsertGovernanceMembership): the
+// locks a held change's approval takes too, in its order, so the upsert and that approval never interleave, and
+// neither does a profile write. q must be a pgx.Tx.
+func LockGovernanceMembershipWrite(ctx context.Context, q Querier, unitID uuid.UUID, subjectType, subject string) error {
+	_ = unitID
+	if err := LockGovernanceGraph(ctx, q); err != nil {
+		return err
+	}
+	return LockGovernanceMembershipKey(ctx, q, subjectType, subject)
 }
 
 // LockGovernanceMembershipKey takes the transaction-scoped lock keyed to one assignment's natural
