@@ -1,7 +1,7 @@
 // Copyright 2026 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Integration tests for agent rules (migration 0400_agent_rules). Guarded by WARDYN_TEST_PG; each test works
+// Integration tests for agent rules (migration 0405_agent_rules). Guarded by WARDYN_TEST_PG; each test works
 // in its own throwaway database.
 package store_test
 

@@ -18,7 +18,7 @@ import (
 // over a harness that already has rules.
 var ErrAgentRulesVersion = errors.New("store: the agent rules are at another version")
 
-// AgentRulesStore persists an organisation's rules for each agent harness (migration 0400_agent_rules). Spec
+// AgentRulesStore persists an organisation's rules for each agent harness (migration 0405_agent_rules). Spec
 // and inner walls are validated at the API and stored as given; a stored row that no longer decodes is an
 // error, never read as narrower than it is. Bodies in store_agent_rules.go.
 type AgentRulesStore interface {
