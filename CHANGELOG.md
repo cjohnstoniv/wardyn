@@ -17,7 +17,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Changed
 
-- A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it (#4061).
+- A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it. A Mac disk whose delete waits for its Mac shows as Deleting too (#4061).
 
 ## [0.10.3] — 2026-11-23
 
