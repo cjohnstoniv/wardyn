@@ -24,6 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A push held for review that is over 1 MiB no longer keeps its bytes, or its share of the run's inspection memory, while it waits. Once an admin approves it, git prints that the same commits must be pushed again, and that push goes through without a second question. A held push of 1 MiB or less is still forwarded the moment it is approved. (#4070)
 - UI apps: a run's open relay connections now share one activity keepalive and one app start check, so a browser opening many connections at once writes the run's row once per interval and starts the app check once. Idle relay connections are kept for every run instead of at most 32 across all runs, and a run's desktop opens even when its idle relay connections hold all of the run's connection slots (#4056).
 - Governance: writing one person's or group's assignment to a profile no longer waits for an assignment of the same subject to a different profile; two writes of the same assignment still apply one at a time (#3478).
+- On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 
 ### Fixed
 
@@ -68,6 +69,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Publishing a template to the organisation from the console now names the revision the publisher saw. If the template was saved again since, the server answers `409` `template_revision_conflict` and publishes nothing. `POST /templates/{id}/copy` takes an optional `expected_revision` for the same check; without it a copy takes the current revision, as before.
 - The per-commit `wardynd` image that main publishes (`:sha-<commit>`) is now pushed by digest and named only after it has been checked and signed, as `:latest` already was. Before, the per-commit name pointed at the image before its check and its signature.
 - `wardyn ssh-key ensure` refuses a `.pub` file beside the key that is not exactly that key's public line: another key's, an unreadable one, or the key followed by more. It names both fingerprints, registers nothing and changes no file. Move the `.pub` aside and it is written again.
+
+### Before you upgrade
+
+- If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
 
 ## [0.10.4] — 2026-11-24
 

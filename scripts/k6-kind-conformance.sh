@@ -572,6 +572,20 @@ for image in $NODE_IMAGES; do
   [ "$hub" = PASS ] || { rc=1; kubectl -n "$OWN_NS" logs "deployment/$DEPLOY" -c runnerd --tail=30 || true; }
   case_line org-hub-session "$hub" "$detail"
 
+  # #4065: under the charts' own Roles, both binaries' pod waits ring on a pod watch. The Info line is
+  # logged at boot for each runs namespace; the Forbidden fallback's Warn line must never appear.
+  if [ "$hub" = PASS ]; then
+    pw=PASS
+    org_log="$(kubectl -n "$ORG_NS" logs "deployment/$ORG_FULL" --all-containers 2>/dev/null || true)"
+    rd_log="$(kubectl -n "$OWN_NS" logs "deployment/$DEPLOY" -c runnerd 2>/dev/null || true)"
+    for l in "$org_log" "$rd_log"; do
+      grep -q 'pod waits ring on a pod watch' <<<"$l" || pw=FAIL
+      if grep -q 'grants no watch on pods' <<<"$l"; then pw=FAIL; fi
+    done
+    [ "$pw" = PASS ] || rc=1
+    case_line pod-watch-under-chart-rbac "$pw" "wardynd and runnerd log 'pod waits ring on a pod watch' and never 'grants no watch on pods' (#4065)"
+  fi
+
   # A person's own runner (trust class personal) for the walk's refusal: the same security operator,
   # signed in as themself, self-mints a token, registers a second chart release with it, claims it by
   # fingerprint and puts it in a pool of their own.
