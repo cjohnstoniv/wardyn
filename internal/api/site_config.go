@@ -321,6 +321,9 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateSiteSessions(cfg.Sessions); err != nil {
 		return err
 	}
+	if err := validateSiteOutageAllowance(cfg.OutageAllowanceMinutes); err != nil {
+		return err
+	}
 	if err := validateSiteBranding(cfg.Branding); err != nil {
 		return err
 	}
@@ -450,6 +453,7 @@ var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
 	"recording", "governance_max_depth", "macos_vm", "images", "sessions", "features", "desktop_watermark",
+	"outage_allowance_minutes",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -519,6 +523,11 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteSessions(cfg, existing, present)
 	carryForwardSiteFeatures(cfg, existing, present)
 	carryForwardSiteDesktopWatermark(cfg, existing, present)
+	// outage_allowance_minutes on the same terms: an older client or MDM file cannot name it, so its silence keeps
+	// the admin's allowance; an explicit 0 names it and resets it to the default.
+	if !present["outage_allowance_minutes"] {
+		cfg.OutageAllowanceMinutes = existing.OutageAllowanceMinutes
+	}
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -828,6 +837,7 @@ func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
 		"sign_in_help_text":            saved.SignInHelpText,
 		"sign_in_help_url":             saved.SignInHelpURL,
 		"session_unconfirmed_budget_s": int(saved.Sessions.UnconfirmedBudget() / time.Second),
+		"outage_allowance_minutes":     saved.OutageAllowanceMinutes,
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true

@@ -254,6 +254,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		ScrubResponses:       pc.ScrubResponses,
 		CanonicalPushRepos:   pc.CanonicalPushRepos,
 		Attribution:          pc.Attribution,
+		Outage:               pc.Outage,
 		PushRuleSets:         pc.PushRuleSets,
 		PushRuleBase:         pc.PushRuleBase,
 		ForgeHosts:           pc.ForgeHosts,

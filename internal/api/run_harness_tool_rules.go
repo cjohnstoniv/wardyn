@@ -461,5 +461,7 @@ func sidecarPolicy(policy types.RunPolicySpec, p dispatchParams) types.RunPolicy
 	policy.Recording = ""
 	// data_out is kept by the control plane's doors, never the proxy, and a previous release's proxy refuses the key.
 	policy.DataOut = ""
+	// The proxy reads the run's effective outage terms from its own outage key, and a previous release's proxy refuses this one.
+	policy.Outage = nil
 	return policy
 }

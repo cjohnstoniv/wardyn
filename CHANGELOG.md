@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   than its ceiling; its runs still start, with the kind added.
 - Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
+- A policy can shorten, and an admin can lengthen up to 24 hours, how long a run's network keeps serving while Wardyn cannot be reached, and a policy can mark it strict or end unattended runs after an outage (#4082). This release records and carries the setting; pausing and ending at the allowance follow in a later release.
 
 ### Changed
 
@@ -54,6 +55,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
 - The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
 - A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
+- Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail at start on a run proxy older than this release. An operator who pins the proxy image upgrades it first.
 
 ## [0.10.2] — 2026-11-22
 

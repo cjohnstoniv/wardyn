@@ -171,6 +171,7 @@ export interface SiteConfig {
   // precisely so health.putSiteConfig can strip it — an untyped key rides
   // invisibly through the GET-spread idiom every writer uses.
   readonly onboarding_completed_at?: string;
+  outage_allowance_minutes?: number;
 }
 
 // types.WithheldScmHost (internal/types/site_config.go), the json tags verbatim.

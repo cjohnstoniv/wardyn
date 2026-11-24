@@ -192,6 +192,13 @@ func (s *Server) sendRunnerLease(ctx context.Context, run types.AgentRun, genera
 	if run.EndsAt != nil {
 		l.EndsAt = *run.EndsAt
 	}
+	terms, err := s.runOutageTerms(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	if !terms.IsDefault() {
+		l.OutageAllowanceS, l.OutageStrict = terms.AllowanceSec, terms.Strict
+	}
 	payload, err := runnerwire.Marshal(l)
 	if err != nil {
 		return err

@@ -233,6 +233,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateResources(spec.Resources); err != nil {
 		return err
 	}
+	if err := types.ValidateOutageControls(spec.Outage); err != nil {
+		return err
+	}
 	return validateADOCapabilities(spec.AzureDevOpsCapabilities)
 }
 

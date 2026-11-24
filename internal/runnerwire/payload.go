@@ -615,6 +615,10 @@ type Lease struct {
 	RunID               uuid.UUID `json:"run_id"`
 	TokenRenewedAt      time.Time `json:"token_renewed_at"`
 	EndsAt              time.Time `json:"ends_at"`
+	// OutageAllowanceS and OutageStrict are the run's outage terms (#4082); zero for the default ones, which an
+	// older runner reads as today's deadline.
+	OutageAllowanceS int64 `json:"outage_allowance_s,omitempty"`
+	OutageStrict     bool  `json:"outage_strict,omitempty"`
 }
 
 // PendingAction is one entry of the PENDING payload, oldest first.

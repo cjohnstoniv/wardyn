@@ -25,7 +25,8 @@ var nestedFields = map[reflect.Type][]string{
 		"PushRuleSets PushRuleBase ForgeHosts ActivityIgnoreHosts HarnessToolRules AllowedModels BedrockRoutes HarnessCredentials ViaOrgRoutes MCPServers MCPBindings MCPApproveEach DisableModelUsage " +
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		// LiveDenies is the hosts a live egress edit denied: it only narrows egress and carries no credential.
-		"VM PortRule SigninListen NoNetwork LiveDenies"),
+		"VM PortRule SigninListen NoNetwork LiveDenies Outage"),
+	reflect.TypeFor[proxy.OutageConfig]():         strings.Fields("AllowanceS Strict"),
 	reflect.TypeFor[proxy.InjectionConfig]():      strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():   strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():       strings.Fields("Suffixes Hosts CIDRs"),
@@ -69,7 +70,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.PushRulesSpec]():        strings.Fields("DenyPaths MaxInspectPackMiB RequireReviewPaths HoldSeconds DenyNewExecutables MaxFileSizeMiB DenyAll"),
 	reflect.TypeFor[types.ResourceLimits]():       strings.Fields("CPUMillis MemoryMiB PidsLimit DiskMiB"),
 	reflect.TypeFor[types.RunPolicySpec](): strings.Fields("AllowedDomains DeniedDomains AllowAllEgress RefuseIPLiterals FirstUseApproval FirstUseHoldSeconds MaxHolds AllowedMethods HostRules MinConfinementClass EligibleGrants AutoStopAfterSec " +
-		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Desktop Recording DataOut"),
+		"WorkspaceMounts WorkspaceRepos LLMInspection UIApps Resources ToolRules GitPushAnyBranch PushRules AzureDevOpsCapabilities GitHubCapabilities HarnessInnerWalls Desktop Recording DataOut Outage"),
 	reflect.TypeFor[types.ToolRule]():          strings.Fields("Tool Effect"),
 	reflect.TypeFor[types.HostRuleSet]():       strings.Fields("Rules"),
 	reflect.TypeFor[types.HostRule]():          strings.Fields("Host Methods Paths Effect"),
@@ -78,6 +79,7 @@ var nestedFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.HarnessCredential](): strings.Fields("Harness SHA256"),
 	reflect.TypeFor[types.HarnessInnerWalls](): strings.Fields("SandboxMode Approvals"),
 	reflect.TypeFor[types.DesktopControls]():   strings.Fields("PasteIn CopyOut Upload Download"),
+	reflect.TypeFor[types.OutageControls]():    strings.Fields("AllowanceMinutes Strict Unattended"),
 	reflect.TypeFor[types.UIApp]():             strings.Fields("Name Port Path Inbound Callers Kind"),
 	reflect.TypeFor[types.WorkspaceMount]():    strings.Fields("Source Target ReadOnly"),
 	reflect.TypeFor[types.WorkspaceRepo]():     strings.Fields("Repo Target Ref"),
