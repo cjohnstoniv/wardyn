@@ -29,8 +29,8 @@ function chat(items: ChatItem[], over: Partial<React.ComponentProps<typeof Compo
 describe("ComposerChat", () => {
   it("renders a message as text: the characters are there, and no image, link or element comes from them", () => {
     chat([
-      { kind: "user", seq: 1, text: HOSTILE },
-      { kind: "assistant", seq: 2, text: HOSTILE },
+      { kind: "user", gen: 0, seq: 1, text: HOSTILE },
+      { kind: "assistant", gen: 0, seq: 2, text: HOSTILE },
     ]);
     for (const n of screen.getAllByTestId(/^composer-message-/)) {
       expect(n.textContent).toBe(HOSTILE);
@@ -42,7 +42,7 @@ describe("ComposerChat", () => {
   });
 
   it("keeps a URL as text and puts a letter's name back for display only", () => {
-    chat([{ kind: "assistant", seq: 1, text: "Person A: see https://example.invalid/page" }]);
+    chat([{ kind: "assistant", gen: 0, seq: 1, text: "Person A: see https://example.invalid/page" }]);
     expect(screen.getByTestId("composer-message-assistant").textContent).toBe("Alice: see https://example.invalid/page");
     expect(screen.queryByRole("link")).toBeNull();
   });
@@ -67,7 +67,7 @@ describe("ComposerChat", () => {
   });
 
   it("shows a tool call as one collapsed line", () => {
-    chat([{ kind: "tool", seq: 1, name: "read", args: "unit Payments", result: "1 ceiling", ok: true, dryRun: true }]);
+    chat([{ kind: "tool", gen: 0, seq: 1, name: "read", args: "unit Payments", result: "1 ceiling", ok: true, dryRun: true }]);
     expect(screen.getByRole("button", { name: /read.*1 ceiling/ })).toHaveAttribute("aria-expanded", "false");
   });
 });

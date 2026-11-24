@@ -26,6 +26,7 @@ class FakeSource {
   emit(ev: AssistantEvent) {
     for (const fn of this.handlers.get(ev.kind) ?? []) fn({ data: JSON.stringify(ev) });
   }
+  onopen: (() => void) | null = null;
   drop() {
     this.onerror?.();
   }
@@ -80,6 +81,20 @@ describe("resuming", () => {
     vi.useRealTimers();
   });
 
+  it("does not count a stream that opened and sat quiet as a failure", () => {
+    const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, delayMs: () => 0 });
+    vi.useFakeTimers();
+    for (let i = 0; i < 4; i++) {
+      const src = FakeSource.all[FakeSource.all.length - 1];
+      src.onopen?.();
+      src.drop();
+      vi.advanceTimersByTime(10);
+    }
+    expect(FakeSource.all.length).toBe(5);
+    stop();
+    vi.useRealTimers();
+  });
+
   it("closes its source when stopped", () => {
     const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, delayMs: () => 0 });
     stop();
@@ -117,6 +132,17 @@ describe("the long-poll fallback", () => {
     stop();
   });
 
+  it("reads a poll answer whose letters are null as no letters", async () => {
+    vi.stubGlobal("EventSource", undefined);
+    vi.spyOn(assistant, "pollEvents").mockResolvedValue({ events: [], state: "ended", letters: null });
+    const letters = vi.fn();
+    const ended = vi.fn();
+    const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, onLetters: letters, onEnded: ended, delayMs: () => 0 });
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+    expect(letters).toHaveBeenCalledWith({});
+    stop();
+  });
+
   it("reports a poll that keeps failing instead of looping forever", async () => {
     vi.stubGlobal("EventSource", undefined);
     vi.spyOn(assistant, "pollEvents").mockRejectedValue(new Error("down"));
@@ -128,6 +154,10 @@ describe("the long-poll fallback", () => {
 });
 
 describe("restoreLetters", () => {
+  it("leaves the text alone when the session has no letters", () => {
+    expect(restoreLetters("Person A asked", null)).toBe("Person A asked");
+  });
+
   it("puts names back for display, longest label first, and leaves other text alone", () => {
     const letters = { "Person A": "Alice", "Person AA": "Zed" };
     expect(restoreLetters("Person A asked, Person AA agreed, Person B stayed", letters)).toBe("Alice asked, Zed agreed, Person B stayed");
@@ -150,7 +180,7 @@ describe("foldEvents", () => {
     expect(s.items.map((i) => i.kind)).toEqual(["user", "assistant", "tool"]);
     expect(s.items[1]).toMatchObject({ text: "Hello" });
     expect(s.items[2]).toMatchObject({ name: "read", args: "unit Payments", result: "1 ceiling", ok: true, dryRun: true });
-    expect(s.turns).toEqual([{ seq: 8, usage: { input_tokens: 10, output_tokens: 4 } }]);
+    expect(s.turns).toEqual([{ gen: 0, seq: 8, usage: { input_tokens: 10, output_tokens: 4 } }]);
     expect(s.lastSeq).toBe(8);
   });
 
@@ -160,6 +190,24 @@ describe("foldEvents", () => {
     s = foldEvents(s, [ev(2, "proposal", { parts: [], dropped: [] }), ev(3, "notice", { notice: "provider_error" }), ev(4, "error", { code: "tools_unavailable", status: 404 }), ev(5, "state", { state: "ended" })]);
     expect(s.proposal).toEqual({ parts: [], dropped: [] });
     expect([s.providerError, s.toolsUnavailable, s.ended]).toEqual([true, true, true]);
+  });
+
+  it("keeps a carried chat apart from the next session: its seqs restart at 1 and nothing joins or pairs across them", () => {
+    const first = foldEvents(EMPTY_COMPOSER, [
+      ev(1, "user_message", { text: "one" }),
+      ev(2, "text", { text: "old reply" }),
+      ev(3, "tool_call", { name: "read", input: "a" }),
+      ev(4, "turn_end", { usage: { input_tokens: 1 } }),
+    ]);
+    const next = foldEvents({ ...EMPTY_COMPOSER, gen: first.gen + 1, items: first.items }, [
+      ev(1, "user_message", { text: "two" }),
+      ev(2, "text", { text: "new reply" }),
+      ev(3, "tool_result", { name: "read", ok: true, summary: "late" }),
+    ]);
+    expect(next.items.map((i) => `${i.gen}-${i.kind}-${i.seq}`)).toEqual(["0-user-1", "0-assistant-2", "0-tool-3", "1-user-1", "1-assistant-2", "1-tool-3"]);
+    expect(next.items[1]).toMatchObject({ text: "old reply" });
+    expect(next.items[2]).toMatchObject({ result: "", ok: null });
+    expect(new Set(next.items.map((i) => `${i.gen}-${i.kind}-${i.seq}`)).size).toBe(next.items.length);
   });
 
   it("ignores an event at or before its cursor", () => {

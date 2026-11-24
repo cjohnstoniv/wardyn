@@ -45,9 +45,9 @@ export function ComposerChat({ items, letters, turns, canSend, onSend, children 
     <section data-testid="composer-chat" className="flex min-w-0 flex-col gap-2.5">
       <ol className="flex flex-col gap-2.5">
         {items.map((it) => (
-          <li key={`${it.kind}-${it.seq}`} className={cn(it.kind === "user" && "self-end")}>
+          <li key={`${it.gen}-${it.kind}-${it.seq}`} className={cn(it.kind === "user" && "self-end")}>
             {it.kind === "tool" ? (
-              <ToolLine item={it} usage={usageAfter(turns, it.seq)} />
+              <ToolLine item={it} usage={usageAfter(turns, it)} />
             ) : (
               <p
                 data-testid={`composer-message-${it.kind}`}

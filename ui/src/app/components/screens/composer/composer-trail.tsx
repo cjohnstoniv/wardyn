@@ -14,8 +14,8 @@ import { cn } from "../../ui/utils";
 import type { Suggestion, ToolItem, TurnUsage } from "./composer-stream";
 
 /** The usage of the first turn that ended after a call: the turn the call belongs to. */
-export function usageAfter(turns: readonly TurnUsage[], seq: number): Readonly<Record<string, number>> | null {
-  return turns.find((t) => t.seq > seq)?.usage ?? null;
+export function usageAfter(turns: readonly TurnUsage[], item: { readonly gen: number; readonly seq: number }): Readonly<Record<string, number>> | null {
+  return turns.find((t) => t.gen === item.gen && t.seq > item.seq)?.usage ?? null;
 }
 
 const usageText = (usage: Readonly<Record<string, number>>) =>
@@ -84,7 +84,7 @@ export function ComposerTrail({ tools, suggestion, audit }: { tools: readonly To
       </div>
       <ul className="space-y-1">
         {tools.map((t) => (
-          <li key={t.seq} className="mono flex flex-wrap gap-x-2 text-meta">
+          <li key={`${t.gen}-${t.seq}`} className="mono flex flex-wrap gap-x-2 text-meta">
             <span className="text-foreground">{t.name}</span>
             <span className="min-w-0 break-words text-muted-foreground">{t.result}</span>
           </li>

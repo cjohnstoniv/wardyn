@@ -355,16 +355,51 @@ describe("when the assistant stops", () => {
     expect(availability).toHaveBeenCalledTimes(1);
   });
 
-  it("ends a tools_unavailable stop with its own line, which the ordinary ended event that follows does not replace", async () => {
-    await withDraft();
+  it("ends a tools_unavailable stop, which arrives while the starting view shows, with its own line, and the poll's ended answer does not replace it", async () => {
+    await start();
     await push(ev("error", { code: "tools_unavailable", status: 404 }));
     expect(await screen.findByText(T.TOOLS_UNAVAILABLE)).toBeInTheDocument();
-    await push(ev("state", { state: "ended" }));
-    expect(screen.getByText(T.TOOLS_UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.queryByTestId("composer-starting")).toBeNull();
     expect(screen.queryByText(T.ENDED)).toBeNull();
-    expect(screen.getByText("node-20-dev")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: T.START_AGAIN })).toBeNull();
     expect(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER })).toBeDisabled();
+  });
+
+  it("keeps a retried chat's two sessions apart when the second one's seqs start at 1 again", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await ready();
+    await push({ seq: 2, kind: "user_message", payload: { text: "first ask" }, created_at: "t" }, { seq: 3, kind: "text", payload: { text: "first reply" }, created_at: "t" }, { seq: 4, kind: "notice", payload: { notice: "provider_error" }, created_at: "t" });
+    await userEvent.click(await screen.findByRole("button", { name: T.TRY_AGAIN }));
+    await userEvent.click(await screen.findByRole("button", { name: T.START }));
+    await waitFor(() => expect(FakeSource.all).toHaveLength(2));
+    await push({ seq: 1, kind: "state", payload: { state: "ready" }, created_at: "t" }, { seq: 2, kind: "user_message", payload: { text: "second ask" }, created_at: "t" }, { seq: 3, kind: "text", payload: { text: "second reply" }, created_at: "t" });
+    expect(await screen.findByText("second reply")).toBeInTheDocument();
+    expect(screen.getByText("first reply")).toBeInTheDocument();
+    expect(screen.getByText("first ask")).toBeInTheDocument();
+    expect(screen.getByText("second ask")).toBeInTheDocument();
+    expect(errors.mock.calls.filter((c) => String(c[0]).includes("same key"))).toHaveLength(0);
+    errors.mockRestore();
+  });
+
+  it("ends the chat, with the server's own sentence, when a message is refused for a reason the screen has no state for", async () => {
+    await ready();
+    message.mockRejectedValueOnce(new HttpError(409, "The assistant's provider or model changed. Start again to see what will be sent.", "assistant_session_provider_changed"));
+    await userEvent.type(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER }), "more");
+    await userEvent.click(screen.getByRole("button", { name: T.SEND }));
+    expect(await screen.findByText("The assistant's provider or model changed. Start again to see what will be sent.")).toBeInTheDocument();
+    expect(screen.queryByText(T.ENDED)).toBeNull();
+    expect(screen.getByRole("button", { name: T.START_AGAIN })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER })).toBeDisabled();
+  });
+
+  it("ends the chat when a message is refused because the person's role no longer allows the assistant", async () => {
+    await ready();
+    message.mockRejectedValueOnce(new HttpError(403, "You can't use the assistant.", "assistant_role_denied"));
+    await userEvent.type(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER }), "more");
+    await userEvent.click(screen.getByRole("button", { name: T.SEND }));
+    expect(await screen.findByText("You can't use the assistant.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: T.END })).toBeNull();
   });
 });
 
@@ -384,6 +419,44 @@ describe("ending", () => {
     cleanup();
     expect(end).toHaveBeenCalledWith(SESSION.id);
     expect(FakeSource.all[0].closed).toBe(true);
+  });
+
+  it("says what the server said when the stop failed, keeps End, and a second End that works closes the chat", async () => {
+    await ready();
+    end.mockRejectedValueOnce(new HttpError(500, "The run could not be stopped. Try again."));
+    await userEvent.click(screen.getByRole("button", { name: T.END }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The run could not be stopped. Try again.");
+    expect(screen.queryByText(T.ENDED)).toBeNull();
+    expect(screen.getByRole("textbox", { name: T.CHAT_PLACEHOLDER })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: T.END }));
+    expect(await screen.findByText(T.ENDED)).toBeInTheDocument();
+    expect(end).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("ends a session that was made after the person left, and opens no stream for it", async () => {
+    let made!: (s: AssistantSessionView) => void;
+    create.mockReturnValueOnce(new Promise<AssistantSessionView>((r) => (made = r)));
+    show();
+    await userEvent.click(await screen.findByRole("button", { name: T.START }));
+    cleanup();
+    await act(async () => made(SESSION));
+    expect(end).toHaveBeenCalledWith(SESSION.id);
+    expect(stream).not.toHaveBeenCalled();
+    expect(FakeSource.all).toHaveLength(0);
+  });
+
+  it("shows nothing from a preview that arrives after the person left", async () => {
+    let shown!: (p: AssistantPreview) => void;
+    preview.mockReturnValueOnce(new Promise<AssistantPreview>((r) => (shown = r)));
+    const { unmount } = show();
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(1));
+    unmount();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await act(async () => shown(PREVIEW));
+    expect(screen.queryByTestId("composer-preview")).toBeNull();
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
   });
 
   it("makes no end call on leaving before Start", async () => {

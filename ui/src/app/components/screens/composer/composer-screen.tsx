@@ -59,7 +59,7 @@ type Phase =
   | { name: "unavailable"; why: Unavailable }
   | { name: "failed"; message: string }
   | { name: "preview"; preview: AssistantPreview; changed: boolean; busy: boolean; error: string | null }
-  | { name: "session"; session: AssistantSessionView; endedBy: Unavailable | null; closed: boolean };
+  | { name: "session"; session: AssistantSessionView; endedBy: Unavailable | null; note: string | null; closed: boolean };
 
 export function ComposerScreen() {
   const location = useLocation();
@@ -80,6 +80,11 @@ export function ComposerScreen() {
   // The one live session, so leaving the screen can end it, and the stream that reads it.
   const live = React.useRef<string | null>(null);
   const closeStream = React.useRef<(() => void) | null>(null);
+  // Bumped when the screen is left or the URL changes: an answer that arrives after that belongs to nobody.
+  const gen = React.useRef(0);
+  const supersede = () => {
+    gen.current++;
+  };
 
   const stopStream = React.useCallback(() => {
     closeStream.current?.();
@@ -88,11 +93,14 @@ export function ComposerScreen() {
 
   const loadPreview = React.useCallback(
     async (changed: boolean) => {
+      const mine = gen.current;
       try {
         const preview = await assistant.postPreview(purpose, target);
-        setLetters(preview.letters);
+        if (gen.current !== mine) return;
+        setLetters(preview.letters ?? {});
         setPhase({ name: "preview", preview, changed, busy: false, error: null });
       } catch (e) {
+        if (gen.current !== mine) return;
         const why = unavailableFrom(e, target);
         setPhase(why ? { name: "unavailable", why } : { name: "failed", message: getErrorMessage(e) });
       }
@@ -103,6 +111,7 @@ export function ComposerScreen() {
   // Step 1: is the assistant ready for this purpose? Not ready: the reason, and nothing else.
   const begin = React.useCallback(
     async (carry: ComposerState) => {
+      const mine = gen.current;
       stopStream();
       // A session that ended is not ended again by leaving; the next Start makes its own.
       live.current = null;
@@ -115,9 +124,10 @@ export function ComposerScreen() {
       try {
         answer = await assistant.getMyAssistant(purpose);
       } catch (e) {
-        setPhase({ name: "failed", message: getErrorMessage(e) });
+        if (gen.current === mine) setPhase({ name: "failed", message: getErrorMessage(e) });
         return;
       }
+      if (gen.current !== mine) return;
       if (answer.state !== "ready") {
         setPhase({ name: "unavailable", why: { state: answer.state, providerId: answer.provider_id, providerName: answer.provider_name } });
         return;
@@ -134,6 +144,7 @@ export function ComposerScreen() {
   React.useEffect(() => {
     void begin(EMPTY_COMPOSER);
     return () => {
+      supersede();
       closeStream.current?.();
       closeStream.current = null;
       // Leaving the screen ends the session; the person's own End did that already.
@@ -148,20 +159,27 @@ export function ComposerScreen() {
   const start = async () => {
     if (phase.name !== "preview" || phase.busy) return;
     const { preview } = phase;
+    const mine = gen.current;
     setPhase({ ...phase, busy: true, error: null });
     try {
       const session = await assistant.createSession({ purpose, target, preview_digest: preview.digest });
+      if (gen.current !== mine) {
+        // The person left, or the address changed, while the session was being made: nobody owns it, so it ends.
+        void assistant.endSession(session.id).catch(() => undefined);
+        return;
+      }
       live.current = session.id;
-      setLetters(session.letters ?? preview.letters);
-      setPhase({ name: "session", session, endedBy: null, closed: false });
+      setLetters(session.letters ?? preview.letters ?? {});
+      setPhase({ name: "session", session, endedBy: null, note: null, closed: false });
       closeStream.current = openComposerStream({
         sessionId: session.id,
         onEvents: (events) => setFold((f) => foldEvents(f, events)),
         onEnded: () => setPollEnded(true),
-        onLetters: (l) => Object.keys(l).length > 0 && setLetters(l),
+        onLetters: (l) => Object.keys(l ?? {}).length > 0 && setLetters(l),
         onFailed: (e) => setStreamFailed(getErrorMessage(e)),
       });
     } catch (e) {
+      if (gen.current !== mine) return;
       if (e instanceof HttpError && e.reason === "assistant_preview_stale") {
         // Nothing starts until the person has read the new preview and pressed Start again.
         await loadPreview(true);
@@ -179,13 +197,15 @@ export function ComposerScreen() {
     try {
       await assistant.postMessage(phase.session.id, text);
     } catch (e) {
-      if (e instanceof HttpError && e.status === 409) {
-        // The session is over: the assistant was turned off, its provider no longer serves this person, or it ended
-        // meanwhile. The chat ends the way an end does, with the assistant's own reason, when there is one, in place of the ended
-        // wording, and the draft stays as it was.
+      if (e instanceof HttpError && (e.status === 409 || e.reason === "assistant_role_denied")) {
+        // The session is over: the assistant was turned off, its provider no longer serves this person, the person's
+        // role no longer allows it, or it ended meanwhile. The chat ends the way an end does, with the assistant's own
+        // reason when it has one, else the server's sentence, in place of the ended wording; the draft stays as it was.
         stopStream();
         live.current = null;
-        setPhase({ ...phase, endedBy: unavailableFrom(e, target), closed: true });
+        const why = unavailableFrom(e, target);
+        const note = why || e.reason === "assistant_session_not_found" ? null : e.message || null;
+        setPhase({ ...phase, endedBy: why, note, closed: true });
       } else {
         setChatError(getErrorMessage(e));
       }
@@ -196,17 +216,21 @@ export function ComposerScreen() {
   const end = async () => {
     if (phase.name !== "session") return;
     const id = phase.session.id;
-    stopStream();
-    live.current = null;
-    setPhase({ ...phase, closed: true });
+    setChatError(null);
     try {
       await assistant.endSession(id);
-    } catch {
-      // The session is closed here either way; the server also ends it when it goes idle.
+    } catch (e) {
+      // The run may still be running: say what the server said and keep End, which asks again.
+      setChatError(getErrorMessage(e));
+      return;
     }
+    stopStream();
+    live.current = null;
+    setPhase((p) => (p.name === "session" ? { ...p, closed: true } : p));
   };
 
-  const again = (keepChat: boolean) => void begin({ ...EMPTY_COMPOSER, proposal: fold.proposal, items: keepChat ? fold.items : [] });
+  // The new session's seqs start at 1 again, so what is carried over keeps its own generation.
+  const again = (keepChat: boolean) => void begin({ ...EMPTY_COMPOSER, gen: fold.gen + 1, proposal: fold.proposal, items: keepChat ? fold.items : [] });
 
   const over = phase.name === "session" && (phase.closed || phase.endedBy !== null || fold.ended || pollEnded || fold.toolsUnavailable || fold.providerError);
   const title = (
@@ -252,11 +276,13 @@ export function ComposerScreen() {
     const ready = fold.ready;
     const tools = fold.items.filter((i): i is ToolItem => i.kind === "tool");
     // What ended the chat, most specific first: the tools line wins over the ordinary ended event that follows it.
-    const ending: "tools" | "reason" | "ended" | null = fold.toolsUnavailable
+    const ending: "tools" | "reason" | "note" | "ended" | null = fold.toolsUnavailable
       ? "tools"
       : phase.endedBy
         ? "reason"
-        : phase.closed || fold.ended || pollEnded
+        : phase.note
+          ? "note"
+          : phase.closed || fold.ended || pollEnded
           ? "ended"
           : null;
     if (!ready && ending === null && !fold.providerError && !fold.items.length) {
@@ -275,15 +301,16 @@ export function ComposerScreen() {
           ) : null}
           <div className="grid min-w-0 gap-4 min-[760px]:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
             <ComposerChat items={fold.items} letters={letters} turns={fold.turns} canSend={ready && ending === null && !fold.providerError} onSend={send}>
-              {fold.providerError && ending !== "tools" && ending !== "reason" && (
+              {fold.providerError && ending !== "tools" && ending !== "reason" && ending !== "note" && (
                 <AssistantAvailability state="provider_error" providerName={session.provider} onRetry={() => again(true)} />
               )}
               {ending === "tools" && <Notice tone="warning">{T.TOOLS_UNAVAILABLE}</Notice>}
               {ending === "reason" && phase.endedBy && (
                 <AssistantAvailability state={phase.endedBy.state} providerId={phase.endedBy.providerId} providerName={phase.endedBy.providerName} kindLabel={phase.endedBy.kindLabel} />
               )}
+              {ending === "note" && <Notice tone="info">{phase.note}</Notice>}
               {ending === "ended" && !fold.providerError && <Notice tone="info">{T.ENDED}</Notice>}
-              {((ending === "ended" && !fold.providerError) || ending === "reason") && (
+              {((ending === "ended" && !fold.providerError) || ending === "reason" || ending === "note") && (
                 <div>
                   <Button type="button" variant="outline" onClick={() => again(false)}>
                     {T.START_AGAIN}

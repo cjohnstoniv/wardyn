@@ -13,7 +13,7 @@ import { ComposerTrail, ToolLine, usageAfter } from "./composer-trail";
 
 afterEach(cleanup);
 
-const TOOL: ToolItem = { kind: "tool", seq: 3, name: "validate", args: "run draft", result: "valid", ok: true, dryRun: true };
+const TOOL: ToolItem = { kind: "tool", gen: 0, seq: 3, name: "validate", args: "run draft", result: "valid", ok: true, dryRun: true };
 
 describe("ToolLine", () => {
   it("is collapsed until clicked, then shows its arguments, the dry-run mark and the token use", async () => {
@@ -37,11 +37,11 @@ describe("ToolLine", () => {
 describe("usageAfter", () => {
   it("takes the first turn that ended after the call", () => {
     const turns = [
-      { seq: 2, usage: { a: 1 } },
-      { seq: 9, usage: { a: 2 } },
+      { gen: 0, seq: 2, usage: { a: 1 } },
+      { gen: 0, seq: 9, usage: { a: 2 } },
     ];
-    expect(usageAfter(turns, 3)).toEqual({ a: 2 });
-    expect(usageAfter(turns, 9)).toBeNull();
+    expect(usageAfter(turns, { gen: 0, seq: 3 })).toEqual({ a: 2 });
+    expect(usageAfter(turns, { gen: 0, seq: 9 })).toBeNull();
   });
 });
 

@@ -78,7 +78,8 @@ export interface AssistantEvent {
 export interface AssistantEventsPage {
   readonly events: readonly AssistantEvent[];
   readonly state: string;
-  readonly letters: Readonly<Record<string, string>>;
+  /** Null once the session's person letters were erased. */
+  readonly letters: Readonly<Record<string, string>> | null;
 }
 
 export interface AssistantSessionRequest {

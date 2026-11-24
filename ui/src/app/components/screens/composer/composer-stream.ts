@@ -74,7 +74,7 @@ export function openComposerStream(opts: ComposerStreamOptions): () => void {
         if (closed) return;
         failures = 0;
         deliver(page.events);
-        opts.onLetters?.(page.letters);
+        opts.onLetters?.(page.letters ?? {});
         if (page.state === "ended") {
           opts.onEnded?.();
           return;
@@ -100,6 +100,10 @@ export function openComposerStream(opts: ComposerStreamOptions): () => void {
     let got = false;
     const es = assistant.streamEvents(opts.sessionId, after);
     source = es;
+    // A stream that opened and then sat quiet through the server's hold is not a failure; only one that never opened is.
+    es.onopen = () => {
+      got = true;
+    };
     for (const kind of EVENT_KINDS) {
       es.addEventListener(kind, (m) => {
         try {
@@ -134,12 +138,13 @@ export function openComposerStream(opts: ComposerStreamOptions): () => void {
 }
 
 /** Puts each Person letter's name back, for display only: what is posted back is never changed. */
-export function restoreLetters(text: string, letters: Readonly<Record<string, string>>): string {
+export function restoreLetters(text: string, letters: Readonly<Record<string, string>> | null | undefined): string {
   let out = text;
-  for (const label of Object.keys(letters).sort((a, b) => b.length - a.length)) {
-    if (!letters[label]) continue;
+  const names = letters ?? {};
+  for (const label of Object.keys(names).sort((a, b) => b.length - a.length)) {
+    if (!names[label]) continue;
     const re = new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`, "g");
-    out = out.replace(re, () => letters[label]);
+    out = out.replace(re, () => names[label]);
   }
   return out;
 }
@@ -148,6 +153,8 @@ export function restoreLetters(text: string, letters: Readonly<Record<string, st
 
 export interface ToolItem {
   readonly kind: "tool";
+  /** Which session the item came from: a new session's seqs restart at 1, so a seq is only unique within its gen. */
+  readonly gen: number;
   readonly seq: number;
   readonly name: string;
   readonly args: string;
@@ -157,6 +164,7 @@ export interface ToolItem {
 }
 export interface TextItem {
   readonly kind: "user" | "assistant";
+  readonly gen: number;
   readonly seq: number;
   readonly text: string;
 }
@@ -177,6 +185,7 @@ export interface Proposal {
 }
 
 export interface TurnUsage {
+  readonly gen: number;
   readonly seq: number;
   readonly usage: Readonly<Record<string, number>>;
 }
@@ -187,6 +196,8 @@ export interface Suggestion {
 }
 
 export interface ComposerState {
+  /** The session this state is folding events of; a chat carried into a new session keeps the old items' gen. */
+  readonly gen: number;
   readonly items: readonly ChatItem[];
   readonly lastSeq: number;
   /** A state event said the assistant is ready for a message. */
@@ -203,6 +214,7 @@ export interface ComposerState {
 }
 
 export const EMPTY_COMPOSER: ComposerState = {
+  gen: 0,
   items: [],
   lastSeq: 0,
   ready: false,
@@ -241,10 +253,11 @@ function proposalOf(p: Record<string, unknown>): Proposal {
   };
 }
 
-function withLastTool(items: readonly ChatItem[], pick: (t: ToolItem) => boolean, change: (t: ToolItem) => ToolItem): ChatItem[] | null {
+function withLastTool(items: readonly ChatItem[], gen: number, pick: (t: ToolItem) => boolean, change: (t: ToolItem) => ToolItem): ChatItem[] | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i];
-    if (it.kind === "tool" && pick(it)) {
+    // A call of an earlier session is never paired with this session's result.
+    if (it.kind === "tool" && it.gen === gen && pick(it)) {
       const next = items.slice();
       next[i] = change(it);
       return next;
@@ -262,35 +275,35 @@ export function foldEvents(state: ComposerState, events: readonly AssistantEvent
     s = { ...s, lastSeq: ev.seq };
     switch (ev.kind) {
       case "user_message":
-        s = { ...s, items: [...s.items, { kind: "user", seq: ev.seq, text: str(p, "text") }] };
+        s = { ...s, items: [...s.items, { kind: "user", gen: s.gen, seq: ev.seq, text: str(p, "text") }] };
         break;
       case "text": {
         const last = s.items[s.items.length - 1];
         // The relay posts a turn's text in pieces: consecutive pieces are one message.
         s =
-          last && last.kind === "assistant"
+          last && last.kind === "assistant" && last.gen === s.gen
             ? { ...s, items: [...s.items.slice(0, -1), { ...last, text: last.text + str(p, "text") }] }
-            : { ...s, items: [...s.items, { kind: "assistant", seq: ev.seq, text: str(p, "text") }] };
+            : { ...s, items: [...s.items, { kind: "assistant", gen: s.gen, seq: ev.seq, text: str(p, "text") }] };
         break;
       }
       case "tool_call":
         s = {
           ...s,
-          items: [...s.items, { kind: "tool", seq: ev.seq, name: str(p, "name"), args: str(p, "input", "args", "arguments", "summary"), result: "", ok: null, dryRun: null }],
+          items: [...s.items, { kind: "tool", gen: s.gen, seq: ev.seq, name: str(p, "name"), args: str(p, "input", "args", "arguments", "summary"), result: "", ok: null, dryRun: null }],
         };
         break;
       case "tool_result": {
         const name = str(p, "name");
         const ok = typeof p.ok === "boolean" ? p.ok : null;
         const result = str(p, "summary", "result", "output");
-        const next = withLastTool(s.items, (t) => t.name === name && t.result === "" && t.ok === null, (t) => ({ ...t, result, ok }));
-        s = { ...s, items: next ?? [...s.items, { kind: "tool", seq: ev.seq, name, args: "", result, ok, dryRun: null }] };
+        const next = withLastTool(s.items, s.gen, (t) => t.name === name && t.result === "" && t.ok === null, (t) => ({ ...t, result, ok }));
+        s = { ...s, items: next ?? [...s.items, { kind: "tool", gen: s.gen, seq: ev.seq, name, args: "", result, ok, dryRun: null }] };
         break;
       }
       case "tool_record": {
         const name = str(p, "name");
         const dryRun = typeof p.dry_run === "boolean" ? p.dry_run : null;
-        const next = withLastTool(s.items, (t) => t.name === name && t.dryRun === null, (t) => ({ ...t, dryRun }));
+        const next = withLastTool(s.items, s.gen, (t) => t.name === name && t.dryRun === null, (t) => ({ ...t, dryRun }));
         if (next) s = { ...s, items: next };
         break;
       }
@@ -313,7 +326,7 @@ export function foldEvents(state: ComposerState, events: readonly AssistantEvent
         s = { ...s, proposal: proposalOf(p) };
         break;
       case "turn_end":
-        s = { ...s, turns: [...s.turns, { seq: ev.seq, usage: numbers(p.usage ?? p) }] };
+        s = { ...s, turns: [...s.turns, { gen: s.gen, seq: ev.seq, usage: numbers(p.usage ?? p) }] };
         break;
       case "suggestion":
         s = {
