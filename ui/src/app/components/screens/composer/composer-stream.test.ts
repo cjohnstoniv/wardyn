@@ -32,7 +32,7 @@ class FakeSource {
   }
 }
 
-const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): AssistantEvent => ({ seq, kind, payload, created_at: "2026-11-24T09:00:00Z" });
+const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}): AssistantEvent => ({ seq, kind, payload, created_at: new Date(0).toISOString() });
 const ID = "5b1d2f3a-0000-4000-8000-000000000001";
 
 beforeEach(() => {
