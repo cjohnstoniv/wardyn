@@ -80,7 +80,6 @@ var RedactableActions = map[string]bool{
 	"policy.create": true, "policy.update": true, "policy.delete": true,
 	"preset.create": true, "preset.update": true,
 	"workload.apply": true, "workload.policy_pin.set": true, "workload.launch_refused": true, "workload.delete": true,
-	"agent_rules.write": true, "agent_rules.delete": true,
 	"model_provider.service_grant.mint": true, "model_provider.service_grant.secret_write": true,
 	"model_provider.service_grant.secret_delete": true,
 }

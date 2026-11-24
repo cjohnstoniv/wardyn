@@ -71,10 +71,6 @@ var auditHostViews = map[string]auditHostView{
 	"model_provider.service_grant.mint":          {withhold: []string{"audience", "scope", "token_host"}},
 	"model_provider.service_grant.secret_write":  {withhold: []string{"body_base_host", "body_token_host", "token_host"}},
 	"model_provider.service_grant.secret_delete": {withhold: []string{"token_host"}},
-	// An agent's organisation rules (types.PersonalWallsSpec): GET /agent-rules is security tier, and a withheld
-	// grant's scope is free-form JSON that can name any host, so each image of the walls goes with it.
-	"agent_rules.write":  {withhold: []string{"after", "before"}},
-	"agent_rules.delete": {withhold: []string{"spec"}},
 }
 
 // withoutHostDetail is evs as a reader below the super-admin tier is served them (auditHostViews). Only the
