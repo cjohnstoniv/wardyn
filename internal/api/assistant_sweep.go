@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -36,7 +37,9 @@ func (s *Server) eraseAssistantSessions(ctx context.Context, e assistantSessionE
 		}
 	}
 	for _, run := range assistantRunsOf(runs) {
-		s.stopAssistantRun(ctx, run)
+		if err := s.stopAssistantRun(ctx, run); err != nil {
+			slog.WarnContext(ctx, "wardynd: could not stop an assistant run", slog.String("run_id", run.String()), slog.Any("err", err))
+		}
 	}
 	return n, nil
 }

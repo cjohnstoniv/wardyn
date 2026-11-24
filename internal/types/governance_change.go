@@ -49,6 +49,7 @@ const (
 	GovernanceTargetEnvelope               = "governance_envelope"
 	GovernanceTargetElevation              = "governance_elevation"
 	GovernanceTargetImageRequest           = "governance_image_request"
+	GovernanceTargetApprovalCounts         = "governance_approval_counts"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the

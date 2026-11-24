@@ -726,6 +726,14 @@ const (
 	reasonGovernanceChangeApprovalNotFound = "governance_change_approval_not_found"         // take back, when the caller holds no approval that counts
 )
 
+// How many approvals each kind of governance change needs (governance_approval_counts.go).
+const (
+	reasonGovernanceApprovalCountsMinimumUnset = "governance_approval_counts_minimum_unset" // a PUT while WARDYN_GOVERNANCE_MIN_APPROVALS is unset
+	reasonGovernanceApprovalCountsLocalMode    = "governance_approval_counts_local_mode"    // a PUT in local mode, which authenticates nobody
+	reasonGovernanceApprovalCountsInvalid      = "governance_approval_counts_invalid"       // a count out of range, a kind the page does not list, or a kind twice
+	reasonGovernanceApprovalCountsUnreachable  = "governance_approval_counts_unreachable"   // a count above the people who can approve, or edits to the counts that could not pass
+)
+
 // reasonIdentityDeactivated: a run, API token, SSH key, stored credential or runner registration
 // token was refused because its owner's identity is deactivated or was suspended since the caller
 // was admitted (leaver deprovisioning). One sentence, so a suspension reads like a cut session.
