@@ -211,6 +211,9 @@ type Tools struct {
 	// fdaOpen opens the path the Full Disk Access probe names and closes it; nil is a plain read-only open
 	// (tests answer).
 	fdaOpen func(path string) error
+	// listDir names the entries of a directory; nil is os.ReadDir's (tests answer). An app item's zip install
+	// reads its stage with it.
+	listDir func(dir string) ([]string, error)
 
 	// cltListed is the Command Line Tools labels this process's own `softwareupdate -l` runs printed,
 	// in memory only, so a boot installs only what that boot listed; nil until a `-l` has run.
@@ -339,18 +342,31 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	}
 	steps := appInstallSteps(in.Argv)
 	if steps == nil {
-		steps = [][]string{in.Argv}
+		steps = []installStep{{argv: in.Argv}}
 	}
 	var out []byte
 	code := 0
 	for _, step := range steps { // the first step that fails is the answer
-		o, c, err := run(r.Context(), step)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		argvs := [][]string{step.argv}
+		if step.clearOld != "" {
+			var err error
+			if argvs, err = t.clearOldSteps(step.clearOld); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
-		out, code = append(out, o...), c
-		if c != 0 {
+		for _, argv := range argvs {
+			o, c, err := run(r.Context(), argv)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			out, code = append(out, o...), c
+			if c != 0 {
+				break
+			}
+		}
+		if code != 0 {
 			break
 		}
 	}
@@ -860,36 +876,73 @@ func isItemDirForm(argv []string) bool {
 // write there (ItemSecretPattern), and the host's rm -rf of the stage directory removes it with the rest.
 const itemAppStage = ".app-stage"
 
+// installStep is one step of an app item's install: an argv to run, or, when clearOld names a stage directory,
+// the removal of the /Applications counterpart of each of that directory's top-level entries (read when the step
+// is reached, after the unpack has made them).
+type installStep struct {
+	argv     []string
+	clearOld string
+}
+
 // appInstallSteps is what an app item's install form, already allowed, runs as; nil for every other argv. An
 // archive or disk image keeps the owners and modes it was made with, and ditto as root would put files the
-// run's user owns, or that anyone may write, into /Applications. So the app goes into the item's stage first,
-// is made root's with no group or other write there (neither command follows a link), and only then is copied
-// into place. The host sends the same form to every agent; an older one runs it as given.
-func appInstallSteps(argv []string) [][]string {
+// run's user owns, or that anyone may write, into /Applications, and would merge into an older copy of the app
+// that is still there. So the app goes into the item's stage first, is made root's there (links included) with
+// no group or other write and no set-id bit (neither command follows a link), and only then, with the old copy
+// removed, is copied into place. The host sends the same form to every agent; an older one runs it as given.
+func appInstallSteps(argv []string) []installStep {
 	var stage string
-	var unpack, place []string
+	var unpack, clearOld, place installStep
 	switch {
 	case len(argv) == 5 && argv[0] == "/usr/bin/ditto" && argv[1] == "-x" && argv[2] == "-k" &&
 		isItemFile(argv[3], ItemZip) && argv[4] == MacApplications:
 		stage = filepath.Dir(argv[3]) + "/" + itemAppStage
-		unpack = []string{"/usr/bin/ditto", "-x", "-k", argv[3], stage}
-		place = []string{"/usr/bin/ditto", stage, MacApplications}
+		unpack = installStep{argv: []string{"/usr/bin/ditto", "-x", "-k", argv[3], stage}}
+		clearOld = installStep{clearOld: stage}
+		place = installStep{argv: []string{"/usr/bin/ditto", stage, MacApplications}}
 	case len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(filepath.Base(argv[1])) &&
 		isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+filepath.Base(argv[1]):
 		stage = filepath.Dir(filepath.Dir(argv[1])) + "/" + itemAppStage
 		app := stage + "/" + filepath.Base(argv[1])
-		unpack = []string{"/usr/bin/ditto", argv[1], app}
-		place = []string{"/usr/bin/ditto", app, argv[2]}
+		unpack = installStep{argv: []string{"/usr/bin/ditto", argv[1], app}}
+		clearOld = installStep{argv: []string{"/bin/rm", "-rf", argv[2]}}
+		place = installStep{argv: []string{"/usr/bin/ditto", app, argv[2]}}
 	default:
 		return nil
 	}
-	return [][]string{
-		{"/bin/rm", "-rf", stage},
+	return []installStep{
+		{argv: []string{"/bin/rm", "-rf", stage}},
 		unpack,
-		{"/usr/sbin/chown", "-R", "-P", "root:wheel", stage},
-		{"/bin/chmod", "-R", "-P", "go-w", stage},
+		{argv: []string{"/usr/sbin/chown", "-h", "-R", "-P", "root:wheel", stage}},
+		{argv: []string{"/bin/chmod", "-R", "-P", "go-w,ug-s", stage}},
+		clearOld,
 		place,
 	}
+}
+
+// clearOldSteps are the rm -rf argvs, one per top-level entry of the unpacked stage, that remove its
+// counterpart in /Applications before the copy.
+func (t *Tools) clearOldSteps(stage string) ([][]string, error) {
+	list := t.listDir
+	if list == nil {
+		list = func(dir string) ([]string, error) {
+			es, err := os.ReadDir(dir)
+			names := make([]string, 0, len(es))
+			for _, e := range es {
+				names = append(names, e.Name())
+			}
+			return names, err
+		}
+	}
+	names, err := list(stage)
+	if err != nil {
+		return nil, fmt.Errorf("read the unpacked app: %w", err)
+	}
+	argvs := make([][]string, 0, len(names))
+	for _, n := range names {
+		argvs = append(argvs, []string{"/bin/rm", "-rf", MacApplications + "/" + n})
+	}
+	return argvs, nil
 }
 
 // itemForms checks each item form's whole argv, by its command and first argument.
