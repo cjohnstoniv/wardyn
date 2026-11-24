@@ -1077,6 +1077,11 @@ var routeMatrix = map[string]classifiedRoute{
 	// The ticket-less lane is admin only (requireOperator) and is then refused 400 run_forward_ticket_required in the
 	// handler; the ticket lane's owner rule is pinned by TestAttachForward_TicketLaneOwnerRule.
 	"GET /api/v1/runs/{id}/attach/forward": {class: classAdmin},
+	// GET /runs/{id}/ssh (sshgateway_ticket.go) is ticket-only: no session, bearer or key is consulted, the
+	// single-use SSH ticket in the Wardyn-Ticket header is the credential, and a missing header answers the bad-ticket
+	// 403 (a path id that does not parse, as this matrix sends, the 400). Its owner rule and run checks are pinned by
+	// the TestSSHTicketDoor tests.
+	"GET /api/v1/runs/{id}/ssh": {class: classAnonymous},
 
 	// internal (run-token / ground-truth-token bearer only)
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},

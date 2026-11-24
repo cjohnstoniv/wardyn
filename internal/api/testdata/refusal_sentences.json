@@ -181,6 +181,11 @@
   },
   {
     "reason": "capKinds[capFeature].reason",
+    "target": "\"runs.ssh_ticket\"",
+    "sentence": "sshTicketFeatureRefusal"
+  },
+  {
+    "reason": "capKinds[capFeature].reason",
     "target": "\"runs.ui_apps\"",
     "sentence": "\"Inbound apps aren't turned on for you. Ask your admin, or declare the app without inbound.\""
   },

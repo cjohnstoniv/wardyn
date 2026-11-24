@@ -663,10 +663,10 @@ func (s *Server) routes() chi.Router {
 		// the ticket's MINTER for ticket auth — is recorded for attribution
 		// (invariant 4).
 		r.Group(func(r chi.Router) {
-			r.Use(s.ticketOrHumanAuth)
-			r.Get("/runs/{id}/attach", s.handleAttachWS)
-			r.Get("/runs/{id}/attach/forward", s.handleAttachForward) // one TCP connection to the sandbox's loopback, by ticket only; off unless the operator turns it on (attach_forward.go)
+			r.With(s.ticketOrHumanAuthFor("")).Get("/runs/{id}/attach", s.handleAttachWS)
+			r.With(s.ticketOrHumanAuthFor(ticketPurposeAttachForward)).Get("/runs/{id}/attach/forward", s.handleAttachForward) // one TCP connection to the sandbox's loopback, by ticket only; off unless the operator turns it on (attach_forward.go)
 		})
+		s.mountSSHTicketDoor(r) // GET /runs/{id}/ssh: SSH over a WebSocket by an SSH ticket in a header, no other credential (sshgateway_ticket.go)
 
 		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
 		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth

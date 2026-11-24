@@ -164,14 +164,17 @@ func sshRejectData(ctx context.Context, channelType, reason string) json.RawMess
 	return mustJSON(data)
 }
 
-// sshRejectMessage is what a refused channel's client reads: the key sentence, or on a helper's connection whose
-// grant ended or could not be read, the support sentence.
+// sshRejectMessage is what a refused channel's client reads: the key sentence, on a helper's connection whose
+// grant ended or could not be read the support sentence, and on a ticket connection whose re-check failed the
+// ticket's.
 func sshRejectMessage(reason string) string {
 	switch reason {
 	case sshSupportEnded:
 		return "the support session ended"
 	case sshSupportUnverified:
 		return "the support session could not be verified"
+	case sshTicketEnded, sshTicketUnverified:
+		return "the sign-in that opened this SSH connection is no longer allowed on this run"
 	}
 	return "SSH key is no longer authorized"
 }

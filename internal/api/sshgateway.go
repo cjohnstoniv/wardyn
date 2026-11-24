@@ -296,7 +296,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 
 	lim := &sshConnLimits{handshakes: make(chan struct{}, cmp.Or(s.cfg.SSHMaxHandshakes, DefaultSSHMaxHandshakes)), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
 		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{},
-		perPrincipal: s.sshPerPrincipalCap(), principals: map[string]int{}, metrics: &s.metrics}
+		perPrincipal: s.sshPerPrincipalCap(), principals: map[string]int{}, metrics: &s.metrics, serveCtx: ctx}
 	s.metrics.sshLimits.Store(lim)
 	for {
 		conn, err := ln.Accept()
@@ -310,19 +310,11 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		// read/written — the DoS bound has to bite here, not after a
 		// goroutine and a NewServerConn call are already spent on it.
 		src := peerKey(conn.RemoteAddr().String())
-		if !lim.enterSource(src) {
-			lim.refused(sshBoundSource, lim.perSource)
+		if !sshAdmit(lim, src) {
 			_ = conn.Close()
 			continue
 		}
-		select {
-		case lim.handshakes <- struct{}{}:
-			s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
-		default:
-			lim.leaveSource(src)
-			lim.refused(sshBoundHandshake, cap(lim.handshakes))
-			_ = conn.Close()
-		}
+		s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 	}
 }
 
@@ -471,21 +463,11 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reasonRunBackgroundOnly)
 		return nil, errors.New("ssh: this run is a background task; it has no SSH access")
 	}
-	// deny_interactive on the profile the run was created under closes SSH
-	// for all but a super admin (a fresh, uncapped admin key), as the terminal
-	// attach does (governance_run_doors.go). A super admin reaches the exemption
-	// only on their own run or an operator-owned one, never through a support
-	// grant, so it cannot reach a person's run.
-	if s.sshOverrideRefusal(rec) != "" || grant != uuid.Nil || !s.adminDoorExempt(run) {
-		name, err := s.interactiveDeniedUnit(ctx, run)
-		if err != nil {
-			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, "governance profile unreadable")
-			return nil, errors.New("ssh: not authorized for this run")
-		}
-		if name != "" {
-			s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, fmt.Sprintf("governance profile %q denies interactive sessions", name))
-			return nil, errors.New("ssh: not authorized for this run")
-		}
+	// deny_interactive closes SSH for all but a super admin (a fresh, uncapped admin key) on their own run or an
+	// operator-owned one, never through a support grant (sshRunEntryRefusal).
+	if reason, _ := s.sshRunEntryRefusal(ctx, run, s.sshOverrideRefusal(rec) == "" && grant == uuid.Nil && s.adminDoorExempt(run)); reason != "" {
+		s.sshAuditAuthFailure(ctx, conn, &runID, rec.Principal, fp, reason)
+		return nil, errors.New("ssh: not authorized for this run")
 	}
 
 	// Provisional approval ONLY — no success audit here, see the function doc:
@@ -671,16 +653,16 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	b := s.newSessionBudget(connCtx, sessionWatchID{Run: runID, Actor: types.ActorHuman, Principal: principal, Surface: sessionSurfaceSSH})
 	sshGo(func() {
 		sshProbeConn(connCtx, sconn, b, func() (string, bool) {
-			reason := s.sshCurrentKey(connCtx, sconn.Permissions)
+			reason := s.sshCurrentAuth(connCtx, sconn.Permissions)
 			return reason, sshRecheckUnread(sconn.Permissions, reason)
 		})
 	})
 
 	for newCh := range chans {
 		if newCh.ChannelType() == "session" || newCh.ChannelType() == "direct-tcpip" {
-			if reason := s.sshCurrentKey(connCtx, sconn.Permissions); reason != "" {
+			if reason := s.sshCurrentAuth(connCtx, sconn.Permissions); reason != "" {
 				s.recordAudit(connCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.channel.reject",
-					sconn.Permissions.Extensions["key_fingerprint"], "failure", sshRejectData(connCtx, newCh.ChannelType(), reason)))
+					sshConnTarget(sconn.Permissions), "failure", sshRejectData(connCtx, newCh.ChannelType(), reason)))
 				_ = newCh.Reject(ssh.Prohibited, sshRejectMessage(reason))
 				continue
 			}

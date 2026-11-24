@@ -351,7 +351,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - The route is `GET /api/v1/runs/{id}/attach/forward?port=<n>&ticket=<t>`, a WebSocket of binary frames carrying one TCP connection to the sandbox's `127.0.0.1:<n>`.
 - Every forward needs a ticket from `POST /runs/{id}/attach/ticket`, one per connection. A request with no ticket answers `400 run_forward_ticket_required`.
 - A service identity's run takes no forward from anyone, its sponsor included, as the SSH gateway takes no entry to it: `403 run_owner_only`.
-- The ticket mint counts the run's terminal sessions, so a run with 8 open terminals refuses the mint with `503 attach_session_cap_reached` even though a forward holds no terminal.
+- A ticket minted with `purpose=attach-forward&ports=<list>` forwards only those ports and skips the run's terminal-session count (see [SSH over an attach ticket](#ssh-over-an-attach-ticket)). A terminal ticket still counts it, so a run with 8 open terminals refuses that mint with `503 attach_session_cap_reached`.
 - A helper's, a portal's or an issuer portal's ticket is refused with `403 attach_ticket_not_your_run`.
 - The route is off unless the operator turns it on (`WARDYN_ATTACH_FORWARD`); `WARDYN_SSH_CHANNELS` without `forward` also turns it off (`409 run_forward_off`).
 - Its other refusals: `data_out_blocked`, `run_background_only`, `run_forward_invalid`, `run_forward_port_refused`, `run_forward_unavailable`, `run_forward_busy` (the run's SSH channel cap) and `run_forward_failed`, plus `run_inspect_exec_stream_unsupported`.
@@ -360,6 +360,23 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - A client that answers no ping is ended (`Ping timeout.`): within 90 s of the last byte either way, or 60 s when none moved. A window in which a write into the sandbox, or to the client, was waiting does not count, so a stalled transfer is not cut. A client that reads nothing while the run has nothing more to send looks the same as one that is gone.
 - There is no half-close: a client that sends and then half-closes may lose the reply.
 - The bytes are neither masked nor recorded; each connection writes one `run.port.forward` row.
+
+## SSH over an attach ticket
+
+- `POST /runs/{id}/attach/ticket` takes `purpose` and, for a forward, `ports`. With no purpose, or `ui`, it mints a terminal or UI ticket as before.
+- `ssh-exec`, `ssh-forward` and `ssh-editor` mint a ticket for `GET /runs/{id}/ssh` while `WARDYN_SSH_TICKETS` is on. `ssh-forward` needs `ports`, a comma list of 1 to 16 distinct ports.
+- `attach-forward` with `ports` mints a ticket for `GET /runs/{id}/attach/forward` that forwards only those ports.
+- The answer echoes `purpose`. An older server ignores it and mints a terminal ticket, so a client dials a purpose only when the echo matches.
+- A ticket with a purpose does not count against the run's terminal sessions; a forward holds one of the run's SSH channels instead.
+- An `ssh-*` mint asks the `ssh_key` capability: a person denied it gets `403` `capability_feature` and no ticket.
+- A ticket minted for a purpose and spent at any other door is refused as invalid, and it is burned. A terminal ticket, minted with no purpose, still opens the forward door.
+
+`GET /api/v1/runs/{id}/ssh` takes an SSH ticket in the `Wardyn-Ticket` header, never in the URL, and upgrades to a WebSocket of binary frames carrying one SSH connection.
+The SSH username is the run id and the `none` method signs in, so no key is registered.
+The run checks are the key path's: the owner rule, a background task, `deny_interactive`, `data_out`, `WARDYN_SSH_CHANNELS` and the gateway's caps.
+A ticket opens only the channel kinds its purpose names: `ssh-exec` runs one command, and `ssh-forward` reaches only its ports.
+While tickets are on, `/healthz` reports `tickets` and the gateway's public `host_key` in its `ssh` object.
+A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 
 ## Finding a waiting sign-in
 
@@ -1280,6 +1297,9 @@ sending `error` alone — completing the sweep this issue tracks:
 | `run_exec_invalid` / `run_exec_unavailable` / `run_exec_busy` / `run_exec_failed` | `POST /runs/{id}/exec` (`run_exec.go`): the command is empty or over 128 KiB, or `timeout_sec` is outside 1 to 300 (`400`); the run cannot take a command now, and the message says why (`409`); the run's SSH channels are all in use (`429`); the runner could not start the command, or lost it before it ended (`502`, with no exit code). A runner with no exec stream answers `501 run_inspect_exec_stream_unsupported`. |
 | `run_exec_off` | `POST /runs/{id}/exec` (`run_exec.go`), `409`: the operator left `exec` out of `WARDYN_SSH_CHANNELS`, so commands are off for the deployment and a later try is refused the same way. |
 | `run_forward_off` / `run_forward_ticket_required` / `run_forward_invalid` / `run_forward_port_refused` / `run_forward_unavailable` / `run_forward_busy` / `run_forward_failed` | `GET /runs/{id}/attach/forward` (`attach_forward.go`): the operator has not turned forwarding on (`WARDYN_ATTACH_FORWARD`) or left `forward` out of `WARDYN_SSH_CHANNELS` (`409`); the request carries no attach ticket (`400`); the port is not 1 to 65535 (`400`); a macOS VM's Screen Sharing ports (`403`); the run cannot take a forward now (`409`); the run's SSH channels are all in use (`429`); the runner could not start the relay (`502`). |
+| `attach_ticket_purpose_invalid` / `attach_ticket_ports_invalid` | `POST /runs/{id}/attach/ticket` (`attach_ticket_purpose.go`), `400`: `purpose` starts `ssh-` but is not `ssh-exec`, `ssh-forward` or `ssh-editor`; `ports` is not 1 to 16 distinct ports from 1 to 65535, is missing on `ssh-forward` or `attach-forward`, or rides a purpose that takes none. |
+| `ssh_ticket_unsupported_caller` / `ssh_gateway_off` / `ssh_tickets_off` / `ssh_ticket_channel_off` | `POST /runs/{id}/attach/ticket` with an `ssh-*` purpose (`attach_ticket_purpose.go`): the caller is a portal, a device or a service, not a person signed in directly (`403`); the SSH gateway is off (`WARDYN_SSH_LISTEN`), `WARDYN_SSH_TICKETS` is off, or `WARDYN_SSH_CHANNELS` leaves out a kind the purpose needs (`409`). |
+| `ssh_gateway_unavailable` / `ssh_gateway_busy` / `ssh_ticket_unverifiable` | `GET /runs/{id}/ssh` (`sshgateway_ticket.go`), `503`: the gateway is not serving on this replica yet; the gateway's handshake bounds are full; the run or its governance profile could not be read. The door also answers `ssh_tickets_off` and `ssh_gateway_off` (`409`), a bad ticket as the terminal does (`403` `ui_gateway_ticket_invalid`), `run_owner_only`, `run_background_only` and `governance_unit`. |
 | `audit_unavailable` | Strict audit (`WARDYN_AUDIT_STRICT`, `audit_strict.go`), `503`: a covered change was refused because its audit intent row could not be written first. Nothing was changed; try again. |
 | `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive with no pane snapshot (`409`): with recording off the sentence says nothing was kept, with it on it points at the recording; the runner exposes no direct stdout and no authorized recording-derived output is available (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — it finished before output was persisted, its runner captures none and no recording arrived, or it is still being captured and a later read serves it (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_sign_in_not_aws` / `run_sign_in_unreadable` | `GET /runs/{id}/sign-in` (`run_sign_in.go`): the run is not an AWS sign-in run (`409`); the sign-in pane, or the capture's audit row, could not be read in time — a read a moment later may answer (`503`). |

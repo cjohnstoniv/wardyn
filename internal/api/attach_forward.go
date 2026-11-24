@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -40,6 +42,7 @@ const (
 	attachForwardChannelOffMsg = "Port forwarding is off on this deployment: its operator left forward out of WARDYN_SSH_CHANNELS."
 	attachForwardNoTicketMsg   = "Port forwarding needs an attach ticket: mint one with POST /runs/{id}/attach/ticket and pass it as ?ticket=."
 	attachForwardTicketMsg     = "This attach ticket does not open a port forward."
+	attachForwardPortTicketMsg = "This attach ticket forwards only the ports it was minted for."
 	attachForwardPortMsg       = "The port must be a whole number from 1 to 65535."
 	attachForwardDataOutMsg    = "This run's data_out rule (%s) keeps content in, so port forwarding is off; the terminal still works."
 	attachForwardScreenMsg     = "Forwarding to a macOS VM's Screen Sharing ports (5900-5909) is not allowed: open the run's window instead."
@@ -149,6 +152,9 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunForwardInvalid, attachForwardPortMsg)
 		return
 	}
+	if s.refuseForwardPort(w, r, id, ta, port) {
+		return
+	}
 	if s.refuseForwardDataOut(w, r, run.ID, at, actor) {
 		return
 	}
@@ -253,6 +259,17 @@ func (s *Server) holdForward(ctx context.Context, r *http.Request, runID uuid.UU
 	})
 }
 
+// refuseForwardPort refuses an attach-forward ticket's forward to a port it was not minted for; a terminal ticket, as
+// before, forwards any port. True when it has answered.
+func (s *Server) refuseForwardPort(w http.ResponseWriter, r *http.Request, runID uuid.UUID, ta ticketActor, port int) bool {
+	if ta.purpose != ticketPurposeAttachForward || slices.Contains(ta.ports, port) {
+		return false
+	}
+	s.auditAttachDenied(r, runID, ta.principal, attachForwardPortTicketMsg)
+	writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, attachForwardPortTicketMsg)
+	return true
+}
+
 // refuseForwardDataOut is an SSH direct-tcpip channel's data_out gate for this door: a rule that cannot be read is
 // blocked, and any rule but allowed refuses the forward with the run.data_out.deny row SSH writes. True when it has
 // answered.
@@ -290,11 +307,13 @@ func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context
 				return stop(errAttachForwardReadFailed)
 			}
 		}
-		// liveRunForExec answers notFound on any GetRun error, so that answer covers a failed store read too (a run
-		// that is really gone then ends the forward when the budget runs out).
+		// liveRunForExec answers notFound on any GetRun error. A run that is gone ends the forward, as it ends an SSH
+		// key connection and the terminal; any other failed read rides the session budget.
 		if _, msg := s.liveRunForExec(lctx, runID, forwardLiveRunWords); msg != "" {
 			if msg == forwardLiveRunWords.notFound {
-				return unread
+				if _, err := s.cfg.Store.GetRun(lctx, runID); !errors.Is(err, store.ErrNotFound) {
+					return unread
+				}
 			}
 			return stop(errAttachForwardRunEnded)
 		}

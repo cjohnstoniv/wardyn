@@ -682,6 +682,7 @@ type Config struct {
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
 	SSHChannels          map[string]bool // WARDYN_SSH_CHANNELS: the kinds served; nil = all (sshChannelOn)
+	SSHTickets           bool            // WARDYN_SSH_TICKETS: GET /runs/{id}/ssh and the ssh-* ticket purposes (sshgateway_ticket.go); off by default
 	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakes
 	// (WARDYN_SSH_MAX_HANDSHAKES) the handshakes in progress, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
 	// one address's share of them and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
