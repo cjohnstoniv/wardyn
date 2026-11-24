@@ -166,6 +166,29 @@ func TestLive_VaultKV(t *testing.T) {
 		}
 	})
 
+	t.Run("put_carries_a_write_id_vault_returns", func(t *testing.T) {
+		if _, err := s.Put(ctx, "", "write-id-check", "", []byte("v"), false); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = s.Delete(ctx, "", "write-id-check", "") }()
+		rel, _ := s.rel("", "write-id-check")
+		out := a.must(http.MethodGet, mount+"/data/"+rel, nil)
+		d, _ := out["data"].(map[string]any)
+		inner, _ := d["data"].(map[string]any)
+		meta, _ := d["metadata"].(map[string]any)
+		id, _ := inner[dataWriteID].(string)
+		v, _ := meta["version"].(float64)
+		if id == "" || v < 1 {
+			t.Fatalf("Vault returned write id %q, version %v; want a non-empty id and a version", id, v)
+		}
+		if !s.landed(ctx, rel, int(v), id) {
+			t.Fatal("landed refused the version Vault holds, under the id Vault returned")
+		}
+		if s.landed(ctx, rel, int(v), "other") {
+			t.Fatal("landed took the version under another id")
+		}
+	})
+
 	t.Run("replace_keeps_one_version_and_delete_removes_all", func(t *testing.T) {
 		ref, err := s.Put(ctx, "", "github-app-key", "", []byte("v1"), false)
 		if err != nil {

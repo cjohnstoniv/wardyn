@@ -66,6 +66,10 @@ type AttachTicket struct {
 	// (migration 0293); uuid.Nil and the zero time on any other ticket.
 	SupportGrant   uuid.UUID
 	SupportExpires time.Time
+	// SponsorService, when set, is the service identity whose sponsorship admitted this mint. MintAttachTicket then
+	// inserts only while that identity is usable and Principal is still its sponsor, holding its row FOR SHARE, and
+	// answers ErrServiceIdentityInactive otherwise. Not stored: a redeemed ticket's is always "".
+	SponsorService string
 }
 
 // MintAttachTicket records one outstanding ticket, expiring at expiresAt, and
@@ -99,13 +103,39 @@ func (s PG) MintAttachTicket(ctx context.Context, token string, t AttachTicket, 
 			return err
 		}
 	}
-	_, err := s.Pool.Exec(ctx, `
+	insert := func(q Querier) error {
+		_, err := q.Exec(ctx, `
 		WITH swept AS (DELETE FROM attach_tickets WHERE expires_at <= $7)
 		INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at, via_delegate, via_grant, authorized_at, email, rev_seq, caller, app, via_actor, token_id, cli_session_id, support_grant, support_expires)
 		VALUES ($1, $2, $3, $4, $5, $6, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
-		hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
-		t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID, supportGrant, supportExpires,
-	)
+			hashToken(token), t.RunID, string(t.ActorType), t.Principal, t.Role, expiresAt, now, viaDelegate, viaGrant,
+			t.AuthorizedAt, t.Email, t.RevSeq, t.Caller, t.App, viaActor, tokenID, cliSessionID, supportGrant, supportExpires,
+		)
+		return err
+	}
+	var err error
+	if t.SponsorService == "" {
+		err = insert(s.Pool)
+	} else {
+		err = s.inTx(ctx, func(q Querier) error {
+			var sponsor string
+			var usable bool
+			if err := q.QueryRow(ctx, `SELECT sponsor, suspended_at IS NULL AND retired_at IS NULL
+				FROM service_identities WHERE name = $1 FOR SHARE`, t.SponsorService).Scan(&sponsor, &usable); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrServiceIdentityInactive
+				}
+				return err
+			}
+			if !usable || sponsor != t.Principal {
+				return ErrServiceIdentityInactive
+			}
+			return insert(q)
+		})
+	}
+	if errors.Is(err, ErrServiceIdentityInactive) {
+		return err
+	}
 	if err != nil {
 		return fmt.Errorf("store: mint attach ticket: %w", err)
 	}

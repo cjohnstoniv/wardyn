@@ -28,7 +28,7 @@ import (
 // name statically and cannot see one read through a loop variable.
 func hasRunsListFilterParams(q url.Values) bool {
 	return q.Has("view") || q.Has("owner") || q.Has("status") ||
-		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("workspace") || q.Has("q") || q.Has("sponsored")
+		q.Has("ended_within") || q.Has("include_killed") || q.Has("no_end") || q.Has("service") || q.Has("workspace") || q.Has("q") || q.Has("sponsored")
 }
 
 // maxRunsListQueryLen bounds ?q=: it is parameterised (store_runs_filtered.go
@@ -66,8 +66,9 @@ func isNeedsStatus(statuses []string) bool {
 // is unconditional on the filtered path (see handleListRuns's own doc) — the
 // rest is store.RunFilter plus the resolved owner.
 type parsedRunsListParams struct {
-	view   string // "" | "user" | "admin", already coerced fail-closed
-	filter store.RunFilter
+	view       string // "" | "user" | "admin", already coerced fail-closed
+	filter     store.RunFilter
+	skipCounts bool // ?counts=skip: leave both hidden-count headers out
 }
 
 // parseRunsListParams reads and validates the opt-in params, resolving
@@ -181,6 +182,27 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 		return parsedRunsListParams{}, false
 	}
 
+	serviceOnly := false
+	switch {
+	case !q.Has("service"):
+	case q.Get("service") == "0":
+	case q.Get("service") == "1":
+		serviceOnly = true
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidServiceParam, "invalid service")
+		return parsedRunsListParams{}, false
+	}
+
+	skipCounts := false
+	switch q.Get("counts") {
+	case "":
+	case "skip":
+		skipCounts = true
+	default:
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidCountsParam, "invalid counts")
+		return parsedRunsListParams{}, false
+	}
+
 	searchQuery := q.Get("q")
 	if len(searchQuery) > maxRunsListQueryLen {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunsSearchQueryTooLong, "q is too long")
@@ -188,7 +210,8 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 	}
 
 	return parsedRunsListParams{
-		view: view,
+		view:       view,
+		skipCounts: skipCounts,
 		filter: store.RunFilter{
 			Owner:         resolvedOwner,
 			WithSponsored: withSponsored,
@@ -196,6 +219,7 @@ func (s *Server) parseRunsListParams(w http.ResponseWriter, r *http.Request, pri
 			EndedWithin:   endedWithin,
 			IncludeKilled: includeKilled,
 			NoEnd:         noEnd,
+			ServiceOnly:   serviceOnly,
 			Workspace:     q.Get("workspace"),
 			Query:         searchQuery,
 		},
@@ -224,6 +248,13 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		writeErrorReason(w, http.StatusInternalServerError, reasonListingUnscopedBackend, "run listing is not scoped for this request on this store backend")
 		return
 	}
+	// An issuer portal's list, its hidden counts and its pages are limited to the units under its pin,
+	// in SQL (portal_pin.go).
+	pin, refused := s.portalPinOf(r.Context())
+	if refused.write(s, w, r) {
+		return
+	}
+	params.filter.Scope = pin.scope()
 	adminView := params.view == "admin"
 
 	// #1197: status=needs reads the attention projection, which no SQL
@@ -235,6 +266,7 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 	if isNeedsStatus(params.filter.Statuses) {
 		liveFilter := params.filter
 		liveFilter.Statuses = []string{"active"}
+		liveFilter.AttentionCandidates = true
 		live, err := pager.ListRunsFiltered(r.Context(), liveFilter, store.Page{})
 		if err != nil {
 			writeServerError(w, r, "list", err)
@@ -264,13 +296,16 @@ func (s *Server) handleListRunsFiltered(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	olderHidden, killedHidden, err := pager.CountHiddenRuns(r.Context(), params.filter)
-	if err != nil {
-		writeServerError(w, r, "list", err)
-		return
+	// counts=skip: a poll that already holds the counts skips their read, a count over every matching row.
+	if !params.skipCounts {
+		olderHidden, killedHidden, err := pager.CountHiddenRuns(r.Context(), params.filter)
+		if err != nil {
+			writeServerError(w, r, "list", err)
+			return
+		}
+		w.Header().Set("X-Wardyn-Hidden-Older", strconv.Itoa(olderHidden))
+		w.Header().Set("X-Wardyn-Hidden-Killed", strconv.Itoa(killedHidden))
 	}
-	w.Header().Set("X-Wardyn-Hidden-Older", strconv.Itoa(olderHidden))
-	w.Header().Set("X-Wardyn-Hidden-Killed", strconv.Itoa(killedHidden))
 	servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
 		runs, err := pager.ListRunsFiltered(r.Context(), params.filter, p)
 		if err != nil {

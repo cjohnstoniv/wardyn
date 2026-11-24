@@ -533,11 +533,15 @@ func (s *Server) deleteMembershipInScope(w http.ResponseWriter, r *http.Request,
 // moveMembershipInScope is a unit admin's membership move: from a unit they govern to another, read
 // under the locks the move takes. A move whose destination's walls are Leq the source's applies
 // directly, except a legacy row whose move would let another legacy row take over (H3); any other is
-// held, whatever the second-human switch says.
+// held, whatever the second-human switch says. A held move carries its review (moveReview) and the
+// risk of the source's walls against the destination's.
 func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, id, to uuid.UUID) {
 	ctx := r.Context()
 	var from, moved types.GovernanceMembership
+	var src, dst *ResolvedUnit
+	var shift legacyShift
 	err := s.writeGovernance(ctx, func(q store.Querier) error {
+		shift = legacyShift{}
 		row, err := lockedMembershipQ(ctx, q, id)
 		if err != nil {
 			return err
@@ -545,15 +549,13 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 		if err := s.requireUnitScopeQ(ctx, q, false, row.UnitID, to); err != nil {
 			return err
 		}
-		narrows, err := s.pathNarrowsQ(ctx, q, row.UnitID, to)
-		if err != nil {
+		if src, dst, err = s.pathWallsQ(ctx, q, row.UnitID, to); err != nil {
 			return err
 		}
-		if !narrows && !s.envelopeApprovesMoveQ(ctx, q, row, to) { // an envelope's approved group moves within it
+		if !s.pathNarrows(src, dst) && !s.envelopeApprovesMoveQ(ctx, q, row, to) { // an envelope's approved group moves within it
 			return errHoldForApproval
 		}
-		shift, err := moveShiftQ(ctx, q, row, to)
-		if err != nil {
+		if shift, err = moveShiftQ(ctx, q, row, to); err != nil {
 			return err
 		}
 		if len(shift.activates) > 0 || len(shift.vacates) > 0 {
@@ -563,7 +565,11 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 		return err
 	})
 	if errors.Is(err, errHoldForApproval) {
-		s.holdMembershipMove(w, r, membershipTreePayload{ID: id, UnitID: to})
+		review := s.moveReview(src, dst, shift)
+		if src != nil && dst != nil {
+			review = s.withRisk(ctx, review, &src.Ceiling, dst.Ceiling)
+		}
+		s.holdMembershipMove(w, r, membershipTreePayload{ID: id, UnitID: to}, review)
 		return
 	}
 	if s.answerOutsideScope(w, r, "governance.membership", err) || writeMembershipTreeError(w, r, "move governance assignment", err) {
@@ -579,6 +585,19 @@ func (s *Server) moveMembershipInScope(w http.ResponseWriter, r *http.Request, i
 // no higher member size: the proof a move needs to apply without a second human. A path that does not
 // compose proves nothing.
 func (s *Server) pathNarrowsQ(ctx context.Context, q store.Querier, from, to uuid.UUID) (bool, error) {
+	src, dst, err := s.pathWallsQ(ctx, q, from, to)
+	return err == nil && s.pathNarrows(src, dst), err
+}
+
+// pathNarrows is pathNarrowsQ's proof on walls already composed; a nil side proves nothing.
+func (s *Server) pathNarrows(src, dst *ResolvedUnit) bool {
+	return src != nil && dst != nil && composer.Leq(dst.Ceiling, src.Ceiling, dst.Limits, src.Limits) &&
+		len(memberCapRaises(s.resolvedMemberCap(dst), s.resolvedMemberCap(src))) == 0
+}
+
+// pathWallsQ is the walls of unit from and of unit to, each its path composed on q. A path that does not
+// compose is nil, and unit to's path is not read once unit from's is nil.
+func (s *Server) pathWallsQ(ctx context.Context, q store.Querier, from, to uuid.UUID) (src, dst *ResolvedUnit, err error) {
 	compose := func(id uuid.UUID) (*ResolvedUnit, error) {
 		chain, err := unitChainQ(ctx, q, id, false)
 		if err != nil || len(chain) == 0 {
@@ -590,16 +609,11 @@ func (s *Server) pathNarrowsQ(ctx context.Context, q store.Querier, from, to uui
 		}
 		return res, nil
 	}
-	src, err := compose(from)
-	if err != nil || src == nil {
-		return false, err
+	if src, err = compose(from); err != nil || src == nil {
+		return src, nil, err
 	}
-	dst, err := compose(to)
-	if err != nil || dst == nil {
-		return false, err
-	}
-	return composer.Leq(dst.Ceiling, src.Ceiling, dst.Limits, src.Limits) &&
-		len(memberCapRaises(s.resolvedMemberCap(dst), s.resolvedMemberCap(src))) == 0, nil
+	dst, err = compose(to)
+	return src, dst, err
 }
 
 // unitScopeAudit is a unit admin's direct write row: data plus the actor, the scope they wrote in

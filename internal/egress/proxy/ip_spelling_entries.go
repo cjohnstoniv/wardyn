@@ -185,7 +185,7 @@ func (c *Config) configHosts() []configHost {
 	keys("llm_channel_hosts", slices.Collect(maps.Keys(c.LLMChannelHosts)), false)
 	keys("llm_headers", slices.Collect(maps.Keys(c.LLMHeaders)), false)
 	for _, raw := range slices.Sorted(maps.Keys(c.LocalModels)) {
-		urlHost(fmt.Sprintf("local_models[%q]", raw), raw, true)
+		urlHost(fmt.Sprintf("local_models[%s]", localModelRef(raw)), raw, true)
 	}
 	keys("bedrock_routes", slices.Collect(maps.Keys(c.BedrockRoutes)), false)
 	for i, rt := range c.GatewayIdentity {

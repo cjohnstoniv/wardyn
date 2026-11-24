@@ -81,7 +81,7 @@ export function KillRunDialog({
           <AlertDialogCancel>{notStarted ? NS.KEEP : "Cancel"}</AlertDialogCancel>
           <AlertDialogAction
             onClick={() => runId && onConfirm(runId)}
-            className="bg-danger text-danger-foreground hover:bg-danger/90"
+            variant="destructive"
           >
             {notStarted ? NS.CONFIRM : "End run"}
           </AlertDialogAction>

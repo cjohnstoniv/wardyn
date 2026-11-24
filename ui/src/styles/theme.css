@@ -98,6 +98,17 @@
      buttons/dialogs put WHITE text on this fill (text-danger-foreground). */
   --destructive: var(--danger);
 
+  /* #3078: the terminal surface is near-black in both themes, so these are set here only and never in .dark.
+     xterm cannot read CSS variables: terminal-theme.ts holds the same --terminal and --terminal-foreground hex,
+     and terminal-theme.test.ts keeps them equal. */
+  --terminal: #0d1117;
+  --terminal-foreground: #e6edf3;
+  --terminal-chrome: rgba(0, 0, 0, 0.2);
+  --terminal-chrome-foreground: rgba(255, 255, 255, 0.6);
+  --terminal-dot-close: #ff5f56;
+  --terminal-dot-minimize: #ffbd2e;
+  --terminal-dot-zoom: #28c840;
+
   /* barrier tiers — Fence/Wall/Vault metal ramp (bronze/silver/gold).
      Teal (--primary) is the action color (buttons, links, active nav,
      selection) and the agent accent — never a barrier tier, so tier color
@@ -289,6 +300,13 @@
   --color-agent-claude-foreground: var(--agent-claude-foreground);
 
   --color-destructive: var(--destructive);
+  --color-terminal: var(--terminal);
+  --color-terminal-foreground: var(--terminal-foreground);
+  --color-terminal-chrome: var(--terminal-chrome);
+  --color-terminal-chrome-foreground: var(--terminal-chrome-foreground);
+  --color-terminal-dot-close: var(--terminal-dot-close);
+  --color-terminal-dot-minimize: var(--terminal-dot-minimize);
+  --color-terminal-dot-zoom: var(--terminal-dot-zoom);
 
   --color-fence-bg: var(--fence-bg);
   --color-fence-fg: var(--fence-fg);

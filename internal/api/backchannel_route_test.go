@@ -19,11 +19,18 @@ import (
 	gooidctest "github.com/coreos/go-oidc/v3/oidc/oidctest"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // backchannelServer builds a Server whose identity provider counts the requests made after discovery
 // (its key-set fetches), and a signer for logout tokens under the provider's key or another one.
 func backchannelServer(t *testing.T, on bool) (*Server, *atomic.Int64, func(key *rsa.PrivateKey, kid string) string, *rsa.PrivateKey) {
+	t.Helper()
+	return backchannelServerWith(t, on, fakeAuthzSessionRevocations{})
+}
+
+// backchannelServerWith is backchannelServer over the session revocations rev.
+func backchannelServerWith(t *testing.T, on bool, rev oidc.SessionRevocations) (*Server, *atomic.Int64, func(key *rsa.PrivateKey, kid string) string, *rsa.PrivateKey) {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -41,7 +48,7 @@ func backchannelServer(t *testing.T, on bool) (*Server, *atomic.Int64, func(key 
 	t.Cleanup(httpSrv.Close)
 	auth, err := oidc.New(context.Background(), oidc.Config{
 		IssuerURL: httpSrv.URL, ClientID: "wardyn-client", ClientSecret: "secret", RedirectURL: "http://localhost/auth/callback",
-		Revocations: fakeAuthzSessionRevocations{}, BackchannelLogout: on,
+		Revocations: rev, BackchannelLogout: on,
 	}, accessTestHMACKey)
 	if err != nil {
 		t.Fatalf("oidc.New: %v", err)
@@ -99,5 +106,29 @@ func TestBackchannelLogoutBoundsKeyFetchesFromForgedTokens(t *testing.T) {
 	}
 	if got := fetches.Load() - before; got > int64(backchannelLogoutBurst) || refused == 0 {
 		t.Errorf("20 forged POSTs made %d key fetches with %d refused, want at most %v fetches", got, refused, backchannelLogoutBurst)
+	}
+}
+
+// sinkSeeingRevocations records whether the context a cut was made with carries a CLIEnded.
+type sinkSeeingRevocations struct {
+	fakeAuthzSessionRevocations
+	sawSink *atomic.Bool
+}
+
+func (r sinkSeeingRevocations) RevokeSub(ctx context.Context, _ string) error {
+	r.sawSink.Store(store.CLIEndedFrom(ctx) != nil)
+	return nil
+}
+
+// A provider logout cuts the person's sessions, and the CLI sessions with them: the cut is made with a
+// context that counts what it ends, so the session.revoke row it writes can carry that count.
+func TestBackchannelLogoutCutCountsTheCLISessionsItEnds(t *testing.T) {
+	var saw atomic.Bool
+	srv, _, sign, priv := backchannelServerWith(t, true, sinkSeeingRevocations{sawSink: &saw})
+	if code := postBackchannel(t, srv, sign(priv, "bc-key")); code != http.StatusOK {
+		t.Fatalf("genuine logout = %d, want 200", code)
+	}
+	if !saw.Load() {
+		t.Fatal("the back-channel cut ran on a context with no CLIEnded: its row cannot carry the count")
 	}
 }

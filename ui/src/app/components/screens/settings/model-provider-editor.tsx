@@ -162,13 +162,13 @@ export function ModelProviderEditor({
   const kind = editing?.kind ?? draft?.kind ?? "custom_endpoint";
   const keyKind = !(isEndpoint(kind) || isLocal(kind));
 
-  const write = async (next: ModelProvider[]) => {
+  const write = async (next: ModelProvider[], opts: { restricted?: boolean } = {}) => {
     const doc = { providers: next };
     setSaving(true);
     setRefused(null);
     setRefusedAt(null);
     try {
-      return await modelProviders.putModelProviders(doc, list.etag);
+      return await (opts.restricted ? modelProviders.putModelProviders(doc, list.etag, opts) : modelProviders.putModelProviders(doc, list.etag));
     } catch (e) {
       if (e instanceof HttpError && e.status === 400) {
         setRefused(e.message);
@@ -192,11 +192,11 @@ export function ModelProviderEditor({
     const person = getExpectedPrincipal();
     const next = candidate();
     const rows = editing ? stored.map((p) => (p.id === editing.id ? next : p)) : [...stored, next];
-    const snap = await write(rows);
+    const snap = await write(rows, !editing && audience.restricted ? { restricted: true } : {});
     if (!snap) return;
     if (!editing) {
       try {
-        await writeAvailability("model_provider", next.id, audience, person);
+        await writeAvailability("model_provider", next.id, audience, person, audience.restricted);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
         setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
@@ -295,7 +295,7 @@ export function ModelProviderEditor({
               <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
                 <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
                 <span>{partial.message}</span>
-                <span>{AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
+                <span>{audience.restricted ? AVAILABILITY.CREATE_PARTIAL_RESTRICTED : AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
             <fieldset disabled={busy || reloading} className="m-0 min-w-0 space-y-4 border-0 p-0">

@@ -293,3 +293,42 @@ func TestViaOrg_RestartRetiresThisReplicasEngineBeforeTheAnswer(t *testing.T) {
 	}
 	waitFor(t, "the released engine to close", eng.Closed)
 }
+
+// viaOrgSiteSeqStore answers each site config read from a script by its number, and the last entry from then on.
+type viaOrgSiteSeqStore struct {
+	*viaOrgSlotStore
+	script []types.SiteConfig
+	siteN  atomic.Int32
+}
+
+func (s *viaOrgSiteSeqStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	n := int(s.siteN.Add(1))
+	return s.script[min(n, len(s.script))-1], nil
+}
+
+// A refusal is remembered for the setting its build used. When the site's upstream proxy is read as A before the
+// build, the build reads B, and A is restored, B's refusal is not held against A: the next request at A builds.
+func TestViaOrg_RefusalOfAMiddleSettingIsNotHeldAgainstTheRestoredOne(t *testing.T) {
+	srv, gs, run := viaOrgSlotFixture(t)
+	a := types.SiteConfig{UpstreamProxyURL: "http://proxy.corp.example:3128"}
+	b := types.SiteConfig{UpstreamProxyURL: "http://134744072:3128"} // a host spelling the proxy refuses
+	seq := &viaOrgSiteSeqStore{viaOrgSlotStore: gs, script: []types.SiteConfig{a, b, a}}
+	srv.cfg.Store = seq
+	vr := newViaOrgSlotRun(t, run.ID)
+
+	// Read 1 is the request's own look at the setting (A); read 2 is the build's (B).
+	if _, _, err := srv.viaOrgEngine(context.Background(), vr, run.ID); !errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+		t.Fatalf("a build that read B = %v, want its upstream host refusal", err)
+	}
+	if n := seq.siteN.Load(); n != 2 {
+		t.Fatalf("the first request read the site config %d times, want 2 (its own, then the build's)", n)
+	}
+	// From read 3 on the site config is A again.
+	g, _, err := srv.viaOrgEngine(context.Background(), vr, run.ID)
+	if errors.As(err, new(viaOrgRefusalRemembered)) {
+		t.Fatalf("a request at A was answered B's remembered refusal: %v", err)
+	}
+	if err != nil || g == nil {
+		t.Fatalf("a request at A = %v, %v; want its engine built", g, err)
+	}
+}

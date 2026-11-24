@@ -94,6 +94,37 @@ describe("providerFrom: the sign-in block", () => {
     });
   });
 
+  it("an unrelated save keeps an API-set require_id_token, and it is no sign-in change", () => {
+    const apiSet = withOIDC({ ...stored.oidc, require_id_token: false });
+    const draft = { ...draftFrom(apiSet, harnesses), name: "Renamed" };
+    const out = providerFrom(draft, apiSet, []);
+    expect(out.oidc?.require_id_token).toBe(false);
+    expect(out.oidc).toEqual(apiSet.oidc);
+    expect(addressChanged(apiSet, out)).toBe(false);
+    // An edit to a shown field rides the same spread.
+    const edited = providerFrom({ ...draft, oidcIssuer: "https://new.example.com" }, apiSet, []);
+    expect(edited.oidc?.require_id_token).toBe(false);
+  });
+
+  it("an unrelated save keeps an API-set service_grant", () => {
+    const serviceGrant = {
+      grant_type: "client_credentials" as const,
+      token_url: "https://idp.example.com/oauth/token",
+      client_id: "svc-client",
+      scope: "api.read",
+      service_identities: ["service:ci-bot"],
+    };
+    const apiSet = withOIDC({ ...stored.oidc, service_grant: serviceGrant });
+    const draft = { ...draftFrom(apiSet, harnesses), name: "Renamed" };
+    const out = providerFrom(draft, apiSet, []);
+    expect(out.oidc?.service_grant).toEqual(serviceGrant);
+    expect(out.oidc).toEqual(apiSet.oidc);
+    expect(addressChanged(apiSet, out)).toBe(false);
+    // An edit to a shown field rides the same spread.
+    const edited = providerFrom({ ...draft, oidcIssuer: "https://new.example.com" }, apiSet, []);
+    expect(edited.oidc?.service_grant).toEqual(serviceGrant);
+  });
+
   it("scopes go as held, a repeat included", () => {
     const draft = { ...draftFrom(stored, harnesses), oidcScopes: ["b", "a", "a"] };
     expect(providerFrom(draft, stored, []).oidc?.scopes).toEqual(["b", "a", "a"]);

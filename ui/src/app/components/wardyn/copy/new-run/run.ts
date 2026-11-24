@@ -51,6 +51,9 @@ export const NR_RUN = {
   PORTS_LABEL: "Ports",
   PORTS_HELP:
     "Each port opens from the run page through Wardyn's web app gateway. Only people who may enter this run can open it, unless you make it callable from outside.",
+  /** Deviation: a background run's gateway opens only its ports callable from outside, so the run page has no Open. */
+  PORTS_HELP_BACKGROUND:
+    "This run works in the background, so its ports don't open from the run page. Make a port callable from outside the run to reach it through Wardyn's gateway.",
   /** T2-a (r16): a port's own card carries the checkbox and its help. */
   PORT_INBOUND_LABEL: "Callable from outside the run",
   PORT_INBOUND_HELP:

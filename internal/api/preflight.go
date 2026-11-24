@@ -30,6 +30,9 @@ import (
 type preflightResponse struct {
 	SetupItems               []SetupItem            `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// ConfinementRaiseCause says the blast-radius floor lifted that class to CC3. Closed vocabulary, one value
+	// today: blast_radius_floor. Absent when it did not (the class the request named or the default stood).
+	ConfinementRaiseCause string `json:"confinement_raise_cause,omitempty"`
 	// RiskAssessment/OverallRisk are composer.Grade/OverallLevel run on this run's
 	// resolved spec — the IDENTICAL grader compose.go runs for the AI Run
 	// Composer's Review (composeResponse carries the same two fields under the
@@ -421,7 +424,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings = append(warnings, s.managedSettingsUndeliveredWarning(ctx, managedSettingsRun{req: &req, spec: spec, harnesses: f.harnesses, level: f.autonomy.Level,
 		locked: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade).agentGuardrailLocks, class: enforced, place: f.place, comps: f.comps}, bound)...)
-	warnings = append(warnings, f.fitWarnings...)
+	warnings = append(append(warnings, f.fitWarnings...), blastRadiusRaiseWarning(f.confinementRaised)...)
 	warnings = append(warnings, serviceWarnings(req.Service != nil, ceiling.Limits.PauseIdleAfterSec, f.end.capSec > 0, f.end.endSec != nil)...)
 
 	// A zero residency means no provider was chosen (none serves the agent, or a
@@ -440,7 +443,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		Attachments:              f.attachments,
 	}
 	resp.RunnerPool, resp.RunnerPools = f.place.facts()
-	resp.BarrierOptions = f.barrierOptions
+	resp.BarrierOptions, resp.ConfinementRaiseCause = f.barrierOptions, blastRadiusRaiseCause(f.confinementRaised)
 	resp.Image, resp.HarnessSet = f.image, harnessSetFact(f.harnesses, f.harnessChoices)
 	resp.AllowedModels, resp.AllowedModelsProfile = modelLimitOf(f.ceiling).models, modelLimitOf(f.ceiling).profile
 	resp.Limits, resp.ResourcesApplied = f.place.sizeFacts()

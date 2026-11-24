@@ -63,9 +63,23 @@ no envbuilder stage at all.
   - (confinement bypass; finalizeImage's fetch-fresh pull has no re-validation step to catch the swap).
 - No serialization is needed — each build's destination is unambiguous by construction — so this preserves full build concurrency.
 
+## Reusing a per-run build
+
+A run that names an image (`--image`) has no workspace to keep its image on. It reuses the image an earlier run of the same creator built from the same inputs:
+
+| Build | Keyed to | Reused when |
+|---|---|---|
+| Image wrap | the base image's ID (inspected every run), the wrap recipe and every file in the runner-tools directory | the same creator wraps a base with the same ID again |
+
+- The image is tagged `wardyn-byoi/reuse:<key>` and labelled with its key. Wardyn reuses it only while the server that built it keeps running. After a restart the first run for each base wraps again, and an image found under a reuse tag that this server did not build is built over, not used.
+- Reuse is per creator, the run's `created_by`. Runs started with the admin token share one creator, and so do the runs of one service identity; another creator's run builds its own copy.
+- A wrap still inspects its base and refuses an ONBUILD trigger on every run. When image admission is on, it still checks the base when the run is created.
+- A devcontainer repository build (`--devcontainer-repo`) is not reused: it builds on every run, under the run's own tag.
+- Wardyn does not remove these images. Remove them with `docker image rm`; a run whose tag is gone builds again.
+
 ## The build record
 
-Each workspace image build records what it built from and the image it produced. Per-run builds (`--image`, `--devcontainer-repo`) write only the `run.build` audit row.
+Each workspace image build records what it built from and the image it produced. Per-run builds (`--image`, `--devcontainer-repo`) write only the `run.build` audit row. A run started with `--image` reuses its build as [Reusing a per-run build](#reusing-a-per-run-build) says.
 
 - A record is current only while the workspace row still names the same image and cache key, and the image's local ID still matches (`imageBuildView`).
 - A pre-0.9 image, or one whose tag moved, reads as unrecorded. Nothing is back-filled.

@@ -118,6 +118,8 @@ type Options struct {
 	NoNetwork bool
 	// CanonicalPushRepos is Config.CanonicalPushRepos.
 	CanonicalPushRepos bool
+	// PushHoldRemovals is Config.PushHoldRemovals.
+	PushHoldRemovals bool
 	// Attribution is Config.Attribution, already re-projected by LoadConfigBytes.
 	Attribution *policyref.Ref
 

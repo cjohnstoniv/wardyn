@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -18,6 +19,28 @@ import (
 // InstallCommand is the helper's subcommand that runs one install for
 // prepare, in a process of its own (RunInstall). Only prepare starts it.
 const InstallCommand = "install-base"
+
+// InstallVMLimitExit is the install process's exit status when Apple's framework refused the
+// installer's VM for its VM limit (ErrVMLimit). prepare reads the status, never the error's text.
+const InstallVMLimitExit = 3
+
+// InstallExit is the install process's exit status for RunInstall's error: 0, InstallVMLimitExit, or 1.
+func InstallExit(err error) int {
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, ErrVMLimit):
+		return InstallVMLimitExit
+	}
+	return 1
+}
+
+// installLimitError is an install process's failure that exited InstallVMLimitExit: it is ErrVMLimit,
+// and its text is the process's own.
+type installLimitError struct{ error }
+
+func (e installLimitError) Is(target error) bool { return target == ErrVMLimit }
+func (e installLimitError) Unwrap() error        { return e.error }
 
 // installRequest is what prepare writes to the install process's stdin.
 type installRequest struct {
@@ -123,11 +146,18 @@ func installInProcess(ctx context.Context, argv []string, spec MachineSpec, ipsw
 	}
 	_, _ = io.Copy(io.Discard, stdout) // a line too long for the scanner
 	if err := cmd.Wait(); err != nil {
+		var ee *exec.ExitError
+		limit := errors.As(err, &ee) && ee.ExitCode() == InstallVMLimitExit
 		msg := strings.TrimSpace(string(stderr.b))
 		if msg == "" {
-			return fmt.Errorf("the install process: %w", err)
+			err = fmt.Errorf("the install process: %w", err)
+		} else {
+			err = fmt.Errorf("%s (the install process: %w)", msg, err)
 		}
-		return fmt.Errorf("%s (the install process: %w)", msg, err)
+		if limit {
+			return installLimitError{err}
+		}
+		return err
 	}
 	return nil
 }

@@ -59,6 +59,25 @@ export const APPROVAL = {
   // string for both surfaces on purpose — they state the same fact, and two
   // copies would be two wordings of it.
   CANCELLED_BODY: "The run ended before anyone decided this. Nothing was approved and nothing was denied.",
+  // The archive's own line, by the reason the cancellation recorded (internal/api terminalCancelReason): a run that
+  // was lost to an outage or a reboot may still be going, so it is not said to have ended; no reason is neutral.
+  CANCELLED_LOST: "Wardyn lost contact with the run and cancelled this request. Nothing was approved and nothing was denied.",
+  CANCELLED_UNKNOWN: "Cancelled before anyone decided this. Nothing was approved and nothing was denied.",
+  cancelledBody: (reason: string | undefined): string => {
+    switch (reason) {
+      case "run_lost":
+        return APPROVAL.CANCELLED_LOST;
+      case "run_ended":
+      case "run_killed":
+      case "run_completed":
+      case "run_failed":
+      case "run_stopped":
+      case "run_terminated":
+        return APPROVAL.CANCELLED_BODY;
+      default:
+        return APPROVAL.CANCELLED_UNKNOWN;
+    }
+  },
   // P0.3 (R3-F001/F108/F145): an egress_domain approval is HOST-WIDE — the
   // server strips any port before it keys the decision (approvalHostKey,
   // internal/egress/proxy/approvals.go). 0.7.2 aligns the three surfaces to SAY

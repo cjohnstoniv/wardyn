@@ -380,6 +380,28 @@ class TestHarnessesRecipe(unittest.TestCase):
             self.assertIn(f"deploy/images/{harness}/agent-run /usr/local/lib/wardyn/harness/{harness}/agent-run", dockerfile)
 
 
+class AsciinemaWithoutPkgResources(unittest.TestCase):
+    """agent-base and agent-codex-cli install asciinema from a deb repacked inline, so python3-pkg-resources and its jaraco chain stay out."""
+
+    def test_both_images_repack_inline_with_every_refusal(self):
+        for name in ["base", "codex-cli"]:
+            with self.subTest(image=name):
+                text = (ROOT / f"deploy/images/{name}/Dockerfile").read_text()
+                self.assertNotIn("asciinema-deb.sh", text)
+                self.assertIn("apt-get download asciinema", text)
+                self.assertIn("/tmp/asciinema-wardyn.deb", text)
+                self.assertNotRegex(text, r"(?m)^\s+asciinema \\$")
+                self.assertIn("grep -rIl 'pkg_resources' asciinema-src/usr", text)
+                self.assertIn("grep -qx 'Depends: python3:any, python3-pkg-resources' asciinema-src/DEBIAN/control", text)
+                self.assertIn("Version: \\1+wardyn1", text)
+                # Live RUN continuation lines, not comments: a guard moved into a `#` line passes assertIn.
+                self.assertRegex(text, r"(?m)^\s+&& if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi \\$")
+                self.assertRegex(text, r"(?m)^\s+&& if dpkg -s python3-jaraco\.context >/dev/null 2>&1; then exit 1; fi$")
+
+    def test_the_recipe_has_no_script_image_scope_cannot_model(self):
+        self.assertFalse((ROOT / "deploy/images/common/asciinema-deb.sh").exists())
+
+
 class FullImageHomeOwnership(unittest.TestCase):
     """`install -d -o agent` owns only the directories it names: a parent it creates on the way stays root:root 0755."""
 

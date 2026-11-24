@@ -428,6 +428,13 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/model-providers":      {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
+
+	// The service grant's secret and removal routes, and the clean-up retry: operatorOnly beside the provider
+	// routes (provider_service_grant_routes.go).
+	"PUT /api/v1/model-providers/{id}/service-grant/secret":    {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant/secret": {class: classAdmin},
+	"DELETE /api/v1/model-providers/{id}/service-grant":        {class: classAdmin},
+	"POST /api/v1/service-grant-cleanups/{uid}/retry":          {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
 	// Getting Started -> People editor over the store half of
 	// internal/auth/oidc's RoleMappingSource. SUPER-only, including BOTH reads,
@@ -449,9 +456,12 @@ var routeMatrix = map[string]classifiedRoute{
 	// security tier can stop a foreign run, on purpose — ownsRunOrAdmin is
 	// isSecurityOperator, so kill admits it on any run. See
 	// TestSecurityAdminCanStopAForeignRun below and routes.go's own note.
-	"POST /api/v1/admin/sandboxes/sweep":  {class: classAdmin},
-	"GET /api/v1/admin/runs/proxy-window": {class: classAdmin},
-	"POST /api/v1/admin/runs/restart":     {class: classAdmin},
+	"POST /api/v1/admin/sandboxes/sweep": {class: classAdmin},
+	// Releasing the person's Docker volumes held since the 0.10.2 upgrade: SUPER, it answers for every person's
+	// drives and states that every older server is stopped.
+	"POST /api/v1/admin/drives/legacy-docker/release": {class: classAdmin},
+	"GET /api/v1/admin/runs/proxy-window":             {class: classAdmin},
+	"POST /api/v1/admin/runs/restart":                 {class: classAdmin},
 	// Re-opening a person's identity row to another sign-in principal (the Entra
 	// app re-registration remedy): it decides who a sign-in becomes, the same
 	// reach the role mappings above are SUPER for.
@@ -507,6 +517,15 @@ var routeMatrix = map[string]classifiedRoute{
 	// 0.8.6: the SCIM card's read (scim-a7): who is deactivated, which leaver steps are stuck on what
 	// error, and which purged people's drives are still to reclaim. Names, steps and errors, read-only.
 	"GET /api/v1/scim/status": {class: classSecurity},
+	// The portal's own lifecycle (person_suspend.go, person_purge.go, portal_lifecycle.go): suspending a person
+	// issuer portals introduced, the reads that find one and the portal's status view are the security tier; the
+	// undo of a cut and the permanent purge are the super admin's alone.
+	"GET /api/v1/people/portal-person":           {class: classSecurity},
+	"GET /api/v1/people/{principal}/portals":     {class: classSecurity},
+	"POST /api/v1/people/{principal}/suspend":    {class: classSecurity},
+	"POST /api/v1/people/{principal}/reactivate": {class: classAdmin},
+	"POST /api/v1/people/{principal}/purge":      {class: classAdmin},
+	"GET /api/v1/admin/portal-lifecycle/status":  {class: classSecurity},
 	// Its companion (CS-6, design K5-A): who holds a credential for which model
 	// provider, added and last used. Metadata only, never a value.
 	"GET /api/v1/model-providers/credentials": {class: classSecurity},
@@ -627,6 +646,7 @@ var routeMatrix = map[string]classifiedRoute{
 	// the handler (governance_changes_pg_test.go).
 	"GET /api/v1/governance/changes":               {class: classUnit},
 	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":   {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
 	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
 	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
@@ -1080,6 +1100,11 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/admin/delegates":        {class: classAdmin},
 	"GET /api/v1/admin/delegates":         {class: classSecurity},
 	"DELETE /api/v1/admin/delegates/{id}": {class: classSecurity},
+	// The issuer-portal registry: the switch-on, a binding's retirement and a portal's admission rule are
+	// the super admin's alone (portal_issuer_activate.go, portal_issuer_governance.go).
+	"POST /api/v1/admin/portal-issuers/activate": {class: classAdmin},
+	"DELETE /api/v1/admin/portal-issuers/{k}":    {class: classAdmin},
+	"PUT /api/v1/admin/delegates/{id}/admission": {class: classAdmin},
 
 	// device (a `wdd_` device bearer on its own {id} only)
 	"POST /api/v1/devices/{id}/audit":     {class: classDevice},
@@ -1919,8 +1944,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 18 routes: GET /governance, the three unit writes, the two
-	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the five change routes.
+	// and refuses a member at the door. 19 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the six change routes.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -1939,8 +1964,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 18 {
-		t.Errorf("probed %d classUnit routes, want 18", unit)
+	if unit != 19 {
+		t.Errorf("probed %d classUnit routes, want 19", unit)
 	}
 
 	var sec, super int
@@ -2085,8 +2110,19 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10 platform envelopes add PUT and DELETE /governance/units/{id}/envelope on the security tier: an
 	// envelope names the groups a unit admin's group adds may apply for without a second person (= 104 SEC).
 	// An organisation component's unit pin joins the workspace's on the security tier (= 105 SEC).
-	if sec != 105 || super != 71 {
-		t.Errorf("tier split = %d security / %d admin, want 105 / 71 (PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final §3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + §B's 14 SEC + governance's 7 + §I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.10.2 adds seven SUPER routes: the issuer-portal switch-on (POST /admin/portal-issuers/activate), a binding's
+	// retirement (DELETE /admin/portal-issuers/{k}) and a portal's admission rule (PUT /admin/delegates/{id}/admission),
+	// and the service grant's secret write and delete (PUT and DELETE /model-providers/{id}/service-grant/secret), its
+	// removal (DELETE /model-providers/{id}/service-grant) and the clean-up retry (POST
+	// /service-grant-cleanups/{uid}/retry) (= 78 SUPER).
+	// 0.10.2 adds the release of the Docker volume drives held since the upgrade, POST
+	// /admin/drives/legacy-docker/release, on the SUPER tier beside POST /admin/sandboxes/sweep: it answers for every
+	// person's drives (= 79 SUPER).
+	// 0.10.2 portal people add the portal-person lookup, a person's portal list, the suspension and the portal
+	// lifecycle status on the security tier: a suspension is the fast cut the security admin owns (= 109 SEC). The
+	// reactivation and the purge, which undo or end a person for good, are SUPER (= 81 SUPER).
+	if sec != 109 || super != 81 {
+		t.Errorf("tier split = %d security / %d admin, want 109 / 81 (PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
@@ -2294,7 +2330,7 @@ func (s *authzStore) CountActiveRunsBy(_ context.Context, createdBy string) (int
 	return n, nil
 }
 
-func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page) ([]types.AgentRun, error) {
+func (s *authzStore) ListRunsPageByCreator(_ context.Context, createdBy string, _ store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []types.AgentRun{}
@@ -3245,7 +3281,6 @@ func (authzCLIStore) EndCLISession(context.Context, uuid.UUID, string, string, t
 func (authzCLIStore) ListCLISessions(context.Context, string, time.Time) ([]store.CLISessionRow, error) {
 	return nil, nil
 }
-func (authzCLIStore) CountLiveCLISessions(context.Context, string) (int, error) { return 0, nil }
 
 // authzCLIAuthenticator is a real authenticator with both logout routes on, over a throwaway
 // discovery server. Its sessions are signed with accessTestHMACKey (accessSession), not the empty key

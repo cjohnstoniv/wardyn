@@ -1,0 +1,445 @@
+// Copyright 2026 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
+)
+
+// The open-stream half of an issuer portal's UI session on Postgres: the events a tick must discover (a portal
+// revoke, a suspend, a purge's tombstone, the run's unit leaving the pin) and the known ends (the chain's end
+// at admission), on real servers. Ticks are scaled as in uigateway_relay_cut_test.go; the per-write fallback
+// keeps its unscaled 30 s, so a cut inside relayEvery + relayBound is the concurrent interrupt's.
+
+// pgEvents are the events a tick must discover, by name.
+var pgEvents = map[string]func(*issuerPGRig, *testing.T){
+	"portal revoke": (*issuerPGRig).revokePortal,
+	"suspend":       (*issuerPGRig).suspend,
+}
+
+// openBlocked opens the relay stream at path in mode, requires its 200, and then stops reading.
+func openBlocked(t *testing.T, rig *issuerPGRig, mode gatewayMode, path string, c *http.Cookie) chan time.Time {
+	t.Helper()
+	srv, ended := serveGateway(t, rig.issuerUIRig, mode, nil)
+	if mode == gwHTTP2 {
+		h2Unread(t, srv, rig.path(path), c)
+	} else {
+		awaitHeaders(t, rawRequest(t, srv, mode, rig.path(path), c, ""))
+	}
+	return ended
+}
+
+// TestUIRelayIssuerPortal_BlockedClientWriteCutOnRevoke_PG: a streaming 200 on HTTP/1 and on HTTP/2, its
+// client not reading, is cut within one re-check of a portal revoke and of a suspend. One of the renewal
+// gate's measures: each subtest logs the stream's end after the event.
+func TestUIRelayIssuerPortal_BlockedClientWriteCutOnRevoke_PG(t *testing.T) {
+	setRelayWatch(t, relayEvery)
+	for _, mode := range []gatewayMode{gwHTTP1, gwHTTP2} {
+		for name, event := range pgEvents {
+			t.Run(mode.String()+"/"+name, func(t *testing.T) {
+				in := &inputLog{}
+				rig := newIssuerPGRig(t, streamBackend(in), renews)
+				ended := openBlocked(t, rig, mode, relayPath, rig.session(rig.grant))
+				requireBlocked(t, in, ended) // a 200 that streamed, then the gateway's write to its client pending
+				at := time.Now()
+				event(rig, t)
+				cutBy(t, mode.String()+" stream, client not reading, "+name, at, waitEnded(t, ended, 20*time.Second, name), relayEvery+relayBound+relaySlack)
+			})
+		}
+	}
+}
+
+// readLog is what a viewer read: each read's time and size, and the send time the backend stamped on each frame
+// (a line that starts with its UnixNano). done closes when its reader has returned.
+type readLog struct {
+	mu     sync.Mutex
+	reads  []stallWrite
+	stamps []time.Time
+	done   chan struct{}
+}
+
+// stampedAfter counts the frames the viewer read that the backend sent after t: output made after a cut, as
+// against output made before it and still draining.
+func (l *readLog) stampedAfter(t time.Time) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, s := range l.stamps {
+		if s.After(t) {
+			n++
+		}
+	}
+	return n
+}
+
+func newReadLog() *readLog { return &readLog{done: make(chan struct{})} }
+
+// stampCount is how many frame stamps readAll parsed.
+func (l *readLog) stampCount() int { l.mu.Lock(); defer l.mu.Unlock(); return len(l.stamps) }
+
+func (l *readLog) after(t time.Time) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, r := range l.reads {
+		if r.at.After(t) {
+			n += r.n
+		}
+	}
+	return n
+}
+
+// readAll reads r until it fails, logging each read.
+func (l *readLog) readAll(r io.Reader) {
+	defer close(l.done)
+	buf := make([]byte, 32<<10)
+	var line []byte // the frame read so far
+	for {
+		n, err := r.Read(buf)
+		l.mu.Lock()
+		l.reads = append(l.reads, stallWrite{time.Now(), n})
+		for _, b := range buf[:n] {
+			if b != '\n' {
+				if len(line) < 32 { // the stamp is all that is kept of a frame
+					line = append(line, b)
+				}
+				continue
+			}
+			stamp, _, _ := strings.Cut(string(line), " ")
+			if ns, perr := strconv.ParseInt(stamp, 10, 64); perr == nil {
+				l.stamps = append(l.stamps, time.Unix(0, ns))
+			}
+			line = line[:0]
+		}
+		l.mu.Unlock()
+		if err != nil {
+			return
+		}
+	}
+}
+
+// sendLines writes a timestamp line to w every 2 ms until a write fails.
+func sendLines(w io.Writer) {
+	for {
+		if _, err := fmt.Fprintf(w, "%d\n", time.Now().UnixNano()); err != nil {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// duplexBody posts an endless request body of timestamp lines to path over HTTP/2, requires its 200, and reads
+// the answer that streams back meanwhile into the returned log.
+func duplexBody(t *testing.T, srv *httptest.Server, path string, c *http.Cookie) *readLog {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, pr)
+	req.AddCookie(c)
+	go sendLines(pw)
+	type answer struct {
+		resp *http.Response
+		err  error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		resp, err := srv.Client().Do(req)
+		got <- answer{resp, err}
+	}()
+	var a answer
+	select {
+	case a = <-got:
+	case <-time.After(5 * time.Second): // the admission's bound, apart from the stream's life
+		t.Fatal("the duplex body never answered")
+	}
+	if a.err != nil || a.resp.StatusCode != http.StatusOK || a.resp.ProtoMajor != 2 {
+		t.Fatalf("the duplex body was not admitted: %v %v", a.resp, a.err)
+	}
+	t.Cleanup(func() { _ = a.resp.Body.Close() })
+	out := newReadLog()
+	go out.readAll(a.resp.Body)
+	return out
+}
+
+// chunkLines is a chunked request body whose every chunk is one timestamp line.
+type chunkLines struct{ w io.Writer }
+
+func (c chunkLines) Write(p []byte) (int, error) {
+	if _, err := fmt.Fprintf(c.w, "%x\r\n%s\r\n", len(p), p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// waitWithin polls cond until it holds, failing after within.
+func waitWithin(t *testing.T, within time.Duration, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(within); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: not within %v", what, within)
+		}
+	}
+}
+
+// TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG: a renewable 101 (HTTP/1), a streamed request body whose
+// answer streams back at the same time (HTTP/2, full duplex) and a streamed upload with no answer yet (HTTP/1,
+// input only) cross their admitted end while the portal keeps minting the person successors. Traffic is shown flowing in both directions before the end; once the stream has
+// ended and the observers have returned, no viewer input sent after the end reached the backend, and, asserted
+// apart, no backend output reached the viewer after it. The same with a revoke in place of the end.
+func TestUIRelayIssuerPortal_BothDirectionsStopAtEnd_PG(t *testing.T) {
+	setRelayWatch(t, relayEvery)
+	for _, shape := range []string{"101", "request body", "upload"} {
+		for _, by := range []string{"end", "revoke"} {
+			t.Run(shape+"/"+by, func(t *testing.T) {
+				in := &inputLog{}
+				rig := newIssuerPGRig(t, streamBackend(in), renews)
+				life := 3 * time.Second
+				if by == "revoke" {
+					life = 6 * time.Second // past the revoke, and short of a successor's ten minutes
+				}
+				end := rig.endIn(t, rig.grant, life)
+				c := rig.session(rig.grant)
+				mode := gwHTTP1
+				if shape == "request body" {
+					mode = gwHTTP2
+				}
+				srv, ended := serveGateway(t, rig.issuerUIRig, mode, nil)
+				var out *readLog
+				if shape == "101" {
+					conn := rawRequest(t, srv, gwHTTP1, rig.path("/ws"), c, "Connection: Upgrade\r\nUpgrade: test\r\n")
+					br := bufio.NewReader(conn)
+					if line, _ := br.ReadString('\n'); !strings.Contains(line, "101") {
+						t.Fatalf("no 101: %q", line)
+					}
+					skipHeaders(br)
+					out = newReadLog()
+					go out.readAll(br)
+					go sendLines(conn)
+				} else if shape == "upload" { // admitted is shown by the input reaching the backend
+					conn := rawMethod(t, srv, gwHTTP1, http.MethodPost, rig.path("/upload"), c, "Transfer-Encoding: chunked\r\n")
+					go sendLines(chunkLines{conn})
+				} else {
+					out = duplexBody(t, srv, rig.path("/body"), c)
+				}
+				// Admitted and flowing in every claimed direction, before any successor or event.
+				opened := time.Now()
+				waitWithin(t, time.Second, "the viewer's input reached the backend", func() bool { return in.sentAfter(opened.Add(-time.Minute)) > 0 })
+				if out != nil {
+					waitWithin(t, time.Second, "the backend's output reached the viewer", func() bool { return out.after(opened.Add(-time.Minute)) > 0 })
+				}
+				stop := make(chan struct{})
+				var minted, refused atomic.Int64 // the exchanges before the event
+				var evented atomic.Bool
+				go func() { // the portal keeps exchanging
+					for {
+						select {
+						case <-stop:
+							return
+						case <-time.After(300 * time.Millisecond):
+							err := rig.mintQuiet(time.Now().Add(time.Hour)) // refused once the portal is revoked
+							switch {
+							case evented.Load():
+							case err == nil:
+								minted.Add(1)
+							default:
+								refused.Add(1)
+							}
+						}
+					}
+				}()
+				t.Cleanup(func() { close(stop) })
+				// A successor on the stream's own chain, ending after the stream's admitted end, before the event.
+				waitWithin(t, 2*time.Second, "a successor extended the chain past the admitted end", func() bool {
+					chainEnd, _, err := rig.env.st.PortalChainLive(context.Background(), rig.d.ID, rig.principal, rig.grant.ChainID)
+					return err == nil && minted.Load() > 0 && chainEnd.After(end)
+				})
+				admitted := end
+				if by == "revoke" {
+					time.Sleep(500 * time.Millisecond)
+					// Far enough before the admitted end that a cut by the end could not pass for the revoke's.
+					if left := time.Until(admitted); left < relayEvery+relayBound+relaySlack {
+						t.Fatalf("the revoke lands %v before the admitted end, inside the window a revoke's cut may take", left)
+					}
+					evented.Store(true)
+					end = time.Now()
+					rig.revokePortal(t)
+				} else {
+					time.AfterFunc(time.Until(end), func() { evented.Store(true) })
+				}
+				at := waitEnded(t, ended, 20*time.Second, shape+" "+by)
+				if by == "end" {
+					cutWithin(t, shape+" (end): the stream ended", at, end, relaySlack)
+				} else {
+					cutBy(t, shape+" (revoke)", end, at, relayEvery+relayBound+relaySlack)
+					if !at.Before(admitted) {
+						t.Fatalf("%s (revoke): ended %v, not before the admitted end %v", shape, at, admitted)
+					}
+				}
+				if in.sentAfter(end.Add(-time.Minute)) == 0 {
+					t.Fatal("no viewer input crossed the stream at all")
+				}
+				if n := refused.Load(); n != 0 {
+					t.Errorf("%d of the portal's exchanges before the event were refused", n)
+				}
+				waitWithin(t, 5*time.Second, "the backend's reader returned", in.finished)
+				limit := at // a revoke's cut lands somewhere inside its window: the handler's end bounds it
+				if by == "end" {
+					limit = earlier(at, end.Add(inputGrace)) // the end is the cut point
+				}
+				if n := in.sentAfter(limit); n != 0 {
+					t.Errorf("the backend received %d lines the viewer sent after the stream ended", n)
+				}
+				if out != nil {
+					select {
+					case <-out.done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("the viewer's reader never returned")
+					}
+					if out.stampCount() == 0 {
+						t.Fatal("no frame stamp was read: nothing below tells output after the end from a drain")
+					}
+					if n := out.stampedAfter(limit); n != 0 {
+						t.Errorf("the viewer read %d frames the backend sent after the stream ended", n)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestUIRenewal_ChainEndJustAfterCleanTickCutsAtEnd_PG: the chain's end falls just after a clean tick, with no
+// successor; the stream is cut at the end, not at the next tick.
+func TestUIRenewal_ChainEndJustAfterCleanTickCutsAtEnd_PG(t *testing.T) {
+	setRelayWatch(t, relayEvery)
+	t.Run("no successor", func(t *testing.T) {
+		rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
+		end := rig.endIn(t, rig.grant, relayEvery+relayEvery/10) // a tick at relayEvery passes clean
+		ended := openBlocked(t, rig, gwHTTP1, relayPath, rig.session(rig.grant))
+		at := waitEnded(t, ended, 10*time.Second, "chain end")
+		cutWithin(t, "the stream ended", at, end, relaySlack)
+	})
+}
+
+// TestUIRenewal_BlockedClientCutAtChainEnd_PG: a renewable stream whose client has stopped reading, on HTTP/1
+// and on HTTP/2, is cut at the end its chain had at admission.
+func TestUIRenewal_BlockedClientCutAtChainEnd_PG(t *testing.T) {
+	setRelayWatch(t, time.Hour)
+	for _, mode := range []gatewayMode{gwHTTP1, gwHTTP2} {
+		t.Run(mode.String(), func(t *testing.T) {
+			rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
+			end := rig.endIn(t, rig.grant, 2*time.Second)
+			ended := openBlocked(t, rig, mode, relayPath, rig.session(rig.grant))
+			cutWithin(t, mode.String()+": the blocked stream ended", waitEnded(t, ended, 10*time.Second, "chain end"), end, relaySlack)
+		})
+	}
+}
+
+// skipHeaders reads br past the end of a response's header block.
+func skipHeaders(br *bufio.Reader) {
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || line == "\r\n" {
+			return
+		}
+	}
+}
+
+// mintQuiet mints the person a further grant capped by signedEnd and returns the mint's error: for a goroutine
+// that keeps the portal exchanging.
+func (rig *issuerPGRig) mintQuiet(signedEnd time.Time) error {
+	_, _, err := rig.env.st.MintPortalGrant(context.Background(), types.PortalGrant{DelegateID: rig.d.ID, Principal: rig.principal,
+		UserType: rig.d.UserType, SubjectIssuedAt: time.Now().UTC()}, delegatedTokenPrefix+fmt.Sprint(time.Now().UnixNano()), signedEnd, 10*time.Minute, rig.d.AdmissionRev)
+	return err
+}
+
+// successorTo mints the person a further grant capped by signedEnd, as an exchange of one subject token whose
+// iat + max age (or exp) is signedEnd does.
+func (rig *issuerPGRig) successorTo(t *testing.T, signedEnd time.Time) {
+	t.Helper()
+	if err := rig.mintQuiet(signedEnd); err != nil {
+		t.Fatalf("mint a successor: %v", err)
+	}
+}
+
+// TestUIRenewal_OpenStreamEndsAtAdmittedEndWhilePortalExchanges_PG: successors commit throughout, the last
+// from the same last subject token. The open stream ends at its admitted end; the app's next request is served
+// and opens a new stream, which ends at that token's signed end: no stream outlives it.
+func TestUIRenewal_OpenStreamEndsAtAdmittedEndWhilePortalExchanges_PG(t *testing.T) {
+	setRelayWatch(t, relayEvery)
+	rig := newIssuerPGRig(t, streamBackend(&inputLog{}), renews)
+	admitted := rig.endIn(t, rig.grant, 2*time.Second)
+	c := rig.session(rig.grant)
+	signedEnd := time.Now().Add(8 * time.Second)
+	srv, ended := serveGateway(t, rig.issuerUIRig, gwHTTP1, nil)
+	// Admitted before any successor; then successors while each still has five seconds to live.
+	awaitHeaders(t, rawRequest(t, srv, gwHTTP1, rig.path(relayPath), c, ""))
+	for time.Until(signedEnd) > 6*time.Second {
+		rig.successorTo(t, signedEnd)
+		time.Sleep(300 * time.Millisecond)
+	}
+	cutWithin(t, "the first stream ended", waitEnded(t, ended, 10*time.Second, "admitted end"), admitted, relaySlack)
+	if r := rig.relay(c); r.Code != http.StatusOK {
+		t.Fatalf("the app's next request after the first stream's end: %d %s", r.Code, r.Body.String())
+	}
+	srv2, ended2 := serveGateway(t, rig.issuerUIRig, gwHTTP1, nil)
+	rawRequest(t, srv2, gwHTTP1, rig.path(relayPath), c, "")
+	requireOpen(t, ended2, 300*time.Millisecond)
+	at := waitEnded(t, ended2, 15*time.Second, "signed end")
+	if at.After(signedEnd.Add(relaySlack)) {
+		t.Fatalf("the second stream ended %v past the token's signed end", at.Sub(signedEnd))
+	}
+}
+
+// eventRefusesEverything opens a stream, commits event and checks the stream is cut within one re-check and
+// that a ticket minted before the event, a new relay request and a desktop open are all refused.
+func eventRefusesEverything(t *testing.T, event func(*issuerPGRig, *testing.T), what string) {
+	t.Helper()
+	setRelayWatch(t, relayEvery)
+	rig := newIssuerPGRig(t, streamBackend(&inputLog{}))
+	c := rig.session(rig.grant)
+	ticket := rig.ticket(rig.grant)
+	desk := rig.desktopCookie()
+	ended := openBlocked(t, rig, gwHTTP1, relayPath, c)
+	requireOpen(t, ended, 300*time.Millisecond)
+	at := time.Now()
+	event(rig, t)
+	if rec := rig.enterWith(ticket); rec.Code != http.StatusForbidden || len(setUICookies(rec)) != 0 {
+		t.Errorf("%s: a ticket redemption: %d, want 403", what, rec.Code)
+	}
+	if r := rig.relay(c); r.Code != http.StatusForbidden {
+		t.Errorf("%s: a new relay request: %d, want 403", what, r.Code)
+	}
+	if code := rig.desktopOpen(desk); code != http.StatusForbidden {
+		t.Errorf("%s: a desktop open: %d, want 403", what, code)
+	}
+	cutBy(t, what+": the open stream", at, waitEnded(t, ended, 10*time.Second, what), relayEvery+relayBound+relaySlack)
+}
+
+// TestPortalPurge_TombstoneWithLiveGrantRefusedOnTicketAndRelay_PG: the person's tombstone is committed, the
+// grant left live and the rest of the purge held; a ticket redemption, a new relay request and a desktop open
+// are refused, and an open stream is cut.
+func TestPortalPurge_TombstoneWithLiveGrantRefusedOnTicketAndRelay_PG(t *testing.T) {
+	eventRefusesEverything(t, (*issuerPGRig).tombstone, "tombstone")
+}
+
+// TestPortalPin_ReparentOutCutsTicketRelayAndStream_PG: the run's unit is re-parented out of the portal's pin;
+// a ticket redemption, a new relay request and a desktop open are refused, and an open stream is cut.
+func TestPortalPin_ReparentOutCutsTicketRelayAndStream_PG(t *testing.T) {
+	eventRefusesEverything(t, (*issuerPGRig).moveOut, "unit move")
+}

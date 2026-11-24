@@ -27,7 +27,8 @@ const (
 	sshExtOverride     = "override"      // "true" on an admin key's entry to an operator-owned run
 )
 
-// The reasons a support connection's re-check gives. Both are non-transient, so the probe closes the connection.
+// The reasons a support connection's re-check gives: an ended grant closes it at the next tick; a grant that could
+// not be read rides the session budget first (sshRecheckUnread).
 const (
 	sshSupportEnded      = "Support grant ended"
 	sshSupportUnverified = "Support grant could not be verified"
@@ -186,12 +187,9 @@ func sshSupportReason(v supportVerdict) string {
 	return sshSupportEnded
 }
 
-// sshSupportStrict makes a failed store read on a helper's connection a reason that closes it: an owner's idle
-// connection survives a store blip (sshReasonTransient), a helper's does not, so a revoke or an expiry never
-// outlives a blip by more than a tick.
-func sshSupportStrict(perms *ssh.Permissions, reason string) string {
-	if reason != "" && sshReasonTransient(reason) && sshSupportGrant(perms) != uuid.Nil {
-		return sshSupportUnverified
-	}
-	return reason
+// sshRecheckUnread reports whether a connection's re-check reason is a read that failed, so the connection rides
+// the session budget rather than closing at once: a key, run or cutoff lookup, or a helper's grant the store could
+// not read. A grant id the connection's own permissions cannot parse is no grant, and closes it.
+func sshRecheckUnread(perms *ssh.Permissions, reason string) bool {
+	return sshReasonTransient(reason) || (reason == sshSupportUnverified && !sshSupportGrantUnreadable(perms))
 }

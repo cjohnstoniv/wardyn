@@ -118,9 +118,32 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, r
 		s.grantsAppear()
 		s.grantsAppear = nil
 	}
-	if refuseIfAllocated {
+	// A change of team mode while any allocation holds the drive, whatever refuseIfAllocated says (driveTeamFlipOfAllocatedPred).
+	if before, held := s.drives[d.ID]; held && before.Team != d.Team {
 		for _, g := range s.grants {
 			if g.DriveID == d.ID {
+				return types.UserDrive{}, store.ErrDriveAllocated
+			}
+		}
+	}
+	if refuseIfAllocated {
+		// As the store's statement judges them (driveMovesAnAllocationPred): an allocation counts when this write moves its object.
+		before, held := s.drives[d.ID]
+		for _, g := range s.grants {
+			if g.DriveID != d.ID || !held {
+				continue
+			}
+			slugMoves := before.ObjectScheme != types.DriveObjectSchemeID && types.DriveSlug(before.Name) != types.DriveSlug(d.Name)
+			moves := before.Backend != d.Backend
+			switch {
+			case g.SubjectType == types.DriveSubjectPortal:
+			case before.Team:
+				named := before.Backend != types.DriveBackendHostPath || d.Backend != types.DriveBackendHostPath
+				moves = moves || (d.Backend == types.DriveBackendHostPath && before.HostRoot != d.HostRoot) || (slugMoves && named)
+			default:
+				moves = moves || before.HostRoot != d.HostRoot || before.HomeTemplate != d.HomeTemplate || slugMoves
+			}
+			if moves {
 				return types.UserDrive{}, store.ErrDriveAllocated
 			}
 		}
@@ -175,13 +198,16 @@ func (s *driveCRUDStore) ListUserDrives(context.Context) ([]types.UserDriveListI
 	}
 	var out []types.UserDriveListItem
 	for _, d := range s.drives {
-		n := 0
+		n, portals := 0, 0
 		for _, g := range s.grants {
 			if g.DriveID == d.ID {
 				n++
+				if g.SubjectType == types.DriveSubjectPortal {
+					portals++
+				}
 			}
 		}
-		out = append(out, types.UserDriveListItem{UserDrive: d, GrantCount: n})
+		out = append(out, types.UserDriveListItem{UserDrive: d, GrantCount: n, PortalGrantCount: portals})
 	}
 	return out, nil
 }
