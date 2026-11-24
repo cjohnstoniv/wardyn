@@ -418,6 +418,7 @@ func setApprovalCounts(cmd *cobra.Command, c *sdk.Client, file string) error {
 func noApprovalCounts(err error) error {
 	var api *sdk.APIError
 	if errors.As(err, &api) && api.Status == http.StatusNotFound {
+		//lint:ignore ST1005 the sentence the person reads; it ends as a sentence does
 		return errors.New("This server does not offer approval counts yet.")
 	}
 	return err
