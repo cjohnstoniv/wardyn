@@ -114,7 +114,6 @@ export const ASSISTANT = {
   END: "End",
   ARGUMENTS: "Arguments",
   TOKENS_USED: "Tokens used",
-  CHAT_FAILED: "Couldn't send that message.",
 
   // ---- the composer: the tool trail and its audit fields ----
   TOOL_CALLS: "Tool calls",

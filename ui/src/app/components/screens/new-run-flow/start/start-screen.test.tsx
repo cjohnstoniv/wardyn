@@ -48,8 +48,8 @@ describe("Start screen", () => {
     expect(screen.getByText(NR_START.TRUST_LINE)).toBeInTheDocument();
   });
 
-  // #3045: an unbuilt path is not a card. The entry screen has the two real paths and one muted roadmap line.
-  it("offers only the two real paths, and names what is unbuilt in one muted line with no version", async () => {
+  // #3045: an unbuilt path is not a card. The entry screen has the two run paths, the AI composer card and one muted roadmap line.
+  it("offers the two run paths and the AI composer card, and names what is unbuilt in one muted line with no version", async () => {
     show();
     await screen.findByText(NR_START.GUIDED_TITLE);
     expect(screen.queryByText(NR_SHARED.COMING_SOON)).toBeNull();
