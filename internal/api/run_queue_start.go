@@ -541,7 +541,8 @@ func (s *Server) queueLaunch(st *queuedStart, req createRunRequest, ceiling gove
 		EvidenceSource: placed.EvidenceSource, RunnerPoolExecutor: placed.RunnerPoolExecutor, RunnerFallbacks: f.place.otherRunners(f.enforced, placed.RunnerID),
 		RemoteFallbacks: f.place.otherRemotes(f.enforced, placed.RunnerPoolExecutor), Reserved: f.place.reserved(f.mainDrive),
 		ImageInput:     &imageInput,
-		ImageAdmission: f.admission, // the start checked the image again; it dispatches under this verdict
+		ImageAdmission: f.admission,  // the start checked the image again; it dispatches under this verdict
+		Containers:     f.containers, // the start checked each extra's image again; it dispatches under these verdicts
 		WallPreset:     f.source.wallPreset,
 		Binding:        st.auth.Binding,
 	})

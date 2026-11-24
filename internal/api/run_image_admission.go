@@ -106,16 +106,18 @@ func (s *Server) auditImageAdmissionDenied(r *http.Request, ref string, v *types
 // The site config is read before the mode is known, so an unreadable config refuses (500) even on an
 // install whose admission is off: the mode lives in that config, and reading it as off would admit
 // unchecked images on an enforcing install.
-//
+func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+	return s.imageAdmissionOf(r, createDigestInput(req, carried), types.MachineKind(req.MachineKind), profile, create)
+}
+
 // Default off: with the site mode off and no profile signer it returns before any check, so nothing an
 // install refused, wrote or answered changes until an admin turns it on. A profile's signers are enforced
 // whatever the site mode: a profile only ever adds requirements. The input is the digest rule's
 // (createDigestInput): the member's image, an attached workspace's base image, or a policy-carried one; the
 // convention image is not a member's choice. Operators and the break-glass admin are not checked, as with
 // the digest rule.
-func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried string, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
+func (s *Server) imageAdmissionOf(r *http.Request, ref string, kind types.MachineKind, profile []string, create bool) (*types.ImageAdmissionVerdict, string, *runRefusal) {
 	ctx := r.Context()
-	ref := createDigestInput(req, carried)
 	if ref == "" || s.runUngoverned(ctx) {
 		return nil, "", nil
 	}
@@ -134,7 +136,7 @@ func (s *Server) imageAdmission(r *http.Request, req createRunRequest, carried s
 		held = types.ImageAdmissionEnforce
 	}
 	// A macOS VM never runs the member image (its only container is the egress proxy), so there is nothing to check.
-	if types.MachineKind(req.MachineKind).IsMacOSVM() {
+	if kind.IsMacOSVM() {
 		return &types.ImageAdmissionVerdict{Mode: held, Verdict: types.ImageAdmissionNotApplicable}, "", nil
 	}
 	var verdict *types.ImageAdmissionVerdict

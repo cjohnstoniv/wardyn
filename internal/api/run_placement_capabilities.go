@@ -123,7 +123,7 @@ func (s *Server) runnerStreamCapabilities(ctx context.Context, id uuid.UUID) (pl
 			Driver: ep.sub.Name(), ConfinementClasses: cs.Classes, Resolved: cs.Resolved,
 			StructuralEgress: cs.StructuralEgress, NetworkPolicy: cs.NetworkPolicy,
 			NetworkPolicyAcknowledged: cs.NetworkPolicyAcknowledged, SessionRecording: cs.SessionRecording,
-			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles,
+			UserDrives: cs.UserDrives, ManagedFiles: cs.ManagedFiles, ExtraContainers: cs.ExtraContainers,
 			EphemeralDiskEnforcement: cs.EphemeralDiskEnforcement, Freeze: cs.Freeze,
 			ExecOutputUncaptured: cs.ExecOutputUncaptured, NetworkPolicyCheck: cs.NetworkPolicyCheck,
 		},
@@ -202,7 +202,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 	out := placementCaps{Source: types.RunEvidenceSubstrate, Capabilities: runner.Capabilities{
 		Driver: sets[0].Driver, Resolved: map[types.ConfinementClass]string{}, Freeze: map[types.ConfinementClass]bool{},
 		StructuralEgress: true, NetworkPolicy: true, NetworkPolicyAcknowledged: true, SessionRecording: true,
-		UserDrives: true, ManagedFiles: true, EphemeralDiskEnforcement: sets[0].EphemeralDiskEnforcement,
+		UserDrives: true, ManagedFiles: true, ExtraContainers: true, EphemeralDiskEnforcement: sets[0].EphemeralDiskEnforcement,
 	}}
 	for _, c := range sets[0].ConfinementClasses {
 		if every(sets, func(s placementCaps) bool { return slices.Contains(s.ConfinementClasses, c) }) {
@@ -219,6 +219,7 @@ func intersectCapabilities(sets ...placementCaps) placementCaps {
 		out.SessionRecording = out.SessionRecording && s.SessionRecording
 		out.UserDrives = out.UserDrives && s.UserDrives
 		out.ManagedFiles = out.ManagedFiles && s.ManagedFiles
+		out.ExtraContainers = out.ExtraContainers && s.ExtraContainers
 		out.ExecOutputUncaptured = out.ExecOutputUncaptured || s.ExecOutputUncaptured
 		if diskEnforcementRank(s.EphemeralDiskEnforcement) < diskEnforcementRank(out.EphemeralDiskEnforcement) {
 			out.EphemeralDiskEnforcement = s.EphemeralDiskEnforcement
