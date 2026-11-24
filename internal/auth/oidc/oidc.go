@@ -35,7 +35,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -276,17 +275,21 @@ type Session struct {
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.
 type Authenticator struct {
-	cfg        Config
-	oauth2     oauth2.Config
-	verifier   *gooidc.IDTokenVerifier
-	hmacKey    []byte
-	httpClient *http.Client // the token-exchange client: any injected transport, bounded by idpHTTPTimeout
+	cfg     Config
+	oauth2  oauth2.Config // the client half: the endpoints live in the provider state
+	hmacKey []byte
 
-	subjectVerifier *gooidc.IDTokenVerifier // any audience: VerifySubjectToken checks it
+	// prov is the provider state, published once by Discover. nil on a zero value and on an authenticator whose
+	// provider has not been reached yet (see pending.go).
+	prov atomic.Pointer[providerState]
+	// built is set by NewPending: such an authenticator is closed, not empty, until prov is published.
+	built bool
+	// pending is set when Discover failed with ErrProviderUnreachable and cleared when prov is published.
+	pending    atomic.Bool
+	discoverMu sync.Mutex
+	// logouts holds the back-channel logouts received while pending.
+	logouts logoutQueue
 
-	// groupsScopeUnrequested records whether discovery advertised a `groups` scope the
-	// authorization request doesn't ask for, computed once in New. False for every Entra tenant.
-	groupsScopeUnrequested bool
 	// warnedMergedGroupsScope bounds the login-time warning line to ONE per process; sawGroupClaim
 	// silences it for good once any login proves the IdP does send the claim.
 	warnedMergedGroupsScope sync.Once
@@ -385,90 +388,6 @@ func (a *Authenticator) resolvePerson(r *http.Request, subj Subject, reserved fu
 	return principal, ""
 }
 
-// New constructs an Authenticator by performing OIDC discovery against cfg.IssuerURL. hmacKey signs
-// session cookies and is never logged.
-func New(ctx context.Context, cfg Config, hmacKey []byte) (*Authenticator, error) {
-	if cfg.IssuerURL == "" || cfg.ClientID == "" || cfg.RedirectURL == "" {
-		return nil, errors.New("oidc: IssuerURL, ClientID, and RedirectURL are required (ClientSecret is optional for a public client)")
-	}
-	if len(hmacKey) < 32 {
-		return nil, errors.New("oidc: hmacKey must be at least 32 bytes")
-	}
-
-	// Tests inject a custom transport via ctx; production ctx carries nil => http.DefaultClient.
-	var httpClient *http.Client
-	if c, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		httpClient = c
-	}
-
-	// Split-horizon issuer: discover against the internal URL but expect the public issuer.
-	discoverURL := cfg.IssuerURL
-	if cfg.InternalIssuerURL != "" && cfg.InternalIssuerURL != cfg.IssuerURL {
-		rt, err := newRewriteTransport(cfg.IssuerURL, cfg.InternalIssuerURL, httpClient)
-		if err != nil {
-			return nil, err
-		}
-		httpClient = &http.Client{Transport: rt}
-		discoverURL = cfg.InternalIssuerURL
-		// Tell go-oidc the public URL is the expected issuer even though we fetched from internal.
-		ctx = gooidc.InsecureIssuerURLContext(ctx, cfg.IssuerURL)
-	}
-	if httpClient != nil {
-		ctx = gooidc.ClientContext(ctx, httpClient)
-	}
-
-	provider, err := gooidc.NewProvider(ctx, discoverURL)
-	if err != nil {
-		return nil, fmt.Errorf("oidc: provider discovery for %q: %w", discoverURL, err)
-	}
-	// Refuse boot on an unadvertised extra scope BEFORE it reaches oa.Scopes.
-	if err := validateExtraScopes(provider, cfg.ExtraScopes); err != nil {
-		return nil, err
-	}
-
-	oa := oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURL,
-		Endpoint:     provider.Endpoint(),
-		Scopes:       append([]string{gooidc.ScopeOpenID, "profile", "email"}, cfg.ExtraScopes...),
-	}
-	if cfg.ClientSecret == "" {
-		// A public client's token request must never include a client_secret param: AutoDetect
-		// tries HTTP Basic first ("clientID:" with an empty password, still client_secret-shaped),
-		// so force AuthStyleInParams, the one style x/oauth2 skips the field for entirely when empty.
-		oa.Endpoint.AuthStyle = oauth2.AuthStyleInParams
-	}
-	groupsScopeUnrequested := providerGatesGroupsScope(provider, oa.Scopes)
-	warnUnrequestedGroupsScope(groupsScopeUnrequested, oa.Scopes, cfg)
-
-	// The ID-token key set uses a JWKS-TOLERANT client so one unparseable entry skips instead of
-	// failing the whole document and locking every human out. VerifierContext (not Verifier) is only
-	// so the key set gets its own HTTP client, using background context since it outlives this call.
-	// The token exchange and the key set share one client bounded by idpHTTPTimeout (discovery above
-	// is bounded by the caller's ctx). A copy, so the caller's transport and settings survive.
-	idpClient := &http.Client{}
-	if httpClient != nil {
-		*idpClient = *httpClient
-	}
-	if idpClient.Timeout == 0 {
-		idpClient.Timeout = idpHTTPTimeout
-	}
-	keySetCtx := gooidc.ClientContext(context.Background(), newTolerantJWKSClient(idpClient))
-	verifier := provider.VerifierContext(keySetCtx, &gooidc.Config{ClientID: cfg.ClientID})
-
-	return &Authenticator{
-		cfg:                    cfg,
-		oauth2:                 oa,
-		verifier:               verifier,
-		subjectVerifier:        provider.VerifierContext(keySetCtx, &gooidc.Config{SkipClientIDCheck: true}),
-		hmacKey:                hmacKey,
-		httpClient:             idpClient,
-		groupsScopeUnrequested: groupsScopeUnrequested,
-		entra:                  isEntraIssuer(cfg.IssuerURL),
-	}, nil
-}
-
 // groupsScope is the scope name an IdP that gates its group claim expects. Wardyn does NOT request
 // it — see warnUnrequestedGroupsScope.
 const groupsScope = "groups"
@@ -500,6 +419,10 @@ func warnUnrequestedGroupsScope(gated bool, requested []string, cfg Config) {
 // redirects the user to the IdP authorization endpoint. An optional ?return_to=<console path> is where
 // the approved sign-in lands instead of the console root (return_to.go).
 func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	if _, closed := a.state(); closed {
+		pendingSignIn503(w) // before rememberReturnTo, which sets a cookie
+		return
+	}
 	a.rememberReturnTo(w, r)
 	a.startLogin(w, r, true, a.silentEligible(r))
 }
@@ -509,6 +432,11 @@ func (a *Authenticator) LoginHandler(w http.ResponseWriter, r *http.Request) {
 // resource's refusal from costing anyone their console session. See widenRetryableError. silent
 // asks the provider with prompt=none (SilentReauth); every restart from the callback passes false.
 func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen, silent bool) {
+	st, closed := a.state()
+	if closed {
+		pendingSignIn503(w)
+		return
+	}
 	state := randomToken()
 	nonce := randomToken()
 	// PKCE: 32-octet verifier, meeting RFC 7636 §4.1's 43-char minimum.
@@ -539,7 +467,8 @@ func (a *Authenticator) startLogin(w http.ResponseWriter, r *http.Request, widen
 		a.expireWidenedMarker(w)
 	}
 	opts = append(opts, a.reauthOptions(w, r, silent)...)
-	authURL := a.oauth2.AuthCodeURL(state, opts...)
+	oa := a.oauthConfig(st)
+	authURL := oa.AuthCodeURL(state, opts...)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 

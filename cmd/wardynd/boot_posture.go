@@ -435,8 +435,10 @@ func uiCookiePolicy(raw string) api.UICookiePolicy {
 //
 // validateMemberModePosture stays OUT of this list on purpose: it needs
 // lm.enabled (local mode's RESOLVED fact, not the raw flag — local mode
-// auto-enables) and feats.authn != nil (OIDC actually configured, which a
-// failed OIDC discovery leaves nil), and neither exists this early in boot.
+// auto-enables) and feats.authn != nil (OIDC actually configured: nil only
+// when no issuer is set, or when discovery failed for an issuer never booted
+// with or for a reason other than an unanswering provider), and neither
+// exists this early in boot.
 // It is still called directly, at its own later point in run().
 func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
