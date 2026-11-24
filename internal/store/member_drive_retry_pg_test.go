@@ -91,6 +91,13 @@ func TestPG_ListHeldMemberDriveDeletes_Filter(t *testing.T) {
 	if got, err := e.st.ListHeldMemberDriveDeletes(ctx, docker, 1); err != nil || len(got) != 1 || got[0].ID != older {
 		t.Errorf("limit 1 listed %d rows (err %v), want the oldest only", len(got), err)
 	}
+	// A caller that names mac_disk among its backends still never gets a Mac disk: its Mac finishes that delete.
+	if got, err := e.st.ListHeldMemberDriveDeletes(ctx, []string{string(types.DriveBackendMacDisk)}, 50); err != nil || len(got) != 0 {
+		t.Errorf("mac_disk backend listed %d rows (err %v), want none", len(got), err)
+	}
+	if got, err := e.st.ListHeldMemberDriveDeletes(ctx, append(slices.Clone(docker), string(types.DriveBackendMacDisk)), 50); err != nil || len(got) != 2 {
+		t.Errorf("docker backends plus mac_disk listed %d rows (err %v), want the two docker rows", len(got), err)
+	}
 	if got, err := e.st.ListHeldMemberDriveDeletes(ctx, nil, 50); err != nil || len(got) != 0 {
 		t.Errorf("no backends listed %d rows (err %v), want none", len(got), err)
 	}
