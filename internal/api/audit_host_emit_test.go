@@ -540,7 +540,8 @@ func (src auditEmitSource) keysOf(fn *ast.FuncDecl, e ast.Expr, depth int) []str
 	return nil
 }
 
-// mapKeysIn is every key fn sets on its map variable name, following it into the functions it is passed to.
+// mapKeysIn is every key fn sets on its map variable name, following it into the functions it is passed to
+// and the package function it is assigned from (a datum built by a helper, as site_config.write's is).
 func (src auditEmitSource) mapKeysIn(fn *ast.FuncDecl, name string, depth int) []string {
 	var out []string
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -548,8 +549,9 @@ func (src auditEmitSource) mapKeysIn(fn *ast.FuncDecl, name string, depth int) [
 		case *ast.AssignStmt:
 			for i, l := range n.Lhs {
 				if li, ok := l.(*ast.Ident); ok && li.Name == name && i < len(n.Rhs) {
-					if lit, ok := n.Rhs[i].(*ast.CompositeLit); ok {
-						out = append(out, src.keysOf(fn, lit, depth+1)...)
+					switch rhs := n.Rhs[i].(type) {
+					case *ast.CompositeLit, *ast.CallExpr:
+						out = append(out, src.keysOf(fn, rhs, depth+1)...)
 					}
 				}
 				if ix, ok := l.(*ast.IndexExpr); ok {
