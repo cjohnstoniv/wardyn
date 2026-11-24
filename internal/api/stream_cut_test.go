@@ -1302,7 +1302,7 @@ func TestStreamCut_FenceReachesAHolderMadeAfterTheWindowOpened(t *testing.T) {
 	ctx := context.Background()
 	c := newStreamCut(newRecWriter(nil), time.Now().Add(time.Hour), cancel)
 	b := testBudget(h.srv, time.Hour, 10*time.Millisecond)
-	b.fence = c.fenced
+	b.fence = c.budgetFenced
 	var asked atomic.Bool
 	c.watch(ctx, time.Now().Add(10*time.Millisecond), time.Hour, time.Second, b, func(context.Context) error {
 		asked.Store(true)
