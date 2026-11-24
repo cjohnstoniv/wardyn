@@ -360,7 +360,7 @@ func TestAgentRulesRunStep_NarrowsEveryKnob(t *testing.T) {
 }
 
 // openEgressSeed is own plus each entry of list that open egress reaches, filtered as composer's openSeed
-// (internal/composer/meet.go:124-133) filters it: a name or wildcard with no port, 80 or 443; an IP literal
+// (openSeed in internal/composer/meet.go) filters it: a name or wildcard with no port, 80 or 443; an IP literal
 // or another port is left out, so a rule naming one is not judged within an open policy by accident.
 func openEgressSeed(own, list []string) []string {
 	out := slices.Clone(own)
