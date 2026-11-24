@@ -33,6 +33,7 @@ var uiSpecSites = map[string]uiSpecSite{
 	"handlePutPreset":             {ruledBy: []string{"validatePresetRequest"}},
 	"inlinePolicyRefusal":         {ruledBy: []string{"inlinePolicyRefusal"}},
 	"applyPolicyOverlay":          {ruledBy: []string{"applyPolicyOverlay"}},
+	"assistantValidate":           {ruledBy: []string{"assistantValidate"}},
 	"LoadPolicySpec":              {exempt: "the policy file is a configured source, read by the census, not a stored spec"},
 	"applyRestrictionChange":      {exempt: "a RestrictionSpec has no ui_apps field"},
 	"restrictionReviewFor":        {exempt: "a RestrictionSpec has no ui_apps field"},
