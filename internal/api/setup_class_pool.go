@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -35,7 +37,7 @@ func (s *Server) classPoolRows(ctx context.Context, untainted, anyNode []types.C
 	add(&pools, untainted, "this server's cluster")
 	add(&open, anyNode, "this server's cluster")
 	s.runnerStreams.subsMu.Lock()
-	ids := slices.Sorted(maps.Keys(s.runnerStreams.subs))
+	ids := slices.SortedFunc(maps.Keys(s.runnerStreams.subs), func(a, b uuid.UUID) int { return strings.Compare(a.String(), b.String()) })
 	eps := make([]runnerEndpoint, 0, len(ids))
 	for _, id := range ids {
 		eps = append(eps, s.runnerStreams.subs[id])
