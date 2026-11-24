@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -57,7 +58,8 @@ func (s *Server) auditSignInDenied(r *http.Request, reason string) {
 // auditIdPLogout records a back- or front-channel logout from the identity provider as the
 // session.revoke row an admin's sessions-only revoke writes, marked with its source.
 func (s *Server) auditIdPLogout(r *http.Request, source, sub string, err error) {
-	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0, "source": source}
+	data := map[string]any{"scope": "sub", "sub": sub, "sessions_only": true, "tokens_revoked": 0, "ssh_keys_deleted": 0,
+		"cli_sessions_ended": store.CLIEndedFrom(r.Context()).Count(), "source": source}
 	outcome := "success"
 	if err != nil {
 		outcome, data["error"] = "failure", auditStep(r.Context(), auditStepSignOut, err, slog.String("sub", sub), slog.String("source", source))
@@ -87,7 +89,8 @@ func (s *Server) backchannelLogout() http.HandlerFunc {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "temporarily_unavailable", "error_description": "too many logout tokens; retry later"})
 			return
 		}
-		next(w, r)
+		ctx, _ := store.WithCLIEnded(r.Context())
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -117,6 +120,7 @@ func (s *Server) frontchannelLogout() http.HandlerFunc {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "temporarily_unavailable", "error_description": "too many logout requests; retry later"})
 			return
 		}
-		next(w, r)
+		ctx, _ := store.WithCLIEnded(r.Context())
+		next(w, r.WithContext(ctx))
 	}
 }

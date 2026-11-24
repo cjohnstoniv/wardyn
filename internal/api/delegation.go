@@ -83,6 +83,10 @@ const delegationRefusal = "A delegated token cannot reach this action — the pe
 func (s *Server) delegatedTokenAuth(next, fallback http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r)
+		// A grant an issuer portal minted lives in portal_grants, which the lookup below never reads.
+		if ok && strings.HasPrefix(tok, delegatedTokenPrefix) && s.servePortalGrant(w, r, tok, next, fallback) {
+			return
+		}
 		ds, isDS := s.cfg.Store.(store.DelegateStore)
 		if !ok || !strings.HasPrefix(tok, delegatedTokenPrefix) || !isDS {
 			fallback.ServeHTTP(w, r)

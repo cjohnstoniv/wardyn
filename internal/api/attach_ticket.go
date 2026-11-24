@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -98,6 +99,9 @@ func consumeAttachTicket(ctx context.Context, st store.Store, tok string, runID 
 type ticketActorCtxKey struct{}
 
 type ticketActor struct {
+	// admitBy is an issuer portal's opening deadline, set at redemption: every read that admits the ticket's
+	// session or socket runs under it (admitCtx), the stream after them under its own life. Zero for any other.
+	admitBy   time.Time
 	actorType types.ActorType
 	principal string
 	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleUser) at
@@ -132,6 +136,11 @@ type ticketActor struct {
 	// supportExpires that grant's expiry, which caps a UI session opened from the ticket (sessionExpiry).
 	support        uuid.UUID
 	supportExpires time.Time
+	// renewChain is the chain of the issuer-portal grant the ticket was minted under when its portal renews
+	// browser-app sessions (uiRenewalChain), uuid.Nil otherwise; checkStart is when redemption began, the
+	// anchor an issuer-portal terminal's re-checks are timed from. Both are set by redeemAttachTicket.
+	renewChain uuid.UUID
+	checkStart time.Time
 }
 
 func withTicketActor(ctx context.Context, a ticketActor) context.Context {
@@ -220,9 +229,17 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
+	// A kept run takes no ticket, except its owner's own terminal ticket into a run its Kubernetes runner keeps
+	// with its agent running (keptCopyOutRefusal): never a UI app's, a support helper's or a sponsor's.
 	if runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
-		return
+		by := ""
+		if purpose == "" && !asSupport && !asSponsor {
+			by = principalFromRequest(r)
+		}
+		if msg := s.keptCopyOutRefusal(r.Context(), run, by, "run has ended; cannot attach"); msg != "" {
+			writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
+			return
+		}
 	}
 	// The session caps (per run, and per principal on a run more than one principal can attach to) are
 	// also checked here, where the refusal can carry its reason; the WebSocket upgrade enforces them
@@ -252,6 +269,9 @@ func (s *Server) handleAttachTicket(w http.ResponseWriter, r *http.Request) {
 	t := store.AttachTicket{RunID: id, ActorType: at, Principal: principal, Role: role}
 	if asSupport {
 		t.SupportGrant, t.SupportExpires = supportTicketGrant(grant)
+	}
+	if asSponsor {
+		t.SponsorService, _ = serviceOfRun(run) // the insert holds the identity to this sponsor (MintAttachTicket)
 	}
 	s.issueAttachTicket(w, r, t, authorizedAt)
 }
@@ -284,6 +304,12 @@ func (s *Server) issueAttachTicket(w http.ResponseWriter, r *http.Request, t sto
 		}
 	}
 	tok, err := storeAttachTicket(r.Context(), s.cfg.Store, t, issue)
+	if errors.Is(err, store.ErrServiceIdentityInactive) {
+		// The sponsorship ended between the entry check and the insert: the sponsor refusal's foreign-run 404.
+		writeErrorReason(w, http.StatusNotFound, reasonRunNotFound, "run not found")
+		s.recordRefusal(r.Context(), r, authz.Deny(authz.ReasonSponsorNotEntitled, t.RunID.String(), "run not found").OnRun(t.RunID))
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: mint attach ticket failed", "run_id", t.RunID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonAttachTicketMintFailed, "mint attach ticket failed")
@@ -405,4 +431,12 @@ func (s *Server) auditAttachRefused(r *http.Request, runID uuid.UUID, actor, lan
 	ev := s.auditEvent(&runID, types.ActorHuman, actor, "session.attach", runID.String(), "failure", mustJSON(data))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
+}
+
+// admitCtx is ctx bounded by an issuer portal's opening deadline (admitBy), and ctx itself for any other ticket.
+func (ta ticketActor) admitCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ta.admitBy.IsZero() {
+		return ctx, func() {}
+	}
+	return context.WithDeadline(ctx, ta.admitBy)
 }

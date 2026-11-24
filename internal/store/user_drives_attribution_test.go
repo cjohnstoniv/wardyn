@@ -106,14 +106,27 @@ func TestUpsertAttributionNamesTheAllocationWhenTheNamespaceGuardCannotHaveFired
 		}
 	})
 
-	t.Run("an unguarded write still falls back to the namespace answer", func(t *testing.T) {
-		// refuseIfAllocated false: the allocation guard is NOT in the statement,
-		// so it cannot be what refused it either.
+	t.Run("an unflagged write off a share is the team-mode guard, whatever the re-read says", func(t *testing.T) {
+		// refuseIfAllocated false: the re-home guard is not in the statement, but the team-mode guard always is, and a
+		// docker_volume drive has no namespace guard, so the team-mode guard alone refused it. The re-read can answer
+		// false (the allocation went away since) or fail, and the sentence stays the allocation's.
+		for label, first := range map[string]pgx.Row{"false": boolRow{false}, "cannot answer": errRow{err: errors.New("connection reset")}} {
+			q := &scriptedQuerier{rows: []pgx.Row{errRow{err: pgx.ErrNoRows}, first}}
+			if _, err := pg.upsertUserDriveOn(ctx, q, d, false); !errors.Is(err, ErrDriveAllocated) {
+				t.Errorf("re-read %s: err = %v, want ErrDriveAllocated, not the home-name sentence", label, err)
+			}
+		}
+	})
+
+	t.Run("an unflagged write on a share still falls back to the namespace answer", func(t *testing.T) {
+		share := types.UserDrive{ID: uuid.New(), Name: "Corp NAS",
+			Backend: types.DriveBackendHostPath, HostRoot: "/srv/shares"}
 		q := &scriptedQuerier{rows: []pgx.Row{
 			errRow{err: pgx.ErrNoRows},
-			boolRow{false},
+			boolRow{false}, // driveHomeNamespaceClash: no clash now
+			boolRow{false}, // driveTeamFlipBlocked
 		}}
-		_, err := pg.upsertUserDriveOn(ctx, q, d, false)
+		_, err := pg.upsertUserDriveOn(ctx, q, share, false)
 		if !errors.Is(err, ErrDriveHomeNamespaceConflict) {
 			t.Errorf("err = %v, want the unchanged fallback", err)
 		}

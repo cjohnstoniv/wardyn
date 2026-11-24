@@ -24,9 +24,11 @@ Any other value exits 2 at boot. The switch is env-only, so turning it on needs 
 | `GET /governance/approval-rules` | Lists the rules by name, with the switch's value. |
 | `PUT /governance/approval-rules/{name}` | Creates or replaces a rule; the store raises `version` by one on every write. A new rule starts `dry_run` unless the body names `enforce`. Held for a second human under `WARDYN_GOVERNANCE_SECOND_HUMAN`, an edit included. |
 | `DELETE /governance/approval-rules/{name}` | Removes a rule. Never held: removing a rule only narrows. |
-| `POST /governance/approval-rules/dry-run` | Reports what a drafted rule (the body) or a stored one (a body naming only `name`) would do. See below. |
+| `POST /governance/approval-rules/dry-run` | Reports what a drafted rule (the body) or a stored one (a body holding only `name`) would do. See below. |
 
 The dry run writes nothing, not even an audit row.
+
+- A body with any other key is a draft. A draft needs at least one approval kind. Omitting kinds or sending an empty list returns 400.
 
 - Each `PENDING` approval the rule matches runs the dry-run decide path: `would_approve`, or `skip` with the gate's reason.
 - Approvals from the last 7 days are matched on the rule's predicates only, labelled `predicate_match`. `recent_truncated` says the look back stopped at 1,000 rows.

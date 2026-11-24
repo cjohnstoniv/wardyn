@@ -79,6 +79,11 @@ func (s *syncStore) ListGovernanceUnits(context.Context) ([]types.GovernanceUnit
 	return nil, nil
 }
 
+// GetSiteConfig answers an empty document: the gateway reads the open-session budget from it once per connection.
+func (s *syncStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // QueryAuditEvents answers the run's recorded policy, which sets no data_out rule: the gateway reads it once
 // per connection.
 func (s *syncStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, _ int) ([]types.AuditEvent, error) {

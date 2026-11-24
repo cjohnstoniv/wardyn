@@ -7,6 +7,8 @@ package admission
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -234,5 +236,213 @@ func TestReclaimOwnPastAnotherEntrysHelper(t *testing.T) {
 				t.Fatalf("ReclaimOwn = %v, want %q", err, errMayBeVM)
 			}
 		})
+	}
+}
+
+// runnerd is this login's runnerd as the process table shows it, created n ticks after deadHelper's helper.
+func runnerd(n int) Proc {
+	return Proc{PID: 10, UID: 501, Start: 1, MonoStart: mono(n), Name: "wardyn-runnerd"}
+}
+
+// endMono is the entry's HelperEndMono as the ledger holds it.
+func endMono(t *testing.T, l *Ledger, id string) uint64 {
+	t.Helper()
+	es, err := l.Counted()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, ok := find(es, id)
+	if !ok {
+		t.Fatalf("entry %s is not counted", id)
+	}
+	return e.HelperEndMono
+}
+
+// A Virtualization process created after the helper's exit was marked is not the job's VM: Docker's
+// Linux VM restarting after the job ended no longer holds the slot (#3871).
+func TestReclaimOwnPastAVirtualizationProcessCreatedAfterTheHelperExited(t *testing.T) {
+	h, l, e, _ := deadHelper(t)
+	docker := Proc{PID: 50, UID: 501, MonoStart: mono(6), Name: vzName}
+	h.setProcs(runnerd(5))
+	if err := l.MarkHelperEnded(e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := endMono(t, l, e.ID); got != mono(5) {
+		t.Fatalf("HelperEndMono = %d, want %d", got, mono(5))
+	}
+	h.setProcs(runnerd(5), docker)
+	if err := l.ReclaimOwn(e.ID, ""); err != nil {
+		t.Fatalf("ReclaimOwn past a VM created after the mark: %v", err)
+	}
+
+	// Without the mark the same process keeps the slot.
+	h, l, e, _ = deadHelper(t)
+	h.setProcs(runnerd(5), docker)
+	if err := l.ReclaimOwn(e.ID, ""); err == nil || err.Error() != errMayBeVM {
+		t.Fatalf("ReclaimOwn with no mark = %v, want %q", err, errMayBeVM)
+	}
+}
+
+// The job's own VM, alive when the mark was taken, still holds the slot, whatever Docker does later.
+func TestReclaimOwnKeepsAVMThatWasAliveAtTheHelperEndMark(t *testing.T) {
+	h, l, e, _ := deadHelper(t)
+	vm := Proc{PID: 78, UID: 501, Start: minutes(1), MonoStart: mono(1), Name: vzName}
+	docker := Proc{PID: 50, UID: 501, Start: 2, MonoStart: mono(6), Name: vzName}
+	h.setProcs(vm, runnerd(5))
+	if err := l.MarkHelperEnded(e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := endMono(t, l, e.ID); got != mono(5) {
+		t.Fatalf("HelperEndMono = %d, want %d", got, mono(5))
+	}
+	h.setProcs(vm, docker)
+	if err := l.ReclaimOwn(e.ID, ""); err == nil || err.Error() != errMayBeVM {
+		t.Fatalf("ReclaimOwn with the job's VM alive = %v, want %q", err, errMayBeVM)
+	}
+	h.setProcs(docker)
+	if err := l.ReclaimOwn(e.ID, ""); err != nil {
+		t.Fatalf("ReclaimOwn once only Docker's VM runs: %v", err)
+	}
+}
+
+// No mark is taken while a process that may still create the job's VM is alive.
+func TestMarkHelperEndedWaitsForEveryPossibleCreator(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prep func(h *fakeHost, l *Ledger, start int64)
+		want uint64
+	}{
+		{"the helper alive", func(h *fakeHost, _ *Ledger, start int64) {
+			h.setProcs(Proc{PID: 77, UID: 501, Start: start, MonoStart: helperMono, Name: HelperProcess})
+		}, 0},
+		{"an install process alive", func(h *fakeHost, _ *Ledger, _ int64) {
+			h.setProcs(runnerd(5), Proc{PID: 79, UID: 501, Start: 3, MonoStart: mono(2), Name: HelperProcess})
+		}, 0},
+		{"a helper process with an unknown start", func(h *fakeHost, _ *Ledger, _ int64) {
+			h.setProcs(runnerd(5), Proc{PID: 79, UID: 501, Start: 3, Name: HelperProcess})
+		}, 0},
+		{"a Virtualization process with an unknown start", func(h *fakeHost, _ *Ledger, _ int64) {
+			h.setProcs(runnerd(5), Proc{PID: 50, UID: 501, Start: 3, Name: vzName})
+		}, 0},
+		{"another counted entry's own helper", func(h *fakeHost, l *Ledger, start int64) {
+			o, err := l.Admit(runReq(8 * gib))
+			if err != nil {
+				panic(err)
+			}
+			second := Proc{PID: 88, UID: 501, Start: start, MonoStart: mono(3), Name: HelperProcess}
+			h.setProcs(second)
+			if _, err := l.ClaimHelper(o.ID, 88, start); err != nil {
+				panic(err)
+			}
+		}, mono(3)},
+		{"an older job's helper process", func(h *fakeHost, _ *Ledger, _ int64) {
+			h.setProcs(runnerd(5), Proc{PID: 90, UID: 501, Start: 3, MonoStart: mono(-5), Name: HelperProcess})
+		}, mono(5)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, l, e, start := deadHelper(t)
+			tc.prep(h, l, start)
+			if err := l.MarkHelperEnded(e.ID); err != nil {
+				t.Fatal(err)
+			}
+			if got := endMono(t, l, e.ID); got != tc.want {
+				t.Fatalf("HelperEndMono = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// entryBytes is the entry file's content and modification time.
+func entryBytes(t *testing.T, l *Ledger, e Entry) (string, time.Time) {
+	t.Helper()
+	p := filepath.Join(l.c.Dir, e.file)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b), fi.ModTime()
+}
+
+func TestMarkHelperEndedIsANoOpWhenNothingCanBeMarked(t *testing.T) {
+	unchanged := func(t *testing.T, l *Ledger, e Entry, ps ...Proc) {
+		t.Helper()
+		b0, m0 := entryBytes(t, l, e)
+		l.c.Host.(*fakeHost).setProcs(ps...)
+		if err := l.MarkHelperEnded(e.ID); err != nil {
+			t.Fatal(err)
+		}
+		if b1, m1 := entryBytes(t, l, e); b1 != b0 || !m1.Equal(m0) {
+			t.Fatalf("the entry was rewritten:\n%s\n%s", b0, b1)
+		}
+	}
+	t.Run("released first", func(t *testing.T) {
+		h, l, e, _ := deadHelper(t)
+		if err := l.Release(e.ID, Destroyed{Stopped: true}); err != nil {
+			t.Fatal(err)
+		}
+		h.setProcs(runnerd(5))
+		if err := l.MarkHelperEnded(e.ID); err != nil {
+			t.Fatalf("a released entry: %v", err)
+		}
+		if es, err := l.Counted(); err != nil || len(es) != 0 {
+			t.Fatalf("counted after a no-op mark: %v %v", es, err)
+		}
+	})
+	t.Run("leaked", func(t *testing.T) {
+		h := bigMac()
+		l := newRig(t, h).open(t, 501, "r")
+		if _, err := l.AddLeaked("", 10, 1); err != nil {
+			t.Fatal(err)
+		}
+		es, err := l.Counted()
+		if err != nil || len(es) != 1 {
+			t.Fatalf("counted %v %v, want the leaked slot", es, err)
+		}
+		unchanged(t, l, es[0], runnerd(5))
+	})
+	t.Run("no helper recorded", func(t *testing.T) {
+		h := bigMac()
+		l := newRig(t, h).open(t, 501, "r")
+		h.setProcs(runnerd(0))
+		if _, err := l.Admit(runReq(8 * gib)); err != nil {
+			t.Fatal(err)
+		}
+		es, err := l.Counted()
+		if err != nil || len(es) != 1 {
+			t.Fatalf("counted %v %v", es, err)
+		}
+		unchanged(t, l, es[0], runnerd(5))
+	})
+	t.Run("already marked", func(t *testing.T) {
+		h, l, e, _ := deadHelper(t)
+		h.setProcs(runnerd(5))
+		if err := l.MarkHelperEnded(e.ID); err != nil {
+			t.Fatal(err)
+		}
+		es, _ := l.Counted()
+		unchanged(t, l, es[0], runnerd(9))
+		if got := endMono(t, l, e.ID); got != mono(5) {
+			t.Fatalf("HelperEndMono = %d, want the first mark %d", got, mono(5))
+		}
+	})
+}
+
+// A runnerd that did not start the helper takes the mark the first time ReclaimOwn keeps the slot.
+func TestReclaimOwnMarksTheHelperEndWhenItKeepsTheSlot(t *testing.T) {
+	h, l, e, _ := deadHelper(t)
+	h.setProcs(runnerd(5), Proc{PID: 50, UID: 501, Start: 2, MonoStart: mono(3), Name: vzName})
+	if err := l.ReclaimOwn(e.ID, ""); err == nil || err.Error() != errMayBeVM {
+		t.Fatalf("ReclaimOwn past Docker's earlier VM = %v, want %q", err, errMayBeVM)
+	}
+	if got := endMono(t, l, e.ID); got != mono(5) {
+		t.Fatalf("HelperEndMono = %d, want %d", got, mono(5))
+	}
+	h.setProcs(runnerd(5), Proc{PID: 51, UID: 501, Start: 4, MonoStart: mono(7), Name: vzName})
+	if err := l.ReclaimOwn(e.ID, ""); err != nil {
+		t.Fatalf("ReclaimOwn once Docker's VM restarted: %v", err)
 	}
 }

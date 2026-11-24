@@ -120,6 +120,9 @@ var docTierRows = []struct{ route, token string }{
 	// Model providers (0.8), per verb for the same reason.
 	{"GET /api/v1/model-providers", "`GET /model-providers`"},
 	{"PUT /api/v1/model-providers", "`PUT /model-providers`"},
+	// The assistant's settings (0.11.0), per verb for the same reason.
+	{"GET /api/v1/assistant/settings", "`GET /assistant/settings`"},
+	{"PUT /api/v1/assistant/settings", "`PUT /assistant/settings`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
@@ -219,6 +222,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/dry-run", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/governance/changes", "the unit-admin `/governance` routes"},
 	{"GET /api/v1/governance/changes/{id}", "the unit-admin `/governance` routes"},
+	{"GET /api/v1/governance/changes/{id}/impact", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/approve", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/reject", "the unit-admin `/governance` routes"},
 	{"PUT /api/v1/governance/changes/{id}/note", "the unit-admin `/governance` routes"},
@@ -259,11 +263,13 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"DELETE /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
 	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
+	{"POST /api/v1/admin/drives/legacy-docker/release", "`POST /admin/drives/legacy-docker/release`"},
 	{"GET /api/v1/admin/runs/proxy-window", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/runs/restart", "`GET /admin/runs/proxy-window` and `POST /admin/runs/restart`"},
 	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
+	{"GET /api/v1/runs/{id}/attach/forward", "`GET /runs/{id}/attach/forward`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
 	// the security tier's inventory-then-revoke pair.
 	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},
@@ -290,9 +296,23 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/delegates", "`POST /admin/delegates`"},
 	{"GET /api/v1/admin/delegates", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
 	{"DELETE /api/v1/admin/delegates/{id}", "`GET /admin/delegates` and `DELETE /admin/delegates/{id}`"},
+	{"PUT /api/v1/admin/delegates/{id}/admission", "`PUT /admin/delegates/{id}/admission`"},
+	{"POST /api/v1/admin/portal-issuers/activate", "`POST /admin/portal-issuers/activate`"},
+	{"DELETE /api/v1/admin/portal-issuers/{k}", "`DELETE /admin/portal-issuers/{k}`"},
+	// A model provider's service grant: the four routes share one doc row, each named by its own token.
+	{"PUT /api/v1/model-providers/{id}/service-grant/secret", "`PUT /model-providers/{id}/service-grant/secret`"},
+	{"DELETE /api/v1/model-providers/{id}/service-grant/secret", "`DELETE /model-providers/{id}/service-grant/secret`"},
+	{"DELETE /api/v1/model-providers/{id}/service-grant", "`DELETE /model-providers/{id}/service-grant`"},
+	{"POST /api/v1/service-grant-cleanups/{uid}/retry", "`POST /service-grant-cleanups/{uid}/retry`"},
 	{"DELETE /api/v1/people/{principal}/credentials", "`DELETE /people/{principal}/credentials`"},
 	{"POST /api/v1/people/{principal}/erasure", "`POST /people/{principal}/erasure`"},
 	{"GET /api/v1/scim/status", "`GET /scim/status`"},
+	{"GET /api/v1/people/portal-person", "`GET /people/portal-person`"},
+	{"GET /api/v1/people/{principal}/portals", "`GET /people/{principal}/portals`"},
+	{"POST /api/v1/people/{principal}/suspend", "`POST /people/{principal}/suspend`"},
+	{"GET /api/v1/admin/portal-lifecycle/status", "`GET /admin/portal-lifecycle/status`"},
+	{"POST /api/v1/people/{principal}/reactivate", "`POST /people/{principal}/reactivate`"},
+	{"POST /api/v1/people/{principal}/purge", "`POST /people/{principal}/purge`"},
 	{"GET /api/v1/model-providers/credentials", "`GET /model-providers/credentials`"},
 	// 0.9 #1508: the invitation, service-identity and token-move routes, one row each.
 	{"POST /api/v1/people/{principal}/invitations", "`POST /people/{principal}/invitations`"},

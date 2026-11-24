@@ -283,7 +283,7 @@ func (c *agentCast) save(ctx context.Context, snap []byte, truncated bool, readE
 		flags["incomplete"], flags["mask_gap"] = true, true
 	}
 	snap = stampCastFlags(snap, flags)
-	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait)
+	saveCtx, cancel := context.WithTimeout(ctx, sessionRecordingSaveWait())
 	err := s.cfg.RecordingStore.SaveCastNamed(saveCtx, runID.String(), c.session, bytes.NewReader(snap))
 	cancel()
 	if errors.Is(err, recording.ErrErased) {

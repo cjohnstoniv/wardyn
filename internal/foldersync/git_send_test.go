@@ -6,6 +6,8 @@
 package foldersync
 
 import (
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -761,4 +763,215 @@ func snapshot(p string) string {
 	}
 	b, _ := os.ReadFile(filepath.Join(p, "HEAD"))
 	return "directory, HEAD " + strconv.Quote(string(b))
+}
+
+// --git refuses a branch whose history holds a path the organisation's patterns
+// leave out, even one a later commit removed or renamed away, and sends one
+// that holds none.
+func TestCheckHistoryAllowed_RefusesAPathTheOrganisationLeavesOut(t *testing.T) {
+	g := newGitRig(t)
+	ctx := t.Context()
+	if err := checkHistoryAllowed(ctx, g.lap, "feature/x", g.head, []string{"*.pem", "secrets/"}); err != nil {
+		t.Fatalf("a history with no matching path: %v; want it sent", err)
+	}
+	g.write(filepath.Join(g.lap, "secrets"), "notes.txt", "synthetic\n")
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", ".")
+	g.run(g.lap, "commit", "-q", "-m", "add")
+	g.run(g.lap, "mv", "old.pem", "kept.txt")
+	g.run(g.lap, "rm", "-q", "-r", "secrets")
+	g.run(g.lap, "commit", "-q", "-m", "remove and rename")
+	tip := g.run(g.lap, "rev-parse", "HEAD")
+	if st := g.run(g.lap, "ls-files"); st != "kept.txt\nmain.go" {
+		t.Fatalf("the tip holds %q; the matching paths must be only in earlier commits", st)
+	}
+	for _, c := range []struct {
+		deny              []string
+		wantPath, wantPat string
+	}{
+		{[]string{"*.pem"}, "old.pem", "*.pem"},
+		{[]string{"secrets/"}, "secrets/notes.txt", "secrets/"},
+		{[]string{"*.pem", "!old.pem"}, "", ""},
+		{[]string{"kept.txt"}, "kept.txt", "kept.txt"},
+		{nil, "", ""},
+	} {
+		err := checkHistoryAllowed(ctx, g.lap, "feature/x", tip, c.deny)
+		var denied *HistoryDeniedError
+		switch {
+		case c.wantPath == "" && err != nil:
+			t.Errorf("deny %q: %v; want the history sent", c.deny, err)
+		case c.wantPath != "" && (!errors.As(err, &denied) || denied.Path != c.wantPath || denied.Pattern != c.wantPat):
+			t.Errorf("deny %q: got %v; want a refusal naming %s and %s", c.deny, err, c.wantPath, c.wantPat)
+		}
+	}
+}
+
+// moveBranchAround runs script (a commit that moves feature/x) when the git named by step runs, before (when
+// after is false) or after it: a stand-in for a commit landing while --git is working.
+func (g *gitRig) moveBranchAround(step string, after bool, script string) {
+	g.t.Helper()
+	hook := filepath.Join(g.t.TempDir(), "move.sh")
+	g.write(filepath.Dir(hook), "move.sh", script)
+	order := `sh "$MOVE_SH"; ` + shellQuote(g.git) + ` "$@"; rc=$?`
+	if after {
+		order = shellQuote(g.git) + ` "$@"; rc=$?; sh "$MOVE_SH"`
+	}
+	g.write(g.bin, "git", "#!/bin/sh\ncase \" $* \" in *\" "+step+" \"*) "+order+"; exit $rc;; esac\nexec "+shellQuote(g.git)+" \"$@\"\n")
+	if err := os.Chmod(filepath.Join(g.bin, "git"), 0o755); err != nil {
+		g.t.Fatal(err)
+	}
+	g.t.Setenv("MOVE_SH", hook)
+	g.t.Setenv("PATH", g.bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func (g *gitRig) commitFileScript(name string) string {
+	return "cd " + shellQuote(g.lap) + " && echo synthetic > " + name + " && " + shellQuote(g.git) + " add " + name + " && " + shellQuote(g.git) + " commit -q -m late\n"
+}
+
+// The commit --git sends is the one it checked. A commit landing on the branch after the head was read and
+// before the bundle was made is refused, and one landing after the bundle was made is not in the file, which
+// is checked at its own tip.
+func TestMakeCheckedBundle_SendsExactlyTheCommitItChecked(t *testing.T) {
+	deny := []string{"*.pem"}
+	listHeads := func(g *gitRig, bundle string) string { return g.run(g.lap, "bundle", "list-heads", bundle) }
+	t.Run("a commit lands before the bundle is made", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		g.moveBranchAround("bundle create", false, g.commitFileScript("late.pem"))
+		err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny)
+		if err == nil || !strings.Contains(err.Error(), "moved") {
+			t.Fatalf("got %v; want a refusal saying the branch moved", err)
+		}
+	})
+	t.Run("a commit lands after the bundle is made", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		g.moveBranchAround("bundle create", true, g.commitFileScript("late.pem"))
+		if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny); err != nil {
+			t.Fatalf("the bundle holds only the checked commit, yet: %v", err)
+		}
+		if got, want := listHeads(g, bundle), g.head+" refs/heads/feature/x"; got != want {
+			t.Fatalf("bundle heads = %q, want %q", got, want)
+		}
+		if now := g.run(g.lap, "rev-parse", "feature/x"); now == g.head {
+			t.Fatal("the branch did not move; the test proves nothing")
+		}
+	})
+	t.Run("a clean history is bundled at the checked tip", func(t *testing.T) {
+		g := newGitRig(t)
+		bundle := filepath.Join(t.TempDir(), "b.bundle")
+		if err := makeCheckedBundle(t.Context(), g.lap, "feature/x", g.head, bundle, deny); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := listHeads(g, bundle), g.head+" refs/heads/feature/x"; got != want {
+			t.Fatalf("bundle heads = %q, want %q", got, want)
+		}
+	})
+	t.Run("a denied path in the checked commit's history", func(t *testing.T) {
+		g := newGitRig(t)
+		g.write(g.lap, "old.pem", "synthetic\n")
+		g.run(g.lap, "add", "old.pem")
+		g.run(g.lap, "commit", "-q", "-m", "pem")
+		head := g.run(g.lap, "rev-parse", "HEAD")
+		err := makeCheckedBundle(t.Context(), g.lap, "feature/x", head, filepath.Join(t.TempDir(), "b.bundle"), deny)
+		var denied *HistoryDeniedError
+		if !errors.As(err, &denied) || denied.Path != "old.pem" {
+			t.Fatalf("got %v; want a refusal naming old.pem", err)
+		}
+	})
+}
+
+// historyRepo is a repository whose history holds, besides main.go: a root-commit file removed later, a file
+// renamed away, and a file an evil merge adds that no parent has, removed by the next commit.
+func (g *gitRig) historyRepo() (dir, tip string) {
+	g.t.Helper()
+	dir = g.t.TempDir()
+	g.run(dir, "init", "-q", "-b", "feature/x")
+	g.write(dir, "root.pem", "synthetic\n")
+	g.write(dir, "base.txt", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "root")
+	g.run(dir, "branch", "side")
+	g.run(dir, "rm", "-q", "root.pem")
+	g.write(dir, "moved.pem", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "second")
+	g.run(dir, "mv", "moved.pem", "kept.txt")
+	g.run(dir, "commit", "-q", "-m", "rename")
+	g.run(dir, "checkout", "-q", "side")
+	g.write(dir, "s.txt", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "side")
+	g.run(dir, "checkout", "-q", "feature/x")
+	g.run(dir, "merge", "-q", "--no-ff", "--no-commit", "side")
+	g.write(dir, "evil.pem", "synthetic\n")
+	g.run(dir, "add", ".")
+	g.run(dir, "commit", "-q", "-m", "merge")
+	g.run(dir, "rm", "-q", "evil.pem")
+	g.run(dir, "commit", "-q", "-m", "drop")
+	return dir, g.run(dir, "rev-parse", "HEAD")
+}
+
+// The history scan names every path the old full listing did (the additions of each commit, a merge against
+// each parent, are enough), and a user's git config cannot hide a merge's or the root's files from it.
+func TestCheckHistoryAllowed_AdditionsNameEveryPathAndConfigCannotHideOne(t *testing.T) {
+	g := newGitRig(t)
+	dir, tip := g.historyRepo()
+	names := func(args ...string) map[string]bool {
+		out := map[string]bool{}
+		for _, n := range strings.Split(g.run(dir, args...), "\x00") {
+			if n = strings.TrimSpace(n); n != "" {
+				out[n] = true
+			}
+		}
+		return out
+	}
+	full := names("log", "-z", "--format=", "--name-only", "-m", "--no-renames", tip, "--")
+	adds := names("log", "-z", "--format=", "--name-only", "-m", "--root", "--diff-filter=A", "--no-renames", tip, "--")
+	for _, want := range []string{"root.pem", "moved.pem", "evil.pem", "base.txt", "s.txt", "kept.txt"} {
+		if !full[want] || !adds[want] {
+			t.Errorf("%s: in the full listing %v, in the additions %v; want both", want, full[want], adds[want])
+		}
+	}
+	for n := range full {
+		if !adds[n] {
+			t.Errorf("%s is in the full listing but not in the additions", n)
+		}
+	}
+	g.run(dir, "config", "log.diffMerges", "off")
+	g.run(dir, "config", "log.showRoot", "false")
+	for _, path := range []string{"evil.pem", "root.pem", "moved.pem"} {
+		err := checkHistoryAllowed(t.Context(), dir, "feature/x", tip, []string{path})
+		var denied *HistoryDeniedError
+		if !errors.As(err, &denied) || denied.Path != path {
+			t.Errorf("deny %s with log.diffMerges=off and log.showRoot=false: got %v; want a refusal naming it", path, err)
+		}
+	}
+	if err := checkHistoryAllowed(t.Context(), dir, "feature/x", tip, []string{"*.nothing"}); err != nil {
+		t.Errorf("a pattern nothing matches: %v; want the history sent", err)
+	}
+}
+
+// SendGit itself refuses before anything is uploaded or recorded: a nil sftp client would fail the test if
+// the refusal were skipped, and the state keeps its last sent commit.
+func TestSendGit_RefusesADeniedHistoryBeforeUploadOrRecord(t *testing.T) {
+	g := newGitRig(t)
+	g.write(g.lap, "old.pem", "synthetic\n")
+	g.run(g.lap, "add", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "pem")
+	g.run(g.lap, "rm", "-q", "old.pem")
+	g.run(g.lap, "commit", "-q", "-m", "drop")
+	dir := t.TempDir()
+	sy := &Syncer{State: &State{}, StateFile: filepath.Join(dir, "state.json"), StateRoot: dir, Opts: Options{OrgDeny: []string{"*.pem"}}}
+	err := SendGit(t.Context(), io.Discard, sy, nil, "run", g.lap)
+	var denied *HistoryDeniedError
+	if !errors.As(err, &denied) || denied.Path != "old.pem" || denied.Pattern != "*.pem" {
+		t.Fatalf("SendGit = %v; want a refusal naming old.pem and *.pem", err)
+	}
+	if sy.State.GitSent != nil {
+		t.Errorf("GitSent = %+v after a refusal; want none", sy.State.GitSent)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "laptop-*.bundle")); len(left) != 0 {
+		t.Errorf("a refused send left %v", left)
+	}
 }

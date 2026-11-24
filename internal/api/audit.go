@@ -303,7 +303,8 @@ func servedPage(served func([]types.AuditEvent, error) ([]types.AuditEvent, erro
 // client's body read fails and cannot reach a clean end of stream. chi's
 // Recoverer re-panics that value, so net/http cuts the connection without a
 // trailing chunk. The same holds for a held push's path list that cannot be
-// read and for an event that cannot be encoded. A buffering reverse proxy in
+// read, for an event that cannot be encoded and for a retention drop that
+// commits while the export runs (store.AuditRetentionMarker). A buffering reverse proxy in
 // front can hide the abort (docs/OPERATIONS.md).
 func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Has("partition") {
@@ -346,12 +347,35 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		return page, after, err
 	}
 	fail := func(what string, err error) { s.failAuditExport(w, r, what, offset, wrote, err) }
+	// Retention removes whole partitions between pages; a page read after that is short without saying so. The
+	// export therefore reads the retention mark first and again after every page, and a change ends it as
+	// incomplete like any other read failure.
+	marker, _ := pager.(store.AuditRetentionMarker)
+	var mark int64
+	if marker != nil {
+		var err error
+		if mark, err = marker.AuditRetentionMark(r.Context()); err != nil {
+			fail("retention mark read", err)
+			return
+		}
+	}
 	for {
 		page, next, err := readPage(after, offset)
 		after = next
 		if err != nil {
 			fail("page read", err)
 			return
+		}
+		if marker != nil {
+			now, err := marker.AuditRetentionMark(r.Context())
+			if err != nil {
+				fail("retention mark read", err)
+				return
+			}
+			if now != mark {
+				fail("retention dropped a partition during the export", errAuditExportRetentionMoved)
+				return
+			}
 		}
 		if page, err = served(page, nil); err != nil {
 			fail("row view", err)
@@ -385,6 +409,10 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// errAuditExportRetentionMoved is why an export ended: a retention drop committed after it started, so a page read
+// after it may be missing rows the export was asked for.
+var errAuditExportRetentionMoved = errors.New("audit retention dropped a partition while the export was running")
 
 // failAuditExport ends an export that cannot be finished: a 503 while nothing has been written,
 // otherwise an aborted response. It always logs first (the abort carries no message of its own) and

@@ -63,6 +63,10 @@ type providerDenial struct {
 	// state is the state clause of a credential refusal, kept so providerLiveness
 	// can rebuild the sentence with another remedy. Empty for every other denial.
 	state string
+	// serviceGrant marks the refusal of a service identity's grant, whose sentence no sign-in remedy replaces;
+	// notListed is the one that answers 403 service_grant_not_listed.
+	serviceGrant bool
+	notListed    bool
 }
 
 // connectDenial is the one constructor of a credential refusal: its remedy is
@@ -102,7 +106,7 @@ func providerTakesNoCredential(p types.ModelProvider) bool {
 // model_credential. A human owner's sentence is untouched.
 func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	blob, d, err := s.providerLivenessByKind(ctx, p, agent, owner, refresh)
-	if d.credential && isServicePrincipal(owner) && (!providerTypedKinds[p.Kind] || p.OIDC != nil) {
+	if d.credential && !d.serviceGrant && isServicePrincipal(owner) && (!providerTypedKinds[p.Kind] || p.OIDC != nil) {
 		d.msg = fmt.Sprintf(mpRunRefusal, p.ID, d.state, mpRunRemedyService)
 	}
 	return blob, d, err
@@ -111,6 +115,9 @@ func (s *Server) providerLiveness(ctx context.Context, p types.ModelProvider, ag
 // providerLivenessByKind dispatches providerLiveness by the provider's kind.
 func (s *Server) providerLivenessByKind(ctx context.Context, p types.ModelProvider, agent, owner string, refresh bool) (awsSSOBlob, providerDenial, error) {
 	switch {
+	case providerKeyKind(p.Kind) && serviceGrantAppliesTo(p, owner):
+		d, err := s.providerServiceGrantRefusal(ctx, p, owner, refresh)
+		return awsSSOBlob{}, d, err
 	case providerKeyKind(p.Kind):
 		d, err := s.providerCredentialRefusal(ctx, owner, p)
 		return awsSSOBlob{}, d, err

@@ -147,18 +147,44 @@ LABEL org.opencontainers.image.title="agent-base" \
 # tmux + openssh-client already ship here (do not re-touch that pairing/
 # known_hosts baking).
 # apt-get upgrade: take the current security updates for packages the pinned base already carries.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+# asciinema is Debian's package with ONE change, built here: its Depends line no longer
+# names python3-pkg-resources. asciinema 2.4.0 never imports pkg_resources, but Debian
+# declares the dependency, and python3-pkg-resources pulls in python3-jaraco.context,
+# -jaraco.functools, -autocommand, -more-itertools, -inflect and -typeguard. A scanner
+# flags CVE-2026-23949 (jaraco.context tarball path traversal) on that chain, and Debian
+# trixie ships no setuptools fix. Dropping the chain keeps dpkg records intact and apt
+# consistent for images built FROM this one. The package is repacked with a "+wardyn1"
+# version suffix so its dpkg record says it is not Debian's byte-for-byte package;
+# scripts/gpl-source-offer.sh names it as modified. The build refuses if asciinema starts
+# using pkg_resources or Debian changes the Depends line, and the last two checks fail it
+# if the chain is installed after all.
+# WORKDIR, not cd: `apt-get download` writes into the working directory.
+WORKDIR /tmp
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get download asciinema \
+    && dpkg-deb --raw-extract ./asciinema_*.deb asciinema-src \
+    && if grep -rIl 'pkg_resources' asciinema-src/usr; then echo 'asciinema now uses pkg_resources: its python3-pkg-resources dependency is real, do not drop it' >&2; exit 1; fi \
+    && if grep -qx 'Depends: python3:any, python3-pkg-resources' asciinema-src/DEBIAN/control; then :; else echo "asciinema's Depends line changed upstream: re-check it before dropping a dependency" >&2; exit 1; fi \
+    && sed -i -e 's/^Depends: python3:any, python3-pkg-resources$/Depends: python3:any/' -e 's/^Version: \(.*\)$/Version: \1+wardyn1/' asciinema-src/DEBIAN/control \
+    && dpkg-deb --root-owner-group --build asciinema-src asciinema-wardyn.deb \
+    && apt-get install -y --no-install-recommends /tmp/asciinema-wardyn.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/asciinema_*.deb /tmp/asciinema-wardyn.deb /tmp/asciinema-src
+WORKDIR /
+
+# The rest of the packages (a separate RUN: scripts/check-image-pins.sh reads any RUN that names curl).
+RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
-        asciinema \
         tmux \
         openssh-client \
         openssh-sftp-server \
         socat \
         rsync \
         corkscrew \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && if dpkg -s python3-pkg-resources >/dev/null 2>&1; then exit 1; fi \
+    && if dpkg -s python3-jaraco.context >/dev/null 2>&1; then exit 1; fi
 
 # ── SSH SCM lane (git-over-SSH clone via SSH-over-443) ────────────────────────
 # openssh-client provides `ssh`; corkscrew is the HTTP-CONNECT proxy helper used
@@ -247,9 +273,9 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
-ARG GH_VERSION=2.103.3
-ARG GH_SHA256_AMD64=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
-ARG GH_SHA256_ARM64=cac3ff84b60b68e64cca69f31f303210c26320361cc3286b773655d4226b7b06
+ARG GH_VERSION=2.105.0
+ARG GH_SHA256_AMD64=1dac939af3e84fb3861927c984b357531341be9403b889e4aa86e8822145a09d
+ARG GH_SHA256_ARM64=d17e9b089ce0356679c9fa1898f3a7d38dccf943d529acaa94c24e8a4584e0ae
 ARG TARGETARCH
 RUN set -eu; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \

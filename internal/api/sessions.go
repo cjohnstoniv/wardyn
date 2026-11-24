@@ -129,7 +129,10 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, target := "sub", body.Sub
-	cliEnded := s.liveCLISessions(r.Context(), body.Sub)
+	// The cuts below report the CLI sessions they themselves ended; a count read beforehand would credit
+	// this call with sessions a concurrent cut ended first.
+	ctx, cliEnded := store.WithCLIEnded(r.Context())
+	r = r.WithContext(ctx)
 	actorCtx := withRequestActor(r)
 	var res personRevocation
 	var err error
@@ -159,7 +162,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	refusal, keyReason := res.Refusal, res.KeyReason
 	tokens, keys := res.Tokens, res.Keys
-	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys, "cli_sessions_ended": cliEnded}
+	data := map[string]any{"scope": scope, "tokens_revoked": tokens, "ssh_keys_deleted": keys, "cli_sessions_ended": cliEnded.Count()}
 	if !body.All {
 		data["sub"] = body.Sub
 	}
@@ -530,11 +533,12 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		// Clears the HttpOnly session cookie and, for a live session, cuts the person's browser sessions
 		// and with them their CLI sessions; the cut is audited like the session-only cut an admin makes
 		// (handleRevokeSessions).
-		cliEnded := s.liveCLISessions(r.Context(), oidcHumanFromContext(r.Context()))
+		ctx, cliEnded := store.WithCLIEnded(r.Context())
+		r = r.WithContext(ctx)
 		sub, err := s.cfg.OIDC.SignOut(w, r)
 		if sub != "" {
 			outcome, data := "success", map[string]any{"scope": "sub", "sub": sub, "tokens_revoked": 0, "ssh_keys_deleted": 0,
-				"sessions_only": true, "cli_sessions_ended": cliEnded}
+				"sessions_only": true, "cli_sessions_ended": cliEnded.Count()}
 			if err != nil {
 				outcome, data["error"] = "failure", auditStep(r.Context(), auditStepSignOut, err, slog.String("sub", sub))
 			}

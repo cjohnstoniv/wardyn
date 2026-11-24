@@ -78,8 +78,9 @@ make test-drive          # ARGS defaults to --up, which brings the compose stack
 - `ARGS='--section 3'` runs one section, `ARGS='--keep'` leaves its runs alive to poke at.
 
 - The UI is at http://localhost:8080. The demo stack configures no OIDC, so the SSO button is disabled and the admin token below is the way in;
-  - bring up the `sso` compose profile (`docker compose -f deploy/compose/docker-compose.yaml
-    --profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md)) and the role split appears with two real identities already seeded in Dex:
+  - bring up the `sso` compose profile (from `~/.wardyn`, `docker compose -f docker-compose.yaml
+    --profile sso up -d dex`; from a clone, `docker compose -f deploy/compose/docker-compose.yaml
+    --profile sso up -d dex`; then set `WARDYN_OIDC_ISSUER=http://localhost:5556` and `WARDYN_LOCAL_MODE=false` and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md)) and the role split appears with two real identities already seeded in Dex:
     - sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an owner-scoped **member** —
     - on a **fresh** stack, [`deploy/compose/.env.example`](../deploy/compose/.env.example) already maps them that way (`WARDYN_OIDC_ROLE_MAP`);
     - an existing `.env` predating this pair keeps whatever it already had, so add the row by hand if you're on one.
@@ -159,9 +160,13 @@ curl -sS -X PUT "$WARDYN_URL/api/v1/model-providers/anthropic/credential" \
   -H "Authorization: Bearer $WARDYN_ADMIN_TOKEN" -H 'Content-Type: application/json' \
   -d "{\"value\":\"$ANTHROPIC_API_KEY\"}"
 
-# 2. Switch the default policy to the LLM-enabled one and restart wardynd:
+# 2. Switch the default policy to the LLM-enabled one and restart wardynd.
+#    From ~/.wardyn, where the installer put docker-compose.yaml:
 WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json docker compose \
-  -f deploy/compose/docker-compose.yaml up -d wardynd
+  -f docker-compose.yaml up -d wardynd
+#    From a clone, name the file in the tree instead:
+#    WARDYN_DEFAULT_POLICY=/examples/policies/claude-llm.json docker compose \
+#      -f deploy/compose/docker-compose.yaml up -d wardynd
 
 # 3. Create a real run:
 wardyn run --agent claude-code --model-provider anthropic --repo octocat/Hello-World \
@@ -263,15 +268,54 @@ make reset               # start over from an empty Runs list: wipes Postgres + 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `compose up` fails on network labels | a dead run's sandbox pair still holds `wardyn-internal` | `docker ps -aq --filter name=wardyn- \| xargs -r docker rm -f`, then `docker network rm wardyn-internal` |
+| `compose up` fails on network labels | a dead run's sandbox pair still holds `wardyn-internal` | [Free `wardyn-internal`](#free-wardyn-internal-of-a-dead-sandbox-pair): list what is attached, then remove only what is stale |
 | `docker ps` shows nothing but the UI works | your shell is on a different daemon than Wardyn's scripts picked | `export DOCKER_HOST=unix:///var/run/wardyn-docker.sock` — the socket `wardyn setup wall` configures and the CLI prints (`/run/...` also works where `/var/run` is a symlink), the tier-capable native daemon they prefer over the default socket |
 | Only Fence/CC1 offered | ditto — that daemon registers no `runsc`/`kata` | same; `make doctor` prints the classes it can actually see |
 | Record/replay hangs forever | host mode under Docker Desktop + WSL2 NAT | use containerized mode (the default) — drop `WARDYN_SETUP_MODE=local` |
 | Run fails "issue with selected model" | no model access configured, or a stale credential | connect your own credential for the run's model provider (Getting started), then `wardyn setup status` |
 | Port 5432 in use | another Postgres | stop it, or set `WARDYN_PG_PORT` |
 
+#### Free `wardyn-internal` of a dead sandbox pair
+
+- Do not remove containers by the `wardyn-` name prefix, even with a filter on it. It also matches live agents and proxies and the control plane's own `wardyn-api`, `wardyn-postgres` and `wardyn-registry`, and a forced remove destroys a live sandbox's files.
+- Name the control-plane network first. It is `wardyn-internal`, or `${WARDYN_NS}-internal` when `WARDYN_NS` is set.
+
+1. List what is attached to it, with each container's state and, for a run's containers, the run's id:
+
+   ```sh
+   docker ps -a --filter network=wardyn-internal --format 'table {{.Names}}\t{{.Status}}\t{{.Label "wardyn.run-id"}}'
+   ```
+
+   The control plane's own containers show an empty run id and stay. A run's proxy is `wardyn-proxy-<run-id>`, and its agent is `wardyn-agent-<run-id>`.
+2. Check the runs: `wardyn run list` shows each run's id and state. Stop a run you mean to end through Wardyn, which tears down its sandbox and revokes its credentials, and list the network again:
+
+   ```sh
+   wardyn run kill <run-id>
+   ```
+
+3. If a pair is still listed for a run Wardyn no longer shows as running, or Wardyn is not up to answer, read each container's state:
+
+   ```sh
+   docker inspect -f '{{.Name}} {{.State.Status}}' wardyn-proxy-<run-id> wardyn-agent-<run-id>
+   ```
+
+   Remove only a pair whose state is `exited`, `created` or `dead`, by those two full names. A plain `docker rm` refuses a running container, so a live one is never removed by mistake. Leave a running pair alone and end its run through Wardyn once the control plane is up:
+
+   ```sh
+   docker rm wardyn-proxy-<run-id> wardyn-agent-<run-id>
+   ```
+
+4. Remove the network only when nothing is attached, and retry the install or `compose up`:
+
+   ```sh
+   docker network inspect wardyn-internal -f '{{len .Containers}}'
+   docker network rm wardyn-internal
+   ```
+
+   Run the second command only when the first prints `0`.
+
 - Limits of this demo deployment (see [`threatmodel/`](../threatmodel/)):
   - single host,
   - CC1/CC2 only unless a Kata runtime is registered (CC3/Vault is experimental — needs /dev/kvm + Kata; not available on Docker Desktop),
   - wardynd holds the host Docker socket (daemon-trust tradeoff, documented in the compose file),
-  - and the model-API channel is a logged-but-open data path by design.
+  - and the model-API channel is an open data path by design: the proxy records each connection and the usage it can count, not the prompts.

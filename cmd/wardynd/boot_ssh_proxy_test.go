@@ -43,8 +43,8 @@ func TestSSHMaxSessionsPerRunBoot(t *testing.T) {
 	os.Args = []string{"wardynd-test"}
 
 	resetFlags(t)
-	if got := *parseBootFlags().sshMaxSessionsPerRun; got != 4 {
-		t.Fatalf("default = %d, want 4 (today's cap, so an upgrade changes nothing)", got)
+	if got := *parseBootFlags().sshMaxSessionsPerRun; got != 8 {
+		t.Fatalf("default = %d, want 8", got)
 	}
 	t.Setenv("WARDYN_SSH_MAX_SESSIONS_PER_RUN", "8")
 	resetFlags(t)
@@ -67,6 +67,32 @@ func TestSSHMaxSessionsPerRunBoot(t *testing.T) {
 	if err := validateBootPosture(parseBootFlags(), tlsPosture{}); err == nil ||
 		!strings.Contains(err.Error(), "WARDYN_SSH_MAX_SESSIONS_PER_RUN") {
 		t.Errorf("boot with 0 = %v, want a refusal naming the variable", err)
+	}
+}
+
+// The SSH gateway's connection bounds: the defaults, the handshake total settable by WARDYN_SSH_MAX_HANDSHAKES,
+// and a handshake total below 1 refused at boot, naming the variable.
+func TestSSHGatewayBoundsBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_SSH_MAX_HANDSHAKES")
+	ensureUnset(t, "WARDYN_SSH_MAX_CONNECTIONS")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+
+	resetFlags(t)
+	f := parseBootFlags()
+	if *f.sshMaxConns != 256 || *f.sshMaxHandshakes != 64 {
+		t.Fatalf("defaults = %d connections, %d handshakes, want 256 and 64", *f.sshMaxConns, *f.sshMaxHandshakes)
+	}
+	t.Setenv("WARDYN_SSH_MAX_HANDSHAKES", "128")
+	resetFlags(t)
+	if got := *parseBootFlags().sshMaxHandshakes; got != 128 {
+		t.Fatalf("env 128 = %d", got)
+	}
+	t.Setenv("WARDYN_SSH_MAX_HANDSHAKES", "0")
+	resetFlags(t)
+	if err := validatePositiveBounds(parseBootFlags()); err == nil || !strings.Contains(err.Error(), "WARDYN_SSH_MAX_HANDSHAKES") {
+		t.Errorf("a handshake total of 0 = %v, want a refusal naming the variable", err)
 	}
 }
 

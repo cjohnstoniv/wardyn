@@ -14,6 +14,7 @@
 // them.
 import type {
   CapabilitySubjectType,
+  ChangeImpact,
   ConfinementClass,
   GovernanceChange,
   PolicyContact,
@@ -682,6 +683,13 @@ export const governance = {
   async getChange(id: string): Promise<GovernanceChange> {
     const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}`, { method: "GET" });
     return asJson<GovernanceChange>(res);
+  },
+
+  // GET /api/v1/governance/changes/{id}/impact -> 200 who and what approving the change would reach. 404 when the
+  // caller cannot see the change, 409 when it is no longer pending.
+  async getChangeImpact(id: string): Promise<ChangeImpact> {
+    const res = await wfetch(`/governance/changes/${encodeURIComponent(id)}/impact`, { method: "GET" });
+    return asJson<ChangeImpact>(res);
   },
 
   // PUT /api/v1/governance/changes/{id}/note -> 200 the change. Only its proposer, only while it is pending; the

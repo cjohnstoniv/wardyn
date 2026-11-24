@@ -88,28 +88,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Identity != nil {
 		idp = s.cfg.Identity.Name()
 	}
-	runnerName := ""
-	caps := []types.ConfinementClass(nil)
-	var substrates map[types.ConfinementClass]string
-	var own runner.NetPolCheck
-	ownUnread := false // a Kubernetes daemon whose own verdict could not be read
-	if s.cfg.Runner != nil {
-		runnerName = s.cfg.Runner.Name()
-		if c, err := s.cfg.Runner.Capabilities(r.Context()); err == nil {
-			caps = c.ConfinementClasses
-			substrates = c.Resolved
-			own.Verdict = k8sNetpolVerdict(runnerName, c)
-			if runner.KnownNetPolVerdict(c.NetworkPolicyCheck.Verdict) {
-				own.At = c.NetworkPolicyCheck.At
-			}
-		} else {
-			ownUnread = runnerName == "k8s"
-		}
-	}
+	probe := s.healthzProbeFor(r.Context())
+	runnerName, caps, substrates, own, ownUnread := probe.runnerName, probe.caps, probe.substrates, probe.own, probe.ownUnread
 	// The worst of this daemon's verdict and its connected Kubernetes runners', with that one's time.
 	// When the daemon could not read its own, a runner's verdict shows only if it is at least as bad
 	// as not_proven: a better one must not hide that the daemon's own cluster cannot be confirmed.
-	runners := s.runnersNetPolCheck(r.Context())
+	runners := probe.runners
 	if ownUnread && !runner.NetPolAtLeast(runners.Verdict, runner.NetPolNotProven) {
 		runners = runner.NetPolCheck{}
 	}
@@ -121,7 +105,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		netpol, netpolFromRunner = runners, true
 	}
 	netpolVerdict, netpolCheckedAt := netpol.Verdict, netpol.At
-	gtStatus := s.ebpfGroundtruthStatus(r.Context())
+	gtStatus := probe.gtStatus
 	gtPublic := ebpfGroundtruthPublic(gtStatus)
 	body := map[string]any{
 		"status": "ok",

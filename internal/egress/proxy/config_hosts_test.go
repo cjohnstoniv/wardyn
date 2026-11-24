@@ -136,7 +136,7 @@ var configHostDoors = []configHostDoor{
 		return map[string]any{"llm_headers": map[string]any{v: map[string]string{"x-team": "a"}}}
 	}},
 	{field: func(string) string { return "" }, url: true, dialed: true, extra: func(_, auth string) map[string]any {
-		return map[string]any{"local_models": map[string]any{"http://" + auth + ":11434": map[string]any{}}}
+		return map[string]any{"local_models": map[string]any{"http://user:secret@" + auth + ":11434/private-path?key=secret": map[string]any{}}}
 	}},
 	{field: keyed("bedrock_routes"), extra: func(v, _ string) map[string]any {
 		return map[string]any{"bedrock_routes": map[string]string{v: "us-east-1"}}
@@ -198,9 +198,9 @@ func TestEveryConfiguredHostInARefusedSpellingDoesNotLoad(t *testing.T) {
 			if d.url {
 				entry = s.entry
 			}
-			if field == "" { // local_models: keyed by the URL, which names no secret
-				field = fmt.Sprintf("local_models[%q]", "http://"+s.auth+":11434")
+			if field == "" { // local_models: keyed by the URL, named by its host and port alone (the fixture's userinfo, path and query are the canaries)
 				entry = s.entry + ":11434"
+				field = fmt.Sprintf("local_models[%q]", entry)
 			}
 			consequence, warning := "which the proxy refuses in every request, so the entry matches none", configHostEntryWarning
 			if d.dialed {
@@ -220,6 +220,50 @@ func TestEveryConfiguredHostInARefusedSpellingDoesNotLoad(t *testing.T) {
 			}
 			if err != nil && strings.Contains(err.Error()+logs.String(), "secret") {
 				t.Errorf("%s = %q: a URL's secret is named", field, s.v)
+			}
+		}
+	}
+}
+
+// A local_models key is a URL, and no refusal of a config that names one repeats its userinfo, path or
+// query, in the error or in the log: the entry is named by its host and port.
+func TestALocalModelsKeyIsNamedByItsHostInEveryRefusal(t *testing.T) {
+	const canaries = "canary-user canary-pass canary-path canary-query"
+	key := func(host string) string {
+		return "https://canary-user:canary-pass@" + host + "/canary-path?canary-query=1"
+	}
+	models := map[string]any{"models": []string{"llama3"}}
+	for _, tc := range []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"not an llm_upstreams address", map[string]any{"local_models": map[string]any{key("10.0.0.1:11434"): models}},
+			`config: local_models["10.0.0.1:11434"]: not an llm_upstreams address`},
+		{"no models", map[string]any{"llm_upstreams": map[string]string{"ollama": key("10.0.0.1:11434")}, "local_models": map[string]any{key("10.0.0.1:11434"): map[string]any{}}},
+			`config: local_models["10.0.0.1:11434"]: models must list at least one model, none with a "/" or a cloud tag`},
+		{"not http", map[string]any{"local_models": map[string]any{"ftp://canary-user:canary-pass@10.0.0.1/canary-path?canary-query=1": models}},
+			`config: local_models["10.0.0.1"]: want an http:// or https:// base URL`},
+		{"no host", map[string]any{"local_models": map[string]any{"canary-path?canary-query=1": models}},
+			`config: local_models["unreadable URL"]: want an http:// or https:// base URL`},
+		{"unparsable", map[string]any{"local_models": map[string]any{"http://canary-user:canary-pass@10.0.0.1:bad/canary-path?canary-query=1": models}},
+			`config: local_models["unreadable URL"]: not a valid URL`},
+		{"runner entry", map[string]any{"runner_local_models": []string{key("10.0.0.1:11434")}},
+			`config: runner_local_models: "10.0.0.1:11434" is not a local_models entry allowed on laptop runners`},
+		{"two keys, one host and port", map[string]any{"local_models": map[string]any{key("10.0.0.2:11434"): models, key("[::ffff:10.0.0.2]:11434"): models}},
+			`config: local_models: "10.0.0.2:11434" and "[::ffff:10.0.0.2]:11434" name one host and port; keep one`},
+	} {
+		logs := captureLoadLog(t)
+		_, err := LoadConfigBytes(baseConfigJSON(t, tc.extra))
+		if err == nil || err.Error() != tc.want {
+			t.Errorf("%s:\n got %v\nwant %s", tc.name, err, tc.want)
+		}
+		if err == nil {
+			continue
+		}
+		for _, c := range strings.Fields(canaries) {
+			if strings.Contains(err.Error()+logs.String(), c) {
+				t.Errorf("%s: %q is repeated in the error or the log: %v / %s", tc.name, c, err, logs)
 			}
 		}
 	}
@@ -343,9 +387,9 @@ func TestTwoEntriesWithOneHostKeyDoNotLoad(t *testing.T) {
 		{map[string]any{"bedrock_routes": map[string]string{"1.2.3.7": "us-east-1", "::ffff:1.2.3.7": "eu-west-1"}},
 			`config: bedrock_routes: "1.2.3.7" and "::ffff:1.2.3.7" name one host; keep one`},
 		{map[string]any{"local_models": map[string]any{"http://[::ffff:1.2.3.6]:11434": map[string]any{}, "http://1.2.3.6:11434": map[string]any{}}},
-			`config: local_models: "http://1.2.3.6:11434" and "http://[::ffff:1.2.3.6]:11434" name one host and port; keep one`},
+			`config: local_models: "1.2.3.6:11434" and "[::ffff:1.2.3.6]:11434" name one host and port; keep one`},
 		{map[string]any{"local_models": map[string]any{"https://1.2.3.6": map[string]any{}, "https://1.2.3.6:443": map[string]any{}}},
-			`config: local_models: "https://1.2.3.6" and "https://1.2.3.6:443" name one host and port; keep one`},
+			`config: local_models: "1.2.3.6" and "1.2.3.6:443" name one host and port; keep one`},
 		{map[string]any{"via_org_routes": []map[string]any{{"grant_id": uuid.NewString(), "host": "1.2.3.7"}, {"grant_id": uuid.NewString(), "host": "::ffff:1.2.3.7"}}},
 			`config: via_org_routes[0].host "1.2.3.7" and via_org_routes[1].host "::ffff:1.2.3.7" name one host for two grants; keep one`},
 	} {

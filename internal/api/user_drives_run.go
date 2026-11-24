@@ -81,6 +81,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -366,6 +367,12 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, d run
 	switch {
 	case resolved.Drive.Backend == types.DriveBackendMacDisk:
 		bound = resolved.Drive.HomeRunnerID
+	case at.runner != nil && resolved.Tier == types.DriveSubjectPortal:
+		// A portal's folder has no second place: the resolve already refuses a drive that has one, and this is the second
+		// stop, so the mount is never recomputed as an ordinary host path.
+		slog.Warn("wardynd: user drive: a portal's drive resolved to a second place and mounts nothing", slog.String("drive", resolved.Drive.Name))
+		writeErrorReason(w, http.StatusForbidden, string(authz.ReasonDriveNotAllocatedToPortal), portalDriveNotAllocatedMsg)
+		return nil, false
 	case at.runner != nil:
 		bound = resolved.Drive.AltRunnerID
 		resolved = secondPlaceResolved(resolved)

@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -140,7 +141,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, gtWrite gtTokenWriter) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, health *storehealth.Tracker, gtWrite gtTokenWriter) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -183,7 +184,16 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				holdPassed:            api.EndHoldPassed,
 			},
 			maskedRec,
-			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},
+			lifecycle.Config{
+				Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0),
+				TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks,
+				// An outage is not idleness: hold idle stops while the store recovers and for runs on a
+				// runner this replica cannot reach, and restart their idle clocks once after each.
+				StoreRecovering: health.Recovering,
+				StoreHealthyFor: health.HealthyFor,
+				RunnerOnline:    srv.RunnerOnline,
+				StampIdle:       lifecycleStore{pool: pool}.StampIdleClocks,
+			},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))
@@ -218,11 +228,20 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	// holding credentials for every run it ever dispatched. Unconditional — a
 	// no-op without a mask registry, and there is nothing to configure.
 	go goSafe("secret.sweeper", func() { runSecretSweeper(rootCtx, srv, runSecretSweepInterval, ticks) })
+	// Provider service grants: every replica warms and reports its own tokens, with or
+	// without a runner (a headless API serves them too); the claimed clean-up of a
+	// removed grant runs on the sweeper leader only.
+	go goSafe("service.grant.refresher", func() { srv.StartServiceGrantRefresher(rootCtx) })
+	leaderGo(rootCtx, leader, "service.grant.cleanup", srv.RunServiceGrantCleanup)
 	startRunOutputSweeper(rootCtx, leader, srv, runOutputSweepInterval, ticks)
 	startRunQueueSweeper(rootCtx, leader, srv, runQueueSweepInterval, ticks)
 	startAWSSSORenewer(rootCtx, leader, srv, ticks)
 	go goSafe("runner.exit.sweeper", func() { srv.RunRunnerExitSweeper(rootCtx) })
+	// Every replica retries the owed audit rows of a release of the legacy Docker drives, with portals on or off.
+	go goSafe("legacy.docker.release.retry", func() { srv.RunLegacyDockerReleaseRetry(rootCtx) })
+	startPortalActivationMonitor(rootCtx, srv)
 	startSCIMPurgeSweeper(rootCtx, f, leader, srv, scimPurgeSweepInterval)
+	startPortalLifecycleSweeper(rootCtx, leader, srv, portalLifecycleSweepInterval)
 	leaderGo(rootCtx, leader, "credential.sweeper", func(ctx context.Context) { runCredentialSweeper(ctx, srv, credentialSweepInterval, ticks) })
 
 	// NOT gated on run != nil, unlike the lifecycle reaper above: ReconcileOnBoot
@@ -283,6 +302,15 @@ func warnSmallPool(maxConns int32) {
 	}
 	slog.Warn("wardynd: pool_max_conns below 4 — the lifecycle reaper's tick and the terminal-sandbox sweep's tick can overlap, each holding one connection for its lock while its queries take another; requests can block waiting for a connection. Below 6, a sign-in during a tick is not serialized (auth.signin_unserialized)",
 		slog.Int("pool_max_conns", int(maxConns)))
+}
+
+// seedBootState writes what a rebuilt or upgraded database starts with, before anything is served: the network
+// settings from WARDYN_SITE_CONFIG_SEED_FILE (nil seeds nothing), then the remote-provided runner pool.
+func seedBootState(ctx context.Context, srv *api.Server, seed *api.SiteConfigSeed) error {
+	if err := srv.SeedSiteConfig(ctx, seed); err != nil {
+		return err
+	}
+	return srv.BootstrapRunnerPools(ctx)
 }
 
 // bindSSHGatewayEarly is WARDYN_SSH_BIND_EARLY: with it on, the SSH gateway's address is bound before the
@@ -481,6 +509,10 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		}
 	}()
 
+	// Declared after the fanout drain, so it runs before it on every exit, the serve-error return included: the
+	// service grant queue dequeues no copy after it, and logs as unconfirmed the one its worker may still hold.
+	defer srv.StopServiceGrantSIEM()
+
 	// Declared after the fanout drain, so it runs BEFORE it: the open dry-run
 	// denial windows write their summaries while the sinks and the pool are
 	// still open.
@@ -586,7 +618,7 @@ func runShutdownSequence(shutCtx context.Context, internalSrv *http.Server, http
 		cleanErr = waitCleanUps(cleanCtx)
 	}
 	if cleanErr != nil {
-		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut, and the value it was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+		slog.Warn("wardynd: shutdown budget hit with a secret store clean-up still running; it was cut and may have left a value behind (`wardynd -reconcile` lists remaining values that no row uses)",
 			slog.Duration("budget", api.BackgroundShutdownBudget))
 	}
 

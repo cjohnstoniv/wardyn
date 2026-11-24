@@ -312,7 +312,7 @@ func CloseAfterCleanUps(pool interface{ Close() }, bound time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 	if err := waitForCleanUps(ctx, pool); err != nil {
-		slog.Warn("pg secretstore: closing the pool with a Put or its clean-up still running; a clean-up still running was cut, and the value a cut or failed clean-up was removing stays (`wardynd -reconcile` lists it if no row points to it)",
+		slog.Warn("pg secretstore: closing the pool with a Put or its clean-up still running; a clean-up still running was cut and may have left a value behind (`wardynd -reconcile` lists remaining values that no row uses)",
 			slog.Duration("bound", bound))
 	}
 	pool.Close()

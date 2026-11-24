@@ -102,7 +102,7 @@ func withBootTransport(f *bootFlags, mode func(*bootFlags) error) error {
 	if err != nil {
 		return err
 	}
-	if err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
+	if _, _, err := installBootTransport(http.DefaultTransport, pool, f); err != nil {
 		return err
 	}
 	return mode(f)
@@ -121,7 +121,7 @@ func secretStoreMaintenance(f *bootFlags) error {
 	ctx := context.Background()
 	connCtx, cancel := context.WithTimeout(ctx, rekeyConnectTimeout)
 	defer cancel()
-	pool, err := db.Connect(connCtx, *f.dsn)
+	pool, err := db.Connect(connCtx, *f.dsn, toolDBOption("migrate-secrets"))
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

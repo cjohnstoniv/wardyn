@@ -22,6 +22,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 
 const approveMock = vi.fn();
 const rejectMock = vi.fn();
+const impactMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -30,11 +31,13 @@ vi.mock("../../../lib/api/governance", async () => {
       ...actual.governance,
       approveChange: (...a: unknown[]) => approveMock(...a),
       rejectChange: (...a: unknown[]) => rejectMock(...a),
+      getChangeImpact: (...a: unknown[]) => impactMock(...a),
     },
   };
 });
 
 import { HttpError } from "../../../lib/api/core";
+import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
 import { CHANGES, DELIVERY, GOVERNANCE } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -80,6 +83,8 @@ function renderTab(changes: GovernanceChange[], principal = "bo@example.com", on
 beforeEach(() => {
   approveMock.mockReset();
   rejectMock.mockReset();
+  impactMock.mockReset();
+  impactMock.mockResolvedValue({ computed: "none", not_computed: "kind", as_of: aheadByHours(0) });
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.warning).mockClear();
 });
@@ -93,6 +98,73 @@ describe("the Changes tab", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(screen.getByText("2h ago")).toBeInTheDocument();
     expect(screen.getByText("in 20h")).toBeInTheDocument();
+  });
+
+  it("adds an Effect column after Change with the verdict and risk, and nothing on a request", () => {
+    const widening = change({
+      id: "w1",
+      diff: {
+        ...change().diff,
+        review: {
+          verdict: "widens",
+          widens: [{ field: "allowed_domains", entries: ["settle.partner-a.example"] }],
+          risk: { before: { overall: "low", items: [] }, after: { overall: "medium", items: [] } },
+        },
+      },
+    });
+    const held = change({
+      id: "h1",
+      target_key: "team-h",
+      diff: { ...change().diff, review: { verdict: "narrows_held", held_because: ["lock_removed", "contact"] } },
+    });
+    const request = change({
+      id: "r1",
+      target_kind: "governance_elevation",
+      op: "request",
+      target_key: "el1",
+      diff: { after: { unit_name: "Payments", subject: "kai", duration: "1h0m0s" }, changed: [] },
+    });
+    renderTab([widening, held, change({ id: "u1" }), request]);
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.indexOf(CHANGE_REVIEW.COL_EFFECT)).toBe(heads.indexOf(CHANGES.COL_CHANGE) + 1);
+    const rows = screen.getAllByRole("row").slice(1);
+    const effect = (i: number) => within(rows[i]).getAllByRole("cell")[1];
+    expect(within(effect(0)).getByText(CHANGE_REVIEW.VERDICT.widens)).toBeInTheDocument();
+    expect(within(effect(0)).getByText("Risk Low → Medium")).toBeInTheDocument();
+    expect(within(effect(1)).getByText(CHANGE_REVIEW.VERDICT.narrows_held(CHANGE_REVIEW.HELD_BECAUSE.lock_removed))).toBeInTheDocument();
+    expect(within(effect(2)).getByText(CHANGE_REVIEW.VERDICT.not_checked)).toBeInTheDocument();
+    expect(effect(3).textContent).toBe("");
+  });
+
+  it("reads a widening profile change as verdict, impact, risk, then the closed raw diff before the reason", async () => {
+    impactMock.mockResolvedValue({ computed: "tree", as_of: aheadByHours(0), people: [], live_runs_total: 0 });
+    renderTab([
+      change({
+        diff: {
+          ...change().diff,
+          review: {
+            verdict: "widens",
+            widens: [{ field: "allowed_domains", entries: ["settle.partner-a.example"] }],
+            risk: { before: { overall: "low", items: [] }, after: { overall: "medium", items: [] } },
+          },
+        },
+      }),
+    ]);
+    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
+    const dialog = await screen.findByRole("dialog");
+    const impact = await within(dialog).findByTestId("change-impact");
+    expect(impactMock).toHaveBeenCalledTimes(1);
+    expect(impactMock).toHaveBeenCalledWith("c1");
+    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const verdict = within(dialog).getByTestId("change-verdict");
+    const risk = within(dialog).getByTestId("change-risk");
+    const raw = within(dialog).getByTestId("change-raw-diff");
+    expect(follows(verdict, impact)).toBe(true);
+    expect(follows(impact, risk)).toBe(true);
+    expect(follows(risk, raw)).toBe(true);
+    expect(follows(raw, within(dialog).getByText(CHANGES.REASON_LABEL))).toBe(true);
+    expect(raw).not.toHaveAttribute("open");
+    expect(within(dialog).getByText("This lets runs under team-a reach 1 new host.")).toBeInTheDocument();
   });
 
   it("reads a held organization runner removal as a sentence, with who decides it", async () => {
@@ -226,7 +298,8 @@ describe("the change drawer", () => {
     await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
     const dialog = await screen.findByRole("dialog");
     const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const diffHeader = within(dialog).getByText(CHANGES.DIFF_FIELD);
+    // The review sections come first, the raw diff last: the notes sit after the verdict and before the reason.
+    const diffHeader = within(dialog).getByTestId("change-verdict");
     const heading = within(dialog).getByText(GOVERNANCE.OMISSION_TITLE);
     const reason = within(dialog).getByText(CHANGES.REASON_LABEL);
     expect(follows(diffHeader, heading)).toBe(true);

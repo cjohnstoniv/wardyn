@@ -9,7 +9,8 @@ corresponding-source obligation to whoever conveys them — including you, if yo
 mirror these images into a registry other people pull from. This file is that
 offer, and it is what you would pass on.
 
-None of these packages are modified by Wardyn. Most are the unmodified
+Wardyn modifies only the packages named under "Modified by Wardyn" in the
+image sections below. Every other package is unmodified: most are the unmodified
 distribution package; a few are an unmodified upstream release tarball or an
 npm package bundled by the vendor tool that ships it, named per-entry where
 that applies. The corresponding source is the applicable one below:
@@ -23,6 +24,8 @@ that applies. The corresponding source is the applicable one below:
   at the matching aport version.
 - **asciinema** (installed by Wardyn's own Dockerfile, not inherited):
   `https://github.com/asciinema/asciinema` at the version below.
+  Where an image section says Wardyn modified a package, that section also
+  states exactly what changed.
 - **npm packages bundled inside a vendor tool's own release tarball**
   (`agent-vscode`'s code-server bundles `jschardet`, for example): the
   package's own entry at `https://registry.npmjs.org/<name>`, or the
@@ -255,6 +258,24 @@ image digests. Regenerate whenever a base image changes.
 | `tar` | 1.35+dfsg-3.1 | GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+ | deb |
 | `util-linux` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
 
+**Modified by Wardyn: `asciinema`.** Wardyn rebuilds Debian's `asciinema` package
+with changes to its control file and nothing else; the packaged files are
+Debian's, byte for byte:
+
+- `Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`).
+- `Version:` gained the suffix `+wardyn1`, so the dpkg record names a
+  package that is not Debian's own.
+
+The installed version is Debian's package version followed by `+wardyn1`.
+If the table above lists `asciinema` without that suffix, the table was
+scanned from an image built before this change; images built from this
+repository's recipe carry the modified package.
+Remove the suffix to get the Debian version, whose corresponding source is
+`apt-get source asciinema=<that version>` on a trixie host, or
+`https://snapshot.debian.org` pinned to it. The recipe that makes the edits is
+the `RUN` in `deploy/images/base/Dockerfile` that sets the `+wardyn1` version, in
+`https://github.com/cjohnstoniv/wardyn`.
+
 ## `ghcr.io/cjohnstoniv/agent-codex-cli:0.10.0`
 
 103 package(s) carrying a GPL or LGPL term.
@@ -364,6 +385,24 @@ image digests. Regenerate whenever a base image changes.
 | `sysvinit-utils` | 3.14-4 | GPL-2, GPL-2.0, GPL-2.0+, GPL-3, GPL-3.0, LGPL-2.1, LGPL-2.1+ | deb |
 | `tar` | 1.35+dfsg-3.1 | GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+ | deb |
 | `util-linux` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+
+**Modified by Wardyn: `asciinema`.** Wardyn rebuilds Debian's `asciinema` package
+with changes to its control file and nothing else; the packaged files are
+Debian's, byte for byte:
+
+- `Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`).
+- `Version:` gained the suffix `+wardyn1`, so the dpkg record names a
+  package that is not Debian's own.
+
+The installed version is Debian's package version followed by `+wardyn1`.
+If the table above lists `asciinema` without that suffix, the table was
+scanned from an image built before this change; images built from this
+repository's recipe carry the modified package.
+Remove the suffix to get the Debian version, whose corresponding source is
+`apt-get source asciinema=<that version>` on a trixie host, or
+`https://snapshot.debian.org` pinned to it. The recipe that makes the edits is
+the `RUN` in `deploy/images/codex-cli/Dockerfile` that sets the `+wardyn1` version, in
+`https://github.com/cjohnstoniv/wardyn`.
 
 ## `ghcr.io/cjohnstoniv/agent-novnc:0.10.0`
 
@@ -546,6 +585,24 @@ MANUAL_ENTRIES):_
 | package | version | licence | source |
 |---|---|---|---|
 | `websockify` | 0.13.0 | LGPL-3.0 | `https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz` |
+
+**Modified by Wardyn: `asciinema`.** Wardyn rebuilds Debian's `asciinema` package
+with changes to its control file and nothing else; the packaged files are
+Debian's, byte for byte:
+
+- `Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`).
+- `Version:` gained the suffix `+wardyn1`, so the dpkg record names a
+  package that is not Debian's own.
+
+The installed version is Debian's package version followed by `+wardyn1`.
+If the table above lists `asciinema` without that suffix, the table was
+scanned from an image built before this change; images built from this
+repository's recipe carry the modified package.
+Remove the suffix to get the Debian version, whose corresponding source is
+`apt-get source asciinema=<that version>` on a trixie host, or
+`https://snapshot.debian.org` pinned to it. The recipe that makes the edits is
+the `RUN` in `deploy/images/base/Dockerfile` that sets the `+wardyn1` version, in
+`https://github.com/cjohnstoniv/wardyn`.
 
 ## `ghcr.io/cjohnstoniv/agent-novnc-signin:0.10.0`
 
@@ -829,6 +886,24 @@ MANUAL_ENTRIES):_
 |---|---|---|---|
 | `websockify` | 0.13.0 | LGPL-3.0 | `https://github.com/novnc/websockify/archive/refs/tags/v0.13.0.tar.gz` |
 
+**Modified by Wardyn: `asciinema`.** Wardyn rebuilds Debian's `asciinema` package
+with changes to its control file and nothing else; the packaged files are
+Debian's, byte for byte:
+
+- `Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`).
+- `Version:` gained the suffix `+wardyn1`, so the dpkg record names a
+  package that is not Debian's own.
+
+The installed version is Debian's package version followed by `+wardyn1`.
+If the table above lists `asciinema` without that suffix, the table was
+scanned from an image built before this change; images built from this
+repository's recipe carry the modified package.
+Remove the suffix to get the Debian version, whose corresponding source is
+`apt-get source asciinema=<that version>` on a trixie host, or
+`https://snapshot.debian.org` pinned to it. The recipe that makes the edits is
+the `RUN` in `deploy/images/base/Dockerfile` that sets the `+wardyn1` version, in
+`https://github.com/cjohnstoniv/wardyn`.
+
 ## `ghcr.io/cjohnstoniv/agent-vscode:0.10.0`
 
 105 package(s) carrying a GPL or LGPL term.
@@ -940,6 +1015,24 @@ MANUAL_ENTRIES):_
 | `sysvinit-utils` | 3.14-4 | GPL-2, GPL-2.0, GPL-2.0+, GPL-3, GPL-3.0, LGPL-2.1, LGPL-2.1+ | deb |
 | `tar` | 1.35+dfsg-3.1 | GPL-2, GPL-2+, GPL-3, GPL-3+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+ | deb |
 | `util-linux` | 2.41.5-0+deb13u1 | BSD-2-clause, BSD-3-clause, BSD-4-clause, BSLA, Expat, GPL-2, GPL-2+, GPL-3, GPL-3+, ISC, LGPL, LGPL-2, LGPL-2+, LGPL-2.1, LGPL-2.1+, LGPL-3, LGPL-3+, public-domain | deb |
+
+**Modified by Wardyn: `asciinema`.** Wardyn rebuilds Debian's `asciinema` package
+with changes to its control file and nothing else; the packaged files are
+Debian's, byte for byte:
+
+- `Depends:` changed from `python3:any, python3-pkg-resources` to `python3:any` (dropped `python3-pkg-resources`).
+- `Version:` gained the suffix `+wardyn1`, so the dpkg record names a
+  package that is not Debian's own.
+
+The installed version is Debian's package version followed by `+wardyn1`.
+If the table above lists `asciinema` without that suffix, the table was
+scanned from an image built before this change; images built from this
+repository's recipe carry the modified package.
+Remove the suffix to get the Debian version, whose corresponding source is
+`apt-get source asciinema=<that version>` on a trixie host, or
+`https://snapshot.debian.org` pinned to it. The recipe that makes the edits is
+the `RUN` in `deploy/images/base/Dockerfile` that sets the `+wardyn1` version, in
+`https://github.com/cjohnstoniv/wardyn`.
 
 ## `ghcr.io/cjohnstoniv/wardyn-proxy:0.10.0`
 

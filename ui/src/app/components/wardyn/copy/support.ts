@@ -97,8 +97,10 @@ export const SUPPORT_HELPER = {
   },
   /** P-02: a helper's click after the grant ended (REST reason support_grant_ended). */
   ended: "Help is no longer open on this run.",
-  /** P-03: the terminal's line for a helper whose grant ended. */
+  /** P-03: the terminal's line for a helper whose grant the page has read as ended. */
   terminalEnded: "Help on this run has ended.",
+  /** The terminal's line for a helper's closed connection while the page still reads the grant as open: the server closes the same way when it could not read the grant. */
+  terminalDropped: "This terminal connection ended. Reconnect to check access.",
 } as const;
 
 export type SupportViewer = "owner" | "helper" | "security";

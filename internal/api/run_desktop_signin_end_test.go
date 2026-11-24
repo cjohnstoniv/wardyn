@@ -308,7 +308,7 @@ func TestDesktopSignin_AnEndWhoseResumeAgentFailsSaysTheAgentCouldNotBeResumed(t
 	f.rn.mu.Lock()
 	f.rn.exit["resume-agent"] = 1
 	f.rn.mu.Unlock()
-	want := "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+	want := "the sign-in display closed, but the agent's resume is unconfirmed; Wardyn retries, and tries to end the run after 3 failed retries"
 	if code, body := f.post(t, "/desktop-signin/end", ""); code != http.StatusBadGateway || !strings.Contains(body, want) {
 		t.Fatalf("end = %d %s, want 502 %q", code, body, want)
 	}

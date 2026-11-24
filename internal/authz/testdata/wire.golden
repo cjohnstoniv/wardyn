@@ -68,3 +68,4 @@ reason run_paused
 reason support_door_not_granted
 reason support_grant_ended
 reason support_helper_decision
+reason drive_not_allocated_to_portal

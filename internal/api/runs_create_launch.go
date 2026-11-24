@@ -43,13 +43,15 @@ import (
 // memoizes per request and effectiveCeiling keys on OIDC claims, so the
 // handler's resolution is the only one this run gets.
 type createRunLaunch struct {
-	req           createRunRequest
-	spec          types.RunPolicySpec
-	ceiling       dispatchCeiling
-	gw            grantWiring
-	wsRefs        []types.Workspace
-	driveMounts   []types.DriveMount
-	memberDrives  map[uuid.UUID]string
+	req          createRunRequest
+	spec         types.RunPolicySpec
+	ceiling      dispatchCeiling
+	gw           grantWiring
+	wsRefs       []types.Workspace
+	driveMounts  []types.DriveMount
+	memberDrives map[uuid.UUID]string
+	// portalDrives maps each drive that came through the run's issuer portal to that portal (portalDriveMounts).
+	portalDrives  map[uuid.UUID]uuid.UUID
 	ephemeralDirs []string
 	// startFolder is the run's one working directory (stepWorkspaces): "" keeps
 	// the sandbox's own choice.
@@ -86,7 +88,7 @@ func (f *runFold) launch(req createRunRequest, spec types.RunPolicySpec, ceiling
 	spec, harnessRules := applyHarnessToolRules(spec, req.Tools, toolLaneDefault(req))
 	return createRunLaunch{
 		req: req, spec: spec, ceiling: ceilingForDispatch(ceiling, f.adoGrade, f.bedrockGrade), gw: gw,
-		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
+		wsRefs: f.wsRefs, driveMounts: f.driveMounts, memberDrives: memberDriveOwners(f.drives), portalDrives: portalDriveMounts(f.drives, created.CreatedVia), ephemeralDirs: f.ephemeralDirs, startFolder: f.startFolder,
 		runToken: runToken, created: created, comps: f.comps, overridden: f.source.overridden(), provenance: f.source.knobs, pushSets: f.pushSets,
 		harnessRules: harnessRules, harnesses: f.harnesses, mainDrive: f.mainDrive.decision(),
 		signinImageUngranted: f.signinImageUngranted, machine: f.machine,
@@ -183,6 +185,7 @@ func (s *Server) finishCreateRunLaunch(ctx context.Context, l createRunLaunch) {
 			// not hold. See user_drives_run.go's own note.
 			Drives:       drives,
 			MemberDrives: memberDrives,
+			PortalDrives: l.portalDrives,
 			// The zero posture unless this run attaches a MEMBER-OWNED workspace, in
 			// which case the driver re-checks that member's own binds against these
 			// roots immediately before ContainerCreate (userMountPosture,
