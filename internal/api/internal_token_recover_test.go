@@ -738,6 +738,13 @@ func TestRecover_RefusalClasses(t *testing.T) {
 			mut: func(st *ruStore, _ *types.AgentRun, _ uuid.UUID) { st.lineage.JTI = store.TokenCutPrefix + "3" }},
 		{name: "the lineage cannot be read", status: 503, reason: "recovery_read_failed", row: "denied:recovery_read_failed",
 			mut: func(st *ruStore, _ *types.AgentRun, _ uuid.UUID) { st.lineageErr = errRuRead }},
+		{name: "the run's row is gone when its lineage is read", status: 403, reason: "run_not_found", final: true, row: "denied:run_not_found",
+			mut: func(st *ruStore, _ *types.AgentRun, _ uuid.UUID) { st.lineageErr = store.ErrNotFound }},
+		{name: "a terminal run whose lineage cannot be read is still refused for good", status: 403, reason: string(authz.ReasonRunTerminal), final: true, row: "denied:run_terminal:FAILED",
+			mut: func(st *ruStore, run *types.AgentRun, _ uuid.UUID) {
+				run.State = types.RunFailed
+				st.lineageErr = errRuRead
+			}},
 		{name: "the database's clock cannot be read", status: 503, reason: "recovery_read_failed", row: "denied:recovery_read_failed",
 			mut: func(st *ruStore, _ *types.AgentRun, _ uuid.UUID) { st.dbNowErr = errRuRead }},
 		{name: "the runner has the run containment pending", status: 403, reason: "run_containment_pending", final: true, row: "denied:run_containment_pending", relayed: true,
@@ -787,6 +794,8 @@ func TestRecover_RefusalClasses(t *testing.T) {
 			mut: ruAfterStamp(nil)},
 		{name: "the stamp loses and the re-read fails", status: 503, reason: "recovery_read_failed", row: "denied:recovery_read_failed", stamps: 1,
 			mut: ruAfterStamp(func(s *ruStore, _ uuid.UUID) { s.runErr = errRuRead })},
+		{name: "the stamp loses and the run's row is gone at the re-read", status: 403, reason: "run_not_found", final: true, row: "denied:run_not_found", stamps: 1,
+			mut: ruAfterStamp(func(s *ruStore, _ uuid.UUID) { s.lineageErr = store.ErrNotFound })},
 		{name: "the stamp loses to a loss mark", status: 403, reason: string(authz.ReasonRunKept), final: true, row: "denied:run_lost:outage", stamps: 1,
 			mut: ruAfterStamp(func(s *ruStore, id uuid.UUID) {
 				run := s.runs[id]

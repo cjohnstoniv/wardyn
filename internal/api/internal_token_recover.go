@@ -135,6 +135,7 @@ type recoverRefusal struct {
 // recoverRefusals are the door's refusals by audit reason. The run-state ones the renew door shares answer with its
 // wire reasons (recoverWireReason).
 var recoverRefusals = map[string]recoverRefusal{
+	reasonRunNotFound:           {http.StatusForbidden, "run not found"},
 	reasonRunNotRunning:         {http.StatusForbidden, "the run is not running"},
 	reasonRunPastLifetime:       {http.StatusForbidden, "the run is past its end or its lifetime cap"},
 	reasonRunTokenCut:           {http.StatusForbidden, "the run's token lineage was cut when it was stopped; only a revive runs it again"},
@@ -162,13 +163,22 @@ func (s *Server) recoverRunToken(ctx context.Context, w http.ResponseWriter, r *
 		readFailed("the database's clock", err)
 		return
 	}
-	lineage, err := st.RunRecoveryLineage(ctx, run.ID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		readFailed("the run's token lineage", err)
+	if reason := recoverRunStateRefusal(run, now); reason != "" {
+		refuse(reason)
 		return
 	}
-	if reason := recoverRunStateRefusal(run, lineage, now); reason != "" {
-		refuse(reason)
+	// The lineage is read after checks 1-4, and only a row that is still there passes: a run gone since GetRun is
+	// refused, never read as an empty lineage, which check 9 would accept.
+	lineage, err := st.RunRecoveryLineage(ctx, run.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		refuse(reasonRunNotFound)
+		return
+	case err != nil:
+		readFailed("the run's token lineage", err)
+		return
+	case strings.HasPrefix(lineage.JTI, store.TokenCutPrefix):
+		refuse(reasonRunTokenCut)
 		return
 	}
 	if pending, perr := s.runContainmentPending(ctx, run); perr != nil {
@@ -274,9 +284,10 @@ func (s *Server) recoverRunToken(ctx context.Context, w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, tokenRenewResponse{Token: id.Token, ExpiresAt: id.Expiry.UTC().Format(time.RFC3339)})
 }
 
-// recoverRunStateRefusal is the first of checks 1, 2, 3, 4 and 4b that fails for run, "" when none does. A run whose
-// lineage is cut at a stopped pause is never recovered: only a revive's fresh token runs it again.
-func recoverRunStateRefusal(run types.AgentRun, lineage store.TokenLineage, now time.Time) string {
+// recoverRunStateRefusal is the first of checks 1, 2, 3 and 4 on the run row that fails for run, "" when none does.
+// Check 4b, a lineage cut at a stopped pause, follows on the lineage read after it: only a revive's fresh token runs
+// such a run again.
+func recoverRunStateRefusal(run types.AgentRun, now time.Time) string {
 	switch {
 	case isTerminalRunState(run.State):
 		return "run_terminal:" + string(run.State)
@@ -286,15 +297,13 @@ func recoverRunStateRefusal(run types.AgentRun, lineage store.TokenLineage, now 
 		return reasonRunPastLifetime
 	case runIsKept(run):
 		return "run_lost:" + string(run.LostReason)
-	case strings.HasPrefix(lineage.JTI, store.TokenCutPrefix):
-		return reasonRunTokenCut
 	}
 	return ""
 }
 
 // refuseRecoverRaced answers a stamp that did not land: the row changed after the checks. A fresh read answers
-// with the first failing check 1, 2, 4, 4b or 9; when none fails (the row changed back), the answer is retryable.
-// No token is handed out on any of these.
+// with the first failing check 1, 2, 4, 4b or 9, or run_not_found when the run's row is gone; when none fails (the row
+// changed back), the answer is retryable. No token is handed out on any of these.
 func (s *Server) refuseRecoverRaced(ctx context.Context, w http.ResponseWriter, r *http.Request, claims *identity.Claims, st recoveryStore, now time.Time) {
 	run, err := s.cfg.Store.GetRun(ctx, claims.RunID)
 	if err != nil {
@@ -302,16 +311,22 @@ func (s *Server) refuseRecoverRaced(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 	lineage, err := st.RunRecoveryLineage(ctx, run.ID)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.refuseRecover(w, r, claims, reasonRunNotFound)
+		return
+	case err != nil:
 		s.refuseRecover(w, r, claims, reasonRecoveryReadFailed)
 		return
 	}
-	reason := recoverRunStateRefusal(run, lineage, now)
+	reason := recoverRunStateRefusal(run, now)
 	if reason == reasonRunPastLifetime { // check 3 is not re-asked here
 		reason = ""
 	}
 	switch {
 	case reason != "":
+	case strings.HasPrefix(lineage.JTI, store.TokenCutPrefix):
+		reason = reasonRunTokenCut
 	case lineage.JTI != "" && claims.JTI != lineage.JTI:
 		reason = reasonTokenLineageRetired
 	default:
