@@ -11,13 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Setup status warns when a CC2 or CC3 RuntimeClass's nodes carry no taint it tolerates, so other pods can land on them. It also warns when the RuntimeClass sets no scheduling: its sandboxes can then run on any node with the runtime.
+
 ### Changed
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
+- Kubernetes: the fit warning and the start-time limit now judge a barrier run's agent pod with its RuntimeClass's scheduling and overhead.
 
 ### Before you upgrade
 
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
+- Kubernetes: Wardyn now refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. Add the selector, and move that toleration into the RuntimeClass, first.
 
 ## [0.10.4] — 2026-11-24
 

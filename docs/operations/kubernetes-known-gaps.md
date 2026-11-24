@@ -24,6 +24,7 @@
 | NetworkPolicy stops being enforced after boot | Refused for new sandboxes | The canary re-runs every 10 minutes; the first check that shows egress through a deny-all policy refuses new sandboxes in that namespace. Running sandboxes keep running. | Fix the CNI; see [re-checks after boot](#re-checks-after-boot). |
 | The proxy's DNS rule covers only `kube-dns` pods in `kube-system` | Partial | The per-run proxy NetworkPolicy admits DNS to its address range (cloud-metadata address excluded) and to pods labelled `k8s-app=kube-dns` in `kube-system` ([`internal/runner/k8s/sandbox.go`](../../internal/runner/k8s/sandbox.go)). | GKE Cloud DNS, NodeLocal DNSCache on the host network and DNS outside `kube-system` (OpenShift) need an operator-supplied NetworkPolicy. A No network run's proxy has no DNS rule. |
 | `replicas` stays 1 unless `ha.enabled` is set | Partial | HA is supported on Kubernetes only. | See [High availability](../OPERATIONS.md#high-availability) for what the replicas share, what stays per replica (caps multiply by the replica count) and the residual risks. With registered runners keep one replica: [what a second replica still hits](high-availability.md). |
+| NetworkPolicy inside an isolated pool | Not proven | The canary runs on the general nodes, not on a Kata pool. | Check egress from a CC3 run on the pool yourself. |
 
 - In place of a revive, a run whose proxy is out of date is stopped and a new run started ([run lifetime](run-lifetime.md)).
 
@@ -161,6 +162,7 @@ A managed, multi-tenant cluster may apply an ambient default-deny as its baselin
 - If the canary pod reached Running and its own connect exited with exactly 1 (not "never reached Running", not any other exit code), `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` acknowledges that shape and boots anyway.
 - That is never proof of enforcement, because phase B is skipped. The setup checklist's `k8s_egress_containment` row grades it `warn` ("acknowledged, not proven"), never `ok`.
 - Only the exempt-the-podSelector fix gives real proof.
+- The canary runs on the general nodes, not on an isolated Kata pool: check egress from a CC3 run on the pool yourself.
 
 ### Re-checks after boot
 
