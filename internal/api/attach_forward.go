@@ -11,7 +11,8 @@ package api
 // same per-run channel cap, WARDYN_SSH_CHANNELS, data_out rule and deny_interactive door. It is for a deployment
 // whose SSH gateway is off, and it is off itself unless the operator sets WARDYN_ATTACH_FORWARD. Every forward
 // needs an attach ticket, an admin's included, so the credential that opened it is checked again every
-// attachAuthorityEvery for as long as it is open.
+// attachAuthorityEvery for as long as it is open; a check with no answer rides the session budget
+// (session_budget.go) as every other open session does.
 
 import (
 	"context"
@@ -22,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -209,19 +211,11 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	// Ending chCtx makes the bridge close the session, as an SSH channel's close does.
 	conn := websocket.NetConn(chCtx, c, websocket.MessageBinary)
 	parks := &forwardParks{}
-	ch := wsForwardChannel{Conn: conn, gone: chCancel, parks: parks}
+	hold := newForwardHold(chCtx)
+	ch := wsForwardChannel{Conn: conn, gone: chCancel, parks: parks, hold: hold}
 	go s.attachForwardPing(chCtx, c, parks, chCancel)
 
-	// The re-check: the ticket's credential and the entry rule (attachAuthority), the run's state and its data_out
-	// rule. The first failure ends the forward with its own cause; a read that fails ends it too (fail closed).
-	base := s.attachAuthority(r, run.ID)
-	var endCause atomic.Pointer[error]
-	stop := func(cause error) error {
-		endCause.Store(&cause)
-		return errAttachAuthorityEnded
-	}
-	check := s.attachForwardRecheck(run.ID, base, stop)
-	s.holdAttachAuthority(chCtx, check, func() { chCancel(*endCause.Load()) })
+	s.holdForward(chCtx, r, run.ID, hold, chCancel)
 
 	var end bridgeEnd
 	exit, _, bytesOut := s.sshBridgeExecSession(chCtx, run.ID, actor, ch, noteBridgeEnd(chCtx, sess, &end), false)
@@ -233,6 +227,30 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	}
 	// BaseCtx, not the request's: the row must outlive the connection's teardown (sshgateway_channels.go's forward).
 	s.recordStreamAudit(s.cfg.BaseCtx, fresh.SandboxRef, s.attachForwardEvent(run.ID, at, actor, outcome, extra))
+}
+
+// holdForward starts an open forward's re-check: the ticket's credential and the entry rule (attachAuthority), the
+// run's state and its data_out rule (attachForwardRecheck), on the forward's session budget. The first refusal ends
+// the forward through end with its own cause; a read that fails rides the budget while hold keeps the client's bytes
+// back, and the budget running out ends the forward as a read that failed.
+func (s *Server) holdForward(ctx context.Context, r *http.Request, runID uuid.UUID, hold *forwardHold, end context.CancelCauseFunc) {
+	base := s.attachAuthority(r, runID)
+	var endCause atomic.Pointer[error]
+	stop := func(cause error) error {
+		endCause.Store(&cause)
+		return errAttachAuthorityEnded
+	}
+	watch := attachWatchID(r, runID)
+	watch.Surface = sessionSurfaceForward
+	b := s.newSessionBudget(r.Context(), watch)
+	b.fence = hold.fence
+	s.holdAttachAuthority(ctx, b, s.attachForwardRecheck(runID, base, stop), func(spent bool) {
+		if spent {
+			end(errAttachForwardReadFailed)
+			return
+		}
+		end(*endCause.Load())
+	})
 }
 
 // refuseForwardDataOut is an SSH direct-tcpip channel's data_out gate for this door: a rule that cannot be read is
@@ -254,29 +272,35 @@ func (s *Server) refuseForwardDataOut(w http.ResponseWriter, r *http.Request, ru
 
 // attachForwardRecheck is the check an open forward runs every attachAuthorityEvery: base (the ticket's credential
 // and the entry rule, nil when attachAuthority has nothing to check), then the run's state, then its data_out rule.
-// Each failure goes through stop with the cause the forward's row words; a read that fails is its own cause, so the
-// row never says the run ended when it could not be read.
+// Each refusal goes through stop with the cause the forward's row words. A read that fails is not a refusal: it
+// answers unconfirmed, which the session budget rides, so the row never says the run ended when it could not be read.
 func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context) error, stop func(error) error) func(context.Context) error {
+	unread := unconfirmed(errAttachForwardReadFailed)
 	return func(lctx context.Context) error {
 		if base != nil {
 			if err := base(lctx); err != nil {
-				// attachAuthority's own verdict is "session ended"; any other error is a read it could not make.
-				if errors.Is(err, errAttachAuthorityEnded) {
+				// attachAuthority answers "session ended" or a read it could not make; an error it did not mark
+				// either way fails closed.
+				switch {
+				case errors.Is(err, errAttachAuthorityEnded):
 					return stop(errAttachAuthorityEnded)
+				case errors.Is(err, errSessionUnconfirmed):
+					return unread
 				}
 				return stop(errAttachForwardReadFailed)
 			}
 		}
-		// liveRunForExec answers notFound on any GetRun error, so that answer covers a failed store read too.
+		// liveRunForExec answers notFound on any GetRun error, so that answer covers a failed store read too (a run
+		// that is really gone then ends the forward when the budget runs out).
 		if _, msg := s.liveRunForExec(lctx, runID, forwardLiveRunWords); msg != "" {
 			if msg == forwardLiveRunWords.notFound {
-				return stop(errAttachForwardReadFailed)
+				return unread
 			}
 			return stop(errAttachForwardRunEnded)
 		}
 		rule, _, err := s.runDataOutRule(lctx, runID)
 		if err != nil {
-			return stop(errAttachForwardReadFailed)
+			return unread
 		}
 		if rule.DataOut() != types.TransferAllowed {
 			return stop(errAttachForwardDataOut)
@@ -323,16 +347,17 @@ func (s *Server) attachForwardEvent(runID uuid.UUID, at types.ActorType, actor, 
 // wsForwardChannel is a forward's WebSocket as the ssh.Channel sshBridgeExecSession bridges: its bytes both ways, no
 // stderr (the relay's stderr is dropped, as a direct-tcpip channel's is) and no channel requests. A read error is the
 // client's end (a WebSocket has no half-close), so it ends the forward's context, which closes the relay. parks tells
-// the ping loop when either copy waits on a write.
+// the ping loop when either copy waits on a write; hold keeps the client's bytes back while access is unconfirmed.
 type wsForwardChannel struct {
 	net.Conn
 	gone  context.CancelCauseFunc
 	parks *forwardParks
+	hold  *forwardHold
 }
 
 // Read is the client-to-sandbox copy's read. The copy is free while inside it, and parked from the moment it returns
 // bytes until its next Read: that span is the copy's write into the sandbox's stdin (and the presence mark,
-// presenceReader.Read).
+// presenceReader.Read), and any wait on hold before it.
 func (c wsForwardChannel) Read(p []byte) (int, error) {
 	c.parks.reader.free()
 	n, err := c.Conn.Read(p)
@@ -341,7 +366,54 @@ func (c wsForwardChannel) Read(p []byte) (int, error) {
 		return n, err
 	}
 	c.parks.reader.park()
+	if err := c.hold.wait(); err != nil {
+		return 0, err
+	}
 	return n, nil
+}
+
+// forwardHold is an open forward's fence (sessionBudget.fence): while its access is unconfirmed, the client's bytes
+// wait instead of reaching the sandbox, as a terminal takes no input then. A byte relay cannot drop bytes the way a
+// terminal drops keystrokes without breaking the stream, so it holds them; the sandbox's bytes still reach the client.
+type forwardHold struct {
+	ctx  context.Context
+	mu   sync.Mutex
+	open chan struct{} // closed while nothing is held
+}
+
+func newForwardHold(ctx context.Context) *forwardHold {
+	open := make(chan struct{})
+	close(open)
+	return &forwardHold{ctx: ctx, open: open}
+}
+
+// fence holds the client's bytes when on and lets them go when off.
+func (h *forwardHold) fence(on bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	select {
+	case <-h.open:
+		if on {
+			h.open = make(chan struct{})
+		}
+	default:
+		if !on {
+			close(h.open)
+		}
+	}
+}
+
+// wait returns nil once nothing is held, or the forward's end cause once it has ended.
+func (h *forwardHold) wait() error {
+	h.mu.Lock()
+	open := h.open
+	h.mu.Unlock()
+	select {
+	case <-open:
+		return nil
+	case <-h.ctx.Done():
+		return context.Cause(h.ctx)
+	}
 }
 
 // Write is the sandbox-to-client copy's write, parked while inside it.

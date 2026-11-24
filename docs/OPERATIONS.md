@@ -2295,17 +2295,17 @@ Moved to [integrations.md](operations/integrations.md#integrations).
 
 ## Open sessions while the database is unreachable
 
-- An open terminal, desktop, window on a Mac, app session, inbound stream or SSH connection checks every 30 seconds
+- An open terminal, desktop, window on a Mac, app session, inbound stream, SSH connection or port forward checks every 30 seconds
   that its person may still use it. A check that answers no (signed out, revoked, an ended grant, a profile that now
-  denies it) ends the session at that check.
+  denies it) ends the session at once.
 - A check that gets no answer, because the database is unreachable or slow, does not end it. The session asks
-  again every 5 seconds and ends only when no check has answered for the session budget, counted from the first one
-  that got none. A terminal takes no input meanwhile.
+  again every 5 seconds and ends only when no check has answered for the session budget, counted from the first
+  unanswered one. A terminal or port forward takes no input meanwhile.
 - Set the budget with `"sessions": {"unconfirmed_budget_s": N}` in `PUT /site-config`. N is 0 to 120 seconds; the default is 30. With 0 a session ends at the first check that gets no answer;
-  an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each wardynd reads the setting at most once a minute, and a session keeps the budget it started
+  an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each wardynd reads the setting at most once a minute; a session keeps the budget it started
   with.
 - So a database outage ends an open session about 30 seconds plus the budget after its last good check: about 60
-  seconds by default, about 155 at 120. A terminal closes in a way the console reconnects on, and a desktop viewer
+  seconds by default, 155 at 120. A terminal closes in a way the console reconnects on; a desktop viewer
   retries. An inbound stream also keeps its own 30-second grace since its last good check.
 - Every such wait writes a `session.unconfirmed` audit row, at a budget of 0 too: `rode_through` when a check
   answered again, `ended` when the budget ran out, `refused` when a check that answered no ended the session
