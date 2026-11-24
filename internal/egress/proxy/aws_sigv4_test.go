@@ -527,6 +527,8 @@ func TestAWSSigV4_RoleCredentialsCachedAndRenewed(t *testing.T) {
 	if rec := h.send(t, req(), sigv4Bedrock); rec.Code != http.StatusOK {
 		t.Fatalf("status %d %s", rec.Code, rec.Body)
 	}
+	// The renewal runs beside the request, so wait for its portal call before counting.
+	waitUntil(t, "the renewal's portal call", func() bool { return h.portalCalls.Load() >= 2 })
 	if r, p := h.redeemed.Load(), h.portalCalls.Load(); r != 2 || p != 2 {
 		t.Fatalf("credentials inside the renewal margin were not renewed: %d resolves, %d portal calls", r, p)
 	}
