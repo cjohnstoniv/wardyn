@@ -39,7 +39,7 @@ class FakeSource {
 }
 
 let seq = 0;
-const ev = (kind: string, payload: Record<string, unknown> = {}): AssistantEvent => ({ seq: ++seq, kind, payload, created_at: "2026-11-24T09:00:00Z" });
+const ev = (kind: string, payload: Record<string, unknown> = {}): AssistantEvent => ({ seq: ++seq, kind, payload, created_at: new Date(0).toISOString() });
 const push = (...events: AssistantEvent[]) =>
   act(() => {
     for (const e of events) FakeSource.all[FakeSource.all.length - 1].emit(e);
