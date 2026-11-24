@@ -10,6 +10,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"slices"
@@ -155,12 +156,13 @@ func migrateConn(ctx context.Context, conn *pgxpool.Conn, allowUnknown bool) err
 	}
 
 	// Runs on `conn`, not `pool`, so a pool_max_conns=1 DSN can't self-deadlock against this conn.
-	return migrateOn(ctx, conn, allowUnknown)
+	return migrateOn(ctx, conn, allowUnknown, migrationFS)
 }
 
-// migrateOn applies pending migrations using a single executor (the advisory-
-// lock-holding connection). Separated so both the lock path and tests share it.
-func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) error {
+// migrateOn applies the pending migrations of fsys's migrations/*.sql using a single executor (the advisory-
+// lock-holding connection). Separated so both the lock path and tests share it. Production passes migrationFS;
+// TestPG_MigrateBothBandOrders passes sets of its own, to apply one filename set in several band orders.
+func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool, fsys fs.FS) error {
 	fresh, err := freshSchema(ctx, db) // before the tracking table exists: the fresh-install seed's key (fresh_seed.go)
 	if err != nil {
 		return err
@@ -174,7 +176,7 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 		return fmt.Errorf("db: ensure schema_migrations: %w", err)
 	}
 
-	entries, err := migrationFS.ReadDir("migrations")
+	entries, err := fs.ReadDir(fsys, "migrations")
 	if err != nil {
 		return fmt.Errorf("db: read migrations dir: %w", err)
 	}
@@ -240,7 +242,7 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 			continue
 		}
 
-		data, err := migrationFS.ReadFile("migrations/" + name)
+		data, err := fs.ReadFile(fsys, "migrations/"+name)
 		if err != nil {
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}

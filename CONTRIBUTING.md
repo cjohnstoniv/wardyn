@@ -120,7 +120,9 @@ request, and reviewed before it reaches `main`.
 - Dependent work stacks: branch from the previous PR's branch, write
   `Depends on #N` in the PR body, retarget to `main` after #N merges.
 - A database migration takes the next free number at rebase time, never a
-  number reserved in advance.
+  number reserved in advance, from the band of the branch it targets
+  (`internal/db/migration_bands.tsv`: 0300-0399 on release/0.10, 0400-0599
+  on main). A forward-ported migration keeps its number.
 
 ### Pull requests
 
