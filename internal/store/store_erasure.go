@@ -240,17 +240,18 @@ func (s PG) BlankRunTasks(ctx context.Context, createdBy string) (int, error) {
 		}
 	}
 	// The command of each extra container on the person's runs: argv is a paste surface, and this row is the copy
-	// of it the scope's other blanks leave. Skipped for a role without INSERT on run_containers, as above.
-	canStrip, err := s.hasRunContainersPrivilege(ctx, "INSERT")
-	if err != nil {
-		return 0, err
-	}
-	if canStrip {
-		if _, err := s.Pool.Exec(ctx, `UPDATE run_containers c
-			SET containers = (SELECT jsonb_agg(e.v - 'command' ORDER BY e.n) FROM jsonb_array_elements(c.containers) WITH ORDINALITY AS e(v, n))
-			FROM agent_runs r
-			WHERE r.id = c.run_id AND r.created_by = $1
-			  AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.containers) x WHERE x ? 'command')`, createdBy); err != nil {
+	// of it the scope's other blanks leave. Skipped when the role is refused it and cannot INSERT into
+	// run_containers either (runContainersUnwritable): it can have written no row.
+	if _, err := s.Pool.Exec(ctx, `UPDATE run_containers c
+		SET containers = (SELECT jsonb_agg(e.v - 'command' ORDER BY e.n) FROM jsonb_array_elements(c.containers) WITH ORDINALITY AS e(v, n))
+		FROM agent_runs r
+		WHERE r.id = c.run_id AND r.created_by = $1
+		  AND EXISTS (SELECT 1 FROM jsonb_array_elements(c.containers) x WHERE x ? 'command')`, createdBy); err != nil {
+		skip, perr := s.runContainersUnwritable(ctx, err)
+		if perr != nil {
+			return 0, perr
+		}
+		if !skip {
 			return 0, fmt.Errorf("store: blank a person's extra container commands: %w", err)
 		}
 	}

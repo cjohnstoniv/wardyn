@@ -127,10 +127,11 @@ func TestPG_RunContainersCascade(t *testing.T) {
 	}
 }
 
-// TestPG_RunContainersWithoutTheGrant: a role without INSERT on run_containers (a split-role app role the grant
-// loop missed) reads none, so a start does not fail; a role that can insert but not select fails, so stored extras
-// are never silently dropped; with SELECT too it reads them. The erasure blank skips the table for the role without
-// INSERT instead of failing.
+// TestPG_RunContainersWithoutTheGrant: a role refused the read that has no INSERT on run_containers either (a
+// split-role app role the grant loop missed) reads none, so a start does not fail; a role that can select but not
+// insert reads the rows that exist; a role that can insert but not select fails, so stored extras are never
+// silently dropped; with both it reads them. The erasure blank skips the table for the role without INSERT instead
+// of failing.
 func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	ctx := context.Background()
@@ -162,6 +163,11 @@ func TestPG_RunContainersWithoutTheGrant(t *testing.T) {
 	if _, err := pg.BlankRunTasks(ctx, r.CreatedBy); err != nil {
 		t.Errorf("erasure blank without INSERT on run_containers: %v; want it skipped", err)
 	}
+	exec(`GRANT SELECT ON run_containers TO ` + role)
+	if got, err := pg.RunContainers(ctx, r.ID); err != nil || len(got) != len(r.Containers) {
+		t.Errorf("read with SELECT and no INSERT = %+v, %v; want the %d extras", got, err, len(r.Containers))
+	}
+	exec(`REVOKE SELECT ON run_containers FROM ` + role)
 	exec(`GRANT INSERT ON run_containers TO ` + role)
 	if got, err := pg.RunContainers(ctx, r.ID); err == nil {
 		t.Errorf("read with INSERT and no SELECT = %+v, nil; want an error", got)
