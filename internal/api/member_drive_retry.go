@@ -21,6 +21,9 @@ const memberDriveByRetrySweep = "retry_sweep"
 // memberDriveRetryBatch bounds the held deletes one sweep retries, so one tick's substrate calls stay bounded.
 const memberDriveRetryBatch = 50
 
+// heldDriveRetryBound bounds one retry pass; a variable only so a test can shorten it.
+var heldDriveRetryBound = reconcileFinalizeTimeout
+
 // heldDrivesListed runs between the sweep's list and its first takeover. Tests set it to hold two sweeps that both
 // listed the same row, so they race at the takeover (the memberDriveCounted precedent, store/member_drives.go).
 var heldDrivesListed = func() {}
@@ -60,9 +63,9 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 	defer end()
 	// The attempt is the server's own, as other sweeps' rows are: actor system, wardynd.
 	ctx = withActor(ctx, types.ActorSystem, "wardynd")
-	// The pass is bounded: a slow substrate must not hold the tick, and a lost lease ends it too. Rows not taken keep
+	// The pass is bounded (heldDriveRetryBound): a slow substrate must not hold the tick, and a lost lease ends it too. Rows not taken keep
 	// their mark and come first on the next pass. A delete already begun finishes on its own clock (deleteMemberDrive).
-	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	ctx, cancel := context.WithTimeout(ctx, heldDriveRetryBound)
 	defer cancel()
 	if !s.memberDrivesDeletable(ctx) {
 		return nil

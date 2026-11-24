@@ -27,13 +27,16 @@ type heldFake struct {
 	mu        sync.Mutex
 	lists     int
 	takeovers int
+	// passCtx is the context the last list was given: the retry pass's own.
+	passCtx context.Context
 }
 
 // ListHeldMemberDriveDeletes answers as the statement does: owned rows on a listed backend, not a Mac disk, marked
 // more than five minutes ago, oldest first.
-func (h *heldFake) ListHeldMemberDriveDeletes(_ context.Context, backends []string, limit int) ([]types.UserDrive, error) {
+func (h *heldFake) ListHeldMemberDriveDeletes(ctx context.Context, backends []string, limit int) ([]types.UserDrive, error) {
 	h.mu.Lock()
 	h.lists++
+	h.passCtx = ctx
 	h.mu.Unlock()
 	var out []types.UserDrive
 	for _, d := range h.drives {
@@ -200,24 +203,39 @@ func TestHeldDriveRetry_NotDeletableHereTakesNothing(t *testing.T) {
 	}
 }
 
-// slowReclaimer takes longer than the pass's deadline on every call.
-type slowReclaimer struct {
+// untilPassEnds is a reclaimer whose every call blocks until the pass that made it is over, by its deadline or its
+// cancellation, and so never races the clock for how many rows were taken: the pass context is the one the list was
+// given. patience only keeps a pass with no bound from hanging the test; it is never what ends a call that works.
+type untilPassEnds struct {
 	*memberDriveRunner
-	wait  time.Duration
-	calls int
+	hf       *heldFake
+	patience time.Duration
+	calls    int
 }
 
-func (r *slowReclaimer) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+func (r *untilPassEnds) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
 	r.calls++
-	time.Sleep(r.wait)
+	r.hf.mu.Lock()
+	pass := r.hf.passCtx
+	r.hf.mu.Unlock()
+	select {
+	case <-pass.Done():
+	case <-time.After(r.patience):
+	}
 	return runner.DriveReclaimDeleted, nil
 }
 
-// The pass ends at its deadline: once the first delete outlasts it, no later row is taken over, and the rows left keep
-// the mark they had, so they come first on the next pass.
+// The pass ends at its bound: the first delete holds until the pass context is done, so no later row is taken over,
+// and the rows left keep the mark they had, so they come first on the next pass. The caller's context has no
+// deadline, so the bound is the pass's own; without it the first call is held until patience runs out and the later
+// rows are taken, and without the context check before each takeover they are taken the moment the first returns.
 func TestHeldDriveRetry_PassEndsAtItsDeadline(t *testing.T) {
-	rn := &slowReclaimer{memberDriveRunner: reclaiming(runner.DriveReclaimDeleted, nil), wait: 300 * time.Millisecond}
+	prev := heldDriveRetryBound
+	heldDriveRetryBound = 500 * time.Millisecond
+	t.Cleanup(func() { heldDriveRetryBound = prev })
+	rn := &untilPassEnds{memberDriveRunner: reclaiming(runner.DriveReclaimDeleted, nil), patience: 3 * time.Second}
 	srv, hf, _ := heldServer(rn, "docker")
+	rn.hf = hf
 	var left []types.UserDrive
 	for i, age := range []time.Duration{9, 8, 7} {
 		d := heldDrive(hf.memberDriveStore, fmt.Sprintf("Notes %d", i), types.DriveBackendDockerVolume, age*time.Minute, 1)
@@ -225,18 +243,11 @@ func TestHeldDriveRetry_PassEndsAtItsDeadline(t *testing.T) {
 			left = append(left, d)
 		}
 	}
-	// A deadline shorter than the first call, standing for the pass's own (reconcileFinalizeTimeout) having run out.
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	if err := srv.sweepHeldMemberDriveDeletes(ctx); err != nil {
+	if err := srv.sweepHeldMemberDriveDeletes(context.Background()); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if rn.calls != 1 || hf.takeovers != 1 {
-		t.Errorf("substrate calls = %d, takeovers = %d; want 1 and 1 (the rows after the deadline are not taken)", rn.calls, hf.takeovers)
-	}
-	if took := time.Since(started); took > 5*time.Second {
-		t.Errorf("the pass took %v, want it to end at the deadline", took)
+		t.Errorf("substrate calls = %d, takeovers = %d; want 1 and 1 (the rows after the bound are not taken)", rn.calls, hf.takeovers)
 	}
 	for _, d := range left {
 		if got := hf.drives[d.ID]; got.DeleteStartedAt == nil || !got.DeleteStartedAt.Equal(*d.DeleteStartedAt) || got.DeleteIssues != 1 {
