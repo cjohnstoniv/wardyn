@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,7 +27,7 @@ func init() {
 func spooledSink(t *testing.T, c *stubCP, n int) (*decisionSink, func()) {
 	t.Helper()
 	s, start := pausedSink(c, n, "tok")
-	sp, bad, err := openDecisionSpool(t.TempDir())
+	sp, bad, err := openDecisionSpool(t.TempDir(), uuid.New())
 	if err != nil || bad != 0 {
 		t.Fatalf("open spool: %v (bad %d)", err, bad)
 	}
@@ -239,7 +240,7 @@ func TestDecisionSpool_FullSpoolReportsDropOnce(t *testing.T) {
 	for name, prep := range map[string]func(*testing.T, *decisionSink){
 		"no room": func(_ *testing.T, s *decisionSink) { s.spool.bytes = decisionSpoolMaxBytes - 1 },
 		"append refused": func(t *testing.T, s *decisionSink) {
-			s.spool.path = filepath.Join(t.TempDir(), "gone", decisionSpoolFile)
+			s.spool.path = filepath.Join(t.TempDir(), "gone", "decisions-x.jsonl")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -324,8 +325,8 @@ func TestDecisionSpool_CloseCountsRemainder(t *testing.T) {
 
 // A line that does not decode is counted once and skipped, at open and at read, and never logged.
 func TestDecisionSpool_BadLinesCountedOnce(t *testing.T) {
-	dir := t.TempDir()
-	sp, _, err := openDecisionSpool(dir)
+	dir, runID := t.TempDir(), uuid.New()
+	sp, _, err := openDecisionSpool(dir, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +346,7 @@ func TestDecisionSpool_BadLinesCountedOnce(t *testing.T) {
 	if err != nil || len(lines) != 2 || consumed != 3 || bad != 1 {
 		t.Fatalf("read: %d lines, consumed %d, bad %d, %v; want 2, 3, 1", len(lines), consumed, bad, err)
 	}
-	reopened, badAtOpen, err := openDecisionSpool(dir)
+	reopened, badAtOpen, err := openDecisionSpool(dir, runID)
 	if err != nil || badAtOpen != 1 || reopened.pending() != 2 {
 		t.Fatalf("reopen: bad %d, %d held, %v; want 1 and 2", badAtOpen, reopened.pending(), err)
 	}
@@ -367,7 +368,7 @@ func TestDecisionSpool_LogsNoData(t *testing.T) {
 			return http.StatusAccepted, true
 		})
 		s, start := pausedSink(c, 16, token)
-		sp, _, err := openDecisionSpool(t.TempDir())
+		sp, _, err := openDecisionSpool(t.TempDir(), uuid.New())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,8 +424,8 @@ func TestDecisionSpool_NoFinalMarkWhileSpoolHasRoom(t *testing.T) {
 	}
 }
 
-// The spool is trimmed only by an answer that landed the batch: 200 and 202 trim it, and no other status, nor a
-// transport failure, removes a record that was not also counted dropped.
+// The spool is trimmed only by an answer that landed the batch: 200 and 202 trim it, and no other status, 204
+// included, nor a transport failure, removes a record that was not also counted dropped.
 func TestDecisionSpool_AckOnlyOn200Or202(t *testing.T) {
 	for _, tc := range []struct {
 		status  int
@@ -432,7 +433,7 @@ func TestDecisionSpool_AckOnlyOn200Or202(t *testing.T) {
 	}{
 		{http.StatusOK, true},
 		{http.StatusAccepted, true},
-		{http.StatusNoContent, true}, // any 2xx: the door answers 202, and 200 on an older one
+		{http.StatusNoContent, false}, // a success the door never sends does not say it took the batch
 		{http.StatusTooManyRequests, false},
 		{http.StatusServiceUnavailable, false},
 	} {
@@ -446,5 +447,58 @@ func TestDecisionSpool_AckOnlyOn200Or202(t *testing.T) {
 		if got := s.spool.pending() == 0; got != tc.trimmed || s.droppedCount() != 0 {
 			t.Errorf("status %d: trimmed %v dropped %d, want trimmed %v and no drops", tc.status, got, s.droppedCount(), tc.trimmed)
 		}
+	}
+}
+
+// A line longer than a batch may be is skipped and counted dropped, once, and the records after it still drain.
+func TestDecisionSpool_OverlongLineSkippedAndCounted(t *testing.T) {
+	c := newStubCP(t, func(int, cpPost) (int, bool) { return http.StatusAccepted, true })
+	s, _ := spooledSink(t, c, 4)
+	s.batchMax.Store(MaxDecisionBatch)
+	if err := s.spool.append([]batchRecord{mustRecord(t, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(s.spool.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString(strings.Repeat("a", maxBatchBody+10) + "\n")
+	_ = f.Close()
+	if err := s.spool.append([]batchRecord{mustRecord(t, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if res := s.drainSpool(func() bool { return false }); res != drainDone {
+		t.Fatalf("drain = %v, want done", res)
+	}
+	posted := 0
+	for _, p := range c.got() {
+		posted += len(p.records)
+	}
+	if s.droppedCount() != 1 || posted != 2 {
+		t.Fatalf("dropped %d, posted %d records; want 1 and 2", s.droppedCount(), posted)
+	}
+	if left, _, _, err := s.spool.head(10, maxBatchBody); err != nil || len(left) != 0 {
+		t.Fatalf("%d lines left, %v; want none", len(left), err)
+	}
+}
+
+// Lines the caps leave out at open, and lines that do not decode, are counted dropped, not lost silently.
+func TestDecisionSpool_OpenCountsLinesPastTheCaps(t *testing.T) {
+	dir, runID := t.TempDir(), uuid.New()
+	sp, _, err := openDecisionSpool(dir, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := append(append([]byte(nil), mustRecord(t, 0).body...), '\n')
+	f, err := os.OpenFile(sp.path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.Write(bytes.Repeat(line, decisionSpoolMaxRecords+3))
+	_, _ = f.WriteString("{not json\n")
+	_ = f.Close()
+	reopened, dropped, err := openDecisionSpool(dir, runID)
+	if err != nil || dropped != 4 || reopened.pending() != decisionSpoolMaxRecords {
+		t.Fatalf("reopen: dropped %d, held %d, %v; want 4 and %d", dropped, reopened.pending(), err, decisionSpoolMaxRecords)
 	}
 }

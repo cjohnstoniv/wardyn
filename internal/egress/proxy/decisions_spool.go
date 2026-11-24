@@ -8,11 +8,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // The decision spool keeps the batches a server-run proxy could not deliver. It is a file of the masked JSON
@@ -28,7 +31,6 @@ const (
 	decisionSpoolMaxRecords = 50_000
 	decisionSpoolMaxBytes   = 32 << 20
 
-	decisionSpoolFile = "decisions.jsonl"
 	// decisionDrainBackoffMax caps the drain's wait after a failed replay.
 	decisionDrainBackoffMax = 60 * time.Second
 )
@@ -45,19 +47,20 @@ type decisionSpool struct {
 	bytes   int64
 }
 
-// openDecisionSpool opens, creating it if need be, the spool in dir. A line that does not decode is dropped
+// openDecisionSpool opens, creating it if need be, the spool of run runID in dir; one file to a run, so a temporary
+// directory two runs share never mixes their records. A line that does not decode is dropped
 // from the file and counted in the second result.
-func openDecisionSpool(dir string) (*decisionSpool, uint64, error) {
+func openDecisionSpool(dir string, runID uuid.UUID) (*decisionSpool, uint64, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, 0, err
 	}
-	sp := &decisionSpool{path: filepath.Join(dir, decisionSpoolFile)}
+	sp := &decisionSpool{path: filepath.Join(dir, "decisions-"+runID.String()+".jsonl")}
 	f, err := os.OpenFile(sp.path, os.O_RDONLY|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, 0, err
 	}
 	_ = f.Close()
-	lines, _, bad, err := sp.read(decisionSpoolMaxRecords, decisionSpoolMaxBytes)
+	lines, bad, err := sp.load()
 	if err != nil {
 		return nil, 0, err
 	}
@@ -139,52 +142,111 @@ func (sp *decisionSpool) read(n, maxBytes int) (lines [][]byte, consumed, bad in
 		return nil, 0, 0, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), maxBatchBody)
 	size := batchWrapper
-	for len(lines) < n && sc.Scan() {
-		line := bytes.TrimSpace(sc.Bytes())
+	err = eachLine(f, func(line []byte, tooLong bool) bool {
+		if len(lines) >= n {
+			return false
+		}
 		var rec DecisionRecord
-		if len(line) == 0 || json.Unmarshal(line, &rec) != nil {
+		if line = bytes.TrimSpace(line); tooLong || len(line) == 0 || json.Unmarshal(line, &rec) != nil {
 			consumed, bad = consumed+1, bad+1
-			continue
+			return true
 		}
 		if extra := len(line) + 1; len(lines) > 0 && size+extra > maxBytes {
-			break
+			return false
 		}
 		size += len(line) + 1
 		lines = append(lines, append([]byte(nil), line...))
 		consumed++
-	}
-	if err := sc.Err(); err != nil && !errors.Is(err, bufio.ErrTooLong) {
+		return true
+	})
+	if err != nil {
 		return nil, 0, 0, err
 	}
 	return lines, consumed, bad, nil
 }
 
+// load reads the whole file for open: the decodable lines up to the spool's caps, and how many lines were left
+// out, which is every line that does not decode, is longer than a batch may be, or comes after the caps are met.
+func (sp *decisionSpool) load() (lines [][]byte, dropped int, err error) {
+	f, err := os.Open(sp.path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+	var size int64
+	err = eachLine(f, func(line []byte, tooLong bool) bool {
+		var rec DecisionRecord
+		if line = bytes.TrimSpace(line); tooLong || len(line) == 0 || json.Unmarshal(line, &rec) != nil ||
+			len(lines) >= decisionSpoolMaxRecords || size+int64(len(line))+1 > decisionSpoolMaxBytes {
+			dropped++
+			return true
+		}
+		size += int64(len(line)) + 1
+		lines = append(lines, append([]byte(nil), line...))
+		return true
+	})
+	return lines, dropped, err
+}
+
+// eachLine calls fn with each line of r, without its newline. A line longer than maxBatchBody is not held: fn gets
+// it empty with tooLong true, so a reader moves past it. fn returns false to stop.
+func eachLine(r io.Reader, fn func(line []byte, tooLong bool) bool) error {
+	br := bufio.NewReaderSize(r, 64<<10)
+	var line []byte
+	tooLong := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if !tooLong {
+			line = append(line, chunk...)
+			if len(line) > maxBatchBody {
+				line, tooLong = nil, true
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if len(line) > 0 || tooLong {
+			if !fn(bytes.TrimRight(line, "\r\n"), tooLong) {
+				return nil
+			}
+		}
+		line, tooLong = nil, false
+		if err != nil { // io.EOF
+			return nil
+		}
+	}
+}
+
 // ack removes the first consumed lines of the file, by writing the rest to a temporary file in the same
-// directory and renaming it over the spool.
-func (sp *decisionSpool) ack(consumed int) error {
+// directory and renaming it over the spool. A later line too long to keep is left out, and counted in lost.
+func (sp *decisionSpool) ack(consumed int) (lost int, err error) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	f, err := os.Open(sp.path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var rest [][]byte
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), maxBatchBody)
-	for i := 0; sc.Scan(); i++ {
-		if i >= consumed {
-			rest = append(rest, append([]byte(nil), sc.Bytes()...))
+	i := 0
+	err = eachLine(f, func(line []byte, tooLong bool) bool {
+		if i++; i > consumed {
+			if tooLong {
+				lost++
+			} else {
+				rest = append(rest, append([]byte(nil), line...))
+			}
 		}
-	}
-	err = sc.Err()
+		return true
+	})
 	_ = f.Close()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return sp.rewrite(rest)
+	return lost, sp.rewrite(rest)
 }
 
 // clear empties the spool and returns how many records it held.
@@ -237,12 +299,12 @@ func (sp *decisionSpool) rewrite(lines [][]byte) error {
 
 // openSpool opens the proxy's spool, unless it is off; a spool that cannot be opened leaves the proxy as it
 // was before the spool, with one line naming the error.
-func (s *decisionSink) openSpool() {
+func (s *decisionSink) openSpool(runID uuid.UUID) {
 	dir := decisionSpoolDir()
 	if dir == "" {
 		return
 	}
-	sp, bad, err := openDecisionSpool(dir)
+	sp, bad, err := openDecisionSpool(dir, runID)
 	if err != nil {
 		slog.Warn("egress proxy: the decision spool is off", slog.String("err", err.Error()))
 		return
@@ -356,7 +418,9 @@ func (s *decisionSink) drainSpool(stop func() bool) drainResult {
 				return drainDone // the answer read no batch: keep the records, resume once one advertises again
 			case err != nil || code == 429 || code/100 == 5:
 				return drainFailed
+			case code == 200 || code == 202:
 			case code/100 == 2:
+				return drainFailed // a success the door never sends: it did not say it took the batch, so keep them
 			default:
 				drop = uint64(len(lines))
 				if code == 400 {
@@ -365,11 +429,12 @@ func (s *decisionSink) drainSpool(stop func() bool) drainResult {
 				}
 			}
 		}
-		if err := s.spool.ack(consumed); err != nil {
+		lost, err := s.spool.ack(consumed)
+		if err != nil {
 			slog.Warn("egress proxy: the decision spool cannot be trimmed", slog.String("err", err.Error()))
 			return drainFailed
 		}
-		s.dropped.Add(drop + uint64(bad))
+		s.dropped.Add(drop + uint64(bad) + uint64(lost))
 	}
 	return drainDone
 }

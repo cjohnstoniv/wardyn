@@ -81,6 +81,11 @@ type decisionSink struct {
 }
 
 func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
+	return newRunDecisionSink(uuid.Nil, controlPlaneURL, token, bufferSize, client, out)
+}
+
+// newRunDecisionSink is newDecisionSink for the sidecar of run runID, whose spool file is named for the run.
+func newRunDecisionSink(runID uuid.UUID, controlPlaneURL string, token *tokenSource, bufferSize int, client *http.Client, out io.Writer) *decisionSink {
 	s := &decisionSink{
 		endpoint: controlPlaneEndpoint(controlPlaneURL, "/api/v1/internal/decisions"),
 		token:    token,
@@ -89,7 +94,7 @@ func newDecisionSink(controlPlaneURL string, token *tokenSource, bufferSize int,
 		ch:       make(chan queuedDecision, bufferSize),
 	}
 	s.lastOK.Store(time.Now().UnixNano())
-	s.openSpool()
+	s.openSpool(runID)
 	s.startSpoolDrain()
 	s.wg.Add(1)
 	go s.run()
