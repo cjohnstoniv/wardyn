@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -260,27 +262,38 @@ func TestSupportTerminalMintCarriesTheGrant(t *testing.T) {
 
 // (b), (c) and the switch: a door the owner did not tick, any other purpose under a grant, a path-mode UI
 // ticket, no grant and the switch off are all refused with the reason the value list names, and mint nothing.
+// The ssh rows run with the SSH gateway and tickets on; with the gateway off, the deployment's answer comes
+// before any run read, a helper's included.
 func TestSupportTerminalMintRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		doors  []string
 		query  string
 		off    bool
+		ssh    bool
 		status int
 		reason string
 	}{
-		{"terminal not ticked", []string{"files"}, "", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"no grant", nil, "", false, 403, runOwnerOnlyReason},
-		{"switch off", []string{"terminal"}, "", true, 403, runOwnerOnlyReason},
-		{"ssh-exec purpose under a grant", []string{"terminal"}, "?purpose=ssh-exec", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"ssh-exec purpose with no grant", nil, "?purpose=ssh-exec", false, 403, runOwnerOnlyReason},
-		{"ui purpose, no UI door ticked", []string{"terminal"}, "?purpose=ui", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"ui purpose in path mode", []string{"web_apps"}, "?purpose=ui", false, 403, reasonInboundNeedsHostMode},
+		{"terminal not ticked", []string{"files"}, "", false, false, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"no grant", nil, "", false, false, 403, runOwnerOnlyReason},
+		{"switch off", []string{"terminal"}, "", true, false, 403, runOwnerOnlyReason},
+		{"ssh-exec purpose under a grant", []string{"terminal"}, "?purpose=ssh-exec", false, true, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"ssh-exec purpose with no grant", nil, "?purpose=ssh-exec", false, true, 403, runOwnerOnlyReason},
+		{"ssh-exec purpose under a grant, gateway off", []string{"terminal"}, "?purpose=ssh-exec", false, false, 409, reasonSSHGatewayOff},
+		{"ui purpose, no UI door ticked", []string{"terminal"}, "?purpose=ui", false, false, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"ui purpose in path mode", []string{"web_apps"}, "?purpose=ui", false, false, 403, reasonInboundNeedsHostMode},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, tc.doors...)
 			if tc.off {
 				t.Setenv(envSupportSessions, "")
+			}
+			if tc.ssh {
+				_, hostKey, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rig.srv.cfg.SSHListenAddr, rig.srv.cfg.SSHHostKey, rig.srv.cfg.SSHTickets = "127.0.0.1:0", hostKey, true
 			}
 			w := rig.mint(rig.helper, tc.query)
 			if w.Code != tc.status || wireReason(t, w) != tc.reason || rig.ticketCount() != 0 {

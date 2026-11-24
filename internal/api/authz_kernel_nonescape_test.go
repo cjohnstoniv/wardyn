@@ -82,6 +82,7 @@ var kernelDoors = map[string][]string{
 	// Minting a personal credential.
 	"handleAddSSHKey": {"capFeature"},
 	"mintGuards":      {"capFeature"}, // both mint doors: POST /me/tokens and an invitation claim
+	"sshTicketScope":  {"capFeature"}, // an SSH ticket mint asks ssh_key, as adding a key does
 	// A CLI session's refresh re-asks the api_token feature on every rotation.
 	"cliSessionCutsPass": {"capFeature"},
 	// Self-hosting: POST /me/runners/tokens asks the self_host_runner value.

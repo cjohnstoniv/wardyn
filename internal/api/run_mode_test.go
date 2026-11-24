@@ -744,7 +744,9 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 		return out
 	}
 	for name, want := range map[string][]string{
-		"liveRunForExec": {"execFreshRun", "sshFreshRun", "startFresh"},
+		// The forward door refuses a background run (refuseBackgroundOnly) before its fresh read, and its re-check
+		// only holds a forward that door opened; a run's experience never changes after create.
+		"liveRunForExec": {"attachForwardRecheck", "execFreshRun", "handleAttachForward", "sshFreshRun", "startFresh"},
 		"execFreshRun":   {"handleRunExec"},
 	} {
 		if got := callers(name); !slices.Equal(got, want) {
@@ -767,7 +769,8 @@ func TestBackgroundExecIsTheDoorsThirdException(t *testing.T) {
 	for name, want := range map[string][]string{
 		"startFresh": {"Server.desktopSigninDial", "Server.establishExec", "Server.execFresh", "Server.sandboxExec", "localAttach.run"},
 		// execFresh is startFresh for an ExecStream, and execSFTPServer is execFresh when fenced.
-		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
+		// The forward door's relay is execFresh too, after its own background refusal.
+		"execFresh":      {"Server.bridgeSSHExec", "Server.execSFTPServer", "Server.handleAttachForward", "Server.handleSSHDirectTCPIP", "Server.uiDial", "Server.uiEnsureApp"},
 		"execSFTPServer": {"Server.bridgeSSHSFTP", "Server.bridgeSSHSync", "Server.computerFolderPass"},
 	} {
 		var got []string

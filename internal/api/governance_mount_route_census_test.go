@@ -64,6 +64,7 @@ var specRouteExemptions = map[string]struct{ why, via string }{
 	"GET /api/v1/runs/{id}/desktop/files":        {"the run's resolved desktop rules decide the transfer defaults it reports; the answer carries file names and sizes, never a spec", ""},
 	"GET /api/v1/runs/{id}/desktop/files/{name}": {"the run's resolved desktop rules decide whether a download is allowed; the body is the file, never a spec", ""},
 	"GET /api/v1/runs/{id}/attach":               {"the run's profile decides whether attaching is allowed (refuseInteractiveAttach); the refusal names the profile only", ""},
+	"GET /api/v1/runs/{id}/attach/forward":       {"the run's profile decides whether a forward may open (refuseAttachEntry reaches refuseInteractiveAttach) and its data_out rule whether content may leave (refuseForwardDataOut); the answer is a refusal naming the profile or the rule, a 204 check or the relayed TCP bytes, never a spec", ""},
 	"GET /api/v1/setup/status":                   {"the deployment default's minimum confinement class decides one check row; no spec is served", ""},
 	"GET /api/v1/me/machines":                    {"the caller's effective ceiling decides whether they may keep another machine (keptMachineKeepRefusal reads deny_kept_machines); the answer is their own machines, a count, a limit and a reason, never a spec", ""},
 }
