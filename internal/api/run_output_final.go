@@ -269,13 +269,17 @@ func (s *Server) FinishRunOutput(ctx context.Context, runID uuid.UUID) {
 }
 
 // finishRunOutputDetached runs the contract on a tracked goroutine, so the
-// caller (the kill) never waits for the drain barrier or the write.
-func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID) {
+// caller (the kill) never waits for the drain barrier or the write. seenRef is
+// the sandbox ref the kill saw: the kill clears the stored ref while this runs,
+// and the contract decides from the run as the kill found it, so a killed run's
+// capture-gap row never depends on which of the two lands first.
+func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID, seenRef string) {
 	ctx = context.WithoutCancel(ctx)
 	s.goBackground(func() {
 		ctx, cancel := context.WithTimeout(ctx, killCascadeTimeout)
 		defer cancel()
-		s.FinishRunOutput(ctx, runID)
+		s.prepareRunOutputSeen(ctx, runID, false, seenRef)
+		s.finishRunOutput(ctx, runID)
 	})
 }
 
@@ -289,6 +293,13 @@ func (s *Server) finishRunOutputDetached(ctx context.Context, runID uuid.UUID) {
 // interactive run then keeps a snapshot of its pane (run_output_snapshot.go). Any
 // other interactive run keeps nothing here.
 func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful bool) {
+	s.prepareRunOutputSeen(ctx, runID, graceful, "")
+}
+
+// prepareRunOutputSeen is prepareRunOutput for a caller that saw the run's sandbox ref before clearing it (the
+// kill): an empty stored ref is read as seenRef, so the outcome does not depend on whether the clear landed
+// before this read.
+func (s *Server) prepareRunOutputSeen(ctx context.Context, runID uuid.UUID, graceful bool, seenRef string) {
 	st := s.runOutputStore()
 	if st == nil || s.cfg.ExecOutputTailOff || s.cfg.Store == nil {
 		return
@@ -300,6 +311,9 @@ func (s *Server) prepareRunOutput(ctx context.Context, runID uuid.UUID, graceful
 	run, err := s.cfg.Store.GetRun(ctx, runID)
 	if err != nil {
 		return
+	}
+	if run.SandboxRef == "" {
+		run.SandboxRef = seenRef
 	}
 	switch {
 	case run.Interactive:

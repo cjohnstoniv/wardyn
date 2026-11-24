@@ -401,3 +401,49 @@ func TestPGStore_JoinedReplayNeedsOneReadSlotAtATime(t *testing.T) {
 func TestPGStoreDeleteRun(t *testing.T) {
 	deleteRunContract(t, recording.NewPGStore(pgPool(t)))
 }
+
+// TestPGStore_StatJoinedStopsWhereReplayStops: the Recordings list's size and duration end where the joined
+// replay ends, for a stale part 2 behind a short new part 1 and for header lines sharing a prefix longer than
+// the store's first head read.
+func TestPGStore_StatJoinedStopsWhereReplayStops(t *testing.T) {
+	s := recording.NewPGStore(pgPool(t))
+	ctx := context.Background()
+	long := func(ts string) string {
+		return `{"version":2,"width":80,"height":24,"title":"` + strings.Repeat("x", 20000) + `","timestamp":` + ts + "}\n"
+	}
+	newer := `{"version":2,"width":80,"height":24,"timestamp":1700000000}` + "\n"
+	older := `{"version":2,"width":80,"height":24,"timestamp":1600000000}` + "\n"
+	for name, parts := range map[string][2]string{
+		"stale part 2":       {newer + `[0.5,"o","one"]` + "\n", older + `[1.5,"o","two"]` + "\n"},
+		"long shared prefix": {long("1700000000") + `[0.5,"o","one"]` + "\n", long("1600000000") + `[1.5,"o","two"]` + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runID := uuid.NewString()
+			if err := s.SaveCast(ctx, runID, strings.NewReader(parts[0])); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SaveCastNamed(ctx, runID, recording.PartSuffix(2), strings.NewReader(parts[1])); err != nil {
+				t.Fatal(err)
+			}
+			size, tail, err := recording.StatJoined(ctx, s, runID, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rc, err := recording.OpenJoined(ctx, s, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replayed, err := io.ReadAll(rc)
+			_ = rc.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if size != int64(len(replayed)) || size != int64(len(parts[0])) {
+				t.Errorf("size = %d, replay %d bytes, want part 1's %d", size, len(replayed), len(parts[0]))
+			}
+			if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
+				t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
+			}
+		})
+	}
+}

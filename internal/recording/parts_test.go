@@ -209,3 +209,43 @@ func TestJoinReadsNoPartAboveTheLimit(t *testing.T) {
 		t.Fatalf("OpenJoined: %d opens, %d events; want %d of each", s.opens, strings.Count(string(got), partEv1), types.RecordingMaxParts)
 	}
 }
+
+// TestStatJoinedStopsWhereReplayStops: after a revive leaves a short new part 1 beside the previous cast's
+// part 2, the Recordings list's size and duration are part 1's alone: the bytes replay serves.
+func TestStatJoinedStopsWhereReplayStops(t *testing.T) {
+	s, _ := recording.NewFSStore(t.TempDir())
+	const runID = "0a000000-0000-4000-8000-0000000000a2"
+	older := strings.Replace(partHeader, "1700000000", "1600000000", 1)
+	saveParts(t, s, runID, partHeader+partEv1, older+partEv2+partEv3)
+	size, tail, err := recording.StatJoined(context.Background(), s, runID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed := getRecording(t, s, runID); size != int64(len(replayed)) {
+		t.Errorf("size = %d, want %d: the bytes replay serves", size, len(replayed))
+	}
+	if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
+		t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
+	}
+}
+
+// TestStatJoinedComparesLongHeadersWhole: two casts whose header lines share their first 20,000 bytes are two
+// casts; the list compares a header through its newline, as replay does, not by a prefix.
+func TestStatJoinedComparesLongHeadersWhole(t *testing.T) {
+	s, _ := recording.NewFSStore(t.TempDir())
+	const runID = "0a000000-0000-4000-8000-0000000000a3"
+	long := func(ts string) string {
+		return `{"version":2,"width":80,"height":24,"title":"` + strings.Repeat("x", 20000) + `","timestamp":` + ts + "}\n"
+	}
+	saveParts(t, s, runID, long("1700000000")+partEv1, long("1600000000")+partEv2)
+	size, tail, err := recording.StatJoined(context.Background(), s, runID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed := getRecording(t, s, runID); size != int64(len(replayed)) {
+		t.Errorf("size = %d, want %d: the bytes replay serves", size, len(replayed))
+	}
+	if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
+		t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
+	}
+}

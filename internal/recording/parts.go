@@ -175,14 +175,53 @@ func (j *joinedCast) Close() error {
 	return err
 }
 
-// StatJoined is StatAndTail over every part of runID's cast: the size is the
-// bytes stored across all of them, and the tail is the last part's — event
-// times run on from part to part because every part is cut from one cast file.
+// StatJoined is StatAndTail over the parts of runID's cast that OpenJoined plays: the size is the bytes stored
+// across them, and the tail is the last one's (event times run on from part to part because every part is cut
+// from one cast file). Like the replay it ends at the first part whose header line is not part 1's, and at a part
+// 1 whose header is not a whole line. Each part's size, header and tail come from one read of one revision of it
+// (headStatter): a revive that replaces part 1 between two parts' reads leaves the answer a true snapshot of one
+// cast, never one part's header paired with another revision's size.
 //
-// ponytail: unlike OpenJoined it does not read each part's header, so after a
-// revive it still counts an earlier cast's later parts until they are swept;
-// replay itself stays correct.
+// A store that cannot read the three together keeps the sum over every stored part, header unread.
 func StatJoined(ctx context.Context, s Store, runID string, tailBytes int64) (int64, []byte, error) {
+	hs, ok := s.(headStatter)
+	if !ok {
+		return statEveryPart(ctx, s, runID, tailBytes)
+	}
+	size, header, tail, err := hs.statHeadTail(ctx, runID, tailBytes)
+	if err != nil {
+		return 0, nil, err
+	}
+	if !bytes.HasSuffix(header, []byte("\n")) {
+		return size, tail, nil // a cast without a complete header line was never split
+	}
+	for n := 2; n <= types.RecordingMaxParts; n++ {
+		ps, ph, pt, err := hs.statHeadTail(ctx, CastKey(runID, PartSuffix(n)), tailBytes)
+		if errors.Is(err, ErrNotFound) {
+			return size, tail, nil
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		if !bytes.Equal(ph, header) {
+			return size, tail, nil // an earlier cast of the run: replay ends here too
+		}
+		size += ps
+		tail = pt
+	}
+	return size, tail, nil
+}
+
+// headStatter is a Store that reads a cast's size, its header line (through the newline, as joinedHeader reads
+// it, or nil when longer than replay's bound) and its last tailBytes from one revision of the cast. FSStore and
+// PGStore are.
+type headStatter interface {
+	statHeadTail(ctx context.Context, key string, tailBytes int64) (size int64, header, tail []byte, err error)
+}
+
+// statEveryPart is StatJoined for a store that is no headStatter: every stored part is counted, so after a revive
+// an earlier cast's later parts are counted until they are swept. Replay itself stays correct.
+func statEveryPart(ctx context.Context, s Store, runID string, tailBytes int64) (int64, []byte, error) {
 	size, tail, err := s.StatAndTail(ctx, runID, tailBytes)
 	if err != nil {
 		return 0, nil, err

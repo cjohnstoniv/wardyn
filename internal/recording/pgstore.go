@@ -446,6 +446,50 @@ func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 	return size, tail, nil
 }
 
+// castHeadProbe is the head statHeadTail slices first; a cast header is one short JSON line, so this is almost
+// always all of it, and a TOAST prefix slice reads no more of the payload.
+const castHeadProbe = 4 << 10
+
+// statHeadTail is StatAndTail plus the cast's header line, read in one statement, so all three come from one row
+// version. The header ends at its newline: inside the probe when it fits, otherwise searched in the payload, never
+// past replay's bound (maxCastBytes); a header longer than that comes back nil.
+func (s *PGStore) statHeadTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, []byte, error) {
+	if err := validKey(key); err != nil {
+		return 0, nil, nil, err
+	}
+	var size int64
+	var header, tail []byte
+	err := s.runTx(ctx, key, false, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+		SELECT CASE WHEN fresh THEN size_bytes ELSE octet_length(payload) END,
+		       CASE WHEN fresh AND ($2::int <= $3::int OR size_bytes <= $3::int)
+		            THEN substring(tail from greatest(octet_length(tail) - $2::int + 1, 1)::int for $2::int)
+		            ELSE substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
+		       END,
+		       CASE WHEN position('\x0a'::bytea in probe) > 0
+		            THEN substring(probe from 1 for position('\x0a'::bytea in probe))
+		            ELSE substring(payload from 1 for least(
+		                     coalesce(nullif(position('\x0a'::bytea in payload), 0), octet_length(payload)),
+		                     $4::int + 1))
+		       END
+		FROM (SELECT payload, size_bytes, tail, stat_updated_at = updated_at AS fresh,
+		             substring(payload from 1 for $5::int) AS probe
+		      FROM recordings WHERE cast_key = $1) r`,
+			key, tailBytes, castTailKept, maxCastBytes, castHeadProbe,
+		).Scan(&size, &tail, &header)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("recording: stat cast %q: %w", key, err)
+	}
+	if len(header) > maxCastBytes {
+		header = nil // longer than replay reads (joinedHeader): not a header it would match
+	}
+	return size, header, tail, nil
+}
+
 // Sweep deletes every cast row last written more than olderThan ago, returning how many
 // rows it removed. Measured on updated_at, not created_at, so a re-saved cast is never
 // swept from under an in-progress session. Deliberately not part of the Store interface —

@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The Recordings list no longer shows a run's earlier recording's size and duration after a revive: it stops where replay stops, at the first part of a different recording, comparing each part's whole header line, and reads each part's size, header and end in one read so a revive that lands mid-read cannot pair one recording's header with another's size (#4138).
+- The `recording.read` audit row for an admin's replay of another person's run is written only once the recording has opened, so a replay that finds no recording no longer leaves a success row. When the run's owner cannot be read, the replay is audited with `owner_unknown` instead of being served with no row (#4138).
+- A killed run whose output this server was not holding now always gets its capture-gap row; before, it depended on timing inside the kill (#4138).
+- The run's recording picker labels a re-read of the agent's output "re-read from the runner", not "re-read after a restart": the server also re-reads it on a routine sweep (#4138).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

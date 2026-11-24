@@ -16,6 +16,7 @@
 package recording
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -562,6 +563,39 @@ func (s *FSStore) StatAndTail(ctx context.Context, key string, tailBytes int64) 
 		return size, nil, err
 	}
 	return size, tail, nil
+}
+
+// statHeadTail is StatAndTail plus the cast's header line, all read through one open file. A save replaces the
+// file by rename, so one handle is one revision: the three never come from two saves. The header is read as
+// replay reads it (joinedHeader); one longer than replay's bound comes back nil.
+func (s *FSStore) statHeadTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, []byte, error) {
+	f, lock, err := s.openCast(ctx, key)
+	if lock != nil {
+		defer lock.Close()
+	}
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	size := info.Size()
+	// Section readers bound every read to the size stated above, as StatAndTail's LimitReader does.
+	header, err := joinedHeader(bufio.NewReader(io.NewSectionReader(f, 0, size)))
+	switch {
+	case errors.Is(err, ErrInvalidCast):
+		header = nil
+	case err != nil && !errors.Is(err, io.EOF):
+		return 0, nil, nil, err
+	}
+	start := max(size-tailBytes, 0)
+	tail, err := io.ReadAll(io.NewSectionReader(f, start, size-start))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	return size, header, tail, nil
 }
 
 // maxCastKeyBytes bounds a whole cast key, suffixes included. FSStore names

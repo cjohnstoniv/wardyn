@@ -108,7 +108,7 @@ func TestFSStore_SweepRemovesOnlyAgedFiles(t *testing.T) {
 // outer-id/inner-prefix enforcement, not any particular authorization
 // DECISION — internal/api's own recordingAuthorizer (and its ownership rules)
 // is exercised at that layer instead.
-func allowAllAuthorizer(http.ResponseWriter, *http.Request, string) bool { return true }
+func allowAllAuthorizer(http.ResponseWriter, *http.Request, string) (bool, func()) { return true, nil }
 
 // newTestRouter mounts Handler with the given authorizer (allowAllAuthorizer
 // by default via the wrapper below) so tests can also exercise a denying one.
@@ -181,7 +181,10 @@ func TestHandler_OuterInnerMismatch(t *testing.T) {
 	_ = store.SaveCast(ctx, runB, strings.NewReader(cast))
 
 	var authorizeCalled bool
-	authorize := func(http.ResponseWriter, *http.Request, string) bool { authorizeCalled = true; return true }
+	authorize := func(http.ResponseWriter, *http.Request, string) (bool, func()) {
+		authorizeCalled = true
+		return true, nil
+	}
 	srv := httptest.NewServer(newTestRouterWithAuth(store, authorize))
 	defer srv.Close()
 
@@ -207,7 +210,7 @@ func TestHandler_AuthorizerDenies(t *testing.T) {
 	const runID = "0a000000-0000-4000-8000-000000000005"
 	_ = store.SaveCast(ctx, runID, strings.NewReader(`{"version":2}`+"\n"))
 
-	deny := func(http.ResponseWriter, *http.Request, string) bool { return false }
+	deny := func(http.ResponseWriter, *http.Request, string) (bool, func()) { return false, nil }
 	srv := httptest.NewServer(newTestRouterWithAuth(store, deny))
 	defer srv.Close()
 
