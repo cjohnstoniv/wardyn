@@ -148,4 +148,20 @@ describe("DesktopWatermarkCard", () => {
     expect(within(card).queryByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeNull();
     expect(toastSuccess).toHaveBeenCalledWith(T.SAVED_TOAST);
   });
+
+  it("a 412 on the retry too, with this block unchanged, stops at two saves and shows the banner", async () => {
+    putSiteConfigMock.mockRejectedValue(new HttpError(412, "stale"));
+    snapshotMock
+      .mockResolvedValueOnce({ siteConfig: {}, etag: '"v1"' })
+      .mockResolvedValueOnce({ siteConfig: { components: { autonomy_cap: "L1" } }, etag: '"v3"' })
+      .mockResolvedValueOnce({ siteConfig: { components: { autonomy_cap: "L2" } }, etag: '"v4"' });
+    const card = await open();
+    await userEvent.click(await within(card).findByRole("switch", { name: T.LABEL }));
+    await userEvent.click(saveBtn(card));
+    expect(await within(card).findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+    expect(putSiteConfigMock).toHaveBeenCalledTimes(2);
+    expect(putSiteConfigMock.mock.calls[1][1]).toBe('"v3"');
+    expect(card.querySelector("pre")).toHaveTextContent(/"desktop_watermark": \{\s*"required": true\s*\}/);
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
 });
