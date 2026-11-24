@@ -830,7 +830,14 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 		"CC3 on a CC1 runner": {claudeRules(types.PersonalWallsSpec{MinConfinementClass: &cc3}), []types.ConfinementClass{types.CC1}, "cannot enforce confinement_class CC3 (available: CC1)"},
 		"approvals wardyn":    {innerRule(innerWalls("", types.InnerApprovalsWardyn)), nil, "Your organisation's rules for Claude Code"},
 	} {
-		_, calls, err := launchRecord(t, newStore(tc.rule), tc.classes...)
+		st := newStore(tc.rule)
+		_, calls, err := launchRecord(t, st, tc.classes...)
+		st.mu.Lock()
+		written := len(st.records)
+		st.mu.Unlock()
+		if written != 0 {
+			t.Errorf("%s: %d record results were put on the panel, want none (a bare refusal before the claim)", name, written)
+		}
 		var r *sourceRefusal
 		if !errors.As(err, &r) || r.status != http.StatusUnprocessableEntity || r.reason != reasonAgentRulesConflict || calls != 0 ||
 			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") {
@@ -845,7 +852,13 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 		t.Errorf("approvals harness on an interactive session: %d sandboxes, err %v, want a launch", calls, err)
 	}
 	on := true
-	_, calls, err = launchRecord(t, newStore(claudeRules(types.PersonalWallsSpec{AllowAllEgress: &on})))
+	invalid := newStore(claudeRules(types.PersonalWallsSpec{AllowAllEgress: &on}))
+	_, calls, err = launchRecord(t, invalid)
+	invalid.mu.Lock()
+	if n := len(invalid.records); n != 0 {
+		t.Errorf("an invalid stored rule: %d record results were put on the panel, want none", n)
+	}
+	invalid.mu.Unlock()
 	var refusal *sourceRefusal
 	if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonAgentRulesInvalid || calls != 0 {
 		t.Errorf("an invalid stored rule: %d sandboxes, err %v, want a 422 %s refusal and no sandbox", calls, err, reasonAgentRulesInvalid)
