@@ -71,4 +71,73 @@ export const ASSISTANT = {
   CONNECT_HINT:
     "The assistant uses your own credential for this provider. Wardyn's proxy adds it to the assistant's run; it never enters the sandbox.",
   DENIED_BY_UNIT: "Denied by your unit",
+
+  // ---- the composer: what will be sent ----
+  COMPOSER_TITLE: "AI composer",
+  PREVIEW_TITLE: "What will be sent",
+  PREVIEW_LEAD: (provider: string) =>
+    `This is what ${provider} receives with your first message. Policy text is cut to what you may read, at most the security tier; people named in it become Person A, Person B. What you type is sent as you type it.`,
+  // PROPOSED: the harness's own additions, shown under the lead.
+  PREVIEW_ADDITION:
+    "Wardyn's harness adds its own instructions and tool list. Later answers may read more of the same kinds through Wardyn's read-only tools, never anything on the Never sent list.",
+  // PROPOSED: the label on a section whose text the model is told to read as data.
+  UNTRUSTED: "Untrusted",
+  NEVER_SENT_HEADING: "Never sent",
+  NEVER_SECRETS: "Secret values",
+  NEVER_CREDENTIALS: "Credential values",
+  NEVER_SOURCE_FILES: "Source files",
+  NEVER_AUDIT: "Audit trails",
+  NEVER_MOUNTS: "Mount sources",
+  NEVER_ROWS: "Per-run or per-person rows",
+  KINDS_KEPT_AWAY: (kinds: string) => `Kinds your organisation keeps away: ${kinds}`,
+  START: "Start",
+  // PROPOSED: shown above the preview again after the records or the serving provider changed.
+  PREVIEW_CHANGED: "What will be sent changed. Check it again.",
+
+  // ---- the composer: starting ----
+  STARTING: "Starting assistant…",
+  RUN_POLICY: (provider: string) =>
+    `The assistant runs as a run under your name, with a policy Wardyn writes: no mounts, no workspace, egress only to ${provider}, the harness's built-in tools off, and only Wardyn's read-only tools. Prompt inspection is always on, and its token use is counted.`,
+  OPEN_RUN: "Open the assistant's run",
+  FETCHING: "Fetching build files…",
+  FETCH_LINE: "Only names on the fixed list, with your git access, secret-scanned before the assistant starts.",
+
+  // ---- the composer: the chat and the draft ----
+  PROVIDER_CHIP: (provider: string) => `Drafting with ${provider}`,
+  CHAT_PLACEHOLDER: "Describe what the run needs…",
+  SEND: "Send",
+  PART_PROPOSED: "Proposed",
+  DRAFT_LEAD: "The editor holds your draft. The assistant proposes parts; nothing is in the draft until you accept it.",
+  LEFT_OUT: (host: string, unit: string) =>
+    `Left out ${host}: the ceiling for unit ${unit} doesn't allow it, so a run could never reach it. The rest of the draft is as proposed.`,
+  // PROPOSED: the chat's end control, and what a collapsed tool line opens to.
+  END: "End",
+  ARGUMENTS: "Arguments",
+  TOKENS_USED: "Tokens used",
+  CHAT_FAILED: "Couldn't send that message.",
+
+  // ---- the composer: the tool trail and its audit fields ----
+  TOOL_CALLS: "Tool calls",
+  DRY_RUN: "Dry run · read-only",
+  AUDIT_PERSON: "Person",
+  AUDIT_PURPOSE: "Purpose",
+  AUDIT_MODEL: "Model",
+  AUDIT_PROMPT_DIGEST: "Prompt digest",
+  AUDIT_OUTPUT_DIGEST: "Output digest",
+  AUDIT_TOOLS: "Tools called",
+  AUDIT_LINKED: "Linked change",
+  TRANSCRIPT_KEPT: "The full transcript is kept with the assistant's run, under normal run retention.",
+
+  // ---- the composer: 390 px ----
+  DRAFT_BAR: (lines: number, left: number) => `Draft · ${lines} lines · ${left} left out`,
+  SHOW_DRAFT: "Show draft",
+  // PROPOSED: closes the full-height draft sheet.
+  HIDE_DRAFT: "Back to chat",
+
+  // ---- the composer: ending ----
+  // PROPOSED: the wording when a session has ended, and the way back to the first step.
+  ENDED: "The assistant has ended this conversation. Your draft is kept.",
+  START_AGAIN: "Start again",
+  // PROPOSED: the relay could not offer the model its tools.
+  TOOLS_UNAVAILABLE: "The assistant can't use its tools on this server yet, so it stopped.",
 } as const;

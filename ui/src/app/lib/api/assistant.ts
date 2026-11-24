@@ -7,9 +7,10 @@
 // settings, which a super admin reads and replaces, and a person's own answer to whether they can use the
 // assistant for one purpose. A refusal throws the HttpError of core.ts, so the console shows the server's own
 // sentence and can match on `reason`.
+import { apiURL } from "../base-path";
 import type { GovernanceChange } from "../types";
 import type { AssistantSettings } from "../types/site";
-import { asJson, PendingChangeError, wfetch } from "./core";
+import { asJson, asNoContent, PendingChangeError, wfetch } from "./core";
 
 export type AssistantPurpose = "compose" | "review";
 
@@ -28,6 +29,62 @@ export interface AssistantAvailability {
   readonly provider_kind?: string;
   readonly model?: string;
   readonly never_sent_kinds?: readonly string[];
+}
+
+// What a session works on (types.AssistantTarget): a new draft names no id.
+export interface AssistantTarget {
+  readonly kind: "run" | "unit" | "template" | "change";
+  readonly id?: string;
+}
+
+// One block of the records the first message carries (types.AssistantSection).
+export interface AssistantSection {
+  readonly label: string;
+  readonly text: string;
+  readonly untrusted: boolean;
+}
+
+// POST /assistant/preview (types.AssistantPreview): the records, byte for byte, with the digest a start must carry.
+// `letters` maps each Person letter to the name it stands for; it is for this browser only.
+export interface AssistantPreview {
+  readonly provider: string;
+  readonly model: string;
+  readonly sections: readonly AssistantSection[];
+  readonly digest: string;
+  readonly letters: Readonly<Record<string, string>>;
+  readonly never_sent: readonly string[];
+  readonly tools: readonly string[];
+}
+
+// POST /assistant/sessions (assistantSessionView in internal/api/assistant_session.go).
+export interface AssistantSessionView {
+  readonly id: string;
+  readonly state: string;
+  readonly run_id?: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly letters: Readonly<Record<string, string>>;
+}
+
+// One row of a session's transcript (assistantEventView); the payload is read by kind.
+export interface AssistantEvent {
+  readonly seq: number;
+  readonly kind: string;
+  readonly payload: Record<string, unknown>;
+  readonly created_at: string;
+}
+
+// The long-poll answer: the events after the cursor, the session's state and its letters.
+export interface AssistantEventsPage {
+  readonly events: readonly AssistantEvent[];
+  readonly state: string;
+  readonly letters: Readonly<Record<string, string>>;
+}
+
+export interface AssistantSessionRequest {
+  readonly purpose: AssistantPurpose;
+  readonly target: AssistantTarget;
+  readonly preview_digest: string;
 }
 
 /** The block with the ETag the response carried, which the next PUT sends back as If-Match. */
@@ -66,4 +123,33 @@ export const assistant = {
   // GET /api/v1/me/assistant?purpose=: any signed-in person.
   getMyAssistant: (purpose: AssistantPurpose): Promise<AssistantAvailability> =>
     wfetch(`/me/assistant?purpose=${purpose}`, { method: "GET" }).then((r) => asJson<AssistantAvailability>(r)),
+
+  // POST /api/v1/assistant/preview: what the first message will carry. Starts nothing.
+  postPreview: (purpose: AssistantPurpose, target: AssistantTarget): Promise<AssistantPreview> =>
+    wfetch("/assistant/preview", { method: "POST", asPerson: true, body: JSON.stringify({ purpose, target }) }).then((r) =>
+      asJson<AssistantPreview>(r),
+    ),
+
+  // POST /api/v1/assistant/sessions: Start. 409 assistant_preview_stale when what is sent changed since the preview.
+  createSession: (body: AssistantSessionRequest): Promise<AssistantSessionView> =>
+    wfetch("/assistant/sessions", { method: "POST", asPerson: true, body: JSON.stringify(body) }).then((r) => asJson<AssistantSessionView>(r)),
+
+  // POST /api/v1/assistant/sessions/{id}/messages: the person's turn. The text is sent exactly as typed.
+  postMessage: (id: string, text: string): Promise<{ seq: number }> =>
+    wfetch(`/assistant/sessions/${encodeURIComponent(id)}/messages`, { method: "POST", asPerson: true, body: JSON.stringify({ text }) }).then((r) =>
+      asJson<{ seq: number }>(r),
+    ),
+
+  // DELETE /api/v1/assistant/sessions/{id}: end it.
+  endSession: (id: string): Promise<void> =>
+    wfetch(`/assistant/sessions/${encodeURIComponent(id)}`, { method: "DELETE", asPerson: true }).then(asNoContent),
+
+  // GET .../events?after=N as a server-sent event stream. An EventSource is not made by wfetch, so its URL is built here
+  // with apiURL and stays same-origin: the session cookie rides it.
+  streamEvents: (id: string, after: number): EventSource =>
+    new EventSource(apiURL(`/assistant/sessions/${encodeURIComponent(id)}/events?after=${after}`)),
+
+  // GET .../events?after=N as a long-poll: the fallback when a stream cannot be held. It answers within 25 seconds.
+  pollEvents: (id: string, after: number): Promise<AssistantEventsPage> =>
+    wfetch(`/assistant/sessions/${encodeURIComponent(id)}/events?after=${after}`, { method: "GET" }).then((r) => asJson<AssistantEventsPage>(r)),
 };
