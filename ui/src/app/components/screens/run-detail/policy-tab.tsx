@@ -217,7 +217,7 @@ function RecordedPolicy({
         onViewChange={onMode}
         redacted={view.redacted}
         marks={marks}
-        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to }}
+        facts={{ usedClass: run.confinement_class, inspectionLeftTo: view.inspection_left_to, localFolderLayers: run.sync?.wall_layers }}
         hostMarks={view.host_marks}
         presetNotes={presetNotes(view)}
         headingLevel={4}

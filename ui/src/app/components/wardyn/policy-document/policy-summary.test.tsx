@@ -704,3 +704,63 @@ describe("PolicySummary: the Host rules row", () => {
     );
   });
 });
+
+describe("PolicySummary — folders from your computer (local_folders)", () => {
+  const WALLS = { deny_remote: true, deny_pull: true, max_push_mib: 512, max_pull_mib: 256, deny: ["*.pem", "secrets/"] };
+  const LABEL = "Folders from your computer";
+  const spec = (local_folders: unknown) =>
+    ({ workspace_mounts: [{ source: "/srv/reference", target: "/data", read_only: true }], local_folders }) as unknown as RunPolicySpec;
+  const unit = { layer: "unit", name: "Platform", locked: true };
+
+  it("lists one line per wall after Folders from the host, with sizes in the console's byte form", () => {
+    const { container } = render(<PolicySummary spec={spec(WALLS)} />);
+    const labels = within(section("Files and code")).getAllByText(/.+/, { selector: "dt" }).map((d) => d.textContent);
+    expect(labels).toEqual(["Folders from the host", LABEL]);
+    expect(row("Files and code", LABEL)).toHaveTextContent(
+      "Not allowed for a run on another machine" +
+        "Changes in the sandbox don't sync back to your computer" +
+        "Sends up to 512.0 MB per session" +
+        "Brings back up to 256.0 MB per session" +
+        "Skipped by wardyn sync and the runner" +
+        "*.pem, secrets/",
+    );
+    expect(container).not.toHaveTextContent("local_folders");
+    expect(container).not.toHaveTextContent(/never synced/i);
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
+  });
+
+  it("a draft has no layers, so its lines carry no chip", () => {
+    render(<PolicySummary spec={spec(WALLS)} />);
+    expect(within(row("Files and code", LABEL)).queryByText("Locked")).toBeNull();
+    expect(within(row("Files and code", LABEL)).queryByText("Wardyn boundary")).toBeNull();
+  });
+
+  it("walls one locked unit set share one chip pair, on the first line", () => {
+    const layers = { deny_remote: unit, deny_pull: unit, max_push_mib: unit };
+    render(<PolicySummary spec={spec({ deny_remote: true, deny_pull: true, max_push_mib: 512, deny: ["*.pem", "secrets/"] })} facts={{ localFolderLayers: layers }} />);
+    const cell = row("Files and code", LABEL);
+    expect(within(cell).getAllByText("Platform walls")).toHaveLength(1);
+    expect(within(cell).getAllByText("Locked")).toHaveLength(1);
+    expect(within(cell).getByText("Platform walls").closest("li")).toHaveTextContent("Not allowed for a run on another machine");
+  });
+
+  it("each wall names its own layer, so one row can show two", () => {
+    const layers = { max_push_mib: { layer: "boundary" }, max_pull_mib: unit };
+    render(<PolicySummary spec={spec({ max_push_mib: 512, max_pull_mib: 256 })} facts={{ localFolderLayers: layers }} />);
+    const cell = row("Files and code", LABEL);
+    expect(within(cell).getByText("Wardyn boundary").closest("li")).toHaveTextContent("Sends up to 512.0 MB per session");
+    expect(within(cell).getByText("Platform walls").closest("li")).toHaveTextContent("Brings back up to 256.0 MB per session");
+    expect(within(cell).getAllByText("Locked")).toHaveLength(1);
+  });
+
+  it("a wall the run's own policy set says so", () => {
+    render(<PolicySummary spec={spec({ deny_pull: true })} facts={{ localFolderLayers: { deny_pull: { layer: "member" } } }} />);
+    expect(within(row("Files and code", LABEL)).getByText("This run's policy")).toBeInTheDocument();
+  });
+
+  it("shows no row for walls that set nothing", () => {
+    render(<PolicySummary spec={spec({})} />);
+    expect(within(section("Files and code")).queryByText(LABEL)).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Other settings" })).toBeNull();
+  });
+});

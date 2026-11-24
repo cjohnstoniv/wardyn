@@ -10,6 +10,7 @@
 import { absoluteTime, fmtBytes, shortTime } from "../../../../lib/format";
 import { isTerminalRunState, type RunComputerFolder, type RunDetail } from "../../../../lib/types";
 import { FORCED_KEEP_PREFIX, RUN_COMPUTER_FOLDER as C } from "../../../wardyn/copy/runners";
+import { LOCAL_FOLDERS } from "../../../wardyn/copy/local-folders";
 
 // Only a fate this page knows is drawn; an absent or unknown one falls back to the neutral line.
 const isKnownFate = (v: unknown) => v === "retained" || v === "given_up" || v === "complete";
@@ -37,6 +38,10 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
   const ended = isTerminalRunState(run.state);
   const status = f.state === "failed" ? C.STOPPED : f.state === "synced" ? (ended ? C.ENDED : C.SYNCED) : C.WAITING;
   const refused = f.seed?.refused.length ?? 0;
+  // The run's folder walls (folderWallsView) speak only for a folder that syncs back. The walled line is the server's
+  // sentence as sent, and stands in for the same sentence as the pass back's error.
+  const walled = f.direction === "both" ? f.walls?.back_walled_text : undefined;
+  const wallsUnreadable = ended && f.direction === "both" && f.walls?.unreadable === true;
   return (
     <>
       <div className="col-span-2 border-t border-border" aria-hidden />
@@ -67,7 +72,14 @@ export function ComputerFolderRows({ run }: { run: RunDetail }) {
       )}
       {refused > 0 && <p className="col-span-2 text-meta text-muted-foreground">{C.REFUSED(count(refused))}</p>}
       {ended && f.back && !f.back.error && <p className="col-span-2 text-meta text-muted-foreground">{C.BACK_AT(shortTime(f.back.at), count(f.back.files))}</p>}
+      {walled && (
+        <p role="alert" className="col-span-2 text-meta text-danger" data-testid="run-computer-folder-walled">
+          {walled}
+        </p>
+      )}
+      {wallsUnreadable && <p role="alert" className="col-span-2 text-meta text-danger">{C.BACK_FAILED(LOCAL_FOLDERS.WALLS_UNREADABLE)}</p>}
       {f.back?.error &&
+        f.back.error !== walled &&
         (f.back.error.startsWith(FORCED_KEEP_PREFIX) ? (
           <p className="col-span-2 text-meta text-muted-foreground">{f.back.error}</p>
         ) : (
