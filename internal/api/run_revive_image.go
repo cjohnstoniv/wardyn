@@ -20,8 +20,8 @@ const reviveImageNotAdmittedMsg = "Image %s has no digest that image admission c
 	"started (admission was off, in audit mode, or did not check this image), so it cannot be re-checked under the " +
 	"policy as it is now"
 
-// reviveImageRefusals is a revive's image decisions in order, the digest rule then image admission, and the
-// marks the run.revive row carries for an owner they exempt.
+// reviveImageRefusals is a revive's image decisions in order, the digest rule, image admission of the run's image,
+// then of each extra container's, and the marks the run.revive row carries for an owner they exempt.
 func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, profile []string, actorType types.ActorType, actor string) (map[string]any, *reviveError) {
 	digestMark, rerr := s.reviveImageDigestRefusal(ctx, run, actorType, actor)
 	if rerr != nil {
@@ -34,7 +34,76 @@ func (s *Server) reviveImageRefusals(ctx context.Context, run types.AgentRun, pr
 	mark := map[string]any{}
 	maps.Copy(mark, digestMark)
 	maps.Copy(mark, admissionMark)
+	if mark["image_admission_exempt"] != true {
+		containersMark, rerr := s.reviveContainersAdmission(ctx, run, profile, actorType, actor)
+		if rerr != nil {
+			return nil, rerr
+		}
+		maps.Copy(mark, containersMark)
+	}
 	return mark, nil
+}
+
+// reviveContainersAdmission re-runs image admission at a revive for each extra container the run keeps, under the
+// policy as it is now, as reviveImageAdmission does for a member's image: an extra's image is the launcher's own,
+// held under every scope, by the site's signers and the profile's. Each is checked at the digest it runs, the pin
+// its create's admission recorded, else the digest its request named (the shape check takes no other ref), so a
+// tag is never resolved. The first refused extra refuses the revive, named by its index. An exempt owner is not
+// checked, and the mark says so; audit mode refuses nothing; an unreadable site config or store refuses.
+func (s *Server) reviveContainersAdmission(ctx context.Context, run types.AgentRun, profile []string, actorType types.ActorType, actor string) (map[string]any, *reviveError) {
+	rd, ok := s.cfg.Store.(runContainersReader)
+	if !ok || run.MachineKind.IsMacOSVM() {
+		return nil, nil
+	}
+	cs, err := rd.RunContainers(ctx, run.ID)
+	if err != nil {
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			loggedMsg(ctx, "read the run's extra containers", err))
+	}
+	if len(cs) == 0 {
+		return nil, nil
+	}
+	sc, ok := s.siteConfigSnapshot(ctx)
+	if !ok {
+		return nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveOwnerAuthorityUnreadable,
+			loggedMsg(ctx, "re-check image admission", errImageAdmissionSiteUnreadable))
+	}
+	adm := siteImageAdmission(sc)
+	mode := adm.EffectiveMode()
+	if mode == types.ImageAdmissionOff && len(profile) == 0 {
+		return nil, nil
+	}
+	exempt := run.OperatorOwned
+	if actor == run.CreatedBy {
+		exempt = s.runUngoverned(ctx)
+	}
+	if exempt {
+		return map[string]any{"image_admission_exempt": true}, nil
+	}
+	if mode != types.ImageAdmissionEnforce && len(profile) == 0 {
+		return nil, nil
+	}
+	for i, c := range cs {
+		pin := c.Image
+		if c.ImageAdmission != nil && c.ImageAdmission.PinnedRef != "" {
+			pin = c.ImageAdmission.PinnedRef
+		}
+		field := fmt.Sprintf("containers[%d].image: ", i)
+		if !imagePinnedByDigest(pin) {
+			return nil, s.reviveImageAdmissionDenied(ctx, run, actorType, actor, c.Image, "",
+				reasonReviveImageNotAdmitted, field+fmt.Sprintf(reviveImageNotAdmittedMsg, c.Image))
+		}
+		_, refusal := s.checkImageAt(ctx, adm, c.Image, pin, mode == types.ImageAdmissionEnforce, profile)
+		switch {
+		case refusal == nil:
+			continue
+		case refusal.status != http.StatusForbidden: // the check could not be made: nothing is refused for good
+			return nil, reviveRefused(refusal.status, refusal.body.Reason, field+refusal.body.Error)
+		}
+		_, digest, _ := strings.Cut(pin, "@")
+		return nil, s.reviveImageAdmissionDenied(ctx, run, actorType, actor, c.Image, digest, refusal.body.Reason, field+refusal.body.Error)
+	}
+	return nil, nil
 }
 
 // reviveImageAdmission re-runs image admission at a revive under the policy as it is now: the site mode and
