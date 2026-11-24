@@ -23,6 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Inspected LLM request bodies are scanned side by side while their sizes, plus 1 MiB each, fit within the largest inspected body (32 MiB), so four 1 MiB bodies sent at once take about as long as one. A push is still inspected alone. (#4070)
 - A push held for review that is over 1 MiB no longer keeps its bytes, or its share of the run's inspection memory, while it waits. Once an admin approves it, git prints that the same commits must be pushed again, and that push goes through without a second question. A held push of 1 MiB or less is still forwarded the moment it is approved. (#4070)
 - UI apps: a run's open relay connections now share one activity keepalive and one app start check, so a browser opening many connections at once writes the run's row once per interval and starts the app check once. Idle relay connections are kept for every run instead of at most 32 across all runs, and a run's desktop opens even when its idle relay connections hold all of the run's connection slots (#4056).
+- Governance: writing one person's or group's assignment to a profile no longer waits for an assignment of the same subject to a different profile; two writes of the same assignment still apply one at a time (#3478).
 
 ### Fixed
 
