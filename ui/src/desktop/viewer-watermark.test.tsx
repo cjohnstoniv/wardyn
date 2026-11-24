@@ -33,7 +33,7 @@ function show(boot: Boot, connected = true) {
   if (connected) sockets[0].serve(HANDSHAKE);
 }
 
-const watermark = (required: boolean): Boot => ({ ...BASE, watermark: { who: WHO, run: RUN, required } });
+const watermark = (required: boolean): Extract<Boot, { state: "open" }> => ({ ...BASE, watermark: { who: WHO, run: RUN, required } });
 const toggle = () => screen.queryByRole("button", { name: DESKTOP.watermarkToggle });
 
 afterEach(cleanup);
