@@ -224,7 +224,7 @@ func TestStartBackgroundWorkersRegistersRunRetention(t *testing.T) {
 		}
 		t.Setenv("WARDYN_GROUNDTRUTH_TOKEN_FILE", "")
 		ticks := sweephealth.New(sweephealth.NewMemStore(), "r1", nil)
-		startBackgroundWorkers(ctx, f, srv, nil, nil, store.PG{}, nil, nil, nil, nil, nil, ticks, nil)
+		startBackgroundWorkers(ctx, f, srv, nil, nil, store.PG{}, nil, nil, nil, nil, nil, ticks, nil /* no store health */, nil /* no groundtruth token delivery */)
 		got := false
 		for _, s := range ticks.Registered() {
 			got = got || s.Name == sweephealth.RunRetention

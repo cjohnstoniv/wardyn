@@ -339,7 +339,7 @@ func TestRegisterSweepHealth_RunRetentionOnlyWhenSet(t *testing.T) {
 		days int
 		want bool
 	}{{0, false}, {30, true}} {
-		clk := &healthClock{t: time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)}
+		clk := &healthClock{t: time.Now().UTC().Truncate(time.Second)}
 		tr := registeredFor(t, sweepInstall{runHistoryRetentionDays: tc.days}, clk)
 		got := false
 		for _, s := range tr.Registered() {
