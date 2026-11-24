@@ -763,7 +763,8 @@ func TestAttachForward_AcceptFailureWritesTheStartFailureRow(t *testing.T) {
 }
 
 // TestAttachForward_RecheckReadFailures: with no credential check (base nil, a super admin's ticket with no
-// revocation store), a run that cannot be read ends the forward as a failed read, never as an ended run.
+// revocation store), a run or rule that cannot be read answers unconfirmed with no stop cause (the forward rides the
+// session budget), never as an ended run; a refusal goes through stop with its own cause.
 func TestAttachForward_RecheckReadFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -780,8 +781,15 @@ func TestAttachForward_RecheckReadFailures(t *testing.T) {
 			tc.prep(fr)
 			var cause error
 			stop := func(c error) error { cause = c; return errAttachAuthorityEnded }
-			if err := fr.srv.attachForwardRecheck(fr.runID, nil, stop)(context.Background()); err == nil {
+			err := fr.srv.attachForwardRecheck(fr.runID, nil, stop)(context.Background())
+			if err == nil {
 				t.Fatal("the re-check passed")
+			}
+			if tc.want == errAttachForwardReadFailed {
+				if cause != nil || !errors.Is(err, errSessionUnconfirmed) || !errors.Is(err, tc.want) {
+					t.Errorf("a failed read = %v with stop cause %v, want unconfirmed %v and no cause", err, cause, tc.want)
+				}
+				return
 			}
 			if !errors.Is(cause, tc.want) {
 				t.Errorf("the re-check ended with %v, want %v", cause, tc.want)
@@ -1058,10 +1066,12 @@ func TestAttachForward_EndsWhenTheRunStops(t *testing.T) {
 			now := time.Now()
 			fr.setRun(fr.runID, func(r *types.AgentRun) { r.LostAt = &now })
 		}, attachForwardEndRun},
-		{"run_unreadable", func(fr *forwardRig) { fr.st.getRunErr.Store(true) }, attachForwardEndReadFailed},
+		// A budget of zero: a read that fails ends the forward at its first unanswered check.
+		{"run_unreadable", func(fr *forwardRig) { fr.st.getRunErr.Store(true) }, sessionUnconfirmedReason},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := newForwardRig(t, true, nil)
+			fr.budget(0, 10*time.Millisecond)
 			fr.dial(t, "3000")
 			relay := fr.waitRelayOpen(t)
 			tc.stop(fr)
@@ -1081,10 +1091,11 @@ func TestAttachForward_EndsWhenDataOutTightens(t *testing.T) {
 		words string
 	}{
 		{"rule_blocked", func(s *forwardStore) { s.rule.Store(types.TransferBlocked) }, attachForwardEndDataOut},
-		{"rule_unreadable", func(s *forwardStore) { s.ruleErr.Store(true) }, attachForwardEndReadFailed},
+		{"rule_unreadable", func(s *forwardStore) { s.ruleErr.Store(true) }, sessionUnconfirmedReason},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := newForwardRig(t, true, nil)
+			fr.budget(0, 10*time.Millisecond)
 			fr.dial(t, "3000")
 			relay := fr.waitRelayOpen(t)
 			tc.flip(fr.st)
@@ -1095,6 +1106,43 @@ func TestAttachForward_EndsWhenDataOutTightens(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAttachForward_SessionBudget: an open forward holds on the session budget, as every other door does. A read that
+// keeps failing ends it once the budget runs out, with the unconfirmed words; a refusal while a read is failing still
+// ends it with its own words.
+func TestAttachForward_SessionBudget(t *testing.T) {
+	t.Run("budget_runs_out", func(t *testing.T) {
+		fr := newForwardRig(t, true, nil)
+		fr.budget(50*time.Millisecond, 10*time.Millisecond)
+		fr.dial(t, "3000")
+		relay := fr.waitRelayOpen(t)
+		fr.st.ruleErr.Store(true)
+		waitFor(t, "the relay to be closed", func() bool { return relay.closes.Load() > 0 })
+		rows := fr.waitRows(t, 1)
+		if rows[0].Outcome != "failure" || rowFields(t, rows[0])["error"] != sessionUnconfirmedReason {
+			t.Errorf("row = %s %s, want a failure with error %q", rows[0].Outcome, rows[0].Data, sessionUnconfirmedReason)
+		}
+	})
+	t.Run("refusal_inside_the_window", func(t *testing.T) {
+		fr := newForwardRig(t, true, nil)
+		fr.budget(time.Hour, 10*time.Millisecond)
+		fr.dial(t, "3000")
+		relay := fr.waitRelayOpen(t)
+		fr.st.getRunErr.Store(true)
+		n := fr.st.getRunCalls.Load()
+		waitFor(t, "two failed re-checks", func() bool { return fr.st.getRunCalls.Load() >= n+2 })
+		if relay.closes.Load() != 0 {
+			t.Fatal("a failed read ended the forward inside its budget")
+		}
+		fr.st.rule.Store(types.TransferBlocked)
+		fr.st.getRunErr.Store(false)
+		waitFor(t, "the relay to be closed", func() bool { return relay.closes.Load() > 0 })
+		rows := fr.waitRows(t, 1)
+		if rows[0].Outcome != "failure" || rowFields(t, rows[0])["error"] != attachForwardEndDataOut {
+			t.Errorf("row = %s %s, want a failure with error %q", rows[0].Outcome, rows[0].Data, attachForwardEndDataOut)
+		}
+	})
 }
 
 func TestAttachForward_SharesTheSSHChannelCap(t *testing.T) {

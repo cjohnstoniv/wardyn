@@ -213,7 +213,8 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	go s.attachForwardPing(chCtx, c, parks, chCancel)
 
 	// The re-check: the ticket's credential and the entry rule (attachAuthority), the run's state and its data_out
-	// rule. The first failure ends the forward with its own cause; a read that fails ends it too (fail closed).
+	// rule. A refusal ends the forward with its own cause. A read that fails rides the session budget, as every
+	// other door's does, and ends the forward as unconfirmed once the budget runs out.
 	base := s.attachAuthority(r, run.ID)
 	var endCause atomic.Pointer[error]
 	stop := func(cause error) error {
@@ -221,7 +222,16 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 		return errAttachAuthorityEnded
 	}
 	check := s.attachForwardRecheck(run.ID, base, stop)
-	s.holdAttachAuthority(chCtx, check, func() { chCancel(*endCause.Load()) })
+	b := s.newSessionBudget(chCtx, sessionWatchID{Run: run.ID, Actor: types.ActorHuman, Principal: attachWatchID(r, run.ID).Principal, Surface: sessionSurfaceSSH})
+	s.holdAttachAuthority(chCtx, b, check, func(spent bool) {
+		cause := errAttachAuthorityEnded
+		if spent {
+			cause = unconfirmed(errAttachAuthorityEnded)
+		} else if p := endCause.Load(); p != nil {
+			cause = *p
+		}
+		chCancel(cause)
+	})
 
 	var end bridgeEnd
 	exit, _, bytesOut := s.sshBridgeExecSession(chCtx, run.ID, actor, ch, noteBridgeEnd(chCtx, sess, &end), false)
@@ -254,7 +264,8 @@ func (s *Server) refuseForwardDataOut(w http.ResponseWriter, r *http.Request, ru
 
 // attachForwardRecheck is the check an open forward runs every attachAuthorityEvery: base (the ticket's credential
 // and the entry rule, nil when attachAuthority has nothing to check), then the run's state, then its data_out rule.
-// Each failure goes through stop with the cause the forward's row words; a read that fails is its own cause, so the
+// Each refusal goes through stop with the cause the forward's row words. A read that fails is no refusal: it answers
+// unconfirmed (errAttachForwardReadFailed) and leaves the cause unset, so the forward rides the session budget and the
 // row never says the run ended when it could not be read.
 func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context) error, stop func(error) error) func(context.Context) error {
 	return func(lctx context.Context) error {
@@ -264,19 +275,19 @@ func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context
 				if errors.Is(err, errAttachAuthorityEnded) {
 					return stop(errAttachAuthorityEnded)
 				}
-				return stop(errAttachForwardReadFailed)
+				return unconfirmed(errAttachForwardReadFailed)
 			}
 		}
 		// liveRunForExec answers notFound on any GetRun error, so that answer covers a failed store read too.
 		if _, msg := s.liveRunForExec(lctx, runID, forwardLiveRunWords); msg != "" {
 			if msg == forwardLiveRunWords.notFound {
-				return stop(errAttachForwardReadFailed)
+				return unconfirmed(errAttachForwardReadFailed)
 			}
 			return stop(errAttachForwardRunEnded)
 		}
 		rule, _, err := s.runDataOutRule(lctx, runID)
 		if err != nil {
-			return stop(errAttachForwardReadFailed)
+			return unconfirmed(errAttachForwardReadFailed)
 		}
 		if rule.DataOut() != types.TransferAllowed {
 			return stop(errAttachForwardDataOut)
@@ -289,6 +300,8 @@ func (s *Server) attachForwardRecheck(runID uuid.UUID, base func(context.Context
 // end (errSSHChannelClosed), whose outcome bridgeOutcome decides.
 func attachForwardEndWords(cause error) (string, bool) {
 	switch {
+	case errors.Is(cause, errSessionUnconfirmed):
+		return sessionUnconfirmedReason, true
 	case errors.Is(cause, errAttachAuthorityEnded):
 		return attachForwardEndSession, true
 	case errors.Is(cause, errAttachForwardRunEnded):
