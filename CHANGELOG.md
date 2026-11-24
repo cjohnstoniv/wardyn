@@ -14,6 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
+- Kubernetes: the image registration check, the start-time check of where a runner's relay traffic comes from, and the recovery of a task's output now wait on the shared pod watch instead of reading their pod on a timer; each still reads the pod itself before deciding, and polls as before where the watch is not available (#4124).
 
 ### Before you upgrade
 

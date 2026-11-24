@@ -34,6 +34,7 @@ func (d *Driver) startWarmPools() {
 		if len(d.cfg.WarmPools) == 0 {
 			return
 		}
+		// A timer, not the pod watch: one reconcile per replica, not a wait per run.
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
