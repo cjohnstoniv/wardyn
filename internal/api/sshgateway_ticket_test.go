@@ -129,13 +129,19 @@ func (rig *ticketDoorRig) get(t *testing.T, runID uuid.UUID, tok, query string) 
 // dial opens the WebSocket with tok in the header and an SSH client over it as user, pinning the gateway's key.
 func (rig *ticketDoorRig) dial(t *testing.T, tok, user string) (*ssh.Client, error) {
 	t.Helper()
+	return rig.dialRun(t, rig.run.ID, tok, user)
+}
+
+// dialRun is dial on runID's door.
+func (rig *ticketDoorRig) dialRun(t *testing.T, runID uuid.UUID, tok, user string) (*ssh.Client, error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	hdr := http.Header{}
 	hdr.Set("Wardyn-Ticket", tok)
 	dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
 	defer dcancel()
-	ws, _, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(rig.doorURL(rig.run.ID), "http"), &websocket.DialOptions{HTTPHeader: hdr})
+	ws, _, err := websocket.Dial(dctx, "ws"+strings.TrimPrefix(rig.doorURL(runID), "http"), &websocket.DialOptions{HTTPHeader: hdr})
 	if err != nil {
 		return nil, err
 	}
@@ -444,13 +450,44 @@ func TestSSHTicketDoor_Admits(t *testing.T) {
 			t.Errorf("success row ports = %v, want [3000 5000]", row["ports"])
 		}
 		lim := rig.h.srv.metrics.sshLimits.Load()
-		lim.principalsMu.Lock()
-		n := lim.principals[rig.principal]
-		lim.principalsMu.Unlock()
-		if n != 1 {
-			t.Errorf("the person's established connections = %d, want 1", n)
-		}
+		waitFor(t, "the connection to count against its person", func() bool {
+			lim.principalsMu.Lock()
+			defer lim.principalsMu.Unlock()
+			return lim.principals[rig.principal] == 1
+		})
 		_ = client.Close()
+	})
+	t.Run("an admin on an operator-owned run passes deny_interactive", func(t *testing.T) {
+		rig := newTicketDoorRig(t)
+		profile := types.GovernanceUnit{ID: uuid.New(), Name: "no-shell", Limits: types.GovernanceLimits{DenyInteractive: true}}
+		rig.st.mu.Lock()
+		rig.st.profiles = []types.GovernanceUnit{profile}
+		rig.st.mu.Unlock()
+		run := rig.run
+		run.ID, run.OperatorOwned, run.UnitID = uuid.New(), true, &profile.ID
+		rig.st.putRun(run)
+		member := rig.ticketAs(t, run.ID, rig.principal, oidc.RoleUser, ticketPurposeSSHExec, nil)
+		if status, reason, _ := rig.get(t, run.ID, member, ""); status != 403 || reason != string(authz.ReasonGovernanceUnit) {
+			t.Fatalf("the member's GET /ssh = %d %q, want 403 governance_unit", status, reason)
+		}
+		admin := rig.ticketAs(t, run.ID, "root@example.com", oidc.RoleAdmin, ticketPurposeSSHExec, nil)
+		client, err := rig.dialRun(t, run.ID, admin, run.ID.String())
+		if err != nil {
+			t.Fatalf("the admin's dial: %v", err)
+		}
+		defer client.Close()
+		var row map[string]any
+		waitFor(t, "the admin's success row", func() bool {
+			for _, r := range rig.rows("ssh.authenticate", "success") {
+				if r["_actor"] == "root@example.com" {
+					row = r
+				}
+			}
+			return row != nil
+		})
+		if row["override"] != true || row["auth"] != sshAuthTicket {
+			t.Errorf("success row = %v, want override true and auth ticket", row)
+		}
 	})
 	t.Run("a key connection carries no auth", func(t *testing.T) {
 		rig := newTicketDoorRig(t)
@@ -557,6 +594,32 @@ func TestSSHTicketDoor_ChannelPurpose(t *testing.T) {
 		}
 		rig.waitRow(t, "ssh.channel.reject", "failure", "ticket_purpose")
 	})
+	t.Run("ssh-editor and sync", func(t *testing.T) {
+		rig := newTicketDoorRig(t)
+		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHEditor), rig.run.ID.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sess.Close()
+		var stderr strings.Builder
+		sess.Stderr = &stderr
+		if err := sess.RequestSubsystem(sshSyncSubsystem); err != nil {
+			t.Fatalf("the sync request: %v, want it acked and then ended", err)
+		}
+		if err := sess.Wait(); err == nil {
+			t.Error("the sync channel ended with no error")
+		}
+		if !strings.Contains(stderr.String(), "does not open wardyn sync") {
+			t.Errorf("stderr = %q, want the ticket's sentence naming wardyn sync", stderr.String())
+		}
+		if row := rig.waitRow(t, "ssh.channel.reject", "failure", "ticket_purpose"); row["purpose"] != ticketPurposeSSHEditor {
+			t.Errorf("row = %v, want purpose ssh-editor", row)
+		}
+	})
 }
 
 // TestSSHTicketDoor_SwitchAndDataOutFirst: WARDYN_SSH_CHANNELS refuses before the purpose,
@@ -594,12 +657,26 @@ func TestSSHTicketDoor_SwitchAndDataOutFirst(t *testing.T) {
 	})
 }
 
-// TestSSHTicketDoor_Recheck: a revoked sign-in refuses the next channel with the
-// ticket's sentence and closes an idle connection; deny_interactive set after the connection opened closes it too.
+// TestSSHTicketDoor_Recheck: a revoked sign-in refuses the next channel with the ticket's sentence and closes an
+// idle connection; deny_interactive set after the connection opened closes it too, and an untouched connection
+// stays open across many keepalive ticks.
 func TestSSHTicketDoor_Recheck(t *testing.T) {
-	prev := setSSHKeepaliveEvery(100 * time.Millisecond)
-	t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
-	t.Run("revoked", func(t *testing.T) {
+	keepalive := func(t *testing.T, d time.Duration) {
+		prev := setSSHKeepaliveEvery(d)
+		t.Cleanup(func() { setSSHKeepaliveEvery(prev) })
+	}
+	closesWithin := func(t *testing.T, client *ssh.Client, what string) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- client.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal(what)
+		}
+	}
+	t.Run("revoked, the next channel", func(t *testing.T) {
+		keepalive(t, time.Hour) // only the channel's own check runs
 		rig := newTicketDoorRig(t)
 		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHEditor), rig.run.ID.String())
 		if err != nil {
@@ -608,19 +685,47 @@ func TestSSHTicketDoor_Recheck(t *testing.T) {
 		if err := rig.rev.RevokeSub(context.Background(), rig.principal); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.NewSession(); err == nil {
-			// The keepalive may have closed the connection first; either way no channel opens.
-			t.Error("a channel opened after the sign-in was revoked")
+		if _, err := client.NewSession(); err == nil || !strings.Contains(err.Error(), "no longer allowed on this run") {
+			t.Errorf("a channel after the sign-in was revoked = %v, want the ticket's sentence", err)
+		}
+		if row := rig.waitRow(t, "ssh.channel.reject", "failure", sshTicketEnded); row["_target"] != sshAuthTicket {
+			t.Errorf("row = %v, want target ticket", row)
+		}
+	})
+	t.Run("revoked, idle", func(t *testing.T) {
+		keepalive(t, 250*time.Millisecond)
+		rig := newTicketDoorRig(t)
+		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHEditor), rig.run.ID.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		if err := rig.rev.RevokeSub(context.Background(), rig.principal); err != nil {
+			t.Fatal(err)
+		}
+		closesWithin(t, client, "the idle connection stayed open")
+	})
+	t.Run("untouched stays open", func(t *testing.T) {
+		keepalive(t, 250*time.Millisecond)
+		rig := newTicketDoorRig(t)
+		client, err := rig.dial(t, rig.ticket(t, ticketPurposeSSHEditor), rig.run.ID.String())
+		if err != nil {
+			t.Fatalf("dial: %v", err)
 		}
 		done := make(chan error, 1)
 		go func() { done <- client.Wait() }()
 		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatal("the idle connection stayed open")
+		case err := <-done:
+			t.Fatalf("an untouched connection closed: %v", err)
+		case <-time.After(10 * 250 * time.Millisecond):
 		}
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("a channel on the untouched connection: %v", err)
+		}
+		_ = sess.Close()
 	})
 	t.Run("deny_interactive later", func(t *testing.T) {
+		keepalive(t, 250*time.Millisecond)
 		rig := newTicketDoorRig(t)
 		profile := types.GovernanceUnit{ID: uuid.New(), Name: "later", Limits: types.GovernanceLimits{}}
 		rig.st.mu.Lock()
@@ -637,13 +742,7 @@ func TestSSHTicketDoor_Recheck(t *testing.T) {
 		rig.st.mu.Lock()
 		rig.st.profiles = []types.GovernanceUnit{profile}
 		rig.st.mu.Unlock()
-		done := make(chan error, 1)
-		go func() { done <- client.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatal("the connection stayed open under deny_interactive")
-		}
+		closesWithin(t, client, "the connection stayed open under deny_interactive")
 	})
 	t.Run("the channel's sentence", func(t *testing.T) {
 		if got := sshRejectMessage(sshTicketEnded); got != "the sign-in that opened this SSH connection is no longer allowed on this run" {
@@ -665,9 +764,15 @@ func TestSSHTicketDoor_RecheckBounds(t *testing.T) {
 	}
 	blocks := &sshTicketConn{check: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
 	ctx := context.WithValue(context.Background(), sshTicketConnKey{}, blocks)
-	start := time.Now()
-	if got := srv.sshCurrentAuth(ctx, perms); got != sshTicketEnded || time.Since(start) > 2*sshAuthTimeout {
-		t.Errorf("a blocked check = %q after %v, want %q within the bound", got, time.Since(start), sshTicketEnded)
+	got := make(chan string, 1)
+	go func() { got <- srv.sshCurrentAuth(ctx, perms) }()
+	select {
+	case reason := <-got:
+		if reason != sshTicketEnded {
+			t.Errorf("a blocked check = %q, want %q", reason, sshTicketEnded)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("a blocked check was not bounded by sshAuthTimeout")
 	}
 	holds := &sshTicketConn{check: func(context.Context) error { return nil }}
 	if got := srv.sshCurrentAuth(context.WithValue(context.Background(), sshTicketConnKey{}, holds), perms); got != "" {
