@@ -100,14 +100,14 @@ Not checked: an MDM device certificate, Apple Managed Device Attestation, or a T
 
 #### Machine kinds by trust class
 
-`runners.machine_kind_denials` (super admin, `PUT /api/v1/runners/settings`, API only) lists pairs of a trust class and a machine kind (`container`, `linux_vm`, `macos_vm`) that a new run may not use.
+`runners.machine_kind_denials` (super admin, `PUT /api/v1/runners/settings`, API only) lists pairs of a trust class and a machine kind (`container`, `linux_vm`, `macos_vm`) that a new local run on a registered runner may not use.
 
 - The list only denies. It never admits what a built-in rule refuses.
 - It is judged for a new run at create, at the queue's start and at dispatch, never at revive.
 - A pool places the run on a class that admits it. Denied everywhere, the answer is `placement_denied`.
 - With a list set, a runner of no known trust class takes no new run.
 - A macOS VM needs `managed_device` whatever the list says.
-- The organisation's executor runs containers only.
+- The list covers local runs on registered runners only. The organisation's executor, which runs containers only, is not judged.
 
 The switch is only as strong as the mark: review marked runners against your MDM inventory, and unmark (`wardyn runner trust <runner-id> personal --reason "<why>"`) a laptop that leaves management.
 
