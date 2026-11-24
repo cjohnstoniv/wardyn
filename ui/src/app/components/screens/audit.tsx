@@ -299,10 +299,10 @@ export function AuditScreen() {
   );
   const events = eventsQuery.data ?? NO_EVENTS;
   const status: "loading" | "error" | "ready" = eventsQuery.data ? "ready" : eventsQuery.isError ? "error" : "loading";
-  // The kernel sensor's health rides along with every audit refresh (initial
-  // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
-  // events, so an event list structurally cannot show them — a dead sensor
-  // reads exactly like a quiet one. health() never rejects.
+  // The kernel sensor's health rides along with the audit refresh: "unavailable" and "degraded" are the ABSENCE
+  // of events, so an event list structurally cannot show them — a dead sensor reads exactly like a quiet one.
+  // A load or a run-filter change reads it at once (the key holds the filter); a poll tick only when the last
+  // read is SENSOR_HEALTH_EVERY_MS old (see tick). health() never rejects.
   // keepPreviousData keeps the chip on screen across a filter change until the new answer lands.
   const sensorQuery = useQuery(
     { queryKey: ["audit", runFilter, "sensor"], queryFn: () => healthApi.health(), placeholderData: keepPreviousData },
@@ -338,14 +338,18 @@ export function AuditScreen() {
   // With a list on screen a tick joins a read still in flight. With none yet it replaces that read, so a first read
   // that hangs is not waited on for good (TanStack joins a read with no data instead of cancelling it).
   const { refetch: refetchEvents } = eventsQuery;
-  const { refetch: refetchSensor } = sensorQuery;
   const tick = React.useCallback(() => {
-    void refetchSensor({ cancelRefetch: false });
+    // fetchQuery reads only when the cached answer is older than the staleTime, and joins a read still in flight.
+    void queryClient.fetchQuery({
+      queryKey: ["audit", runFilter, "sensor"],
+      queryFn: () => healthApi.health(),
+      staleTime: SENSOR_HEALTH_EVERY_MS,
+    });
     const key = ["audit", runFilter, "events"];
     return queryClient.getQueryData(key) === undefined
       ? queryClient.cancelQueries({ queryKey: key, exact: true }).then(() => refetchEvents())
       : refetchEvents({ cancelRefetch: false });
-  }, [refetchEvents, refetchSensor, runFilter]);
+  }, [refetchEvents, runFilter]);
   // The poll's hold follows the screen one render late, as the status state did: a refocus that lands in the commit
   // of a filter change still reads, and replaces the new filter's first read.
   const [pollHeld, setPollHeld] = React.useState(true);
