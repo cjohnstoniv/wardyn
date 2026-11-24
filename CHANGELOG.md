@@ -15,6 +15,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - `/metrics` has three latency histograms: `wardyn_run_start_phase_seconds` splits a run's start into its phases, `wardyn_http_request_seconds` times each API route, and `wardyn_egress_decision_record_seconds` times an egress decision from the proxy to its audit row. See the monitoring page. (#4062)
 
+### Changed
+
+- The egress proxy reuses a host's DNS answer for up to 30 seconds and checks it against the address guard on every use, as it checks a fresh one. A lookup that does not answer gives up after 10 seconds. (#4051)
+- The egress proxy keeps up to 32 idle connections per upstream host and resumes upstream TLS sessions, except on connections that present a client certificate. HTTP/2 upstream connections that stop answering are pinged and closed. (#4051)
+
 ### Fixed
 
 - A SCIM group create now answers with the members it recorded in the same step. Before, a failed read of the members after the group was stored answered 500, and the identity provider's retry then got 409 for a group that existed.

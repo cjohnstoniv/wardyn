@@ -391,6 +391,9 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	if !p.mitmPlaintextUpstream(host, port) || clientSpeaksTLS(brw.Reader) {
 		tlsConn := tls.Server(buffered, &tls.Config{
 			MinVersion: tls.VersionTLS12,
+			// No session tickets: this config is new per tunnel, so a ticket could never be redeemed, and
+			// minting one costs every handshake.
+			SessionTicketsDisabled: true,
 			GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				// Mint for the VALIDATED CONNECT host, not the agent-chosen SNI: bounds the leaf
 				// cache and stops an agent forcing a fresh keygen+sign per request via unique SNIs.

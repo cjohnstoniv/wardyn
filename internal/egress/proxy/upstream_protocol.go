@@ -106,6 +106,9 @@ type h2Fallback struct {
 func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 	p.transport.ForceAttemptHTTP2 = true
 	p.transport.TLSClientConfig = base.Clone()
+	// A dead HTTP/2 connection answers no ping, so it is closed instead of holding the requests sent on it.
+	p.transport.HTTP2 = &http.HTTP2Config{SendPingTimeout: h2PingAfter, PingTimeout: h2PingTimeout}
+	sessions := tls.NewLRUClientSessionCache(tlsSessionCacheSize)
 	p.transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		cfg := base.Clone()
 		if cfg == nil {
@@ -115,6 +118,9 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 			cfg.ServerName, _, _ = net.SplitHostPort(addr)
 		}
 		cfg.NextProtos = []string{"h2", "http/1.1"}
+		// Resumes an earlier session with the upstream, saving the full handshake; offerGatewayClientCert
+		// turns this off again on a dial that offers a client certificate.
+		cfg.ClientSessionCache = sessions
 		p.offerGatewayClientCert(cfg, addr)
 		tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 		if err != nil {
@@ -141,8 +147,13 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 		//lint:ignore SA1019 see h2Fallback
 		IdleConnTimeout: 60 * time.Second,
 		//lint:ignore SA1019 see h2Fallback
+		ReadIdleTimeout: h2PingAfter,
+		//lint:ignore SA1019 see h2Fallback
+		PingTimeout: h2PingTimeout,
+		//lint:ignore SA1019 see h2Fallback
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
 			cfg = cfg.Clone()
+			cfg.ClientSessionCache = sessions
 			p.offerGatewayClientCert(cfg, addr)
 			tc, err := handshakeOver(ctx, egressDial, network, addr, cfg)
 			if err != nil {
@@ -152,6 +163,17 @@ func (p *Proxy) offerHTTP2(egressDial dialFunc, base *tls.Config) {
 		},
 	}
 }
+
+const (
+	// egressIdlePerHost is how many idle connections the egress transport keeps per upstream host.
+	egressIdlePerHost = 32
+	// tlsSessionCacheSize is how many upstream TLS sessions are kept to resume.
+	tlsSessionCacheSize = 256
+	// h2PingAfter is how long an HTTP/2 upstream connection may be silent before it is pinged, and
+	// h2PingTimeout how long the ping may go unanswered before the connection is closed.
+	h2PingAfter   = 15 * time.Second
+	h2PingTimeout = 15 * time.Second
+)
 
 // connectStageError marks a failure while the upstream connection was being
 // set up (the dial or the TLS handshake), so classifyUpstreamErr keeps a reset

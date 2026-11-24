@@ -31,6 +31,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/net/http/httpguts"
 
@@ -584,8 +585,13 @@ type resolver interface {
 // netResolver is the production resolver backed by the stdlib.
 type netResolver struct{}
 
+// dnsLookupTimeout bounds one lookup, so a resolver that never answers cannot hold a request forever.
+const dnsLookupTimeout = 10 * time.Second
+
 func (netResolver) LookupIP(host string) ([]net.IP, error) {
-	return net.LookupIP(host)
+	ctx, cancel := context.WithTimeout(context.Background(), dnsLookupTimeout)
+	defer cancel()
+	return net.DefaultResolver.LookupIP(ctx, "ip", host)
 }
 
 // VetHost resolves host and returns the first address that is NOT in a
