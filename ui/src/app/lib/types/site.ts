@@ -173,6 +173,8 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.DesktopWatermark: whether every desktop view must show the viewer's name and the run id.
+  desktop_watermark?: SiteDesktopWatermark;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
   // types.SiteConfig.Sessions: how open sessions behave while Wardyn cannot check access.
@@ -748,6 +750,11 @@ export interface SiteMacOSVM {
 export interface SiteSessions {
   /** Seconds an open session keeps going while no check of the person's access answers. 0 to 120; absent reads 30. */
   unconfirmed_budget_s?: number;
+}
+
+/** Go: types.SiteDesktopWatermark (SiteConfig.desktop_watermark). */
+export interface SiteDesktopWatermark {
+  required?: boolean;
 }
 
 /** Go: types.SiteFeatureSwitches (SiteConfig.features): one key per feature new in 0.11. Absent reads every one off. */

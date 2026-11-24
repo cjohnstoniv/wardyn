@@ -224,11 +224,12 @@ func (s *Server) afterSiteConfigSave(ctx context.Context, existing, saved types.
 	}
 }
 
-// auditSiteBlocks records the image rules and the features block on site_config.write, in one call so
+// auditSiteBlocks records the image rules, the features block and the desktop watermark rule on site_config.write, in one call so
 // handlePutSiteConfig stays inside funlen.
 func auditSiteBlocks(datum map[string]any, existing, saved types.SiteConfig, present map[string]bool) {
 	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
 	auditSiteFeatures(datum, existing, saved, present["features"])
+	auditSiteDesktopWatermark(datum, saved.DesktopWatermark, present["desktop_watermark"])
 }
 
 // auditSiteFeatures records, once a features block is stored or the body named one (so a deployment with none

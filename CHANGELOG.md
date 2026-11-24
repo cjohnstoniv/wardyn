@@ -45,6 +45,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
+- Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
 
 ### Changed
 
