@@ -345,11 +345,9 @@ type runScheduleBody struct {
 // run title may be is a 400 run_field_too_long, as the title's is.
 func decodeRunScheduleBody(w http.ResponseWriter, r *http.Request) (runScheduleBody, scheduleRule, bool) {
 	var in runScheduleBody
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	dec.DisallowUnknownFields()
 	var fields map[string]json.RawMessage
 	rule, ok := scheduleRule{}, false
-	if dec.Decode(&in) == nil && json.Unmarshal(in.Request, &fields) == nil && fields != nil {
+	if types.DecodeOneJSON(http.MaxBytesReader(w, r.Body, maxJSONBody), &in, true) == nil && json.Unmarshal(in.Request, &fields) == nil && fields != nil {
 		_, hasStart := fields["start_at"]
 		_, hasZone := fields["start_time_zone"]
 		if !hasStart && !hasZone {
