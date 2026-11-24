@@ -34,12 +34,16 @@ func sitePlaceJudgement(t *testing.T, kind string, denials []types.MachineKindDe
 type dispatchSiteStore struct {
 	localPersonRunnerStore
 	store.OrgSiteStore
-	site  types.OrgSite
-	reads *int
+	site    types.OrgSite
+	reads   *int
+	readErr error
 }
 
 func (d dispatchSiteStore) GetOrgSite(_ context.Context, id uuid.UUID) (types.OrgSite, error) {
 	*d.reads++
+	if d.readErr != nil {
+		return types.OrgSite{}, d.readErr
+	}
 	if id != d.site.ID {
 		return types.OrgSite{}, store.ErrNotFound
 	}
@@ -50,12 +54,18 @@ func (d dispatchSiteStore) GetOrgSite(_ context.Context, id uuid.UUID) (types.Or
 // sites on and the given denials, and answers whether dispatch went on, the failure hint and the site reads.
 func dispatchAtSite(t *testing.T, office types.OrgSite, site *uuid.UUID, denials ...types.MachineKindDenial) (bool, string, int) {
 	t.Helper()
+	return dispatchAtSiteReading(t, office, site, nil, denials...)
+}
+
+// dispatchAtSiteReading is dispatchAtSite with the site read answering readErr.
+func dispatchAtSiteReading(t *testing.T, office types.OrgSite, site *uuid.UUID, readErr error, denials ...types.MachineKindDenial) (bool, string, int) {
+	t.Helper()
 	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
 	id := uuid.New()
 	run.RunnerID, run.MachineKind, run.SiteID = &id, types.MachineLinuxVM, site
 	ls.run = run
 	reads := 0
-	st := dispatchSiteStore{localPersonRunnerStore: localPersonRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}}, site: office, reads: &reads}
+	st := dispatchSiteStore{localPersonRunnerStore: localPersonRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}}, site: office, reads: &reads, readErr: readErr}
 	srv.cfg.Store = st
 	on := true
 	sc := types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, MachineKindDenials: denials},
@@ -106,6 +116,17 @@ func TestSitePlaceRuleDeniesKindAtOneSite(t *testing.T) {
 	// A list with no entry keyed to the run's site reads no site.
 	if ok, _, reads := dispatchAtSite(t, office, &branchID); !ok || reads != 0 {
 		t.Errorf("dispatch with no keyed entry: ok %v, %d site reads, want dispatched with none", ok, reads)
+	}
+}
+
+// A dispatch whose site read fails, with an entry keyed to the run's site, fails closed: the run is not
+// dispatched as if the entry held nowhere.
+func TestSitePlaceRuleDispatchFailsClosedOnASiteReadError(t *testing.T) {
+	office := types.OrgSite{ID: uuid.New(), Name: "Leeds office", State: types.OrgSiteActive}
+	deny := types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM, SiteID: office.ID.String()}
+	ok, hint, reads := dispatchAtSiteReading(t, office, &office.ID, errors.New("read failed"), deny)
+	if ok || reads != 1 || !strings.Contains(hint, "local dispatch provenance could not be read") {
+		t.Fatalf("site read failed: ok %v hint %q reads %d, want refused after one read", ok, hint, reads)
 	}
 }
 

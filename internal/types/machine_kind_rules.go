@@ -39,7 +39,11 @@ func ValidateMachineKindDenials(ds []MachineKindDenial) error {
 		}
 		d.MachineKind = d.MachineKind.Normalize()
 		if seen[d] {
-			return fmt.Errorf("machine_kind_denials[%d]: %s on %s runners is listed twice", i, ds[i].MachineKind, d.Trust)
+			where := "at every site"
+			if d.SiteID != "" {
+				where = "at site " + d.SiteID
+			}
+			return fmt.Errorf("machine_kind_denials[%d]: %s on %s runners is listed twice %s", i, ds[i].MachineKind, d.Trust, where)
 		}
 		seen[d] = true
 	}
