@@ -63,6 +63,11 @@ describe("the Azure Foundry sign-in banner", () => {
     expect(await screen.findByText(ADO_SIGNIN.REASON.exchange_failed)).toBeInTheDocument();
   });
 
+  it("a reason naming an inherited member reads as the exchange_failed sentence and does not throw", async () => {
+    land("?azure_signin_error=__proto__&azure_provider=u-az-1");
+    expect(await screen.findByText(ADO_SIGNIN.REASON.exchange_failed)).toBeInTheDocument();
+  });
+
   it("says nothing with none of the parameters", () => {
     land("?other=1");
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
