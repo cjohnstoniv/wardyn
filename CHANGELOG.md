@@ -18,6 +18,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - A person's drive whose delete did not finish on Docker or Kubernetes is now retried by the server and shown to its owner as Deleting, instead of disappearing from their list until a super admin deleted it. A Mac disk whose delete waits for its Mac shows as Deleting too (#4061).
+- A run started with `--image` reuses the wrapped image an earlier run of the same creator built from the same base image, runner tools and wrap recipe, instead of wrapping it again, while the server keeps running. Runs started with the admin token share one creator. A `--devcontainer-repo` run still builds on every run. A reused build's `run.build` audit row carries `cache_hit`.
+- Starting a Docker sandbox reads the Docker Engine's details once instead of twice.
 
 ## [0.10.3] — 2026-11-23
 
