@@ -66,6 +66,9 @@ type policySourceRecord struct {
 	// WallPreset is the wall preset the run was launched with and what it narrowed, set only when
 	// the launch chose one (personal_walls.go).
 	WallPreset *wallPresetSourceRecord `json:"wall_preset,omitempty"`
+	// AgentRules is what the rules of each agent the run includes narrowed, set only when they narrowed
+	// something (run_agent_rules.go).
+	AgentRules []agentRulesSourceRecord `json:"agent_rules,omitempty"`
 	// wallPreset stays in memory: the frozen copy create and the queue's start put on the run.
 	wallPreset *types.WallPresetOnRun
 	// edits stays in memory: the person's provenance rows for this request.

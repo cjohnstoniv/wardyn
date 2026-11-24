@@ -227,7 +227,7 @@ func (s *Server) stepMacWindow(f *runFold, _ *foldRecorder) bool {
 	if f.req.DesktopWindow == "" {
 		return true
 	}
-	choice, rf := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil)
+	choice, rf := s.createRecordingChoice(f.r.Context(), f.r, f.spec.Recording, f.place, f.ceiling, f.policyID == nil, includedHarnessIDs(*f.req))
 	if rf == nil {
 		rf = s.macWindowCreateRefusal(f.r.Context(), f.r, f.ceiling, f.req, choice.Resolve())
 	}

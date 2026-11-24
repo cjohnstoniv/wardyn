@@ -760,8 +760,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
-    `/drives/grants`, `/wall-presets`, `/templates`, `/me/walls`, `/assistant/settings`, `/assistant/sessions` and
-    `/assistant/preview`.
+    `/drives/grants`, `/wall-presets`, `/templates`, `/me/walls`, `/agent-rules`, `/assistant/settings`,
+    `/assistant/sessions` and `/assistant/preview`.
   - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
     `/governance/dry-run`, `/governance/approval-rules/dry-run`, `/templates/import`, `/templates/{id}/policy-check` and
     `/assistant/preview`.
@@ -4256,6 +4256,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0401` (`0401_assistant_sessions`) creates `assistant_sessions`, a row for each assistant session with the person it acts as, its target, provider and model, state and draft, and `assistant_session_events`, its transcript. Both are granted to the roles that write `run_attach_leases`.
 - `0402` (`0402_attach_ticket_purpose`) adds `attach_tickets.purpose` (not null, default empty) and the nullable `attach_tickets.ports` (`0026`'s table): the one door a ticket opens, and the ports a forwarding ticket may reach. No grant changes.
 - `0403` (`0403_outage_windows`) creates `cp_heartbeat`, the row each replica beats every 10 seconds, and `outage_windows`, the recorded outage windows. The migration grants `SELECT, INSERT, UPDATE` on `cp_heartbeat` and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows` to every role granted `UPDATE` on `agent_runs`, other than that table's owner. The window id is an identity column, so no sequence grant is needed. A split-role install whose app role is not one of those roles, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when the runner connects.
+- `0400` (`0400_agent_rules`) creates `agent_rules`: one row per agent harness holding the organisation's walls spec and optional inner walls for it, with a version. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role that was granted `UPDATE` on `delegates`, other than that table's owner; an app role outside those needs the same grant by hand on a split-role install. Without it a run that includes a harness is refused.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

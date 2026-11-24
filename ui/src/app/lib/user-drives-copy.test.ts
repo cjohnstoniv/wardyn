@@ -378,11 +378,12 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
       UnprocessableEntity: 422,
     };
     let checked = 0;
+    // Each row's literal is found once: literalFor scans every Go literal, and this loop asks per case.
+    const rowLiterals = serverRows.map((row) => [row, literalFor(row)] as const);
     for (const m of src.matchAll(/want:\s*http\.Status(\w+),\s*msg:\s*(?:"([^"]*)"|`([^`]*)`)/g)) {
       const want = codes[m[1]];
       const msg = m[2] ?? m[3];
-      for (const row of serverRows) {
-        const lit = literalFor(row);
+      for (const [row, lit] of rowLiterals) {
         if (!lit) continue;
         // The pinned message is a SUBSTRING of the refusal, so it either sits
         // inside one fixed run of the literal or starts with one (the case

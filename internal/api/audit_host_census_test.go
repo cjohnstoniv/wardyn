@@ -55,6 +55,9 @@ const (
 	keepSigning = keepEgress + "; no_aws_host and unsigned_host are aws_signing_reason values about such a host"
 	keepGrant   = "the configured gateway's host name, never its URL: an egress destination its runs are allowed (the host resolveProviderLane derives from the provider's base URL), " +
 		"and the host the member-safe provider view names (providerHost); the token and refused-form hosts are withheld"
+	keepAgentRules = "an agent harness's organisation rules (types.PersonalWallsSpec, decoded strictly): egress hosts, capability and tool lists, " +
+		"push deny paths in a repository, desktop rules and withheld grants; it has no workspace_mounts and names no deployment host or path, " +
+		"and the rows are served to the security tier, which writes the rules (GET /agent-rules)"
 )
 
 // keepAssistant is assistant.settings.write's before and after: the block as assistantAuditView writes it.
@@ -64,6 +67,8 @@ const keepAssistant = "two purpose switches, the run-history switch, record kind
 // auditHostReviewed are the host-shaped fields served as recorded, per action. A host-shaped field on a
 // documented row must be withheld by auditHostViews or named here.
 var auditHostReviewed = map[string]auditHostKeep{
+	"agent_rules.delete":                         {[]string{"spec"}, keepAgentRules},
+	"agent_rules.write":                          {[]string{"after", "before"}, keepAgentRules},
 	"approval.decide":                            {[]string{"host"}, keepEgress},
 	"assistant.settings.write":                   {[]string{"after", "before"}, keepAssistant},
 	"authz.denied":                               {[]string{"host"}, keepEgress},
