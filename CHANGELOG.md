@@ -59,6 +59,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A slow credential refresh no longer stalls the other requests to that host while the current credential is still valid. A request waiting on a refresh now leaves when its client hangs up. (#4052)
 - AWS role credentials used to re-sign requests renew in the background before they expire. A failed renewal is asked again at most once every 10 seconds instead of once per request. (#4052)
 - With computer folders on, a task run on the server's Docker whose lease ended now brings its folder's changes back when it is finally stopped: its stopped sandbox is started again with no network and its agent stopped for the pass back, then stopped. An interactive run's sandbox, a sandbox on a runner and a virtual machine still run no pass and say their changes were not brought back (#3486).
+- The Recordings list no longer shows a run's earlier recording's size and duration after a revive: it stops where replay stops, at the first part of a different recording, comparing each part's whole header line (a header line longer than 64 KiB is not compared, and the list shows that recording's first part alone), and reads each part's size, header and end in one read so a revive that lands mid-read cannot pair one recording's header with another's size (#4138).
+- The `recording.read` audit row for an admin's replay of another person's run is written only once the recording has opened, so a replay that finds no recording no longer leaves a success row. When the run's owner cannot be read, the replay is audited with `owner_unknown` instead of being served with no row (#4138).
+- A killed run whose output this server was not holding now always gets its capture-gap row; before, it depended on timing inside the kill (#4138).
+- The run's recording picker labels a re-read of the agent's output "re-read from the runner", not "re-read after a restart": the server also re-reads it on a routine sweep (#4138).
 
 ### Security
 

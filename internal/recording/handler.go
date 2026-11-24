@@ -24,8 +24,9 @@ import (
 // middleware proves SOME authenticated human/admin, not WHICH run's
 // recordings they may read. False means not served. An authorizer may write its own refusal to w; when it
 // writes nothing, Handler answers the same 404 an absent recording gets: no existence oracle for "not yours"
-// vs "never recorded".
-type Authorizer func(w http.ResponseWriter, r *http.Request, runIDPrefix string) bool
+// vs "never recorded". With true it may return served, the read's receipt: Handler calls it once the
+// recording has opened and before any of it is sent, and never for a refusal or a failed open.
+type Authorizer func(w http.ResponseWriter, r *http.Request, runIDPrefix string) (allowed bool, served func())
 
 // refusal holds an authorizer's answer so Handler can tell one that answered from one that said nothing, and
 // can write it to the client under a type it chose: a refusal is never served as HTML.
@@ -93,7 +94,7 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			return
 		}
 		answer := &refusal{header: http.Header{}}
-		allowed := authorize(answer, req, prefix)
+		allowed, served := authorize(answer, req, prefix)
 		if !allowed && !answer.wrote() {
 			http.Error(w, "recording not found", http.StatusNotFound)
 			return
@@ -125,6 +126,10 @@ func Handler(store Store, authorize Authorizer) http.Handler {
 			return
 		}
 		defer rc.Close()
+		// The receipt goes on record before the first byte, and only for a recording that opened.
+		if served != nil {
+			served()
+		}
 
 		w.Header().Set("Content-Type", "application/x-asciicast")
 		w.Header().Set("Cache-Control", "no-store")

@@ -209,3 +209,81 @@ func TestJoinReadsNoPartAboveTheLimit(t *testing.T) {
 		t.Fatalf("OpenJoined: %d opens, %d events; want %d of each", s.opens, strings.Count(string(got), partEv1), types.RecordingMaxParts)
 	}
 }
+
+// TestStatJoinedStopsWhereReplayStops: after a revive leaves a short new part 1 beside the previous cast's
+// part 2, the Recordings list's size and duration are part 1's alone: the bytes replay serves.
+func TestStatJoinedStopsWhereReplayStops(t *testing.T) {
+	s, _ := recording.NewFSStore(t.TempDir())
+	const runID = "0a000000-0000-4000-8000-0000000000a2"
+	older := strings.Replace(partHeader, "1700000000", "1600000000", 1)
+	saveParts(t, s, runID, partHeader+partEv1, older+partEv2+partEv3)
+	size, tail, err := recording.StatJoined(context.Background(), s, runID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed := getRecording(t, s, runID); size != int64(len(replayed)) {
+		t.Errorf("size = %d, want %d: the bytes replay serves", size, len(replayed))
+	}
+	if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
+		t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
+	}
+}
+
+// TestStatJoinedComparesLongHeadersWhole: two casts whose header lines share their first 20,000 bytes are two
+// casts; the list compares a header through its newline, as replay does, not by a prefix.
+func TestStatJoinedComparesLongHeadersWhole(t *testing.T) {
+	s, _ := recording.NewFSStore(t.TempDir())
+	const runID = "0a000000-0000-4000-8000-0000000000a3"
+	long := func(ts string) string {
+		return `{"version":2,"width":80,"height":24,"title":"` + strings.Repeat("x", 20000) + `","timestamp":` + ts + "}\n"
+	}
+	saveParts(t, s, runID, long("1700000000")+partEv1, long("1600000000")+partEv2)
+	size, tail, err := recording.StatJoined(context.Background(), s, runID, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed := getRecording(t, s, runID); size != int64(len(replayed)) {
+		t.Errorf("size = %d, want %d: the bytes replay serves", size, len(replayed))
+	}
+	if d, ok := recording.LastOutputElapsed(tail); !ok || d != 0.5 {
+		t.Errorf("duration = %v (ok=%v), want part 1's 0.5", d, ok)
+	}
+}
+
+// TestStatJoinedBoundsTheHeaderItReads: a part with no newline in its first 64 KiB has no header the list
+// compares, so a recording that is one long line counts alone, and so do two casts whose identical header lines
+// are longer than that (the list does not read them whole, as replay does).
+func TestStatJoinedBoundsTheHeaderItReads(t *testing.T) {
+	long := func(n int) string { return `{"version":2,"title":"` + strings.Repeat("x", n) + `"}` + "\n" }
+	for name, parts := range map[string][2]string{
+		"no newline in 128 KiB":    {strings.Repeat("x", 128<<10), strings.Repeat("x", 128<<10)},
+		"identical 100 KiB header": {long(100<<10) + partEv1, long(100<<10) + partEv2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := recording.NewFSStore(t.TempDir())
+			const runID = "0a000000-0000-4000-8000-0000000000a4"
+			saveParts(t, s, runID, parts[0], parts[1])
+			size, _, err := recording.StatJoined(context.Background(), s, runID, 64)
+			if err != nil || size != int64(len(parts[0])) {
+				t.Fatalf("StatJoined = %d, %v; want part 1's %d alone", size, err, len(parts[0]))
+			}
+		})
+	}
+}
+
+// TestStatJoinedJoinsMatchingHeaders: two parts with the same header are both counted, whether it is short or
+// longer than the 4 KiB head the PostgreSQL store probes first.
+func TestStatJoinedJoinsMatchingHeaders(t *testing.T) {
+	for name, n := range map[string]int{"short": 0, "over 4 KiB": 8 << 10} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := recording.NewFSStore(t.TempDir())
+			const runID = "0a000000-0000-4000-8000-0000000000a5"
+			h := `{"version":2,"title":"` + strings.Repeat("x", n) + `"}` + "\n"
+			saveParts(t, s, runID, h+partEv1, h+partEv2)
+			size, _, err := recording.StatJoined(context.Background(), s, runID, 64)
+			if want := int64(len(h+partEv1) + len(h+partEv2)); err != nil || size != want {
+				t.Fatalf("StatJoined = %d, %v; want %d", size, err, want)
+			}
+		})
+	}
+}

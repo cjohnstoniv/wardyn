@@ -13,18 +13,18 @@ import type { AuditEvent } from "../../../lib/types";
 import { RECORDING_COMPLETENESS } from "../../wardyn/copy/recording-level";
 
 // The agent's output cast of a macOS VM task run is saved under session "agent", or "agent-recovered" when
-// a restart lost it and the server re-read it (internal/api/run_agent_cast.go); both are Wardyn's, not a person's.
+// the server re-read it from the runner (internal/api/run_agent_cast.go); both are Wardyn's, not a person's.
 const isAgentCast = (e: AuditEvent): boolean => e.data?.session === "agent" || e.data?.session === "agent-recovered";
 
 export function sessionOptionLabel(e: AuditEvent): string {
   const incomplete = e.data?.incomplete === true ? " · incomplete" : "";
   const at = clockTime(e.time);
-  // A row written by a sweep or by a re-read after a restart is stamped when that happened, which can be hours
+  // A row written by a sweep or by a re-read from the runner is stamped when that happened, which can be hours
   // after the capture ended; no capture end is recorded for it, so it is labelled by the recovery, never as an end.
   const recovered = e.data?.swept === true || e.data?.session === "agent-recovered";
   const when = recovered ? `recovered ${at}` : `ended ${at}`;
   if (e.data?.session === "agent") return `Agent output · ${when}${incomplete}`;
-  if (e.data?.session === "agent-recovered") return `Agent output, re-read after a restart · ${when}${incomplete}`;
+  if (e.data?.session === "agent-recovered") return `Agent output, re-read from the runner · ${when}${incomplete}`;
   return recovered ? `Session ${when} · ${e.actor}${incomplete}` : `Session ended ${at} · ${e.actor}${incomplete}`;
 }
 
