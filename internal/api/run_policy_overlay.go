@@ -138,7 +138,7 @@ func (s *Server) applyPolicyOverlay(ctx context.Context, r *http.Request, base t
 			s.auditPolicyDrops(ctx, r, "runs.policy_overlay", slices.DeleteFunc(drops, func(d capDrop) bool { return !slices.Contains(keys, capDropField(d)) }))
 		}
 	}
-	if err := validatePolicySpec(spec); err != nil {
+	if err := validateRunPolicyBeforeSeed(*req, spec); err != nil {
 		return base, nil, invalid(err)
 	}
 	if err := s.ruleUIAppCallers(ctx, spec); err != nil {

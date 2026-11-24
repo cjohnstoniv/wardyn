@@ -22,7 +22,7 @@ import (
 // recording retention) take one.
 const terminalSandboxSweepInterval = 5 * time.Minute
 
-// terminalSandboxSweepPageSize bounds each tick's cost: SweepTerminalSandboxesPage
+// terminalSandboxSweepPageSize bounds each tick's cost: SweepTerminalSandboxesAfter
 // reads at most this many runs (newest-first) per tick, so the ticker's cost
 // never grows with run history the way the operator-triggered, deliberately
 // unbounded SweepTerminalSandboxes does. The run rows this exists to catch (an
@@ -47,14 +47,14 @@ const terminalSandboxSweepPageSize = 200
 var terminalSandboxSweepTickTimeout = terminalSandboxSweepInterval + 2*time.Minute
 
 // terminalSandboxPager is the *api.Server surface runTerminalSandboxSweeper
-// needs, narrowed so a test can drive the paging/offset/wrap arithmetic with
+// needs, narrowed so a test can drive the paging/cursor/wrap arithmetic with
 // a fake's worth of runs instead of a real *api.Server and PG.
 type terminalSandboxPager interface {
-	SweepTerminalSandboxesPage(ctx context.Context, page store.Page) (swept, pageLen int, err error)
+	SweepTerminalSandboxesAfter(ctx context.Context, after store.RunCursor, limit int) (swept, pageLen int, next store.RunCursor, err error)
 }
 
 // runTerminalSandboxSweeper is #710's reaper tick: a periodic, bounded-page
-// retry surface for the two SweepTerminalSandboxesPage gaps (a failed
+// retry surface for the two SweepTerminalSandboxesAfter gaps (a failed
 // StopSandbox/RevokeRun step inside a prior finalize/kill, or a
 // killTeardownTail interrupted by a shutdown/crash) that nothing else
 // revisits automatically — today the only other caller is the
@@ -76,8 +76,8 @@ type terminalSandboxPager interface {
 // wires terminalSandboxSweepTickLock (adapters.go); nil is test-only.
 //
 // Bounded cost: each tick reads at most terminalSandboxSweepPageSize runs via
-// pager.SweepTerminalSandboxesPage (store.Pager.ListRunsPage under it),
-// advancing offset by one page per tick and wrapping back to 0 once a page
+// pager.SweepTerminalSandboxesAfter (store.RunsKeysetPager.ListRunsKeyset under it),
+// carrying the cursor of the page's last run and wrapping to the newest run once a page
 // comes back shorter than the page size — the previous objection to a ticker
 // here (reconcile.go's ReconcileOnBoot doc comment) was that
 // SweepTerminalSandboxes calls ListRuns unpaged, so its cost would grow with
@@ -98,13 +98,13 @@ type terminalSandboxPager interface {
 func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), interval time.Duration, ticks *sweephealth.Tracker) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	offset := 0
+	var cursor store.RunCursor
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			offset, _ = terminalSandboxSweepLockedTick(ctx, pager, tickLock, offset, ticks)
+			cursor, _ = terminalSandboxSweepLockedTick(ctx, pager, tickLock, cursor, ticks)
 		}
 	}
 }
@@ -122,42 +122,40 @@ func runTerminalSandboxSweeper(ctx context.Context, pager terminalSandboxPager, 
 // connection until it returns — either way holding
 // db.TerminalSandboxSweepLockKey, and with it every other control plane's
 // sweep, indefinitely.
-func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), offset int, ticks *sweephealth.Tracker) (int, error) {
+func terminalSandboxSweepLockedTick(ctx context.Context, pager terminalSandboxPager, tickLock func(context.Context) (func(), bool), cursor store.RunCursor, ticks *sweephealth.Tracker) (store.RunCursor, error) {
 	ctx, cancel := context.WithTimeout(ctx, terminalSandboxSweepTickTimeout)
 	defer cancel()
 	if tickLock != nil {
 		release, ok := tickLock(ctx)
 		if !ok {
-			return offset, nil // another control plane holds the lock this tick; skip, don't queue
+			return cursor, nil // another control plane holds the lock this tick; skip, don't queue
 		}
 		defer release()
 	}
-	next := offset
+	next := cursor
 	err := ticks.Tick(ctx, sweephealth.TerminalSandbox, func(ctx context.Context) (err error) {
-		next, err = terminalSandboxSweepTick(ctx, pager, offset)
+		next, err = terminalSandboxSweepTick(ctx, pager, cursor)
 		return err
 	})
 	return next, err
 }
 
-// terminalSandboxSweepTick runs one page and returns the next tick's offset:
-// advanced by one page, or wrapped to 0 once a page comes back shorter than
-// terminalSandboxSweepPageSize (the end of the table). A failed tick keeps
-// the current offset, so the same page is retried next time rather than
-// silently skipped.
-func terminalSandboxSweepTick(ctx context.Context, pager terminalSandboxPager, offset int) (int, error) {
-	swept, pageLen, err := pager.SweepTerminalSandboxesPage(ctx, store.Page{Limit: terminalSandboxSweepPageSize, Offset: offset})
+// terminalSandboxSweepTick runs one page and returns the next tick's cursor: the page's last run, or the zero cursor
+// (the newest run) once a page comes back shorter than terminalSandboxSweepPageSize, the end of the table. A failed
+// tick keeps the current cursor, so the same page is retried next time rather than silently skipped.
+func terminalSandboxSweepTick(ctx context.Context, pager terminalSandboxPager, cursor store.RunCursor) (store.RunCursor, error) {
+	swept, pageLen, next, err := pager.SweepTerminalSandboxesAfter(ctx, cursor, terminalSandboxSweepPageSize)
 	if err != nil {
 		slog.WarnContext(ctx, "wardynd: terminal sandbox sweep tick failed", slog.Any("err", err))
-		return offset, err
+		return cursor, err
 	}
 	if swept > 0 {
-		slog.InfoContext(ctx, "wardynd: terminal sandbox sweep tick", slog.Int("swept", swept), slog.Int("offset", offset))
+		slog.InfoContext(ctx, "wardynd: terminal sandbox sweep tick", slog.Int("swept", swept), slog.Time("after", cursor.CreatedAt))
 	}
 	if pageLen < terminalSandboxSweepPageSize {
-		return 0, nil // short page: reached the end of the table — wrap
+		return store.RunCursor{}, nil // short page: reached the end of the table — wrap
 	}
-	return offset + terminalSandboxSweepPageSize, nil
+	return next, nil
 }
 
 // terminalSandboxBackgrounder is the *api.Server surface

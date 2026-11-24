@@ -28,8 +28,7 @@ type specCaller struct {
 var validatePolicySpecCallers = map[string]map[string]specCaller{
 	"validatePolicySpec": {
 		"policy_api_key_approval.go": {1, "validateAuthoredSpecBase, under validateAuthoredPolicySpec: the plain check, then the authored-only refusals"},
-		"run_policy_resolution.go":   {1, "the run path, after the inline policy is bounded"},
-		"run_policy_overlay.go":      {1, "the run path, after the overlay is bounded"},
+		"run_policy_resolution.go":   {1, "the run path before the seed, for a run that attaches no workspace (validateRunPolicyBeforeSeed)"},
 		"governance_unit_write.go":   {1, "the profile base check: a base that already fails is not blamed on the overlay"},
 	},
 	"validatePolicySpecMode": {
@@ -39,7 +38,8 @@ var validatePolicySpecCallers = map[string]map[string]specCaller{
 		"profile.go": {1, "a spec built from stored values, not authored"},
 	},
 	"validatePolicySpecUnresolved": {
-		"policy_grade.go": {1, "grading reads no file of this host"},
+		"policy_grade.go":          {1, "grading reads no file of this host"},
+		"run_policy_resolution.go": {1, "the run path before the seed, for a run that attaches workspaces: the seed resolves each mount (validateRunPolicyBeforeSeed)"},
 	},
 }
 

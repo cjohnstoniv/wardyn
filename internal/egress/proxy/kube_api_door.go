@@ -16,10 +16,15 @@ package proxy
 // port refuse every request to the host.
 //
 // What the door refuses beyond the row's namespaces and access, because each
-// would put a cluster credential, or a shell, inside the sandbox: core Secrets,
-// a service account's token request, exec, attach, port-forward, the API
-// server's proxy, ephemeral containers, any protocol upgrade, and any
-// impersonation header.
+// would put a cluster credential, or a shell, inside the sandbox: any path with
+// a secrets segment, in any group, a service account's token request, exec,
+// attach, port-forward, the API server's proxy, ephemeral containers, any
+// protocol upgrade, and any impersonation header. A write may not create or
+// replace a pod, or a workload that carries a pod spec, unless it sets
+// automountServiceAccountToken: false, mounts only plain volumes, reads no
+// Secret and uses no host access, nor patch one's pod spec, since what the pod
+// prints is readable through its log (kube_api_door_podspec.go). Nor may it
+// write a ControllerRevision, from which a StatefulSet builds its pods.
 
 import (
 	"context"
@@ -148,6 +153,12 @@ func (d *kubeAPIDoor) admit(method, raw string, h http.Header) error {
 			return errors.New("the path is not a plain Kubernetes API path")
 		}
 	}
+	// Any secrets segment, in any group, case and depth: another group's
+	// resource may serve Secrets as a subresource of its own.
+	if slices.ContainsFunc(segs, func(s string) bool { return strings.EqualFold(s, "secrets") }) {
+		//lint:ignore ST1005 the sentence opens with the Kubernetes kind, Secrets
+		return errors.New("Secrets are not readable or writable through this run's kubectl")
+	}
 	if kubeDiscovery(segs) {
 		if method != http.MethodGet {
 			return errors.New("discovery paths are read only")
@@ -161,25 +172,24 @@ func (d *kubeAPIDoor) admit(method, raw string, h http.Header) error {
 	if !slices.Contains(d.namespaces, ns) {
 		return fmt.Errorf("the namespace %q is not one this run's kubectl may reach (%s)", ns, strings.Join(d.namespaces, ", "))
 	}
-	return d.admitInNamespace(method, segs[0] == "api", rest)
+	return d.admitInNamespace(method, rest)
 }
 
 // admitInNamespace judges what follows /namespaces/<ns> in an admitted
-// namespace; core is the core API group (/api).
-func (d *kubeAPIDoor) admitInNamespace(method string, core bool, rest []string) error {
+// namespace.
+func (d *kubeAPIDoor) admitInNamespace(method string, rest []string) error {
 	switch {
 	case len(rest) == 0 && method != http.MethodGet,
 		len(rest) == 1 && (rest[0] == "finalize" || rest[0] == "status"):
 		return errors.New("this run's kubectl cannot change or delete a namespace itself")
 	case len(rest) > 3:
 		return errors.New("the path is deeper than a Kubernetes resource and subresource")
-	case len(rest) >= 1 && core && rest[0] == "secrets":
-		//lint:ignore ST1005 the sentence opens with the Kubernetes kind, Secrets
-		return errors.New("Secrets are not readable or writable through this run's kubectl")
 	case len(rest) == 3 && slices.Contains(kubeSubresourcesRefused, rest[2]):
 		return fmt.Errorf("%s is not allowed for this run's kubectl", rest[2])
 	case len(rest) == 3 && rest[0] == "serviceaccounts" && rest[2] == "token":
 		return errors.New("this run's kubectl cannot request a service account token")
+	case len(rest) >= 1 && rest[0] == "controllerrevisions" && method != http.MethodGet && method != http.MethodDelete:
+		return errors.New("this run's kubectl cannot create or change a ControllerRevision, because a StatefulSet builds its pods from one")
 	case method != http.MethodGet && !d.write && !d.restart:
 		return errors.New("this run's kubectl has read access only")
 	}
@@ -232,7 +242,11 @@ func headerHasToken(h http.Header, name, token string) bool {
 
 // serveKubeAPI is the door: judge, resolve, forward.
 func (p *Proxy) serveKubeAPI(w http.ResponseWriter, r *http.Request, host string, port int) {
-	if err := p.kube.admit(r.Method, adoRawPath(r), r.Header); err != nil {
+	err := p.kube.admit(r.Method, adoRawPath(r), r.Header)
+	if err == nil && p.kube.write {
+		err = p.kube.admitPodSpec(r, adoRawPath(r))
+	}
+	if err != nil {
 		p.refuseKubeAPI(w, r, host, port, kubeAPIRefused, kubeAPIRefusedPrefix+err.Error()+".")
 		return
 	}

@@ -570,3 +570,28 @@ func TestAttachIssuerPortal_ThawNeedsPersonMembership_PG(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachIssuerPortal_ThawThroughLivePortalPin_PG: the sibling of the case above for a run the portal itself
+// started (created_via names it). With the person's membership removed, the live portal's pin covers the run's
+// unit, so the ticket's thaw re-check passes and the runtime thaws.
+func TestAttachIssuerPortal_ThawThroughLivePortalPin_PG(t *testing.T) {
+	rig, dr := newDispatchAttachRig(t)
+	if _, err := rig.env.st.DeleteGovernanceMembership(context.Background(), rig.member.ID); err != nil {
+		t.Fatalf("remove the person's membership: %v", err)
+	}
+	st := rig.srv.cfg.Store.(issuerAttachStore)
+	now := time.Now().UTC()
+	rig.ast.mu.Lock()
+	run := rig.ast.runs[rig.run.ID]
+	run.PausedAt, run.PausedReason = &now, types.PauseIdle
+	run.CreatedVia = &rig.via.Delegate
+	rig.ast.runs[rig.run.ID] = run
+	rig.ast.mu.Unlock()
+	rig.srv.cfg.Store = pausingAttachStore{st}
+	_ = rig.dial(t).CloseNow()
+	dr.mu.Lock()
+	defer dr.mu.Unlock()
+	if len(dr.thaws) != 1 {
+		t.Fatalf("%d runtime thaws through the live portal's pin with no membership, want 1", len(dr.thaws))
+	}
+}

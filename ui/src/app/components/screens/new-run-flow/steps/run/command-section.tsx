@@ -59,7 +59,7 @@ export function CommandSection({ kind, command, apps, onKind, onCommand, onApps,
         An Automation / script that keeps itself running has it too, as Optional (r15 q1). */}
     {(server || keptRunning) && (
       <QuestionBlock labelId={portsId} label={NR_RUN.PORTS_LABEL} marker={server ? undefined : NR_SHARED.OPTIONAL}>
-        <PortsSection labelId={portsId} apps={apps} optional={!server} inboundRefused={inboundRefused} {...onApps} />
+        <PortsSection labelId={portsId} apps={apps} optional={!server} background={!server} inboundRefused={inboundRefused} {...onApps} />
       </QuestionBlock>
     )}
     </>

@@ -134,7 +134,7 @@ cd ~/.wardyn && docker compose up -d
 - An upgrade keeps a local tag or an image on another registry. It overwrites a `claude-code` pin on the installer's own `ghcr.io` owner with `agent-base` at the new version.
 - A local build stays at the version you built, so rebuild after an upgrade.
 
-**"Resolves" is two checks, not one:**
+**"Resolves" is two checks, and Wardyn's own base image never passes:**
 
 - A pin alone is not proof the image exists — this repo's own defaults pin
   it unconditionally, build or no build.
@@ -142,6 +142,9 @@ cd ~/.wardyn && docker compose up -d
   present: the docker substrate's local image store. On Kubernetes, which
   pulls fresh per launch, the pin is trusted and a missing image surfaces
   at the login run itself, naming it.
+
+- Wardyn's own agent base image never resolves, present or not, because it ships no `claude` CLI: `agent-base` under `ghcr.io/cjohnstoniv/`, under `wardyn/`, or with no registry, at any tag.
+- A one-line install pins `claude-code` to it, so Setup warns and the refusal below holds until the entry names an image built as above.
 
 - Until both checks hold, `PUT /model-providers` and `PUT /site-config` refuse a write that turns an `anthropic_subscription` provider on.
 - The refusal reads: *"Claude subscriptions need the Claude Code sign-in image, which this install hasn't built yet."*

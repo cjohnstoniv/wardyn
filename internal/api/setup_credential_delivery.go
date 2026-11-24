@@ -57,10 +57,11 @@ func (s *Server) credentialDeliveryRow(ctx context.Context) (SetupCheck, bool) {
 	return credentialDeliveryCheck(p.Unbuildable())
 }
 
-// runnerPolicyRows are the operator rows about what a runner is set to take: runner_limits and credential_delivery.
-func (s *Server) runnerPolicyRows(ctx context.Context) []SetupCheck {
+// runnerPolicyRows are the operator rows about what a runner is set to take: runner_limits, credential_delivery and default_barrier_unset.
+func (s *Server) runnerPolicyRows(ctx context.Context, rnr SetupRunner) []SetupCheck {
 	var rows []SetupCheck
-	for _, row := range []func(context.Context) (SetupCheck, bool){s.runnerLimitsRow, s.credentialDeliveryRow} {
+	for _, row := range []func(context.Context) (SetupCheck, bool){s.runnerLimitsRow, s.credentialDeliveryRow,
+		func(ctx context.Context) (SetupCheck, bool) { return s.defaultBarrierUnsetRow(ctx, rnr) }} {
 		if chk, ok := row(ctx); ok {
 			rows = append(rows, chk)
 		}
