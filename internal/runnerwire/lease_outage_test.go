@@ -31,7 +31,9 @@ func TestLeaseOutageFieldsRoundTrip(t *testing.T) {
 
 // TestLeaseDecodesV0102Shape: a lease from a previous release, without the outage keys, decodes with zero terms.
 func TestLeaseDecodesV0102Shape(t *testing.T) {
-	old := `{"execution_generation":"` + uuid.NewString() + `","run_id":"` + uuid.NewString() + `","token_renewed_at":"2026-11-01T00:00:00Z","ends_at":"2026-11-01T01:00:00Z"}`
+	now := time.Now().UTC()
+	old := `{"execution_generation":"` + uuid.NewString() + `","run_id":"` + uuid.NewString() + `","token_renewed_at":"` +
+		now.Format(time.RFC3339) + `","ends_at":"` + now.Add(time.Hour).Format(time.RFC3339) + `"}`
 	var l Lease
 	if err := json.Unmarshal([]byte(old), &l); err != nil {
 		t.Fatal(err)
