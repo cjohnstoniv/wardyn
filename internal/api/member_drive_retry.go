@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -94,8 +95,9 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 }
 
 // meDeletingDrives is the caller's own drives whose delete has not finished, listed so the owner sees them and can
-// press Delete again (#4061). They are added after the reachable set is built, so no run attaches one.
-func (s *Server) meDeletingDrives(ctx context.Context) []client.MeDrive {
+// press Delete again (#4061). They are added after the reachable set is built, so no run attaches one. A drive already
+// in have is not listed twice.
+func (s *Server) meDeletingDrives(ctx context.Context, have []client.MeDrive) []client.MeDrive {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	owner := types.CanonicalUserSubject(oidcHumanFromContext(ctx))
 	if _, actor := actorFromContext(ctx, ""); !ok || owner == "" || types.CanonicalUserSubject(actor) != owner {
@@ -108,7 +110,7 @@ func (s *Server) meDeletingDrives(ctx context.Context) []client.MeDrive {
 	}
 	var out []client.MeDrive
 	for _, d := range drives {
-		if !d.Deleting() {
+		if !d.Deleting() || slices.ContainsFunc(have, func(h client.MeDrive) bool { return h.ID == d.ID.String() }) {
 			continue
 		}
 		row := memberMeDrive(d)

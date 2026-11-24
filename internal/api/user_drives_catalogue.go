@@ -135,7 +135,7 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
 		// A catalogue that could not be read is not padded with the rows that could.
 		if out.Unavailable == "" {
-			out.Drives = append(out.Drives, s.meDeletingDrives(ctx)...)
+			out.Drives = append(out.Drives, s.meDeletingDrives(ctx, out.Drives)...)
 		}
 	}
 	out.Create = s.memberDriveCreateState(r.WithContext(ctx))

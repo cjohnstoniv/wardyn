@@ -308,3 +308,17 @@ func TestMeDrives_NoDeletingRowsWhenTheCatalogueIsUnavailable(t *testing.T) {
 		t.Errorf("an unavailable catalogue listed %+v, want no row", got.Drives)
 	}
 }
+
+// A drive the catalogue already lists is not listed a second time as deleting.
+func TestMeDrives_DeletingRowIsNeverListedTwice(t *testing.T) {
+	st := newMemberDriveStore()
+	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	d := heldDrive(st, "Stuck", types.DriveBackendDockerVolume, 10*time.Minute, 1)
+	ctx := personCtx(aliceSub)
+	if got := srv.meDeletingDrives(ctx, nil); len(got) != 1 || got[0].ID != d.ID.String() {
+		t.Fatalf("with nothing listed: %+v, want the one deleting drive", got)
+	}
+	if got := srv.meDeletingDrives(ctx, []client.MeDrive{{ID: d.ID.String()}}); len(got) != 0 {
+		t.Errorf("with the drive already listed: %+v, want none", got)
+	}
+}
