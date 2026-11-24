@@ -97,7 +97,7 @@ func containerImageOK(ref string) bool {
 }
 
 // containerImageRefusal is the shape refusal of containers[i].image. runRequestGovernance answers it too, before
-// its sentences echo the ref, since that door runs before the shape checks (runs_create_validate.go:144).
+// its sentences echo the ref, since that door runs before the shape checks (decodeAndValidateCreateRun).
 func containerImageRefusal(i int) *runRefusal {
 	return containersInvalid(fmt.Sprintf("containers[%d].image", i),
 		"containers[%d].image: one image ref of at most %d bytes, pinned by digest (<repository>@sha256:<64 hex>)", i, maxRunOverrideValueLen)
