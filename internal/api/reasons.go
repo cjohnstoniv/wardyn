@@ -646,6 +646,8 @@ const (
 	reasonDriveShareBesideManaged = "drive_share_beside_managed"
 	// reasonDriveOneDisk: a macOS VM run naming a second disk drive, a kept work folder counting as one.
 	reasonDriveOneDisk = "drive_one_disk"
+	// reasonDriveInAnotherRun: a disk drive another run that has not ended holds.
+	reasonDriveInAnotherRun = "drive_in_another_run"
 )
 
 // Member drives (member_drives.go, member_drives_admin.go): a person's own
