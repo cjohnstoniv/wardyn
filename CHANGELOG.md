@@ -26,6 +26,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Governance: writing one person's or group's assignment to a profile no longer waits for an assignment of the same subject to a different profile; two writes of the same assignment still apply one at a time (#3478).
 - On Kubernetes, Wardyn now learns that a pod it is waiting on has changed by watching its pods, instead of reading each waiting pod every 200 ms (every second for a running task). Many runs starting or stopping at once make far fewer requests to the cluster. Every decision still comes from reading the pod itself. The runs Role in both Helm charts (`wardyn` and `wardyn-runnerd`) gains `watch` on pods.
 - Kubernetes: the image registration check, the start-time check of where a runner's relay traffic comes from, and the recovery of a task's output now wait on the shared pod watch instead of reading their pod on a timer; each still reads the pod itself before deciding, and polls as before where the watch is not available (#4124).
+- Terminals: the open terminal sessions on one run now share one read of the run and its profile at each re-check instead of one read per session. A profile that stops allowing interactive sessions still ends every open session at the next check.
 
 ### Fixed
 
