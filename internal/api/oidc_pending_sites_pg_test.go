@@ -116,7 +116,7 @@ func postHeldLogout(t *testing.T, srv *Server, token string) *httptest.ResponseR
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -587,7 +587,8 @@ func (b *bodyHook) Read(p []byte) (int, error) {
 	return b.r.Read(p)
 }
 
-func postWithBodyHook(srv *Server, token string, hook func()) *httptest.ResponseRecorder {
+func postWithBodyHook(t *testing.T, srv *Server, token string, hook func()) *httptest.ResponseRecorder {
+	t.Helper()
 	form := url.Values{"logout_token": {token}}.Encode()
 	r := httptest.NewRequest(http.MethodPost, "/auth/backchannel-logout", strings.NewReader(""))
 	r.Body = io.NopCloser(&bodyHook{r: strings.NewReader(form), hook: hook})
@@ -595,7 +596,7 @@ func postWithBodyHook(srv *Server, token string, hook func()) *httptest.Response
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Host, r.RemoteAddr = "127.0.0.1", "127.0.0.1:54321"
 	w := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(w, r)
+	panicFails(t, srv.Handler()).ServeHTTP(w, r)
 	return w
 }
 
@@ -621,7 +622,7 @@ func TestBackchannelPending_ExemptRequestChargedAfterPublish(t *testing.T) {
 	if _, charged := backchannelBucketTokens(srv); charged {
 		t.Fatal("a malformed request under the pending exemption charged the limiter before the first refusal")
 	}
-	w := postWithBodyHook(srv, "garbage", func() { pc.recoverProvider(t) })
+	w := postWithBodyHook(t, srv, "garbage", func() { pc.recoverProvider(t) })
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("a malformed token on the discovered path = %d %s, want 400", w.Code, w.Body.String())
 	}
@@ -637,7 +638,7 @@ func TestBackchannelPending_ExemptRequestRefusedAfterPublishWhenLimited(t *testi
 	for range int(backchannelLogoutBurst) + 2 {
 		srv.backchannelLimiter.allow("", srv.cfg.Now())
 	}
-	w := postWithBodyHook(srv, pc.token(t, "u1", "j1", nil), func() { pc.recoverProvider(t) })
+	w := postWithBodyHook(t, srv, pc.token(t, "u1", "j1", nil), func() { pc.recoverProvider(t) })
 	if w.Code != http.StatusTooManyRequests {
 		t.Errorf("an exempt request past the rate on the discovered path = %d %s, want 429", w.Code, w.Body.String())
 	}
