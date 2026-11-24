@@ -42,6 +42,12 @@ const GovernanceScreen = React.lazy(() =>
     default: m.GovernanceScreen,
   })),
 );
+// A governance change on its own page, opened from the Changes queue.
+const ChangeReviewPage = React.lazy(() =>
+  import("./components/screens/governance/change-review-page").then((m) => ({
+    default: m.ChangeReviewPage,
+  })),
+);
 // The admin's drive registry. No nav item and no member path: it is reached
 // from the Workspaces header's outline button, the setup Workspaces step's card
 // and the Settings card, each of which renders for an operator only.
@@ -194,6 +200,7 @@ export {
   PoliciesScreen,
   BoundaryScreen,
   GovernanceScreen,
+  ChangeReviewPage,
   DrivesScreen,
   ProvidersScreen,
   ImagesScreen,

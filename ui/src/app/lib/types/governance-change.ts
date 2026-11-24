@@ -83,7 +83,6 @@ export interface ApprovalEligible {
   principal: string;
   email?: string;
   tier: ApproverTier;
-  unit_name?: string;
 }
 
 // What the people count leaves out: people whose role cannot be confirmed (count), or a pool past its cap.
