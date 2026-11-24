@@ -881,7 +881,7 @@ func TestRunScheduleSweep_TwoSweepsWriteOneFireRow(t *testing.T) {
 			if fires != 1 {
 				t.Errorf("run.schedule.fire rows = %d, want 1", fires)
 			}
-			if got := st.row(t, sc.ID); got.LastOutcome != tc.outcome || !got.NextAt.Equal(sc.NextAt.Add(24*time.Hour)) {
+			if got := st.row(t, sc.ID); got.LastOutcome != tc.outcome || !got.NextAt.Equal(sc.NextAt.Truncate(time.Minute).Add(24*time.Hour)) {
 				t.Errorf("the schedule after both sweeps = %+v; want one slot on, recorded %s", got, tc.outcome)
 			}
 		})
