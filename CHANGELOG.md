@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A run's proxy no longer adds a Git credential (a GitHub App token, a `git_pat` through the PAT broker, the GitHub CLI's token, or a push rule's read of the forge) when the 30-minute limit without a run token renewal passes while the request waits: for another request's credential, for an approval, or for the forge's address. It checks the limit again just before the credential goes on. A Git request queued behind another request for the same credential now spends its own `WARDYN_GIT_APPROVAL_TIMEOUT` and stops waiting when it is cancelled; before, it could wait out the other request's whole timeout and then start a new one. Needs the new proxy image.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
