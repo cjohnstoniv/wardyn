@@ -118,9 +118,9 @@ func (s *Server) assistantSubjectFor(ctx context.Context, rt assistantTarget, dr
 		spec := s.assistantRecordSpec(ctx, p.Spec)
 		sub.before = &spec
 	case rt.template != nil:
-		sub.template = rt.template
-		if spec, ok := assistantTemplateSpec(rt.template.Document); ok {
-			spec = s.assistantRecordSpec(ctx, spec)
+		view := s.assistantTemplateView(ctx, *rt.template)
+		sub.template = &view
+		if spec, ok := assistantTemplateSpec(view.Document); ok {
 			sub.before = &spec
 		}
 	}
@@ -128,6 +128,28 @@ func (s *Server) assistantSubjectFor(ctx context.Context, rt assistantTarget, dr
 		return sub, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "Name a draft to check.") // PROPOSED
 	}
 	return sub, nil
+}
+
+// assistantTemplateView is a stored template as the template read shows it: every repository URL that carries a
+// credential redacted (redactRepoURLsInJSON), and its inline policy cut as the person may read it
+// (assistantRecordSpec). Nothing of the stored row reaches a check, a result or the model in any other form.
+func (s *Server) assistantTemplateView(ctx context.Context, t types.RunTemplate) types.RunTemplate {
+	t.Document = redactRepoURLsInJSON(t.Document)
+	spec, ok := assistantTemplateSpec(t.Document)
+	if !ok {
+		return t
+	}
+	var doc client.TemplateDocument
+	if json.Unmarshal(t.Document, &doc) != nil || doc.Intent.Set("inline_policy", s.assistantRecordSpec(ctx, spec)) != nil {
+		t.Document = nil
+		return t
+	}
+	if raw, err := json.Marshal(doc); err == nil {
+		t.Document = raw
+	} else {
+		t.Document = nil
+	}
+	return t
 }
 
 // assistantTemplateSpec is the inline policy a template document's intent names, if any.
@@ -167,11 +189,38 @@ func (s *Server) assistantUnitBuild(ctx context.Context, key string, draft json.
 	if err != nil {
 		return nil, err
 	}
-	_, res, _, err := s.buildGovernanceUnit("", super, id, req, all, b, limit)
+	p, res, _, err := s.buildGovernanceUnit("", super, id, req, all, b, limit)
 	if err != nil {
 		return nil, errAssistantDraftInvalid{err.Error()}
 	}
+	if err := s.assistantUnitParentInScope(ctx, all, id, p.ParentID); err != nil {
+		return nil, err
+	}
 	return res, nil
+}
+
+// assistantUnitParentInScope is the parent check a unit admin's save makes (unitWritePrecheck, scopedUnitBuild):
+// a new unit, or one the draft moves, must sit under a unit they govern (unitScopeEvery); a unit with no parent
+// is a security admin's. A security caller is not checked. The answer is a validator error, as the save's 403 is
+// a refusal of this draft, not of the session.
+func (s *Server) assistantUnitParentInScope(ctx context.Context, all []types.GovernanceUnit, id uuid.UUID, parent *uuid.UUID) error {
+	if !s.isUnitAdminCaller(ctx) {
+		return nil
+	}
+	if cur, exists := unitsByID(all)[id]; exists && sameJSON(cur.ParentID, parent) {
+		return nil
+	}
+	if parent == nil {
+		return errAssistantDraftInvalid{"A unit with no parent is a security admin's to create."}
+	}
+	in, err := s.unitScopeEvery(ctx, false, *parent)
+	if err != nil {
+		return err
+	}
+	if !in {
+		return errAssistantDraftInvalid{"The parent unit is outside the units you govern."}
+	}
+	return nil
 }
 
 // errAssistantDraftInvalid is a draft its save route refuses, told apart from a failed read.
@@ -378,11 +427,21 @@ func (s *Server) assistantToolExplain(e *assistantToolEnv) (any, *assistantRefus
 	if ref != nil {
 		return nil, ref
 	}
-	review, approvals, err := s.assistantReview(e.ctx(), sub, s.assistantReviewCaller(e.ctx()))
+	caller := s.assistantReviewCaller(e.ctx())
+	// A draft the save route's validator refuses has no verdict: it says so, with the validator's errors, as the
+	// checks strip does, rather than failing on reviewFor's build error.
+	errs, err := s.assistantValidate(e.r, sub, caller)
 	if err != nil {
 		return nil, assistantCheckFailed(err)
 	}
-	return map[string]any{"review": review, "held": review != nil && approvals > 0, "approvals_needed": approvals}, nil
+	if len(errs) > 0 {
+		return map[string]any{"valid": false, "errors": errs, "review": nil, "held": false, "approvals_needed": 0}, nil
+	}
+	review, approvals, err := s.assistantReview(e.ctx(), sub, caller)
+	if err != nil {
+		return nil, assistantCheckFailed(err)
+	}
+	return map[string]any{"valid": true, "errors": errs, "review": review, "held": review != nil && approvals > 0, "approvals_needed": approvals}, nil
 }
 
 // assistantToolGrade is grade: composer.Grade's risk before and after.

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -42,9 +42,11 @@ type assistantClamped struct {
 	unit     *ResolvedUnit
 }
 
-// assistantClampDraft bounds a run or template draft's policy to the person's ceiling (assistantClampSpec). A
-// unit draft, or a template with no policy, comes back as it is.
-func (s *Server) assistantClampDraft(ctx context.Context, sub assistantSubject) (assistantClamped, error) {
+// assistantClampDraft bounds a run or template draft's policy as the save route does: first the person's
+// capability grants (narrowUserInlinePolicy, the run route's narrowing), then their ceiling (assistantClampSpec).
+// A unit draft, or a template with no policy, comes back as it is.
+func (s *Server) assistantClampDraft(r *http.Request, sub assistantSubject) (assistantClamped, error) {
+	ctx := r.Context()
 	out := assistantClamped{draft: sub.draft}
 	if sub.govKind != "" {
 		return out, nil
@@ -58,8 +60,23 @@ func (s *Server) assistantClampDraft(ctx context.Context, sub assistantSubject) 
 		return out, err
 	}
 	out.unit = ceiling.Unit
-	clamped, refusals := assistantClampSpec(spec, ceiling)
-	out.refusals = refusals
+	narrowed := spec
+	_, drops, err := s.narrowUserInlinePolicy(ctx, s.secretOwnerFromRequest(r), &narrowed)
+	if err != nil {
+		return out, err
+	}
+	for _, d := range drops {
+		if d.reason == authz.ReasonCapabilityEgressHost {
+			out.refusals = append(out.refusals, assistant.Refusal{Host: d.detail, Code: assistant.DropNotGranted})
+		}
+	}
+	for _, f := range assistantSpecFieldsChanged(&spec, narrowed) {
+		if f != "allowed_domains" {
+			out.refusals = append(out.refusals, assistant.Refusal{Field: f, Code: assistant.DropNotGranted})
+		}
+	}
+	clamped, refusals := assistantClampSpec(narrowed, ceiling)
+	out.refusals = append(out.refusals, refusals...)
 	out.draft, err = assistantWithSpec(sub, clamped)
 	return out, err
 }
@@ -77,17 +94,17 @@ func assistantClampSpec(spec types.RunPolicySpec, ceiling governanceCeiling) (ty
 	}
 	var refusals []assistant.Refusal
 	clamped, _ := composer.ClampMember(spec, ceiling.Spec, ceiling.Limits, ceiling.authoredSize(), ceiling.memberSize())
-	kept := []string{}
+	refused := map[string]bool{}
 	for _, h := range spec.AllowedDomains {
 		within := ceiling.Spec.AllowAllEgress || composer.AllowlistWithin([]string{h}, ceiling.Spec.AllowedDomains)
 		if !within || !slices.Contains(clamped.AllowedDomains, h) {
 			refusals = append(refusals, assistant.Refusal{Host: h, Code: assistant.DropOutsideCeiling, Unit: unitName})
-			continue
+			refused[h] = true
 		}
-		kept = append(kept, h)
 	}
+	// A narrowing: the draft's own hosts less the refused ones, never a host the draft did not name.
 	if spec.AllowedDomains != nil {
-		clamped.AllowedDomains = kept
+		clamped.AllowedDomains = slices.DeleteFunc(slices.Clone(spec.AllowedDomains), func(h string) bool { return refused[h] })
 	}
 	for _, f := range assistantSpecFieldsChanged(&spec, clamped) {
 		if f != "allowed_domains" {
@@ -162,13 +179,28 @@ func assistantPartFits(sub assistantSubject, one json.RawMessage) error {
 	return errors.New("unknown field: this target takes no draft")
 }
 
-// assistantPartsOf is draft as parts, one per top-level field, each marked as not from a build file.
-func assistantPartsOf(draft json.RawMessage) []types.AssistantProposalPart {
+// assistantRefusalSection is the draft section a clamp refusal is about: a run policy's field (a host is in
+// allowed_domains), or a template's document, which holds its inline policy.
+func assistantRefusalSection(sub assistantSubject, f assistant.Refusal) string {
+	switch {
+	case sub.targetKind == types.AssistantTargetTemplate:
+		return "document"
+	case f.Host != "":
+		return "allowed_domains"
+	}
+	return f.Field
+}
+
+// assistantPartsOf is draft as parts, one per top-level field that proposed names (every field when proposed is
+// nil), each marked as not from a build file.
+func assistantPartsOf(draft json.RawMessage, proposed map[string]bool) []types.AssistantProposalPart {
 	var body map[string]json.RawMessage
 	_ = json.Unmarshal(draft, &body)
 	keys := make([]string, 0, len(body))
 	for k := range body {
-		keys = append(keys, k)
+		if proposed == nil || proposed[k] {
+			keys = append(keys, k)
+		}
 	}
 	slices.Sort(keys)
 	parts := make([]types.AssistantProposalPart, 0, len(keys))
@@ -202,7 +234,14 @@ func (s *Server) assistantToolDraft(e *assistantToolEnv) (any, *assistantRefusal
 	}
 	draft, refusals := s.assistantAssembleDraft(sub, a.Parts)
 	sub.draft = draft
-	p, ref := s.assistantPropose(e.r, sub, refusals)
+	proposed := map[string]bool{}
+	for _, part := range a.Parts {
+		proposed[part.Section] = true
+	}
+	for _, f := range refusals {
+		delete(proposed, f.Field)
+	}
+	p, ref := s.assistantPropose(e.r, sub, refusals, proposed)
 	if ref != nil {
 		return nil, ref
 	}
@@ -222,21 +261,27 @@ func (s *Server) assistantToolDraft(e *assistantToolEnv) (any, *assistantRefusal
 }
 
 // assistantPropose is the proposal of sub: clamped, validated, reviewed, with its dropped entries. The person
-// routes' checks build the same answer.
-func (s *Server) assistantPropose(r *http.Request, sub assistantSubject, refusals []assistant.Refusal) (assistantProposal, *assistantRefusal) {
+// routes' checks build the same answer. proposed names the sections the model proposed: the parts and the
+// clamp's refusals carry those sections only, so a stored field the model did not propose is never echoed. nil
+// means every section is the caller's own (the checks strip sends its whole draft).
+func (s *Server) assistantPropose(r *http.Request, sub assistantSubject, refusals []assistant.Refusal, proposed map[string]bool) (assistantProposal, *assistantRefusal) {
 	ctx := r.Context()
 	caller := s.assistantReviewCaller(ctx)
-	clamped, err := s.assistantClampDraft(ctx, sub)
+	clamped, err := s.assistantClampDraft(r, sub)
 	if err != nil {
 		return assistantProposal{}, assistantCheckFailed(err)
 	}
 	sub.draft = clamped.draft
-	refusals = append(refusals, clamped.refusals...)
+	for _, f := range clamped.refusals {
+		if proposed == nil || proposed[assistantRefusalSection(sub, f)] {
+			refusals = append(refusals, f)
+		}
+	}
 	errs, err := s.assistantValidate(r, sub, caller)
 	if err != nil {
 		return assistantProposal{}, assistantCheckFailed(err)
 	}
-	p := assistantProposal{Parts: assistantPartsOf(sub.draft), Valid: len(errs) == 0, Errors: errs}
+	p := assistantProposal{Parts: assistantPartsOf(sub.draft, proposed), Valid: len(errs) == 0, Errors: errs}
 	if p.Valid {
 		if p.Review, p.ApprovalsNeeded, err = s.assistantReview(ctx, sub, caller); err != nil {
 			return assistantProposal{}, assistantCheckFailed(err)

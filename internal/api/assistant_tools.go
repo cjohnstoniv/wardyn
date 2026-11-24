@@ -15,6 +15,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/assistant"
 	"github.com/cjohnstoniv/wardyn/internal/audit"
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -169,6 +170,11 @@ func (s *Server) assistantRunTool(r *http.Request, ss store.AssistantSessionStor
 	if ref != nil {
 		return nil, ref
 	}
+	if rt.Kind == types.AssistantTargetUnit && rt.unit == nil {
+		if ref := s.assistantUnitTier(tctx); ref != nil {
+			return nil, ref
+		}
+	}
 	sc, err := s.cfg.Store.GetSiteConfig(tctx)
 	if err != nil {
 		return nil, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the settings.") // PROPOSED
@@ -235,6 +241,23 @@ func assistantCapped(raw json.RawMessage) json.RawMessage {
 	}
 	out, _ := json.Marshal(map[string]any{"truncated": true, "partial": string(keep)})
 	return out
+}
+
+// assistantUnitTier is the unit tier POST /governance/units sits behind (requireUnitScope), asked of a session
+// on a new unit before any tool composes it: a security caller passes, a caller holding a unit admin grant
+// passes (the parent is checked against their scope when the draft is built), and anyone else is refused.
+func (s *Server) assistantUnitTier(ctx context.Context) *assistantRefusal {
+	if s.isSecurityOperator(ctx) {
+		return nil
+	}
+	grants, err := s.callerUnitGrants(ctx)
+	if err != nil {
+		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read your unit admin grants.") // PROPOSED
+	}
+	if len(grants) == 0 {
+		return assistantRefusalFor(http.StatusForbidden, string(authz.ReasonUnitScopeDenied), "A new unit needs a unit admin or a security admin.") // PROPOSED
+	}
+	return nil
 }
 
 // assistantToolRecord appends the call's tool_record event: the one list the turn's suggestion row names.

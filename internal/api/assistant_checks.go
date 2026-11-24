@@ -126,19 +126,22 @@ func (s *Server) assistantPersonTarget(w http.ResponseWriter, tr *http.Request, 
 		rt.run = &run
 		next(tr, rt)
 	case types.AssistantTargetChange:
-		ch, err := s.cfg.Store.GetGovernanceChange(tr.Context(), id)
-		if err == nil && !s.canSeeGovernanceChange(tr, ch) {
-			err = store.ErrNotFound
-		}
-		if notFoundIf(w, err, "governance change", reasonGovernanceChangeNotFound) {
-			return
-		}
-		if err != nil {
-			writeServerError(w, tr, "read governance change", err)
-			return
-		}
-		rt.change, rt.govKind = &ch, ch.TargetKind
-		next(tr, rt)
+		// GET /governance/changes/{id} sits behind the unit tier (mountGovernanceChangeRoutes on the unit group).
+		s.requireUnitScope(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ch, err := s.cfg.Store.GetGovernanceChange(r.Context(), id)
+			if err == nil && !s.canSeeGovernanceChange(r, ch) {
+				err = store.ErrNotFound
+			}
+			if notFoundIf(w, err, "governance change", reasonGovernanceChangeNotFound) {
+				return
+			}
+			if err != nil {
+				writeServerError(w, r, "read governance change", err)
+				return
+			}
+			rt.change, rt.govKind = &ch, ch.TargetKind
+			next(r, rt)
+		})).ServeHTTP(w, tr)
 	default:
 		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "target_kind must be run, unit, template or change.") // PROPOSED
 	}
@@ -200,7 +203,7 @@ func (s *Server) handleAssistantChecks(w http.ResponseWriter, r *http.Request) {
 			ref.write(w, tr)
 			return
 		}
-		p, ref := s.assistantPropose(tr, sub, nil)
+		p, ref := s.assistantPropose(tr, sub, nil, nil)
 		if ref != nil {
 			ref.write(w, tr)
 			return
@@ -218,7 +221,7 @@ func (s *Server) handleAssistantChecks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// assistantReplayAnswer is POST /assistant/replay's answer: REPLAY's result, with its run list cut to runs
+// assistantReplayAnswer is POST /assistant/replay's answer: the replay's result, with its run list cut to runs
 // the caller may read, and the fixed basis every answer carries.
 type assistantReplayAnswer struct {
 	replayResult

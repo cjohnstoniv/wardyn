@@ -73,7 +73,7 @@ func (s *Server) assistantReplayScope(ctx context.Context, sub assistantSubject,
 	return store.ReplayScope{Units: units}, nil
 }
 
-// assistantReplay is REPLAY's read and its pure counts over the last 30 days of scope, leaving out every run an
+// assistantReplay is the replay's read and its pure counts over the last 30 days of scope, leaving out every run an
 // assistant session served, with allowed as the draft's verdict.
 func (s *Server) assistantReplay(ctx context.Context, scope store.ReplayScope, allowed func(string, int) bool) (replayResult, *assistantRefusal) {
 	rd, ok := s.cfg.Store.(store.RunHostDecisionReader)

@@ -13,6 +13,8 @@ const (
 	DropInvalid = "invalid"
 	// DropUnknownSection is a part that names no field of the target's body.
 	DropUnknownSection = "unknown_section"
+	// DropNotGranted is a host or field the person's capability grants leave out, as the save route narrows it.
+	DropNotGranted = "not_granted"
 )
 
 // Refusal is one save-route refusal of a proposed part: a host or a field, why, and the unit whose limits
