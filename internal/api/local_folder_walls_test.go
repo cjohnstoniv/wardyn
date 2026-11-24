@@ -902,6 +902,18 @@ func TestComputerFolderPass_DataOutStartsReadDenied(t *testing.T) {
 	}
 }
 
+// TestFolderPassArgs_UnreadableDataOutStartsReadDenied: a data_out rule that cannot be read starts the pass
+// read-closed, as the sync channel treats one.
+func TestFolderPassArgs_UnreadableDataOutStartsReadDenied(t *testing.T) {
+	s, cs, run, _ := scriptedFolderFixture(t, runnerwire.FolderPass{})
+	cs.policyErr = errors.New("planted policy read failure")
+	s.cfg.Store = &lfwFolderStore{computerFolderStore: cs}
+	got := s.folderPassArgs(context.Background(), run.ID, "/work", nil)
+	if !slices.Equal(got, []string{"-d", "/work", "-P", sftpServerDeny}) {
+		t.Fatalf("argv = %v, want read-closed", got)
+	}
+}
+
 // lfwPassStream is a pass's runner stream: reads come from in, writes are counted.
 type lfwPassStream struct {
 	in io.Reader
