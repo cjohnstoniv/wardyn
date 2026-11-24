@@ -242,3 +242,39 @@ func TestPG_HeldDriveRetry_FinishedRowLeavesCount(t *testing.T) {
 		t.Errorf("after the sweep: create = %+v, want count 1", after.Create)
 	}
 }
+
+// startingOwner is a store whose owner always has a run starting, so a delete is refused before any issue.
+type startingOwner struct{ store.PG }
+
+func (startingOwner) MemberDriveOwnerStarting(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+// A sweep that is refused before any issue only re-stamps the mark: the count stays even, nothing is called, and the
+// cleanup that never ran, running late, finds the claim is no longer its run's end and returns.
+func TestPG_HeldDriveRetry_RefusedBeforeAnyIssueOnlyRestampsTheMark(t *testing.T) {
+	e, pool := keepEnv(t, 3)
+	ctx := context.Background()
+	rc := &retryReclaimer{keepPoolRunner: &keepPoolRunner{e.runner}, outcome: runner.DriveReclaimDeleted}
+	e.srv.cfg.Runner = rc
+	run, drive := e.fenceKeptRun(pool)
+	e.fenceEndKept(run)
+	at := time.Now().Add(-6 * time.Minute).Truncate(time.Microsecond)
+	e.exec(`UPDATE agent_runs SET ended_at = $2 WHERE id = $1`, run.ID, at)
+	e.exec(`UPDATE user_drives SET delete_started_at = $2 WHERE id = $1`, drive, at)
+
+	if err := e.retryReplica(startingOwner{e.pg}, rc, true).sweepHeldMemberDriveDeletes(ctx); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	var restamped bool
+	if err := e.poolEnv.pool.QueryRow(ctx, `SELECT delete_started_at > now() - interval '1 minute' FROM user_drives WHERE id = $1`, drive).Scan(&restamped); err != nil {
+		t.Fatal(err)
+	}
+	if marked, n := e.fenceMarkOf(drive); !marked || n != 0 || !restamped || rc.calls() != 0 {
+		t.Fatalf("after the refused sweep: marked = %v, count = %d, re-stamped = %v, calls = %d; want marked at the even count 0, re-stamped, no call", marked, n, restamped, rc.calls())
+	}
+	e.srv.finishQueuedKeptDrive(ctx, run.ID)
+	if marked, n := e.fenceMarkOf(drive); !marked || n != 0 || rc.calls() != 0 || !e.keptDriveExists(run) {
+		t.Errorf("after the late cleanup: marked = %v, count = %d, calls = %d, exists = %v; want it to return at the re-stamp check, touching nothing", marked, n, rc.calls(), e.keptDriveExists(run))
+	}
+}
