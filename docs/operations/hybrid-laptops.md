@@ -364,8 +364,13 @@ What happens:
   them out.
 - On filesystems that cannot sync a directory, and for read-only files on Windows, a power loss can drop a
   just-written change; Wardyn logs a warning and continues.
-- Before a pass back, Wardyn stops the agent and cuts its egress. No pass runs once a lease end under
-  [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace) has stopped the sandbox; a krun run is refused at start.
+- Before a pass back, Wardyn stops the agent and cuts its egress. A krun run is refused at start.
+- A lease end stops the sandbox and keeps its files for
+  [`WARDYN_ENDED_RUN_GRACE`](../ENV.md#wardyn_ended_run_grace). When the run is finally stopped, a task sandbox on the
+  server's Docker is started again with no network and nothing running but its idle process, for the pass back, and
+  is then stopped.
+- An interactive run's sandbox, a sandbox on a runner and a virtual machine are not started again: no pass runs, and
+  the run says its changes were not brought back.
 - Known limit: on a virtual machine sandbox, the agent can stay running with its network for up to about 2 minutes
   after the run ends, while the first pass back runs (its timeout).
 - On a Kubernetes runner, or a runner older than 0.10.0, Wardyn stops the sandbox's proxy before the first pass back

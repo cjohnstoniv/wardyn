@@ -15,8 +15,9 @@ import (
 // fencingSubstrate is a reviving substrate that fences and acts for a policy generation, and records both.
 type fencingSubstrate struct {
 	*revivingSubstrate
-	fenced []string
-	gens   []int
+	fenced  []string
+	started []string
+	gens    []int
 }
 
 func (f *fencingSubstrate) FenceProxy(_ context.Context, ref string) error {
@@ -104,4 +105,23 @@ func (p *plainVerbs) ReplaceProxy(context.Context, string, []byte) error {
 func (p *plainVerbs) ReplaceProxyHashed(context.Context, string, []byte) (string, error) {
 	p.count("replace")
 	return "plain", nil
+}
+
+func (f *fencingSubstrate) StartFenced(_ context.Context, ref string) error {
+	f.rec(&f.started, ref)
+	return nil
+}
+
+// A fenced start is forwarded to a substrate that has it, and refused where it cannot be served.
+func TestOrchestrator_StartFencedForwards(t *testing.T) {
+	ctx := context.Background()
+	const ref = "wardyn-agent-x"
+	at := &fencingSubstrate{revivingSubstrate: &revivingSubstrate{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}}
+	if err := New(at).StartFenced(ctx, ref); err != nil || len(at.started) != 1 {
+		t.Fatalf("StartFenced = %v, started %v; want it forwarded", err, at.started)
+	}
+	plain := &plainVerbs{fakeSubstrate: &fakeSubstrate{name: "docker", classes: []types.ConfinementClass{types.CC1}}}
+	if err := New(plain).StartFenced(ctx, ref); !errors.Is(err, runner.ErrEndUnsupported) {
+		t.Errorf("StartFenced on a substrate without it = %v; want runner.ErrEndUnsupported", err)
+	}
 }

@@ -502,7 +502,8 @@ type notQuiescable string
 func (e notQuiescable) Error() string { return string(e) }
 
 // errSandboxStopped is quiesceKeptSandbox's answer for a sandbox that no longer runs, as at a lease
-// end whose EndSandbox stopped it: no pass can run in it, whatever stopping its agent would do.
+// end whose EndSandbox stopped it, and that was not started again for its pass (restartFencedForPass):
+// no pass can run in it, whatever stopping its agent would do.
 var errSandboxStopped = errors.New("the sandbox had already stopped")
 
 // unlessStopped is err, or errSandboxStopped when ref's sandbox reads as no longer running.
@@ -529,9 +530,17 @@ const keptAgentStopWait = 2 * time.Second
 // cannot reach; for an ended run on a runner, as quiesceRunnerRun says; and for a substrate that
 // cannot stop its proxy alone (noProxyStop: Kubernetes in server mode, whose pass runs only on an
 // agent already ended). An exec-less sandbox, whose agent is its main process, is refused outright: its
-// agent ends only with the sandbox, so no pass runs. A sandbox already stopped answers
-// errSandboxStopped.
+// agent ends only with the sandbox, so no pass runs. A server task sandbox a lease end stopped is
+// started again with no network and its agent ended (restartFencedForPass); one that cannot be, and
+// any other sandbox already stopped, answers errSandboxStopped.
 func (s *Server) quiesceKeptSandbox(ctx context.Context, run types.AgentRun, ref string) error {
+	if restarted, err := s.restartFencedForPass(ctx, run, ref); err != nil {
+		slog.WarnContext(ctx, "wardynd: a stopped sandbox could not be started again for its pass back",
+			slog.String("run_id", run.ID.String()), slog.Any("err", err))
+		return err
+	} else if restarted {
+		return nil
+	}
 	if !isTerminalRunState(run.State) {
 		// A run still RUNNING (a person's bring-back, or a first pass kept at the run's end) is quiesced as
 		// before the cut existed: cutAgent cuts only an ended run's agent.
@@ -605,6 +614,11 @@ func (s *Server) killKeptAgent(ctx context.Context, run types.AgentRun, ref stri
 			if err := s.verifyAgentGone(ctx, ref); err != nil {
 				return s.unlessStopped(ctx, ref, fmt.Errorf("its agent could not be stopped: %w", err))
 			}
+			return nil
+		}
+		if err != nil && s.verifyAgentGone(ctx, ref) == nil {
+			// The agent's exec cannot be read (Docker drops it when a sandbox is started again for its pass,
+			// restartFencedForPass) and nothing but the sandbox's init is left: the agent is gone.
 			return nil
 		}
 		if time.Now().After(deadline) {

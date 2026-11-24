@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- With computer folders on, a task run on the server's Docker whose lease ended now brings its folder's changes back when it is finally stopped: its stopped sandbox is started again with no network and its agent stopped for the pass back, then stopped. An interactive run's sandbox, a sandbox on a runner and a virtual machine still run no pass and say their changes were not brought back (#3486).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
