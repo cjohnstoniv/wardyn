@@ -76,19 +76,18 @@ func decideForgeEngine() forgeEngine {
 }
 
 // TestDecideMatchesCorpus: through reqcheck.Decide, each checker and the
-// mapping give every recorded row its recorded answer and capability.
+// mapping give every recorded row its recorded answer and capability, after
+// the deltas file.
 func TestDecideMatchesCorpus(t *testing.T) {
 	rec := loadForgeRecording(t)
 	g, err := generateForgeRows(realForgeTables(), decideForgeEngine())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(g.rows) != rec.Rows || len(g.driftedIDs) != 0 {
-		t.Fatalf("%d rows regenerated (drifted %v), recording has %d", len(g.rows), g.driftedIDs, rec.Rows)
-	}
-	d, hashErrs := diffForge(rec, g.rows)
-	if len(hashErrs) != 0 || len(d.Changes) != 0 || len(d.Added) != 0 || len(d.Removed) != 0 {
-		t.Fatalf("Decide differs from the recording: %d hash errors %v, changes %v, added %v, removed %v", len(hashErrs), hashErrs, d.Changes, d.Added, d.Removed)
+	// The same replay as TestForgeCheckCorpus, after the same deltas file, so
+	// an attributed delta or an appended sample holds here too.
+	if err := replayForge(rec, g, loadForgeDeltas(t)); err != nil {
+		t.Fatalf("Decide differs from the recording after its deltas:\n%v", err)
 	}
 	// The match is over rows of every kind, not one of them.
 	var adoAllowed, adoHeld, adoRefused, ghAllowed, ghRefused int

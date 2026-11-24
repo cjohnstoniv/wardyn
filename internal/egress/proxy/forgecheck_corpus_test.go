@@ -709,6 +709,11 @@ func loadForgeDeltas(t *testing.T) forgeDeltas {
 	if err := json.Unmarshal(raw, &d); err != nil {
 		t.Fatal(err)
 	}
+	// The deltas are against one recording; a file written against another
+	// could match by chance, so it is refused.
+	if d.Base != forgeRecordBase {
+		t.Fatalf("%s has base %q, want the recording's %s", forgeDeltasPath, d.Base, forgeRecordBase)
+	}
 	return d
 }
 
@@ -976,6 +981,37 @@ func TestForgeCheckDeltasWriter(t *testing.T) {
 		tb.ADOCatalogue = append(tb.ADOCatalogue, forgeCap{"zz_orphan", true})
 		if _, err := generateForgeRows(tb, realForgeEngine()); err == nil || !strings.Contains(err.Error(), "zz_orphan") {
 			t.Fatalf("generateForgeRows = %v, want the orphan named", err)
+		}
+	})
+}
+
+// TestForgeCheckGeneratorRefusesExempt: a capability exempt as never
+// classified can neither be declared by a sample nor be what a sample
+// classifies to, so the exempt list cannot hide a reachable capability.
+func TestForgeCheckGeneratorRefusesExempt(t *testing.T) {
+	exempt := map[string]string{"pr": "planted: never classified"}
+	t.Run("a sample declaring an exempt capability", func(t *testing.T) {
+		tb := plantedForgeTables()
+		tb.ADOExempt = exempt
+		tb.ADOSamples = append(tb.ADOSamples, adoSample("declares pr", "pr", "GET", forgeADOHost, forgeADORepo+"pullrequests", "", ""))
+		_, err := generateForgeRows(tb, realForgeEngine())
+		if err == nil || !strings.Contains(err.Error(), `"declares pr" declares "pr", which is exempt`) {
+			t.Fatalf("err = %v, want the declared-exempt refusal", err)
+		}
+	})
+	t.Run("a sample classifying to an exempt capability", func(t *testing.T) {
+		tb := plantedForgeTables()
+		tb.ADOExempt = exempt
+		_, err := generateForgeRows(tb, overridingForgeEngine(map[string]string{"git GET": "pr"}))
+		if err == nil || !strings.Contains(err.Error(), `"git GET" classifies to "pr", which is exempt`) {
+			t.Fatalf("err = %v, want the classified-exempt refusal", err)
+		}
+	})
+	t.Run("the same tables without the exempt sample pass", func(t *testing.T) {
+		tb := plantedForgeTables()
+		tb.ADOExempt = exempt
+		if _, err := generateForgeRows(tb, realForgeEngine()); err != nil {
+			t.Fatal(err)
 		}
 	})
 }
