@@ -173,6 +173,19 @@ type SetupFeatures struct {
 	// SupportSessions is WARDYN_SUPPORT_SESSIONS: an admin may ask to help inside someone's run. Absent when off,
 	// so the console shows no Request help button.
 	SupportSessions bool `json:"support_sessions,omitempty"`
+	// The site config's features block (site_features.go): each is true only when this release can turn the feature on
+	// and the site config turns it on. Absent when off or when the site config could not be read.
+	OrgSites              bool `json:"org_sites,omitempty"`
+	WindowsVMs            bool `json:"windows_vms,omitempty"`
+	RunMove               bool `json:"run_move,omitempty"`
+	MachineSnapshots      bool `json:"machine_snapshots,omitempty"`
+	LocalWindow           bool `json:"local_window,omitempty"`
+	PreviewURLs           bool `json:"preview_urls,omitempty"`
+	ComponentRequestRules bool `json:"component_request_rules,omitempty"`
+	OrgRunnerDrives       bool `json:"org_runner_drives,omitempty"`
+	// PreviewMaxVisibility is features.preview_urls.max_visibility while preview URLs are on: private (also an absent
+	// value), org or public.
+	PreviewMaxVisibility string `json:"preview_max_visibility,omitempty"`
 }
 
 func setupFeatures(multiAgentTasks, macWindow bool) SetupFeatures {
@@ -486,7 +499,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
-		Features:       setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()),
+		Features:       siteFeatureFlags(setupFeatures(s.cfg.MultiAgentTasks, siteCfgOK && siteCfg.MacOSVM.AttendedWindowAllowed()), siteCfg, siteCfgOK),
 	}
 	resp.HarnessSets = visibleHarnessSets(s.cfg.AgentImages, resp.Harnesses)
 	// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
