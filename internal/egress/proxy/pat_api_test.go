@@ -8,10 +8,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -680,5 +682,69 @@ func TestPATAPIForwardsNoRouteOverride(t *testing.T) {
 		if v := h.up.gitHeaders.Values(k); len(v) != 0 {
 			t.Errorf("forge saw %s: %q, want it stripped", k, v)
 		}
+	}
+}
+
+// holdAPIHostResolver answers as publicResolver, but once armed it holds the next lookup of apiHost until released.
+type holdAPIHostResolver struct {
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *holdAPIHostResolver) LookupIP(host string) ([]net.IP, error) {
+	if host == apiHost && g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		<-g.release
+	}
+	return publicResolver{}.LookupIP(host)
+}
+
+// The git_pat API door mints, then waits on the upstream vet (which can wait on DNS). A token served from the
+// cache inside the 30 minutes must not go upstream when the vet ends outside them.
+func TestPATAPIOfflineBoundAfterTheVet(t *testing.T) {
+	up := newPATBrokerUpstream(t, apiToken, "oauth2")
+	gate := &holdAPIHostResolver{entered: make(chan struct{}), release: make(chan struct{})}
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:        gate,
+		Dial:            redirectDial(upstreamAddr(up.srv)),
+		ControlPlaneURL: "https://wardynd.test:8080",
+		RunToken:        newTokenSource("RUNTOK"),
+		TLSClientConfig: testInsecureTLSConfig,
+		ControlTLS:      testInsecureTLSConfig,
+		PATGrants: map[string]PATGrant{apiHost: {
+			GrantID: uuid.New(), API: true, Forge: types.PATForgeGitLab, Repos: types.PATRepoSet("team/app"),
+		}},
+	})
+	h := &apiHarness{p: p, up: up, log: buf}
+	if rec := h.serve(t, apiReq{method: "GET", target: glBase + "/issues"}); rec.Code != http.StatusOK {
+		t.Fatalf("(a) status %d (%s), want 200", rec.Code, rec.Body)
+	}
+	hits, mints := h.forgeHits(), h.mints()
+
+	setQuiet(p, 29*time.Minute)
+	gate.armed.Store(true)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- h.serve(t, apiReq{method: "GET", target: glBase + "/jobs/5"}) }()
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never looked the forge host up")
+	}
+	setQuiet(p, 30*time.Minute)
+	close(gate.release)
+	rec := <-done
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not renewed its run token") {
+		t.Fatalf("(b) status %d body %q, want 502: the vet crossed the bound", rec.Code, rec.Body)
+	}
+	if h.forgeHits() != hits || h.mints() != mints {
+		t.Fatalf("(b) %d forge hits and %d mints (were %d and %d), want no new forge hit and no new mint", h.forgeHits(), h.mints(), hits, mints)
+	}
+	if d := findDecision(t, buf, ruleSourcePATAPIDenied); d.Decision != egress.Deny {
+		t.Fatalf("(b) last %s row %+v, want deny", ruleSourcePATAPIDenied, d)
 	}
 }

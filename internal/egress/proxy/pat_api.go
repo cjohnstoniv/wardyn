@@ -175,6 +175,7 @@ func (p *Proxy) servePATAPI(w http.ResponseWriter, r *http.Request, host string,
 		return
 	}
 	p.forwardAPIDoor(w, r, host, port, apiDoor{allow: ruleSourcePATAPI, denied: ruleSourcePATAPIDenied, mintFailed: "mint git_pat",
+		beforeSend: p.brokerOfflineErr,
 		credential: func(ctx context.Context) (string, string, error) {
 			token, _, err := p.patToken(ctx, grant)
 			if err != nil {
