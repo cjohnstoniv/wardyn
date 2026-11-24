@@ -437,6 +437,11 @@
   {
     "reason": "governance_unit",
     "target": "\"runs.schedule\"",
+    "sentence": "runScheduleResumeDeniedMsg"
+  },
+  {
+    "reason": "governance_unit",
+    "target": "\"runs.schedule\"",
     "sentence": "scheduledRunsDeniedMsg"
   },
   {
