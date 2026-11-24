@@ -89,6 +89,9 @@ func (s *Server) requiredApprovals(ctx context.Context, kind, targetKey string) 
 	if singleDecider(kind) || minimum <= 0 {
 		return 1, false, nil
 	}
+	if kind == govKindApprovalCounts {
+		return s.approvalCountsEditRequired(ctx)
+	}
 	required = minimum
 	if st, ok := s.cfg.Store.(store.GovernanceApprovalStore); ok {
 		n, sec, found, rerr := st.GovernanceApprovalCountFor(ctx, kind)
@@ -332,6 +335,9 @@ func (s *Server) settleOwnApproval(ctx context.Context, q store.Querier, in *rec
 	rows []store.GovernanceChangeApproval, c approvalCaller) ([]store.GovernanceChangeApproval, []approvalDrop, error) {
 	var counting []store.GovernanceChangeApproval
 	var drops []approvalDrop
+	// own is whether any of the same human's rows that still count is the caller's own, as the viewer judges it:
+	// an earlier row held only by a shared email must not hide the caller's own approval from the refusal.
+	var blocked, own bool
 	for _, row := range rows {
 		if !row.Counts() {
 			continue
@@ -345,9 +351,13 @@ func (s *Server) settleOwnApproval(ctx context.Context, q store.Querier, in *rec
 			return nil, nil, err
 		}
 		if v.counts {
-			return nil, nil, s.alreadyApproved(s.holdsApproval(c.principal, c.email, row))
+			blocked, own = true, own || s.holdsApproval(c.principal, c.email, row)
+			continue
 		}
 		drops = append(drops, approvalDrop{row: row, why: v.why, at: v.at, replace: true})
+	}
+	if blocked {
+		return nil, nil, s.alreadyApproved(own)
 	}
 	return counting, drops, nil
 }
@@ -403,8 +413,8 @@ func (s *Server) applyHeld(r *http.Request, q store.Querier, kind govKind, ch ty
 }
 
 // replayApply runs the held write under a savepoint and rolls it back: what a decision would answer for
-// stale or invalid, found without writing the target. An apply never touches the pool and never audits, so
-// the rollback leaves nothing behind.
+// stale or invalid, found without writing the target. An apply reads and writes only on q, and never audits,
+// so the rollback leaves nothing behind.
 func (s *Server) replayApply(ctx context.Context, r *http.Request, q store.Querier, kind govKind, ch types.GovernanceChange) error {
 	if _, err := q.Exec(ctx, `SAVEPOINT governance_approval`); err != nil {
 		return err

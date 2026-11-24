@@ -235,6 +235,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
+	{"GET /api/v1/governance/approval-counts", "the `/governance/approval-counts` routes"},
+	{"PUT /api/v1/governance/approval-counts", "the `/governance/approval-counts` routes"},
 	{"GET /api/v1/governance/recording", "the `/governance/recording` routes"},
 	{"PUT /api/v1/governance/recording", "the `/governance/recording` routes"},
 	{"PUT /api/v1/governance/units/{id}/envelope", "the `/governance/units/{id}/envelope` routes"},

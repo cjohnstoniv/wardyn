@@ -450,7 +450,7 @@
 # docs/AUDIT-ACTIONS.md 62898 = ours 62852 + theirs 62034 - base 61988 at the 0.10 W7 merge of egress-edit.
 # docs/AUDIT-ACTIONS.md 63867 = ours 63867 + theirs 63762 - base 63762 at the 0.10 W7 merge of rc.20 train merge of d2da2a9b5e.
 # docs/AUDIT-ACTIONS.md 63908 = ours 63867 + theirs 63803 - base 63762 at the 0.10 W7 merge of rc.20 train merge of live-deny-k8s.
-docs/AUDIT-ACTIONS.md=71190 share=8 # 71190 measured with the assistant sessions (+206: the session start, end and suggestion rows); earlier: 70984
+docs/AUDIT-ACTIONS.md=71241 share=8 # 71241 measured (+51: the approval counts write row); earlier: 71190
 # docs/AUDIT-ACTIONS.md 50827 = ours 50175 + theirs 50556 - base 49904 at the 0.10 merge of main (W4a) into the W4b train.
 # docs/AUDIT-ACTIONS.md 39938 adds 1 (0.9 H7): the `placement_component_self_defined` reason in the authz.denied vocabulary.
 # 0.9 H10 r1: docs/AUDIT-ACTIONS.md 40113 adds 65 over 40048 for the token-revoke join, the off semantics and the pending connect/disconnect rows.
