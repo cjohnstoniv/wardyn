@@ -152,4 +152,6 @@ func TestAttachLocalDisplacedWhileItsGrantIsInFlightReadsWhy(t *testing.T) {
 	if !errors.As(got, &ce) || ce.Code != websocket.StatusPolicyViolation || ce.Reason != attachTakeoverReason(holderOwner) {
 		t.Fatalf("the local socket ended with %v, want %d %q", got, websocket.StatusPolicyViolation, attachTakeoverReason(holderOwner))
 	}
+	// The handler itself returns: a displacement that closed the socket without ending the wait would leak it.
+	waitFor(t, "the local handler to finish", func() bool { return len(rig.rows("session.detach")) > 0 })
 }
