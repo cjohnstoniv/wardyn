@@ -32,6 +32,16 @@ type buildFilesStore struct {
 	ws map[uuid.UUID]types.Workspace
 	// draftErr fails a write of held files; replaceErr fails ReplaceAssistantSession.
 	draftErr, replaceErr error
+	// fresh answers the fresh role's sign-in read with a record, which with no role mapping derives the admin
+	// role, so an admin's tool context keeps the security tier and can read a unit.
+	fresh bool
+}
+
+func (s *buildFilesStore) GetPrincipalGroups(ctx context.Context, principal, portal string) (store.PrincipalGroups, error) {
+	if s.fresh {
+		return store.PrincipalGroups{Email: principal + "@corp.example", Groups: []string{}}, nil
+	}
+	return s.assistantFake.GetPrincipalGroups(ctx, principal, portal)
 }
 
 func (s *buildFilesStore) SetAssistantDraft(ctx context.Context, session uuid.UUID, draft []byte) error {
@@ -472,27 +482,55 @@ func TestAssistantRepoDraftReplacesWarmAndFetchingSessions(t *testing.T) {
 	}
 }
 
+// createdForUnit is created for a repository draft of a unit an admin reads: the unit is in the fake's graph, and
+// the fresh role keeps the admin's security tier, so the unit is in scope.
+func (e *buildFilesEnv) createdForUnit(t *testing.T) (assistantSessionView, string) {
+	t.Helper()
+	unit := types.GovernanceUnit{ID: uuid.New(), Name: "build-unit", Ceiling: types.RunPolicySpec{MinConfinementClass: types.CC2}}
+	e.f.govGraph = []types.GovernanceUnit{unit}
+	e.st.fresh = true
+	e.cookie = ssoSession(t, e.person, e.person+"@corp.example", oidc.RoleAdmin)
+	target := `"purpose":"compose","target":{"kind":"unit","id":"` + unit.ID.String() + `"}`
+	w := doSSO(t, e.srv, http.MethodPost, "/api/v1/assistant/preview", e.cookie, `{`+target+`}`)
+	var p types.AssistantPreview
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &p) != nil {
+		t.Fatalf("preview of the unit = %d %s, want 200", w.Code, w.Body)
+	}
+	w = e.post(t, `{`+target+`,"preview_digest":"`+p.Digest+`","workspace_id":"`+e.ws.ID.String()+`","repo":"`+buildFilesTestRepo+`"}`)
+	var out assistantSessionView
+	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+		t.Fatalf("create for the unit = %d %s, want 201", w.Code, w.Body)
+	}
+	return out, p.Digest
+}
+
 // What changes between the create and the confirm ends the session with the reason and sends nothing: the purpose
-// turned off, a provider that now defers inspection, and a workspace the person can no longer launch (answered as
-// a missing one, with nothing read or launched). A template draft has no governance kind, so never_sent_kinds,
-// which takes governance kinds only (governanceKindKnown), cannot name it.
+// turned off, the kind put on the never-sent list, a provider that now defers inspection, and a workspace the
+// person can no longer launch (answered as a missing one, with nothing read or launched). never_sent_kinds takes
+// governance kinds only (governanceKindKnown), so that case drafts for a unit.
 func TestAssistantRepoDraftConfirmRefusals(t *testing.T) {
 	for _, c := range []struct {
 		name   string
+		unit   bool
 		change func(*buildFilesEnv)
 		status int
 		reason string
 	}{
-		{"purpose off", func(e *buildFilesEnv) { e.f.site.Assistant.Compose = false }, http.StatusConflict, reasonAssistantOff},
-		{"deferral", func(e *buildFilesEnv) {
+		{"purpose off", false, func(e *buildFilesEnv) { e.f.site.Assistant.Compose = false }, http.StatusConflict, reasonAssistantOff},
+		{"never sent", true, func(e *buildFilesEnv) { e.f.site.Assistant.NeverSentKinds = []string{govKindUnit} }, http.StatusConflict, reasonAssistantKindNeverSent},
+		{"deferral", false, func(e *buildFilesEnv) {
 			for i := range e.f.site.ModelProviders.Providers {
 				e.f.site.ModelProviders.Providers[i].GatewayIdentity = &types.ModelProviderGatewayIdentity{Inspection: types.GatewayInspectionGateway}
 			}
 		}, http.StatusConflict, reasonAssistantNoProvider},
-		{"workspace withdrawn", func(e *buildFilesEnv) { delete(e.srv.cfg.Store.(*buildFilesStore).ws, e.ws.ID) }, http.StatusNotFound, reasonWorkspaceNotFound},
+		{"workspace withdrawn", false, func(e *buildFilesEnv) { delete(e.srv.cfg.Store.(*buildFilesStore).ws, e.ws.ID) }, http.StatusNotFound, reasonWorkspaceNotFound},
 	} {
 		e := newBuildFilesEnv(t, buildFile("go.mod", "module widgets\n"))
-		created, digest := e.created(t)
+		create := e.created
+		if c.unit {
+			create = e.createdForUnit
+		}
+		created, digest := create(t)
 		reads := len(e.gh.LastReadRepos)
 		c.change(e)
 		wantReason(t, e.confirm(t, e.cookie, created.ID, digest), c.status, c.reason)
