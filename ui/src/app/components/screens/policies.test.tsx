@@ -45,6 +45,12 @@ vi.mock("../../lib/api/setup", () => ({
   setup: { getSetupStatus: () => getSetupStatusMock() },
 }));
 
+// The Agent rules section under the table reads its own list; an empty one keeps it out of these tests.
+vi.mock("../../lib/api/agent-rules", async (orig) => ({
+  ...(await orig<typeof import("../../lib/api/agent-rules")>()),
+  agentRules: { list: () => Promise.resolve([]), put: vi.fn(), remove: vi.fn() },
+}));
+
 // The person's own Azure DevOps rows; [] (no row) unless a test sets one.
 const getMineMock = vi.fn<() => Promise<unknown>>(() => Promise.resolve([]));
 vi.mock("../../lib/api/scm-access", () => ({
