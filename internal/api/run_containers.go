@@ -47,8 +47,8 @@ func containersShapeRefusal(req createRunRequest) *runRefusal {
 		return runError(http.StatusUnprocessableEntity, reasonRequestFieldUnavailable,
 			"containers: extra containers run in a container sandbox, not a virtual machine.")
 	}
-	if len(req.Containers) > maxRunContainers {
-		return containersInvalid("containers", "containers: at most %d extra containers", maxRunContainers)
+	if refusal := containersCountRefusal(req); refusal != nil {
+		return refusal
 	}
 	names, ports := map[string]bool{}, map[int]bool{}
 	for i, c := range req.Containers {
@@ -81,6 +81,15 @@ func containersShapeRefusal(req createRunRequest) *runRefusal {
 			}
 			ports[p] = true
 		}
+	}
+	return nil
+}
+
+// containersCountRefusal refuses more than maxRunContainers extras. runRequestGovernance asks it first too, so its
+// per-entry loop never runs over an unbounded list.
+func containersCountRefusal(req createRunRequest) *runRefusal {
+	if len(req.Containers) > maxRunContainers {
+		return containersInvalid("containers", "containers: at most %d extra containers", maxRunContainers)
 	}
 	return nil
 }
@@ -230,6 +239,17 @@ func (s *Server) stepContainersRecording(f *runFold, _ *foldRecorder) bool {
 		"Extra containers are not available where your organisation requires recording: what the agent and an extra container exchange inside the sandbox is not recorded.")
 	ref.body.Field = "containers"
 	return !ref.write(s, f.w, f.r)
+}
+
+// stampRunContainers writes the extras on a run.create datum, and marks the row image_admission_exempt when an
+// operator's or the break-glass admin's run carries any, as markImageAdmissionExempt marks a member image: each
+// extra's image is the launcher's choice, which admission does not check for them.
+func (s *Server) stampRunContainers(ctx context.Context, data map[string]any, cs []types.RunExtraContainer) {
+	if len(cs) == 0 {
+		return
+	}
+	data["containers"] = auditContainers(cs)
+	s.markImageAdmissionExempt(ctx, cs[0].Image, data)
 }
 
 // auditContainers is the run.create row's view of the extras: what runs, how big, and its verdict. Never the

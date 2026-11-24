@@ -82,3 +82,18 @@ func TestPolicyPreviewImageAdmissionWire(t *testing.T) {
 		t.Error("handlePolicyPreview does not set image_admission from imageAdmissionPreview")
 	}
 }
+
+// TestPolicyPreviewImageAdmissionCountsExtraContainers: a run whose only launcher-chosen image is an extra
+// container's is checked at launch (stepContainerAdmission), so the preview says so for a member, and not for an
+// operator, whose extras admission does not check.
+func TestPolicyPreviewImageAdmissionCountsExtraContainers(t *testing.T) {
+	req := createRunRequest{Containers: []client.RunContainer{extra("kernel", kernelImage)}}
+	s := admissionServer(admissionSite(types.ImageAdmissionEnforce), &fakeAdmitter{})
+	if got := s.imageAdmissionPreview(governReq(memberCtx(nil)).Context(), req, "", nil); got != client.ImageAdmissionCheckedAtLaunch {
+		t.Errorf("a member's run with only an extra's image: preview image_admission = %q, want checked at launch", got)
+	}
+	admin := operatorCtx(capSub, capEmail, oidc.RoleAdmin)
+	if got := s.imageAdmissionPreview(governReq(admin).Context(), req, "", nil); got != "" {
+		t.Errorf("an operator's run with an extra: preview image_admission = %q, want none", got)
+	}
+}

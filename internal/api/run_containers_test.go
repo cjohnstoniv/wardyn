@@ -165,7 +165,8 @@ func TestContainersBudgetRefusal(t *testing.T) {
 }
 
 // TestRunRequestGovernanceGatesEachContainerImage: a governed member needs an image grant for every extra's
-// image, as for `image`; an operator needs none; the door's own bound answers before any sentence echoes a ref.
+// image, as for `image`; an operator needs none; the door's own bounds, on each ref and on the count, answer before
+// any sentence echoes a ref.
 func TestRunRequestGovernanceGatesEachContainerImage(t *testing.T) {
 	const otherImage = "registry.example.com/other/side@" + imgDigest
 	granting := func(values ...string) *capStore {
@@ -210,6 +211,12 @@ func TestRunRequestGovernanceGatesEachContainerImage(t *testing.T) {
 	if _, refusal := none.runRequestGovernance(governReq(member), tag); refusal == nil || refusal.status != http.StatusBadRequest ||
 		refusal.body.Reason != reasonRunContainersInvalid {
 		t.Errorf("a tag image with no grant: refusal = %+v, want 400 %s before the grant check", refusal, reasonRunContainersInvalid)
+	}
+
+	many := createRunRequest{Containers: make([]client.RunContainer, maxRunContainers+1)}
+	if _, refusal := none.runRequestGovernance(governReq(member), many); refusal == nil || refusal.body.Reason != reasonRunContainersInvalid ||
+		refusal.body.Field != "containers" {
+		t.Errorf("%d extras: refusal = %+v, want 400 %s field containers before any entry is read", len(many.Containers), refusal, reasonRunContainersInvalid)
 	}
 }
 
@@ -529,5 +536,32 @@ func TestRunCreateAuditContainersHaveNoCommand(t *testing.T) {
 	}
 	if _, ok := rows[0]["command"]; ok || strings.Contains(string(mustJSON(rows)), "--token=x") {
 		t.Errorf("the row carries the command: %s", mustJSON(rows))
+	}
+}
+
+// TestRunCreateContainersMarkAnOperatorRunExempt: with admission on, an operator's run with extras is marked
+// image_admission_exempt, as one naming its own image is; a member's run is not, and no extras stamp nothing.
+func TestRunCreateContainersMarkAnOperatorRunExempt(t *testing.T) {
+	cs := []types.RunExtraContainer{{Name: "kernel", Image: kernelImage, CPUMillis: 500, MemoryMiB: 512}}
+	s := admissionServer(admissionSite(types.ImageAdmissionEnforce), &fakeAdmitter{})
+	admin := operatorCtx(capSub, capEmail, oidc.RoleAdmin)
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		cs     []types.RunExtraContainer
+		exempt bool
+	}{
+		{"operator with extras", admin, cs, true},
+		{"member with extras", memberCtx(nil), cs, false},
+		{"operator with none", admin, nil, false},
+	} {
+		data := map[string]any{}
+		s.stampRunContainers(governReq(tc.ctx).Context(), data, tc.cs)
+		if got := data["image_admission_exempt"] == true; got != tc.exempt {
+			t.Errorf("%s: image_admission_exempt = %v, want %v", tc.name, got, tc.exempt)
+		}
+		if _, ok := data["containers"]; ok != (len(tc.cs) > 0) {
+			t.Errorf("%s: containers key present = %v", tc.name, ok)
+		}
 	}
 }

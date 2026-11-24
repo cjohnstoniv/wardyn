@@ -241,7 +241,7 @@ var templateRequestRules = []TemplateFieldRule{
 	carriedField("service", partTools, templateOmitOptional, templateEmptyValue,
 		"The command is not kept running: it runs once and the run ends with it. A present service is a choice to keep it running; its restart, port and health check follow the defaults the server fills."),
 	carriedField("containers", partTools, templateOmitOptional, templateEmptySame,
-		"No extra container runs beside the agent."),
+		"No extra container runs beside the agent.").sensitive(),
 	carriedField("startup", partTools, templateOmitOptional, templateEmptySame,
 		"Nothing starts automatically unless chosen: one included harness, which may open with a starting prompt, one command, or none. A removed startup tool is never replaced by another.").sensitive(),
 	carriedField("start_folder", partRepos, templateOmitBaseline, templateEmptySame,

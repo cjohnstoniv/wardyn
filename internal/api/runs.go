@@ -625,9 +625,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
 	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
 	stampImageAdmission(createData, f.admission)
-	if len(f.containers) > 0 {
-		createData["containers"] = auditContainers(f.containers)
-	}
+	s.stampRunContainers(ctx, createData, f.containers)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	return createData

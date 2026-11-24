@@ -304,11 +304,11 @@ func siteImageAdmission(sc types.SiteConfig) *types.SiteImageAdmission {
 }
 
 // imageAdmissionPreview is the policy preview's image_admission fact: "checked at launch" when launch would
-// check the member's image (imageAdmission's decisions up to the check itself), "" when it would not: no
-// member image, an operator or the break-glass admin, a macOS VM, or the site mode off with no profile
+// check the member's image or an extra container's (imageAdmissionOf's decisions up to the check itself), "" when
+// it would not: no member image and no extra container, an operator or the break-glass admin, a macOS VM, or the site mode off with no profile
 // signer. It reads no registry. An unreadable site config reports the check, since launch then refuses.
 func (s *Server) imageAdmissionPreview(ctx context.Context, req createRunRequest, carried string, profile []string) client.ImageAdmissionFact {
-	if createDigestInput(req, carried) == "" || s.runUngoverned(ctx) || types.MachineKind(req.MachineKind).IsMacOSVM() {
+	if (createDigestInput(req, carried) == "" && len(req.Containers) == 0) || s.runUngoverned(ctx) || types.MachineKind(req.MachineKind).IsMacOSVM() {
 		return ""
 	}
 	if sc, ok := s.siteConfigSnapshot(ctx); ok || s.cfg.Store == nil {

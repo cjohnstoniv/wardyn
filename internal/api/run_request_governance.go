@@ -109,6 +109,9 @@ func (s *Server) runRequestGovernance(r *http.Request, req createRunRequest) (go
 					"or launch with the agent's convention image or an onboarded workspace's base image"))
 		}
 	}
+	if refusal := containersCountRefusal(req); refusal != nil {
+		return governanceCeiling{}, refusal
+	}
 	for i, c := range req.Containers {
 		if !containerImageOK(c.Image) { // this door runs before the shape checks; never echo an unbounded ref
 			return governanceCeiling{}, containerImageRefusal(i)

@@ -928,6 +928,7 @@
       "omitted": "unset_optional",
       "empty": "same_as_omitted",
       "meaning": "No extra container runs beside the agent.",
+      "sensitive": true,
       "section": "run_wide"
     },
     {
