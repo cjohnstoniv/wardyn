@@ -114,6 +114,7 @@ func (d *Driver) buildProxyPod(in proxyPodInputs) (*corev1.Pod, error) {
 			corev1.EnvVar{Name: kv[0], Value: kv[1]})
 	}
 	withLiveDenyDir(proxyPod, d.runnerMode())
+	withSPIFFEMount(proxyPod, d.cfg.SPIFFE)
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}
@@ -125,4 +126,19 @@ func (d *Driver) buildProxyPod(in proxyPodInputs) (*corev1.Pod, error) {
 		proxyPod.Spec.HostAliases = append(proxyPod.Spec.HostAliases, *in.CPPin)
 	}
 	return proxyPod, nil
+}
+
+// withSPIFFEMount runs the proxy pod as the SPIRE proxy account and mounts the Workload API socket read-only into the
+// proxy container. The token automount stays off: the account exists to be attested, not to call the API server.
+func withSPIFFEMount(pod *corev1.Pod, m SPIFFEMount) {
+	if !m.enabled() {
+		return
+	}
+	pod.Spec.ServiceAccountName = m.ProxyServiceAccount
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name:         spiffeVolumeName,
+		VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{Driver: m.CSIDriver, ReadOnly: boolPtr(true)}},
+	})
+	c := &pod.Spec.Containers[0]
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: spiffeVolumeName, MountPath: spiffeWorkloadAPIDir, ReadOnly: true})
 }

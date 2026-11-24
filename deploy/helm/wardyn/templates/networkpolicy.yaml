@@ -10,6 +10,7 @@ re-open only what wardynd needs:
     .Values.k8s.apiServer.ports, scoped to .Values.k8s.apiServer.to when set
     (empty by default — see the BOLD warning on that value) — wardynd itself
     drives the k8s runner substrate via client-go
+  - egress to the SPIRE server's namespace and port (spire.enabled only)
   - ingress to the HTTP port from the configured sources (default: same
     namespace, e.g. an ingress controller / the UI)
   - a SEPARATE ingress rule for SSH (ssh.enabled) and the UI-sandbox gateway
@@ -234,6 +235,18 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     {{- end }}
+    {{- end }}
+    {{- $spire := .Values.spire | default dict }}
+    {{- if $spire.enabled }}
+    # The SPIRE server (spire.server.*): its namespace and port only, never cluster-wide.
+    {{- $srv := $spire.server | default dict }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required "wardyn: spire.server.namespace is required when spire.enabled=true and networkPolicy.enabled=true (the egress rule to the SPIRE server names it)" $srv.namespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ int ($srv.targetPort | default $srv.port) }}
     {{- end }}
     {{- with .Values.networkPolicy.egress.extra }}
     # Operator-supplied additional egress rules (OIDC issuer, SIEM sinks, etc.).

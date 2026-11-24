@@ -787,6 +787,35 @@ k8s:
     # e.g. an ipBlock naming your cluster's actual apiserver/LB CIDR.
     to: []
 
+# SPIRE identity provider (docs/operations/spire.md). Experimental, off by default, Kubernetes only.
+# On, the run token becomes a SPIRE JWT-SVID and each run's proxy pod is attested for its own
+# X.509-SVID. The chart installs no SPIRE: install the server, agents and the SPIFFE CSI driver from
+# upstream first. On, the chart sets WARDYN_IDENTITY=spire and the WARDYN_SPIRE_* variables, mounts
+# the CSI volume into wardynd, creates the proxies' ServiceAccount in the runs namespace (no token,
+# no RoleBinding) and adds one egress rule to the SPIRE server. It refuses to render without
+# k8s.enabled, when the proxy account is empty or "default", when it equals wardynd's account, or
+# when wardynd's account is "default". Set WARDYN_TRUST_DOMAIN in env to SPIRE's trust domain.
+spire:
+  enabled: false
+  # The SPIFFE CSI driver that publishes the agent's Workload API socket into a pod.
+  csiDriver: csi.spiffe.io
+  # wardynd's Workload API socket. The CSI volume is mounted at /spiffe-workload-api, and every
+  # proxy dials /spiffe-workload-api/spire-agent.sock, so keep the file name your agent uses there.
+  socketPath: /spiffe-workload-api/spire-agent.sock
+  server:
+    # The SPIRE server's host (a Service name such as spire-server.spire-server.svc) and port.
+    address: ""
+    port: 8081
+    # The server pod's own port, which the egress rule names: a NetworkPolicy sees the pod's port,
+    # not the Service's (upstream's Service maps 443 to 8081). Empty means port.
+    targetPort: ""
+    # The namespace the server runs in: wardynd's egress rule allows only that namespace and port.
+    namespace: ""
+  # The node alias that parents every run entry. It must select this cluster's agents only.
+  parentId: ""
+  # The proxies' ServiceAccount, created in k8s.runsNamespace. Never "default", and never wardynd's own.
+  proxyServiceAccount: wardyn-proxy
+
 # Kernel ground-truth sensor for Kubernetes (docs/operations/kubernetes-ground-truth.md). Off by
 # default. On, the chart runs a DaemonSet from wardynd's own image (command /wardyn-tetragon-ingest)
 # that tails YOUR Tetragon's JSON export on each node, ties each event to the run whose agent pod
