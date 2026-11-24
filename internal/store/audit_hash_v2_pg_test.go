@@ -273,27 +273,34 @@ func TestAuditSplit_CarriesHashColumns_PG(t *testing.T) {
 	wantVerifies(t, f.pool, "after the split")
 }
 
-// receiptRowsOf reads rows lo..hi as a receipt carries them.
+// receiptRowsOf reads rows lo..hi as a receipt carries them: through AuditReceiptRows, the read a receipt is
+// built from.
 func receiptRowsOf(t *testing.T, pool *pgxpool.Pool, lo, hi int64) []auditreceipt.Row {
 	t.Helper()
-	rows, err := pool.Query(context.Background(), `SELECT seq, id, (extract(epoch FROM time) * 1000000)::bigint, run_id, actor_type, actor,
-		action, target, outcome, source_ip, data::text, prev_hash, row_hash, hash_format, hash_salt
-		FROM audit_events WHERE seq BETWEEN $1 AND $2 ORDER BY seq`, lo, hi)
+	ctx := context.Background()
+	rs, err := pool.Query(ctx, `SELECT id FROM audit_events WHERE seq BETWEEN $1 AND $2 ORDER BY seq`, lo, hi)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
-	var out []auditreceipt.Row
-	for rows.Next() {
-		var r auditreceipt.Row
-		if err := rows.Scan(&r.Seq, &r.ID, &r.TimeUS, &r.RunID, &r.ActorType, &r.Actor, &r.Action, &r.Target, &r.Outcome,
-			&r.SourceIP, &r.Data, &r.PrevHash, &r.RowHash, &r.HashFormat, &r.HashSalt); err != nil {
+	var ids []uuid.UUID
+	for rs.Next() {
+		var id uuid.UUID
+		if err := rs.Scan(&id); err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, r)
+		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
+	rs.Close()
+	if err := rs.Err(); err != nil {
 		t.Fatal(err)
+	}
+	stored, err := store.NewPG(pool).AuditReceiptRows(ctx, ids, nil, 0, len(ids)+1)
+	if err != nil || len(stored) != len(ids) {
+		t.Fatalf("AuditReceiptRows = %d rows, %v; want %d", len(stored), err, len(ids))
+	}
+	out := make([]auditreceipt.Row, len(stored))
+	for i, r := range stored {
+		out[i] = receiptRow(r)
 	}
 	return out
 }
@@ -327,6 +334,9 @@ func TestAuditReceipt_V2VerifiesOffline_PG(t *testing.T) {
 	rows := receiptRowsOf(t, pool, v1[0], v2[len(v2)-1])
 	if int64(len(rows)) != v2[len(v2)-1]-v1[0]+1 {
 		t.Fatalf("seqs %d..%d are not contiguous in an isolated database", v1[0], v2[len(v2)-1])
+	}
+	if first, last := rows[0], rows[len(rows)-1]; first.HashFormat > 1 || first.HashSalt != nil || last.HashFormat != 2 || last.HashSalt == nil {
+		t.Fatalf("AuditReceiptRows lost the hash format or salt: first format %d, last format %d", first.HashFormat, last.HashFormat)
 	}
 	hashes := make([]string, len(rows))
 	seqs := make([]int64, len(rows))
