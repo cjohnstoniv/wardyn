@@ -64,6 +64,9 @@ func TestMetricsListenerHandler(t *testing.T) {
 // a scrape gets, the live health gauges included.
 func TestMetricsText_IsTheScrapeBody(t *testing.T) {
 	h := newHarness(t)
+	// A scrape records its own latency once its body is written, so the scrape compared below follows one
+	// that leaves the same /metrics sample in both bodies.
+	do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
 	console := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
 	if console.Code != http.StatusOK {
 		t.Fatalf("admin console /metrics = %d, want 200", console.Code)
