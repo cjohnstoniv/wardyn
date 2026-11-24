@@ -11,6 +11,25 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Inbound federation (#3787): a machine swaps a token from its organization's own identity provider, such as a CI job's, for a short-lived inbound token of one service identity at `POST /api/v1/inbound/exchange`, with no Wardyn credential. See [Inbound federation](docs/operations/inbound-federation.md).
+- It is off until a signed-in admin or security admin turns it on (`PUT /api/v1/inbound-federation`). The same people add a trust for one exact issuer, audience and subject (`/api/v1/inbound-trusts`); an API token cannot do either. Under `WARDYN_GOVERNANCE_SECOND_HUMAN` both are held for a second signed-in admin, and turning it off cancels a pending turn-on.
+- A trust's audience must be the origin of `WARDYN_OIDC_REDIRECT_URL` or `WARDYN_RUNNER_ORG_URL`, with the base path when one is set; the UI-sandbox address is never one. A swapped token lasts 15 minutes by default, an hour at most, and never past the provider token's own expiry.
+- The identity's sponsor sees and removes its trusts, and a sponsor change or a retire removes them. A revoke of all the sponsor's sessions, or of everyone's, stops the sponsor's trusts until the sponsor confirms each one again.
+- Migration `<NNNN>_inbound_federation` creates `inbound_federation` (one row, off), `inbound_trusts` and `inbound_trust_tokens`.
+
+### Changed
+
+- A service identity's cap of 20 live tokens no longer counts the tokens exchanged under its trusts. Each trust has its own `max_live`.
+- The `service_identity.update` and `service_identity.retire` audit rows carry `trusts_removed`.
+
+### Before you upgrade
+
+- Inbound federation, which lets machines call sandbox ports with tokens from your own identity provider, is new and off. Nothing changes until an administrator turns it on, except that split-role installs must apply the new grants before upgrading.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants `SELECT, UPDATE` on `inbound_federation`, `SELECT, INSERT, UPDATE, DELETE` on `inbound_trusts` and `SELECT, INSERT` on `inbound_trust_tokens` to every role granted `UPDATE` on `api_tokens`, other than that table's owner. If your app role is not one of them and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, set that up before you upgrade, or grant it the same as soon as the migration has run. Until then service-token mints, sponsor changes and retires fail, and so does every inbound federation route.
+- Stop every wardynd older than this release first. An older server counts exchanged tokens against a service identity's cap, and leaves an identity's trusts in place when its sponsor changes or it is retired.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added

@@ -10,6 +10,7 @@ it honest, tokens for a person who never signs in, and the portals that act for 
 | Automation that acts as you | [A per-user token](#per-user-api-tokens-stop-sharing-the-admin-token) |
 | Automation under its own name | [A service identity](#service-identities) |
 | A caller of a run's inbound port | [An inbound token](#inbound-tokens) |
+| A machine with a token from its own organization's identity provider | [Inbound federation](inbound-federation.md) |
 | The CLI signed in as you | [`wardyn login`](#cli-sign-in-wardyn-login) |
 | A portal acting for a group | [A delegated token](#delegated-run-management-portals) |
 | A person who never signs in | [A person record](#tokens-for-a-person-who-never-signs-in) |
@@ -162,6 +163,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
 
 - `kind` is `api` when omitted. Any value other than `api` or `inbound` is a `400`.
 - Every guard of an ordinary mint applies, because it is the same door: the `api_token` [feature](capabilities.md#feature), the show-once answer, and the cap of `20` live tokens per principal, inbound ones counted.
+  - A token [exchanged under a trust](inbound-federation.md) comes through another door: it counts against its trust's `max_live`, not the `20`, and lives at most an hour.
 - **It must expire.**
   - The default and the maximum are `90d`, or the deployment cap `WARDYN_API_TOKEN_MAX_TTL` if lower, the rule a service token follows.
   - A `ttl_seconds` above that is clamped, and the `token.create` row records the clamp.
@@ -171,7 +173,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/jso
   - A WebSocket or other upgraded connection an inbound token opened is re-checked every 15 seconds and closed within 30 seconds of its last admitting check once the token no longer holds.
   - A person's inbound token also answers `401` `role_stamp_stale` once `WARDYN_ROLE_STAMP_TTL` has passed since its owner last signed in.
 - **Groups are the ones stamped on the token.** A `group:` caller entry matches a person's token by its stored groups: those of the mint, refreshed each time its owner signs in again. A group change reaches the token at that sign-in, not at once.
-- Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included.
+- Revoking a person's sessions revokes their inbound tokens with the rest. Changing a service identity's sponsor revokes its tokens, inbound ones included. Deleting a trust, or turning [inbound federation](inbound-federation.md) off, revokes the tokens exchanged under it.
 - The token never reaches the sandbox, which sees the caller as `X-Wardyn-Caller`. Wardyn does not bind it to a network.
 
 ## CLI sign-in (`wardyn login`)
@@ -432,11 +434,13 @@ A service identity is automation that runs under its own name. It is not a perso
 | Event | Effect |
 |---|---|
 | The sponsor changes | Every live token of the identity is revoked in the same transaction. |
-| The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. |
+| The sponsor changes (inbound federation) | Its [trusts](inbound-federation.md) are deleted with the tokens exchanged under them. |
+| The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. | Exchanges under the identity's [trusts](inbound-federation.md) stop too, as they do after a revoke of everyone's sessions, until the sponsor confirms each trust again.
 | The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; its live runs end with the sponsor's. |
 | The sponsor's sign-in identity is unbound | Refused `409` `identity_principal_in_use` while they sponsor an identity or hold a pending invitation. |
 | An admin suspends it | Tokens refused; its live runs end. |
 | An admin retires it | Tokens revoked, its live runs ended and its stored credentials erased (`credential.erase`); the name stays taken. |
+| An admin retires it (inbound federation) | Its trusts are deleted with the tokens exchanged under them. |
 
 - Rows a service's own request writes have actor type `service`, actor `service:<name>` and `data.sponsor` ([AUDIT-ACTIONS.md](../AUDIT-ACTIONS.md#service-identities)).
   - They name the service and its sponsor, not whoever holds the token.
