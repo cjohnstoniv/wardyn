@@ -27,13 +27,6 @@ const (
 	outageRecoveryEndStrictOnRunner
 )
 
-// The finalize reasons of the two control-plane ends. The strict one names no outage: a spent strict allowance ends
-// the run whether or not an outage was recorded.
-const (
-	outageEndStrictReason     = "the run's strict outage terms end it: its network was not confirmed within its allowance"
-	outageEndUnattendedReason = "control-plane outage: this policy ends unattended runs after an outage"
-)
-
 // outageRecoveryFor reads run's recovery facts (store.RunTokenRecoverer.RunRecoveryCheck, with the store health tracker's
 // Recovering) and decides. outage is the pass's verdict (v.outage) or a covering window; serverRun limits the
 // unattended end to the server's own runs. A store that is not a store.RunTokenRecoverer, or a read error, answers

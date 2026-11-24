@@ -255,42 +255,9 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 			}
 		} else if tok, exp, err := renewToken(rctx, base, ts.Get(), client); err != nil {
 			cancel()
-			var se *renewStatusError
-			if errors.As(err, &se) && se.permanent() {
-				slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, giving up",
-					slog.Int("status", se.Status), slog.Any("err", err))
-				g.refuseIfClosed(renewCause(err, ts.Get()))
+			var stop bool
+			if next, recovering, stop = renewFailed(ctx, ts, g, tune, err, lastGood, heldExp, &backoff); stop {
 				return
-			}
-			held := tune.now().Sub(lastGood)
-			switch {
-			case held >= tune.giveUpAfter && g == nil:
-				slog.ErrorContext(ctx, "wardyn-proxy: run token renew has failed for longer than a token's lifetime, giving up",
-					slog.Duration("failing_for", held), slog.Any("err", err))
-				return
-			case g != nil && (held >= tune.giveUpAfter || isRecoverStatus(err, http.StatusUnauthorized) && !heldExp.IsZero() && tune.now().After(heldExp)):
-				recovering, next = true, tune.recoverGap()
-				g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
-				slog.WarnContext(ctx, "wardyn-proxy: the held run token can no longer renew, asking to recover it",
-					slog.Duration("failing_for", held), slog.Duration("retry_in", next), slog.Any("err", err))
-			default:
-				closed := g.isClosed()
-				next = tune.retryGap(backoff, heldExp, tune.now())
-				if closed {
-					// Nothing has been served and the replace is waiting on this: keep asking quickly.
-					next = tune.closedRetry
-				}
-				if g != nil {
-					g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
-				}
-				// SECURITY: do not log the token; the error carries status + body only.
-				slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off (a refused Git request can bring the next try sooner)",
-					slog.Duration("retry_in", next), slog.Any("err", err))
-				if !closed {
-					if backoff = backoff * 2; backoff > tune.maxInterval {
-						backoff = tune.maxInterval
-					}
-				}
 			}
 		} else {
 			cancel()
@@ -341,6 +308,49 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 		}
 		timer.Stop()
 	}
+}
+
+// renewFailed applies one failed renew for runTokenRenewerGated. A permanent refusal stops the loop, lapsing a gate
+// that never opened. Past giveUpAfter from lastGood, a nil g gives up (stop) and a gate enters recover mode (recover),
+// as it does on a 401 once heldExp, the held token's known expiry, has passed. Anything else backs off: *backoff
+// doubles up to maxInterval once g is open, and a closed gate retries every closedRetry. next is the wait.
+func renewFailed(ctx context.Context, ts *tokenSource, g *lapseGate, tune renewerTuning, err error, lastGood, heldExp time.Time, backoff *time.Duration) (next time.Duration, recover, stop bool) {
+	var se *renewStatusError
+	if errors.As(err, &se) && se.permanent() {
+		slog.ErrorContext(ctx, "wardyn-proxy: run token renew refused permanently, giving up",
+			slog.Int("status", se.Status), slog.Any("err", err))
+		g.refuseIfClosed(renewCause(err, ts.Get()))
+		return 0, false, true
+	}
+	held := tune.now().Sub(lastGood)
+	switch {
+	case held >= tune.giveUpAfter && g == nil:
+		slog.ErrorContext(ctx, "wardyn-proxy: run token renew has failed for longer than a token's lifetime, giving up",
+			slog.Duration("failing_for", held), slog.Any("err", err))
+		return 0, false, true
+	case g != nil && (held >= tune.giveUpAfter || isRecoverStatus(err, http.StatusUnauthorized) && !heldExp.IsZero() && tune.now().After(heldExp)):
+		next = tune.recoverGap()
+		g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
+		slog.WarnContext(ctx, "wardyn-proxy: the held run token can no longer renew, asking to recover it",
+			slog.Duration("failing_for", held), slog.Duration("retry_in", next), slog.Any("err", err))
+		return next, true, false
+	}
+	closed := g.isClosed()
+	next = tune.retryGap(*backoff, heldExp, tune.now())
+	if closed {
+		// Nothing has been served and the replace is waiting on this: keep asking quickly.
+		next = tune.closedRetry
+	}
+	if g != nil {
+		g.failed(renewCause(err, ts.Get()), addSat(g.clock.Now(), next))
+	}
+	// SECURITY: do not log the token; the error carries status + body only.
+	slog.ErrorContext(ctx, "wardyn-proxy: run token renew failed, backing off (a refused Git request can bring the next try sooner)",
+		slog.Duration("retry_in", next), slog.Any("err", err))
+	if !closed {
+		*backoff = min(*backoff*2, tune.maxInterval)
+	}
+	return next, false, false
 }
 
 // isClosed reports a gate that has not opened yet; false for nil.

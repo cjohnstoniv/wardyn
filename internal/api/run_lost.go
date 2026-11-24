@@ -75,10 +75,11 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 			recovery := s.outageRecoveryFor(ctx, run, v, run.RunnerID == nil && run.Placement != types.PlacementLocal)
 			switch recovery {
 			case outageRecoveryEndStrict:
-				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, outageEndStrictReason)
+				// The reason names no outage: a spent strict allowance ends the run whether or not one was recorded.
+				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "the run's strict outage terms end it: its network was not confirmed within its allowance")
 				return
 			case outageRecoveryEndUnattended:
-				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, outageEndUnattendedReason)
+				s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef, "control-plane outage: this policy ends unattended runs after an outage")
 				return
 			case outageRecoveryHold:
 				return // no mark, no stop and no row: the next pass decides again
