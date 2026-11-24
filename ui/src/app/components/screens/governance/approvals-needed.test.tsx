@@ -122,7 +122,12 @@ describe("the Approvals needed tab", () => {
     expect(within(rows[2]).getByText(COPY.EVERY_OTHER_KIND)).toBeInTheDocument();
     expect(screen.queryByText(CHANGES.KIND.egress_baseline)).toBeNull();
     expect(box(CHANGES.KIND.role_mapping)).toHaveValue(3);
-    expect(within(rows[2]).getByText(COPY.DEFAULT_COUNT)).toBeInTheDocument();
+    // "min" is the count in the Approvals column, beside the number box, and nothing sits under the other columns.
+    const cells = within(rows[2]).getAllByRole("cell");
+    expect(cells[1]).toHaveTextContent(COPY.DEFAULT_COUNT);
+    expect(within(cells[1]).getByRole("spinbutton")).toBeInTheDocument();
+    expect(cells[3]).toBeEmptyDOMElement();
+    expect(cells[4]).toBeEmptyDOMElement();
     expect(screen.getByRole("switch", { name: COPY.ROW_FIELD(CHANGES.KIND.governance_envelope, COPY.COL_SECURITY) })).toBeChecked();
   });
 

@@ -152,20 +152,23 @@ export function ApprovalsNeededTab({ onSubmitted }: { onSubmitted?: () => void }
     }
   };
 
-  const rowInputs = (kind: string | null, d: RuleDraft, label: string) => (
+  const rowInputs = (kind: string | null, d: RuleDraft, label: string, beside?: React.ReactNode) => (
     <>
       <TableCell>
-        <Input
-          type="number"
-          className="w-20"
-          min={floor}
-          max={MAX_APPROVALS}
-          step={1}
-          value={d.required}
-          disabled={readOnly || busy}
-          aria-label={COPY.ROW_FIELD(label, COPY.COL_APPROVALS)}
-          onChange={(e) => editRow(kind, { required: e.target.value })}
-        />
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            className="w-20"
+            min={floor}
+            max={MAX_APPROVALS}
+            step={1}
+            value={d.required}
+            disabled={readOnly || busy}
+            aria-label={COPY.ROW_FIELD(label, COPY.COL_APPROVALS)}
+            onChange={(e) => editRow(kind, { required: e.target.value })}
+          />
+          {beside}
+        </div>
       </TableCell>
       <TableCell>
         <Switch
@@ -248,8 +251,13 @@ export function ApprovalsNeededTab({ onSubmitted }: { onSubmitted?: () => void }
               ))}
               <TableRow data-testid="approvals-default-row">
                 <TableCell className="font-medium">{COPY.EVERY_OTHER_KIND}</TableCell>
-                {rowInputs(null, draft.default, COPY.EVERY_OTHER_KIND)}
-                <TableCell className="text-muted-foreground">{counts.default.required === counts.minimum ? COPY.DEFAULT_COUNT : null}</TableCell>
+                {rowInputs(
+                  null,
+                  draft.default,
+                  COPY.EVERY_OTHER_KIND,
+                  counts.default.required === counts.minimum ? <span className="text-xs text-muted-foreground">{COPY.DEFAULT_COUNT}</span> : null,
+                )}
+                <TableCell />
                 <TableCell />
               </TableRow>
             </TableBody>
