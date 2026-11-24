@@ -76,18 +76,24 @@ write_ext() {
 	agent "$1" sh -c 'mkdir -p /tmp/ext && echo "self.addEventListener(\"install\", () => {});" > /tmp/ext/bg.js && cat > /tmp/ext/manifest.json' \
 		<<<'{"manifest_version":3,"name":"lockdown-gate","version":"1","background":{"service_worker":"bg.js"}}'
 }
-# ext_loads C: a Chromium the agent starts itself with --load-extension shows a chrome-extension:// target within 10 s.
+# ext_loads C: a Chromium the agent starts itself with --load-extension shows a chrome-extension:// target
+# within 10 s (0), shows none (1), or the check itself failed (2).
 ext_loads() {
 	local c=$1 port=""
 	docker exec -d -u 1000:1000 "$c" chromium --headless=new --no-sandbox --user-data-dir=/tmp/p2 --remote-debugging-port=0 --load-extension=/tmp/ext
 	for _ in $(seq 50); do port=$(agent "$c" sed -n 1p /tmp/p2/DevToolsActivePort 2>/dev/null || true); [ -n "$port" ] && break; sleep 0.2; done
 	[ -n "$port" ] || fail "$c: the agent's Chromium wrote no DevToolsActivePort"
 	agent "$c" python3 -I -c 'import json,sys,time,urllib.request
-o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-for _ in range(20):
-    t = json.load(o.open("http://127.0.0.1:%s/json/list" % sys.argv[1], timeout=2))
-    if any(x.get("url", "").startswith("chrome-extension://") for x in t): sys.exit(0)
-    time.sleep(0.5)
+try:
+    o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for _ in range(20):
+        t = json.load(o.open("http://127.0.0.1:%s/json/list" % sys.argv[1], timeout=2))
+        if any(x.get("url", "").startswith("chrome-extension://") for x in t):
+            sys.exit(0)
+        time.sleep(0.5)
+except Exception as e:
+    print("ext_loads: %r" % e, file=sys.stderr)
+    sys.exit(2)
 sys.exit(1)' "$port"
 }
 # I2D: the agent's Chromium on the DevTools pipe with --enable-unsafe-extension-debugging; prints
@@ -151,6 +157,7 @@ install_policy "$ON" "$BASELINE"
 agent "$ON" sh -c "echo x >> $POLICY" 2>/dev/null && fail "the agent appended to the policy"
 agent "$ON" mv /etc/chromium/policies/managed /etc/chromium/policies/aside 2>/dev/null && fail "the agent moved the policy directory aside"
 agent "$ON" mv /etc/chromium/policies /etc/chromium/aside 2>/dev/null && fail "the agent moved /etc/chromium/policies aside"
+agent "$ON" mv /etc/chromium /etc/chromium.aside 2>/dev/null && fail "the agent moved /etc/chromium aside"
 agent "$ON" rm -f "$POLICY" 2>/dev/null && fail "the agent removed the policy"
 agent "$ON" chmod 666 "$POLICY" 2>/dev/null && fail "the agent chmodded the policy"
 [ "$(root "$ON" cat "$POLICY")" = "$BASELINE" ] || fail "the policy changed under the agent"
@@ -173,8 +180,11 @@ pass "I-1b the archive form leaves every level root-owned and unwritable by othe
 # I-2 and I-2c. An extension the agent loads itself.
 write_ext "$ON"
 write_ext "$OFF"
-ext_loads "$ON" && fail "I-2 an extension loaded under the policy"
-ext_loads "$OFF" || fail "I-2c control: the extension did not load without the policy, so I-2 proves nothing"
+if ext_loads "$ON"; then rc=0; else rc=$?; fi
+[ "$rc" != 0 ] || fail "I-2 an extension loaded under the policy"
+[ "$rc" = 1 ] || fail "I-2 the extension check failed (rc $rc), so I-2 proves nothing"
+if ext_loads "$OFF"; then rc=0; else rc=$?; fi
+[ "$rc" = 0 ] || fail "I-2c control: the extension did not load without the policy (rc $rc), so I-2 proves nothing"
 stop_browsers "$ON"
 stop_browsers "$OFF"
 pass "I-2 --load-extension loads nothing under the policy, and does without it"
@@ -188,7 +198,17 @@ echo "MEASURE I-2dc $off"
 [ "$off" = "loaded=yes target=yes" ] || fail "I-2dc control: Extensions.loadUnpacked did not load without the policy, so I-2d proves nothing"
 pass "I-2d Extensions.loadUnpacked loads nothing under the policy, and does without it"
 
-# I-3. Wardyn's launcher opens no port.
+# I-3. Wardyn's launcher opens no port. First, listeners sees a port the agent opens.
+docker exec -d -u 1000:1000 "$ON" python3 -I -c 'import socket,time
+s = socket.socket()
+s.bind(("127.0.0.1", 39999))
+s.listen()
+time.sleep(5)'
+seen=""
+for _ in $(seq 25); do listeners "$ON" | grep -qx 39999 && seen=1 && break; sleep 0.2; done
+[ -n "$seen" ] || fail "I-3 control: listeners did not see the agent's port 39999, so I-3 proves nothing"
+for _ in $(seq 50); do listeners "$ON" | grep -qx 39999 || break; sleep 0.2; done
+listeners "$ON" | grep -qx 39999 && fail "I-3 control: port 39999 is still listening"
 before=$(listeners "$ON")
 start_browser "$ON" wardyn-signin browser --headless || fail "I-3 wardyn-signin browser did not answer under the policy"
 [ "$(listeners "$ON")" = "$before" ] || fail "I-3 wardyn-signin browser opened a listener"
@@ -220,11 +240,14 @@ measure() {
 	fi
 	if port_opens "$c"; then port=listening; fi
 	echo "MEASURE $label pipe=$pipe session=$session port=$port"
+	i5port=$port
 }
 measure "$P-i5" '{"DeveloperToolsAvailability":2,"ExtensionInstallBlocklist":["*"],"RemoteDebuggingAllowed":false}' I-5
 measure "$P-i5b" '{"ExtensionInstallBlocklist":["*"]}' I-5b
+[ "$i5port" = listening ] || fail "I-5b control: an agent's Chromium opened no port with neither key set, so I-5's port= proves nothing"
 
 # I-6. No user-namespace mask over the policy.
+agent "$ON" sh -c 'command -v unshare' >/dev/null || fail "I-6 the image has no unshare, so I-6 proves nothing"
 if agent "$ON" unshare -Urm sh -c "mount -t tmpfs none ${POLICY%/*} && ls ${POLICY%/*}" >/dev/null 2>&1; then
 	echo "MEASURE I-6 userns-mask=possible"
 	fail "I-6 the agent masked the policy directory in a user namespace"

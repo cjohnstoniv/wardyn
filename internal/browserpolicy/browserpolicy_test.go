@@ -48,8 +48,19 @@ func TestRender_KeepsOrgKeys(t *testing.T) {
 	}
 }
 
+// ownedKeys is Owned written out, so a key dropped from Owned fails here rather than leaving the
+// loop below with one case fewer.
+var ownedKeys = []string{
+	"CommandLineFlagSecurityWarningsEnabled", "DeveloperToolsAvailability", "ExtensionDeveloperModeSettings",
+	"ExtensionInstallBlocklist", "ExtensionSettings", "ProxyBypassList", "ProxyMode", "ProxyPacUrl",
+	"ProxyServer", "ProxyServerMode", "ProxySettings", "RemoteDebuggingAllowed",
+}
+
 func TestRender_RefusesEveryOwnedKey(t *testing.T) {
-	for _, k := range append(slices.Clone(Owned), "ProxyFutureKey", "DeveloperToolsAvailabilityFutureKey") {
+	if !slices.Equal(Owned, ownedKeys) {
+		t.Fatalf("Owned = %v, want exactly %v", Owned, ownedKeys)
+	}
+	for _, k := range append(slices.Clone(ownedKeys), "ProxyFutureKey", "DeveloperToolsAvailabilityFutureKey") {
 		t.Run(k, func(t *testing.T) {
 			_, err := Render([]byte(`{"` + k + `": 1}`))
 			if err == nil || !strings.Contains(err.Error(), k) {

@@ -89,8 +89,10 @@ func (c *cdp) call(method string, params json.RawMessage) (json.RawMessage, erro
 }
 
 // callIn sends one command, in session (a page's sessionId) or browser-level when session is empty,
-// and returns its result, or an error once cdpCallTimeout passes with no reply.
+// and returns its result, or an error once cdpCallTimeout passes with no reply. A browser that stops
+// reading its pipe fails the write by the same deadline, where the writer can take one.
 func (c *cdp) callIn(session, method string, params json.RawMessage) (json.RawMessage, error) {
+	deadline := time.Now().Add(cdpCallTimeout)
 	ch := make(chan cdpMessage, 1)
 	c.wmu.Lock()
 	c.next++
@@ -109,13 +111,20 @@ func (c *cdp) callIn(session, method string, params json.RawMessage) (json.RawMe
 	}
 	c.waiting[id] = ch
 	c.mu.Unlock()
+	wd, canDeadline := c.w.(interface{ SetWriteDeadline(time.Time) error })
+	if canDeadline {
+		_ = wd.SetWriteDeadline(deadline)
+	}
 	_, err = c.w.Write(append(msg, 0))
+	if canDeadline {
+		_ = wd.SetWriteDeadline(time.Time{})
+	}
 	c.wmu.Unlock()
 	if err != nil {
 		c.forget(id)
 		return nil, err
 	}
-	timer := time.NewTimer(cdpCallTimeout)
+	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	select {
 	case in, ok := <-ch:

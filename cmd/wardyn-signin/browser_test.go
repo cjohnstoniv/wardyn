@@ -310,3 +310,80 @@ func TestCallIn_DeadlineFreesTheBroker(t *testing.T) {
 		}
 	}
 }
+
+// A browser that exits while a call waits fails that call at once, not after cdpCallTimeout.
+func TestCallIn_PipeEndFailsAWaitingCall(t *testing.T) {
+	old := cdpCallTimeout
+	cdpCallTimeout = 30 * time.Second
+	t.Cleanup(func() { cdpCallTimeout = old })
+	cdpW, browserR := net.Pipe()
+	browserW, cdpR := net.Pipe()
+	t.Cleanup(func() { _ = cdpW.Close(); _ = browserR.Close(); _ = browserW.Close(); _ = cdpR.Close() })
+	go func() {
+		// Read the one command, then exit without answering it.
+		_, _ = readNUL(bufio.NewReader(browserR))
+		_ = browserW.Close()
+	}()
+	c := newCDP(cdpW, cdpR)
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { _, err := c.call("Browser.getVersion", nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a call whose browser exited returned no error")
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("the call failed only after %s", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a call whose browser exited still waits after 5s")
+	}
+	if _, err := c.call("Browser.getVersion", nil); err == nil {
+		t.Fatal("a call after the browser exited returned no error")
+	}
+}
+
+// A browser that stops reading its pipe fails the stalled write by the call's deadline, and the
+// calls after it run once the browser reads again.
+func TestCallIn_WriteDeadlineFreesAStalledPipe(t *testing.T) {
+	old := cdpCallTimeout
+	cdpCallTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { cdpCallTimeout = old })
+	cdpW, browserR := net.Pipe()
+	browserW, cdpR := net.Pipe()
+	t.Cleanup(func() { _ = cdpW.Close(); _ = browserR.Close(); _ = browserW.Close(); _ = cdpR.Close() })
+	c := newCDP(cdpW, cdpR)
+
+	done := make(chan error, 1)
+	go func() { _, err := c.call("Browser.getVersion", nil); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a write to a browser that reads nothing returned no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a write to a browser that reads nothing still blocks after 5s")
+	}
+
+	go func() {
+		r := bufio.NewReader(browserR)
+		for {
+			line, err := readNUL(r)
+			if err != nil {
+				return
+			}
+			var m cdpMessage
+			if json.Unmarshal(line, &m) != nil {
+				return
+			}
+			rep, _ := json.Marshal(cdpMessage{ID: m.ID, Result: json.RawMessage(`{"ok":true}`)})
+			if _, err := browserW.Write(append(rep, 0)); err != nil {
+				return
+			}
+		}
+	}()
+	if res, err := c.call("Browser.getVersion", nil); err != nil || string(res) != `{"ok":true}` {
+		t.Fatalf("the call after the stalled one = %s, %v", res, err)
+	}
+}

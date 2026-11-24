@@ -705,8 +705,9 @@ func TestCreateSandbox_ChromiumPolicyDirShippedByImageIsRefused(t *testing.T) {
 	}
 }
 
-// /etc/chromium is the lockdown's anchor: present, it must be a root-owned directory nobody else can
-// write; absent, the delivery creates it root-owned and /etc is checked instead.
+// /etc/chromium is the lockdown's anchor: present, it and /etc must both be root-owned directories
+// nobody else can write, or the agent could rename it aside; absent, the delivery creates it
+// root-owned and /etc alone is checked.
 func TestCreateSandbox_ChromiumAnchorMustBeRootOwned(t *testing.T) {
 	const (
 		badChromium = "image whose /etc/chromium is a directory owned by root and not writable by group or others"
@@ -719,7 +720,9 @@ func TestCreateSandbox_ChromiumAnchorMustBeRootOwned(t *testing.T) {
 		reads    []string
 		want     string // "" means delivered
 	}{
-		{name: "root-owned 0755", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755}, reads: []string{"/etc/chromium"}},
+		{name: "root-owned 0755", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755}, reads: []string{"/etc/chromium", "/etc"}},
+		{name: "root-owned 0755 in an agent-owned /etc", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755}, etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badEtc},
+		{name: "root-owned 0755 in a world-writable /etc", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755}, etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o777}, want: badEtc},
 		{name: "owned by the agent", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badChromium},
 		{name: "group-writable", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o775}, want: badChromium},
 		{name: "a link", chromium: &tar.Header{Name: "chromium", Typeflag: tar.TypeSymlink, Linkname: "/home/agent/c", Mode: 0o777}, want: badChromium},

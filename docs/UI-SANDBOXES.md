@@ -118,10 +118,10 @@
 
 ## The sandbox browser lockdown
 
-- With `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run carries a Chromium policy the agent cannot change: no extension but those the organisation allows. It binds every Chromium build in the sandbox that reads `/etc/chromium/policies`, whoever starts it. It does not bind Google Chrome, Chrome for Testing or Firefox.
+- With `WARDYN_BROWSER_LOCKDOWN=on`, every container and Linux VM run carries a Chromium policy the agent cannot change: no extension but those the organisation allows. It binds every Chromium build in the sandbox that reads `/etc/chromium/policies` and is started the normal way, whoever starts it. It does not bind Google Chrome, Chrome for Testing or Firefox.
 - The agent drives its browser through `wardyn-signin cdp --agent [--session ID]`, a socket only its uid can open, never a port.
 - `wardyn-signin browser` takes only `--headless` and start URLs, in every deployment, and starts Chromium with a fixed environment.
-- A browser the agent starts itself can still open a debugging port on the sandbox's own loopback. Nothing outside the sandbox reaches it except Wardyn's ticketed forwarders.
+- A browser the agent starts itself can still open a debugging port on the sandbox's own loopback. Nothing outside the sandbox reaches it except Wardyn's ticketed forwarders. An agent that can run its own code can start a browser that ignores the policy file, so the run's network policy stays the wall.
 - A Linux VM guest refuses the policy when a directory above it is not root-owned or is writable by others. A Linux VM guest that allows unprivileged user namespaces lets a process mount over the policy directory in a namespace of its own. Set `user.max_user_namespaces=0` in the guest image to close that.
 - Who is refused, and the Kubernetes limit: [`WARDYN_BROWSER_LOCKDOWN`](ENV.md#wardyn_browser_lockdown) and [`WARDYN_BROWSER_POLICY_FILE`](ENV.md#wardyn_browser_policy_file).
 
