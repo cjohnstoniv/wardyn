@@ -55,6 +55,10 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 		return nil
 	}
 	defer end()
+	// The pass is bounded: a slow substrate must not hold the tick, and a lost lease ends it too. Rows not taken keep
+	// their mark and come first on the next pass. A delete already begun finishes on its own clock (deleteMemberDrive).
+	ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
+	defer cancel()
 	if !s.memberDrivesDeletable(ctx) {
 		return nil
 	}
@@ -69,6 +73,9 @@ func (s *Server) sweepHeldMemberDriveDeletes(ctx context.Context) error {
 	heldDrivesListed()
 	var errs []error
 	for _, h := range held {
+		if ctx.Err() != nil {
+			break
+		}
 		d, started, err := ms.BeginMemberDriveTakeover(ctx, h.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrMemberDriveBusy):

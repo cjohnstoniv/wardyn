@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -192,6 +193,51 @@ func TestHeldDriveRetry_NotDeletableHereTakesNothing(t *testing.T) {
 				t.Errorf("the row moved: %+v", got)
 			}
 		})
+	}
+}
+
+// slowReclaimer takes longer than the pass's deadline on every call.
+type slowReclaimer struct {
+	*memberDriveRunner
+	wait  time.Duration
+	calls int
+}
+
+func (r *slowReclaimer) ReclaimDrive(context.Context, types.DriveMount) (runner.DriveReclaimOutcome, error) {
+	r.calls++
+	time.Sleep(r.wait)
+	return runner.DriveReclaimDeleted, nil
+}
+
+// The pass ends at its deadline: once the first delete outlasts it, no later row is taken over, and the rows left keep
+// the mark they had, so they come first on the next pass.
+func TestHeldDriveRetry_PassEndsAtItsDeadline(t *testing.T) {
+	rn := &slowReclaimer{memberDriveRunner: reclaiming(runner.DriveReclaimDeleted, nil), wait: 300 * time.Millisecond}
+	srv, hf, _ := heldServer(rn, "docker")
+	var left []types.UserDrive
+	for i, age := range []time.Duration{9, 8, 7} {
+		d := heldDrive(hf.memberDriveStore, fmt.Sprintf("Notes %d", i), types.DriveBackendDockerVolume, age*time.Minute, 1)
+		if i > 0 {
+			left = append(left, d)
+		}
+	}
+	// A deadline shorter than the first call, standing for the pass's own (reconcileFinalizeTimeout) having run out.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if err := srv.sweepHeldMemberDriveDeletes(ctx); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if rn.calls != 1 || hf.takeovers != 1 {
+		t.Errorf("substrate calls = %d, takeovers = %d; want 1 and 1 (the rows after the deadline are not taken)", rn.calls, hf.takeovers)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Errorf("the pass took %v, want it to end at the deadline", took)
+	}
+	for _, d := range left {
+		if got := hf.drives[d.ID]; got.DeleteStartedAt == nil || !got.DeleteStartedAt.Equal(*d.DeleteStartedAt) || got.DeleteIssues != 1 {
+			t.Errorf("row %s was touched: %+v", d.Name, got)
+		}
 	}
 }
 
