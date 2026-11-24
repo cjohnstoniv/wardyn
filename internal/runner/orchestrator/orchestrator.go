@@ -331,6 +331,20 @@ func (o *Orchestrator) CanManageDrives(ctx context.Context) error {
 	return runner.ErrDriveLifecycleUnavailable
 }
 
+// DriveHolder implements runner.DriveHolderChecker by asking the same substrate ReclaimDrive would use: the first
+// local that is a DriveReclaimer. One that cannot answer is ErrDriveHolderUnknown, never "no holder".
+func (o *Orchestrator) DriveHolder(ctx context.Context, mount types.DriveMount) (string, error) {
+	for _, s := range o.locals() {
+		if _, ok := s.(runner.DriveReclaimer); ok {
+			if h, ok := s.(runner.DriveHolderChecker); ok {
+				return h.DriveHolder(ctx, mount)
+			}
+			return "", runner.ErrDriveHolderUnknown
+		}
+	}
+	return "", runner.ErrDriveHolderUnknown
+}
+
 // CheckFit implements runner.FitChecker by delegating to the first wired substrate that
 // implements it, the same single fan-out ProbeDrive takes. A substrate with no fit to check
 // (docker) is skipped; none at all answers runner.ErrFitUnsupported.
