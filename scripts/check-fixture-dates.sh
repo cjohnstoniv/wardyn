@@ -235,7 +235,12 @@ declare -A ALLOWLIST=(
   ["ui/e2e/team-drives.spec.ts"]=1
   ["ui/src/app/components/screens/new-run-flow/draft/draft-reducer.test.ts"]=1
   ["ui/src/app/components/screens/new-run-flow/draft/intent-to-wire.test.ts"]=2
-  ["ui/src/app/components/screens/new-run-flow/draft/launch-start.test.ts"]=4
+  # Repeating schedules: next-slot and first-start math on an injected clock (NOW, or the now each helper is given),
+  # and next_at/due_at/paused.at values the screens only format in a zone; nothing reads the wall clock.
+  ["ui/src/app/components/screens/new-run-flow/draft/launch-start.test.ts"]=16 # injected clock only: every call passes NOW or a fixed now, so past/far/first-start never read the wall clock
+  ["ui/src/app/components/screens/new-run-flow/launch/review-with-launch-schedule.test.tsx"]=1 # passthrough only: the created schedule's next_at in the stubbed reply, never rendered or compared to the clock
+  ["ui/src/app/components/screens/schedules.test.tsx"]=6 # display only: next_at, due_at and paused.at formatted in the schedule's zone, never compared to the clock
+  ["internal/api/run_schedule_repeat_test.go"]=14 # injected clock only: nextOccurrence and firstSlot take the instant as an argument; the start_at one is a body refused for carrying the field, never parsed
   ["ui/src/app/components/screens/new-run-flow/launch/refusal-text.test.ts"]=2
   ["ui/src/app/components/screens/new-run-flow/steps/run/run-step.test.tsx"]=1
   ["ui/src/app/components/screens/run-detail-summary-header.test.tsx"]=1
