@@ -279,6 +279,12 @@ describe("Folders from your computer: the run's folder walls", () => {
     expect(screen.getByText("The changes could not come back: the run's folder walls could not be read")).toBeInTheDocument();
   });
 
+  it("says nothing about unreadable walls while the run is still active: nothing has failed to come back yet", () => {
+    show("RUNNING", { ...FOLDER, state: "synced", walls: { unreadable: true } });
+    expect(screen.queryByText(C.BACK_FAILED(LOCAL_FOLDERS.WALLS_UNREADABLE))).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("draws nothing from the walls for a folder that only copies in, or without walls", () => {
     show("COMPLETED", { ...FOLDER, direction: "in", state: "synced", walls: { back_walled_text: WALLED, unreadable: true } });
     expect(screen.queryByText(WALLED)).toBeNull();

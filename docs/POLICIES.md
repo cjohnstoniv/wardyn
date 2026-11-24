@@ -1226,8 +1226,9 @@ Walls for folders from a person's computer (#2990): `wardyn sync` folders and co
 - The size limits count each sync session on its own: a new `wardyn sync` session, or a new pass of a folder from your computer, starts again at zero.
 - `deny` is applied by `wardyn sync` and the runner, as `WARDYN_SYNC_DENY` is: `wardyn sync` and the runner skip a matching path. The server only relays sftp bytes and cannot stop a modified client.
 - At most 64 patterns count together with the deployment's. A policy write is not refused for passing 64 with `WARDYN_SYNC_DENY`; a run whose patterns pass 64 with it has its sync refused instead.
-- Walls that cannot be read refuse the sync channel and the bring-back (503 `local_folder_walls_unreadable`), and keep the run's sandbox for a later pass back. A run with no walls kept has none.
-- Audit: each refusal writes `run.local_folder.deny` with the `wall`, its `layer`, the unit `name` and `locked`.
+- Walls that cannot be read refuse the bring-back (503 `local_folder_walls_unreadable`) and the sync channel (a sentence and exit status 1), and keep the run's sandbox for a later pass back. A run with no walls kept has none.
+- Audit: `run.local_folder.deny`, with the `wall`, its `layer`, the unit `name` and `locked`, is written by the sync channel (its `deny_pull` guard, `deny_remote` and its size limits), a computer-folder pass's size limits, and the bring-back under `deny_pull`.
+- A refusal at create, preflight or preview answers 422 `local_folder_walled` and writes no audit row.
 
 ## `tool_rules` — `[]ToolRule`
 
