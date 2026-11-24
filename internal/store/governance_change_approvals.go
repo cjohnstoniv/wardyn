@@ -16,6 +16,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // GovernanceChangeApproval is one person's approval of a pending change. Tier and UnitScope are what the
@@ -155,6 +158,9 @@ type GovernanceApprovalStore interface {
 	// hold the security tier: the kind's own row, else the default row ('*'). found is false when neither
 	// exists.
 	GovernanceApprovalCountFor(ctx context.Context, kind string) (required int, requireSecurity, found bool, err error)
+	// ReplaceGovernanceApprovalCounts replaces every row of the counts with rows, in one transaction under the
+	// counts' target lock: the admin token's direct write.
+	ReplaceGovernanceApprovalCounts(ctx context.Context, rows []GovernanceApprovalCount) error
 }
 
 // GovernanceApprovalDefaultKind is the target_kind of the default row of governance_approval_counts.
@@ -182,6 +188,61 @@ func (s PG) GovernanceApprovalCountFor(ctx context.Context, kind string) (requir
 		return 0, false, false, fmt.Errorf("store: read the approval count of %s: %w", kind, err)
 	}
 	return required, requireSecurity, true, nil
+}
+
+// GovernanceApprovalCount is one row of the counts: a kind's own count, or the default row
+// (GovernanceApprovalDefaultKind), and whether one approver must hold the security tier.
+type GovernanceApprovalCount struct {
+	Kind            string
+	Required        int
+	RequireSecurity bool
+}
+
+// ListGovernanceApprovalCountsQ is every row of the counts on q, the default row included, ordered by kind.
+func ListGovernanceApprovalCountsQ(ctx context.Context, q Querier) ([]GovernanceApprovalCount, error) {
+	return collect(ctx, q, "list", "approval counts", `SELECT target_kind, required, require_security
+		FROM governance_approval_counts ORDER BY target_kind COLLATE "C"`, nil,
+		func(row pgx.Row) (GovernanceApprovalCount, error) {
+			var c GovernanceApprovalCount
+			return c, row.Scan(&c.Kind, &c.Required, &c.RequireSecurity)
+		})
+}
+
+// ReplaceGovernanceApprovalCountsQ replaces every row of the counts with rows on q. The caller holds the
+// counts' target lock (LockGovernanceTarget with types.GovernanceTargetApprovalCounts).
+func ReplaceGovernanceApprovalCountsQ(ctx context.Context, q Querier, rows []GovernanceApprovalCount) error {
+	if _, err := q.Exec(ctx, `DELETE FROM governance_approval_counts`); err != nil {
+		return fmt.Errorf("store: clear the approval counts: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	kinds := make([]string, len(rows))
+	required := make([]int32, len(rows))
+	security := make([]bool, len(rows))
+	for i, r := range rows {
+		kinds[i], required[i], security[i] = r.Kind, int32(r.Required), r.RequireSecurity
+	}
+	if _, err := q.Exec(ctx, `INSERT INTO governance_approval_counts (target_kind, required, require_security)
+		SELECT * FROM unnest($1::text[], $2::int[], $3::bool[])`, kinds, required, security); err != nil {
+		return fmt.Errorf("store: write the approval counts: %w", err)
+	}
+	return nil
+}
+
+func (s PG) ReplaceGovernanceApprovalCounts(ctx context.Context, rows []GovernanceApprovalCount) error {
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer db.Rollback(ctx, tx) // a no-op after Commit
+	if err := LockGovernanceTarget(ctx, tx, types.GovernanceTargetApprovalCounts); err != nil {
+		return err
+	}
+	if err := ReplaceGovernanceApprovalCountsQ(ctx, tx, rows); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // SignInRecordCap bounds the sign-in records one pool read returns: the read asks for one more, so a read
