@@ -66,7 +66,7 @@ func outageDispatch(t *testing.T, siteMinutes int) (*Server, *outageDispatchStor
 		t.Fatalf("persist the run: %v", err)
 	}
 	st := &outageDispatchStore{dispatchTestStore: &dispatchTestStore{run: run, state: types.RunPending}, pg: pg,
-		site: types.SiteConfig{OutageAllowanceMinutes: siteMinutes}}
+		site: types.SiteConfig{OutageAllowanceMinutes: ptr(siteMinutes)}}
 	fr := &fakeRunner{}
 	cfg := baseTestConfig(h, st)
 	cfg.Runner = fr
@@ -125,7 +125,7 @@ func TestDispatchOutageTerms_PG(t *testing.T) {
 
 	// Second dispatch of the same run: the site is lowered to the default and the policy says nothing, and
 	// the run keeps the terms it was first dispatched with.
-	st.setSite(types.SiteConfig{OutageAllowanceMinutes: 60})
+	st.setSite(types.SiteConfig{OutageAllowanceMinutes: ptr(60)})
 	st.mu.Lock()
 	st.state = types.RunPending
 	st.mu.Unlock()

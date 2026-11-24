@@ -24,7 +24,7 @@ import (
 func (s *Server) recordOutageTerms(ctx context.Context, run types.AgentRun, siteCfg types.SiteConfig, siteCfgErr error, policy types.RunPolicySpec) (types.OutageTerms, bool) {
 	site := 0
 	if siteCfgErr == nil {
-		site = siteCfg.OutageAllowanceMinutes
+		site = siteCfg.OutageAllowance()
 	}
 	terms := types.EffectiveOutageTerms(site, policy.Outage)
 	termer, ok := s.cfg.Store.(store.RunOutageTermer)
@@ -70,9 +70,9 @@ func proxyOutage(t types.OutageTerms) *proxy.OutageConfig {
 	return &proxy.OutageConfig{AllowanceS: t.AllowanceSec, Strict: t.Strict}
 }
 
-// validateSiteOutageAllowance refuses a site allowance other than 0 (the default) or 60 to 1440 minutes.
-func validateSiteOutageAllowance(m int) error {
-	if m != 0 && (m < types.OutageAllowanceDefaultMinutes || m > types.OutageAllowanceMaxMinutes) {
+// validateSiteOutageAllowance refuses a site allowance other than unset, 0 (the default) or 60 to 1440 minutes.
+func validateSiteOutageAllowance(p *int) error {
+	if p != nil && *p != 0 && (*p < types.OutageAllowanceDefaultMinutes || *p > types.OutageAllowanceMaxMinutes) {
 		return fmt.Errorf("outage_allowance_minutes must be 0 or %d to %d", types.OutageAllowanceDefaultMinutes, types.OutageAllowanceMaxMinutes)
 	}
 	return nil

@@ -68,11 +68,14 @@ func TestValidatePolicySpec_OutageBounds(t *testing.T) {
 }
 
 func TestValidateSiteConfig_OutageAllowanceBounds(t *testing.T) {
+	if err := validateSiteConfig(types.SiteConfig{}); err != nil {
+		t.Fatalf("validateSiteConfig(no outage_allowance_minutes) = %v, want ok", err)
+	}
 	for _, tc := range []struct {
 		minutes int
 		ok      bool
 	}{{0, true}, {59, false}, {60, true}, {1440, true}, {1441, false}} {
-		err := validateSiteConfig(types.SiteConfig{OutageAllowanceMinutes: tc.minutes})
+		err := validateSiteConfig(types.SiteConfig{OutageAllowanceMinutes: ptr(tc.minutes)})
 		if (err == nil) != tc.ok {
 			t.Fatalf("validateSiteConfig(outage_allowance_minutes %d) = %v, want ok %v", tc.minutes, err, tc.ok)
 		}
@@ -86,7 +89,7 @@ func TestRecordOutageTerms_FailedSiteReadTakesDefault(t *testing.T) {
 	cfg.Broker = h.broker
 	srv := New(cfg)
 	run := types.AgentRun{ID: uuid.New(), State: types.RunStarting}
-	got, ok := srv.recordOutageTerms(context.Background(), run, types.SiteConfig{OutageAllowanceMinutes: 240}, errors.New("site read failed"), types.RunPolicySpec{})
+	got, ok := srv.recordOutageTerms(context.Background(), run, types.SiteConfig{OutageAllowanceMinutes: ptr(240)}, errors.New("site read failed"), types.RunPolicySpec{})
 	if !ok || got != types.DefaultOutageTerms() {
 		t.Fatalf("recordOutageTerms after a failed site read = %+v %v, want the default terms and the run kept", got, ok)
 	}
@@ -122,13 +125,14 @@ func TestRecordOutageTerms_UnrecordableNonDefaultRefusesRun(t *testing.T) {
 }
 
 func TestSiteConfigPut_OutageAllowanceCarriedWhenUnnamed(t *testing.T) {
-	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{OutageAllowanceMinutes: 240}}
+	fake := &fakeSiteConfigStore{cfg: types.SiteConfig{OutageAllowanceMinutes: ptr(240)}}
 	srv, audit := newSiteConfigHarness(t, fake)
 	for _, tc := range []struct {
 		name, body string
 		want       int
 	}{
 		{"unnamed keeps the stored allowance", `{}`, 240},
+		{"a null keeps the stored allowance", `{"outage_allowance_minutes": null}`, 240},
 		{"an explicit 0 resets it", `{"outage_allowance_minutes": 0}`, 0},
 		{"a named value sets it", `{"outage_allowance_minutes": 120}`, 120},
 	} {
@@ -137,7 +141,7 @@ func TestSiteConfigPut_OutageAllowanceCarriedWhenUnnamed(t *testing.T) {
 			if w.Code != http.StatusOK {
 				t.Fatalf("PUT %s = %d; body=%s", tc.body, w.Code, w.Body.String())
 			}
-			if fake.putSeen == nil || fake.putSeen.OutageAllowanceMinutes != tc.want {
+			if fake.putSeen == nil || fake.putSeen.OutageAllowanceMinutes == nil || *fake.putSeen.OutageAllowanceMinutes != tc.want {
 				t.Fatalf("PUT %s stored %+v, want outage_allowance_minutes %d", tc.body, fake.putSeen, tc.want)
 			}
 			var last *types.AuditEvent

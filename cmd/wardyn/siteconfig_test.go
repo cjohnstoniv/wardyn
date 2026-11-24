@@ -445,6 +445,28 @@ func TestSiteConfigSet_GovernanceMaxDepthZeroStaysOnTheWire(t *testing.T) {
 	}
 }
 
+// TestSiteConfigSet_OutageAllowanceZeroStaysOnTheWire: outage_allowance_minutes 0 is the explicit reset
+// to the default (#4082), so the re-marshalled document must keep the key, as governance_max_depth's 0 does.
+func TestSiteConfigSet_OutageAllowanceZeroStaysOnTheWire(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(srv.Close)
+	if _, _, err := runSiteConfigSet(t, srv.URL, `{"outage_allowance_minutes":0}`); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("wire body %q: %v", body, err)
+	}
+	if v, ok := wire["outage_allowance_minutes"]; !ok || v != float64(0) {
+		t.Errorf("wire = %s, want outage_allowance_minutes present as 0", body)
+	}
+}
+
 // TestSiteConfigSet_NoOmittedFieldsNoteOnRejectedApply: the note is about a
 // SUCCESSFUL apply's carry-forward, not the file's shape — a server that
 // rejects the write (500 here) must not print it, or an operator debugging

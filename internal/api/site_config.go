@@ -523,9 +523,9 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteSessions(cfg, existing, present)
 	carryForwardSiteFeatures(cfg, existing, present)
 	carryForwardSiteDesktopWatermark(cfg, existing, present)
-	// outage_allowance_minutes on the same terms: an older client or MDM file cannot name it, so its silence keeps
-	// the admin's allowance; an explicit 0 names it and resets it to the default.
-	if !present["outage_allowance_minutes"] {
+	// outage_allowance_minutes on the same terms: an older client or MDM file cannot name it, so its silence (or a
+	// null) keeps the admin's allowance; an explicit 0 names it and resets it to the default.
+	if cfg.OutageAllowanceMinutes == nil {
 		cfg.OutageAllowanceMinutes = existing.OutageAllowanceMinutes
 	}
 	// branding (#1215), on the same terms: a file written before the key existed
@@ -837,7 +837,7 @@ func siteConfigAuditDatum(saved types.SiteConfig) map[string]any {
 		"sign_in_help_text":            saved.SignInHelpText,
 		"sign_in_help_url":             saved.SignInHelpURL,
 		"session_unconfirmed_budget_s": int(saved.Sessions.UnconfirmedBudget() / time.Second),
-		"outage_allowance_minutes":     saved.OutageAllowanceMinutes,
+		"outage_allowance_minutes":     saved.OutageAllowance(),
 	}
 	if redirectsTruncated {
 		datum["egress_redirects_truncated"] = true
