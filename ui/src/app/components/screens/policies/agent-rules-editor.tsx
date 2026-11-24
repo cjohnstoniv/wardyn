@@ -38,7 +38,8 @@ export interface RulesEdit {
   rules?: AgentRules;
 }
 
-const NONE = "none";
+// "No requirement" in a choice group: a token no wire value can equal ("none" is one), and never sent.
+const NONE = "__no_requirement";
 
 export function AgentRulesEditor({ edit, onClose, onSaved, onReload }: { edit: RulesEdit; onClose: () => void; onSaved: () => void; onReload: (harness: string) => void }) {
   const stored = edit.rules;
@@ -68,7 +69,8 @@ export function AgentRulesEditor({ edit, onClose, onSaved, onReload }: { edit: R
     }
     if (e instanceof HttpError && e.reason === AGENT_RULES_REASON.INVALID) {
       const { section, text } = sectionOfRefusal(e.message);
-      if (section && section !== "name" && section !== "description") return setSectionErrors({ [section]: text });
+      // The two forge capability lists are not on this form, so a refusal that names one has no section to sit under.
+      if (section && section !== "name" && section !== "description" && section !== "github" && section !== "ado") return setSectionErrors({ [section]: text });
       return setFailure(text);
     }
     setFailure(getErrorMessage(e));

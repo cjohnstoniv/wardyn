@@ -121,10 +121,29 @@ describe("AgentRulesSection: the editor", () => {
     expect(within(dialog).getByRole("radio", { name: /Codex CLI/ })).toBeDisabled();
     expect(within(dialog).queryByText("Your own tools")).toBeNull();
     await user.click(within(dialog).getByRole("button", { name: "Continue" }));
-    await user.click(await screen.findByRole("radio", { name: A.INNER_NONE, checked: false }).catch(() => screen.getAllByRole("radio", { name: A.INNER_NONE })[1]));
+    // Both groups start on "No requirement": nothing is asked of the agent until a choice is made.
+    for (const r of screen.getAllByRole("radio", { name: A.INNER_NONE })) expect(r).toBeChecked();
     await user.click(screen.getByRole("radio", { name: "Approvals in the harness" }));
     await user.click(screen.getByRole("button", { name: A.SAVE }));
     await waitFor(() => expect(putMock).toHaveBeenCalledWith("claude-code", { spec: {}, inner_walls: { approvals: "harness" }, version: 0 }));
+  });
+
+  it("says the four walls sentences in the organisation's voice and leaves out the forge capability lists", async () => {
+    await open(W.EDIT);
+    expect(screen.getByText(A.SITES_ANY)).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Only these sites" }));
+    expect(screen.getByText(A.SITES_ONLY_HINT)).toBeInTheDocument();
+    expect(screen.getByText(A.UNLISTED_POLICY)).toBeInTheDocument();
+    expect(screen.getByText(A.TOOLS_NONE)).toBeInTheDocument();
+    expect(screen.queryByText("GitHub capabilities")).toBeNull();
+    expect(screen.queryByText("Azure DevOps capabilities")).toBeNull();
+  });
+
+  it("a 422 that names a forge capability list, which this form does not show, lands in the footer", async () => {
+    putMock.mockRejectedValueOnce(refused(422, "agent_rules_invalid", "Agent rules: github_capabilities: agent rules cannot hold capability lists"));
+    await open(W.EDIT);
+    await user.click(screen.getByRole("button", { name: A.SAVE }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("github_capabilities: agent rules cannot hold capability lists");
   });
 
   it("a 409 says nothing was saved and Reload reopens the stored version", async () => {

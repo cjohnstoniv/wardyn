@@ -19,6 +19,12 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
 }));
 
+// The shell's setup status names the agents; null (the default) is a console that has not read it, so the chip says the id.
+const shell = vi.hoisted(() => ({ harnesses: null as { id: string; display: string }[] | null }));
+vi.mock("../../wardyn/model-access-context", () => ({
+  useShellSetupStatus: () => ({ status: shell.harnesses ? { harnesses: shell.harnesses } : null, refresh: () => undefined }),
+}));
+
 import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -826,6 +832,17 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
     expect(inSummary("Agent rules: claude-code")).toHaveLength(1);
     expect(inSummary("Agent rules: codex-cli")).toHaveLength(1);
+  });
+
+  it("names the agent by its display name when the shell's setup status has it", async () => {
+    shell.harnesses = [{ id: "claude-code", display: "Claude Code" }];
+    try {
+      show(policy({ provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" } }, wall_preset: undefined }));
+      await ready();
+      expect(screen.getAllByText("Agent rules: Claude Code").some((e) => e.closest("[data-testid=policy-summary]"))).toBe(true);
+    } finally {
+      shell.harnesses = null;
+    }
   });
 
   it("keeps the wall preset's chip beside an agent's on a row both decided", async () => {

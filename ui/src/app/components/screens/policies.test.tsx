@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunPolicy } from "../../lib/types";
 import { aheadByHours } from "../../lib/test-clock";
@@ -629,6 +629,15 @@ describe("PoliciesScreen — the door to the Wardyn boundary", () => {
   it("a security admin gets a Wardyn boundary link to its page", async () => {
     renderAs(true);
     expect(await screen.findByRole("link", { name: BOUNDARY.TITLE })).toHaveAttribute("href", "/admin/policies/boundary");
+  });
+
+  it("a security admin gets the Agent rules section; an admin who isn't one gets none", async () => {
+    renderAs(true);
+    expect(await screen.findByTestId("agent-rules-section")).toBeInTheDocument();
+    cleanup();
+    renderAs(false);
+    await screen.findByRole("button", { name: /New policy/ });
+    expect(screen.queryByTestId("agent-rules-section")).toBeNull();
   });
 
   it("an admin who isn't a security admin gets none", async () => {
