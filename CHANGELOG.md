@@ -42,6 +42,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
 
+### Security
+
+- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and can refuse to admit.
+
 ### Before you upgrade
 
 - The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
