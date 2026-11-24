@@ -273,11 +273,17 @@ func TestMaskingAndSealingRecorderBatch(t *testing.T) {
 	}
 }
 
+// subjectSealer is a field sealer with a subject directory, as boot arms one (newAuditSealer): Seal refuses a
+// row carrying a forged subject string only when it has the directory.
+func subjectSealer() *audit.Sealer {
+	return &audit.Sealer{Keys: miscCovFixedKeys{key: make([]byte, 32)}, Subjects: oneSubject{principal: "alice", id: uuid.NewString()}}
+}
+
 // TestSealingRecorderBatch_OneRefusedOthersStored: a row the sealer refuses inside a batch is noted refused and
 // is the result, and the batch's other rows are still stored.
 func TestSealingRecorderBatch_OneRefusedOthersStored(t *testing.T) {
 	src := newAuditSealSource(audit.SealFields)
-	src.arm(&audit.Sealer{Keys: miscCovFixedKeys{key: make([]byte, 32)}})
+	src.arm(subjectSealer())
 	inner := &batchCapture{}
 	rec := sealingRecorder{inner: inner, src: src}
 	plain := plantedRows(1)[0]
@@ -306,11 +312,11 @@ func TestAuditBatchStages_LogNoData(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := newAuditSealSource(audit.SealFull)
-	src.arm(&audit.Sealer{Keys: miscCovFixedKeys{key: make([]byte, 32)}})
+	src.arm(subjectSealer())
 	chain := sealingRecorder{inner: spoolingRecorder{inner: fanoutRecorder{primary: store.Recorder{Pool: deadPool(t)}}, spool: spool}, src: src, spool: spool}
 	evs := plantedRows(2)
 	forged := evs[1]
-	forged.ID, forged.ActorType, forged.Target = uuid.New(), types.ActorHuman, audit.SubjectActorPrefix+uuid.NewString()
+	forged.ID, forged.ActorType, forged.Actor = uuid.New(), types.ActorHuman, audit.SubjectActorPrefix+uuid.NewString()
 	evs = append(evs, forged)
 	ctx, out := audit.WithBatchOutcome(t.Context())
 	_ = chain.RecordBatch(ctx, evs)
