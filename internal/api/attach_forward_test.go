@@ -762,8 +762,6 @@ func TestAttachForward_AcceptFailureWritesTheStartFailureRow(t *testing.T) {
 	}
 }
 
-// TestAttachForward_RecheckReadFailures: with no credential check (base nil, a super admin's ticket with no
-// revocation store), a run that cannot be read ends the forward as a failed read, never as an ended run.
 // TestAttachForward_RecheckReadFailures: a read that fails answers unconfirmed, for the session budget to ride, and
 // stops nothing; a refusal stops the forward with its own cause.
 func TestAttachForward_RecheckReadFailures(t *testing.T) {
