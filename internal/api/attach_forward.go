@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -38,6 +39,7 @@ const (
 	attachForwardChannelOffMsg = "Port forwarding is off on this deployment: its operator left forward out of WARDYN_SSH_CHANNELS."
 	attachForwardNoTicketMsg   = "Port forwarding needs an attach ticket: mint one with POST /runs/{id}/attach/ticket and pass it as ?ticket=."
 	attachForwardTicketMsg     = "This attach ticket does not open a port forward."
+	attachForwardPortTicketMsg = "This attach ticket forwards only the ports it was minted for."
 	attachForwardPortMsg       = "The port must be a whole number from 1 to 65535."
 	attachForwardDataOutMsg    = "This run's data_out rule (%s) keeps content in, so port forwarding is off; the terminal still works."
 	attachForwardScreenMsg     = "Forwarding to a macOS VM's Screen Sharing ports (5900-5909) is not allowed: open the run's window instead."
@@ -147,6 +149,9 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusBadRequest, reasonRunForwardInvalid, attachForwardPortMsg)
 		return
 	}
+	if s.refuseForwardPort(w, r, id, ta, port) {
+		return
+	}
 	if s.refuseForwardDataOut(w, r, run.ID, at, actor) {
 		return
 	}
@@ -212,26 +217,7 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	ch := wsForwardChannel{Conn: conn, gone: chCancel, parks: parks}
 	go s.attachForwardPing(chCtx, c, parks, chCancel)
 
-	// The re-check: the ticket's credential and the entry rule (attachAuthority), the run's state and its data_out
-	// rule. A refusal ends the forward with its own cause. A read that fails rides the session budget, as every
-	// other door's does, and ends the forward as unconfirmed once the budget runs out.
-	base := s.attachAuthority(r, run.ID)
-	var endCause atomic.Pointer[error]
-	stop := func(cause error) error {
-		endCause.Store(&cause)
-		return errAttachAuthorityEnded
-	}
-	check := s.attachForwardRecheck(run.ID, base, stop)
-	b := s.newSessionBudget(chCtx, sessionWatchID{Run: run.ID, Actor: types.ActorHuman, Principal: attachWatchID(r, run.ID).Principal, Surface: sessionSurfaceSSH})
-	s.holdAttachAuthority(chCtx, b, check, func(spent bool) {
-		cause := errAttachAuthorityEnded
-		if spent {
-			cause = unconfirmed(errAttachAuthorityEnded)
-		} else if p := endCause.Load(); p != nil {
-			cause = *p
-		}
-		chCancel(cause)
-	})
+	s.holdAttachForward(chCtx, r, run.ID, chCancel)
 
 	var end bridgeEnd
 	exit, _, bytesOut := s.sshBridgeExecSession(chCtx, run.ID, actor, ch, noteBridgeEnd(chCtx, sess, &end), false)
@@ -243,6 +229,17 @@ func (s *Server) handleAttachForward(w http.ResponseWriter, r *http.Request) {
 	}
 	// BaseCtx, not the request's: the row must outlive the connection's teardown (sshgateway_channels.go's forward).
 	s.recordStreamAudit(s.cfg.BaseCtx, fresh.SandboxRef, s.attachForwardEvent(run.ID, at, actor, outcome, extra))
+}
+
+// refuseForwardPort refuses an attach-forward ticket's forward to a port it was not minted for; a terminal ticket, as
+// before, forwards any port. True when it has answered.
+func (s *Server) refuseForwardPort(w http.ResponseWriter, r *http.Request, runID uuid.UUID, ta ticketActor, port int) bool {
+	if ta.purpose != ticketPurposeAttachForward || slices.Contains(ta.ports, port) {
+		return false
+	}
+	s.auditAttachDenied(r, runID, ta.principal, attachForwardPortTicketMsg)
+	writeErrorReason(w, http.StatusForbidden, reasonAttachTicketNotYourRun, attachForwardPortTicketMsg)
+	return true
 }
 
 // refuseForwardDataOut is an SSH direct-tcpip channel's data_out gate for this door: a rule that cannot be read is
@@ -260,6 +257,29 @@ func (s *Server) refuseForwardDataOut(w http.ResponseWriter, r *http.Request, ru
 	s.auditDataOutDenied(ctx, runID, at, actor, "port_forward", rule)
 	writeErrorReason(w, http.StatusConflict, reasonDataOutBlocked, fmt.Sprintf(attachForwardDataOutMsg, rule))
 	return true
+}
+
+// holdAttachForward holds an open forward to its re-check: the ticket's credential and the entry rule
+// (attachAuthority), the run's state and its data_out rule. A refusal ends the forward with its own cause. A read
+// that fails rides the session budget, as every other door's does, and ends the forward as unconfirmed once the
+// budget runs out.
+func (s *Server) holdAttachForward(ctx context.Context, r *http.Request, runID uuid.UUID, end context.CancelCauseFunc) {
+	var endCause atomic.Pointer[error]
+	stop := func(cause error) error {
+		endCause.Store(&cause)
+		return errAttachAuthorityEnded
+	}
+	check := s.attachForwardRecheck(runID, s.attachAuthority(r, runID), stop)
+	b := s.newSessionBudget(ctx, sessionWatchID{Run: runID, Actor: types.ActorHuman, Principal: attachWatchID(r, runID).Principal, Surface: sessionSurfaceSSH})
+	s.holdAttachAuthority(ctx, b, check, func(spent bool) {
+		cause := errAttachAuthorityEnded
+		if spent {
+			cause = unconfirmed(errAttachAuthorityEnded)
+		} else if p := endCause.Load(); p != nil {
+			cause = *p
+		}
+		end(cause)
+	})
 }
 
 // attachForwardRecheck is the check an open forward runs every attachAuthorityEvery: base (the ticket's credential

@@ -1972,7 +1972,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - The DAEMON default is off, but two shipped deployments turn it on.
 - `install.sh` writes `WARDYN_SSH_LISTEN=:2222` into every `.env` it creates **and backfills it on upgrade** (an install predating the listener vars would otherwise publish a port that refuses every connection), and [`deploy/desktop/wardyn.env.example`](../deploy/desktop/wardyn.env.example) ships it on too.
 - So on those two paths the pre-auth listener exists by default, bound to loopback via the compose host-port publish — see [SSH.md](SSH.md) and [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) B9.
-- Registered-public-key auth only (no passwords), owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` and re-checked within `WARDYN_SSH_ROLE_TTL`); see [`docs/SSH.md`](SSH.md) Bounds.
+- Registered-public-key auth only on the TCP listener (no passwords); `GET /runs/{id}/ssh` accepts a single-use ticket when `WARDYN_SSH_TICKETS` is on. Owner-or-admin authorization (`run.created_by` equals the key's principal, or the key was stamped `role=admin` and re-checked within `WARDYN_SSH_ROLE_TTL`); see [`docs/SSH.md`](SSH.md) Bounds.
 
 ### `WARDYN_SSH_ADVERTISE`
 

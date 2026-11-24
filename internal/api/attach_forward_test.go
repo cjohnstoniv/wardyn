@@ -681,6 +681,65 @@ func TestAttachForward_ServiceIdentityRunRefused(t *testing.T) {
 	}
 }
 
+// forwardTicket stores a ticket for the rig's owner on its run, minted for purpose and ports.
+func (fr *forwardRig) forwardTicket(t *testing.T, purpose string, ports ...int) string {
+	t.Helper()
+	tok, err := storeAttachTicket(context.Background(), fr.srv.cfg.Store, store.AttachTicket{RunID: fr.runID, ActorType: types.ActorHuman,
+		Principal: forwardOwner, Role: oidc.RoleUser, Purpose: purpose, Ports: ports}, oidc.Issue{At: time.Now(), Seq: fr.rev.current()})
+	if err != nil {
+		t.Fatalf("store a ticket: %v", err)
+	}
+	return tok
+}
+
+// TestAttachForward_PortBinding: an attach-forward ticket opens only the ports it was minted for; a terminal ticket
+// still opens any port.
+func TestAttachForward_PortBinding(t *testing.T) {
+	t.Run("a minted port opens", func(t *testing.T) {
+		fr := newForwardRig(t, true, nil)
+		c, resp, err := fr.dialQuery(t, "port=3000&ticket="+fr.forwardTicket(t, ticketPurposeAttachForward, 3000))
+		if err != nil {
+			t.Fatalf("dial port 3000: %v (%v)", err, resp)
+		}
+		defer c.CloseNow()
+		fr.waitRelayOpen(t)
+	})
+	t.Run("another port is refused", func(t *testing.T) {
+		fr := newForwardRig(t, true, nil)
+		w := fr.get(t, fr.runID, "port=5000&ticket="+fr.forwardTicket(t, ticketPurposeAttachForward, 3000))
+		fr.wantReason(t, w, http.StatusForbidden, reasonAttachTicketNotYourRun)
+		rows := execRows(fr.audit.snapshot(), "session.attach")
+		if len(rows) != 1 || rows[0].Outcome != "failure" || rowFields(t, rows[0])["reason"] != attachForwardPortTicketMsg {
+			t.Errorf("session.attach rows = %v, want one failure with reason %q", rows, attachForwardPortTicketMsg)
+		}
+		fr.wantNoExec(t)
+	})
+	t.Run("a terminal ticket opens any port", func(t *testing.T) {
+		fr := newForwardRig(t, true, nil)
+		c, resp, err := fr.dialQuery(t, "port=5000&ticket="+fr.forwardTicket(t, ""))
+		if err != nil {
+			t.Fatalf("dial port 5000: %v (%v)", err, resp)
+		}
+		defer c.CloseNow()
+		fr.waitRelayOpen(t)
+	})
+}
+
+// TestAttachForward_SponsorTicketRefused: through the real router, so the route's own redemption spends it, a
+// sponsor's terminal ticket on a service identity's run opens no forward, and the ticket is burned.
+func TestAttachForward_SponsorTicketRefused(t *testing.T) {
+	fr := newForwardRig(t, true, nil)
+	fr.srv.cfg.Store = sponsoringStore{forwardStore: fr.st, sponsor: forwardOwner}
+	run := fr.addRun(types.ServicePrincipalPrefix+"bot", nil)
+	tok := fr.ticketFor(t, run, forwardOwner, oidc.RoleUser)
+	fr.wantReason(t, fr.get(t, run, "port=3000&ticket="+tok), http.StatusForbidden, runOwnerOnlyReason)
+	fr.wantNoExec(t)
+	if rows := fr.forwardRows(); len(rows) != 0 {
+		t.Errorf("run.port.forward rows = %d, want 0", len(rows))
+	}
+	fr.wantReason(t, fr.get(t, run, "port=3000&ticket="+tok), http.StatusForbidden, reasonUIGatewayTicketInvalid)
+}
+
 func TestAttachForward_TicketKinds(t *testing.T) {
 	fr := newForwardRig(t, true, nil)
 	base := ticketActor{actorType: types.ActorHuman, principal: forwardOwner, role: oidc.RoleUser, authorizedAt: time.Now()}
