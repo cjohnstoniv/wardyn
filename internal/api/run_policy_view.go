@@ -212,12 +212,12 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	events, err := s.cfg.Store.QueryAuditEvents(ctx, run.ID, effectivePolicyAuditScan)
+	pe, err := s.readRunPolicyEvidence(ctx, run.ID)
 	if err != nil {
 		writeServerError(w, r, "read run policy", err)
 		return
 	}
-	create := runCreateFacts(events)
+	create := pe.Create
 	resp := runPolicyResponse{RunID: run.ID, Changes: []runPolicyChange{}, Complete: create.Source != nil}
 	resp.Source = s.runPolicySourceOf(ctx, run, create)
 	if create.Source != nil {
@@ -240,32 +240,10 @@ func (s *Server) handleGetRunPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.State, resp.RecordedAt = policyViewRecorded, &at
 
-	revives, err := s.runReviveEvents(ctx, run.ID)
+	ev, served, err := s.runPolicyServed(ctx, run, pe, envelope)
 	if err != nil {
 		writeServerError(w, r, "read run restarts", err)
 		return
-	}
-	ev := collectEvidence(events, revives)
-	ev.diskFilled, ev.diskBasis, ev.diskDefaultSource = envelope.DiskMiBFilled, envelope.DiskMiBBasis, envelope.DiskMiBDefaultSource
-	ev.bounded = create.Source != nil && create.Source.Bounded
-	if create.Source != nil {
-		ev.clamp, ev.overlay, ev.walls = create.ClampWarnings, create.Source.Overlay, create.Source.PersonalWalls
-		if p := create.Source.WallPreset; p != nil {
-			ev.preset = p.WallsSourceRecord
-		}
-	} else {
-		ev.legacyGitBroker = s.holdsGitHubGrant(ctx, run.ID)
-	}
-
-	served := envelope.RunPolicySpec
-	// data_out as the doors read it: the run row's rule when it keeps one (runDataOutRule).
-	if run.DataOut != nil && *run.DataOut != served.DataOut.DataOut() {
-		served.DataOut = *run.DataOut
-	}
-	for _, h := range ev.restartHosts {
-		if !slices.Contains(served.DeniedDomains, h) {
-			served.DeniedDomains = append(served.DeniedDomains, h)
-		}
 	}
 	var base *types.RunPolicySpec
 	if create.Source != nil {

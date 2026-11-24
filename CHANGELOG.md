@@ -29,6 +29,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
+- The Walls view's topology and run routes (`GET /api/v1/walls/topology`, `GET /api/v1/runs/{id}/walls`), for the 3D view. Its stream routes answer 501 until the live stream ships.
 
 ### Changed
 
