@@ -596,6 +596,7 @@ func TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists(t *testing.T) {
 		t.Errorf("catalogue row = %+v, want what the 201 body said: %+v", row, got)
 	}
 	w = createMemberDrive(srv, personCtx(aliceSub), "Notes")
+	got = client.MeDrive{} // the body omits false fields, which Unmarshal would leave as the team drive's
 	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 		t.Fatalf("plain create = %d %s", w.Code, w.Body.String())
 	}
@@ -650,7 +651,7 @@ func TestMemberTeamDriveDelete_PreTombstoneWaitsForAnyStartingRun(t *testing.T) 
 }
 
 // TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun: past its claim, a team drive's delete still waits
-// for another person's STARTING run: refused in use, with no physical call and no issue recorded.
+// for another person's STARTING run: refused in use, with no physical call and no issue recorded; the owner's claim clears.
 func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun(t *testing.T) {
 	st, tr := newTeamDriveStore()
 	srv, _, rn := teamDriveServer(st, "docker")
@@ -662,8 +663,9 @@ func TestMemberTeamDriveDelete_PastTombstoneWaitsForAnyStartingRun(t *testing.T)
 	}
 	st.starting = map[string]bool{carolSub: true}
 	res := srv.deleteMemberDrive(ctx, st, tomb, started, memberDriveByOwner)
-	if res.reason != reasonMemberDriveInUse || len(rn.calls) != 0 || st.drives[d.ID].DeleteIssues != 0 {
-		t.Fatalf("delete = %+v, calls %d, issues %d; want in use, no call, no issue", res, len(rn.calls), st.drives[d.ID].DeleteIssues)
+	// Refused before any issue, the owner's claim clears (the count moves from 0 to 2, never to an issued odd one).
+	if got := st.drives[d.ID]; res.reason != reasonMemberDriveInUse || len(rn.calls) != 0 || got.DeleteIssues != 2 || got.DeleteStartedAt != nil {
+		t.Fatalf("delete = %+v, calls %d, issues %d, claim %v; want in use, no call, claim given up at 2", res, len(rn.calls), got.DeleteIssues, got.DeleteStartedAt)
 	}
 }
 
