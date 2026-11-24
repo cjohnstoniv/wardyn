@@ -76,6 +76,15 @@ const CodexManagedFileDir = "/etc/codex"
 // asked: the file is the agent's own secret, not a bound on it.
 const ComponentSecretDir = "/run/wardyn/secrets"
 
+// ChromiumPolicyDir is where Chromium reads its managed policies on Linux, whatever launched it: the
+// sandbox browser lockdown's one file (#2970). It joined the allowlist against ManagedFileDir's three
+// checks: it sits under root-owned /etc, nothing loosens it after delivery, and no Wardyn image ships
+// it (the sign-in image's gate checks that).
+const ChromiumPolicyDir = "/etc/chromium/policies/managed"
+
+// ChromiumPolicyFile is the lockdown's file in ChromiumPolicyDir.
+const ChromiumPolicyFile = ChromiumPolicyDir + "/wardyn.json"
+
 // ComponentSecretFileMode is the only mode an AgentOwned file is delivered
 // with: owner read. Docker owns the file by the agent's uid, so this is the
 // whole of who can read it; Kubernetes cannot set a projected file's owner and
@@ -104,8 +113,8 @@ func ValidateManagedFiles(files []ManagedFile) error {
 			return fmt.Errorf("managed file %q: path must be absolute", f.Path)
 		case path.Clean(f.Path) != f.Path:
 			return fmt.Errorf("managed file %q: path must be clean (no %q, %q or trailing separator)", f.Path, "..", "//")
-		case path.Dir(f.Path) != ManagedFileDir && path.Dir(f.Path) != CodexManagedFileDir && path.Dir(f.Path) != ComponentSecretDir:
-			return fmt.Errorf("managed file %q: a managed file must sit directly in %s or %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir, CodexManagedFileDir)
+		case path.Dir(f.Path) != ManagedFileDir && path.Dir(f.Path) != CodexManagedFileDir && path.Dir(f.Path) != ChromiumPolicyDir && path.Dir(f.Path) != ComponentSecretDir:
+			return fmt.Errorf("managed file %q: a managed file must sit directly in %s, %s or %s; anywhere else the agent could rename its directory aside, a mount could hide it, or delivery could write into a directory it did not create", f.Path, ManagedFileDir, CodexManagedFileDir, ChromiumPolicyDir)
 		case f.AgentOwned != (path.Dir(f.Path) == ComponentSecretDir):
 			return fmt.Errorf("managed file %q: an agent-owned file is a delivered secret and sits in %s, and nothing else does; in %s it would be a ceiling its own subject can rewrite", f.Path, ComponentSecretDir, ManagedFileDir)
 		case f.WipeAfterRead && !f.AgentOwned:

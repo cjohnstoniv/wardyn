@@ -49,7 +49,7 @@ func TestRender_KeepsOrgKeys(t *testing.T) {
 }
 
 func TestRender_RefusesEveryOwnedKey(t *testing.T) {
-	for _, k := range append(slices.Clone(Owned), "ProxyFutureKey") {
+	for _, k := range append(slices.Clone(Owned), "ProxyFutureKey", "DeveloperToolsAvailabilityFutureKey") {
 		t.Run(k, func(t *testing.T) {
 			_, err := Render([]byte(`{"` + k + `": 1}`))
 			if err == nil || !strings.Contains(err.Error(), k) {

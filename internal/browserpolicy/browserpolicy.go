@@ -32,13 +32,17 @@ func baseline() map[string]any {
 }
 
 // Owned are the keys an organisation's file may not set: the baseline's, the ones that override the
-// extension blocklist or turn remote debugging back on, and the ones that would move the browser off
-// the run's proxy or the sign-in lane.
+// extension blocklist or developer tools or turn remote debugging back on, and the ones that would
+// move the browser off the run's proxy or the sign-in lane.
 var Owned = []string{
-	"CommandLineFlagSecurityWarningsEnabled", "DeveloperToolsAvailability", "ExtensionInstallBlocklist",
-	"ExtensionSettings", "ProxyBypassList", "ProxyMode", "ProxyPacUrl", "ProxyServer", "ProxyServerMode",
-	"ProxySettings", "RemoteDebuggingAllowed",
+	"CommandLineFlagSecurityWarningsEnabled", "DeveloperToolsAvailability", "ExtensionDeveloperModeSettings",
+	"ExtensionInstallBlocklist", "ExtensionSettings", "ProxyBypassList", "ProxyMode", "ProxyPacUrl",
+	"ProxyServer", "ProxyServerMode", "ProxySettings", "RemoteDebuggingAllowed",
 }
+
+// ownedPrefixes are key prefixes that are Wardyn's whole, named in Owned or not, so a key of that
+// family a later Chromium adds is refused too.
+var ownedPrefixes = []string{"DeveloperToolsAvailability", "Proxy"}
 
 var extensionID = regexp.MustCompile(`^[a-p]{32}$`)
 
@@ -70,8 +74,7 @@ func Render(org []byte) ([]byte, error) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		// Every Proxy key is Wardyn's, named or not, so a proxy key a later Chromium adds is refused too.
-		if slices.Contains(Owned, k) || strings.HasPrefix(k, "Proxy") {
+		if slices.Contains(Owned, k) || slices.ContainsFunc(ownedPrefixes, func(p string) bool { return strings.HasPrefix(k, p) }) {
 			return nil, fmt.Errorf("the browser policy file sets %s, which Wardyn sets itself; remove it", k)
 		}
 		if k == "ExtensionInstallAllowlist" || k == "ExtensionInstallForcelist" {

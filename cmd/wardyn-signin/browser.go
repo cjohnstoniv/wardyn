@@ -90,7 +90,7 @@ func cmdBrowser(args []string) error {
 	}
 }
 
-// browserArgs are the flags cmdBrowser adds for its arguments: --headless, and a start URL. Anything
+// browserArgs are the flags cmdBrowser adds for its arguments: --headless, and start URLs. Anything
 // else is refused, so no argument can open a debugging port or load an extension (#2970).
 func browserArgs(args []string) ([]string, error) {
 	var out []string
@@ -101,7 +101,7 @@ func browserArgs(args []string) ([]string, error) {
 		case a == "about:blank" || strings.HasPrefix(a, "https://") || strings.HasPrefix(a, "http://"):
 			out = append(out, a)
 		default:
-			return nil, fmt.Errorf("browser takes --headless and a start URL only; %q is refused, so no flag can open a debugging port or load an extension", a)
+			return nil, fmt.Errorf("browser takes --headless and start URLs only; %q is refused, so no flag can open a debugging port or load an extension", a)
 		}
 	}
 	return out, nil

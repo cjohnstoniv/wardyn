@@ -16,6 +16,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/system"
+	"github.com/moby/moby/client"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -653,5 +654,103 @@ func TestVolumeOverSecretDir(t *testing.T) {
 		if got := volumeOverSecretDir(insp); got != tc.want {
 			t.Errorf("mounts %v volumes %v: volumeOverSecretDir = %q, want %q", tc.mounts, tc.volumes, got, tc.want)
 		}
+	}
+}
+
+// managedChromiumSpec is testSpec plus the browser lockdown's one file.
+func managedChromiumSpec() runner.SandboxSpec {
+	spec := testSpec()
+	spec.ManagedFiles = []runner.ManagedFile{{Path: runner.ChromiumPolicyFile, Mode: 0o644, Content: []byte(`{"ExtensionInstallBlocklist":["*"]}`)}}
+	return spec
+}
+
+// chromiumFake is the managed-file fake plus an /etc/chromium entry (nil: absent, as in an image
+// without Chromium).
+type chromiumFake struct {
+	*fakeDocker
+	chromium *tar.Header
+}
+
+func (c *chromiumFake) CopyFromContainer(ctx context.Context, id string, opts client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	if opts.SourcePath != "/etc/chromium" || c.chromium == nil {
+		return c.fakeDocker.CopyFromContainer(ctx, id, opts)
+	}
+	if hook := c.onCopyFrom; hook != nil {
+		hook(id, opts.SourcePath)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(c.chromium)
+	_ = tw.Close()
+	return client.CopyFromContainerResult{Content: io.NopCloser(&buf)}, nil
+}
+
+// An image that ships Chromium's policy directory, at either depth, is refused while the lockdown
+// delivers its file: the image's own policy would sit beside Wardyn's (#2970).
+func TestCreateSandbox_ChromiumPolicyDirShippedByImageIsRefused(t *testing.T) {
+	for _, shipped := range []string{"/etc/chromium/policies", runner.ChromiumPolicyDir} {
+		t.Run(shipped, func(t *testing.T) {
+			f := newManagedFake()
+			f.existingPaths = map[string]bool{shipped: true}
+			d := newTestDriver(f)
+			spec := managedChromiumSpec()
+			_, err := d.CreateSandbox(context.Background(), spec)
+			if err == nil || !strings.Contains(err.Error(), "managed file directory "+shipped+" already exists") {
+				t.Fatalf("an image shipping %s: err = %v, want the refusal naming it", shipped, err)
+			}
+			if len(f.managedCopies()) != 0 || slices.Contains(f.startedNames, agentContainerName(spec.RunID)) {
+				t.Errorf("the refusal still copied %d archives / started the agent", len(f.managedCopies()))
+			}
+		})
+	}
+}
+
+// /etc/chromium is the lockdown's anchor: present, it must be a root-owned directory nobody else can
+// write; absent, the delivery creates it root-owned and /etc is checked instead.
+func TestCreateSandbox_ChromiumAnchorMustBeRootOwned(t *testing.T) {
+	const (
+		badChromium = "image whose /etc/chromium is a directory owned by root and not writable by group or others"
+		badEtc      = "image whose /etc is a directory owned by root and not writable by group or others"
+	)
+	cases := []struct {
+		name     string
+		chromium *tar.Header
+		etc      *tar.Header
+		reads    []string
+		want     string // "" means delivered
+	}{
+		{name: "root-owned 0755", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755}, reads: []string{"/etc/chromium"}},
+		{name: "owned by the agent", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badChromium},
+		{name: "group-writable", chromium: &tar.Header{Name: "chromium/", Typeflag: tar.TypeDir, Mode: 0o775}, want: badChromium},
+		{name: "a link", chromium: &tar.Header{Name: "chromium", Typeflag: tar.TypeSymlink, Linkname: "/home/agent/c", Mode: 0o777}, want: badChromium},
+		{name: "absent, /etc checked", reads: []string{"/etc/chromium", "/etc"}},
+		{name: "absent, /etc owned by the agent", etc: &tar.Header{Name: "etc/", Typeflag: tar.TypeDir, Mode: 0o755, Uid: 1000}, want: badEtc},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newManagedFake()
+			f.etcDir = tc.etc
+			var reads []string
+			f.onCopyFrom = func(_, p string) { reads = append(reads, p) }
+			d := newWithClient(&chromiumFake{fakeDocker: f, chromium: tc.chromium}, Config{ProxyImage: "wardyn-proxy:dev"})
+			spec := managedChromiumSpec()
+			_, err := d.CreateSandbox(context.Background(), spec)
+			started := slices.Contains(f.startedNames, agentContainerName(spec.RunID))
+			if tc.want == "" {
+				if err != nil || len(f.managedCopies()) != 1 || !started {
+					t.Fatalf("err = %v, %d copies, started = %v; want the file delivered and the agent started", err, len(f.managedCopies()), started)
+				}
+				if !slices.Equal(reads, tc.reads) {
+					t.Errorf("archive reads = %v, want %v", reads, tc.reads)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a refusal containing %q", err, tc.want)
+			}
+			if len(f.managedCopies()) != 0 || started {
+				t.Errorf("the refusal still copied %d archives / started the agent = %v", len(f.managedCopies()), started)
+			}
+		})
 	}
 }

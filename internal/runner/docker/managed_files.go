@@ -101,7 +101,13 @@ var managedFileAnchors = map[string]string{
 	runner.ManagedFileDir:      "/etc",
 	runner.CodexManagedFileDir: "/etc",
 	runner.ComponentSecretDir:  "/run",
+	runner.ChromiumPolicyDir:   "/etc/chromium",
 }
+
+// managedFileAnchorParent is what an anchor that may be absent rests on instead: an image without
+// Chromium has no /etc/chromium, the delivery then creates it root-owned, and /etc is what nobody
+// else may write.
+var managedFileAnchorParent = map[string]string{"/etc/chromium": "/etc"}
 
 // checkManagedFileImage refuses a container whose image would let the agent
 // replace a root-owned file in runner.ManagedFileDir, or carry a delivered
@@ -144,6 +150,10 @@ func (d *Driver) checkManagedFileImage(ctx context.Context, containerID string, 
 			return 0, fmt.Errorf("docker: managed file directory %s has no anchor this driver checks", dir)
 		}
 		ent, _, err := d.firstArchiveEntry(ctx, containerID, anchor, 0)
+		if up, ok := managedFileAnchorParent[anchor]; ok && isNotFound(err) {
+			anchor = up
+			ent, _, err = d.firstArchiveEntry(ctx, containerID, anchor, 0)
+		}
 		if err != nil {
 			if anchor != "/etc" && isNotFound(err) {
 				continue

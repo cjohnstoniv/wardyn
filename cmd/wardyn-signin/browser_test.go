@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -36,7 +37,8 @@ func TestBrowserArgsRefused(t *testing.T) {
 	for _, a := range []string{
 		"--remote-debugging-port=1", "--remote-debugging-port", "--remote-debugging-address=0.0.0.0",
 		"--load-extension=x", "--disable-extensions-except=x", "--user-data-dir=x", "file:///etc/passwd",
-		"--headless=old", "chrome://version",
+		"--headless=old", "chrome://version", "about:flags", "javascript:alert(1)", "data:text/html,x",
+		"view-source:https://x", "HTTPS://x", "", "--",
 	} {
 		if out, err := browserArgs([]string{"--headless", a}); err == nil {
 			t.Errorf("browserArgs accepted %q: %v", a, out)
@@ -250,5 +252,61 @@ func TestCDPArgs_Session(t *testing.T) {
 	agent, session, rest, err = cdpArgs([]string{"Browser.getVersion"})
 	if err != nil || agent || session != "" || !slices.Equal(rest, []string{"Browser.getVersion"}) {
 		t.Fatalf("cdpArgs person = %v, %q, %q, %v", agent, session, rest, err)
+	}
+}
+
+// A command the browser never answers fails on its own after cdpCallTimeout, and the calls after it
+// still get their own replies; its late reply goes to nobody.
+func TestCallIn_DeadlineFreesTheBroker(t *testing.T) {
+	old := cdpCallTimeout
+	cdpCallTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { cdpCallTimeout = old })
+	cdpW, browserR := net.Pipe()
+	browserW, cdpR := net.Pipe()
+	t.Cleanup(func() { _ = cdpW.Close(); _ = browserR.Close(); _ = browserW.Close(); _ = cdpR.Close() })
+	go func() {
+		r := bufio.NewReader(browserR)
+		stuck := 0
+		for {
+			line, err := readNUL(r)
+			if err != nil {
+				return
+			}
+			var m cdpMessage
+			if json.Unmarshal(line, &m) != nil {
+				return
+			}
+			if m.Method == "Runtime.evaluate" {
+				stuck = m.ID
+				continue
+			}
+			if stuck != 0 {
+				late, _ := json.Marshal(cdpMessage{ID: stuck, Result: json.RawMessage(`{"late":true}`)})
+				if _, err := browserW.Write(append(late, 0)); err != nil {
+					return
+				}
+				stuck = 0
+			}
+			rep, _ := json.Marshal(cdpMessage{ID: m.ID, Result: json.RawMessage(fmt.Sprintf(`{"id":%d}`, m.ID))})
+			if _, err := browserW.Write(append(rep, 0)); err != nil {
+				return
+			}
+		}
+	}()
+	c := newCDP(cdpW, cdpR)
+
+	start := time.Now()
+	res, err := c.callIn("S1", "Runtime.evaluate", json.RawMessage(`{"expression":"new Promise(() => {})","awaitPromise":true}`))
+	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("an unanswered command = %s, %v; want the deadline's error", res, err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("the unanswered command held its caller %s", d)
+	}
+	for id := 2; id <= 3; id++ {
+		res, err := c.call("Browser.getVersion", nil)
+		if want := fmt.Sprintf(`{"id":%d}`, id); err != nil || string(res) != want {
+			t.Fatalf("call %d after the unanswered one = %s, %v; want %s", id, res, err, want)
+		}
 	}
 }
