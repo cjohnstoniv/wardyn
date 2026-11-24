@@ -162,6 +162,10 @@ func TestConformanceK8s(t *testing.T) {
 		testNoNetworkProxyPodReachesOnlyWardyn(t, r, agentImage)
 	})
 
+	t.Run("ExtraContainerReachesOnlyTheProxy", func(t *testing.T) {
+		testExtraContainerReachesOnlyTheProxy(t, r, agentImage)
+	})
+
 	t.Run("ClosedOffAfterTeardown", func(t *testing.T) {
 		testClosedOffAfterTeardown(t, r, cs, ns, agentImage)
 	})
