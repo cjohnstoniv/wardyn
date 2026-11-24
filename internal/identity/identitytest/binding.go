@@ -45,8 +45,11 @@ func (m *MemBindingStore) PutBinding(_ context.Context, b identity.TokenBinding)
 	if m.err != nil {
 		return m.err
 	}
-	if _, ok := m.rows[b.JTI]; ok {
-		return fmt.Errorf("identitytest: a binding for jti %q already exists", b.JTI)
+	if old, ok := m.rows[b.JTI]; ok {
+		if identity.SameBinding(old, b) {
+			return nil
+		}
+		return fmt.Errorf("identitytest: a different binding for jti %q already exists", b.JTI)
 	}
 	m.rows[b.JTI] = b
 	return nil

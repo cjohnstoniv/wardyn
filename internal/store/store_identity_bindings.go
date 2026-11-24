@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,13 +20,25 @@ type TokenBindingEraser interface {
 	DeleteTokenBindingsOf(ctx context.Context, person string) (int64, error)
 }
 
-// PutTokenBinding writes b into identity_token_bindings. A second write of one jti fails on the primary
-// key: a binding is never overwritten.
+// PutTokenBinding writes b into identity_token_bindings. A binding is never overwritten: on a jti already
+// held, a row equal to b in every field is success (a deterministic signature can mint one token twice), and
+// any other row is an error.
 func (p PG) PutTokenBinding(ctx context.Context, b identity.TokenBinding) error {
-	_, err := p.Pool.Exec(ctx, `INSERT INTO identity_token_bindings
-	    (jti, run_id, spiffe_id, sub, sponsor, operator_owned, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+	tag, err := p.Pool.Exec(ctx, `INSERT INTO identity_token_bindings
+	    (jti, run_id, spiffe_id, sub, sponsor, operator_owned, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
+	    ON CONFLICT (jti) DO NOTHING`,
 		b.JTI, b.RunID, b.SPIFFEID, b.Sub, b.Sponsor, b.OperatorOwned, b.Expiry)
-	return err
+	if err != nil || tag.RowsAffected() == 1 {
+		return err
+	}
+	old, err := p.GetTokenBinding(ctx, b.JTI)
+	if err != nil {
+		return fmt.Errorf("token binding %s exists but does not read back: %w", b.JTI, err)
+	}
+	if !identity.SameBinding(old, b) {
+		return fmt.Errorf("a different token binding for jti %s already exists", b.JTI)
+	}
+	return nil
 }
 
 // GetTokenBinding reads jti's binding, or identity.ErrBindingNotFound.

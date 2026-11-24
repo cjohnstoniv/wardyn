@@ -47,7 +47,17 @@ func RunBindingConformance(t *testing.T, newStore, newBroken func(t *testing.T) 
 		}
 	})
 
-	t.Run("second_put_of_a_jti_is_an_error", func(t *testing.T) {
+	t.Run("identical_second_put_succeeds", func(t *testing.T) {
+		s := newStore(t)
+		b := binding(time.Now().Add(time.Hour))
+		for i := 0; i < 2; i++ {
+			if err := s.PutBinding(ctx, b); err != nil {
+				t.Fatalf("PutBinding #%d of one row: %v", i+1, err)
+			}
+		}
+	})
+
+	t.Run("different_second_put_of_a_jti_is_an_error", func(t *testing.T) {
 		s := newStore(t)
 		b := binding(time.Now().Add(time.Hour))
 		if err := s.PutBinding(ctx, b); err != nil {

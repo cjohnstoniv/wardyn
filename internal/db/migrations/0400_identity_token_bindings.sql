@@ -7,7 +7,8 @@
 -- the token was signed for. The key is the token, not the run: a revive recomputes the sponsor, so one row per
 -- run would refuse it. A row is useless once its token is past expires_at; every mint and revoke deletes, for
 -- any run, up to 1000 rows past expires_at plus the run token's lapse allowance. Erasing a person deletes the
--- rows whose sub or sponsor is that person, compared lower-cased, which the second index serves. Never a secret.
+-- rows whose sub or sponsor is that person, compared lower-cased; one expression index on each column serves the
+-- two arms of that delete. Never a secret.
 --
 -- The app role is granted the table here, found from the catalog and never by name: every role but the owner
 -- that holds DELETE on run_attach_leases gets SELECT, INSERT and DELETE on identity_token_bindings.
@@ -22,7 +23,8 @@ CREATE TABLE IF NOT EXISTS identity_token_bindings (
 );
 
 CREATE INDEX IF NOT EXISTS identity_token_bindings_expires_at ON identity_token_bindings (expires_at);
-CREATE INDEX IF NOT EXISTS identity_token_bindings_people ON identity_token_bindings (lower(sub), lower(sponsor));
+CREATE INDEX IF NOT EXISTS identity_token_bindings_sub ON identity_token_bindings (lower(sub));
+CREATE INDEX IF NOT EXISTS identity_token_bindings_sponsor ON identity_token_bindings (lower(sponsor));
 
 DO $mig$
 DECLARE
