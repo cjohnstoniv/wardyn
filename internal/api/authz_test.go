@@ -432,8 +432,10 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/assistant/sessions":               {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
 	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
-	"GET /api/v1/assistant/sessions/{id}/events":    {class: classMember},
-	"DELETE /api/v1/assistant/sessions/{id}":        {class: classMember},
+	// The person's last confirmation of a repository draft's files: the session's owner's own, another's {id} is 404.
+	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":               {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":                   {class: classMember},
 	// The checks strip and the replay: the signed-in person's own checks, with no session and no model.
 	"POST /api/v1/assistant/checks": {class: classMember},
 	"POST /api/v1/assistant/replay": {class: classMember},

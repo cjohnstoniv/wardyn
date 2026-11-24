@@ -898,7 +898,7 @@ start.
 | `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, a message or edit on a live session, and the assistant's `read` tool (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
 | `assistant_session_not_found` | `404`: no session with that id is yours; another person's session answers the same. `409` on a message, an edit or a run's event when the session has ended or another session replaced it. |
 | `assistant_purpose_target_mismatch` | `400`: the purpose does not take that kind of target (a review names a held change). |
-| `assistant_preview_stale` | `POST /assistant/sessions` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
+| `assistant_preview_stale` | `POST /assistant/sessions` and `POST /assistant/sessions/{id}/build-files/confirm` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
 | `assistant_rate_limited` | `429` with `Retry-After`: too many assistant requests from you, or more than four open event streams and long-polls at once. |
 | `assistant_role_denied` | `403`: your role no longer allows the assistant (the session ends), or the caller is no person, such as the admin token. |
 | `assistant_session_provider_changed` | A message or edit (`409`): the session's provider or model no longer serves the purpose. The session ends; start a new one. |
@@ -907,7 +907,9 @@ start.
 | `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. Start a new session. |
 | `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
 | `assistant_tool_unknown` | `POST /internal/assistant/tools/{name}` (`404`): the run called a tool the server does not have. |
-| `assistant_tool_refused` | `POST /internal/assistant/tools/{name}` (`403`): a review session called `draft`, or the organisation keeps run history from the assistant. |
+| `assistant_tool_refused` | `POST /internal/assistant/tools/{name}` (`403`): a review session called `draft` or `build_files`, or the organisation keeps run history from the assistant. |
+| `assistant_repo_host_unsupported` | `POST /assistant/sessions` with a repository (`400`): a draft cannot read files from that repository's host yet. GitHub and Azure DevOps are read. |
+| `assistant_build_files_not_pending` | `POST /assistant/sessions/{id}/build-files/confirm` (`409`): the session is not waiting for its files to be confirmed, or its ten minutes passed and it ended. Start again. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |

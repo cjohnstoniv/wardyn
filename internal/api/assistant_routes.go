@@ -17,6 +17,8 @@ func (s *Server) mountAssistantRoutes(r chi.Router) {
 	r.Post("/assistant/sessions", s.handleCreateAssistantSession)
 	r.Post("/assistant/sessions/{id}/messages", s.handleAssistantMessage)
 	r.Post("/assistant/sessions/{id}/edits", s.handleAssistantEdits)
+	// The person's last confirmation of a repository draft's files: "Send files".
+	r.Post("/assistant/sessions/{id}/build-files/confirm", s.handleAssistantBuildFilesConfirm)
 	r.Get("/assistant/sessions/{id}/events", s.handleAssistantEvents)
 	r.Delete("/assistant/sessions/{id}", s.handleDeleteAssistantSession)
 	// The checks strip and the replay answer the signed-in person with no model, and write nothing.
