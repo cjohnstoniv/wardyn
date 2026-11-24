@@ -526,11 +526,12 @@ func uiAppIsDesktopSession(app string) bool {
 	return app == uiDesktopAppName || uiDesktopApp(app)
 }
 
-// uiSessionUnitDenies is the re-check's profile arm for a session that is not inbound: the run's profile as it
+// uiSessionUnitDenial is the re-check's profile arm for a session that is not inbound: the run's profile as it
 // stands now refuses what its door would refuse a new one, deny_ui_apps (uiEnterCommon) and, for a desktop
 // (uiAppIsDesktopSession), deny_interactive too (the harness sign-in run exempt as interactiveDeniedBy exempts it),
 // with the doors' super-admin exemption. A profile that cannot be read is unverifiable: fail closed.
-func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
+// It writes no row; uiSessionUnitDenies does, and the limit watch writes one only when it ends a stream.
+func (s *Server) uiSessionUnitDenial(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	if sess.Role == oidc.RoleAdmin && s.adminDoorExempt(run) {
 		return nil
 	}
@@ -542,22 +543,30 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 				msg = u.Error() // the curated sentence (governance_compose.go)
 			}
 			slog.WarnContext(ctx, "wardynd: ui gateway: the run's governance profile cannot be composed", "run_id", run.ID, "err", err)
-			return s.uiDenyReassert(sess, string(authz.ReasonGovernanceOverlayUnsatisfiable), http.StatusForbidden, msg)
+			return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceOverlayUnsatisfiable), msg: msg}
 		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
-		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		return &uiDialError{status: http.StatusServiceUnavailable, reason: reasonRunUnreadable, msg: uiSessionUnverifiableMsg}
 	}
 	switch {
 	case p == nil:
 		return nil
 	case p.Limits.DenyUIApps:
-		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
-			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
+		return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit),
+			msg: fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name)}
 	case sess.desktopSession() && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
-		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
-			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
+		return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit),
+			msg: fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name)}
 	case sess.backgroundWatch() && p.Limits.DenyBackgroundDesktopWatch:
-		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden, backgroundWatchProfileMsg)
+		return &uiDialError{status: http.StatusForbidden, reason: string(authz.ReasonGovernanceUnit), msg: backgroundWatchProfileMsg}
+	}
+	return nil
+}
+
+// uiSessionUnitDenies is uiSessionUnitDenial with its ui.authorize row, for the re-check (uiSessionArms).
+func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
+	if de := s.uiSessionUnitDenial(ctx, sess, run); de != nil {
+		return s.uiDenyReassert(sess, de.reason, de.status, de.msg)
 	}
 	return nil
 }
