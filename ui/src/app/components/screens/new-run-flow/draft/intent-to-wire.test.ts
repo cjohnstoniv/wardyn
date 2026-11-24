@@ -92,6 +92,12 @@ describe("intentToWire (U1)", () => {
     expect(unsupported).toEqual([]);
   });
 
+  it("sends a document's containers as given", () => {
+    const containers = [{ name: "kernel", image: "registry.example.com/team/kernel@sha256:" + "0".repeat(64), ports: [8888],
+      resources: { cpu_millis: 500, memory_mib: 512 } }];
+    expect(intentToWire({ ...INTENT, containers } as RunIntent).body.containers).toEqual(containers);
+  });
+
   it("sends the document's inline_policy as the policy overlay, never as a whole policy", () => {
     const { body } = intentToWire(INTENT);
     expect(body.policy_overlay).toEqual({ allowed_domains: [], auto_stop_after_sec: 0 });

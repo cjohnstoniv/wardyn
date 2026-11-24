@@ -106,6 +106,18 @@ export interface RunQueue {
 
 export type { ImageAdmissionVerdict } from "./image-admission";
 
+/** One extra container a run keeps beside its agent, as create admitted it (Go: types.RunExtraContainer). */
+export interface ExtraContainer {
+  name: string;
+  /** The admitted pin when admission pinned one. */
+  image: string;
+  command?: string[];
+  ports?: number[];
+  cpu_millis: number;
+  memory_mib: number;
+  image_admission?: ImageAdmissionVerdict;
+}
+
 export interface AgentRun {
   id: string;
   created_at: string;
@@ -200,6 +212,8 @@ export interface AgentRun {
   // The image admission verdict for the member's image (Go: types.AgentRun.ImageAdmission); absent when
   // admission was off, the run named no member image, an operator started it, or the run predates it.
   image_admission?: ImageAdmissionVerdict | null;
+  // The run's extra containers (Go: types.AgentRun.Containers): on the 201 only; a read of the run does not load them.
+  containers?: ExtraContainer[];
   // The scan/verify/record-only TRUSTED linkage (internal/types/types.go's
   // AgentRun.WorkspaceID) — set for a record/verify step run, nil for an
   // ordinary user run. Modeled here ONLY so runHasWorkspace (below) can read
