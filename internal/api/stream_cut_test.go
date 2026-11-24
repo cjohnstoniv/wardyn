@@ -1221,7 +1221,15 @@ func watchBudgeted(t *testing.T, b *sessionBudget, every time.Duration, answers 
 		return answers[min(i, len(answers)-1)]
 	}
 	c.watch(ctx, time.Now().Add(every), every, time.Second, b, check)
-	t.Cleanup(c.End)
+	t.Cleanup(func() {
+		// End aborts a cut stream's handler (http.ErrAbortHandler); here there is no handler to abort.
+		defer func() {
+			if p := recover(); p != nil && p != http.ErrAbortHandler {
+				panic(p)
+			}
+		}()
+		c.End()
+	})
 	return c, &n
 }
 
