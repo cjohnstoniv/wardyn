@@ -404,7 +404,7 @@ func TestAssistantRepoDraftConfirmAttachesTheRunBeforeDispatch(t *testing.T) {
 	}
 }
 
-// The confirm's digest covers the serving binding. Two providers (CX-021): the person previewed on a, a is gone by
+// The confirm's digest covers the serving binding. Two providers: the person previewed on a, a is gone by
 // the confirm and b serves with every record byte the same. The old digest is refused and the session stays
 // fetching; b's digest confirms, on a new session that carries b and the files, and the first is ended as replaced.
 func TestAssistantRepoDraftConfirmDigestCoversTheBinding(t *testing.T) {
