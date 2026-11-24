@@ -133,7 +133,10 @@ func (s *Server) handleListMeDrives(w http.ResponseWriter, r *http.Request) {
 		out.DeniedByUnit = name
 	default:
 		out.Drives, out.PoolChecked, out.Unavailable = s.meDrives(ctx, r.URL.Query().Get("runner_pool_id"))
-		out.Drives = append(out.Drives, s.meDeletingDrives(ctx)...)
+		// A catalogue that could not be read is not padded with the rows that could.
+		if out.Unavailable == "" {
+			out.Drives = append(out.Drives, s.meDeletingDrives(ctx)...)
+		}
 	}
 	out.Create = s.memberDriveCreateState(r.WithContext(ctx))
 	writeJSON(w, http.StatusOK, out)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -283,5 +284,27 @@ func TestMeDrives_DeletingRowOwnerOnlyNotAttachable(t *testing.T) {
 	_, f := authorizeDrives(srv, alice, drivesRequest(deleting.ID.String()))
 	if f == nil || f.body.Reason != string(authz.ReasonDriveNotFound) {
 		t.Errorf("attaching the deleting drive = %+v, want drive_not_found", f)
+	}
+}
+
+// resolveFails is a store whose drive resolve cannot be answered.
+type resolveFails struct{ *memberDriveStore }
+
+func (resolveFails) ResolveUserDrives(context.Context, []string, []string, string) ([]store.UserDriveWinner, error) {
+	return nil, errors.New("resolve: database down")
+}
+
+// A catalogue that could not be read says so and lists no row, the deleting ones included.
+func TestMeDrives_NoDeletingRowsWhenTheCatalogueIsUnavailable(t *testing.T) {
+	st := newMemberDriveStore()
+	srv, _ := memberDriveServer(st, catalogueRunner(), "docker")
+	heldDrive(st, "Stuck", types.DriveBackendDockerVolume, 10*time.Minute, 1)
+	srv.cfg.Store = resolveFails{st}
+	got := meDrivesOf(t, srv, personCtx(aliceSub))
+	if got.Unavailable == "" {
+		t.Fatal("the catalogue was not unavailable, so this case does not test the guard")
+	}
+	if len(got.Drives) != 0 {
+		t.Errorf("an unavailable catalogue listed %+v, want no row", got.Drives)
 	}
 }
