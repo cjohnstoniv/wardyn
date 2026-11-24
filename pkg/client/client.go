@@ -149,8 +149,6 @@
 //     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
-//   - /api/v1/assistant      — the organisation's assistant settings (0.11): read and saved from the
-//     console's Settings card, a widening held for a super admin's approval
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller
