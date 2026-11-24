@@ -222,14 +222,19 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	} else if walls != nil && walls.DenyPull && sess.Stdout != nil {
 		sess.Stdout = s.localFolderPullGuard(runID, principal, channel, sess.Stdout, rec)
 	}
-	sess.Stdout = s.syncCapped(runID, principal, channel, rec, "pull", sess.Stdout)
+	capEnd := &syncCapEnd{}
+	sess.Stdout = s.syncCapped(runID, principal, channel, rec, "pull", capEnd, sess.Stdout)
 	defer s.sshSyncOpened(runID, dir)()
 	pass.start(dir)
-	ops := &sftpOpCounter{Channel: s.syncPushCapped(runID, principal, channel, rec)}
+	ops := &sftpOpCounter{Channel: s.syncPushCapped(runID, principal, channel, rec, capEnd)}
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, ops, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	removes, renames := ops.counts()
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut, "remove_requests": removes, "rename_requests": renames}
 	outcome := pass.outcome(bridgeOutcome(exit, bridgeEnd{}, "sftp-server", extra), extra) // a sync session keeps its rule: any nonzero exit, or a started pass the client never accounted for
+	// A session ended at a size cap: its row says why, not how sftp-server exited.
+	if msg := capEnd.text(); msg != "" {
+		outcome, extra["error"] = "failure", msg
+	}
 	record(outcome, extra)
 }
 

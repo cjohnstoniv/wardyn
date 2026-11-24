@@ -814,3 +814,33 @@ func TestBridgeSSHSync_ByteCapEndsSession(t *testing.T) {
 		}
 	}
 }
+
+// TestBridgeSSHSync_ByteCapRowCarriesSentence: a session ended at its size cap writes the cap sentence, word for
+// word, as its ssh.sync.transfer row's error, where the console's sync rows read it; not how sftp-server exited.
+func TestBridgeSSHSync_ByteCapRowCarriesSentence(t *testing.T) {
+	for _, tc := range []struct {
+		wall  string
+		walls *types.LocalFolderRules
+		want  string
+	}{
+		{wallMaxPush, &types.LocalFolderRules{MaxPushMiB: 1}, "This sync session reached its 1.0 MB limit for sending in, set by the Platform unit (locked)"},
+		{wallMaxPull, &types.LocalFolderRules{MaxPullMiB: 1}, "This sync session reached its 1.0 MB limit for bringing back, set by the Platform unit (locked)"},
+	} {
+		layer := types.LocalFolderWallLayer{Layer: policyref.LayerUnit, Name: "Platform", Locked: true}
+		d := newLFWSSH(t, types.LocalFolderWallsRecord{Walls: tc.walls, Layers: map[string]types.LocalFolderWallLayer{tc.wall: layer}}, nil, types.TransferAllowed, nil, types.Runner{})
+		sess, _, in, out := d.openSync(t, "push")
+		go func() {
+			_, _ = in.Write(make([]byte, 1<<20+4096))
+			_ = in.Close()
+		}()
+		_, _ = io.Copy(io.Discard, out)
+		_ = sess.Wait()
+		ev := waitForAudit(t, d.h.audit, d.run.ID, "ssh.sync.transfer", "failure")
+		if ev == nil {
+			t.Fatalf("%s: no failed transfer row; events=%s", tc.wall, auditDump(d.h.audit.snapshot(), d.run.ID))
+		}
+		if got := sshAuditData(t, ev)["error"]; got != tc.want {
+			t.Errorf("%s: row error = %q, want %q", tc.wall, got, tc.want)
+		}
+	}
+}

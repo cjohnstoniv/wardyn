@@ -386,9 +386,30 @@ func localFolderCapOf(walls *types.LocalFolderRules, way string) (int64, string)
 	return int64(walls.MaxPushMiB) << 20, wallMaxPush
 }
 
-// syncCapped bounds one way of a sync session by its cap: at the cap the session is audited and ended with the
-// size-cap sentence and exit status syncCapExitStatus. r is returned as it is with no cap.
-func (s *Server) syncCapped(runID uuid.UUID, principal string, channel ssh.Channel, rec types.LocalFolderWallsRecord, way string, r io.Reader) io.Reader {
+// syncCapEnd is the size-cap sentence a sync session was ended with, for its ssh.sync.transfer row's error; empty
+// while the session is under its caps. The first cap reached wins.
+type syncCapEnd struct {
+	mu  sync.Mutex
+	msg string
+}
+
+func (e *syncCapEnd) set(msg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.msg == "" {
+		e.msg = msg
+	}
+}
+
+func (e *syncCapEnd) text() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.msg
+}
+
+// syncCapped bounds one way of a sync session by its cap: at the cap the session is audited, end keeps the size-cap
+// sentence, and the session is ended with it and exit status syncCapExitStatus. r is returned as it is with no cap.
+func (s *Server) syncCapped(runID uuid.UUID, principal string, channel ssh.Channel, rec types.LocalFolderWallsRecord, way string, end *syncCapEnd, r io.Reader) io.Reader {
 	limit, wall := localFolderCapOf(rec.Walls, way)
 	if r == nil || limit <= 0 {
 		return r
@@ -396,7 +417,9 @@ func (s *Server) syncCapped(runID uuid.UUID, principal string, channel ssh.Chann
 	l := rec.Layers[wall]
 	return &localFolderByteCap{r: r, left: limit, over: func() {
 		s.auditLocalFolderDenied(s.cfg.BaseCtx, runID, types.ActorHuman, principal, wall, l)
-		endSyncAtCap(channel, localFolderCapText(limit, way, l))
+		msg := localFolderCapText(limit, way, l)
+		end.set(msg)
+		endSyncAtCap(channel, msg)
 	}}
 }
 
@@ -409,11 +432,11 @@ type syncCappedChannel struct {
 func (c syncCappedChannel) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 // syncPushCapped is channel with its client bytes read through the push cap, or channel itself with no cap.
-func (s *Server) syncPushCapped(runID uuid.UUID, principal string, channel ssh.Channel, rec types.LocalFolderWallsRecord) ssh.Channel {
+func (s *Server) syncPushCapped(runID uuid.UUID, principal string, channel ssh.Channel, rec types.LocalFolderWallsRecord, end *syncCapEnd) ssh.Channel {
 	if limit, _ := localFolderCapOf(rec.Walls, "push"); limit <= 0 {
 		return channel
 	}
-	return syncCappedChannel{Channel: channel, r: s.syncCapped(runID, principal, channel, rec, "push", channel)}
+	return syncCappedChannel{Channel: channel, r: s.syncCapped(runID, principal, channel, rec, "push", end, channel)}
 }
 
 // passCapped bounds one way of a computer-folder pass by its cap: at the cap the copy ends and the pass is audited.
