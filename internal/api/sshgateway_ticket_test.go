@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -75,7 +76,7 @@ func newTicketDoorRig(t *testing.T, configure ...func(*Config)) *ticketDoorRig {
 	base := func(c *Config) { c.SSHTickets, c.SessionRevocations = true, rev }
 	h := newSSHTestHarness(t, st, fr, append([]func(*Config){base}, configure...)...)
 	waitFor(t, "the gateway to serve", func() bool { return h.srv.metrics.sshLimits.Load() != nil })
-	web := httptest.NewServer(h.srv.Handler())
+	web := httptest.NewServer(panicFails(t, h.srv.Handler()))
 	t.Cleanup(web.Close)
 	return &ticketDoorRig{h: h, st: st, rev: rev, run: run, principal: principal, web: web}
 }
@@ -605,16 +606,24 @@ func TestSSHTicketDoor_ChannelPurpose(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer sess.Close()
-		var stderr strings.Builder
-		sess.Stderr = &stderr
+		// RequestSubsystem starts no copying of the session's streams (Wait would answer "not started"), so the
+		// test reads the channel's stderr itself; the gateway acks sync and then ends it with the sentence.
+		stderrPipe, err := sess.StderrPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := sess.RequestSubsystem(sshSyncSubsystem); err != nil {
 			t.Fatalf("the sync request: %v, want it acked and then ended", err)
 		}
-		if err := sess.Wait(); err == nil {
-			t.Error("the sync channel ended with no error")
-		}
-		if !strings.Contains(stderr.String(), "does not open wardyn sync") {
-			t.Errorf("stderr = %q, want the ticket's sentence naming wardyn sync", stderr.String())
+		read := make(chan string, 1)
+		go func() { b, _ := io.ReadAll(stderrPipe); read <- string(b) }()
+		select {
+		case stderr := <-read:
+			if !strings.Contains(stderr, "does not open wardyn sync") {
+				t.Errorf("stderr = %q, want the ticket's sentence naming wardyn sync", stderr)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the sync channel was not ended")
 		}
 		if row := rig.waitRow(t, "ssh.channel.reject", "failure", "ticket_purpose"); row["purpose"] != ticketPurposeSSHEditor {
 			t.Errorf("row = %v, want purpose ssh-editor", row)
