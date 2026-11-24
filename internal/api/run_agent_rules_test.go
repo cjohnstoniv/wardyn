@@ -934,6 +934,11 @@ func TestAgentRulesInnerWalls_TwoRulesNameNoPolicy(t *testing.T) {
 	if refusal == nil || refusal.body.Reason != reasonAgentRulesConflict || !strings.Contains(refusal.body.Error, "This run's policy sets harness_inner_walls.approvals") {
 		t.Errorf("a policy that set the axis: refusal = %+v, want the policy named", refusal)
 	}
+	// A policy that set only the sandbox mode is not blamed when the two rules disagree on approvals.
+	_, _, _, refusal = agentRulesStep(t, srv, both, types.RunPolicySpec{HarnessInnerWalls: innerWalls(types.InnerSandboxReadOnly, "")})
+	if refusal == nil || refusal.body.Reason != reasonAgentRulesConflict || strings.Contains(refusal.body.Error, "This run's policy") {
+		t.Errorf("a policy that set only sandbox_mode: refusal = %+v, want the rules named and no policy", refusal)
+	}
 	// A rule met first does not make a later, agreeing rule a refusal or the policy a setter.
 	agree := types.AgentRules{Harness: "codex-cli", InnerWalls: innerWalls(types.InnerSandboxReadOnly, types.InnerApprovalsWardyn), Version: 6, UpdatedBy: "sub-admin"}
 	srv, _ = agentRulesServer(t, innerRule(innerWalls("", types.InnerApprovalsWardyn)), agree)
@@ -942,7 +947,7 @@ func TestAgentRulesInnerWalls_TwoRulesNameNoPolicy(t *testing.T) {
 		t.Fatalf("agreeing rules: %+v, %+v, want both met", spec.HarnessInnerWalls, refusal)
 	}
 	for _, rec := range source.AgentRules {
-		if rec.policySetInnerWalls {
+		if rec.policySetInnerWalls.has("") {
 			t.Errorf("record for %s says the policy set the agent's walls; no policy did", rec.Harness)
 		}
 	}
