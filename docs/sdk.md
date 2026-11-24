@@ -886,16 +886,16 @@ start.
 | `runners_enabled_required` | `PUT /runners/settings` needs `enabled` or `require_managed_device`, each true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
 | `site_config_runners_via_own_route` | Change `runners.enabled` or `runners.require_managed_device` with `PUT /runners/settings`. |
-| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. |
+| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. `POST /assistant/checks` and `POST /assistant/replay` (`409`): every purpose the route serves is off. |
 | `assistant_no_provider` | `GET /me/assistant`: no model provider is marked to serve this purpose. |
-| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. |
+| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. `POST /assistant/checks` and `POST /assistant/replay` answer it with `409`. |
 | `assistant_not_connected` | `GET /me/assistant`: you have no credential for a marked provider yet. |
 | `assistant_settings_invalid` | `PUT /assistant/settings`: `400` for an unknown provider, a bad model list or an unknown record kind, `428` without `If-Match`, `412` when it no longer matches. `GET /me/assistant`: `purpose` is not `compose` or `review`. An approval refuses a block the providers no longer allow. |
 | `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |
 | `assistant_provider_defers_inspection` | `PUT /assistant/settings`: a marked provider leaves prompt inspection to its gateway. |
 | `assistant_settings_via_own_route` | Change `assistant` with `PUT /assistant/settings`, not `PUT /site-config`. |
 | `assistant_at_run_limit` | `POST /assistant/preview` and `POST /assistant/sessions` (`409`): you are at your `max_concurrent_runs`, and the assistant's run would count against it. End a run first. |
-| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, and a message or edit on a live session (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
+| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, a message or edit on a live session, and the assistant's `read` tool (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
 | `assistant_session_not_found` | `404`: no session with that id is yours; another person's session answers the same. `409` on a message, an edit or a run's event when the session has ended or another session replaced it. |
 | `assistant_purpose_target_mismatch` | `400`: the purpose does not take that kind of target (a review names a held change). |
 | `assistant_preview_stale` | `POST /assistant/sessions` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
