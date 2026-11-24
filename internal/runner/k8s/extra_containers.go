@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -25,13 +26,30 @@ const (
 	agentFloorMemoryMiB int64 = 256
 )
 
-var errExtraContainersBudget = errors.New("the run's extra containers do not fit its size")
+var (
+	errExtraContainersBudget = errors.New("the run's extra containers do not fit its size")
+	errExtraContainerName    = errors.New("an extra container's name is reserved or repeated")
+)
 
 // extraContainerEnvKeys are the only variables of the run's env an extra container gets. Never a
 // secretKeyRef, and never the CA bundle paths: they name files only agent-run writes, in the agent's
 // own filesystem.
 var extraContainerEnvKeys = []string{
 	"WARDYN_RUN_ID", "WARDYN_PROXY_URL", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy", mitmCAPEMEnv,
+}
+
+// extraContainerNames refuses an extra named like one of Wardyn's own containers (the agent, the
+// wardyn-* containers, the stage-* init containers) or named twice: the API server refuses some of these
+// at create, and an extra named like the exec container would start and fail the agent's first Exec.
+func extraContainerNames(extras []runner.ExtraContainer) error {
+	seen := map[string]bool{}
+	for _, c := range extras {
+		if c.Name == mainContainerName || strings.HasPrefix(c.Name, "wardyn-") || strings.HasPrefix(c.Name, "stage-") || seen[c.Name] {
+			return fmt.Errorf("k8s: extra container %q: %w", c.Name, errExtraContainerName)
+		}
+		seen[c.Name] = true
+	}
+	return nil
 }
 
 // agentResources is the agent container's size: the run's effective size less every extra's. Without

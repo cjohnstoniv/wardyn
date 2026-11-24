@@ -113,7 +113,7 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 	enforced = spec.ConfinementClass
 	if spec.MachineKind.Normalize() != "" {
 		if len(spec.Containers) > 0 {
-			return "", "", "", fmt.Errorf("k8s: a Linux VM: %w", runner.ErrExtraContainersUnsupported)
+			return "", "", "", fmt.Errorf("k8s: a VM sandbox: %w", runner.ErrExtraContainersUnsupported)
 		}
 		if err := d.refuseVMSpec(spec); err != nil {
 			return "", "", "", err
@@ -131,6 +131,9 @@ func (d *Driver) createPreflight(ctx context.Context, spec runner.SandboxSpec) (
 		return "", "", "", fmt.Errorf("k8s: %w", err)
 	}
 	if err := validateDriveSet(spec.Drives); err != nil {
+		return "", "", "", err
+	}
+	if err := extraContainerNames(spec.Containers); err != nil {
 		return "", "", "", err
 	}
 	if _, err := agentResources(spec); err != nil {
@@ -561,8 +564,8 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns
 	})
 	// Only a TIMEOUT is enriched: the poll's own errors already name their
 	// cause, and a Get failure is about the apiserver, not the pod.
-	if errors.Is(err, context.DeadlineExceeded) {
-		if why := podStuckReason(lastPod); why != "" {
+	if errors.Is(err, context.DeadlineExceeded) && lastPod != nil { // a container's own Waiting reason first, as the proxy's wait reads it
+		if why := cmp.Or(waitingDetail(lastPod), podStuckReason(lastPod)); why != "" {
 			return fmt.Errorf("%w (%s)", err, why)
 		}
 	}

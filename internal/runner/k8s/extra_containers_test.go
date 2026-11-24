@@ -11,8 +11,10 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -383,5 +385,148 @@ func TestAgentSandbox_ExtraContainersPassReadBack(t *testing.T) {
 	}
 	if p := podPatches(cs); len(p) != 1 {
 		t.Errorf("pod patches = %d, want the one gate removal", len(p))
+	}
+}
+
+// A kept work folder is the drive at the work path: no wardyn-work volume beside it, and the extra
+// shares the drive there.
+func TestCreateSandbox_ExtraContainersShareAKeptWorkFolder(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.25")
+	installPodContainersReactor(t, cs, nil)
+
+	spec := testSandboxSpec()
+	spec.Resources = runner.Resources{CPUMillis: 1000, MemoryMiB: 1024}
+	kept := testDriveMount()
+	kept.Target = "/home/agent/work"
+	spec.Drives = []types.DriveMount{*kept}
+	spec.Containers = []runner.ExtraContainer{{Name: "mcp", Image: "registry.example/mcp@sha256:" + strings.Repeat("b", 64), CPUMillis: 100, MemoryMiB: 128}}
+	pod := createExtrasPod(t, d, cs, spec)
+
+	if volumeFor(pod.Spec.Volumes, "wardyn-work") != nil {
+		t.Errorf("pod carries a wardyn-work volume beside the kept work folder; volumes=%+v", pod.Spec.Volumes)
+	}
+	for _, c := range pod.Spec.Containers {
+		var atWork []string
+		for _, m := range c.VolumeMounts {
+			if m.MountPath == "/home/agent/work" {
+				atWork = append(atWork, m.Name)
+			}
+		}
+		if !slices.Equal(atWork, []string{driveVolumeNameAt(0)}) {
+			t.Errorf("%s mounts at /home/agent/work = %v, want only the drive %q", c.Name, atWork, driveVolumeNameAt(0))
+		}
+	}
+}
+
+func TestExtraContainerNames(t *testing.T) {
+	named := func(names ...string) []runner.ExtraContainer {
+		out := make([]runner.ExtraContainer, 0, len(names))
+		for _, n := range names {
+			out = append(out, runner.ExtraContainer{Name: n})
+		}
+		return out
+	}
+	for _, names := range [][]string{
+		{"agent"}, {"wardyn-agent"}, {"wardyn-proxy"}, {"wardyn-x"}, {"stage-secrets"}, {"stage-proxy-config"},
+		{"mcp", "mcp"}, {"kernel", "mcp", "kernel"},
+	} {
+		if err := extraContainerNames(named(names...)); !errors.Is(err, errExtraContainerName) {
+			t.Errorf("%v: err = %v, want errExtraContainerName", names, err)
+		}
+	}
+	for _, names := range [][]string{nil, {"kernel", "mcp"}, {"agents"}, {"my-wardyn-"}, {"staged"}} {
+		if err := extraContainerNames(named(names...)); err != nil {
+			t.Errorf("%v: err = %v, want nil", names, err)
+		}
+	}
+}
+
+func TestCreatePreflight_RefusesAReservedExtraName(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	before := len(cs.Actions())
+	spec := testSandboxSpec()
+	spec.Drives = []types.DriveMount{*testDriveMount()}
+	spec.Resources = runner.Resources{CPUMillis: 1000, MemoryMiB: 1024}
+	spec.Containers = []runner.ExtraContainer{{Name: "wardyn-agent", Image: "img", CPUMillis: 100, MemoryMiB: 128}}
+	if _, err := d.CreateSandbox(context.Background(), spec); !errors.Is(err, errExtraContainerName) {
+		t.Fatalf("err = %v, want errExtraContainerName", err)
+	}
+	assertNoCreates(t, cs, before)
+}
+
+// A start timeout on an extra still waiting names the extra and its reason, not only the pod's phase.
+func TestCreateSandbox_TimeoutNamesAWaitingExtra(t *testing.T) {
+	d, cs := newTestDriver(t, Config{StartTimeout: 300 * time.Millisecond})
+	installProxyIPReactor(t, cs, "10.244.0.26")
+	installPodContainersReactor(t, cs, map[string]string{"mcp": "ContainerCreating"})
+
+	spec := testSandboxSpec()
+	spec.Resources = runner.Resources{CPUMillis: 1000, MemoryMiB: 1024}
+	spec.Containers = twoExtras()
+	_, err := d.CreateSandbox(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "mcp: ContainerCreating") {
+		t.Fatalf("err = %v, want the timeout to name mcp's waiting reason", err)
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+}
+
+func agentPodWith(phase corev1.PodPhase, extras int, agent corev1.ContainerState) *corev1.Pod {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: phase}}
+	pod.Spec.Containers = []corev1.Container{{Name: mainContainerName}}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: agent}}
+	for i := range extras {
+		name := "extra-" + strconv.Itoa(i)
+		pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses,
+			corev1.ContainerStatus{Name: name, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}})
+	}
+	return pod
+}
+
+func exited(code int32) corev1.ContainerState {
+	return corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: code}}
+}
+
+// With an extra still running the pod stays Running after the agent exits; the run reads ended with
+// the agent's own exit code.
+func TestStatusFromPod_AgentExitedBesideARunningExtra(t *testing.T) {
+	for _, tc := range []struct {
+		code int32
+		want types.RunState
+	}{{2, types.RunFailed}, {143, types.RunFailed}, {0, types.RunStopped}} {
+		st := statusFromPod(agentPodWith(corev1.PodRunning, 1, exited(tc.code)))
+		if st.State != tc.want || st.ExitCode == nil || *st.ExitCode != int(tc.code) || st.Message == "" {
+			t.Errorf("agent exited %d beside a running extra: %+v, want %s with exit code %d", tc.code, st, tc.want, tc.code)
+		}
+	}
+	if st := statusFromPod(agentPodWith(corev1.PodRunning, 2, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}})); st.State != types.RunRunning || st.ExitCode != nil {
+		t.Errorf("agent running beside extras: %+v, want RUNNING with no exit code", st)
+	}
+}
+
+// A run without extras reads from the phase alone, exactly as before extras existed: a terminated agent
+// status under a Running phase does not end it.
+func TestStatusFromPod_OneContainerPodReadsThePhase(t *testing.T) {
+	zero, two := 0, 2
+	for _, tc := range []struct {
+		name  string
+		pod   *corev1.Pod
+		state types.RunState
+		code  *int
+	}{
+		{"pending", agentPodWith(corev1.PodPending, 0, corev1.ContainerState{}), types.RunStarting, nil},
+		{"running", agentPodWith(corev1.PodRunning, 0, corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}), types.RunRunning, nil},
+		{"running, agent status terminated", agentPodWith(corev1.PodRunning, 0, exited(2)), types.RunRunning, nil},
+		{"succeeded", agentPodWith(corev1.PodSucceeded, 0, exited(0)), types.RunStopped, &zero},
+		{"failed", agentPodWith(corev1.PodFailed, 0, exited(2)), types.RunFailed, &two},
+	} {
+		st := statusFromPod(tc.pod)
+		if st.State != tc.state || !reflect.DeepEqual(st.ExitCode, tc.code) {
+			t.Errorf("%s: %+v, want %s with exit code %v", tc.name, st, tc.state, tc.code)
+		}
+		if tc.state == types.RunRunning && st.Message != "" {
+			t.Errorf("%s: message %q, want none", tc.name, st.Message)
+		}
 	}
 }
