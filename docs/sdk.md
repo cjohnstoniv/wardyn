@@ -369,7 +369,7 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - The answer echoes `purpose`. An older server ignores it and mints a terminal ticket, so a client dials a purpose only when the echo matches.
 - A ticket with a purpose does not count against the run's terminal sessions; a forward holds one of the run's SSH channels instead.
 - An `ssh-*` mint asks the `ssh_key` capability: a person denied it gets `403` `capability_feature` and no ticket.
-- A ticket spent at any door but its own is refused as invalid, and it is burned.
+- A ticket minted for a purpose and spent at any other door is refused as invalid, and it is burned. A terminal ticket, minted with no purpose, still opens the forward door.
 
 `GET /api/v1/runs/{id}/ssh` takes an SSH ticket in the `Wardyn-Ticket` header, never in the URL, and upgrades to a WebSocket of binary frames carrying one SSH connection.
 The SSH username is the run id and the `none` method signs in, so no key is registered.

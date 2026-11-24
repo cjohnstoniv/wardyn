@@ -1777,7 +1777,7 @@ These risks are **not closed by v1 Wardyn**.
 
 - owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.**
 - The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`).
-- Attach tickets now carry a purpose, and a ticket spent at another door is refused after it is burned.
+- Attach tickets now carry a purpose, and a ticket minted for a purpose and spent at any other door is refused after it is burned; a terminal ticket with no purpose still opens the forward door.
 - SSH tickets ride a header, never a URL.
 - `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17).
 - And "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run.

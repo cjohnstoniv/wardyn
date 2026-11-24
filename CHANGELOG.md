@@ -14,7 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
-- An operator can let a person reach a run over the SSH gateway with no registered key, through a 30-second single-use ticket the CLI mints (`WARDYN_SSH_TICKETS`, off by default). A ticket names what it opens, so one minted for a command opens no terminal (#3279).
+- An operator can let a person reach a run over the SSH gateway with no registered key: `GET /runs/{id}/ssh` takes a 30-second single-use ticket minted at `POST /runs/{id}/attach/ticket` (`WARDYN_SSH_TICKETS`, off by default). A ticket names what it opens, so one minted for a command opens no terminal (#3279).
 - An attach ticket minted for a port forward (`purpose=attach-forward`) opens only that forward and only its ports, and does not count against the run's terminal sessions.
 
 ### Changed
