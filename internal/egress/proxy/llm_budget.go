@@ -20,12 +20,16 @@ import (
 // truncating, which would corrupt the request.
 var maxLLMScanBody = 32 << 20 // 32 MiB
 
-// maxConcurrentScans bounds concurrent extract+scan per engine — a memory bound, not
-// throughput: extraction re-materializes a body ~5.3x live heap against the sidecar's hard
-// 256 MiB cgroup cap (one 30 MiB body peaks ~158 MiB; two would OOM-kill the sidecar and its
-// run's only network path). Waiting rather than skipping keeps a queued request fully
-// inspected, bounded by scanQueueWait instead.
-const maxConcurrentScans = 1
+// scanOverhead is what a scan is charged beside its body's bytes against its engine's scan
+// budget, which is one largest body's bytes (maxLLMScanBody): a memory bound, not throughput.
+// Extraction re-materializes a body ~5.3x live heap against the sidecar's hard 256 MiB cgroup
+// cap (one 30 MiB body peaks ~158 MiB; two would OOM-kill the sidecar and its run's only
+// network path). A small body costs more per byte: at 1 MiB, about 1.5x a 30 MiB body's peak per
+// byte (measured). So each scan is charged its body plus 1 MiB, and scans run side by side while
+// their charges fit one largest body: four 1 MiB bodies at once, a 30 MiB one alone, never more
+// than 32. Waiting rather than skipping keeps a queued request fully inspected, bounded by
+// scanQueueWait instead.
+const scanOverhead = 1 << 20
 
 // maxRetainedScanBytes bounds the request bytes inspection holds live per engine, from
 // before the read until the caller is done with the buffer: N slow or stalled requests
@@ -33,20 +37,22 @@ const maxConcurrentScans = 1
 // extraction under the 256 MiB cap.
 var maxRetainedScanBytes = 64 << 20 // 64 MiB
 
-// scanBudget is one engine's inspection bounds: the scan slots (maxConcurrentScans) and the
+// scanBudget is one engine's inspection bounds: the scan budget (scanOverhead) and the
 // retained-bytes budget (maxRetainedScanBytes). Each Proxy has its own, so a via_org engine
 // inside wardynd bounds only its own run; a sidecar runs one Proxy, so there it is the
 // process's bound. The zero value is ready.
 type scanBudget struct {
-	once     sync.Once
-	slots    chan struct{}
-	retained *semaphore.Weighted
-	limit    int64
+	once      sync.Once
+	scanning  *semaphore.Weighted
+	scanLimit int64
+	retained  *semaphore.Weighted
+	limit     int64
 }
 
 func (b *scanBudget) init() *scanBudget {
 	b.once.Do(func() {
-		b.slots = make(chan struct{}, maxConcurrentScans)
+		b.scanLimit = int64(maxLLMScanBody)
+		b.scanning = semaphore.NewWeighted(b.scanLimit)
 		b.limit = int64(maxRetainedScanBytes)
 		b.retained = semaphore.NewWeighted(b.limit)
 	})
@@ -144,18 +150,22 @@ func holdChargedBody(r *http.Request, buf []byte) {
 	*r = *r.WithContext(context.WithValue(r.Context(), chargedBodyKey{}, buf))
 }
 
-// takeSlot waits, bounded by ctx and scanQueueWait, for one of b's scan slots. An error means
-// the caller FAILS CLOSED; otherwise the caller defers free.
-func (b *scanBudget) takeSlot(ctx context.Context) (free func(), err error) {
+// takeSlot waits, bounded by ctx and scanQueueWait, for room in b's scan budget to extract a
+// body of n bytes, charged n plus scanOverhead and at most the whole budget. An inspection whose
+// heap does not follow its input's size passes math.MaxInt64 and runs alone. Waiters are served
+// in order, so a large body is not passed over by smaller ones. An error means the caller FAILS
+// CLOSED; otherwise the caller defers free.
+func (b *scanBudget) takeSlot(ctx context.Context, n int64) (free func(), err error) {
 	b.init()
-	ctx, cancel := context.WithTimeout(ctx, scanQueueWait)
-	defer cancel()
-	select {
-	case b.slots <- struct{}{}:
-		return func() { <-b.slots }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	n = min(n, b.scanLimit-scanOverhead) + scanOverhead
+	if !b.scanning.TryAcquire(n) {
+		ctx, cancel := context.WithTimeout(ctx, scanQueueWait)
+		defer cancel()
+		if err := b.scanning.Acquire(ctx, n); err != nil {
+			return nil, err
+		}
 	}
+	return func() { b.scanning.Release(n) }, nil
 }
 
 // scanQueueWait bounds how long a request waits for a scan slot or for inspection memory;

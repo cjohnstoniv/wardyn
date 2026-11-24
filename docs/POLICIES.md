@@ -1424,7 +1424,7 @@ Residual: a rule constrains requests addressed to its host name, not every route
 | The push cannot be read from its own bytes | `415` | `brokered:git:push-uninspectable` | Push from a complete clone (`git fetch --unshallow`) so the pack carries every object it deltifies against. |
 | A ref is set to a commit the request does not carry (for example a branch created at a commit the forge already has) | `415` | `brokered:git:push-uninspectable` | Leave the named refs out of the push, or point them at commits it carries. A complete clone (`git fetch --unshallow`) does not help, and one new commit need not fix every ref. |
 | The sidecar was busy inspecting other requests for longer than it waits | `503` | `brokered:git:push-uninspectable` | Retry the push. Inspection takes the sidecar's one inspection slot, shared with LLM request scanning, because a small compressed push can inflate to over a hundred MiB inside a sidecar capped at 256 MiB. |
-| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked | `403`; a push whose paths could not be worked out is instead a rejected ref whose reason git prints; `403` for a client that did not ask for git's push report | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
+| A path matched `require_review_paths`, and an admin denied the push, nobody decided within `hold_seconds`, the request closed undecided, or it could not be asked; or an admin approved a push over 1 MiB | `403`. A push whose paths could not be worked out, or an approved one over 1 MiB, is a rejected ref whose reason git prints. A client that did not ask for git's push report gets `403` | `brokered:git:push-held` | Wait for the decision and push the same commits again, or take those paths out of the push. |
 | A path matched `require_review_paths` on an **unattended** run | A rejected ref whose reason git prints; `403` for a client that did not ask for git's push report | `brokered:git:push-held-unattended` | Take those paths out of the push, or run the task interactively. No approval is raised. |
 
 - `415` `brokered:git:push-uninspectable`: A body in a non-identity `Content-Encoding`, a malformed pack, a `deny_paths` list too long to evaluate, and a `deny_paths` entry the broker cannot read (one that bypassed write-time validation) land here too.
@@ -1550,6 +1550,7 @@ So an entry a pattern matches is judged one of two ways:
 
 - A path a review pattern matches — same pattern language, same forge comparison, a directory the push does not carry matched when a pattern could match beneath it — does not refuse the push.
 - The broker holds the request open and raises a `push_content` approval for an admin, then forwards the buffered bytes unchanged if it is approved.
+  - A held push over 1 MiB is not kept: once approved, git says to push the same commits again, and they go through.
 - A deny match always wins: a path both lists match is refused and nothing is asked.
 
 - **Admins decide, members do not** — not even on their own run.

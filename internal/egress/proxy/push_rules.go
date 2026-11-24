@@ -72,6 +72,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"path"
 	"slices"
@@ -428,6 +429,10 @@ func (p *Proxy) applyPushRules(w http.ResponseWriter, r *http.Request, body io.R
 			head := receivePackHead(buf)
 			target.writeToGit = func(w http.ResponseWriter, msg string) { writeADOGitRefusal(w, head, msg) }
 		}
+		if len(buf) > maxHeldPushBytes {
+			// Not kept for the hold: the run's LLM inspection shares the budget it is charged to.
+			target.dropPush = func() { buf = nil; release() }
+		}
 		if !p.holdPush(w, r, rules, review, target, subject, deny) {
 			release()
 			return nil, noRelease, false
@@ -488,7 +493,8 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 				rules.inspectMax>>20))
 		return nil, pushReview{}, noRelease, false
 	}
-	free, err := p.scan.takeSlot(r.Context())
+	// The whole scan budget: a pack's heap follows what it inflates to, not its size.
+	free, err := p.scan.takeSlot(r.Context(), math.MaxInt64)
 	if err != nil {
 		busy()
 		return nil, pushReview{}, noRelease, false
@@ -582,7 +588,8 @@ func (p *Proxy) inspectPush(w http.ResponseWriter, r *http.Request, rules *pushR
 		return nil, pushReview{}, noRelease, false
 	}
 	review.unresolved = review.why != "" && review.why != whyChanged && review.why != whyTipChanged && review.why != whyBranchDeleted
-	// The buffer outlives the slot, forwarded or held from here, and stays charged.
+	// The buffer outlives the slot, forwarded or held from here, and stays charged (a large held push gives it
+	// back: maxHeldPushBytes).
 	kept = true
 	return buf, review, release, true
 }

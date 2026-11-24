@@ -19,6 +19,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The egress proxy reuses a host's DNS answer for up to 30 seconds and checks it against the address guard on every use, as it checks a fresh one. A lookup that does not answer gives up after 10 seconds. (#4051)
 - The egress proxy keeps up to 32 idle connections per upstream host and resumes upstream TLS sessions, except on connections that present a client certificate. HTTP/2 upstream connections that stop answering are pinged and closed. (#4051)
+- An opaque CONNECT tunnel now copies socket to socket once the proxy's checks of its first bytes are done, so the kernel moves the bytes: about twice the throughput through one tunnel on loopback. The checks, the run's activity mark and how a failed tunnel is recorded are unchanged. (#4070)
+- Inspected LLM request bodies are scanned side by side while their sizes, plus 1 MiB each, fit within the largest inspected body (32 MiB), so four 1 MiB bodies sent at once take about as long as one. A push is still inspected alone. (#4070)
+- A push held for review that is over 1 MiB no longer keeps its bytes, or its share of the run's inspection memory, while it waits. Once an admin approves it, git prints that the same commits must be pushed again, and that push goes through without a second question. A held push of 1 MiB or less is still forwarded the moment it is approved. (#4070)
 
 ### Fixed
 

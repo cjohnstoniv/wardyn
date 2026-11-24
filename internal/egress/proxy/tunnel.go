@@ -76,6 +76,10 @@ const resolveBypassedCause = "this name is on the upstream proxy's bypass list, 
 // destination: that side is the one that broke. An upstream reset that lands
 // while the client's bytes are still being written would otherwise be claimed
 // by the client-to-upstream copy as the client having closed.
+//
+// Each copy goes through the wrappers until the upstream's guard has settled
+// (tunnelWatch.settled), then socket to socket (relayHalf), where the kernel
+// moves the bytes.
 func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	type end struct {
 		src net.Conn
@@ -85,7 +89,7 @@ func tunnel(a, b net.Conn) (first net.Conn, err error) {
 	done := make(chan struct{}, 2)
 	cp := func(dst, src net.Conn) {
 		w := &writeFailed{Writer: dst}
-		_, err := io.Copy(w, src)
+		err := relayHalf(w, dst, src)
 		side := src
 		if w.failed {
 			side = dst
