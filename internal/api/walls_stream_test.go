@@ -508,6 +508,38 @@ func TestWallsStreamReplay(t *testing.T) {
 	gapped("a number the ring lost", nonce+".1")
 }
 
+// TestWallsStreamFirstBeatAfterAStop: the sampler idles out and starts again, its first beat numbered from the time
+// elapsed, far above the head's next number. A stream opened with no Last-Event-ID is sent that beat as a frame, not
+// a gap, and one resuming from before the stop is sent a gap.
+func TestWallsStreamFirstBeatAfterAStop(t *testing.T) {
+	st := &wallsLiveStore{}
+	run := st.addRun("sub-a", nil)
+	e := newWallsStreamEnv(t, st)
+	sm := &e.s.wallsLive.sampler
+	e.beat()
+	e.beat()
+	sm.mu.Lock()
+	sm.clearLocked()
+	sm.mu.Unlock()
+
+	resp, cancel := e.get("/view")
+	defer cancel()
+	defer resp.Body.Close()
+	st.add(wallsLiveRow(t, run, "egress.allow", "policy:allowlist", "a.example"))
+	sm.mu.Lock()
+	sm.born = sm.born.Add(-40 * time.Second)
+	sm.mu.Unlock()
+	e.beat()
+	ev, ok := wallsSSENext(bufio.NewReader(resp.Body))
+	head := sm.headN()
+	if !ok || ev.Event != "frame" || ev.ID != sm.nonce()+"."+strconv.FormatUint(head, 10) || head < 30 {
+		t.Errorf("first event %+v (read %v), head %d; want the restarted beat as a frame, numbered from the clock", ev, ok, head)
+	}
+	if ev := e.events(1, "/view", "Last-Event-ID", sm.nonce()+".1")[0]; ev.Event != "gap" {
+		t.Errorf("a resume from before the stop: %+v, want a gap", ev)
+	}
+}
+
 // TestWallsStreamSendsEachBeat: a stream that sent no Last-Event-ID is sent the beats made after it opened, each as
 // a frame with its id, and a notice after it with no id.
 func TestWallsStreamSendsEachBeat(t *testing.T) {

@@ -485,3 +485,44 @@ func TestWallsSamplerUnitFoldLeavesOutStartRows(t *testing.T) {
 		t.Errorf("unit %+v, %d hosts, %d samples; want none of them", fold.Unit, len(fold.Hosts), len(fold.Samples))
 	}
 }
+
+// TestWallsSamplerGapIsExactAcrossAStop: after the sampler idles out and starts again, the first beat is numbered from
+// the time elapsed, far above the head's next number, and a stream that opened at the old head is not told it missed
+// anything; a resume from before the stop, or from a beat the ring evicted, is.
+func TestWallsSamplerGapIsExactAcrossAStop(t *testing.T) {
+	st := &wallsLiveStore{}
+	run := st.addRun("sub-a", nil)
+	s, clk := wallsLiveServer(st)
+	sm := &s.wallsLive.sampler
+	for range 3 {
+		st.add(wallsLiveRow(t, run, "egress.allow", "policy:allowlist", "a.example"))
+		wallsLiveBeat(t, s)
+	}
+	head := sm.headN()
+	if head != 3 {
+		t.Fatalf("head %d after three beats, want 3", head)
+	}
+
+	sm.mu.Lock()
+	sm.clearLocked() // what an idle stop does
+	sm.mu.Unlock()
+	if _, _, _, gap := sm.since(head); gap {
+		t.Error("a stream opened at the head after a stop, before any beat, was told of a gap")
+	}
+	if _, _, _, gap := sm.since(head - 1); !gap {
+		t.Error("a resume from before the stop was not told of a gap")
+	}
+
+	clk.now = clk.now.Add(40 * time.Second)
+	sm.beatOnce(context.Background(), s)
+	beats, newHead, _, gap := sm.since(head)
+	if gap || len(beats) != 1 || beats[0].N != newHead || newHead < head+30 {
+		t.Fatalf("after a restart, a stream at the old head got %d beats, head %d, gap %v; want its first beat, numbered from the clock, and no gap", len(beats), newHead, gap)
+	}
+	if _, _, _, gap := sm.since(newHead + 1); !gap {
+		t.Error("a number past the head was not a gap")
+	}
+	if _, _, _, gap := sm.since(head - 1); !gap {
+		t.Error("a resume from before the stop was not a gap after the restart")
+	}
+}

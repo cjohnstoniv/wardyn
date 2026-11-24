@@ -31,6 +31,7 @@ const (
 	wallsRingMaxEntries = 200_000          // folds, host entries and samples across the ring
 	wallsBeatLimit      = 5000             // rows read per beat
 	wallsSamplerIdle    = 30 * time.Second // the sampler stops this long after its last stream closes
+	wallsBeatTimeout    = 5 * time.Second  // one beat's reads end after this, and the beat is marked stale
 	wallsRunMetaMax     = 50_000           // cached run to unit and creator entries
 	wallsWarnEvery      = time.Minute      // a failed read is logged at most this often
 	wallsFoldSamples    = 5                // samples one fold keeps of each kind
@@ -122,6 +123,7 @@ type wallsSampler struct {
 	floor     time.Time
 	born      time.Time // when this state first ran; beat numbers never fall behind the whole ticks since
 	lastN     uint64
+	lostN     uint64 // the highest beat number cleared or evicted from the ring; a resume below it missed a beat
 	subs      int
 	idleSince time.Time
 	running   bool
@@ -211,8 +213,10 @@ func (w *wallsSampler) stop() {
 }
 
 // clearLocked drops the ring, the cursor and the floor, and marks the loop not running. The beat number, the
-// nonce and the start time stay, so a number is never reused after a stop.
+// nonce and the start time stay, so a number is never reused after a stop; lostN rises to the head, so a resume from
+// before the stop gets a gap.
 func (w *wallsSampler) clearLocked() {
+	w.lostN = w.lastN
 	w.ring, w.volume = nil, 0
 	w.cursor, w.floor = store.DecisionCursor{}, time.Time{}
 	w.running = false
@@ -236,8 +240,9 @@ func (w *wallsSampler) headN() uint64 {
 }
 
 // since returns the stored beats with N above after, in order, with the head's N and the channel that is closed
-// when the next beat is published. gap is true when after names a beat the ring no longer holds, or one it never
-// made, so the caller cannot be told what it missed.
+// when the next beat is published. gap is true when after is below lostN, so a beat after it is gone, or above the
+// head, a beat never made, so the caller cannot be told what it missed. Beat numbers are not dense, so a number
+// the ring never held between two kept beats is not a gap.
 func (w *wallsSampler) since(after uint64) (beats []wallsBeat, head uint64, wake <-chan struct{}, gap bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -245,11 +250,11 @@ func (w *wallsSampler) since(after uint64) (beats []wallsBeat, head uint64, wake
 		w.wake = make(chan struct{})
 	}
 	head, wake = w.lastN, w.wake
-	if len(w.ring) == 0 {
-		return nil, head, wake, after != head
-	}
-	if after > head || after+1 < w.ring[0].N {
+	if after > head || after < w.lostN {
 		return nil, head, wake, true
+	}
+	if len(w.ring) == 0 {
+		return nil, head, wake, false
 	}
 	i, _ := slices.BinarySearchFunc(w.ring, after, func(b wallsBeat, n uint64) int { return cmp.Compare(b.N, n+1) })
 	return slices.Clone(w.ring[i:]), head, wake, false
@@ -277,12 +282,14 @@ func (w *wallsSampler) beatOnce(ctx context.Context, s *Server) {
 	floor, cursor := w.floor, w.cursor
 	w.mu.Unlock()
 
-	rows, next, err := reader.AuditWallsRows(ctx, store.DecisionQuery{
+	readCtx, cancelRead := context.WithTimeout(ctx, wallsBeatTimeout)
+	defer cancelRead()
+	rows, next, err := reader.AuditWallsRows(readCtx, store.DecisionQuery{
 		Actions: wallsSampleActions, Since: floor, After: cursor, Limit: wallsBeatLimit,
 	})
 	var meta map[uuid.UUID]wallsRunMeta
 	if err == nil {
-		meta, err = w.runMetaFor(ctx, runs, rows)
+		meta, err = w.runMetaFor(readCtx, runs, rows)
 	}
 	if err != nil {
 		w.warn(ctx, "wardyn: the Walls view's live streams could not read a beat; its frames are marked stale", err)
@@ -501,6 +508,7 @@ func (w *wallsSampler) publish(start time.Time, b wallsBeat, read *wallsRead) {
 	limit := cmp.Or(w.maxVolume, wallsRingMaxEntries)
 	for len(w.ring) > wallsRingBeats || (w.volume > limit && len(w.ring) > 1) {
 		w.volume -= w.ring[0].entries()
+		w.lostN = w.ring[0].N
 		w.ring[0] = wallsBeat{}
 		w.ring = w.ring[1:]
 	}
