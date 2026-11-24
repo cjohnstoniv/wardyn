@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -726,6 +727,8 @@ func TestPATAPIOfflineBoundAfterTheVet(t *testing.T) {
 	}
 	hits, mints := h.forgeHits(), h.mints()
 
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(gate.release) }) }) // a failed wait still lets the held lookup go
 	setQuiet(p, 29*time.Minute)
 	gate.armed.Store(true)
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -736,7 +739,7 @@ func TestPATAPIOfflineBoundAfterTheVet(t *testing.T) {
 		t.Fatal("the request never looked the forge host up")
 	}
 	setQuiet(p, 30*time.Minute)
-	close(gate.release)
+	release.Do(func() { close(gate.release) })
 	rec := <-done
 	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "has not renewed its run token") {
 		t.Fatalf("(b) status %d body %q, want 502: the vet crossed the bound", rec.Code, rec.Body)
