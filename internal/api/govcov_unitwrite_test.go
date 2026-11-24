@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -466,7 +465,7 @@ func TestGovCovProfileDeleteDoor(t *testing.T) {
 }
 
 func TestWarnUnresolvableProfilesNamesOnlyTheOnesThatNoLongerCompose(t *testing.T) {
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
