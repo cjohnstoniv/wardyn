@@ -11,6 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- On a Linux VM, the guest's root can no longer create a file, folder or link in a shared folder, nor make root a file's owner (#3464). Before, such a file landed on the host as the runner's user, as the agent's own files do. A folder mounted inside another writable folder now gets its mount folder made in that folder on the host, as in a container.
+
+### Fixed
+
+- On a Linux VM, closing an exec's input no longer waits for a guest that is not reading it, so a terminal or relay whose program stopped reading its input still closes (#4139).
+- On a Linux VM, an exec whose program reads none of its input no longer holds up the input of the VM's other execs (#4139). This takes effect once the guest image is rebuilt.
+- When the Linux VM guest agent ends a connection on its side, the runner's end now closes with it, so the runner's next connection is served at once instead of waiting (#3494). This takes effect once the guest image is rebuilt.
+- `wardyn-runnerd drive open`: a second Ctrl-C, or the write-back's time limit, now ends a write-back whose command in the VM has stopped reading. Before, the copy kept waiting on it (#4139).
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

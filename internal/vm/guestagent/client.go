@@ -339,7 +339,13 @@ func (w stdinWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w stdinWriter) Close() error { return w.s.send(FrameStdinClose, nil) }
+// Close sends end of input without waiting for it to leave. A write the guest is not reading holds the upload
+// stream, and a relay closing on its way out must still reach Session.Close, which ends both. The end follows every
+// write that returned before Close, and the session's close ends a send still waiting.
+func (w stdinWriter) Close() error {
+	go func() { _ = w.s.send(FrameStdinClose, nil) }()
+	return nil
+}
 
 // Resize sets the session's terminal size; a no-op on the guest for a non-TTY exec.
 func (s *Session) Resize(cols, rows uint16) error { return s.send(FrameResize, uint16Pair(cols, rows)) }

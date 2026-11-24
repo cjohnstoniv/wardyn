@@ -319,6 +319,11 @@ func (d *Driver) createVM(ctx context.Context, spec runner.SandboxSpec) (runner.
 	if len(shares) > maxVMShares {
 		return runner.Sandbox{}, fmt.Errorf("docker: a Linux VM sandbox cannot take more than %d folders and drives; this run has %d", maxVMShares, len(shares))
 	}
+	// virtiofsd refuses the guest's root a create (qemu.VirtiofsdArgs), so the guest cannot make the
+	// mountpoint of a share inside another: make it here, in the outer share's folder.
+	if err := makeShareMountpoints(shares); err != nil {
+		return runner.Sandbox{}, err
+	}
 
 	var rollback []func()
 	fail := func(err error) (runner.Sandbox, error) {

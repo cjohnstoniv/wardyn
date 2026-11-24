@@ -29,7 +29,17 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 )
+
+// agentHTTP2Config is the guest agent's HTTP/2 receive windows. An exec's input is its request body, which the
+// agent reads only as fast as the exec's process reads its stdin, so each stream holds at most its own window and
+// the connection's has room for every stream at once: an exec whose input goes unread never stalls another's.
+func agentHTTP2Config() *http.HTTP2Config {
+	const streams, perStream = 250, 256 << 10
+	return &http.HTTP2Config{MaxConcurrentStreams: streams, MaxReceiveBufferPerStream: perStream,
+		MaxReceiveBufferPerConnection: streams * perStream}
+}
 
 // PortName is the virtio-serial port the agent serves; in the guest it is /dev/virtio-ports/PortName.
 const PortName = "org.wardyn.agent.0"
