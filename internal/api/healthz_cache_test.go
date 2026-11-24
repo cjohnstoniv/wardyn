@@ -184,9 +184,10 @@ func TestHealthz_HungProbeIsNeverServedPastTheTTL(t *testing.T) {
 	getHealthz(t, context.Background(), srv)
 	clock.advance(3 * time.Second)
 	rn.setBlock(make(chan struct{})) // never released
+	// Read the start before making the context, so all of its 100 ms fall inside elapsed.
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	getHealthz(t, ctx, srv)
 	if elapsed := time.Since(start); elapsed < 90*time.Millisecond {
 		t.Errorf("the request returned after %v, before its context ended: the old probe was served", elapsed)
