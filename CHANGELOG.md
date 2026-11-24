@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Runners: an administrator can drain a runner for maintenance (`wardyn runner drain`, `PUT /runners/{id}/drain`). It takes no new sandbox; its running runs go on.
+- Migration `0400_runner_drains` adds the `runner_drains` table, one row for each drained runner.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, DELETE` on `runner_drains` to every role
+  that was granted `UPDATE` on `runners`, other than that table's owner. If the app role is not one of those roles or a member of one, and
+  does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the
+  migration has run. Until then no run can be placed on a registered runner, and a drain cannot be set.
+
+### Before you upgrade
+
+- Drain runners only after every control-plane replica runs this release.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

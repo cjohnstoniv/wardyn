@@ -60,6 +60,7 @@ read by the route matrix in [`internal/api/authz_test.go`](../../internal/api/au
 | `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the model-provider rows below | ⛔ admin only |
 | `POST /runners/tokens` — creates a single-use registration token bound to the named owner; the runner remains unclaimed until that owner verifies its fingerprint in their personal session | ⛔ admin only |
 | `PUT /runners/settings` — turning runners on or off for the organisation, or requiring a managed device for local runs (`runners.enabled.set`); turning on is refused until the organisation URL is HTTPS | ⛔ admin only |
+| `PUT /runners/{id}/drain` and `DELETE /runners/{id}/drain` — draining a runner for maintenance, and undraining it; running runs are not touched | ⛔ admin only |
 | `POST /admin/devices/enrolment-tokens` — minting the single-use token a managed laptop's first boot trades for its device credential: it creates a credential | ⛔ admin only |
 | `GET /admin/devices` and `DELETE /admin/devices/{id}` — the enrolled-device inventory and revoking one device: the inventory-then-revoke pair `/tokens` sits on, and like it neither returns credential material nor adds reach | ⛔ admin or `security_admin` |
 | `DELETE /runners/{id}` — revoking any person's runner: every run on it ends KILLED and the session this replica holds closes; a session on another replica ends at its next reconnect. It only removes reach; a person revokes their own with `DELETE /me/runners/{id}` | ⛔ admin or `security_admin` |

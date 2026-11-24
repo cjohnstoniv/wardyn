@@ -205,6 +205,13 @@
 3. `Recreate` stops the old pod before the new one starts. The organisation supports runnerd N and N-1.
 4. Runs survive the restart only if runnerd is READY again and each proxy renews before its deadline: see [Self-lapse](#self-lapse-and-outages).
 
+To drain a runner before maintenance:
+
+1. Upgrade the control plane first. A control plane older than this release does not read drains.
+2. Drain the runner: `wardyn runner drain <runner> --reason <text>`. The card shows Draining and its running count.
+3. Wait for 0 in use, or upgrade within the proxy deadline. In use counts runs placed but not yet started; they still start on the runner. A run survives only if runnerd is READY again before its proxy's last renew plus 60 minutes (see [Self-lapse](#self-lapse-and-outages)).
+4. Upgrade or restart runnerd, check Online, then `wardyn runner undrain <runner>`. Revive any run lost meanwhile.
+
 - The state volume holds the runner's identity. If it is lost, mint a new token, use a fresh volume and revoke the old runner. There is no re-key.
 - Upgrade the control plane first. Runnerd N-1 keeps working against it.
 

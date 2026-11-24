@@ -24,6 +24,7 @@
 - An organization runner on Kubernetes serves a pool in one runs namespace, fixed when you add it and listed as `runs_namespace` on the pool's members. It serves each named namespace for one pool only: [Several runs namespaces](k8s-runners.md#several-runs-namespaces).
 - With `WARDYN_GOVERNANCE_SECOND_HUMAN` on, removing an organization runner from a pool that carries a use policy is held for a super admin, as for a remote-hosted runner.
 - On its first boot with pools, a deployment gets one organization pool, named "Organization", that holds its remote-hosted runners and is the organization's default.
+- A drained runner stays in its pools. Placement passes it over, a queued run waits for another runner, and a lost run on it cannot be revived until the undrain. Running runs, attach, exec and SSH go on. A run placed on it before the drain still starts: dispatch does not recheck the drain.
 
 | Task | Command |
 |---|---|
@@ -32,6 +33,7 @@
 | Put runners in a pool, or take them out | `wardyn runner pool add <pool> <runner>...`, `wardyn runner pool remove <pool> <runner>...`; an admin may add organization runners, with `--runs-namespace <namespace>` for a Kubernetes one; each refused runner gets its own line and the command exits non-zero |
 | Rename, switch off or re-limit a pool | `wardyn runner pool update <pool>` with `--name`, `--switch on\|off` or the limit flags |
 | Delete a pool | `wardyn runner pool delete <pool> --yes`: its runners leave it and runs waiting for it end; running runs are not touched |
+| Drain a runner for maintenance | `wardyn runner drain <runner> --reason <text>`, then `wardyn runner undrain <runner>` |
 
 ## Which pool, and which runner
 
