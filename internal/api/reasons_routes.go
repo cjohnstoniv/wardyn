@@ -891,4 +891,6 @@ const (
 	reasonAssistantStreamUnavailable      = "assistant_stream_unavailable"       // this server cannot stream the session's events; read them by long-poll
 	reasonAssistantToolUnknown            = "assistant_tool_unknown"             // the run called a tool the server does not have
 	reasonAssistantToolRefused            = "assistant_tool_refused"             // the session's purpose or the organisation's settings keep that tool from the run
+	reasonAssistantRepoHostUnsupported    = "assistant_repo_host_unsupported"    // a repository draft cannot read this repository host yet
+	reasonAssistantBuildFilesNotPending   = "assistant_build_files_not_pending"  // the session is not waiting for its build files to be confirmed
 )

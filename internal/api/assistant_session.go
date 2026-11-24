@@ -78,7 +78,8 @@ type assistantSessionView struct {
 
 // handleCreateAssistantSession is POST /api/v1/assistant/sessions. The checks run in order: a person; availability
 // ready; the purpose and target pair; the target's kind never sent; the person can read it; the deferral refusal;
-// the preview digest against the records and binding built now. The workspace and repository fields answer 400.
+// the preview digest against the records and binding built now. A workspace and a repository start a repository
+// draft instead: the session holds in fetching until the person confirms the files (assistant_build_files.go).
 func (s *Server) handleCreateAssistantSession(w http.ResponseWriter, r *http.Request) {
 	ss, ok := s.assistantStore(w)
 	if !ok {
@@ -90,7 +91,7 @@ func (s *Server) handleCreateAssistantSession(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.WorkspaceID != nil || req.Repo != nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "Files from a repository are not supported yet.") // PROPOSED
+		s.handleCreateAssistantRepoSession(w, r, ss, req)
 		return
 	}
 	if s.assistantRateRefused(w, oidcHumanFromContext(r.Context())) {
@@ -148,6 +149,10 @@ func (s *Server) assistantStart(ctx context.Context, ss store.AssistantSessionSt
 		if live {
 			return s.assistantReuseRun(ctx, ss, prep, purpose, old)
 		}
+	}
+	if old.State == types.AssistantSessionFetching {
+		// A fetching row has no run to reuse; it ends here as replaced, with the files it holds.
+		s.assistantDropHeld(ctx, ss, old.ID)
 	}
 	s.endAssistantSession(ctx, ss, old, types.AssistantEndReplaced, true)
 	return s.assistantStartFresh(ctx, ss, prep, purpose)
@@ -226,7 +231,8 @@ func (s *Server) assistantStartFresh(ctx context.Context, ss store.AssistantSess
 }
 
 // assistantOwned reads the session of the {id} path for the signed-in person, else 404: another person's session
-// and a missing one answer alike. A session whose run ended is ended lazily here, with reason run_ended.
+// and a missing one answer alike. A session whose run ended is ended lazily here, with reason run_ended, and one
+// that has fetched files for ten minutes without the person confirming them, with reason idle.
 func (s *Server) assistantOwned(w http.ResponseWriter, r *http.Request) (store.AssistantSessionStore, types.AssistantSession, bool) {
 	ss, ok := s.assistantStore(w)
 	if !ok {
@@ -246,6 +252,10 @@ func (s *Server) assistantOwned(w http.ResponseWriter, r *http.Request) (store.A
 			writeServerError(w, r, "read assistant session", err)
 		}
 		return nil, types.AssistantSession{}, false
+	}
+	if s.assistantFetchingExpired(sess) {
+		s.assistantEndFetching(r.Context(), ss, sess, types.AssistantEndIdle)
+		sess, _ = ss.GetAssistantSession(r.Context(), id, person)
 	}
 	if sess.Live() && sess.RunID != nil {
 		live, run, err := s.assistantRunState(r.Context(), *sess.RunID)
@@ -386,6 +396,10 @@ type assistantMessageRequest struct {
 func (s *Server) assistantSessionUsable(w http.ResponseWriter, r *http.Request) (store.AssistantSessionStore, types.AssistantSession, bool) {
 	ss, sess, ok := s.assistantOwned(w, r)
 	if !ok || !assistantLiveOr409(w, sess) || s.assistantRoleRefused(w, r, ss, sess) {
+		return nil, types.AssistantSession{}, false
+	}
+	if sess.State == types.AssistantSessionFetching {
+		writeErrorReason(w, http.StatusConflict, "", "Send the files or start again before you write to the assistant.") // PROPOSED
 		return nil, types.AssistantSession{}, false
 	}
 	if ref := s.assistantStillAvailable(r.Context(), ss, sess); ref != nil {
@@ -540,6 +554,9 @@ func (s *Server) handleDeleteAssistantSession(w http.ResponseWriter, r *http.Req
 	var err error
 	ended := false
 	if sess.Live() {
+		if sess.State == types.AssistantSessionFetching {
+			s.assistantDropHeld(r.Context(), ss, sess.ID)
+		}
 		ended, err = s.endAssistantSession(r.Context(), ss, sess, types.AssistantEndPerson, true)
 	}
 	if err == nil && !ended {

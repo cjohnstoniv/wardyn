@@ -79,12 +79,22 @@ func assistantToolRegistry() map[string]assistantToolFunc {
 		types.AssistantToolSimulate:       (*Server).assistantToolSimulate,
 		types.AssistantToolExplain:        (*Server).assistantToolExplain,
 		types.AssistantToolDraft:          (*Server).assistantToolDraft,
+		types.AssistantToolBuildFiles:     (*Server).assistantToolBuildFiles,
 	}
 }
 
-// assistantToolRefusedInReview reports a tool a review session is never offered: it proposes a draft.
+// assistantToolRefusedInReview reports a tool a review session is never offered: it proposes a draft, or it reads
+// the build files of a repository draft, which a review never has.
 func assistantToolRefusedInReview(purpose types.AssistantPurpose, name string) bool {
-	return purpose == types.AssistantReview && name == types.AssistantToolDraft
+	return purpose == types.AssistantReview && (name == types.AssistantToolDraft || name == types.AssistantToolBuildFiles)
+}
+
+// assistantReviewRefusal is the 403 of a tool a review session called anyway.
+func assistantReviewRefusal(name string) *assistantRefusal {
+	if name == types.AssistantToolBuildFiles {
+		return assistantRefusalFor(http.StatusForbidden, reasonAssistantToolRefused, "A review session has no build files.") // PROPOSED
+	}
+	return assistantRefusalFor(http.StatusForbidden, reasonAssistantToolRefused, "A review session cannot propose a draft.") // PROPOSED
 }
 
 // assistantToolList is the tools a purpose is offered, each with its schema. It is never empty.
@@ -147,7 +157,7 @@ func (s *Server) assistantRunTool(r *http.Request, ss store.AssistantSessionStor
 		return nil, assistantRefusalFor(http.StatusNotFound, reasonAssistantToolUnknown, "There is no such tool.") // PROPOSED
 	}
 	if assistantToolRefusedInReview(sess.Purpose, name) {
-		return nil, assistantRefusalFor(http.StatusForbidden, reasonAssistantToolRefused, "A review session cannot propose a draft.") // PROPOSED
+		return nil, assistantReviewRefusal(name)
 	}
 	if !assistantToolLimiter.allow(sess.Principal, s.cfg.Now()) {
 		return nil, assistantToolRateLimited()
@@ -275,4 +285,92 @@ func assistantDraftArgsOf(e *assistantToolEnv) (types.AssistantDraftArgs, *assis
 		return a, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "The arguments do not fit this tool or this session's target.") // PROPOSED
 	}
 	return a, nil
+}
+
+// assistantConfirmedFiles are the build files the person confirmed for the session: the files section of the
+// records the session sends, read back. A session with no repository has none.
+func (s *Server) assistantConfirmedFiles(ctx context.Context, e *assistantToolEnv) ([]assistant.File, error) {
+	if e.sess.WorkspaceID == nil {
+		return nil, nil
+	}
+	records, err := s.assistantStoredRecords(ctx, e.ss, e.sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	return assistant.FilesOf(records), nil
+}
+
+// assistantBuildFilesResult is build_files' answer: the confirmed files, named and with their text, which is
+// untrusted data.
+type assistantBuildFilesResult struct {
+	Untrusted bool                     `json:"untrusted"`
+	Files     []assistantBuildFileText `json:"files"`
+}
+
+type assistantBuildFileText struct {
+	Name string `json:"name"`
+	Text string `json:"text"`
+}
+
+// assistantToolBuildFiles is build_files: the files the person confirmed, and nothing beyond them. A review
+// session has none, and a session that was never given a repository answers an empty list.
+func (s *Server) assistantToolBuildFiles(e *assistantToolEnv) (any, *assistantRefusal) {
+	if assistantToolRefusedInReview(e.sess.Purpose, types.AssistantToolBuildFiles) {
+		return nil, assistantReviewRefusal(types.AssistantToolBuildFiles)
+	}
+	var a types.AssistantBuildFilesArgs
+	if err := decodeStrictJSON(e.args, &a); err != nil {
+		return nil, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "build_files takes no arguments.") // PROPOSED
+	}
+	files, err := s.assistantConfirmedFiles(e.ctx(), e)
+	if err != nil {
+		return nil, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the build files.") // PROPOSED
+	}
+	out := assistantBuildFilesResult{Untrusted: true, Files: []assistantBuildFileText{}}
+	for _, f := range files {
+		out.Files = append(out.Files, assistantBuildFileText{Name: f.Name, Text: f.Text})
+	}
+	return out, nil
+}
+
+// assistantMarkBuildFiles sets from_build_file on the proposal's parts: true only when every string in a part's
+// value is found as a whole token in a confirmed file (assistant.LiteralIn). The model's own words about where a
+// value came from are never read, and a session with no confirmed files never sets it.
+func (s *Server) assistantMarkBuildFiles(e *assistantToolEnv, p *assistantProposal) *assistantRefusal {
+	files, err := s.assistantConfirmedFiles(e.ctx(), e)
+	if err != nil {
+		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the build files.") // PROPOSED
+	}
+	for i := range p.Parts {
+		p.Parts[i].FromBuildFile = len(files) > 0 && assistantValueInFiles(p.Parts[i].Value, files)
+	}
+	return nil
+}
+
+// assistantValueInFiles reports whether value holds at least one string, and every string in it (its values, not
+// its keys) is in the files.
+func assistantValueInFiles(value json.RawMessage, files []assistant.File) bool {
+	var tree any
+	if json.Unmarshal(value, &tree) != nil {
+		return false
+	}
+	found, all := false, true
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case string:
+			found = true
+			all = all && assistant.LiteralIn(x, files)
+		case []any:
+			for _, y := range x {
+				walk(y)
+			}
+		case map[string]any:
+			for _, y := range x {
+				walk(y)
+			}
+		}
+	}
+	walk(tree)
+	return found && all
 }

@@ -66,3 +66,17 @@ func TestAssistantSimulateDescriptionSaysTheApproximation(t *testing.T) {
 		t.Error("no simulate tool in the list")
 	}
 }
+
+// build_files is the tenth tool, and takes no argument.
+func TestAssistantToolsListBuildFilesLast(t *testing.T) {
+	specs := AssistantToolSpecs()
+	if len(specs) != 10 || specs[len(specs)-1].Name != AssistantToolBuildFiles {
+		t.Fatalf("tools = %d, last %q; want ten, with build_files last", len(specs), specs[len(specs)-1].Name)
+	}
+	var schema struct {
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(specs[len(specs)-1].InputSchema, &schema); err != nil || len(schema.Properties) != 0 {
+		t.Errorf("build_files schema = %s, want no property", specs[len(specs)-1].InputSchema)
+	}
+}

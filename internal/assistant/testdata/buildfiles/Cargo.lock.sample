@@ -1,0 +1,23 @@
+[[package]]
+name = "left-pad-sample"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "93930e564d49f5cd87626cbb46454d69d652d474cd7680022ae1ddefc36efd8b"
+
+[[package]]
+name = "example-lib"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e2779bb79690f073d89637b0185a0c0eac4329cd9062ff1c1ba5d42b08bea95"
+
+[[package]]
+name = "fixture-core"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7d446994e52dfc6177b96223a63a5768b01d3ec963a138de9be7f892d347949"
+
+[[package]]
+name = "demo-utils"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37d2b1391c65a1fb78695987bc9946a9364637543c2f26f0baba42de5b6f0a67"

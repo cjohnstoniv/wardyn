@@ -190,6 +190,8 @@ func TestAssistantToolsWriteNothing_PG(t *testing.T) {
 					args = `{"kind":"target"}`
 				case types.AssistantToolDraft:
 					args = `{"target_kind":"` + c.kind + `","parts":` + parts(c.draft) + `}`
+				case types.AssistantToolBuildFiles:
+					args = `{}`
 				}
 				w := a.tool(s, run, name, args)
 				if w.Code != http.StatusOK {

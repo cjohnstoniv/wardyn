@@ -284,6 +284,9 @@ func (s *Server) assistantToolDraft(e *assistantToolEnv) (any, *assistantRefusal
 		delete(proposed, f.Field)
 	}
 	p, ref := s.assistantPropose(e.r, sub, refusals, proposed)
+	if ref == nil {
+		ref = s.assistantMarkBuildFiles(e, &p)
+	}
 	if ref != nil {
 		return nil, ref
 	}

@@ -158,22 +158,29 @@ func (s *Server) assistantTurnOf(r *http.Request, ss store.AssistantSessionStore
 	return turn, nil
 }
 
-// assistantStoredRecords reads the records the session began with: its first state event, which the server
-// wrote before the run could post anything (on a reuse, the reset that carries them).
+// assistantStoredRecords reads the records the session began with: the first of its state events that carries
+// them, which the server wrote before the run could post anything (on a reuse, the reset that carries them; on a
+// repository draft, the one the confirmation writes after its fetching state).
 func (s *Server) assistantStoredRecords(ctx context.Context, ss store.AssistantSessionStore, id uuid.UUID) ([]types.AssistantSection, error) {
-	evs, err := ss.FindAssistantEvents(ctx, id, store.AssistantEventFilter{Kinds: []string{types.AssistantEventState}, Limit: 1})
-	if err != nil || len(evs) == 0 {
+	evs, err := ss.FindAssistantEvents(ctx, id, store.AssistantEventFilter{Kinds: []string{types.AssistantEventState}, Limit: assistantRecordsScan})
+	if err != nil {
 		return nil, err
 	}
-	var p struct {
-		State   string                   `json:"state"`
-		Records []types.AssistantSection `json:"records"`
+	for _, ev := range evs {
+		var p struct {
+			State   string                   `json:"state"`
+			Records []types.AssistantSection `json:"records"`
+		}
+		if json.Unmarshal(ev.Payload, &p) == nil && p.State == "records" {
+			return p.Records, nil
+		}
 	}
-	if json.Unmarshal(evs[0].Payload, &p) != nil || p.State != "records" {
-		return nil, nil
-	}
-	return p.Records, nil
+	return nil, nil
 }
+
+// assistantRecordsScan is how many of a session's first state events are read for its records: its fetching
+// state comes before them, and nothing else the server writes does.
+const assistantRecordsScan = 4
 
 // assistantRunEvent is the body of POST /internal/assistant/events. Everything but the kind and the session
 // id is the payload, kept as the run sent it.
