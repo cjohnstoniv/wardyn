@@ -864,7 +864,7 @@ func (s *Server) stepPlacement(f *runFold, rec *foldRecorder) bool {
 	drives, driveRunner := keptPlacementPin(mountsDrives(f.drives, f.keep), drivesBoundRunner(f.drives, f.keep), f.keptPin)
 	in := placementInput{req: f.req, floor: confinementFloor(*f.req, f.carriedImage, f.wsRefs, f.comps, f.spec, f.ceiling), baseline: f.baseline, reqCC: f.reqCC, reqCCOK: true,
 		ceiling: f.ceiling, untouched: resourceBaseline(f.source, f.spec), ask: resourceAsk(f.req.Resources, sourceSize(f.source, f.ceiling)),
-		promoted: f.promoted, drives: drives, driveRunner: driveRunner, noLocal: promotedNoLocal(f.r.Context())}
+		promoted: f.promoted, drives: drives, driveRunner: driveRunner, driveIDs: driveIDsOf(f.drives), noLocal: promotedNoLocal(f.r.Context())}
 	if f.spec.Resources != nil {
 		in.policyDiskMiB = f.spec.Resources.DiskMiB
 	}

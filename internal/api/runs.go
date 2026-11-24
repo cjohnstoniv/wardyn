@@ -513,7 +513,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,
-		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor,
+		RunnerPoolSelection: placed.RunnerPoolSelection, RunnerPoolExecutor: placed.RunnerPoolExecutor, SiteID: placed.SiteID,
 		// What it holds on that runner: the CPU and memory it gets and its main drive (runner limits).
 		Reserved: f.place.reserved(f.mainDrive),
 	}

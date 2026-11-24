@@ -118,6 +118,8 @@
 //     credential is shared or per-person (0.7.2). Admin-only, same page
 //   - /api/v1/integrations   — integration definitions (0.7)
 //   - /api/v1/base-images    — the base-image library (0.7)
+//   - /api/v1/org-sites      — organisation sites (0.11), with PUT and DELETE /api/v1/runner-pools/{id}/site and
+//     /api/v1/drives/{id}/site: which place each pool and admin drive is at, and each site's default pool
 //   - /api/v1/admin          — operator maintenance (the sandbox sweep; devices is wrapped)
 //   - /api/v1/devices        — an enrolled laptop's daemon routes (enrol, audit, heartbeat)
 //   - /api/v1/internal       — the AGENT-facing plane (mint, decisions, groundtruth,

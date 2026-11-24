@@ -300,6 +300,7 @@ func (s *Server) routes() chi.Router {
 			s.adminRoutes(operatorOnly, securityOps)
 			s.mountRunnerRevokeRoutes(r, securityOps)             // runner_revoke.go: the security tier, or the runner's own owner
 			s.mountRunnerPoolRoutes(r, operatorOnly, securityOps) // runner_pools.go: 501 until the pool storage lands
+			s.registerOrgSiteRoutes(r, operatorOnly, securityOps) // org_sites.go: adds refused while features.org_sites is off
 			s.mountWorkloadRoutes(r, securityOps)                 // workloads.go: the caller's own workloads; the bindings are the security tier's
 			s.mountRunnerInventoryRoutes(r, operatorOnly, securityOps)
 			s.mountOrgRunnerRoutes(securityOps) // runner_registration.go: org runner mint, claim and trust

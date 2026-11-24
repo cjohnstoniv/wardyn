@@ -1,2 +1,3 @@
 # Asserted against every cap in scripts/doc-form.sh (strict tier).
 docs/operations/runner-pools.md
+docs/operations/sites.md
