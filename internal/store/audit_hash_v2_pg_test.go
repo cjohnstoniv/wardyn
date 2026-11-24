@@ -349,7 +349,7 @@ func TestAuditReceipt_V2VerifiesOffline_PG(t *testing.T) {
 	last := len(rows) - 1
 	st := auditreceipt.Statement{Format: auditreceipt.CheckpointFormat, Kid: auditreceipt.KeyID(pub), SeqLo: rows[0].Seq, SeqHi: rows[last].Seq,
 		Rows: int64(len(rows)), HeadHash: hashes[last], Digest: auditreceipt.Fold("", hashes), SeqDigest: auditreceipt.SeqDigest(seqs, hashes),
-		SignedAt: "2026-11-24T10:00:00Z"}
+		SignedAt: time.Unix(0, 0).UTC().Format(time.RFC3339)}
 	text := string(st.Bytes())
 	cp := auditreceipt.Checkpoint{Statement: text, Signature: ed25519.Sign(priv, []byte(text)), Seqs: seqs, RowHashes: hashes}
 	for i, r := range rows {
