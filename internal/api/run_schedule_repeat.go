@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -57,6 +58,9 @@ const (
 	scheduleOutcomeRefused       = "refused"
 	scheduleOutcomeSkippedPrefix = "skipped:"
 	scheduleOutcomeCancelled     = "cancelled:"
+	// scheduleOutcomeCancelPending and the cancel's reason is a slot whose booking's cancel failed; each tick retries
+	// it (retryCancels) and books nothing for the schedule until it settles.
+	scheduleOutcomeCancelPending = "cancel_pending:"
 )
 
 // Why the sweep cancelled a booking it made, or recorded a replayed one as not booked: the kill's reason, the
@@ -90,6 +94,8 @@ type runScheduleStore interface {
 	ScheduleOwnerSignedInAt(ctx context.Context, principal string) (time.Time, bool, error)
 	GetPrincipalGroups(ctx context.Context, principal, portal string) (store.PrincipalGroups, error)
 	BlankRunTaskByID(ctx context.Context, runID uuid.UUID) error
+	PendingRunScheduleCancels(ctx context.Context, prefix string, limit int) ([]store.RunSchedule, error)
+	SettleRunScheduleCancel(ctx context.Context, id, runID uuid.UUID, was, outcome string) (bool, error)
 }
 
 // runScheduleEraser deletes a person's schedules (eraseRunSchedulesOf).
@@ -597,17 +603,6 @@ func (s *Server) handleDeleteRunSchedule(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// cancelBookedRun kills the one run a booking just made, while it still waits, as the system, with reason. A run
-// that left QUEUED since keeps its own end: the kill's claim is QUEUED to KILLED only (cancelQueuedRunsOf).
-func (s *Server) cancelBookedRun(ctx context.Context, runID uuid.UUID, reason string) error {
-	run, err := s.cfg.Store.GetRun(ctx, runID)
-	if err != nil || run.State != types.RunQueued {
-		return err
-	}
-	_, _, err = s.killRunCascade(ctx, run, types.ActorSystem, "wardynd", map[string]any{"reason": reason})
-	return err
-}
-
 // RunScheduleSweep books every repeating schedule due within the booking lead, on the sweeper leader every 30
 // seconds. Off (WARDYN_SCHEDULED_RUNS unset) it starts nothing and pauses nothing. It returns an error only when
 // the due read fails.
@@ -630,7 +625,7 @@ type scheduleSweep struct {
 	now    time.Time
 	create http.HandlerFunc
 	live   func(context.Context, queueAuthority, time.Time) (bool, error)
-	cancel func(context.Context, uuid.UUID, string) error
+	cancel func(context.Context, uuid.UUID, string) (bool, error)
 }
 
 func (s *Server) newScheduleSweep(st runScheduleStore) *scheduleSweep {
@@ -647,6 +642,7 @@ const (
 )
 
 func (sw *scheduleSweep) run(ctx context.Context) error {
+	sw.retryCancels(ctx)
 	due, err := sw.st.DueRunSchedules(ctx, sw.now.Add(scheduleFireLead), scheduleSweepBatch)
 	if err != nil {
 		return err
@@ -669,6 +665,9 @@ func (sw *scheduleSweep) run(ctx context.Context) error {
 // one is a due schedule's turn: the owner's standing, then their groups and email from the latest sign-in, a
 // missed slot or a fresh booking, then the booking's outcome.
 func (sw *scheduleSweep) one(ctx context.Context, sc store.RunSchedule) scheduleTick {
+	if strings.HasPrefix(sc.LastOutcome, scheduleOutcomeCancelPending) {
+		return scheduleTickNone // its last booking may still start: never book over a cancel still being retried
+	}
 	// A row it cannot read pauses, so it never stays at the head of the due list starving every other schedule.
 	rule, err := scheduleRuleOf(sc)
 	if err != nil {
@@ -872,13 +871,9 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 		return scheduleTickNone
 	}
 	if live, err := sw.live(ctx, a, sc.AuthorityAt); err != nil || !live {
-		if err := sw.cancel(ctx, runID, queueCancelSessionRevoked); err != nil {
-			slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("run_id", runID.String()), slog.Any("err", err))
-		}
+		stopped, err := sw.cancel(ctx, runID, scheduleKillReason(schedulePausedIdentity))
 		sw.pause(ctx, sc, schedulePausedIdentity)
-		if sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+schedulePausedIdentity) {
-			sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": schedulePausedIdentity, "run_id": runID, "due_at": sc.NextAt})
-		}
+		sw.dropAdvance(ctx, sc, rule, runID, schedulePausedIdentity, stopped, err)
 		return scheduleTickNone
 	}
 	if !sw.advance(ctx, sc, rule, &runID, scheduleOutcomeBooked) {
@@ -893,7 +888,7 @@ func (sw *scheduleSweep) booked(ctx context.Context, sc store.RunSchedule, rule 
 }
 
 // dropBooked cancels a fresh booking whose schedule is gone, paused or unread, with reason, and moves the
-// schedule past the slot with that outcome, so a later replay of the slot's key never records the killed run
+// schedule past the slot (dropAdvance), so a later replay of the slot's key never records the killed run
 // booked. A gone schedule (the owner's Delete or an erasure) also blanks that one run's text while it still
 // waits. Either call's error leaves the other to run.
 func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, rule scheduleRule, runID uuid.UUID, reason string) scheduleTick {
@@ -904,15 +899,18 @@ func (sw *scheduleSweep) dropBooked(ctx context.Context, sc store.RunSchedule, r
 			}
 		}
 	}
-	if err := sw.cancel(ctx, runID, reason); err != nil {
-		slog.WarnContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("schedule", sc.ID.String()),
+	stopped, err := sw.cancel(ctx, runID, scheduleKillReason(reason))
+	if reason != scheduleCancelGone {
+		sw.dropAdvance(ctx, sc, rule, runID, reason, stopped, err)
+		return scheduleTickNone
+	}
+	// A gone schedule has no row to advance or to retry from, so its fire row cannot wait on either, and says
+	// whether the run was stopped; only the sweep that got the fresh 201 reaches here, so two sweeps write one row.
+	if err != nil {
+		slog.ErrorContext(ctx, "wardynd: run schedule booking not cancelled", slog.String("schedule", sc.ID.String()),
 			slog.String("run_id", runID.String()), slog.Any("err", err))
 	}
-	// A gone schedule has no row to advance, so its fire row cannot wait on the advance; only the sweep that got
-	// the fresh 201 reaches here, so two sweeps still write one row.
-	if reason == scheduleCancelGone || sw.advance(ctx, sc, rule, &runID, scheduleOutcomeCancelled+reason) {
-		sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt})
-	}
+	sw.fire(ctx, sc, &runID, "failure", map[string]any{"reason": reason, "run_id": runID, "due_at": sc.NextAt, "cancelled": stopped})
 	return scheduleTickNone
 }
 

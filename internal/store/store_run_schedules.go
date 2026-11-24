@@ -170,6 +170,25 @@ func (s PG) AdvanceRunSchedule(ctx context.Context, id uuid.UUID, wasNext, next 
 	return tag.RowsAffected() == 1, nil
 }
 
+// PendingRunScheduleCancels is the schedules whose last outcome starts with prefix (a booking whose cancel has not
+// yet gone through), paused or not, at most limit.
+func (s PG) PendingRunScheduleCancels(ctx context.Context, prefix string, limit int) ([]RunSchedule, error) {
+	return collect(ctx, s.Pool, "list", "pending run schedule cancels",
+		`SELECT `+runScheduleCols+` FROM run_schedules WHERE starts_with(last_outcome, $1) ORDER BY next_at, id LIMIT $2`,
+		[]any{prefix, limit}, scanRunSchedule)
+}
+
+// SettleRunScheduleCancel records outcome in place of was for the booking runID, a compare-and-set on both: false
+// when the schedule no longer records was for that run.
+func (s PG) SettleRunScheduleCancel(ctx context.Context, id, runID uuid.UUID, was, outcome string) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `UPDATE run_schedules SET last_outcome = $4 WHERE id = $1 AND last_run_id = $2 AND last_outcome = $3`,
+		id, runID, was, outcome)
+	if err != nil {
+		return false, fmt.Errorf("store: settle a run schedule's cancel: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // ScheduleOwnerSignedInAt is the database time of principal's latest SSO sign-in to Wardyn itself (the
 // principal_groups row of the empty portal, migration 0290); false when none is recorded.
 func (s PG) ScheduleOwnerSignedInAt(ctx context.Context, principal string) (time.Time, bool, error) {

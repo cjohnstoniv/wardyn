@@ -143,6 +143,8 @@ type fakeScheduleStore struct {
 	groupsErr error
 	getErr    error                        // GetRunSchedule's answer once set
 	runs      map[uuid.UUID]types.AgentRun // GetRun's rows
+	getRunErr error                        // GetRun's answer once set
+	kills     int                          // kill claims (UpdateRunStateIf calls)
 }
 
 func newFakeScheduleStore() *fakeScheduleStore {
@@ -176,6 +178,9 @@ func (f *fakeScheduleStore) GetRunSchedule(_ context.Context, id uuid.UUID) (sto
 func (f *fakeScheduleStore) GetRun(_ context.Context, id uuid.UUID) (types.AgentRun, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.getRunErr != nil {
+		return types.AgentRun{}, f.getRunErr
+	}
 	run, ok := f.runs[id]
 	if !ok {
 		return types.AgentRun{}, store.ErrNotFound
@@ -241,6 +246,37 @@ func (f *fakeScheduleStore) GetPrincipalGroups(context.Context, string, string) 
 }
 
 func (f *fakeScheduleStore) BlankRunTaskByID(context.Context, uuid.UUID) error { return nil }
+
+func (f *fakeScheduleStore) UpdateRunStateIf(context.Context, uuid.UUID, types.RunState, types.RunState) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kills++
+	return false, errors.New("fake: kill claim not expected")
+}
+
+func (f *fakeScheduleStore) PendingRunScheduleCancels(_ context.Context, prefix string, _ int) ([]store.RunSchedule, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []store.RunSchedule
+	for _, sc := range f.rows {
+		if strings.HasPrefix(sc.LastOutcome, prefix) {
+			out = append(out, sc)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeScheduleStore) SettleRunScheduleCancel(_ context.Context, id, runID uuid.UUID, was, outcome string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	sc, ok := f.rows[id]
+	if !ok || sc.LastRunID == nil || *sc.LastRunID != runID || sc.LastOutcome != was {
+		return false, nil
+	}
+	sc.LastOutcome = outcome
+	f.rows[id] = sc
+	return true, nil
+}
 
 func (f *fakeScheduleStore) row(t *testing.T, id uuid.UUID) store.RunSchedule {
 	t.Helper()
@@ -437,7 +473,7 @@ func testSweep(srv *Server, st *fakeScheduleStore, now time.Time, create http.Ha
 		}
 	}
 	sw.live = func(context.Context, queueAuthority, time.Time) (bool, error) { return live, nil }
-	sw.cancel = func(context.Context, uuid.UUID, string) error { return nil }
+	sw.cancel = func(context.Context, uuid.UUID, string) (bool, error) { return true, nil }
 	return sw, &creates
 }
 
@@ -576,11 +612,11 @@ func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
 			srv := scheduleTestServer(st)
 			sw, _ := testSweep(srv, st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
 			var cancelled []string
-			sw.cancel = func(_ context.Context, id uuid.UUID, reason string) error {
+			sw.cancel = func(_ context.Context, id uuid.UUID, reason string) (bool, error) {
 				if id == runID {
 					cancelled = append(cancelled, reason)
 				}
-				return nil
+				return true, nil
 			}
 			if err := sw.run(context.Background()); err != nil {
 				t.Fatal(err)
@@ -607,6 +643,104 @@ func TestRunScheduleSweep_CancelledBookingAdvancesWithItsCause(t *testing.T) {
 				t.Errorf("the schedule after the cancel = %+v; want it past the slot, recorded %s%s", got, scheduleOutcomeCancelled, tc.reason)
 			}
 		})
+	}
+}
+
+// fireRowsNaming is the run.schedule.fire rows srv wrote whose reason or cancel_too_late is reason.
+func fireRowsNaming(srv *Server, reason string) []map[string]any {
+	var out []map[string]any
+	for _, ev := range srv.cfg.Audit.(*recRecorder).snapshot() {
+		var data map[string]any
+		if ev.Action == "run.schedule.fire" && json.Unmarshal(ev.Data, &data) == nil && (data["reason"] == reason || data["cancel_too_late"] == reason) {
+			out = append(out, data)
+		}
+	}
+	return out
+}
+
+// A fresh booking whose cancel fails is recorded cancel_pending with no fire row, never cancelled while its run may
+// still start, and its schedule books nothing while it stays pending, even with its next slot due. The tick after the
+// cancel goes through settles it cancelled, paused or not, and writes the slot's one fire row. A gone schedule has no
+// row to hold the retry, so its one fire row says the run was not cancelled.
+func TestRunScheduleSweep_FailedCancelStaysPendingUntilItStops(t *testing.T) {
+	t.Setenv(envScheduledRuns, "1")
+	for _, tc := range []struct {
+		reason string
+		during func(*fakeScheduleStore, uuid.UUID)
+	}{
+		{scheduleCancelPaused, func(st *fakeScheduleStore, id uuid.UUID) {
+			_, _ = st.PauseRunSchedule(context.Background(), id, schedulePausedByOwner, time.Now())
+		}},
+		{scheduleCancelUnread, func(st *fakeScheduleStore, _ uuid.UUID) { st.getErr = errors.New("fake: read failed") }},
+		{scheduleCancelGone, func(st *fakeScheduleStore, id uuid.UUID) { _, _ = st.DeleteRunSchedule(context.Background(), id) }},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			now := time.Now()
+			st := newFakeScheduleStore()
+			sc := st.seed(now.Add(time.Minute), false)
+			runID := uuid.New()
+			srv := scheduleTestServer(st)
+			sw, creates := testSweep(srv, st, now, booking201(runID, false, func() { tc.during(st, sc.ID) }), true)
+			fail := true
+			sw.cancel = func(context.Context, uuid.UUID, string) (bool, error) {
+				if fail {
+					return false, errors.New("fake: kill failed")
+				}
+				return true, nil
+			}
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			st.getErr = nil
+			if tc.reason == scheduleCancelGone {
+				if rows := fireRowsNaming(srv, tc.reason); len(rows) != 1 || rows[0]["cancelled"] != false {
+					t.Errorf("fire rows naming %s = %v; want one with cancelled false", tc.reason, rows)
+				}
+				return
+			}
+			got := st.row(t, sc.ID)
+			if got.LastOutcome != scheduleOutcomeCancelPending+tc.reason || got.LastRunID == nil || *got.LastRunID != runID {
+				t.Errorf("the schedule after a failed cancel = %+v; want it recorded %s%s for its run", got, scheduleOutcomeCancelPending, tc.reason)
+			}
+			if rows := fireRowsNaming(srv, tc.reason); len(rows) != 0 {
+				t.Errorf("fire rows naming %s after a failed cancel = %v; want none", tc.reason, rows)
+			}
+
+			sw.now = got.NextAt.Add(-time.Minute) // the next slot is due
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if again := st.row(t, sc.ID); *creates != 1 || again.LastOutcome != got.LastOutcome || !again.NextAt.Equal(got.NextAt) {
+				t.Errorf("a tick while the cancel still fails: %d creates, schedule %+v; want no new booking, still pending", *creates, again)
+			}
+
+			fail = false
+			sw.now = now
+			if err := sw.run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := st.row(t, sc.ID); got.LastOutcome != scheduleOutcomeCancelled+tc.reason {
+				t.Errorf("the schedule after the cancel went through = %+v; want it recorded %s%s", got, scheduleOutcomeCancelled, tc.reason)
+			}
+			if rows := fireRowsNaming(srv, tc.reason); len(rows) != 1 || rows[0]["run_id"] != runID.String() {
+				t.Errorf("fire rows naming %s after the cancel went through = %v; want one for run %s", tc.reason, rows, runID)
+			}
+		})
+	}
+}
+
+// A run read that fails claims no kill and answers its error, so the sweep tries again; a run that is gone is
+// stopped.
+func TestCancelBookedRun_FailedReadClaimsNoKill(t *testing.T) {
+	st := newFakeScheduleStore()
+	st.getRunErr = errors.New("fake: postgres is down")
+	srv := scheduleTestServer(st)
+	if stopped, err := srv.cancelBookedRun(context.Background(), uuid.New(), scheduleCancelPaused); stopped || err == nil || st.kills != 0 {
+		t.Errorf("a failed run read = %v, %v after %d kill claims; want false, its error, no claim", stopped, err, st.kills)
+	}
+	st.getRunErr = nil
+	if stopped, err := srv.cancelBookedRun(context.Background(), uuid.New(), scheduleCancelPaused); !stopped || err != nil || st.kills != 0 {
+		t.Errorf("a gone run = %v, %v after %d kill claims; want true, nil, no claim", stopped, err, st.kills)
 	}
 }
 
