@@ -374,9 +374,13 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot, in 
 	bw := s.snapshotWalls(ctx, before, in)
 	treeDryRunPause("walls")
 	aw := s.snapshotWalls(ctx, after, in)
-	names := map[uuid.UUID]string{}
-	for _, u := range append(slices.Clone(before.units), after.units...) {
-		names[u.ID] = u.Name
+	// Each side names a unit as that side has it: after a rename, from_unit_name is the old name and unit_name the new.
+	beforeNames, afterNames := map[uuid.UUID]string{}, map[uuid.UUID]string{}
+	for _, u := range before.units {
+		beforeNames[u.ID] = u.Name
+	}
+	for _, u := range after.units {
+		afterNames[u.ID] = u.Name
 	}
 	wallsChanged := map[uuid.UUID]bool{}
 	for id, b := range bw {
@@ -405,7 +409,7 @@ func (s *Server) treeEffect(ctx context.Context, before, after treeSnapshot, in 
 		}
 		report.People = append(report.People, treeDryRunPerson{
 			MembershipID: m.ID, SubjectType: m.SubjectType, Subject: m.Subject,
-			FromUnitID: prev.UnitID, FromUnitName: names[prev.UnitID], UnitID: m.UnitID, UnitName: names[m.UnitID],
+			FromUnitID: prev.UnitID, FromUnitName: beforeNames[prev.UnitID], UnitID: m.UnitID, UnitName: afterNames[m.UnitID],
 			Changes: changes, Error: a.err,
 		})
 	}

@@ -207,6 +207,8 @@ export const POOLS = {
   POOL_LIMITS: (parts: string) => `Pool limits: ${parts}`,
   DEFAULT_MADE: (name: string) => `${name} is now the organisation default`,
   DEFAULT_CLEARED: "Organisation default cleared",
+  DEFAULT_MOVED: (name: string) => `The organisation default changed to ${name} since this page loaded, so nothing was cleared.`,
+  DEFAULT_GONE: "The organisation default was already cleared.",
 } as const;
 
 /** The pool details sheet (mock frames A5, A8, B2). */

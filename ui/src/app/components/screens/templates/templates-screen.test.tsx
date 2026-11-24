@@ -342,7 +342,7 @@ describe("Templates screen: Publish to organization (A9)", () => {
 
     await userEvent.click(screen.getByRole("button", { name: T.PUBLISH }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: T.PUBLISH }));
-    expect(api.publishToOrg).toHaveBeenCalledWith(ID(1));
+    expect(api.publishToOrg).toHaveBeenCalledWith(ID(1), 2);
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.PUBLISHED("Nightly tests")));
     await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });

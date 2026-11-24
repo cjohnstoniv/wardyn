@@ -278,7 +278,8 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 // caller reads the source and writes the target, and the document passes the
 // door again for the target, so a field only one person has never reaches a
 // shared audience. Publishing to the organisation is this route, in the Admin
-// view.
+// view. A body that names expected_revision copies only that revision: a
+// template saved since is refused, so a publish never ships what nobody reviewed.
 func (s *Server) handleCopyTemplate(w http.ResponseWriter, r *http.Request) {
 	ts, c, id, ok := s.templateRoute(w, r, true)
 	if !ok {
@@ -290,6 +291,11 @@ func (s *Server) handleCopyTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	src, ok := readableTemplate(w, r, ts, c, id, 0, false)
 	if !ok {
+		return
+	}
+	// The copy below is of src, the revision compared here, so a save landing after this read is not copied either.
+	if req.ExpectedRevision != nil && *req.ExpectedRevision != src.Revision {
+		writeErrorReason(w, http.StatusConflict, reasonTemplateRevisionConflict, templateRevisionConflictMsg(src.Revision))
 		return
 	}
 	to, diag := c.targetOwner(req.Scope, req.GroupID)

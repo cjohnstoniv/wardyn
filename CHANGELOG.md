@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- The namespace binding picker offers only active service identities. It no longer offers one whose sponsor is inactive, which the server refused at bind.
+- An approval rule's dry run reads the last 7 days of approvals in one read of up to 1,000 rows instead of pages of 200, so an approval raised during the dry run no longer makes it report a row twice or miss one (#4151).
+- New run keeps the unit you chose when your requests cannot be read, and says it could not check that unit; the server checks your access when the run starts. Before, the run went to your home unit with a sentence saying you were no longer in the chosen one (#4153).
+- An approval rule's dry run reports a pending approval past its wait budget, which the expiry sweep has not yet moved, as `skip` with `approval_already_decided`, as a real decision would refuse it. Before, it reported `would_approve` (#4154).
+- A governance preview of a write that renames a unit and changes its limits shows the unit's old name as where each affected person was, and the new name as where they are (#4161).
+- Clearing a pool as the organisation default clears nothing when another pool has become the default since the page loaded, and says which pool it is now. Before, it cleared that other pool (#4163).
+
+### Security
+
+- Publishing a template to the organisation from the console now names the revision the publisher saw. If the template was saved again since, the server answers `409` `template_revision_conflict` and publishes nothing. `POST /templates/{id}/copy` takes an optional `expected_revision` for the same check; without it a copy takes the current revision, as before.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

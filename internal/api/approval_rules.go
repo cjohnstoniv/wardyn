@@ -430,32 +430,31 @@ func (s *Server) approvalRuleDryRun(ctx context.Context, rule types.ApprovalRule
 		return report, nil
 	}
 	cutoff := s.boundNow(ctx).Add(-approvalRuleHistory) // requested_at is the database's stamp
-	for scanned := 0; ; {
-		page, err := pager.ListApprovalsPage(ctx, "", store.Page{Limit: 200, Offset: scanned})
+	// One bounded read, newest first, not OFFSET pages: a request raised during the scan lands at the head of the feed
+	// and would shift every later page by one, reading a row twice or skipping one. The row past the bound says the
+	// look back was cut short.
+	page, err := pager.ListApprovalsPage(ctx, "", store.Page{Limit: approvalRuleHistoryScan + 1})
+	if err != nil {
+		return report, err
+	}
+	for scanned, ap := range page {
+		if ap.RequestedAt.Before(cutoff) {
+			return report, nil
+		}
+		if scanned == approvalRuleHistoryScan {
+			report.RecentTruncated = true
+			return report, nil
+		}
+		if ap.State == types.ApprovalPending {
+			continue
+		}
+		m, ok, err := match(ap)
 		if err != nil {
 			return report, err
 		}
-		for _, ap := range page {
-			if ap.RequestedAt.Before(cutoff) {
-				return report, nil
-			}
-			if scanned++; scanned > approvalRuleHistoryScan {
-				report.RecentTruncated = true
-				return report, nil
-			}
-			if ap.State == types.ApprovalPending {
-				continue
-			}
-			m, ok, err := match(ap)
-			if err != nil {
-				return report, err
-			}
-			if ok {
-				report.Recent = append(report.Recent, row(ap, m, "predicate_match", ""))
-			}
-		}
-		if len(page) < 200 {
-			return report, nil
+		if ok {
+			report.Recent = append(report.Recent, row(ap, m, "predicate_match", ""))
 		}
 	}
+	return report, nil
 }
