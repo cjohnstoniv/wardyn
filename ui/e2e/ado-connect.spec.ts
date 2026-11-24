@@ -134,6 +134,9 @@ test.describe("the person's Azure DevOps card, a row that creates a token for ea
     expect(deletes).toBe(0);
     await dialog.getByRole("button", { name: ADO_PAT.DISCONNECT_CANCEL }).click();
     expect(deletes).toBe(0);
+    // The closing dialog stays mounted for its exit animation and hides the page behind it, so until it unmounts the
+    // only "Disconnect" button on the page is its own, and a click there disconnects without the second ask.
+    await expect(dialog).toHaveCount(0);
 
     await page.getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: ADO_PAT.MEMBER_DISCONNECT }).click();
