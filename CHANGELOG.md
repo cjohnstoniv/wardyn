@@ -42,6 +42,9 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Helm chart's probes use HTTPS when the server serves TLS itself, that is when `WARDYN_TLS_CERT` and `WARDYN_TLS_KEY` are both set by a value or a `valueFrom`. A name-only `extraEnv` entry counts as unset. Before, such a pod never became ready (#4158).
 - A refused `wardyn apply` or `wardyn workload restart` of a workload with no running run says no run was started, instead of saying the previous run keeps running (#4164).
 - A killed `wardyn sync --git` send no longer leaves its bundle-scan directory in the sync state directory for good: the next send removes it once it is ten minutes old and no running send holds it (#4173).
+- An upload through an inspected host is no longer cut after five minutes in total: the read time now counts from the last bytes received, so only an upload that stops sending is cut. (#4052)
+- A slow credential refresh no longer stalls the other requests to that host while the current credential is still valid. A request waiting on a refresh now leaves when its client hangs up. (#4052)
+- AWS role credentials used to re-sign requests renew in the background before they expire. A failed renewal is asked again at most once every 10 seconds instead of once per request. (#4052)
 
 ### Security
 

@@ -432,8 +432,9 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 			}
 		},
 		ReadHeaderTimeout: 30 * time.Second,
-		// ReadTimeout bounds the whole request incl. body (anti slow-loris); WriteTimeout stays 0
-		// since model responses legitimately stream for a long time.
+		// ReadTimeout bounds the request until its body is read; each body read that brings bytes
+		// re-arms it (serveMITMRequest), so it is an idle bound, not a cap on a long upload. WriteTimeout
+		// stays 0 since model responses legitimately stream for a long time.
 		ReadTimeout: mitmReadTimeout,
 		IdleTimeout: 90 * time.Second,
 	}
@@ -441,7 +442,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	<-connDone
 }
 
-// mitmReadTimeout is the inner server's per-request read bound. A var only so
+// mitmReadTimeout is how long the inner server waits for the next request body bytes. A var only so
 // a test can shorten it.
 var mitmReadTimeout = 5 * time.Minute
 
@@ -451,7 +452,7 @@ var mitmReadTimeout = 5 * time.Minute
 // shorten it.
 var mitmHandshakeTimeout = 30 * time.Second
 
-// rearmBodyDeadline gives the request body a fresh mitmReadTimeout from now.
+// rearmBodyDeadline gives the request body a fresh mitmReadTimeout from now, or keeps a later deadline already set.
 //
 // ReadTimeout counts from when headers arrived and isn't reset once read (measured: an unread body
 // past the deadline fails with i/o timeout even mid-handler), so a request held on an ADO or
@@ -473,16 +474,39 @@ func rearmBodyDeadlineAfter(w http.ResponseWriter, r *http.Request, wait time.Du
 	if !networkBodyUnread(r) {
 		return
 	}
+	deadline := time.Now().Add(wait + mitmReadTimeout)
+	if state, ok := r.Context().Value(networkBodyKey{}).(*networkBody); ok {
+		deadline = state.later(deadline)
+	}
 	rc := http.NewResponseController(w)
-	_ = rc.SetReadDeadline(time.Now().Add(wait + mitmReadTimeout))
+	_ = rc.SetReadDeadline(deadline)
 	if r.Context().Err() != nil {
 		_ = rc.SetReadDeadline(time.Now())
 	}
 }
 
 // networkBody is the state of the body a request arrived with, kept in its context so it outlives a
-// gate replacing r.Body with a buffered copy (trackNetworkBody).
-type networkBody struct{ done atomic.Bool }
+// gate replacing r.Body with a buffered copy (trackNetworkBody). rearm, when set, runs after each read
+// that brings bytes and is not the last; until is the read deadline last set, in unix nanoseconds.
+type networkBody struct {
+	done  atomic.Bool
+	rearm func()
+	until atomic.Int64
+}
+
+// later records d as the body's read deadline unless the one set before is later still, and returns the
+// deadline that stands: a re-arm after bytes arrive never takes back time a hold granted.
+func (b *networkBody) later(d time.Time) time.Time {
+	for {
+		cur := b.until.Load()
+		if cur >= d.UnixNano() {
+			return time.Unix(0, cur)
+		}
+		if b.until.CompareAndSwap(cur, d.UnixNano()) {
+			return d
+		}
+	}
+}
 
 type networkBodyKey struct{}
 
@@ -497,6 +521,9 @@ func (b *networkBodyReader) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if err == io.EOF {
 		b.state.done.Store(true)
+	} else if n > 0 && err == nil && b.state.rearm != nil {
+		// Before EOF, so net/http's background read, which starts at EOF, never inherits this deadline.
+		b.state.rearm()
 	}
 	return n, err
 }
@@ -538,6 +565,18 @@ func networkBodyUnread(r *http.Request) bool {
 // credential reaches whatever answers at the wrong port.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	r = trackNetworkBody(r)
+	// The body read deadline counts from the last bytes that arrived, so an upload that keeps sending
+	// is never cut, and one that stalls is.
+	if state, ok := r.Context().Value(networkBodyKey{}).(*networkBody); ok {
+		tracked := r
+		state.rearm = func() {
+			// The transport's write loop may read on after this handler returned, while net/http serves the
+			// next request on the connection: an ended request re-arms nothing, or it would cut that one.
+			if tracked.Context().Err() == nil {
+				rearmBodyDeadline(w, tracked)
+			}
+		}
+	}
 	p.stripGatewayHeaders(r.Header)
 	removeConnectionNominated(r.Header) // every gate below judges the headers the forward sends
 	// A via_org destination: the inner request's own Host goes to the

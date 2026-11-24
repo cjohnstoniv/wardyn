@@ -58,6 +58,8 @@ const (
 	awsSigV4MaxHashedBody = 16 << 20
 	// awsSigV4CredentialMargin renews the role credentials this long before they expire.
 	awsSigV4CredentialMargin = 5 * time.Minute
+	// awsSigV4RetryAfter is how long a failed renewal's answer is reused before the next one is asked.
+	awsSigV4RetryAfter = 10 * time.Second
 	// awsSSOFederationPath is the portal's GetRoleCredentials.
 	awsSSOFederationPath = "/federation/credentials"
 )
@@ -105,8 +107,14 @@ type awsSigV4Door struct {
 	scopes map[string]awsSigV4HostScope
 	signer *v4.Signer
 
+	// mu guards creds and the renewal's state; it is never held across a call.
 	mu    sync.Mutex
 	creds aws.Credentials
+	// flight is open while one renewal is out and closed when it lands; lastErr is the last renewal's
+	// failure, reused until nextAsk.
+	flight  chan struct{}
+	lastErr error
+	nextAsk time.Time
 }
 
 // newAWSSigV4Door compiles the grant and adds its hosts to the MITM-eligible set on port 443.
@@ -556,10 +564,77 @@ func awsSigV4Sign(s *v4.Signer, out *http.Request, signed []string, payload stri
 func (p *Proxy) awsSigV4Credentials(ctx context.Context) (aws.Credentials, error) {
 	d := p.sigv4
 	d.mu.Lock()
+	now := time.Now()
+	held := d.creds.HasKeys() && now.Before(d.creds.Expires)
+	if held && now.Before(d.creds.Expires.Add(-awsSigV4CredentialMargin)) {
+		creds := d.creds
+		d.mu.Unlock()
+		return creds, nil
+	}
+	// A failed renewal's error answers every request until awsSigV4RetryAfter has passed, as the renewal
+	// itself would have: a refused grant stops signing even while the held credentials have not expired.
+	if d.flight == nil && now.Before(d.nextAsk) {
+		err := d.lastErr
+		d.mu.Unlock()
+		return aws.Credentials{}, err
+	}
+	flight := d.startRenewalLocked(ctx, p)
+	if held && d.lastErr == nil { // inside the margin, nothing refused yet: these still sign while the renewal runs
+		creds := d.creds
+		d.mu.Unlock()
+		return creds, nil
+	}
+	d.mu.Unlock()
+	select {
+	case <-flight:
+	case <-ctx.Done():
+	}
+	// Both may be ready at once, and select then picks either: a request that has ended takes no answer.
+	if err := ctx.Err(); err != nil {
+		return aws.Credentials{}, err
+	}
+	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.creds.HasKeys() && time.Now().Before(d.creds.Expires.Add(-awsSigV4CredentialMargin)) {
+	// A renewal refused again answers with its refusal: the held credentials are not served after it.
+	if d.lastErr != nil {
+		return aws.Credentials{}, d.lastErr
+	}
+	if d.creds.HasKeys() && time.Now().Before(d.creds.Expires) {
 		return d.creds, nil
 	}
+	return aws.Credentials{}, cmp.Or(d.lastErr, errRoleCredentials)
+}
+
+// startRenewalLocked joins the renewal that is out, or starts one on its own context, so a request that hangs
+// up never cancels what the next one waits for. d.mu is held.
+func (d *awsSigV4Door) startRenewalLocked(ctx context.Context, p *Proxy) <-chan struct{} {
+	if d.flight != nil {
+		return d.flight
+	}
+	ch := make(chan struct{})
+	d.flight = ch
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), controlPlaneCallTimeout)
+		defer cancel()
+		creds, err := p.renewRoleCredentials(ctx)
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if err != nil {
+			slog.Warn("proxy: renewing the AWS role credentials for re-signing failed", "err", err)
+			d.lastErr, d.nextAsk = err, time.Now().Add(awsSigV4RetryAfter)
+		} else {
+			d.creds, d.lastErr, d.nextAsk = creds, nil, time.Time{}
+		}
+		d.flight = nil
+		close(ch)
+	}()
+	return ch
+}
+
+// renewRoleCredentials resolves the run's AWS sign-in through the control plane and exchanges it at the portal
+// for role credentials, each value masked before it is returned.
+func (p *Proxy) renewRoleCredentials(ctx context.Context) (aws.Credentials, error) {
+	d := p.sigv4
 	if p.inject == nil {
 		return aws.Credentials{}, errors.New("no control plane to resolve the run's AWS sign-in from")
 	}
@@ -576,7 +651,6 @@ func (p *Proxy) awsSigV4Credentials(ctx context.Context) (aws.Credentials, error
 	procMaskFor(p.maskKey, []byte(creds.AccessKeyID))
 	procMaskFor(p.maskKey, []byte(creds.SecretAccessKey))
 	procMaskFor(p.maskKey, []byte(creds.SessionToken))
-	d.creds = creds
 	return creds, nil
 }
 
