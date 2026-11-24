@@ -89,6 +89,13 @@ type runSyncOpen struct {
 type runSyncView struct {
 	Open []runSyncOpen `json:"open"`
 	Deny []string      `json:"deny,omitempty"`
+	// The run's folder walls (local_folder_walls.go): the size caps in bytes, deny_pull with the CLI's sentence,
+	// and each wall's layer. Deny above is then WARDYN_SYNC_DENY with the run's own patterns.
+	MaxPushBytes int64                                 `json:"max_push_bytes,omitempty"`
+	MaxPullBytes int64                                 `json:"max_pull_bytes,omitempty"`
+	DenyPull     bool                                  `json:"deny_pull,omitempty"`
+	DenyPullText string                                `json:"deny_pull_text,omitempty"`
+	WallLayers   map[string]types.LocalFolderWallLayer `json:"wall_layers,omitempty"`
 }
 
 // Bounds on WARDYN_SYNC_DENY.
@@ -194,8 +201,14 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	sandboxRef = run.SandboxRef
+	rec, wmsg := s.syncWalls(ctx, run, principal)
+	if wmsg != "" {
+		fail(wmsg, wmsg)
+		return
+	}
+	walls := rec.Walls
 	args := []string{"-d", dir}
-	if dataOut.DataOut() != types.TransferAllowed {
+	if dataOut.DataOut() != types.TransferAllowed || walls != nil && walls.DenyPull {
 		args = append(args, "-P", sftpServerDeny) // no file content leaves the run
 	}
 	words := sshLiveRunWords.copyOutFor(principal)
@@ -206,10 +219,13 @@ func (s *Server) bridgeSSHSync(ctx context.Context, runID uuid.UUID, principal s
 	}
 	if dataOut.DataOut() != types.TransferAllowed && sess.Stdout != nil {
 		sess.Stdout = s.sshSyncReplyGuard(runID, principal, channel, sess.Stdout, dataOut)
+	} else if walls != nil && walls.DenyPull && sess.Stdout != nil {
+		sess.Stdout = s.localFolderPullGuard(runID, principal, channel, sess.Stdout, rec)
 	}
+	sess.Stdout = s.syncCapped(runID, principal, channel, rec, "pull", sess.Stdout)
 	defer s.sshSyncOpened(runID, dir)()
 	pass.start(dir)
-	ops := &sftpOpCounter{Channel: channel}
+	ops := &sftpOpCounter{Channel: s.syncPushCapped(runID, principal, channel, rec)}
 	exit, bytesIn, bytesOut := s.sshBridgeExecSession(ctx, runID, principal, ops, withSFTPLaunchNote(sess, channel.Stderr()), true)
 	removes, renames := ops.counts()
 	extra := map[string]any{"bytes_in": bytesIn, "bytes_out": bytesOut, "remove_requests": removes, "rename_requests": renames}

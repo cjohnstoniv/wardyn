@@ -333,7 +333,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		RunnerPoolName:  s.runPoolName(r.Context(), run),
 		KeptUntil:       s.endedRunKeptUntil(run),
 		Policy:          s.runPolicyRef(r.Context(), run),
-		Sync:            s.runSyncOpenView(run.ID),
+		Sync:            s.runSyncViewFor(r.Context(), run.ID),
 		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
 		Agents:          s.runDetailAgents(r.Context(), run),
 		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),

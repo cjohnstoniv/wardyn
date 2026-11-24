@@ -29,6 +29,13 @@ func (c *Client) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, erro
 // sends none.
 type RunSyncRules struct {
 	Deny []string `json:"deny"`
+	// MaxPushBytes and MaxPullBytes are the run's size caps for one session (0 is none); DenyPull says the run's
+	// walls keep the sandbox's changes from coming back, and DenyPullText is the sentence that says so. The
+	// server holds all of them anyway.
+	MaxPushBytes int64  `json:"max_push_bytes,omitempty"`
+	MaxPullBytes int64  `json:"max_pull_bytes,omitempty"`
+	DenyPull     bool   `json:"deny_pull,omitempty"`
+	DenyPullText string `json:"deny_pull_text,omitempty"`
 }
 
 // GetRunSyncRules reads the run's sync rules.

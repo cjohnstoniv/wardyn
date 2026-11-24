@@ -145,6 +145,7 @@ var namespaceCensusExempt = map[string]string{
 	"agent_runs.inner_walls":                    "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.local_folder":                   "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.local_folder_status":            "a run's own settings and recorded state, not a list that names people",
+	"agent_runs.local_folder_walls":             "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.model_allowlists":               "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.policy_generations":             "a run's own settings and recorded state, not a list that names people",
 	"agent_runs.run_limits":                     "a run's own settings and recorded state, not a list that names people",

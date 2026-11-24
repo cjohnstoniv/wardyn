@@ -4,11 +4,17 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 func waitSyncOpen(t *testing.T, f *sshSyncFixture, want int) []runSyncOpen {
@@ -110,5 +116,31 @@ func TestRunSyncView_ServesTheOrganisationDeny(t *testing.T) {
 	raw, _ := json.Marshal(f.h.srv.runSyncOpenView(f.run.ID))
 	if string(raw) != `{"open":[],"deny":[".env*","*.pem"]}` {
 		t.Errorf("sync = %s, want the organisation's patterns as sync.deny", raw)
+	}
+}
+
+// TestRunSyncView_DenyIsUnion: GET /runs/{id}'s sync serves WARDYN_SYNC_DENY with the run's own patterns, in that
+// order, each once, beside the caps in bytes, deny_pull with its sentence and each wall's layer.
+func TestRunSyncView_DenyIsUnion(t *testing.T) {
+	layers := map[string]types.LocalFolderWallLayer{"deny_pull": {Layer: "boundary"}, "max_push_mib": {Layer: "unit", Name: "eng"}}
+	s := &Server{cfg: Config{SyncDeny: []string{"*.key", "secrets/"}, Store: lfwStore{rec: types.LocalFolderWallsRecord{
+		Walls:  &types.LocalFolderRules{DenyPull: true, MaxPushMiB: 2, MaxPullMiB: 3, Deny: []string{"secrets/", "a,b"}},
+		Layers: layers,
+	}}}}
+	v := s.runSyncViewFor(context.Background(), uuid.New())
+	if want := []string{"*.key", "secrets/", "a,b"}; !slices.Equal(v.Deny, want) {
+		t.Errorf("deny = %v, want %v", v.Deny, want)
+	}
+	if v.MaxPushBytes != 2<<20 || v.MaxPullBytes != 3<<20 || !v.DenyPull || !reflect.DeepEqual(v.WallLayers, layers) {
+		t.Errorf("view = %+v", v)
+	}
+	if !strings.Contains(v.DenyPullText, "walled off by your organisation's boundary") || v.Open == nil {
+		t.Errorf("deny_pull_text %q, open %v", v.DenyPullText, v.Open)
+	}
+	raw, _ := json.Marshal(v)
+	for _, key := range []string{`"max_push_bytes":2097152`, `"max_pull_bytes":3145728`, `"deny_pull":true`, `"wall_layers":`} {
+		if !strings.Contains(string(raw), key) {
+			t.Errorf("wire %s lacks %s", raw, key)
+		}
 	}
 }

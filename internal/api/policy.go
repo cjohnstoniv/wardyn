@@ -226,6 +226,9 @@ func validatePolicySpecMode(spec types.RunPolicySpec, strict, resolveMounts bool
 	if err := validateDataOut(spec.DataOut); err != nil {
 		return err
 	}
+	if err := validateLocalFolders(spec.LocalFolders); err != nil {
+		return err
+	}
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}

@@ -194,6 +194,9 @@ func runSync(cmd *cobra.Command, c *sdk.Client, runID, localDir string, f syncFl
 	if err != nil {
 		return fmt.Errorf("sync: read the run's sync rules: %w", err)
 	}
+	if err := applySyncRules(&f, rules); err != nil {
+		return err
+	}
 	signer, err := loadSyncSigner()
 	if err != nil {
 		return err
@@ -295,6 +298,19 @@ func portOr22(port string) string {
 		return "22"
 	}
 	return port
+}
+
+// applySyncRules holds this sync to the run's folder walls before it connects: a --pull sync of a run whose walls
+// keep the sandbox's changes in exits with their sentence, and one pass pulls at most the smaller of the flag and the
+// run's cap. The server holds both anyway.
+func applySyncRules(f *syncFlags, rules sdk.RunSyncRules) error {
+	if f.pull && rules.DenyPull {
+		return errors.New(rules.DenyPullText)
+	}
+	if rules.MaxPullBytes > 0 {
+		f.maxPullBytes = min(f.maxPullBytes, rules.MaxPullBytes)
+	}
+	return nil
 }
 
 // runGitSteps runs the send (nil when --git is off) and then the pull (nil when --pull-commits is off). A send
