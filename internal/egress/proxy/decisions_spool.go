@@ -141,14 +141,16 @@ func (sp *decisionSpool) append(recs []batchRecord) error {
 		buf.WriteByte('\n')
 	}
 	before, werr := f.Seek(0, io.SeekEnd)
+	seeked := werr == nil
 	if werr == nil {
 		_, werr = decisionSpoolWrite(f, buf.Bytes())
 	}
 	if werr == nil {
 		werr = f.Sync()
 	}
-	if werr != nil {
-		// A part-written batch would leave a line with no newline for the next append to join onto.
+	if werr != nil && seeked {
+		// A part-written batch would leave a line with no newline for the next append to join onto. Without a known
+		// size before the write there is nothing safe to cut back to.
 		_ = f.Truncate(before)
 	}
 	if cerr := f.Close(); werr == nil {
