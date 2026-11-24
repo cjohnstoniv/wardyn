@@ -6,8 +6,9 @@
 # the walk mints, with runners on, a member token holding the self-host grant, and wardyn-runnerd's register and
 # serve on the host. Sourced, not exec'd. The caller sets, before sourcing: PROJECT, ORG_HOST, ORG_PORT, ORG_URL,
 # ADMIN_TOKEN, MEMBER, MEMBER_TOKEN, RUNNER_NET, PG_CONTAINER, POOL, EVIDENCE_DIR, TMP, and SERVE_PID, ORG_WARDYND,
-# ORG_PROXY and RIDS empty; and AGENT_IMAGE before org_up. It defines pass and fail itself only if the caller has
-# not. scripts/lib/common.sh and scripts/lib/walk-api.sh must already be sourced.
+# ORG_PROXY and RIDS empty; and AGENT_IMAGE before org_up. ORG_ADMIN_PORT, if set, adds a second published port on
+# 127.0.0.1 for calls a runner cut must not touch. It defines pass and fail itself only if the caller has not.
+# scripts/lib/common.sh and scripts/lib/walk-api.sh must already be sourced.
 declare -F pass >/dev/null || pass() { printf '  [pass] %s\n' "$*"; }
 declare -F fail >/dev/null || fail() { printf '  [FAIL] %s\n' "$*"; FAILED=1; }
 
@@ -120,10 +121,12 @@ org_tls() {
   chmod 600 "${T}/tls.key"
   # From here on only the walk CA is trusted: every TLS call left is to the organisation.
   export SSL_CERT_FILE="${T}/ca.crt" CURL_CA_BUNDLE="${T}/ca.crt"
+  local ports="\"${ORG_HOST}:${ORG_PORT}:8080\""
+  [[ -z "${ORG_ADMIN_PORT:-}" ]] || ports="${ports}, \"127.0.0.1:${ORG_ADMIN_PORT}:8080\""
   cat >"${TMP}/override.yaml" <<EOF
 services:
   wardynd:
-    ports: ["${ORG_HOST}:${ORG_PORT}:8080"]
+    ports: [${ports}]
     environment:
       WARDYN_TLS_CERT: /walk-tls/tls.crt
       WARDYN_TLS_KEY: /walk-tls/tls.key
