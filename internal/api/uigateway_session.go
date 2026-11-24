@@ -140,6 +140,9 @@ type uiSession struct {
 	// ViewOnly pins a VM desktop session's input off for its whole life, whatever the Mac's caps later say.
 	// Set at enter on a background run's watch alone (backgroundWatch); signed, so it can't be dropped.
 	ViewOnly bool `json:"w,omitempty"`
+	// DesktopKind marks a session on a declared app of kind desktop (types.UIAppKindDesktop): set at enter from the
+	// run's policy (newDeclaredUISession, inboundSessionFor) and signed, so it can't be dropped.
+	DesktopKind bool `json:"dk,omitempty"`
 	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
 	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
 	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
@@ -459,7 +462,7 @@ func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.Ag
 	}
 	if sess.SupportGrant != uuid.Nil {
 		// A helper's session answers to its grant: live, ticking this app's door, the owner and helper still signed in.
-		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, uiSupportDoor(sess.App)); v {
+		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, sess.supportDoor()); v {
 		case supportOK:
 		case supportUnavailable: // fail closed: a grant that cannot be read is not a grant
 			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
@@ -550,7 +553,7 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	case p.Limits.DenyUIApps:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
-	case uiAppIsDesktopSession(sess.App) && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
+	case sess.desktopSession() && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
 	case sess.backgroundWatch() && p.Limits.DenyBackgroundDesktopWatch:

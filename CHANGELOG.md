@@ -22,6 +22,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
   run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
   the runner connects; a server with no remote runners loses only the windows.
+- A UI app can be declared with `"kind": "desktop"`. The desktop's clipboard rules, its recording and `deny_interactive`
+  then bind that app whatever its name, as they bind the `novnc` app, and a support helper needs both the web apps and
+  the desktop door to open it. A ceiling whose entry for an app says `desktop` keeps the kind on every policy under it.
+  Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
+  than its ceiling; its runs still start, with the kind added.
 
 ### Changed
 
@@ -40,6 +45,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - An owner's idle SSH connection now closes when the database stays unreachable for the session budget (30 seconds by default) after a check that got no answer; before, it stayed open. Raise `sessions.unconfirmed_budget_s` (up to 120) to give it longer.
+- A desktop declared under a name other than `novnc` is still relayed unfiltered until its `ui_apps` entry, or its
+  ceiling's, says `"kind": "desktop"`. Under a `data_out` rule of `review` or `blocked`, such an app is refused like
+  any other web app; only the `novnc` app is exempt.
+- Declare `kind: desktop` only once every wardynd runs this release.
+- Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
 
 ## [0.10.2] — 2026-11-22
 

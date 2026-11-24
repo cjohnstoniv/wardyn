@@ -442,6 +442,9 @@ func validateUIApps(apps []types.UIApp) error {
 		if err := validateUIAppCallers(a); err != nil {
 			return fmt.Errorf("ui_apps[%d]: %w", i, err)
 		}
+		if a.Kind != "" && a.Kind != types.UIAppKindDesktop {
+			return fmt.Errorf("ui_apps[%d]: invalid kind %q (want %q or none)", i, a.Kind, types.UIAppKindDesktop)
+		}
 	}
 	return nil
 }

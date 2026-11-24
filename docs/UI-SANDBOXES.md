@@ -76,10 +76,14 @@
 
 - The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
   paste in allowed and copy out blocked unless the policy says otherwise.
-- The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
-  follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
-- Only that app and the sign-in display (`_signin`) are filtered. A member may declare the same desktop server under another name, so a ceiling that
-  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop is the app declared as `"name": "novnc"`, and any app declared with `"kind": "desktop"` whatever its
+  name. Every WebSocket of such an app is RFB or it closes. The relay follows the RFB stream inside it and drops a
+  blocked `ClientCutText` or `ServerCutText`.
+- Only those apps and the sign-in display (`_signin`) are filtered. A desktop declared under another name without the
+  kind relays unfiltered, so declare the kind on it, or on the ceiling's entry for it (a policy under that ceiling
+  keeps the kind).
+- An SSH port forward to the VNC port is outside the relay. A ceiling that blocks copy out should list its `ui_apps`:
+  a policy under a ceiling with no list may declare any app.
 - The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
   a run built to get data out.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
@@ -678,6 +682,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
   - So is a support helper's: each new request is re-checked before it is relayed, and one already open, a WebSocket or a long response, is re-checked every 30 seconds and closed once the grant stops.
 - **A support helper.** A super admin whose [support request](ENV.md#wardyn_support_sessions) the run's owner accepted with the web apps or desktop door ticked opens the run's apps, governed.
   - Web apps opens a declared app that is not a desktop. Desktop opens the `novnc` app and a Linux VM's desktop. A door the owner left unticked is `403` `support_door_not_granted` when the ticket is asked for. A ticket used after its grant ended, ran out or lost that door is `403` `ui_gateway_ticket_run_mismatch` at the enter.
+  - An app of kind desktop under another name needs both doors.
   - It needs per-run hosts. On one shared host the ticket mint answers `403` `inbound_needs_host_mode`.
   - The profile's `deny_ui_apps` and `deny_interactive` and the run's `data_out` apply. The helper never has a super admin's exemption.
   - The cookie ends with the grant, and each re-check asks the grant again: a revoke or an expiry ends the session, and a grant that cannot be read fails closed (`503`).

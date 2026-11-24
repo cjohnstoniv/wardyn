@@ -390,13 +390,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, redirectStatus)
+	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, superAdmin, redirectStatus)
 }
 
 // uiEnterDeclaredApp is the tail of uiEnterCommon for a declared (non-desktop) app: the run's effective policy
 // must declare app, and only then does the session cookie start. It writes every refusal itself; actx is the
-// ticket's opening-deadline context uiEnterCommon derived, and r already carries it.
-func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, redirectStatus int) {
+// ticket's opening-deadline context uiEnterCommon derived, and r already carries it. superAdmin is uiEnterCommon's.
+func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, superAdmin bool, redirectStatus int) {
 	apps, err := s.effectiveUIApps(r.Context(), runID)
 	if err != nil && !ta.admitBy.IsZero() {
 		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)
@@ -420,7 +420,10 @@ func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx
 		return
 	}
 
-	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	if s.refuseDesktopKindApp(w, r, run, ta, declared, superAdmin) {
+		return
+	}
+	sess := s.newDeclaredUISession(run, ta, declared)
 	sess.Inbound = declared.Inbound
 	if sess.Caller = ta.caller; sess.Caller != "" {
 		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity

@@ -1135,6 +1135,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 | `path` | `string` | `/` | Landing path after the gateway's ticket handoff. Must be an absolute same-origin path — a scheme, a host, a `//` prefix or a `..` is rejected, since that redirect would otherwise leave the UI origin. |
 | `inbound` | `bool` | `false` | Makes the port a service port: the run's owner and its `callers` reach it through the gateway on any run, a background run included. Declaring it needs the restricted `feature` value `inbound`. See [Inbound](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). |
 | `callers` | `[]string` | `[]` | Who besides the owner may call an `inbound` app: `user:<sub or email>`, `group:<name>` or `service:<name>`, lower-case, each once, at most 32. Refused without `inbound`; `all` is not a caller. Fixed at create. |
+| `kind` | `string` | none | `desktop` marks a desktop app: whatever its name, the relay filters its clipboard, records it and closes it under `deny_interactive`. A helper needs the web apps and desktop doors. `novnc` is one without it. Other values are refused. |
 
 ## `desktop` — `DesktopControls`
 
@@ -1148,9 +1149,11 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
   asked decides it.
 - An approval releases those bytes once; a file changed since is refused. `allowed` < `review` < `blocked`, so a layer
   below can only make it stricter.
-- The clipboard rules bind the relay of the app named `novnc` only. A member may declare the same desktop server
-  under another app name, so a ceiling that blocks copy out should also pin `ui_apps` to the desktop app. An SSH
-  port forward to the desktop's VNC port is outside the relay.
+- The clipboard rules bind the relay of every desktop app: the app named `novnc`, and any app declared with
+  `kind: desktop`. A desktop declared under another name without the kind relays unfiltered, so declare the kind on
+  it, or on the ceiling's entry for it: a policy under that ceiling keeps the kind.
+- An SSH port forward to the desktop's VNC port is outside the relay. A ceiling that blocks copy out should list its
+  `ui_apps`: a policy under a ceiling with no list may declare any app.
 - The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
   a run built to get data out.
 
@@ -1196,7 +1199,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - The upgrade sets `blocked` on each other existing run with no policy record left that is older than the newest record retention removed, plus a day. A run still queued, pending or starting with no sandbox is left alone. The desktop's socket and its Files panel refuse a run whose policy records were removed with 503 `desktop_rules_unreadable`.
 - Network egress is outside this rule. An agent can still send content to any host in `allowed_domains`, through MCP tool calls and the model lane. Narrow those with `allowed_domains`, `denied_domains` and tool rules.
 - Paths left open: the SSH shell, `GET /runs/{id}/attach` and watching the desktop show a person what is on screen, and the run's file list and event stream carry names, sizes and events, not file contents. Turn off interactive access (`deny_interactive`) and background desktop watching (`deny_background_desktop_watch`) to close them.
-- The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app.
+- The desktop app (`novnc`) is exempt because it is a display. Its server runs in the sandbox, so anything that server answers over plain HTTP also leaves. `deny_interactive` closes the desktop app. An app declared with `kind: desktop` under another name is not exempt: under `review` or `blocked` it is refused like any other web app.
 - With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
 - Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A web app's refusals write it; a refused call to an `inbound` app with an API token writes it only within the audit rate limit shared with failed authentication.
 - A refused Files panel download keeps its `desktop.file.transfer` row. A 503 `data_out_unreadable` writes no row; it is logged.
