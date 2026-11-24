@@ -455,6 +455,7 @@ func BenchmarkDecisionDoor_SingleVsBatch_PG(b *testing.B) {
 				ts := &timedStore{rec: store.Recorder{Pool: pool}}
 				srv := New(Config{Audit: ts, Store: store.NewPG(pool), AdminToken: adminToken, TrustDomain: "wardyn.local",
 					ControlPlaneURL: "http://wardynd:8080", BaseCtx: context.Background()})
+				listHandler := panicFails(b, srv.Handler())
 				stop := make(chan struct{})
 				var listD []time.Duration
 				var lw sync.WaitGroup
@@ -472,7 +473,7 @@ func BenchmarkDecisionDoor_SingleVsBatch_PG(b *testing.B) {
 							r.Header.Set("Authorization", "Bearer "+adminToken)
 							w := httptest.NewRecorder()
 							start := time.Now()
-							srv.Handler().ServeHTTP(w, r)
+							listHandler.ServeHTTP(w, r)
 							listD = append(listD, time.Since(start))
 						}
 					}
