@@ -3,10 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// GovernanceScreen — the security admin's profiles/assignments surface (0.7
-// Phase 4). Every assertion reads its expected string from a copy module rather
-// than retyping it, the convention permissions.test.tsx and access-panel.test
-// .tsx already follow: these tests fail the moment a rendered string stops
+// GovernanceScreen — the security admin's profiles/assignments surface. Every assertion reads its expected
+// string from a copy module rather than retyping it: these tests fail the moment a rendered string stops
 // coming from the canon.
 //
 // Four things are pinned here because they are DECISIONS, not rendering:
@@ -25,19 +23,11 @@ import { MemoryRouter } from "react-router-dom";
 // The SafetyMeter (one per profile row, plus the editor's) debounces a
 // POST /policies/grade. Stub it so no test touches the network.
 const gradePolicyMock = vi.fn();
-vi.mock("../../../lib/api/runs", () => ({
-  runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) },
-}));
+vi.mock("../../../lib/api/runs", () => ({ runs: { gradePolicy: (...a: unknown[]) => gradePolicyMock(...a) } }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
-const getGovernanceMock = vi.fn();
-const createProfileMock = vi.fn();
-const updateProfileMock = vi.fn();
-const deleteProfileMock = vi.fn();
-const upsertAssignmentMock = vi.fn();
-const deleteAssignmentMock = vi.fn();
-const previewGovernanceMock = vi.fn();
-const listChangesMock = vi.fn();
+const [getGovernanceMock, createProfileMock, updateProfileMock, deleteProfileMock] = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+const [upsertAssignmentMock, deleteAssignmentMock, previewGovernanceMock, listChangesMock, getMyAssistantMock] = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -61,27 +51,20 @@ vi.mock("../../../lib/api/governance", async () => {
 // that wants suggestions overrides it. The combobox's own states are pinned in
 // wardyn/directory-combobox.test.tsx.
 const directorySearchMock = vi.fn();
-vi.mock("../../../lib/api/directory", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api/directory")>("../../../lib/api/directory");
-  return { ...actual, directory: { search: (...a: unknown[]) => directorySearchMock(...a) } };
-});
+vi.mock("../../../lib/api/directory", async () => ({
+  ...(await vi.importActual<typeof import("../../../lib/api/directory")>("../../../lib/api/directory")),
+  directory: { search: (...a: unknown[]) => directorySearchMock(...a) },
+}));
 
 // UT-7a: the assignment form's "User type" branch — permissions.tsx's shared
 // UserTypeSubjectSelect, a closed picker rather than the DirectoryCombobox.
 const listUserTypesMock = vi.fn();
-vi.mock("../../../lib/api/user-types", () => ({
-  userTypes: { listUserTypes: () => listUserTypesMock() },
-}));
-// The assistant's settings and availability answer off, with the stored defaults.
-vi.mock("../../../lib/api/assistant", () => ({
-  assistant: {
-    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
-    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
-    getMyAssistant: () => Promise.resolve({ state: "off" }),
-  },
-}));
+vi.mock("../../../lib/api/user-types", () => ({ userTypes: { listUserTypes: () => listUserTypesMock() } }));
+vi.mock("../../../lib/api/assistant", () => ({ assistant: { getMyAssistant: (...a: unknown[]) => getMyAssistantMock(...a) } }));
 
 import { HttpError, PendingChangeError } from "../../../lib/api/core";
+import { COMPOSER_PATH, composerHref } from "../../../lib/composer-url";
+import { ASSISTANT } from "../../wardyn/copy/assistant";
 import type { DirectoryEntry } from "../../../lib/api/directory";
 import type { GovernanceUnit, GovernanceSnapshot } from "../../../lib/api/governance";
 import { CHANGES, DIRECTORY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
@@ -157,6 +140,7 @@ function renderScreen(snap: GovernanceSnapshot | null = snapshot()) {
 }
 
 beforeEach(() => {
+  getMyAssistantMock.mockReset().mockResolvedValue({ state: "off" });
   gradePolicyMock.mockReset();
   gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
   getGovernanceMock.mockReset();
@@ -996,5 +980,21 @@ describe("GovernanceScreen — a 202 is submitted, never saved", () => {
 
     expect(await screen.findByText(CHANGES.SUBMITTED_TITLE)).toBeInTheDocument();
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+// Draft with AI links the composer when ready; otherwise it is shut, linkless and says why.
+describe("GovernanceScreen: Draft with AI", () => {
+  it.each([
+    [{ state: "ready" }, composerHref({ kind: "unit" })],
+    [{ state: "off" }, ASSISTANT.OFF],
+    [{ state: "ready", never_sent_kinds: ["governance_unit"] }, ASSISTANT.KIND_NEVER_SENT(CHANGES.KIND.governance_unit)],
+  ])("answer %j gives the door %s", async (answer, want) => {
+    getMyAssistantMock.mockResolvedValue(answer);
+    renderScreen();
+    if (want.startsWith(COMPOSER_PATH)) return void expect(await screen.findByRole("link", { name: ASSISTANT.DRAFT_WITH_AI })).toHaveAttribute("href", want);
+    expect(await screen.findByText(want)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: ASSISTANT.DRAFT_WITH_AI })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: ASSISTANT.DRAFT_WITH_AI })).toBeNull();
   });
 });
