@@ -674,13 +674,20 @@ What the check does and does not settle:
   - A rule looser than the agent's lane refuses the run: `approvals: harness` on a hold-lane run, or `sandbox_mode: workspace-write` on a read-only launch. It never launches the agent looser.
 - Rules that cannot be read refuse the run, and a stored rule the walls rules now refuse refuses it too (`agent_rules_invalid`). At a credential mint, rules that cannot be read answer a retryable `503`.
 
-**When a change reaches a running run.**
+**When a change reaches a run.**
 
-- Denies, blocked desktop directions, withheld credentials and a refusal of every push reach it at its next dispatch or revive.
-- Tool rules, `push_rules.deny_paths`, `recording`, `auto_stop_after_sec`, `first_use_approval`, `min_confinement_class`, `inner_walls` and the allowlist reach only runs created after the change.
-- A queued run keeps the policy it was resolved with, and its dispatch re-asserts the current rules' denies.
+- Denies, blocked desktop directions, withheld credentials and a refusal of every push reach a running run at its next dispatch or revive.
+- The recording floor is read when a run is dispatched, so it also reaches a run that is still queued or starting. Once a run is recorded its level does not change.
+- Tool rules, `push_rules.deny_paths`, `auto_stop_after_sec`, `first_use_approval`, `min_confinement_class`, `inner_walls` and the allowlist reach only runs created after the change.
+- A queued run is resolved again when it starts, from its stored request, with the rules in force then. A change made while it waited binds it, and a rule it can no longer meet ends the start with the refusal.
 
-**Routes**, on the security tier (`admin` or `security_admin`), all audited and covered by strict audit:
+**Runs the rules bind.**
+
+- A workspace record or verify session runs the agent, so the rules for `claude-code` narrow its policy as they narrow a run's. A rule it cannot meet refuses the launch (`422`).
+- A harness login is a run of the vendor CLI, so the rules for that agent bind it.
+- A source scan and a workspace step that is not an interactive session start no agent. They carry the step's default agent name but are not bound, so a withheld credential cannot fail their clone.
+
+**Routes**, on the security tier (`admin` or `security_admin`). Writes and deletes are audited and covered by strict audit; `GET /agent-rules` is not audited:
 
 - `GET /agent-rules` lists the rules, sorted by harness.
 - `PUT /agent-rules/{harness}` writes them. The body is `spec`, `inner_walls` and `version`: `0` creates, any other value must be the stored version, or the write is `409` `agent_rules_version_conflict`.
