@@ -40,7 +40,8 @@
 # Both Postgres faults on kind freeze every postgres process (SIGSTOP, then SIGCONT) from the kind node, which sees
 # them in an ancestor PID namespace: inside the container the postmaster is PID 1 and ignores SIGSTOP from its own
 # namespace. The quickstart's Postgres has no volume, so it cannot be stopped without losing the database. Each
-# freeze is proved by a fresh connection that must not complete within 5 s. T1 freezes up to three times, 40 s
+# freeze is proved by a fresh connection that must not complete within 5 s (the probe is first run unfrozen and
+# must connect). T1 holds each freeze 20 s from the STOP, probe included, and freezes up to three times, 40 s
 # apart, until a session check lands inside a freeze: a check runs every 30 s and gives up after 5 s, so one 20 s
 # freeze can fall between two checks.
 #
@@ -110,13 +111,25 @@ kind_leg() {
   psql1() { k -n "${NAMESPACE}" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc "$1" 2>&1; }
   # pg_signal STOP|CONT: every postgres process on the kind node (-x: the exact process name, so nothing else).
   pg_signal() { docker exec "${KIND_NODE}" pkill "-$1" -x postgres; }
-  # pg_freeze: freeze Postgres, then prove it: a fresh connection must not complete within 5 s.
+  # pg_probe: a fresh connection to Postgres from inside its pod, given 5 s. rc 0 = connected, 124 = timed out.
+  pg_probe() {
+    timeout 5 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deployment/postgres -- \
+      psql -U wardyn -d wardyn -h 127.0.0.1 -tAc 'select 1' >/dev/null 2>&1
+  }
+  # pg_freeze: prove the probe works, freeze Postgres, then prove it: a fresh connection must not complete within
+  # 5 s. FREEZE_T0 is the clock second of the STOP, so a caller can hold the freeze for a measured time.
   pg_freeze() {
+    local rc
+    pg_probe; rc=$?
+    [[ "${rc}" -eq 0 ]] || die "freeze check cannot reach Postgres before the freeze (rc=${rc})"
     pg_signal STOP || die "could not freeze Postgres on ${KIND_NODE} (no postgres process, or no pkill there)"
-    if timeout 5 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deployment/postgres -- \
-      psql -U wardyn -d wardyn -h 127.0.0.1 -tAc 'select 1' >/dev/null 2>&1; then
-      die "the Postgres freeze did not take effect"
-    fi
+    FREEZE_T0="$(date +%s)"
+    pg_probe; rc=$?
+    case "${rc}" in
+      124) ;;
+      0) die "the Postgres freeze did not take effect" ;;
+      *) die "freeze check inconclusive (rc=${rc})" ;;
+    esac
   }
   run_state() { api GET "/api/v1/runs/$1" >/dev/null; jq -r '.state // empty' "${TMP}/resp.json"; }
   audit_count() { psql1 "SELECT count(*) FROM audit_events WHERE run_id = '$1' AND action = '$2' $3"; }
@@ -197,7 +210,7 @@ kind_leg() {
   for cycle in 1 2 3; do
     FROZEN=1
     pg_freeze
-    for _ in $(seq 1 10); do
+    while [[ $(($(date +%s) - FREEZE_T0)) -lt 20 ]]; do
       ready_now || ready_lost=1
       sleep 2
     done
@@ -468,8 +481,8 @@ t6() {
   [[ -n "${renewed}" ]] && pass "T6: run ${run_a}'s lease renewed within ${renewed} s of the organisation coming back" \
     || fail "T6: run ${run_a}'s lease was not renewed within 60 s of the organisation coming back (still ${before})"
   read -r n f gap < <(fetch_window "$(fetch_log "${run_a}")" "${t6_from}" "$(date +%s)")
-  [[ "${n}" -ge 30 && "${gap}" -le 7 ]] && pass "T6: ${n} fetches, ${f} failed, longest gap between successes ${gap} s" \
-    || fail "T6: ${n} fetches, ${f} failed, longest gap between successes ${gap} s (want at least 30 fetches and at most 7 s)"
+  [[ "${n}" -ge 30 && "${gap}" -le 7 ]] && pass "T6: ${n} fetches, ${f} failed, longest gap without a success ${gap} s" \
+    || fail "T6: ${n} fetches, ${f} failed, longest gap without a success ${gap} s (want at least 30 fetches and at most 7 s)"
   [[ "$(run_field "${run_a}" .state)" == RUNNING ]] && pass "T6: run ${run_a} still RUNNING" || fail "T6: run ${run_a} is $(run_field "${run_a}" .state)"
 }
 
@@ -492,7 +505,7 @@ t4() {
       || fail "T4: ${f} of ${n} server-run fetches failed (want 0 of at least 60)"
     read -r n f gap < <(fetch_window "$(fetch_log "${rrun}")" "${t_from}" "${t_back}")
     [[ "${n}" -ge 60 && "${gap}" -le 7 ]] && pass "T4: ${n} runner-run fetches through the outage, longest gap ${gap} s" \
-      || fail "T4: ${n} runner-run fetches, longest gap between successes ${gap} s (want at least 60 and at most 7 s)"
+      || fail "T4: ${n} runner-run fetches, longest gap without a success ${gap} s (want at least 60 and at most 7 s)"
     local rid
     for rid in "${rrun}" "${srun}"; do
       [[ "$(run_field "${rid}" .state)" == RUNNING ]] && pass "T4: run ${rid} RUNNING" || fail "T4: run ${rid} is $(run_field "${rid}" .state)"
