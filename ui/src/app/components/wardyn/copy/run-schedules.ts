@@ -51,8 +51,8 @@ export const RUN_SCHEDULE = {
   OUTCOME_SKIPPED: "Skipped",
   OUTCOME_REFUSED: "Refused",
   OUTCOME_CANCELLED: "Cancelled",
-  /** PROPOSED (not in STRINGS.md): a booked start whose cancel failed and is being tried again (cancel_pending:<reason>). */
-  OUTCOME_CANCEL_PENDING: "Cancel pending",
+  /** A booked start whose cancel failed and is being tried again (cancel_pending:<reason>). */
+  OUTCOME_CANCEL_PENDING: "Cancel still pending",
   EMPTY_TITLE: "No schedules yet",
   EMPTY_BODY: "Choose Schedule for later and a repeat when you start a run.",
   OFF_BANNER: "Scheduled runs are off on this server, so none of these schedules will start until an admin turns them on.",
