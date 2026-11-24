@@ -82,9 +82,9 @@ func TestRunSchedules_DueSkipsPaused_PG(t *testing.T) {
 	}
 }
 
-// The erasure's delete is skipped for a role without INSERT on the table, which can have written no schedule, and
-// fails loudly for a role that can insert but not delete.
-func TestRunSchedules_EraseSkipsARoleWithoutTheGrant_PG(t *testing.T) {
+// The erasure's delete fails for a role without the grant, leaving the schedule in place, and goes through for a
+// role holding SELECT and DELETE without INSERT: INSERT never decides it.
+func TestRunSchedules_EraseFailsWithoutTheGrant_PG(t *testing.T) {
 	pool := runsPGPoolIsolated(t)
 	pg := store.NewPG(pool)
 	ctx := t.Context()
@@ -103,14 +103,31 @@ func TestRunSchedules_EraseSkipsARoleWithoutTheGrant_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(restricted.Close)
-	if n, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err != nil || n != 0 {
-		t.Fatalf("erase without INSERT = %d, %v; want 0 and no error", n, err)
+	count := func() int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM run_schedules WHERE owner = 'sub-a'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
 	}
-	if _, err := pool.Exec(ctx, `GRANT INSERT ON run_schedules TO `+role); err != nil {
+	if n, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err == nil {
+		t.Fatalf("erase without the grant = %d, nil; want an error", n)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("schedules after the refused erase = %d, want 1", n)
+	}
+	if _, err := pool.Exec(ctx, `GRANT SELECT, DELETE ON run_schedules TO `+role); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err == nil {
-		t.Fatal("erase with INSERT and no DELETE succeeded; want it to fail loudly")
+	if n, err := store.NewPG(restricted).DeleteRunSchedulesOf(ctx, "sub-a"); err != nil || n != 1 {
+		t.Fatalf("erase with SELECT and DELETE but no INSERT = %d, %v; want 1", n, err)
+	}
+	if n := count(); n != 0 {
+		t.Fatalf("schedules after the erase = %d, want 0", n)
+	}
+	if err := pg.CreateRunSchedule(ctx, runScheduleRow("sub-a", time.Now().UTC().Add(time.Hour)), 20); err != nil {
+		t.Fatal(err)
 	}
 	if n, err := pg.DeleteRunSchedulesOf(ctx, "sub-a"); err != nil || n != 1 {
 		t.Fatalf("erase as the owner role = %d, %v; want 1", n, err)
