@@ -25,6 +25,12 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A failed audit partition drop no longer says the partition was not dropped when wardynd cannot tell whether the drop committed. It says the outcome is unknown and to read the retention status before trying again.
 - `/setup/status` now warns when it cannot read how many months of audit partitions exist ahead. Before, the warning disappeared, together with the `wardyn_audit_partitions_ahead` metric.
 - The SCIM status card's last-token read now looks at the last 30 days first, so it no longer scans the whole audit table on a store that is in use.
+- The namespace binding picker offers only active service identities. It no longer offers one whose sponsor is inactive, which the server refused at bind.
+- An approval rule's dry run reads the last 7 days of approvals in one read of up to 1,000 rows instead of pages of 200, so an approval raised during the dry run no longer makes it report a row twice or miss one (#4151).
+- New run keeps the unit you chose when your requests cannot be read, and says it could not check that unit; the server checks your access when the run starts. Before, the run went to your home unit with a sentence saying you were no longer in the chosen one (#4153).
+- An approval rule's dry run reports a pending approval past its wait budget, which the expiry sweep has not yet moved, as `skip` with `approval_already_decided`, as a real decision would refuse it. Before, it reported `would_approve` (#4154).
+- A governance preview of a write that renames a unit and changes its limits shows the unit's old name as where each affected person was, and the new name as where they are (#4161).
+- Clearing a pool as the organisation default clears nothing when another pool has become the default since the page loaded, and says which pool it is now. Before, it cleared that other pool (#4163).
 
 ### Security
 
@@ -35,6 +41,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A macOS VM base's `app` item, from a `.zip` or a `.dmg`, is now owned by `root:wheel` in `/Applications`, with no file writable by its group or others and no set-user-ID or set-group-ID bit. Before, it kept the owners and modes stored in the archive or disk image, which could leave files that the run's user owns, or that anyone can write, in `/Applications`. The guest agent now unpacks the app into the item's own folder, fixes its owners (links included) and modes there, removes the copy of the app already in `/Applications`, and only then copies the new one into place. A base made with `macos-vm prepare` on this version has it at once. An existing base picks this up from the second `macos-vm update-tools` on this version: the first one installs the new guest agent, and the second one reinstalls the items with it. Not yet tried on a real Mac.
 - On a Linux VM, the guest's root can no longer create a file, folder or link in a shared folder, nor make root a file's owner (#3464). Before, such a file landed on the host as the runner's user, as the agent's own files do. A folder mounted inside another writable folder now gets its mount folder made in that folder on the host, as in a container.
 - Unbinding a sign-in identity is now refused while a capability deny names the person's old sign-in subject. After the unbind the person signs in under a new subject, which the deny did not name, so they were no longer denied. Move the deny to the person's email, which the new binding keeps, then unbind. The `identity_principal_in_use` refusal now counts these denies.
+- Publishing a template to the organisation from the console now names the revision the publisher saw. If the template was saved again since, the server answers `409` `template_revision_conflict` and publishes nothing. `POST /templates/{id}/copy` takes an optional `expected_revision` for the same check; without it a copy takes the current revision, as before.
 
 ## [0.10.4] — 2026-11-24
 

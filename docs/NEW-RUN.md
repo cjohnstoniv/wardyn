@@ -202,7 +202,7 @@ The **Templates** screen lists saved starting points at `/templates` (User view)
 |---|---|---|
 | **Use** | Anyone who can read the row | Opens New run at Review, on the listed revision |
 | **Rename**, **Delete** | The owner of a personal template; an organisation admin for an organisation one; the group's template managers for a group one | `template_scope_forbidden`, `template_group_unverified` |
-| **Publish to organization** | An organisation admin, in the Admin view only | Copies the current revision to the organisation |
+| **Publish to organization** | An organisation admin, in the Admin view only | Copies the revision the row shows to the organisation. If the template was saved since, the server answers `template_revision_conflict` and publishes nothing |
 | **Save as template**, **Save as policy** (Review) | You, to **Only me** or a group you manage | Never the organisation from Review |
 
 - [`internal/types/template.go#TemplateAuthorize`](../internal/types/template.go) decides authority. A template you cannot read answers `template_not_found`, like a missing one.

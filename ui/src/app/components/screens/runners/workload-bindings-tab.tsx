@@ -41,7 +41,9 @@ export function WorkloadBindingsTab() {
       .then(([list, catalogue, identities]) => {
         setBindings(list);
         setPools(catalogue.pools.map((p) => ({ id: p.id, name: p.name, scope: p.scope })));
-        setServices(identities.filter((s) => s.state !== "suspended" && s.state !== "retired"));
+        // Only an active identity can be bound: the server refuses a suspended or retired one and one whose sponsor is
+        // inactive, so the picker offers none of them.
+        setServices(identities.filter((s) => s.state === "active"));
         setLoadError(null);
         setNow(Date.now());
       })

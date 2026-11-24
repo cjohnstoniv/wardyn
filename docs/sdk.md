@@ -614,6 +614,7 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
   - Saving one writes no stored policy.
 - An update needs `expected_revision`, the revision you read. Another current revision answers `409` `template_revision_conflict` and changes nothing; keep your edits, reload, and apply them again.
   - Every revision stays readable by number; scope and kind never change (copy a template to publish it elsewhere).
+- A copy (`CopyTemplate`) may name `expected_revision`, the revision you reviewed. Another current revision answers `409` `template_revision_conflict` and copies nothing; without it the copy takes the current revision.
 - A refused document answers `TemplateSaveRefusal`: the first diagnostic's `error` and `reason`, and every diagnostic with its path.
 - A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
 - `created_by` and `updated_by` are set only for someone who may write the template.

@@ -115,7 +115,7 @@ export function TemplatesScreen() {
   const publish = async (t: TemplateSummary) => {
     setBusyId(t.id);
     try {
-      await templatesApi.publishToOrg(t.id);
+      await templatesApi.publishToOrg(t.id, t.revision);
       toast.success(T.PUBLISHED(t.name));
     } catch (e) {
       toast.error(getErrorMessage(e));

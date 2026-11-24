@@ -111,7 +111,7 @@ describe("Workload bindings tab", () => {
     await userEvent.click(screen.getByRole("option", { name: "Platform services" }));
     await userEvent.type(within(dialog).getByRole("textbox", { name: /Namespace/ }), "team-payments");
     await userEvent.click(within(dialog).getByRole("combobox", { name: /Service identity/ }));
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["service:billing", "service:search"]);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["service:billing"]);
     await userEvent.click(screen.getByRole("option", { name: "service:billing" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Bind namespace" }));
     await waitFor(() => expect(createMock).toHaveBeenCalledWith({ pool: PLATFORM, namespace: "team-payments", service: "billing" }));
@@ -129,7 +129,7 @@ describe("Workload bindings tab", () => {
     await userEvent.click(screen.getByRole("option", { name: "Batch" }));
     await userEvent.type(within(dialog).getByRole("textbox", { name: /Namespace/ }), "team-metrics");
     await userEvent.click(within(dialog).getByRole("combobox", { name: /Service identity/ }));
-    await userEvent.click(screen.getByRole("option", { name: "service:search" }));
+    await userEvent.click(screen.getByRole("option", { name: "service:billing" }));
     await userEvent.click(within(dialog).getByRole("button", { name: "Bind namespace" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("That namespace is bound on this pool already. Delete that binding first.");
   });

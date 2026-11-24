@@ -26,7 +26,7 @@ export const templatesApi = {
     await asNoContent(await wfetch(path(id), { method: "DELETE" }));
   },
 
-  /** Publishes the template's current revision to the organisation (Admin view). */
-  publishToOrg: async (id: string): Promise<Template> =>
-    asJson<Template>(await wfetch(`${path(id)}/copy`, { method: "POST", asPerson: true, body: JSON.stringify({ scope: "org" }) })),
+  /** Publishes the revision the person saw to the organisation (Admin view); a template saved since answers 409 template_revision_conflict. */
+  publishToOrg: async (id: string, revision: number): Promise<Template> =>
+    asJson<Template>(await wfetch(`${path(id)}/copy`, { method: "POST", asPerson: true, body: JSON.stringify({ scope: "org", expected_revision: revision }) })),
 };
