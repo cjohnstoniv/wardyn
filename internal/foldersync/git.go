@@ -427,25 +427,29 @@ const (
 // not one.
 func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
-	hash, mk := "sha1", "GIT_DEFAULT_HASH=sha1 git init -q --template="
+	hash, mk, probe := "sha1", "GIT_DEFAULT_HASH=sha1 git init -q --template=", ""
 	if sha256 {
 		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
-		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
+		hash = "sha256"
+		// A git older than 2.29 answers --object-format with rc 129 and its whole usage: the send says the git is
+		// too old instead. Any other failure shows git's own words.
+		said := "if [ \"$r\" = 129 ]; then echo " + shellQuote(gitTooOld) + " >&2; exit 1; fi; [ -z \"$e\" ] || printf '%s\\n' \"$e\" >&2; "
+		// Whether this git can make a SHA-256 repository at all is tried first, in a directory of its own that is
+		// removed after, so a git too old for one says so before anything in the synced directory is read or made.
+		probe = "d=$(mktemp -d); r=0; e=$(GIT_DIR=\"$d\" git init -q --bare --object-format=sha256 2>&1) || r=$?; rm -rf \"$d\"; " +
+			said + "[ \"$r\" = 0 ] || exit 1; "
+		mk = "{ r=0; e=$(git init -q --template= --object-format=sha256 2>&1) || r=$?; " + said + "[ \"$r\" = 0 ]; }"
 	}
-	// oh is the object format of a repository git can already open. A git older than 2.29 echoes the unknown flag
-	// and knows only SHA-1 (old is then set, so a SHA-256 send says that, not to remove .git). A repository of
-	// the other hash ends the send with a reason and nothing changed; the fetch never sees it.
-	read := "old=; oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1; old=1;; esac; }"
-	refuse := "{ [ \"$oh\" = " + hash + " ] || { [ -z \"$old\" ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
+	// oh is the object format of a repository git can already open. A git older than 2.29 prints the unknown
+	// flag back, and knows only SHA-1. A repository of the other hash ends the send with a reason and nothing
+	// changed; the fetch never sees it.
+	read := "oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1;; esac; }"
+	refuse := "{ [ \"$oh\" = " + hash + " ] || { echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
 		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
-	// A git older than 2.29 answers an unknown option with rc 129: a SHA-256 init that gets it is a git too old for SHA-256.
-	if sha256 {
-		mk += " || { r=$?; [ \"$r\" != 129 ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; false; }"
-	}
 	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
 	check := "if " + read + "; then " + refuse + "; fi; "
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
-	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
+	return "set -eu; " + probe + "cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
 		"{ [ \"$(git rev-parse -q --verify HEAD)\" = \"$c\" ] || { [ \"${1:-0}\" -lt 2 ] && idx $((${1:-0}+1)); }; }; }; " +
 		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 1; fi; " +

@@ -296,6 +296,7 @@ var templatePolicyRules = []TemplateFieldRule{
 		"The organisation's recording level applies. Keystrokes are never recorded."),
 	carriedField("data_out", partRules, templateOmitOptional, templateEmptySame,
 		"Content may leave the run as the organisation and the person's own walls allow. A template can only make the rule stricter."),
+	carriedField("local_folders", partRules, templateOmitOptional, templateEmptySame, "No walls for folders from a person's computer beyond the organisation's. A template can only add walls."),
 	carriedField("git_push_any_branch", partRules, templateOmitBaseline, templateEmptyValue,
 		"Pushes stay inside the run's own branch namespace. False is a choice to keep that.").
 		in(templateSectionSCMEntry, "provider+org"),
@@ -338,6 +339,7 @@ var templateNestedCarried = map[string]string{
 	"IncludedTool":        "id kind model_provider component tool_rules default_effect",
 	"LLMInspectionSpec": "mode workspace_secret_names detect_secrets detect_secret_patterns detect_entropy detect_pii detector_sidecar_url detector_sidecar_format " +
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
+	"LocalFolderRules":   "deny_remote deny_pull max_push_mib max_pull_mib deny",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
 	"DriveAttachment":    "drive_id read_only",

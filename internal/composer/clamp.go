@@ -181,6 +181,7 @@ func clamp(proposed, ceiling types.RunPolicySpec, limits types.GovernanceLimits,
 
 	warns = clampPushRules(&out, ceiling, warns)
 	warns = clampDataOut(&out, ceiling, warns)
+	warns = clampLocalFolders(&out, ceiling.LocalFolders, warns)
 	warns = clampGitHubCapabilities(&out, ceiling, warns)
 
 	return out, warns

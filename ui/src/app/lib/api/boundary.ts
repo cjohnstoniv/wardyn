@@ -8,7 +8,7 @@
 // required (202, thrown as PendingChangeError by asJson). The dry run writes nothing.
 import { asJson, wfetch } from "./core";
 import type { ConfinementClass } from "../types/runs";
-import type { DesktopControls, GrantSpec } from "../types/policy";
+import type { DesktopControls, GrantSpec, LocalFolderRules } from "../types/policy";
 import type { PolicyContact } from "../types/site";
 
 export type BoundaryMode = "no_limits" | "hard_limits";
@@ -24,6 +24,8 @@ export interface BoundarySpec {
   desktop?: DesktopControls;
   // The least strict rule for content leaving any run; a run's own is at least this strict.
   data_out?: "allowed" | "review" | "blocked";
+  // The walls for folders from a person's computer every run keeps; a run's own only add to them.
+  local_folders?: LocalFolderRules;
   /** The Azure DevOps capabilities a run may hold, at launch, at each request and at each credential resolve. pr means its parts; absent is no cap. */
   azure_devops_capabilities?: string[];
   /** The GitHub capabilities the GitHub CLI and git pushes may use, at launch. Absent is no cap. */
