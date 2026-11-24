@@ -144,7 +144,7 @@ func TestMacDiskHold_Grants_PG(t *testing.T) {
 	app, other := "wardyn_hold_app_"+suffix, "wardyn_hold_other_"+suffix
 	for _, r := range []string{app, other} {
 		if _, err := pool.Exec(ctx, `CREATE ROLE `+r+` NOLOGIN`); err != nil {
-			t.Skipf("cannot create a role here: %v", err)
+			t.Fatalf("create role %s: %v", r, err)
 		}
 		t.Cleanup(func() {
 			_, _ = pool.Exec(context.Background(), `DROP OWNED BY `+r)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -154,5 +155,38 @@ func TestMacDiskHold_DispatchNeverRefuses(t *testing.T) {
 	plain, _ := multiDriveServer(notesDisk())
 	if !plain.holdMacDiskDrives(context.Background(), run, mount) {
 		t.Error("a store without the record refused the dispatch")
+	}
+}
+
+// A queued or scheduled run's start replays the create doors with a promoted-start context: a hold another run keeps
+// does not refuse it, and the store is not read, so the run keeps the Mac's own wait. The same request as a create is
+// refused.
+func TestMacDiskHold_PromotedStartNotRefused(t *testing.T) {
+	w := notesDisk()
+	srv, fake := holdRig(w)
+	fake.holder = uuid.New()
+	disk := []runDrive{{resolved: types.ResolvedDrive{Drive: w.Drive}}}
+	promoted := withPromotedStart(context.Background(), uuid.New(), nil, "", false)
+	if refusal := srv.macDiskHeldRefusal(promoted, disk); refusal != nil || len(fake.reads) != 0 {
+		t.Errorf("promoted start: refusal %+v, reads %v; want none", refusal, fake.reads)
+	}
+	if refusal := srv.macDiskHeldRefusal(context.Background(), disk); refusal == nil || refusal.status != http.StatusConflict {
+		t.Errorf("create: refusal %+v, want 409", refusal)
+	}
+}
+
+// sandboxCreateAdmitted records the run's disk drive holds: dropping that conjunct leaves the hold unwritten and the
+// create door blind to the run.
+func TestMacDiskHold_WrittenByDispatchDoors(t *testing.T) {
+	w := notesDisk()
+	srv, fake := holdRig(w)
+	run := types.AgentRun{ID: uuid.New(), Placement: types.PlacementRemote}
+	p := dispatchParams{Drives: []types.DriveMount{{DriveID: w.Drive.ID, Backend: types.DriveBackendMacDisk}}}
+	spec := runner.SandboxSpec{}
+	if !srv.sandboxCreateAdmitted(context.Background(), run, dispatchCeiling{}, types.SiteConfig{}, &spec, nil, llmTransport{}, p) {
+		t.Fatal("the dispatch doors refused the run")
+	}
+	if len(fake.holds) != 1 || fake.holds[0] != [2]uuid.UUID{w.Drive.ID, run.ID} {
+		t.Errorf("holds = %v, want the run holding its disk drive", fake.holds)
 	}
 }

@@ -35,10 +35,12 @@ func (s *Server) holdMacDiskDrives(ctx context.Context, run types.AgentRun, driv
 }
 
 // macDiskHeldRefusal refuses a create or a Review whose disk drive another run that is not finished holds
-// (#3851). A store that cannot answer refuses, as every drive read here does.
+// (#3851). A store that cannot answer refuses, as every drive read here does. A queued or scheduled run's start
+// replays the create doors, but is not a create: it keeps the Mac's own wait, as before mac_disk_holds existed,
+// instead of ending the run on a hold read.
 func (s *Server) macDiskHeldRefusal(ctx context.Context, drives []runDrive) *runRefusal {
 	hs, ok := s.cfg.Store.(store.MacDiskHoldStore)
-	if !ok {
+	if !ok || startingPromoted(ctx) {
 		return nil
 	}
 	for _, d := range drives {
