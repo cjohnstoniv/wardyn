@@ -282,6 +282,7 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 			"rfb":   s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopRFB,
 			"close": s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopClose,
 		}
+		boot["approvals"] = s.uiBasePath() + uiRelayPrefix(runID, uiDesktopAppName) + uiDesktopApprovals
 		// From the signed session, so the viewer's strip is right even if the run below can't be read.
 		if sess.backgroundWatch() {
 			boot["view_only"], boot["background"] = true, true
@@ -315,6 +316,8 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		http.SetCookie(w, &http.Cookie{Name: uiCookieName, Value: "", Path: s.uiBasePath() + uiCookiePath(runID, uiDesktopAppName),
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.cfg.OIDCSecureCookies, MaxAge: -1})
 		w.WriteHeader(http.StatusNoContent)
+	case rest == uiDesktopApprovals && r.Method == http.MethodGet:
+		s.serveDesktopApprovals(w, r, runID)
 	default:
 		writeErrorReason(w, http.StatusNotFound, reasonUIGatewayNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 	}
