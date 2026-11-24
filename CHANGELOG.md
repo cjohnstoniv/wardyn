@@ -11,6 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Changed
+
+- The egress proxy reuses a host's DNS answer for up to 30 seconds and checks it against the address guard on every use, as it checks a fresh one. A lookup that does not answer gives up after 10 seconds. (#4051)
+- The egress proxy keeps up to 32 idle connections per upstream host and resumes upstream TLS sessions, except on connections that present a client certificate. HTTP/2 upstream connections that stop answering are pinged and closed. (#4051)
+
+### Fixed
+
+- An upload through an inspected host is no longer cut after five minutes in total: the read time now counts from the last bytes received, so only an upload that stops sending is cut. (#4052)
+- A slow credential refresh no longer stalls the other requests to that host while the current credential is still valid. A request waiting on a refresh now leaves when its client hangs up. (#4052)
+- AWS role credentials used to re-sign requests renew in the background before they expire. A failed renewal is asked again at most once every 10 seconds instead of once per request. (#4052)
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
