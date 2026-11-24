@@ -143,12 +143,13 @@ func (b *sessionBudget) observe(check string, err error) budgetVerdict {
 		delete(b.failing, check)
 		if len(b.failing) == 0 {
 			if !b.since.IsZero() {
-				b.auditWindow("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
-				clear(b.seen)
-				b.since = time.Time{}
+				// The fence opens before the row is written: a rode_through row means input is taken again.
 				if b.fence != nil {
 					b.fence(false)
 				}
+				b.auditWindow("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
+				clear(b.seen)
+				b.since = time.Time{}
 			}
 			b.stopTimer()
 			return budgetHolds

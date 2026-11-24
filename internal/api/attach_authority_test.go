@@ -820,7 +820,16 @@ func TestAttachAuthority_RidesAnUnansweredCheck(t *testing.T) {
 			rig := newAuthorityRig(t, 0)
 			rig.budget(time.Minute, 10*time.Millisecond)
 			socks := rig.pairWatched(t, lane, rig.cookie(t, holderOwner, time.Now().UTC().Add(time.Hour)))
-			sess := waitForSession(t, rig.srv.cfg.Runner.(*holderTestRunner), 0)
+			// A socket registers before its exec opens, so the writer's exec need not be Attach 0: pick it by its role.
+			fr := rig.srv.cfg.Runner.(*holderTestRunner)
+			waitForSession(t, fr, 1)
+			if fr.attachOpts(0).Observer == fr.attachOpts(1).Observer {
+				t.Fatalf("attach options = %+v, %+v, want one writer and one observer", fr.attachOpts(0), fr.attachOpts(1))
+			}
+			sess := fr.session(0)
+			if fr.attachOpts(0).Observer {
+				sess = fr.session(1)
+			}
 			rig.rev.setFail(1 << 30)
 			time.Sleep(10 * authorityTick) // well past 3 authority intervals
 			for i, ws := range socks {
