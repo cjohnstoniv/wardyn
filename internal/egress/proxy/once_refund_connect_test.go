@@ -511,7 +511,7 @@ func TestOnceRefund_TheMITMHandshakeRowNamesAGivenBackUse(t *testing.T) {
 			p, _, _ := mitmProxy(t, "alert", captureUpstream(t, true, "ok").srv)
 			done := make(chan struct{}, 4)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				p.mitmConnect(w, r, anthropicHost, 443, c.seen)
+				p.mitmConnect(w, r, anthropicHost, 443, c.seen, false)
 				done <- struct{}{}
 			}))
 			t.Cleanup(srv.Close)

@@ -10,6 +10,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"slices"
@@ -61,12 +62,30 @@ var retiredMigrations = map[string]string{
 // (TryAdvisoryLockDedicated); the default stays 10.
 const DefaultPoolMaxConns = 10
 
+// ConnectOption adjusts the pool configuration Connect builds from the DSN.
+type ConnectOption func(*pgxpool.Config)
+
+// WithApplicationName makes every connection of the pool report label as its application_name,
+// whatever the DSN says: it is applied after the DSN is parsed. The live bus copies the pool's
+// configuration, so its connection carries the label too.
+func WithApplicationName(label string) ConnectOption {
+	return func(cfg *pgxpool.Config) {
+		if cfg.ConnConfig.RuntimeParams == nil {
+			cfg.ConnConfig.RuntimeParams = map[string]string{}
+		}
+		cfg.ConnConfig.RuntimeParams["application_name"] = label
+	}
+}
+
 // Connect opens a pgxpool to dsn and performs a lightweight liveness check.
 // Returns the pool; caller owns Close().
-func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+func Connect(ctx context.Context, dsn string, opts ...ConnectOption) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open pool: %w", err)
+	}
+	for _, opt := range opts {
+		opt(cfg)
 	}
 	if !dsnSetsPoolMaxConns(dsn) {
 		cfg.MaxConns = max(cfg.MaxConns, DefaultPoolMaxConns)
@@ -137,12 +156,13 @@ func migrateConn(ctx context.Context, conn *pgxpool.Conn, allowUnknown bool) err
 	}
 
 	// Runs on `conn`, not `pool`, so a pool_max_conns=1 DSN can't self-deadlock against this conn.
-	return migrateOn(ctx, conn, allowUnknown)
+	return migrateOn(ctx, conn, allowUnknown, migrationFS)
 }
 
-// migrateOn applies pending migrations using a single executor (the advisory-
-// lock-holding connection). Separated so both the lock path and tests share it.
-func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) error {
+// migrateOn applies the pending migrations of fsys's migrations/*.sql using a single executor (the advisory-
+// lock-holding connection). Separated so both the lock path and tests share it. Production passes migrationFS;
+// TestPG_MigrateBothBandOrders passes sets of its own, to apply one filename set in several band orders.
+func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool, fsys fs.FS) error {
 	fresh, err := freshSchema(ctx, db) // before the tracking table exists: the fresh-install seed's key (fresh_seed.go)
 	if err != nil {
 		return err
@@ -156,7 +176,7 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 		return fmt.Errorf("db: ensure schema_migrations: %w", err)
 	}
 
-	entries, err := migrationFS.ReadDir("migrations")
+	entries, err := fs.ReadDir(fsys, "migrations")
 	if err != nil {
 		return fmt.Errorf("db: read migrations dir: %w", err)
 	}
@@ -222,7 +242,7 @@ func migrateOn(ctx context.Context, db migrationExecutor, allowUnknown bool) err
 			continue
 		}
 
-		data, err := migrationFS.ReadFile("migrations/" + name)
+		data, err := fs.ReadFile(fsys, "migrations/"+name)
 		if err != nil {
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}
@@ -821,3 +841,10 @@ func applyMigration(ctx context.Context, db migrationExecutor, filename, sql str
 	}
 	return nil
 }
+
+// OtherClientSQL is the pg_stat_activity condition that selects client sessions, masked ones included. A
+// role without pg_read_all_stats sees another role's session with backend_type NULL (measured on Postgres
+// 17) but still its usename, and the server's own workers (autovacuum, replication) have none, so
+// "backend_type NULL with a usename" is a masked client. The migrate-only quiet check and the portal issuer
+// activation's session sample share this one condition.
+const OtherClientSQL = `(backend_type = 'client backend' OR (backend_type IS NULL AND usename IS NOT NULL))`

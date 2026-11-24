@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // The subject types of an assignment: the governance vocabulary
@@ -415,6 +416,11 @@ func (s *Service) Set(ctx context.Context, a Assignment) (created bool, err erro
 func (s *Service) SetQ(ctx context.Context, q Querier, a Assignment) (created bool, err error) {
 	if !s.Has(a.Domain) {
 		return false, fmt.Errorf("%w: %q", ErrUnknownDomain, a.Domain)
+	}
+	// A portal person holds no principal keys, so no assignment may name one. The ruling is the prefix
+	// alone; it reads nothing, so it runs here without a store.
+	if err := types.RefuseDelegatePersonSubject(a.SubjectType, a.Subject); err != nil {
+		return false, err
 	}
 	err = q.QueryRow(ctx, `
 		INSERT INTO key_domain_assignments (subject_type, subject, domain, set_by) VALUES ($1, $2, $3, $4)

@@ -240,13 +240,13 @@ describe("BoundaryScreen", () => {
     expect(BOUNDARY_DRY_RUN.TILE_PEOPLE(2)).toBe("people narrow");
   });
 
-  it("an empty report says No change", async () => {
+  it("an empty report says no existing policies would change", async () => {
     getMock.mockResolvedValue(hardLimits);
     const user = userEvent.setup();
     renderScreen();
     await draftHosts("paste.example.org");
     await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
-    expect(await within(await screen.findByTestId("boundary-dry-run")).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
+    expect(await within(await screen.findByTestId("boundary-dry-run")).findByText(BOUNDARY_DRY_RUN.NO_POLICY_CHANGE)).toBeInTheDocument();
   });
 
   it("a desktop lock drafts into the dry run and the PUT, keeping the stored locks it does not touch", async () => {
@@ -266,6 +266,22 @@ describe("BoundaryScreen", () => {
       { mode: "hard_limits", spec: {}, limits: {}, locked_knobs: ["allowed_domains", "desktop.copy_out"] },
       '"b1"',
     );
+  });
+
+  it("a lock-only Data out edit shows the Data out value and the lock in the review table, and no policy change", async () => {
+    getMock.mockResolvedValue({ ...hardLimits, spec: { data_out: "review" } });
+    const user = userEvent.setup();
+    renderScreen();
+    const row = await screen.findByRole("group", { name: "Content leaving a run" });
+    await user.click(within(row).getByRole("checkbox", { name: BOUNDARY_DESKTOP.LOCK_ROW }));
+    await user.click(screen.getByRole("button", { name: BOUNDARY.REVIEW }));
+    const report = await screen.findByTestId("boundary-dry-run");
+    expect(within(report).getByRole("row", { name: new RegExp(`^${BOUNDARY_DRY_RUN.DATA_OUT_LOCK}`) })).toHaveTextContent(
+      `${BOUNDARY_DRY_RUN.DATA_OUT_LOCK}${BOUNDARY_DRY_RUN.DATA_OUT_UNLOCKED}${BOUNDARY_DRY_RUN.DATA_OUT_LOCKED}`,
+    );
+    expect(within(report).getByRole("row", { name: /^Data out Review Review/ })).toBeInTheDocument();
+    expect(await within(report).findByText("No existing policies would change")).toBeInTheDocument();
+    expect(within(report).queryByText("No change")).toBeNull();
   });
 
   it("a Data out choice and its lock are sent, keeping the other spec keys and the stored locks", async () => {
@@ -341,7 +357,7 @@ describe("BoundaryScreen", () => {
     expect(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.SUBMIT_SAVE })).toBeDisabled();
     await user.click(within(report).getByRole("button", { name: BOUNDARY_DRY_RUN.RETRY }));
     await waitFor(() => expect(dryRunMock).toHaveBeenCalledTimes(2));
-    expect(await within(report).findByText(BOUNDARY_DRY_RUN.NO_CHANGE)).toBeInTheDocument();
+    expect(await within(report).findByText(BOUNDARY_DRY_RUN.NO_POLICY_CHANGE)).toBeInTheDocument();
   });
 
   // The dry run names the person (asPerson); a session another tab switched to someone else is refused 412

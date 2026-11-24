@@ -707,7 +707,11 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drives []types.DriveMount) 
 // The nil test lives HERE rather than at the assembly site for a mechanical
 // reason worth stating: dispatchRun sits at its gocyclo ceiling, so one more
 // branch there is a lint failure. It belongs with the payload anyway.
-func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount) {
+//
+// A drive the run got through its issuer portal adds `portal`, the portal's id. portals, when given, maps each such drive
+// id to that portal, set at create from the fold: a team drive mounted through a group allocation names none, so it is
+// never inferred from the portal that created the run.
+func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy string, machine types.MachineKind, drives []types.DriveMount, portals ...map[uuid.UUID]uuid.UUID) {
 	for i := range drives {
 		drive := &drives[i]
 		target := drive.Target
@@ -725,6 +729,11 @@ func (s *Server) auditDriveMount(ctx context.Context, runID uuid.UUID, mountedBy
 		}
 		if drive.Team {
 			data["team"], data["mounted_by"] = true, mountedBy
+		}
+		for _, byDrive := range portals {
+			if portal, ok := byDrive[drive.DriveID]; ok {
+				data["portal"] = portal
+			}
 		}
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.drive.mount",
 			driveAuditTarget(drive), "success", mustJSON(data)))

@@ -55,7 +55,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,9 +62,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
 )
@@ -324,7 +323,20 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	run, err := s.cfg.Store.GetRun(r.Context(), runID)
+	// An issuer portal's entry reads run under its ticket's opening deadline (ticketActor.admitCtx), every
+	// gate's through r, so none holds the request past it. The run read, the governance and data_out doors, the
+	// declared apps, the roster and the background door's inbound and roster reads answer a failure or a stall
+	// with a 503 (data_out's its own, the rest the retryable one). The owner check's sponsor and inbound reads, and the sign-in display's holder
+	// read, keep their refusals for a failure. Any other ticket's actx is r's own context.
+	actx, acancel := ta.admitCtx(r.Context())
+	defer acancel()
+	r = r.WithContext(actx)
+	run, err := s.cfg.Store.GetRun(actx, runID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) && !ta.admitBy.IsZero() {
+		slog.ErrorContext(r.Context(), "wardynd: an issuer portal's entry could not read its run", "run_id", runID, "err", err)
+		writeErrorReason(w, http.StatusServiceUnavailable, uiDeniedReasonRevocationUnavailable, uiSessionUnverifiableMsg)
+		return
+	}
 	if err != nil {
 		// Byte-identical to the wrong-owner arm below — including the wire
 		// reason (#656 slice 3) — so a missing run and a foreign one stay
@@ -337,7 +349,7 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// runs humanOrAdminAuth, so the ticket's stamped role/principal is the only
 	// authorization signal, exactly as in handleAttachWS.
 	superAdmin := ta.role == oidc.RoleAdmin
-	if !s.uiTicketMayEnter(r.Context(), run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
+	if !s.uiTicketMayEnter(actx, run, ta, app, superAdmin) { // a caller's ticket: inbound_ticket.go
 		if superAdmin {
 			s.refuseRunOwnerOnly(w, r.WithContext(withTicketActor(r.Context(), ta)), run)
 			return
@@ -356,9 +368,13 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	// operator-owned one, so the governance exemption below cannot reach a
 	// person's run. The sign-in display and a declared noVNC desktop answer to
 	// deny_interactive too, as a VM's desktop does (uiEnterDesktop, which keeps
-	// its own door); any other declared app is deny_ui_apps' alone.
+	// its own door); any other declared app is deny_ui_apps' alone. A desktop's refusal here is shown as the viewer's
+	// page (uiDesktopDoor).
 	rt := r.WithContext(withTicketActor(r.Context(), ta))
-	if ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app) {
+	desktop := uiDesktopApp(app) || app == uiDesktopAppName
+	if s.uiDesktopDoor(w, r, runID, desktop, func(w http.ResponseWriter) bool {
+		return ((!superAdmin || !s.adminDoorExempt(run)) && (s.refuseUIAppsDenied(w, rt, run) || (uiDesktopApp(app) && s.refuseInteractiveAttach(w, rt, run)))) || s.refuseAppDataOut(w, rt, run, app)
+	}) {
 		return
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
@@ -378,7 +394,18 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
+	s.uiEnterDeclaredApp(w, r, actx, runID, run, ta, app, superAdmin, redirectStatus)
+}
+
+// uiEnterDeclaredApp is the tail of uiEnterCommon for a declared (non-desktop) app: the run's effective policy
+// must declare app, and only then does the session cookie start. It writes every refusal itself; actx is the
+// ticket's opening-deadline context uiEnterCommon derived, and r already carries it. superAdmin is uiEnterCommon's.
+func (s *Server) uiEnterDeclaredApp(w http.ResponseWriter, r *http.Request, actx context.Context, runID uuid.UUID, run types.AgentRun, ta ticketActor, app string, superAdmin bool, redirectStatus int) {
 	apps, err := s.effectiveUIApps(r.Context(), runID)
+	if err != nil && !ta.admitBy.IsZero() {
+		refuseIssuerOpeningUnread(r.Context(), w, "ui apps", uiSessionUnverifiableMsg, err)
+		return
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "wardynd: ui gateway policy lookup failed", "run_id", runID, "err", err)
 		writeErrorReason(w, http.StatusInternalServerError, reasonUIGatewayPolicyLookupFailed, "run policy lookup failed")
@@ -386,6 +413,10 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 	}
 	apps = s.withDesktopSigninApp(r.Context(), run, ta.principal, apps)
 	declared, found := uiDeclaredApp(apps, app)
+	if !found && !ta.admitBy.IsZero() && actx.Err() != nil { // the sign-in display's holder read ran out
+		refuseIssuerOpeningUnread(r.Context(), w, "desktop sign-in", uiSessionUnverifiableMsg, actx.Err())
+		return
+	}
 	if !found {
 		s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.authorize", app, "denied",
 			ta.withVia(map[string]any{"reason": "app not declared in the run's policy ui_apps"}))
@@ -393,7 +424,12 @@ func (s *Server) uiEnterCommon(w http.ResponseWriter, r *http.Request, runRaw, a
 		return
 	}
 
-	sess := s.newUISession(run, ta, declared.Name, declared.Port, s.uiSessionTTL())
+	if s.uiDesktopDoor(w, r, runID, true, func(w http.ResponseWriter) bool {
+		return s.refuseDesktopKindApp(w, r, run, ta, declared, superAdmin)
+	}) {
+		return
+	}
+	sess := s.newDeclaredUISession(run, ta, declared)
 	sess.Inbound = declared.Inbound
 	if sess.Caller = ta.caller; sess.Caller != "" {
 		sess.Service = "" // a caller enters as themselves, never as the sponsor of the run's service identity
@@ -445,184 +481,6 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.relayUISession(w, r, sess)
-}
-
-// relayUISession serves one request of an authenticated session, a cookie's or an inbound token's.
-func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiSession) {
-	// Re-assert the human here as well as in uiDial, debounced but for a helper: net/http dials
-	// only when its pool has nothing reusable, so most requests of a busy
-	// session never reach uiDial at all (uiReassertRelay).
-	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
-		writeErrorReason(w, de.status, de.reason, de.msg)
-		return
-	}
-	if sess.Inbound && !s.admitInbound(w, r, sess) {
-		return
-	}
-	// Keep the run's idle clock alive for the life of the session, debounced
-	// exactly like the decision-ingest and attach keepalives: a human reading
-	// code in an editor is not idle, and the reaper must not stop the run under
-	// them.
-	// A human relaying UI traffic is always real presence, so only the debounce applies.
-	if s.touchDue(sess.Run) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
-		_ = s.cfg.Store.TouchRun(r.Context(), sess.Run)
-	}
-	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
-	if sess.Via != nil {
-		ctx = audit.WithDelegation(ctx, *sess.Via) // a thaw here, or in uiDial, names the portal (#1234)
-	}
-	// The same human is presence for the pause, and thaws a paused run.
-	_ = s.markPresent(ctx, sess.Run, uiActorType(sess), sess.Principal, "presence")
-	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
-	ctx, stop := s.supportWatchCtx(ctx, sess)
-	defer stop()
-	s.serveUIRelay(w, r.WithContext(ctx))
-}
-
-// uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
-// transport) on first use. Per-request state — which run, which port — rides
-// the request context, so nothing here is per-run and the idle-connection pool
-// is shared and bounded.
-func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
-	s.uiProxyOnce.Do(func() {
-		s.uiProxy = &httputil.ReverseProxy{
-			Rewrite:        s.uiRewrite,
-			ModifyResponse: s.uiStripOutbound,
-			ErrorHandler:   uiErrorHandler,
-			// Flush immediately: the relayed apps are interactive (an editor's
-			// long-poll, a dev server's HMR stream), and a buffered write on a
-			// pipe-backed conn shows up as a frozen UI.
-			FlushInterval: -1,
-			Transport: &http.Transport{
-				DialContext:  s.uiDial,
-				MaxIdleConns: maxUIConnsPerRun * 4,
-				// A host is one run's app (run:port); a request past the cap waits for a pooled conn (serveUIRelay).
-				MaxConnsPerHost: maxUIConnsPerRun, MaxIdleConnsPerHost: maxUIConnsPerRun,
-				IdleConnTimeout: uiIdleConnTimeout,
-				// No proxy, no TLS: the destination is a sandbox's own loopback
-				// reached over an exec, never a network address.
-				Proxy: nil,
-			},
-		}
-	})
-	return s.uiProxy
-}
-
-// uiRewrite builds the outbound request: the /r/<run-id>/<app> prefix comes off
-// (the app is served at its own root, as it was before the app segment existed
-// — an app that assumes it is mounted at / is no more and no less broken than
-// under /r/<run-id>), the
-// dial target becomes "<run-id>:<port>" (parsed back apart in uiDial — there
-// is no IP to name), and the inbound hygiene runs. httputil.ProxyRequest has
-// already removed the client's X-Forwarded-* headers and we deliberately do
-// NOT re-add them: the sandbox has no business learning the operator's IP.
-func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
-	sess, ok := uiSessionFromContext(pr.In.Context())
-	if !ok {
-		// Unreachable: handleUIRelay always stamps the session. Fail closed by
-		// dialing an address uiDial refuses rather than a real one.
-		pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "invalid:0"
-		return
-	}
-	prefix := uiRelayPrefix(sess.Run, sess.App)
-	pr.Out.URL.Scheme = "http"
-	pr.Out.URL.Host = sess.Run.String() + ":" + strconv.Itoa(sess.Port)
-	pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, prefix)
-	pr.Out.URL.RawPath = strings.TrimPrefix(pr.In.URL.EscapedPath(), prefix)
-	if pr.Out.URL.Path == "" {
-		pr.Out.URL.Path, pr.Out.URL.RawPath = "/", ""
-	}
-	// The app sees a plain loopback Host, which is what it is bound to and what
-	// its own CSRF/host checks expect — never the run id we dial by.
-	pr.Out.Host = "localhost:" + strconv.Itoa(sess.Port)
-	// A request from the app's own page carries the gateway's origin, which is not that Host: an app that
-	// checks Origin against Host (code-server refuses its workbench's WebSocket so) would refuse its own
-	// page. That origin becomes the app's own; any other goes on as it came, for the app's check to judge.
-	if s.uiOwnOrigin(pr.In) {
-		pr.Out.Header.Set("Origin", "http://"+pr.Out.Host)
-	}
-	uiStripInbound(pr.Out, s.cfg.UICookiePolicy)
-	uiCallerHeaders(pr.Out.Header, sess)
-	if uiDesktopApp(sess.App) {
-		pr.Out.Header.Del("Sec-WebSocket-Extensions") // compression would hide the RFB stream (uiFilterUpgrade)
-		pr.Out = desktopConnTrace(pr.Out)
-	}
-}
-
-// uiStripOutbound is the browser-ward half: an app in the sandbox must not be able to set, overwrite or
-// delete a wardyn_* cookie in the operator's browser (cookie tossing — a sandbox-set wardyn_ui_sess or
-// console session cookie would be an authentication attack, not a rendering quirk), nor set one that
-// escapes its own host (uiSetCookieAllowed), nor register a service worker that controls more than its
-// own app (uiConfineServiceWorker), nor clear site data (a browser applies it to the registrable domain the console shares).
-func (s *Server) uiStripOutbound(resp *http.Response) error {
-	uiFilterSetCookie(resp.Header)
-	resp.Header.Del("Clear-Site-Data")
-	if sess, ok := uiSessionFromContext(resp.Request.Context()); ok {
-		uiConfineServiceWorker(resp.Request, resp.Header, s.uiBasePath()+uiRelayPrefix(sess.Run, sess.App)+"/")
-		if resp.StatusCode == http.StatusSwitchingProtocols {
-			if err := s.uiFilterUpgrade(resp, sess); err != nil {
-				return err
-			}
-			s.watchInboundStream(resp)
-		}
-	} else {
-		resp.Header.Del("Service-Worker-Allowed")
-	}
-	return nil
-}
-
-// uiConfineServiceWorker caps the scope of any service worker an app registers
-// at the app's own relay prefix. In path mode every run shares one origin, and
-// a worker registered at "/" would see every later request to it: other runs'
-// apps and the enter hand-off itself.
-//
-// The browser caps a registration's scope at the script's own directory, which
-// through this relay is always inside the app's prefix, unless the script's
-// response carries Service-Worker-Allowed. So the header is the one way out,
-// and the relay owns it: it is removed from every response, and on the
-// worker-script fetch itself (Service-Worker: script, sent by the browser) it
-// is set to the app's own prefix. That keeps an app that registers its worker
-// at its own root working (editors do), and nothing it sends can widen it. The
-// browser enforces the cap on the script response, so it holds whatever the
-// app's pages do.
-//
-// Rejected: refusing worker scripts outright, which breaks editors whose
-// webviews need one; and a CSP worker-src on the app's pages, which rides a
-// document the app writes, also governs the dedicated workers editors depend
-// on, and does not see the scope a registration asks for.
-func uiConfineServiceWorker(req *http.Request, h http.Header, prefix string) {
-	h.Del("Service-Worker-Allowed")
-	if req.Header.Get("Service-Worker") == "script" {
-		h.Set("Service-Worker-Allowed", prefix)
-	}
-}
-
-// uiFilterSetCookie keeps only the Set-Cookie values uiSetCookieAllowed passes.
-func uiFilterSetCookie(h http.Header) {
-	raw := h.Values("Set-Cookie")
-	if len(raw) == 0 {
-		return
-	}
-	h.Del("Set-Cookie")
-	for _, sc := range raw {
-		if uiSetCookieAllowed(sc) {
-			h.Add("Set-Cookie", sc)
-		}
-	}
-}
-
-// uiIsWardynCookie matches the reserved cookie namespace case-insensitively.
-// Browsers treat cookie names case-sensitively, so a "WARDYN_" cookie is a
-// different cookie and harmless — stripping it anyway costs nothing and
-// removes a class of near-miss confusion. The __Host- and __Secure- spellings
-// are the same namespace: under secure cookies the console's own session is
-// __Host-wardyn_session (oidc.CookieName), and on a shared hostname the
-// browser sends it here too.
-func uiIsWardynCookie(name string) bool {
-	n := strings.ToLower(name)
-	n = strings.TrimPrefix(n, "__host-")
-	n = strings.TrimPrefix(n, "__secure-")
-	return strings.HasPrefix(n, uiCookiePrefix)
 }
 
 // dial: one exec per connection
@@ -724,8 +582,11 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// every new connection.
 	gen := s.uiInbound.drops.Load() // before the reads the pass rests on (markUIReasserted)
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
 		return nil, uiFail(ctx, http.StatusNotFound, reasonRunNotFound, "run not found")
+	case err != nil:
+		return nil, uiFail(ctx, http.StatusServiceUnavailable, reasonRunUnreadable, "The run could not be read. Try again.")
 	}
 	if de := uiRunGone(run); de != nil {
 		return nil, uiFail(ctx, de.status, de.reason, de.msg)
@@ -745,13 +606,18 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 	sess.SandboxRef = run.SandboxRef
 	s.markUIReasserted(sess, s.cfg.Now(), gen)
+	// An issuer portal's request starts nothing in the sandbox at or after its dispatch time
+	// (uigateway_dispatch.go): each start below is checked first, and bounded by it.
+	if uiDispatchPast(ctx) {
+		return nil, uiDispatchRefusal(ctx)
+	}
 	// A paused run is thawed before the execs below (run_pause.go).
-	if err := s.thawForExec(ctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {
-		return nil, uiFail(ctx, http.StatusBadGateway, reasonUIGatewayResumeFailed, "run is paused and could not be resumed; try again")
+	if err := s.uiThaw(ctx, run, sess); err != nil {
+		return nil, err
 	}
 
-	release, ok := s.acquireUIConn(sess.Run)
-	if !ok {
+	release, ok := s.uiDialSlot(ctx, sess.Run)
+	if _, gated := uiDispatchFrom(ctx); !ok && !gated { // a portal dial waited for its slot (uiDialSlot)
 		// An idle pooled connection holds its slot until it closes (uiIdleConnTimeout), so one app's idle
 		// pool could refuse another app of the same run. Close the idle pool once and retry. The trade-off:
 		// it drops every run's idle connections, but only when a run hits its cap, and an idle connection
@@ -772,13 +638,18 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		release()
 		return nil, err
 	}
-	if err := s.uiEnsureApp(ctx, run, sess); err != nil {
+	if err := s.uiEnsureAppBy(ctx, run, sess); err != nil {
 		stopSignIn()
 		release()
 		return nil, err
 	}
+	if uiDispatchPast(ctx) {
+		stopSignIn()
+		release()
+		return nil, uiDispatchRefusal(ctx)
+	}
 
-	execSess, err := s.execFresh(ctx, run.ID, uiLiveRunWords, runner.ExecSpec{
+	execSess, err := s.execFresh(uiStartCtx(ctx), run.ID, uiLiveRunWords, runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, sess.Port),
 	})
 	if err != nil {
@@ -806,7 +677,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	s.auditUISession(sess, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 		map[string]any{"app": sess.App, "port": sess.Port})
 	conn := newExecConn(execSess, run.SandboxRef+":"+strconv.Itoa(sess.Port))
-	return s.recordDesktopConn(run, sess, &uiConn{execConn: conn, closeFn: func() {
+	return s.recordDesktopConn(run, sess, s.uiGate(ctx, &uiConn{execConn: conn, closeFn: func() {
 		stopKeepalive()
 		release()
 		// Off the closing path, best-effort: a hung audit sink holds this goroutine, never the relay.
@@ -815,7 +686,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 			s.auditUISession(sess, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 				map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(closed.Sub(opened).Seconds())})
 		})
-	}}, stopSignIn), nil
+	}}, execSess, sess, fmt.Sprintf("127.0.0.1:%d", sess.Port)), stopSignIn), nil
 }
 
 // on-demand launcher
@@ -974,26 +845,10 @@ func (s *Server) uiAppReady(key string) bool {
 func (s *Server) markUIAppReady(key string) {
 	s.uiReadyMu.Lock()
 	defer s.uiReadyMu.Unlock()
+	now := s.cfg.Now()
 	if s.uiReady == nil {
 		s.uiReady = map[string]time.Time{}
-	} else if len(s.uiReady) > 1024 {
-		// Pruned wholesale past a bound, like shouldTouch's map: the worst case
-		// is one extra probe per live app.
-		clear(s.uiReady)
 	}
-	s.uiReady[key] = s.cfg.Now()
-}
-
-// audit
-
-// auditUI writes one ui.* event on the DAEMON-lifetime context, never the
-// request's: ui.close in particular reports the end of the very connection
-// whose context is already cancelled by the time it runs, which is the same
-// trailing-write race the SSH bridges' audits hit (sshgateway_channels.go).
-//
-// These actions are deliberately NOT session.attach: there is no PTY, no
-// holder, and no content capture on this path, and a relay session must never
-// appear in the recording picker as though a recording of it existed.
-func (s *Server) auditUI(runID *uuid.UUID, actorType types.ActorType, principal, action, target, outcome string, data map[string]any) {
-	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(runID, actorType, principal, action, target, outcome, mustJSON(data)))
+	pruneStale(s.uiReady, stampTime, uiReadyTTL, now, &s.uiReadySwept)
+	s.uiReady[key] = now
 }

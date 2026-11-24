@@ -412,7 +412,7 @@ test.describe("the run page", () => {
       const lines = tokens.locator("p:not([role=alert])");
       await expect(lines.nth(0)).toHaveText(`Azure DevOps token: created ${clock(t(9, 2))} · expires ${clock(t(17, 2))} (renewed)`);
       await expect(lines.nth(1)).toHaveText(`Azure DevOps token: created ${clock(t(15, 2))} · expires ${clock(t(23, 2))} (access added)`);
-      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(works)} (not revoked)`);
+      await expect(lines.nth(2)).toHaveText(`Azure DevOps token: created ${clock(t(16, 0))} · expires ${clock(works)} (revoke failed)`);
       await expect(tokens.getByRole("alert")).toHaveText(ADO_PAT.RUN_REVOKE_FAILED(clock(works)));
     } finally {
       clearRunTokens(runId);

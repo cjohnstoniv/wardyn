@@ -259,13 +259,13 @@ describe("erasing a listed person (design F-5)", () => {
     expect(await screen.findByText("Erased 1 credential for alice@corp.example.")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Not erased: iss2|alice. Each is a separate principal that has, or had, this person's tenant and object ID. If one is the same person, erase it by that name too.",
+        "Not erased: iss2|alice. Wardyn left these names out of this erasure. Check who they identify before erasing any of them separately.",
       ),
     ).toBeInTheDocument();
   });
 
   it("says when an Azure DevOps token the credentials erase tried to revoke may still work", async () => {
-    const detail = "The credentials are erased, but Wardyn could not confirm that every Azure DevOps token it created for this person's runs is revoked.";
+    const detail = "Wardyn could not confirm that every token it created for this person's runs was revoked.";
     listInventoryMock.mockResolvedValue(inventory([aliceRow], { "corp-gw": 1 }));
     eraseMock.mockResolvedValue({ count: 1, tokens_revocation_failed: true, detail });
     renderScreen();

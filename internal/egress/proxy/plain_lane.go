@@ -45,9 +45,11 @@ func defaultPortForScheme(scheme string) int {
 func (p *Proxy) servePlain(w http.ResponseWriter, r *http.Request) {
 	// A host name on the wire is ASCII: a client sends an international name in its xn-- form. The
 	// transport maps any other spelling to an ASCII name before it pools a connection, names the TLS
-	// server and offers a certificate, so the request would go to a host this lane never judged.
-	if r.URL != nil && strings.ContainsFunc(r.URL.Host, func(c rune) bool { return c >= 0x80 }) {
-		http.Error(w, "the request's host name is not ASCII; send an international name in its xn-- form", http.StatusBadRequest)
+	// server and offers a certificate, so the request would go to a host this lane never judged. It is
+	// refused as CONNECT refuses it: evaluate's step 0 denies it (builtin:non-ascii-host) before any door,
+	// rule or dial, so the 403 and the denial row are the same on every lane.
+	if r.URL != nil && nonASCIIHost(r.URL.Host) {
+		p.handlePlain(w, r)
 		return
 	}
 	if p.refuseADOPlain(w, r) || p.refuseAzurePlain(w, r) || p.refusePATAPIPlain(w, r) || p.refuseGitHubAPIPlain(w, r) ||

@@ -32,6 +32,7 @@ import { AUTONOMY_META } from "../wardyn/autonomy-meta";
 import { PENDING_NO_DETAIL, STARTING_CONTAINER_CREATING, STARTING_UNSCHEDULABLE } from "./run-status-detail";
 import { setField } from "../../../test/set-field";
 import { END_RUN } from "../wardyn/copy/run-lifetime";
+import { shortTime } from "../../lib/format";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -903,7 +904,8 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 5m 0s")).toBeInTheDocument();
+    // The clock beside it is the end time too, not the teardown two days later.
+    expect(screen.getByLabelText("Total run time 5m 0s")).toHaveTextContent(`Ran 5m 0s · ended ${shortTime(at(5 * 60_000))}`);
   });
 
   it("falls back to updated_at when the run has no ended_at", () => {
@@ -918,7 +920,7 @@ describe("SummaryHeader: total run time of an ended run (#2521)", () => {
         <SummaryHeader run={run} terminal={true} onKill={() => {}} />
       </OperatorProvider>,
     );
-    expect(screen.getByLabelText("Total run time 7m 0s")).toBeInTheDocument();
+    expect(screen.getByLabelText("Total run time 7m 0s")).toHaveTextContent(`ended ${shortTime(at(7 * 60_000))}`);
   });
 });
 
@@ -983,8 +985,14 @@ describe("SummaryHeader — a live service's badge", () => {
   });
 
   it("reads Starting before the first health read, and plain Running for a run that is not a service", () => {
-    show(svc({ service_status: undefined }));
+    const fresh = { created_at: aheadByHours(-0.05), admitted_at: aheadByHours(-0.05) };
+    show(svc({ service_status: undefined, ...fresh }));
     expect(screen.getByText("Starting")).toBeInTheDocument();
+    cleanup();
+    // ten minutes past admission with no reading, the grace is over: renewal reads it as unknown
+    show(svc({ service_status: undefined, created_at: aheadByHours(-0.2), admitted_at: aheadByHours(-0.2) }));
+    expect(screen.getByText("Health unknown")).toBeInTheDocument();
+    expect(screen.queryByText("Starting")).not.toBeInTheDocument();
     cleanup();
     show(svc({ service: undefined, service_status: undefined }));
     expect(screen.getByText("Running")).toBeInTheDocument();

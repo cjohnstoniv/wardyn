@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -96,5 +97,34 @@ func TestApprovalRuleListAnswersTheSwitch(t *testing.T) {
 	}
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Rules) != 1 || body.Switch != approvalRulesDryRun {
 		t.Fatalf("list = %d %s", w.Code, w.Body)
+	}
+}
+
+// TestApprovalRuleDryRunSelectsStoredRuleOnlyByName: a body holding the name key and nothing else previews the saved
+// rule; every other body is a draft and is validated as one, so an edited draft with kinds omitted or emptied is
+// refused rather than answered with the saved rule's report.
+func TestApprovalRuleDryRunSelectsStoredRuleOnlyByName(t *testing.T) {
+	t.Setenv(envApprovalRules, approvalRulesOn)
+	f := newRuleFix(t)
+	const path = "/api/v1/governance/approval-rules/dry-run"
+	w := do(t, f.srv, http.MethodPost, path, adminToken, `{"name":"ci-review"}`)
+	var rep approvalRuleReport
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rep) != nil || rep.Rule.Name != "ci-review" ||
+		rep.Rule.Mode != types.ApprovalRuleEnforce || len(rep.Rule.Kinds) != 2 {
+		t.Fatalf("a name-only body = %d %s; want the saved rule", w.Code, w.Body)
+	}
+	if w := do(t, f.srv, http.MethodPost, path, adminToken, `{"name":"missing"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("a name-only body for an absent rule = %d %s; want 404", w.Code, w.Body)
+	}
+	for name, body := range map[string]string{
+		"edited draft, kinds omitted": `{"name":"ci-review","mode":"dry_run","match":{"repos":["narrow/repo"]}}`,
+		"edited draft, kinds empty":   `{"name":"ci-review","kinds":[],"match":{"repos":["narrow/repo"]}}`,
+		"name and empty kinds only":   `{"name":"ci-review","kinds":[]}`,
+		"name and mode only":          `{"name":"ci-review","mode":"enforce"}`,
+	} {
+		w := do(t, f.srv, http.MethodPost, path, adminToken, body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "kinds is required") {
+			t.Errorf("%s = %d %s; want 400 kinds is required", name, w.Code, w.Body)
+		}
 	}
 }

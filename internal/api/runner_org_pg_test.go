@@ -22,7 +22,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -321,5 +323,44 @@ func TestPG_OrgRunnerLimits(t *testing.T) {
 	person := e.claimedRunner("sub-user")
 	if w := e.call(e.alice, http.MethodPut, "/api/v1/runners/"+person.String(), string(body)); w.Code != http.StatusNotFound {
 		t.Fatalf("a security admin's write of a person's runner limits = %d %s, want 404", w.Code, w.Body)
+	}
+}
+
+// TestPG_RunnerRegister_OwnerSuspendedAfterTheSpendGetsNoRunner: a person suspended after their registration
+// token is spent and before the runner is inserted gets 403 identity_deactivated and no runner row.
+func TestPG_RunnerRegister_OwnerSuspendedAfterTheSpendGetsNoRunner(t *testing.T) {
+	e := newOrgRunnerEnv(t, false)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	p := "sub-reg-" + uuid.NewString()[:8]
+	if _, err := e.pg.UpsertLoginIdentity(ctx, store.LoginIdentity{Principal: p, Issuer: "https://login.example/" + uuid.NewString() + "/v2.0"}, now); err != nil {
+		t.Fatal(err)
+	}
+	raw := "wdr_" + uuid.NewString()
+	if _, err := e.pg.MintRunnerRegistrationToken(ctx, raw, types.RunnerRegistrationToken{ID: uuid.New(), Owner: p, MintedBy: p,
+		OrgURLSHA256: federation.OrgURLSHA256(poolTestOrgURL), CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	// The trigger suspends the owner in the spend's own transaction, after the spend's guard passed.
+	if _, err := e.pool.Exec(ctx, `
+		CREATE FUNCTION test_suspend_on_spend() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN UPDATE principal_identities SET deactivated_at = now() WHERE principal = NEW.owner; RETURN NEW; END $$;
+		CREATE TRIGGER test_suspend_on_spend AFTER UPDATE OF consumed_at ON runner_registration_tokens
+		  FOR EACH ROW WHEN (NEW.consumed_at IS NOT NULL) EXECUTE FUNCTION test_suspend_on_spend()`); err != nil {
+		t.Fatal(err)
+	}
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	body, _ := json.Marshal(types.RunnerRegisterRequest{Token: raw, PublicKey: pub, Name: "laptop", Limits: roomyRunnerLimits()})
+	w := do(t, e.srv, http.MethodPost, "/api/v1/runners/register", "", string(body))
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "identity_deactivated") {
+		t.Fatalf("register after the owner was suspended = %d %s, want 403 identity_deactivated", w.Code, w.Body)
+	}
+	var runners int
+	if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM runners WHERE owner = $1`, p).Scan(&runners); err != nil || runners != 0 {
+		t.Fatalf("runners of the suspended owner = %d, %v; want 0", runners, err)
+	}
+	var deactivated bool
+	if err := e.pool.QueryRow(ctx, `SELECT deactivated_at IS NOT NULL FROM principal_identities WHERE principal = $1`, p).Scan(&deactivated); err != nil || !deactivated {
+		t.Fatalf("owner deactivated = %v, %v; the trigger did not fire", deactivated, err)
 	}
 }

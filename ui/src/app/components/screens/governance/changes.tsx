@@ -15,8 +15,8 @@
 //     and the server remains the authority: a 403 or 409 is shown as its own sentence, verbatim, under the
 //     frozen heading.
 //
-// Every string is from CHANGES (governance-copy.ts) or CHANGE_NOTE (wardyn/copy/change-note.ts); this file
-// adds none.
+// Every string is from CHANGES (governance-copy.ts), CHANGE_NOTE (wardyn/copy/change-note.ts) or CHANGE_REVIEW
+// (change-review-copy.ts); this file adds none.
 import * as React from "react";
 import { Inbox } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -26,8 +26,10 @@ import { governance as api, type GovernanceChangeList } from "../../../lib/api/g
 import { runnerPools } from "../../../lib/api/runner-pools";
 import { absoluteTime, formatDuration, getErrorMessage, relativeTime } from "../../../lib/format";
 import { goDurationMs } from "../../../lib/go-duration";
+import { changeTarget } from "../../../lib/change-review";
+import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
 import { CHANGES, GOVERNANCE } from "../../../lib/governance-copy";
-import type { GovernanceChange } from "../../../lib/types";
+import type { ChangeImpact, GovernanceChange } from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../../ui/sheet";
@@ -42,6 +44,7 @@ import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { ChangeNoteForm } from "./change-note-form";
+import { ImpactSection, RawDiffSection, RiskChip, RiskSection, VerdictBlock, VerdictChip } from "./change-review-sections";
 import { Note } from "./display";
 
 // "Profile · Edit": the kind and the op, each in the table's own vocabulary. One this console predates
@@ -50,19 +53,7 @@ export function changeLabel(c: GovernanceChange): string {
   return `${CHANGES.KIND[c.target_kind] ?? c.target_kind} · ${CHANGES.OP[c.op] ?? c.op}`;
 }
 
-// What a change is about, as the reviewer reads it. A profile's key is its id, which says nothing, so its
-// name is read from the server's own diff (the stored row on an edit or a delete, the proposed one on a
-// create), as is a runner trust change's runner. Every other kind's key is already its natural key.
-export function changeTarget(c: GovernanceChange): string {
-  // A runner's key is its id; the diff carries its name on both sides.
-  if (c.target_kind === "governance_unit" || c.target_kind === "runner_trust") {
-    for (const side of [c.diff.after, c.diff.before]) {
-      const name = (side as { name?: unknown } | undefined)?.name;
-      if (typeof name === "string" && name) return name;
-    }
-  }
-  return c.target_key;
-}
+export { changeTarget };
 
 // The organization runner a held removal takes out of its pool. The payload never reaches the console, so it
 // is the one id the diff's runner_ids lose; null for every other change. A pool's key is its id.
@@ -92,24 +83,6 @@ function useRemovalNames(changes: GovernanceChange[]): Record<string, { pool: st
     }
   }, [changes]);
   return names;
-}
-
-// One value of a diff cell. Strings read as they are, an absent value as DIFF_UNSET, anything else as JSON.
-function cell(v: unknown): React.ReactNode {
-  if (v === undefined || v === null) return <span className="text-muted-foreground">{CHANGES.DIFF_UNSET}</span>;
-  return <Mono className="whitespace-pre-wrap break-words text-foreground">{typeof v === "string" ? v : JSON.stringify(v)}</Mono>;
-}
-
-// The value at a dotted path of `root`. The server's changedPaths names an array as one leaf and a
-// whole-value change "(root)".
-function valueAt(root: unknown, path: string): unknown {
-  if (path === "(root)") return root;
-  let cur: unknown = root;
-  for (const key of path.split(".")) {
-    if (cur === null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  return cur;
 }
 
 // The profile an assignment change assigns, from the diff's own `after.profile`.
@@ -302,6 +275,7 @@ export function ChangesTab({
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>{CHANGES.COL_CHANGE}</TableHead>
+                <TableHead>{CHANGE_REVIEW.COL_EFFECT}</TableHead>
                 <TableHead>{CHANGES.COL_TARGET}</TableHead>
                 <TableHead>{CHANGES.COL_BY}</TableHead>
                 <TableHead>{CHANGES.COL_PROPOSED}</TableHead>
@@ -332,6 +306,14 @@ export function ChangesTab({
                         <p className="text-xs font-normal text-muted-foreground">{IMG.CHANGE_LINE(c.note?.ticket)}</p>
                       ) : (
                         c.note && <NoteLine note={c.note} />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {!isRequest(c) && (
+                        <div className="flex flex-wrap gap-1">
+                          <VerdictChip review={c.diff.review} />
+                          {c.diff.review?.risk && <RiskChip risk={c.diff.review.risk} />}
+                        </div>
                       )}
                     </TableCell>
                     <TableCell>
@@ -397,6 +379,22 @@ export function ChangeDrawer({
   const withdrawal = own && !!shown && isRequest(shown);
   const hasNote = !!(shown?.note?.reason || shown?.note?.ticket);
   const id = change?.id;
+  // What approving would reach: asked once when the drawer opens, for a pending change that is not a request.
+  const reviewable = !!change && change.state === "pending" && !isRequest(change);
+  const [impact, setImpact] = React.useState<ChangeImpact>();
+  const [impactError, setImpactError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!reviewable || !id) return;
+    let live = true;
+    api
+      .getChangeImpact(id)
+      .then((i) => live && setImpact(i))
+      .catch((e) => live && setImpactError(getErrorMessage(e)));
+    return () => {
+      live = false;
+    };
+  }, [reviewable, id]);
 
   React.useEffect(() => {
     if (!own || !id) return;
@@ -493,42 +491,32 @@ export function ChangeDrawer({
                     ))}
                   </TableBody>
                 </Table>
+              ) : isRequest(change) ? (
+                // A request this console cannot read the people out of keeps its raw diff, open.
+                <RawDiffSection change={shown!} open />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead>{CHANGES.DIFF_FIELD}</TableHead>
-                      <TableHead>{CHANGES.DIFF_BEFORE}</TableHead>
-                      <TableHead>{CHANGES.DIFF_AFTER}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {change.diff.changed.map((path) => (
-                      <TableRow key={path}>
-                        <TableCell className="align-top">
-                          <Mono className="text-foreground">{path}</Mono>
-                        </TableCell>
-                        <TableCell className="align-top">{cell(valueAt(change.diff.before, path))}</TableCell>
-                        <TableCell className="align-top">{cell(valueAt(change.diff.after, path))}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <>
+                  <VerdictBlock change={shown!} />
+                  <ImpactSection change={shown!} impact={impact} error={impactError} />
+                  <RiskSection change={shown!} />
+                </>
               )}
 
-              <details>
-                <summary className="cursor-pointer text-body text-muted-foreground">{CHANGES.DIFF_FULL}</summary>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {[change.diff.before, change.diff.after].map((side, i) => (
-                    <pre
-                      key={i}
-                      className="scroll-thin max-h-72 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs"
-                    >
-                      {side === undefined ? CHANGES.DIFF_UNSET : JSON.stringify(side, null, 2)}
-                    </pre>
-                  ))}
-                </div>
-              </details>
+              {(elevation || img) && (
+                <details>
+                  <summary className="cursor-pointer text-body text-muted-foreground">{CHANGES.DIFF_FULL}</summary>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    {[change.diff.before, change.diff.after].map((side, i) => (
+                      <pre
+                        key={i}
+                        className="scroll-thin max-h-72 overflow-auto rounded-lg bg-muted p-3 font-mono text-xs"
+                      >
+                        {side === undefined ? CHANGES.DIFF_UNSET : JSON.stringify(side, null, 2)}
+                      </pre>
+                    ))}
+                  </div>
+                </details>
+              )}
 
               {profile && (
                 <section data-testid="change-assigned-profile">
@@ -599,6 +587,8 @@ export function ChangeDrawer({
                   )}
                 </>
               )}
+              {!isRequest(change) && <RawDiffSection change={shown!} />}
+
               {!editing && !withdrawal && (
                 <Field label={CHANGES.REASON_LABEL} htmlFor="governance-change-reason" hint={CHANGES.REASON_HINT}>
                   <Input

@@ -86,3 +86,44 @@ func TestString_ReleaseBuild(t *testing.T) {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }
+
+// TestString_StampedRevision covers the image build: no .git in the context, so no vcs.revision, and the
+// Dockerfile stamps the commit with -ldflags -X instead. A release build still reports the bare Version.
+func TestString_StampedRevision(t *testing.T) {
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	prev := buildRevision
+	t.Cleanup(func() { buildRevision = prev })
+	buildRevision = sha
+
+	t.Run("no build info", func(t *testing.T) {
+		withReleaseBuild(t, "")
+		stubBuildInfo(t, "", false, false)
+		if got, want := String(), Version+"+012345678"; got != want {
+			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("no vcs revision", func(t *testing.T) {
+		withReleaseBuild(t, "")
+		stubBuildInfo(t, "", false, true)
+		if got, want := String(), Version+"+012345678"; got != want {
+			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("toolchain revision wins", func(t *testing.T) {
+		withReleaseBuild(t, "")
+		stubBuildInfo(t, "80852d67fabcdef0123456789", false, true)
+		if got, want := String(), Version+"+80852d67f"; got != want {
+			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("release build stays bare", func(t *testing.T) {
+		withReleaseBuild(t, "true")
+		stubBuildInfo(t, "", false, true)
+		if got, want := String(), Version; got != want {
+			t.Fatalf("String() = %q, want %q", got, want)
+		}
+	})
+}

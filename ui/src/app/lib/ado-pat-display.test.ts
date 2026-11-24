@@ -107,7 +107,7 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     const line = (last: Partial<NonNullable<SCMAccessPAT["last_token"]>>) =>
       patCardView(access({ ...minted, last_token: { created_at: at(9, 2), valid_to: at(17, 2), ...last } }), "Azure DevOps", NOON)!.body[1];
     expect(line({ revoked_at: at(9, 41), revoke_reason: "run_end", revoke_failed: true })).toBe(
-      `Last token: created ${hm("09:02")}. Wardyn couldn't revoke it, so it works until ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
+      `Last token: created ${hm("09:02")}. Wardyn could not confirm the revoke. The token may still work until ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
     );
     expect(line({ revoke_pending: true })).toBe(
       `Last token: created ${hm("09:02")}. Its revoke isn't confirmed; it stops working by ${hm("17:02")} at the latest.`,
@@ -119,7 +119,7 @@ describe("patCardView: a row that creates a token per run (states 4, 8b, 9)", ()
     const card = (state: string, valid_to: string, now: number) =>
       patCardView(access({ ...minted, state, last_token: { ...failed, valid_to } }), "Azure DevOps", now)!.body;
     expect(card("live", at(17, 2, 30), NOON)[1]).toBe(
-      `Last token: created ${hm("09:02")}. Wardyn couldn't revoke it, so it works until ${shortDate(at(17, 2, 30))}, ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
+      `Last token: created ${hm("09:02")}. Wardyn could not confirm the revoke. The token may still work until ${shortDate(at(17, 2, 30))}, ${hm("17:02")}; revoke it in Azure DevOps under Personal access tokens.`,
     );
     const after = Date.parse(at(17, 3));
     expect(card("live", at(17, 2), after)[1]).toBe(`Last token: created ${hm("09:02")}, expired ${hm("17:02")}.`);
@@ -387,7 +387,7 @@ describe("runTokenView: the run page's token list (state 6, 7)", () => {
       NOON,
     );
     expect(v.lines).toEqual([
-      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (not revoked)`, old: false },
+      { text: `Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (revoke failed)`, old: false },
       { text: `Azure DevOps token: created ${hm("09:20")} · expires ${hm("17:20")} (revoke not confirmed)`, old: false },
     ]);
   });

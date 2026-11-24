@@ -377,9 +377,14 @@ describe("RunRow: a live service's health chip", () => {
   });
 
   it("says Starting until the first read, Health unknown in a neutral tone, and plain Running for any other run", () => {
-    const starting = renderRow(service(undefined));
+    const starting = renderRow(service(undefined, { created_at: aheadByHours(-0.05), admitted_at: aheadByHours(-0.05) }));
     expect(pillOf("Starting").className).toMatch(/info/);
     starting.unmount();
+    // no reading and past the ten-minute grace from admission: Health unknown, as renewal reads it
+    const lapsed = renderRow(service(undefined, { created_at: aheadByHours(-0.2), admitted_at: aheadByHours(-0.2) }));
+    expect(pillOf("Health unknown").className).toMatch(/muted/);
+    expect(screen.queryByText("Starting")).not.toBeInTheDocument();
+    lapsed.unmount();
     const unknown = renderRow(service(seen("unknown")));
     expect(pillOf("Health unknown").className).toMatch(/muted/);
     unknown.unmount();

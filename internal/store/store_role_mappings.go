@@ -84,6 +84,9 @@ func lockRoleMapping(ctx context.Context, q Querier, value string) error {
 // UpsertRoleMappingQ is UpsertRoleMapping's statement on q (the doc above is its contract). A held
 // governance change applies through it inside the decision transaction.
 func UpsertRoleMappingQ(ctx context.Context, q Querier, m types.RoleMapping) (types.RoleMapping, error) {
+	if err := ruleDelegatePersonSubject(ctx, q, "role_mappings.value", m.Value); err != nil {
+		return types.RoleMapping{}, err
+	}
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
 	}

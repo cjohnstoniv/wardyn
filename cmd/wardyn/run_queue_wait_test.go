@@ -54,6 +54,8 @@ func newQueueServer(t *testing.T, runID uuid.UUID, script []types.AgentRun) *que
 			q.audited = true
 			q.mu.Unlock()
 			_, _ = w.Write([]byte("[]"))
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events"):
+			w.WriteHeader(http.StatusNotFound) // no event feed: run --wait keeps its poll
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

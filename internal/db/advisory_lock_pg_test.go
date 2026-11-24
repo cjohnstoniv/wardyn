@@ -74,6 +74,7 @@ func TestAdvisoryLockKeysAreDistinct(t *testing.T) {
 		"sweeperLeader":        SweeperLeaderLockKey,
 		"auditChain":           AuditChainLockKey,
 		"auditPartition":       AuditPartitionLockKey,
+		"portalIssuerRegistry": PortalIssuerRegistryLockKey,
 	}
 	seen := map[int64]string{}
 	for name, key := range keys {

@@ -120,6 +120,12 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // month must not queue behind (or hold up) an append.
 const AuditPartitionLockKey int64 = 0x5741524459_415054 // ASCII "WARDYAPT"
 
+// PortalIssuerRegistryLockKey serializes every issuer-portal registry decision across replicas: a direct
+// registration, the approval of a held registration, the retirement of an unused issuer binding and the
+// boot-time record of the console issuer. It is taken as a transaction lock (pg_advisory_xact_lock) before
+// any conflict read, so two decisions that each read "no conflict" cannot both commit.
+const PortalIssuerRegistryLockKey int64 = 0x5741524459_504952 // ASCII "WARDYPIR"
+
 // AuditChainLockTimeout bounds how long ANY writer waits for AuditChainLockKey.
 // Since 0056 the trigger takes it on every audit_events insert, including
 // from outside this repo, so a stray open transaction (an operator's psql
@@ -148,6 +154,13 @@ var AuditChainLockTimeout = 5 * time.Second
 // integer, never caller input. SET LOCAL reverts at commit/rollback.
 func AuditChainLockTimeoutSQL() string {
 	return fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", AuditChainLockTimeout.Milliseconds())
+}
+
+// AuditChainLockWaitSQL bounds the chain lock's wait to d, at least 1ms: lock_timeout 0 would mean no bound at all.
+// It answers one statement text for every d, with the bound as its argument, so pgx's statement cache keeps one
+// entry and a contended append still goes in one batch. set_config(..., true) is SET LOCAL.
+func AuditChainLockWaitSQL(d time.Duration) (sql, arg string) {
+	return `SELECT set_config('lock_timeout', $1, true)`, fmt.Sprintf("%dms", max(1, d.Milliseconds()))
 }
 
 // TryAdvisoryLock takes session-level advisory lock key on a connection

@@ -405,6 +405,40 @@ func TestAuditReceipt_RecordsReceiptCreate(t *testing.T) {
 	}
 }
 
+// The audit row's redacted count is of the events the receipt carries. A security admin's run receipt over rows
+// 2, 5 (host detail) and 8: with only checkpoint 1-3 signed it carries row 2 alone, and the withheld row 5 it
+// leaves for the next page is not counted; with 1-6 signed it carries 2 and 5, and counts 5.
+func TestAuditReceipt_RedactedCountIsOfTheServedPrefix(t *testing.T) {
+	for _, c := range []struct {
+		signed         int
+		events         int
+		wantNext, want float64
+	}{
+		{1, 1, 2, 0},
+		{2, 2, 5, 1},
+	} {
+		w := newReceiptWorld(t, c.signed)
+		srv, h := w.server(t)
+		sec := ssoSession(t, "sub-sec", "sec@corp.example", oidc.RoleSecurityAdmin)
+		rec := doSSO(t, srv, http.MethodGet, "/api/v1/audit/receipt?run_id="+w.run.String(), sec, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%d signed: receipt = %d %s", c.signed, rec.Code, rec.Body.String())
+		}
+		if b := decodeReceipt(t, rec); float64(b.NextAfterSeq) != c.wantNext || len(auditreceipt.VerifyBundle(b.Bundle, w.keys()).Events) != c.events {
+			t.Fatalf("%d signed: next_after_seq %d, want %v and %d events", c.signed, b.NextAfterSeq, c.wantNext, c.events)
+		}
+		var d map[string]any
+		for _, ev := range h.audit.snapshot() {
+			if ev.Action == "audit.receipt.create" {
+				_ = json.Unmarshal(ev.Data, &d)
+			}
+		}
+		if d["events"] != float64(c.events) || d["redacted"] != c.want {
+			t.Fatalf("%d signed: audit row %v; want %d events and redacted %v", c.signed, d, c.events, c.want)
+		}
+	}
+}
+
 // Retention dropped seqs 1-4, so checkpoint 4-6 lost its first row: a receipt for an event in it is refused
 // 409 audit_receipt_proof_unavailable and audited as a failure, never served as a bundle verify rejects. An
 // event in a checkpoint retention left whole still gets a receipt that verifies.

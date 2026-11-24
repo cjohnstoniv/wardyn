@@ -448,6 +448,9 @@ func (s *Server) retryForcedStop(ctx context.Context, fs store.ForcedStopper, m 
 			if pg, ok := s.cfg.Store.(store.PG); ok {
 				changed, cerr := pg.ClearSandboxRefRetainingIf(sctx, run.ID, ref)
 				cleared = cerr == nil && changed
+				if cleared {
+					s.reclaimRunImageAfterTeardown(sctx, run.ID) // clearSandboxRef does this on the other path
+				}
 				return
 			}
 			_ = s.clearSandboxRef(sctx, run.ID)

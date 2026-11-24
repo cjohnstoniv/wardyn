@@ -147,7 +147,7 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 		args[2] = anchor.Translate(r.UpdatedAt)
 	}
 	stampRunTimes(anchor, r, args)
-	created, err := scanRun(tx.QueryRow(ctx, createRunSQL, args...))
+	created, err := scanRun(tx.QueryRow(ctx, runInsertFor(r, createRunSQL), args...))
 	if err != nil {
 		return types.AgentRun{}, runInsertErr(err)
 	}
@@ -185,23 +185,42 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	return created, nil
 }
 
-// LeaveRunQueue is the one way a run leaves QUEUED: one statement moves it to `to` (only while it is
-// still QUEUED) and deletes its run_queue row, so no exit can keep the row or drop it without the
-// state. admittedAt is promotion's stamp (QUEUED to PENDING) and nil for every other exit. false with a
-// nil error means another exit won first. UpdateRunStateIf from QUEUED is this call with no stamp.
-func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, admittedAt *time.Time) (bool, error) {
+// QueueExit is what one exit from the queue writes besides the state. The zero value is UpdateRunStateIf(QUEUED, to).
+type QueueExit struct {
+	// Detail and Hint are the reason a queue exit ends a run: status_detail ("queue: <token>") and the sentence for
+	// failure_hint. Both are written when either is set, and left as they are when both are empty.
+	Detail, Hint string
+	// AdmittedAt is promotion's stamp (QUEUED to PENDING) and nil for every other exit.
+	AdmittedAt *time.Time
+}
+
+// LeaveRunQueueIn is the one statement by which a run leaves QUEUED: it moves the run to `to` (only while it is
+// still QUEUED), writes x, deletes the run's run_queue row and, when `to` is terminal, takes the claim on the drive
+// the run kept (keptDriveHoldSQL), all in one statement so no exit can keep the row, drop it or miss the claim
+// without the state. q may be a caller's transaction, so a caller's lock and currency test wrap it and every
+// effect commits together. false with a nil error means another exit won first.
+func LeaveRunQueueIn(ctx context.Context, q Querier, id uuid.UUID, to types.RunState, x QueueExit) (applied bool, err error) {
 	var moved int
-	if err := s.Pool.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 		WITH moved AS (
 			UPDATE agent_runs SET state=$2, updated_at=now(), ended_at=CASE WHEN $3 THEN now() ELSE ended_at END,
-				admitted_at=COALESCE($4::timestamptz, admitted_at)
+				admitted_at=COALESCE($4::timestamptz, admitted_at),
+				status_detail=CASE WHEN $6::text <> '' OR $7::text <> '' THEN $6::text ELSE status_detail END,
+				failure_hint=CASE WHEN $6::text <> '' OR $7::text <> '' THEN $7::text ELSE failure_hint END
 			WHERE id=$1 AND state=$5 RETURNING id),
-		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id)
+		gone AS (DELETE FROM run_queue WHERE run_id IN (SELECT id FROM moved) RETURNING run_id),
+		held AS (`+keptDriveHoldSQL+` AND $3)
 		SELECT count(*) FROM moved`,
-		id, string(to), to.IsTerminal(), admittedAt, string(types.RunQueued)).Scan(&moved); err != nil {
+		id, string(to), to.IsTerminal(), x.AdmittedAt, string(types.RunQueued), x.Detail, x.Hint).Scan(&moved); err != nil {
 		return false, fmt.Errorf("store: leave run queue: %w", err)
 	}
 	return moved > 0, nil
+}
+
+// LeaveRunQueue is LeaveRunQueueIn on the pool with only promotion's stamp. UpdateRunStateIf from QUEUED is this
+// call with no stamp.
+func (s PG) LeaveRunQueue(ctx context.Context, id uuid.UUID, to types.RunState, admittedAt *time.Time) (bool, error) {
+	return LeaveRunQueueIn(ctx, s.Pool, id, to, QueueExit{AdmittedAt: admittedAt})
 }
 
 // RunQueuePosition is how many runs stand ahead of run id in its pool's line (a count, never whose), or

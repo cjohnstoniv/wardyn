@@ -230,6 +230,11 @@ func (s *Server) writeProviderChoiceRefusal(w http.ResponseWriter, r *http.Reque
 	if choice.tool != "" {
 		dec = dec.With("tool", choice.tool)
 	}
+	if d.notListed {
+		s.recordRefusal(r.Context(), r, dec.With("provider", choice.provider.ID))
+		writeErrorReason(w, http.StatusForbidden, reasonServiceGrantNotListed, mpServiceGrantNotListed)
+		return
+	}
 	s.writeProviderRefusalAs(w, r, dec, choice.provider.ID, choice.provider.Kind, d.msg, d.credential)
 }
 

@@ -158,23 +158,24 @@ var dropLooked = func() {}
 // is removed only if it still holds the copy and the bytes the copy wrote (holdsCopyBytes). A file saved over to
 // before that look stays at to. One saved after it is moved with the name, is kept at the aside, and the error
 // names it, as is a copy someone rewrote in place. An empty copy is never moved or removed: its size proves
-// nothing, and a filesystem may number empty files alike. A copy that cannot be proved or moved aside stays at to,
-// and the error says so.
+// nothing, and a filesystem may number empty files alike. A file that cannot be proved to be the copy, or moved
+// aside, stays at to, and the error says only that it is kept there: nothing at that name is called the copy's,
+// since it may be a save someone made in place.
 func dropCopy(root *os.Root, to string, c *copyHandle, err error) error {
 	if held, gone := copyAt(root, to, c); gone {
 		return err
 	} else if !held || c.written == 0 {
-		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
+		return fmt.Errorf("%w; the file is kept at %s", err, to)
 	}
 	dropLooked()
 	aside, f, terr := createTemp(root, path.Dir(to), ".wardyn-sync-", "")
 	if terr != nil {
-		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
+		return fmt.Errorf("%w; the file is kept at %s", err, to)
 	}
 	_ = f.Close()
 	if replaceFile(root, to, aside) != nil {
 		_ = removeIn(root, aside)
-		return fmt.Errorf("%w; its partial copy is left at %s", err, to)
+		return fmt.Errorf("%w; the file is kept at %s", err, to)
 	}
 	if held, _ := copyAt(root, aside, c); !held || !holdsCopyBytes(root, aside, c) {
 		return fmt.Errorf("%w; %w", err, keptAt(aside))

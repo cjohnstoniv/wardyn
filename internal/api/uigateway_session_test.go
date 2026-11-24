@@ -702,6 +702,126 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 	}
 }
 
+// uiDialRunFailStore fails the run read, as a database that stopped answering does.
+type uiDialRunFailStore struct{ *uiMemStore }
+
+func (uiDialRunFailStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	return types.AgentRun{}, errors.New("conn closed by peer")
+}
+
+// uiDial answers a run read that fails with 503 run_unreadable (the person retries), and a run the store no longer
+// has with 404 run_not_found.
+func TestUIDial_RunReadFailureIs503AndMissingRunIs404(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	now := time.Now()
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: h.owner,
+		Expires: now.Add(time.Hour).Unix(), IssuedAt: 1, AuthorizedAt: now.Unix()}
+	ctx := context.WithValue(context.Background(), uiSessionCtxKey{}, sess)
+	addr := h.run.ID.String() + ":" + fmt.Sprint(uiTestPort)
+	for _, tc := range []struct {
+		name   string
+		arm    func()
+		status int
+		reason string
+	}{
+		{"the run read fails", func() { h.srv.cfg.Store = uiDialRunFailStore{h.store} }, http.StatusServiceUnavailable, reasonRunUnreadable},
+		{"the run is gone", func() { h.srv.cfg.Store = h.store; h.store.dropRun(h.run.ID) }, http.StatusNotFound, reasonRunNotFound},
+	} {
+		tc.arm()
+		_, err := h.srv.uiDial(ctx, "tcp", addr)
+		var de *uiDialError
+		if !errors.As(err, &de) || de.status != tc.status || de.reason != tc.reason {
+			t.Errorf("%s: uiDial = %v, want %d %s", tc.name, err, tc.status, tc.reason)
+		}
+	}
+}
+
+// uiUnmeetableStore adds a restriction that denies every placement: the run's profile composition then meets to
+// nothing, a *composer.OverlayError wrapped by foldRestrictionLimits.
+type uiUnmeetableStore struct {
+	*uiMemStore
+	store.RestrictionStore // nil: the fold calls only GetRestrictionsByID
+	id                     uuid.UUID
+}
+
+func (s *uiUnmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
+	deny := []types.Placement{types.PlacementLocal, types.PlacementRemote}
+	return []types.Restriction{{ID: s.id, Name: "walled", Limits: types.RestrictionLimits{DenyPlacements: &deny}}}, nil
+}
+
+// TestUISession_UnsatisfiableProfileIs403NotUnconfirmed: a profile composition nothing satisfies is a definite
+// refusal, so the UI re-check answers 403 governance_overlay_unsatisfiable (never the 503 a failed read gets, which
+// rides the session budget), with a curated sentence that leaks neither the restriction's name nor the composer's
+// error. A profile read that fails stays 503 run_unreadable. The desktop and the Mac window read the difference.
+func TestUISession_UnsatisfiableProfileIs403NotUnconfirmed(t *testing.T) {
+	type arm struct {
+		name   string
+		set    func(h *uiHarness)
+		status int
+		reason string
+		unread bool
+	}
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "company-baseline-secret-name", Ceiling: types.RunPolicySpec{AllowedMethods: []string{"GET"}}}
+	post := []string{"POST"}
+	child := types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	restriction := uuid.New()
+	arms := []arm{
+		{"a restriction that meets to nothing", func(h *uiHarness) {
+			h.srv.cfg.Store = &uiUnmeetableStore{uiMemStore: h.store, id: restriction}
+			h.run.RestrictionIDs = []uuid.UUID{restriction}
+			h.store.putRun(h.run)
+		}, http.StatusForbidden, string(authz.ReasonGovernanceOverlayUnsatisfiable), false},
+		{"an overlay nothing satisfies", func(h *uiHarness) {
+			h.store.sshMemStore.mu.Lock()
+			h.store.profiles = []types.GovernanceUnit{base, child}
+			h.store.sshMemStore.mu.Unlock()
+			h.run.UnitID = &child.ID
+			h.store.putRun(h.run)
+		}, http.StatusForbidden, string(authz.ReasonGovernanceOverlayUnsatisfiable), false},
+		{"a profile read that fails", func(h *uiHarness) {
+			unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
+			h.store.sshMemStore.mu.Lock()
+			h.store.profiles, h.store.profilesErr = []types.GovernanceUnit{unit}, errors.New("conn closed by peer")
+			h.store.sshMemStore.mu.Unlock()
+			h.run.UnitID = &unit.ID
+			h.store.putRun(h.run)
+		}, http.StatusServiceUnavailable, reasonRunUnreadable, true},
+	}
+	for _, a := range arms {
+		t.Run(a.name, func(t *testing.T) {
+			h, _ := newDesktopHarness(t)
+			a.set(h)
+			sess := uiSession{Run: h.run.ID, App: uiDesktopAppName, Port: uiTestPort, Principal: h.owner, Role: oidc.RoleUser,
+				Expires: time.Now().Add(time.Hour).Unix(), IssuedAt: 1, AuthorizedAt: time.Now().Unix()}
+			de := h.srv.uiSessionUnitDenies(context.Background(), sess, h.run)
+			if de == nil || de.status != a.status || de.reason != a.reason {
+				t.Fatalf("uiSessionUnitDenies = %+v, want %d %s", de, a.status, a.reason)
+			}
+			if a.status == http.StatusForbidden {
+				for _, bad := range []string{"meet restriction", "governance_overlay_unsatisfiable:", "company-baseline-secret-name", "walled"} {
+					if strings.Contains(de.msg, bad) {
+						t.Errorf("the 403 message %q leaks %q", de.msg, bad)
+					}
+				}
+				if a.name == "a restriction that meets to nothing" && de.msg != uiUnitUnsatisfiableMsg {
+					t.Errorf("the 403 message = %q, want the curated %q", de.msg, uiUnitUnsatisfiableMsg)
+				}
+				if a.name == "an overlay nothing satisfies" && !strings.Contains(de.msg, `"team"`) {
+					t.Errorf("the 403 message = %q, want the overlay error's own sentence naming the run's profile", de.msg)
+				}
+			}
+			sess.Inbound = true
+			if in := h.srv.uiInboundUnitDenial(context.Background(), sess, h.run); in == nil || in.status != a.status || in.reason != a.reason {
+				t.Errorf("uiInboundUnitDenial = %+v, want %d %s", in, a.status, a.reason)
+			}
+			sess.Inbound = false
+			if _, code, _, unread := h.srv.desktopRunCheck(context.Background(), sess); unread != a.unread || code != desktopCloseNotAuthorized {
+				t.Errorf("desktopRunCheck = code %d unread %v, want %d unread %v", code, unread, desktopCloseNotAuthorized, a.unread)
+			}
+		})
+	}
+}
+
 // walledRun puts h's run under a profile that denies nothing yet, and returns what sets its limits.
 func walledRun(h *uiHarness) func(types.GovernanceLimits) {
 	unit := types.GovernanceUnit{ID: uuid.New(), Name: "walled"}
@@ -752,11 +872,11 @@ func TestUIGateway_ProfileEditEndsAnOpenSession(t *testing.T) {
 		now := h.clock.now().Unix()
 		sess := uiSession{Run: h.run.ID, App: uiDesktopAppName, Principal: h.owner, Role: oidc.RoleUser, Desktop: true,
 			IssuedAt: now, AuthorizedAt: now}
-		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != 0 {
+		if _, code, why, _ := h.srv.desktopRunCheck(context.Background(), sess); code != 0 {
 			t.Fatalf("checked under a profile that denies nothing: %d %s, want open", code, why)
 		}
 		set(types.GovernanceLimits{DenyInteractive: true})
-		if _, code, why := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
+		if _, code, why, _ := h.srv.desktopRunCheck(context.Background(), sess); code != desktopCloseNotAuthorized {
 			t.Fatalf("checked under a profile that now denies interactive sessions: %d %s, want %d", code, why, desktopCloseNotAuthorized)
 		}
 		if !h.audit.hasDataValue("reason", governanceUnit) {

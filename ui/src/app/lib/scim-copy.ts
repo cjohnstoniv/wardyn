@@ -22,12 +22,14 @@ export const SCIM = {
   OFF_HOW: "Set WARDYN_SCIM_TOKEN on wardynd, then point your Entra ID provisioning at the endpoint below.",
   OFF_LINK: "Leaver runbook",
   ENDPOINT: "Endpoint",
-  TOKEN_LABEL: "Token last matched",
+  TOKEN_LABEL: "Token on the latest update",
   TOKEN_PRIMARY: "Primary token",
   TOKEN_NEXT: "Next token",
   TOKEN_NONE: "None yet",
   TOKEN_NEXT_HINT:
-    "Your identity provider is using the next token. Move it to WARDYN_SCIM_TOKEN and unset WARDYN_SCIM_TOKEN_NEXT to finish the rotation.",
+    "The latest update used the next token, but another provisioning job may still use the primary one. Confirm that each configured job has switched before you retire a token. Then move the next token to WARDYN_SCIM_TOKEN and unset WARDYN_SCIM_TOKEN_NEXT to finish the rotation.",
+  TOKEN_PRIMARY_HINT:
+    "This is the token of the latest update only. If you are rotating tokens, confirm that each configured provisioning job has switched before you retire one.",
   PURGE_DELAY: "Purge delay",
   PURGE_DAYS: (delay: string) => delay,
   PURGE_OFF: "Off — only a delete from your identity provider purges",

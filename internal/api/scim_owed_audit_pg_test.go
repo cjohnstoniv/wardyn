@@ -161,7 +161,7 @@ func TestSCIMOwedRefusalRowLandsOnceForTwoDrainers(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = n.srv.drainRefusalAudits(ctx, e.st, ident, store.JobKindSuspend, jobs)
+			errs[i] = n.srv.drainRefusalAudits(ctx, n.srv.scimOrigin(), e.st, ident, store.JobKindSuspend, jobs)
 		}()
 	}
 	wg.Wait()

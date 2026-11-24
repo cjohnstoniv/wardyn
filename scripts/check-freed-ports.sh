@@ -37,6 +37,8 @@ ALLOWED = {
         "the command takes a listen port, never 0; another port is picked when the bind fails",
     ("cmd/wardynd/boot_metrics_test.go", "TestStartMetricsListener"):
         "startMetricsListener takes an address, not a listener; another port is picked when the bind fails",
+    ("internal/api/provider_service_grant_mixed_pg_test.go", "launchReleasedServer"):
+        "the released wardynd takes only an address; startReleasedServer picks both ports again, up to three times, when it exits before /healthz",
     ("internal/egress/proxy/dns_peers_test.go", "listenDNSOnFreePort"):
         "ListenDNS needs one port for UDP and TCP and reports no bound address; another port is picked when the bind fails",
 }

@@ -131,6 +131,50 @@ MANUAL_ENTRIES=(
 HISTORICAL_FILE=deploy/images/third-party-gpl-historical.md
 [ -f "$HISTORICAL_FILE" ] || { echo "FATAL: $HISTORICAL_FILE missing — regenerating without it would delete offers still owed" >&2; exit 1; }
 
+# ── packages Wardyn repacks (read from the Dockerfiles, not from any SBOM) ───
+#
+# A package a Dockerfile rebuilds with a `+wardyn<N>` version suffix is MODIFIED
+# by Wardyn, and the offer must say so. The previous release's SBOMs (this
+# script's input) cannot show a package that first ships in the release being
+# written, so the recipes are read from the Dockerfiles themselves: a RUN that
+# runs `apt-get download <pkg>` and sets a `+wardyn<N>` version. An image built
+# FROM a local Wardyn image (`wardyn/agent-<name>:local`) carries its base's
+# modified packages too. scripts/test-gpl-source-offer.sh pins the parse against
+# the real Dockerfiles.
+declare -A DOCKERFILE_OF
+for img in "${ALL_IMAGES[@]}"; do
+  df=$(awk -v n="$img" '$1 == "-" && $2 == "name:" {cur = $3} $1 == "dockerfile:" && cur == n {print $2; exit}' "$RELEASE_WF")
+  [ -n "$df" ] || df="deploy/images/${img#agent-}/Dockerfile"
+  DOCKERFILE_OF["$img"]="$df"
+done
+
+# modified_recipes <Dockerfile>: one `pkg|suffix|depends-before|depends-after|dockerfile`
+# line per modified package, the Dockerfile's own and its local base's.
+modified_recipes() {
+  local df=$1 base logical pkg suffix re before after
+  [ -f "$df" ] || return 0
+  base=$(sed -n 's|^ARG BASE_IMAGE=wardyn/agent-\([a-z0-9-]*\):local$|\1|p' "$df" | head -n 1)
+  [ -z "$base" ] || modified_recipes "deploy/images/$base/Dockerfile"
+  re='s/\^Depends: ([^/]*)\$/Depends: ([^/]*)/'
+  while IFS= read -r logical; do
+    [[ "$logical" =~ \+wardyn[0-9]+ ]] || continue
+    suffix="${BASH_REMATCH[0]}"
+    # A `+wardyn<N>` RUN this parse cannot read is a modified package the offer
+    # would silently omit: refuse instead.
+    [[ "$logical" =~ apt-get\ download\ ([a-z0-9.+-]+) ]] || { echo "FATAL: $df sets a +wardyn version in a RUN with no 'apt-get download <pkg>'; teach $0 this recipe shape" >&2; exit 1; }
+    pkg="${BASH_REMATCH[1]}"
+    [[ "$logical" =~ $re ]] || { echo "FATAL: $df repacks $pkg but its Depends edit is not the 's/^Depends: .../Depends: .../' form $0 reads" >&2; exit 1; }
+    before="${BASH_REMATCH[1]}"; after="${BASH_REMATCH[2]}"
+    printf '%s|%s|%s|%s|%s\n' "$pkg" "$suffix" "$before" "$after" "$df"
+  done < <(grep -Ev '^[[:space:]]*#' "$df" | awk '{ if (sub(/\\[[:space:]]*$/, "")) {buf = buf $0} else {print buf $0; buf = ""} }')
+}
+declare -A MODIFIED
+modified_total=0
+for img in "${ALL_IMAGES[@]}"; do
+  MODIFIED["$img"]=$(modified_recipes "${DOCKERFILE_OF[$img]}" | sort -u)
+  [ -z "${MODIFIED[$img]}" ] || modified_total=$((modified_total + 1))
+done
+
 # ── resolve every image's SBOM BEFORE writing anything ──────────────────────
 #
 # A separate pass, ahead of the `> "$OUT"` write below: a missing SBOM fails
@@ -184,6 +228,23 @@ if [ "${#unbuilt[@]}" -gt 0 ]; then
   exit 1
 fi
 
+# An SBOM row carrying a `+wardyn<N>` version is a package Wardyn modified. If
+# no Dockerfile recipe describes it any more (the repack was dropped after that
+# image shipped), the offer cannot say how it differs from Debian's: refuse
+# rather than print "None of these packages are modified" over that row.
+orphans=()
+for img in "${ALL_IMAGES[@]}"; do
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    [[ $'\n'"${MODIFIED[$img]}" == *$'\n'"${row%% *}|"* ]] || orphans+=("$img: $row")
+  done < <(jq -r '.artifacts[] | select((.version // "") | test("\\+wardyn[0-9]+$")) | "\(.name) \(.version)"' "${SBOM_FILE[$img]}")
+done
+if [ "${#orphans[@]}" -gt 0 ]; then
+  echo "FATAL: these SBOM rows carry a +wardyn version that no Dockerfile recipe describes; describe them before writing the offer:" >&2
+  printf '  %s\n' "${orphans[@]}" >&2
+  exit 1
+fi
+
 {
   echo "# Corresponding source for GPL and LGPL components in the published images"
   echo
@@ -196,7 +257,12 @@ fi
   echo "mirror these images into a registry other people pull from. This file is that"
   echo "offer, and it is what you would pass on."
   echo
-  echo "None of these packages are modified by Wardyn. Most are the unmodified"
+  if [ "$modified_total" -eq 0 ]; then
+    echo "None of these packages are modified by Wardyn. Most are the unmodified"
+  else
+    echo "Wardyn modifies only the packages named under \"Modified by Wardyn\" in the"
+    echo "image sections below. Every other package is unmodified: most are the unmodified"
+  fi
   echo "distribution package; a few are an unmodified upstream release tarball or an"
   echo "npm package bundled by the vendor tool that ships it, named per-entry where"
   echo "that applies. The corresponding source is the applicable one below:"
@@ -210,6 +276,10 @@ fi
   echo "  at the matching aport version."
   echo "- **asciinema** (installed by Wardyn's own Dockerfile, not inherited):"
   echo "  \`https://github.com/asciinema/asciinema\` at the version below."
+  if [ "$modified_total" -gt 0 ]; then
+    echo "  Where an image section says Wardyn modified a package, that section also"
+    echo "  states exactly what changed."
+  fi
   echo "- **npm packages bundled inside a vendor tool's own release tarball**"
   echo "  (\`agent-vscode\`'s code-server bundles \`jschardet\`, for example): the"
   echo "  package's own entry at \`https://registry.npmjs.org/<name>\`, or the"
@@ -281,6 +351,37 @@ fi
         printf '| `%s` | %s | %s | `%s` |\n' "$mpkg" "$mver" "$mlic" "$murl"
       done
       echo
+    fi
+    if [ -n "${MODIFIED[$img]}" ]; then
+      while IFS='|' read -r mpkg msuffix mbefore mafter mdf; do
+        echo "**Modified by Wardyn: \`${mpkg}\`.** Wardyn rebuilds Debian's \`${mpkg}\` package"
+        echo "with changes to its control file and nothing else; the packaged files are"
+        echo "Debian's, byte for byte:"
+        echo
+        if [ -n "$mbefore" ]; then
+          dropped=$(comm -23 <(tr -d ' ' <<<"$mbefore" | tr ',' '\n' | sort) <(tr -d ' ' <<<"$mafter" | tr ',' '\n' | sort) | paste -sd, - | sed 's/,/, /g')
+          echo "- \`Depends:\` changed from \`${mbefore}\` to \`${mafter}\`${dropped:+ (dropped \`$dropped\`)}."
+        fi
+        echo "- \`Version:\` gained the suffix \`${msuffix}\`, so the dpkg record names a"
+        echo "  package that is not Debian's own."
+        echo
+        exact=$(jq -r --arg p "$mpkg" '[.artifacts[] | select(.name == $p and ((.version // "") | test("\\+wardyn[0-9]+$")))] | first | .version // ""' "$f")
+        if [ -n "$exact" ]; then
+          echo "This image carries \`${mpkg} ${exact}\`, which is Debian's \`${mpkg} ${exact%"$msuffix"}\`"
+          echo "with those two edits."
+        else
+          echo "The installed version is Debian's package version followed by \`${msuffix}\`."
+          echo "If the table above lists \`${mpkg}\` without that suffix, the table was"
+          echo "scanned from an image built before this change; images built from this"
+          echo "repository's recipe carry the modified package."
+        fi
+        echo "Remove the suffix to get the Debian version, whose corresponding source is"
+        echo "\`apt-get source ${mpkg}=<that version>\` on a trixie host, or"
+        echo "\`https://snapshot.debian.org\` pinned to it. The recipe that makes the edits is"
+        echo "the \`RUN\` in \`${mdf}\` that sets the \`${msuffix}\` version, in"
+        echo "\`https://github.com/cjohnstoniv/wardyn\`."
+        echo
+      done <<<"${MODIFIED[$img]}"
     fi
   done
 
