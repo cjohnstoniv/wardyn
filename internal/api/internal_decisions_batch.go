@@ -34,6 +34,10 @@ const (
 	// a retry).
 	decisionBatchPast = 10 * time.Minute
 	decisionBatchSkew = 5 * time.Minute
+	// A replay from the proxy's spool (proxy.DecisionReplayHeader) keeps each record's own time back to this
+	// long before the post's arrival, or the run's start when that is later: the longest outage the spool's
+	// 50,000 records span.
+	decisionReplayPast = 24 * time.Hour
 )
 
 // advertiseDecisionBatch says on an answer of the decision door that it takes batches, and how many records.
@@ -239,8 +243,8 @@ func validDecisionBatch(b proxy.DecisionBatch) bool {
 // handlePostDecisionBatch records a batch of decisions as handlePostDecision records each, and appends the
 // rows in one call through the audit chain (audit.RecordBatch), under one take of the chain lock.
 //
-// Each record's rows take the record's id (its llm.scan.* row an id derived from it) and, inside the window,
-// its queue time, and are recorded as replays: a retried batch adds no row twice, and a row an earlier
+// Each record's rows take the record's id (its llm.scan.* row an id derived from it) and, inside the window
+// (wider for a replay from the proxy's spool), its queue time, and are recorded as replays: a retried batch adds no row twice, and a row an earlier
 // attempt stored is held, not counted again. The answer is a 202 once every durable egress row was appended,
 // held or spooled, else the retryable 503. A decision is counted on the attempt that appended its row, or, for
 // a spooled row, on the attempt that answers 202. Sink emits of spooled rows wait for the attempt that answers
@@ -256,6 +260,13 @@ func (s *Server) handlePostDecisionBatch(w http.ResponseWriter, r *http.Request,
 	relayed := s.decisionRequest(r)
 	kind, isOver := s.decisionRunOver(ctx)
 	now := s.cfg.Now().UTC()
+	oldest := now.Add(-decisionBatchPast)
+	if r.Header.Get(proxy.DecisionReplayHeader) == "1" {
+		oldest = now.Add(-decisionReplayPast)
+		if run, ok := liveRunFromContext(ctx); ok && run.CreatedAt.After(oldest) {
+			oldest = run.CreatedAt.UTC()
+		}
+	}
 	type durableRecord struct {
 		id uuid.UUID
 		dl egress.DecisionLog
@@ -271,7 +282,7 @@ func (s *Server) handlePostDecisionBatch(w http.ResponseWriter, r *http.Request,
 		}
 		primary, extra := s.decisionEvents(ctx, claims, r.RemoteAddr, dl)
 		at := now
-		if !rec.Time.Before(now.Add(-decisionBatchPast)) && !rec.Time.After(now.Add(decisionBatchSkew)) {
+		if !rec.Time.Before(oldest) && !rec.Time.After(now.Add(decisionBatchSkew)) {
 			at = rec.Time.UTC()
 		}
 		primary.ID, primary.Time = rec.ID, at

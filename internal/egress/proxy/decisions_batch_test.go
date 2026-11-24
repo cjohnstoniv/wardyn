@@ -27,6 +27,7 @@ import (
 type cpPost struct {
 	batch   bool
 	final   bool
+	replay  bool
 	relayed bool
 	auth    string
 	body    []byte
@@ -52,6 +53,7 @@ func newStubCP(t *testing.T, answer func(i int, p cpPost) (int, bool)) *stubCP {
 		p := cpPost{
 			batch:   r.Header.Get("Content-Type") == DecisionBatchContentType,
 			final:   r.Header.Get(DecisionFinalHeader) == "1",
+			replay:  r.Header.Get(DecisionReplayHeader) == "1",
 			relayed: r.Header.Get(DecisionRelayedHeader) == "1",
 			auth:    r.Header.Get("Authorization"),
 			body:    body,

@@ -45,9 +45,9 @@ func storedDecisionData(t *testing.T, chain *pgBatchChain, id uuid.UUID) (map[st
 	return data, string(raw)
 }
 
-// TestAudit_AgentRowCarriesOwnerSponsorWorkload_PG: a decision row written under a verified run token is stored
+// TestAudit_AgentRowCarriesOwnerSponsorWorkload: a decision row written under a verified run token is stored
 // with the token's owner, its sponsor when the owner is a service identity, and its SPIFFE ID as the workload.
-func TestAudit_AgentRowCarriesOwnerSponsorWorkload_PG(t *testing.T) {
+func TestAudit_AgentRowCarriesOwnerSponsorWorkload(t *testing.T) {
 	for name, tc := range map[string]struct{ owner, sponsor, wantSponsor string }{
 		"person":  {"alice@example.com", "alice@example.com", ""},
 		"service": {"service:ci", "boss@example.com", "boss@example.com"},
