@@ -596,6 +596,7 @@ func TestMemberTeamDriveCreate_AnswersAsTheCatalogueLists(t *testing.T) {
 		t.Errorf("catalogue row = %+v, want what the 201 body said: %+v", row, got)
 	}
 	w = createMemberDrive(srv, personCtx(aliceSub), "Notes")
+	got = client.MeDrive{} // the body omits false fields, which Unmarshal would leave as the team drive's
 	if w.Code != http.StatusCreated || json.Unmarshal(w.Body.Bytes(), &got) != nil {
 		t.Fatalf("plain create = %d %s", w.Code, w.Body.String())
 	}
