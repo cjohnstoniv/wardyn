@@ -88,4 +88,3 @@ func TestCreateSandbox_CC1RecordsTheNodeOnly(t *testing.T) {
 		t.Errorf("Where (-want +got):\n%s", diff)
 	}
 }
-

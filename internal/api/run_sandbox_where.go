@@ -38,4 +38,3 @@ func (s *Server) auditSandboxStart(ctx context.Context, run types.AgentRun, sb r
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.sandbox.start",
 		run.ID.String(), "success", mustJSON(fields)))
 }
-
