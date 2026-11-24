@@ -214,6 +214,7 @@ var queryIDMatrix = map[string]queryIDRoute{
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
 	"limit":                     "page window (parseListPage)",
+	"version":                   "DELETE /agent-rules/{harness}: the version of the rules the caller read, which the delete must still match; a number, no entity",
 	"run_in":                    "GET /policies/default: one of the caller's own units to read their ceiling in, by id or exact name; a unit they are not in, another person's or none, is the same 403 unit_not_a_context (TestDefaultPolicyContexts), so it selects no other principal's entity and tells no one which units exist",
 	"key":                       "GET /runs/{id}/recording-chain: a recording key of the path's run, already authorised by the recording read's rule; the range query matches it only on that run's own desktop.recording.write row (run_id = the path id), so another run's key is the same 404 as an unknown one (TestRecordingChain_ReadersOnly)",
 	"from":                      "GET /runs/{id}/recording-chain: an RFC 3339 time where the recording started; it bounds the range to the path run's own rows and names no entity",
