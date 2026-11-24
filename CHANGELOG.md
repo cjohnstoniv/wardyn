@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A server whose database role cannot read the support-session table no longer treats the person deciding an approval as someone who never helped in the run; it refuses the decision. A person's erasure no longer reports success while their support requests still hold a reason or an email because the role lost a table grant; it fails and is retried.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

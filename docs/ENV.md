@@ -1660,6 +1660,7 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - Requests, answers and ends are audited as `support.request`, `support.accept`, `support.decline` and `support.end`. The grant ends even when its `support.end` row is not written: a row lost because wardynd stopped, or because the audit sink and spool refused it, right after the end is not retried.
 - `GET /setup/status` publishes it as `features.support_sessions`, present only when on.
 - Needs migration `0293_run_support_grants`.
+- The server's database role needs `SELECT` and `UPDATE` on `run_support_grants`. Without `SELECT`, approval decisions are refused, since the server cannot tell whether the person deciding helped in the run, and a person's erasure fails until the grant is fixed. Without `UPDATE`, an erasure that has support-request text to remove fails the same way.
 - A value that is not a bool exits 2 at boot.
 
 ### `WARDYN_MCP_LOCAL_SERVERS`
