@@ -49,6 +49,7 @@ var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/governance/changes/{id}/approve":        true,
 	"POST /api/v1/governance/changes/{id}/reject":         true,
 	"PUT /api/v1/governance/changes/{id}/note":            true,
+	"DELETE /api/v1/governance/changes/{id}/approval":     true,
 	"POST /api/v1/governance/requests":                    true,
 	"POST /api/v1/governance/requests/{id}/approve":       true,
 	"POST /api/v1/governance/requests/{id}/reject":        true,

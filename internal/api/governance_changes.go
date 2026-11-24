@@ -39,7 +39,7 @@ var governanceChangeStates = []string{
 	types.GovernanceChangeExpired, types.GovernanceChangeStale,
 }
 
-// mountGovernanceChangeRoutes registers the six /governance/changes routes on the unit-admin tier
+// mountGovernanceChangeRoutes registers the seven /governance/changes routes on the unit-admin tier
 // (governance.go): a unit admin lists, reads and decides the changes inside their units, and the
 // per-change approver below decides which those are. The group a mount function receives is decided
 // at the call site, and authz_test.go's chi.Walk matrix is what enforces it.
@@ -50,6 +50,7 @@ func (s *Server) mountGovernanceChangeRoutes(unit chi.Router) {
 	unit.Post("/governance/changes/{id}/approve", s.handleApproveGovernanceChange)
 	unit.Post("/governance/changes/{id}/reject", s.handleRejectGovernanceChange)
 	unit.Put("/governance/changes/{id}/note", s.handlePutGovernanceChangeNote)
+	unit.Delete("/governance/changes/{id}/approval", s.handleTakeBackGovernanceApproval)
 }
 
 // handleListGovernanceChanges lists changes newest first. ?state= narrows to one state and defaults to
@@ -99,7 +100,12 @@ func (s *Server) handleListGovernanceChanges(w http.ResponseWriter, r *http.Requ
 	if truncated {
 		w.Header().Set("X-Wardyn-Truncated", "true")
 	}
-	writeJSON(w, http.StatusOK, out)
+	body, err := s.listWithApprovals(r, out)
+	if err != nil {
+		writeServerError(w, r, "list governance change approvals", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleGetGovernanceChange returns one change with its diff. A change the caller may not approve
@@ -120,7 +126,7 @@ func (s *Server) handleGetGovernanceChange(w http.ResponseWriter, r *http.Reques
 		writeServerError(w, r, "read governance change", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, governanceChangeRead{GovernanceChange: s.changeForRead(r, ch), Approvers: s.changeApprovers(r.Context(), ch)})
+	s.writeChangeView(w, r, ch)
 }
 
 func (s *Server) handleApproveGovernanceChange(w http.ResponseWriter, r *http.Request) {
@@ -291,12 +297,17 @@ func (s *Server) recheckLiveToken(ctx context.Context, q store.Querier) (*types.
 
 // A database-backed revocation check must share the decision's connection.
 func (s *Server) approverSessionStatus(ctx context.Context, q store.Querier, t types.APIToken) (oidc.SessionStatus, error) {
+	return s.sessionStatusAt(ctx, q, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq})
+}
+
+// sessionStatusAt is the identity-level (epoch -1) status of a credential issued at issue, read on q.
+func (s *Server) sessionStatusAt(ctx context.Context, q store.Querier, principal, email string, issue oidc.Issue) (oidc.SessionStatus, error) {
 	if rev, ok := s.cfg.SessionRevocations.(interface {
 		SessionStatusQ(context.Context, store.Querier, string, string, oidc.Issue, int64) (oidc.SessionStatus, error)
 	}); ok {
-		return rev.SessionStatusQ(ctx, q, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
+		return rev.SessionStatusQ(ctx, q, principal, email, issue, -1)
 	}
-	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, t.Principal, t.Email, oidc.Issue{At: t.CreatedAt, Seq: t.RevSeq}, -1)
+	return oidc.CheckSession(ctx, s.cfg.SessionRevocations, principal, email, issue, -1)
 }
 
 // denyApprover is the refusal a caller whose tier does not pass the kind's approver predicate gets.
@@ -367,6 +378,10 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 	if approve && head.TargetKind == govKindAssistantSettings && !s.assistantHoldDecidable(w, r) {
 		return
 	}
+	ar, ok := s.approvalRunFor(w, r, head, approve, bypass, principal, email, reason)
+	if !ok {
+		return
+	}
 	if approve && head.TargetKind == govKindUnit {
 		// The site-config lock before the decision transaction's graph lock, as writeGovernanceUnit
 		// takes them: applyUnitChange reads governance_max_depth, so a lowering cannot slip between.
@@ -383,7 +398,11 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 		decision.To, decision.Reason = types.GovernanceChangeRejected, reason
 	}
 	var applied govApplied
-	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, s.decideInTx(ctx, r, kind, approve, bypass, withdraw, principal, email, &applied))
+	out, err := s.cfg.Store.DecideGovernanceChange(ctx, id, decision, s.decideInTx(ctx, r, kind, approve, bypass, withdraw, principal, email, ar, &applied))
+	if errors.Is(err, store.ErrGovernanceApprovalRecorded) {
+		s.answerRecordedApproval(w, r, out, ar, actorType)
+		return
+	}
 	if err != nil {
 		s.answerFailedDecision(w, r, head, approve, bypass, actorType, principal, err)
 		return
@@ -412,7 +431,7 @@ func (s *Server) decideGovernanceChange(w http.ResponseWriter, r *http.Request, 
 // approver (and the distinct-human rule on approve) unless the admin token bypasses, then an approval
 // applies the held write into *applied.
 func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, approve, bypass, withdraw bool,
-	principal, email string, applied *govApplied) store.GovernanceDecideFunc {
+	principal, email string, ar *approvalRun, applied *govApplied) store.GovernanceDecideFunc {
 	return func(q store.Querier, ch types.GovernanceChange) error {
 		if withdraw {
 			if _, err := s.recheckLiveToken(ctx, q); err != nil {
@@ -436,11 +455,11 @@ func (s *Server) decideInTx(ctx context.Context, r *http.Request, kind govKind, 
 		if !approve {
 			return nil
 		}
-		if ch.DeploymentHash != computeETag(s.cfg.DefaultPolicy) {
-			return store.ErrGovernanceChangeStale
+		if ar != nil {
+			return s.decideMulti(ctx, r, q, kind, ch, ar, applied)
 		}
 		var err error
-		*applied, err = kind.apply(s, r, q, ch)
+		*applied, err = s.applyHeld(r, q, kind, ch)
 		return err
 	}
 }
@@ -456,6 +475,9 @@ func (s *Server) auditDecision(r *http.Request, out types.GovernanceChange, appl
 	ctx := r.Context()
 	data := map[string]any{"target_kind": out.TargetKind, "target_key": out.TargetKey, "proposed_by": out.ProposedBy}
 	if approve {
+		for k, v := range applied.approvalData {
+			data[k] = v
+		}
 		// The target's own row, as a direct write would have written it, with the actor the approver
 		// and the two facts that tie it to the proposal.
 		tdata := map[string]any{}

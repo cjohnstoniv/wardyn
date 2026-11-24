@@ -11,6 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+
 ### Changed
 
 - wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
