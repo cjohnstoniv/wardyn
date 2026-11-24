@@ -25,6 +25,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // An organisation's rules for each agent harness (agent_rules.go, run_agent_rules.go): the type admits no
@@ -881,5 +882,74 @@ func TestAgentRulesSeal_ServerStepsAreNotBound(t *testing.T) {
 	}
 	if _, err := srv.liveWithholding(ctx, record); err == nil {
 		t.Error("a record session's live mint read nothing from an unreadable table")
+	}
+}
+
+// TestAgentRulesInnerWalls_TwoRulesNameNoPolicy: two agents' rules that disagree on approvals, with a policy that
+// set nothing, refuse the run naming the rules, never the policy; with a policy that set the axis, the policy
+// is named.
+func TestAgentRulesInnerWalls_TwoRulesNameNoPolicy(t *testing.T) {
+	codex := types.AgentRules{Harness: "codex-cli", InnerWalls: innerWalls("", types.InnerApprovalsHarness), Version: 5, UpdatedBy: "sub-admin"}
+	srv, _ := agentRulesServer(t, innerRule(innerWalls("", types.InnerApprovalsWardyn)), codex)
+	both := createRunRequest{Experience: client.ExperienceInteractive, Task: "t", Tools: []client.IncludedTool{
+		{ID: "claude-code", Kind: client.IncludedToolHarness}, {ID: "codex-cli", Kind: client.IncludedToolHarness}}}
+	_, _, _, refusal := agentRulesStep(t, srv, both, types.RunPolicySpec{})
+	if refusal == nil || refusal.status != http.StatusUnprocessableEntity || refusal.body.Reason != reasonAgentRulesConflict ||
+		strings.Contains(refusal.body.Error, "This run's policy") || !strings.Contains(refusal.body.Error, "another agent in this run") {
+		t.Fatalf("refusal = %+v, want 422 %s naming the rules and no policy", refusal, reasonAgentRulesConflict)
+	}
+	_, _, _, refusal = agentRulesStep(t, srv, both, types.RunPolicySpec{HarnessInnerWalls: innerWalls("", types.InnerApprovalsHarness)})
+	if refusal == nil || refusal.body.Reason != reasonAgentRulesConflict || !strings.Contains(refusal.body.Error, "This run's policy sets harness_inner_walls.approvals") {
+		t.Errorf("a policy that set the axis: refusal = %+v, want the policy named", refusal)
+	}
+	// A rule met first does not make a later, agreeing rule a refusal or the policy a setter.
+	agree := types.AgentRules{Harness: "codex-cli", InnerWalls: innerWalls(types.InnerSandboxReadOnly, types.InnerApprovalsWardyn), Version: 6, UpdatedBy: "sub-admin"}
+	srv, _ = agentRulesServer(t, innerRule(innerWalls("", types.InnerApprovalsWardyn)), agree)
+	spec, source, _, refusal := agentRulesStep(t, srv, both, types.RunPolicySpec{})
+	if refusal != nil || spec.HarnessInnerWalls == nil || spec.HarnessInnerWalls.SandboxMode != types.InnerSandboxReadOnly {
+		t.Fatalf("agreeing rules: %+v, %+v, want both met", spec.HarnessInnerWalls, refusal)
+	}
+	for _, rec := range source.AgentRules {
+		if rec.policySetInnerWalls {
+			t.Errorf("record for %s says the policy set the agent's walls; no policy did", rec.Harness)
+		}
+	}
+}
+
+// TestAgentRulesRunStep_ToolsRequestBindsEveryIncludedHarness: a run-mode tools[] request is bound by the rules
+// of each harness it includes and by no other, whatever the legacy agent field says.
+func TestAgentRulesRunStep_ToolsRequestBindsEveryIncludedHarness(t *testing.T) {
+	claude := claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("claude-only.example.com")})
+	codex := types.AgentRules{Harness: "codex-cli", Spec: types.PersonalWallsSpec{DeniedDomains: wallsList("codex-only.example.com")}, Version: 7, UpdatedBy: "sub-admin"}
+	srv, _ := agentRulesServer(t, claude, codex)
+	tools := func(ids ...string) []client.IncludedTool {
+		var out []client.IncludedTool
+		for _, id := range ids {
+			out = append(out, client.IncludedTool{ID: id, Kind: client.IncludedToolHarness})
+		}
+		return out
+	}
+	run := func(agent string, ids ...string) createRunRequest {
+		return createRunRequest{Agent: agent, Experience: client.ExperienceInteractive, Task: "t", Tools: tools(ids...)}
+	}
+	for name, tc := range map[string]struct {
+		req  createRunRequest
+		want []string
+	}{
+		"codex-cli only, with a stale claude-code agent": {run("claude-code", "codex-cli"), []string{"codex-only.example.com"}},
+		"codex-cli only, no agent field":                 {run("", "codex-cli"), []string{"codex-only.example.com"}},
+		"two harnesses, first as the agent":              {run("claude-code", "claude-code", "codex-cli"), []string{"claude-only.example.com", "codex-only.example.com"}},
+		"two harnesses, second as the agent":             {run("codex-cli", "claude-code", "codex-cli"), []string{"claude-only.example.com", "codex-only.example.com"}},
+	} {
+		spec, source, _, refusal := agentRulesStep(t, srv, tc.req, types.RunPolicySpec{})
+		if refusal != nil {
+			t.Errorf("%s: refusal %+v", name, refusal)
+			continue
+		}
+		got := slices.Clone(spec.DeniedDomains)
+		slices.Sort(got)
+		if !slices.Equal(got, tc.want) || len(source.AgentRules) != len(tc.want) {
+			t.Errorf("%s: denied %v with %d records, want %v bound by one record each", name, got, len(source.AgentRules), tc.want)
+		}
 	}
 }
