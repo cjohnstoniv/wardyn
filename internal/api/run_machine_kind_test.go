@@ -286,28 +286,55 @@ func TestPlacementTrust_DenyOnOneClassAllowOnAnother(t *testing.T) {
 	}
 }
 
-// P5 and the order (a personal Mac is told why by the managed-Mac gate): the create's eligibility step leaves a
-// macOS VM to the capability step whatever the list says, and that step refuses a personal Mac with v0.10.2's
-// reason and sentences, to a member and to a security operator.
+// macFoldStore is the component fixture's store with the Mac runner rows the capability step reads.
+type macFoldStore struct {
+	localPlanTestStore
+	rows ownedRunners
+}
+
+func (m macFoldStore) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
+	return m.rows.GetRunner(ctx, id)
+}
+
+// personalMacCreate runs create's two placement steps in their order, the local-eligibility step and then the
+// capability step, on one server for a macOS VM run in a pool whose one runner is a personal Mac, asked by role
+// while the organisation's list is denials. It answers what create wrote, and the Mac's id.
+func personalMacCreate(t *testing.T, role string, denials []types.MachineKindDenial) (*httptest.ResponseRecorder, uuid.UUID) {
+	t.Helper()
+	f := newComponentFixture(t)
+	f.st.siteConfig = types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, MachineKindDenials: denials}}
+	rows := map[uuid.UUID]types.Runner{}
+	f.srv.cfg.Store = ownedRunners{rows: rows} // installRunner reads the rows from this store type
+	id := macRunner(t, f.srv, readyMac(), func(r *types.Runner) { r.TrustClass = types.RunnerTrustPersonal })
+	f.srv.cfg.Store = macFoldStore{localPlanTestStore{f.st}, ownedRunners{rows: rows}}
+	req := createRunRequest{Agent: "claude-code", Placement: types.PlacementLocal, MachineKind: "macos_vm"}
+	w := httptest.NewRecorder()
+	fold := &runFold{w: w, r: httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(operatorCtx(capsOwner, capEmail, role)), req: &req,
+		place: runPlacement{pooled: true, placement: types.PlacementLocal,
+			eligible: []poolTarget{{id: id.String(), runnerID: &id, trust: types.RunnerTrustPersonal, ownerKind: types.RunnerOwnerPerson}}}}
+	if f.srv.stepLocalEligibility(fold, &foldRecorder{}) {
+		f.srv.stepPlacementCapability(fold, &foldRecorder{})
+	}
+	return w, id
+}
+
+// P5 and the order: a personal Mac is told why by the managed-Mac gate. The eligibility step leaves a macOS VM to
+// the capability step whatever the list says, and that step refuses a personal Mac with v0.10.2's reason and
+// sentences, to a member and to a security operator, never with runner_trust_required.
 func TestPlacementTrust_PersonalMacRefusedAMacOSVM(t *testing.T) {
-	member := withOIDCRole(capsCtx, oidc.RoleUser)
-	operator := withOIDCRole(capsCtx, oidc.RoleSecurityAdmin)
+	const notManaged = "Mac mini is not marked as company-managed. "
 	for _, denials := range [][]types.MachineKindDenial{nil, {{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineLinuxVM}}} {
-		if _, ref := machineKindJudgement(t, "macos_vm", denials, types.RunnerTrustPersonal); ref != nil {
-			t.Fatalf("the eligibility step refused a personal Mac with denials %v: %+v, want it left to macOSHostGate", denials, ref)
-		}
-		for name, tc := range map[string]struct {
-			ctx  context.Context
-			want string
-		}{
-			"member":   {member, "Mac mini is not marked as company-managed. Ask a security admin to mark it as a managed device."},
-			"operator": {operator, "Mac mini is not marked as company-managed. Mark it with `wardyn runner trust "},
+		for role, want := range map[string]func(uuid.UUID) string{
+			oidc.RoleUser: func(uuid.UUID) string { return notManaged + "Ask a security admin to mark it as a managed device." },
+			oidc.RoleSecurityAdmin: func(id uuid.UUID) string {
+				return notManaged + "Mark it with `wardyn runner trust " + id.String() + " managed_device`."
+			},
 		} {
-			s := capsServer(&fakeRunner{})
-			id := macRunner(t, s, readyMac(), func(r *types.Runner) { r.TrustClass = types.RunnerTrustPersonal })
-			ref := s.placementCapabilityRefusalFor(tc.ctx, macReq(id), runPlacement{}, governanceCeiling{}, 0, macOSVMAsk{})
-			if ref == nil || ref.status != http.StatusUnprocessableEntity || ref.body.Reason != string(placement.ReasonPlacementCapability) || !strings.Contains(ref.body.Error, tc.want) {
-				t.Errorf("%s, denials %v: refusal = %+v, want 422 placement_capability saying %q", name, denials, ref, tc.want)
+			w, id := personalMacCreate(t, role, denials)
+			var body errorBody
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusUnprocessableEntity ||
+				body.Reason != string(placement.ReasonPlacementCapability) || !strings.Contains(body.Error, want(id)) {
+				t.Errorf("%s, denials %v: %d %s, want 422 placement_capability saying %q", role, denials, w.Code, w.Body, want(id))
 			}
 		}
 	}
