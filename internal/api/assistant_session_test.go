@@ -39,6 +39,15 @@ type assistantFake struct {
 	personReads int
 	runIDsErr   error
 	sweptBefore *time.Time
+	// runReadErr fails GetRun; afterRunRead runs after each run read GetRun answers, outside amu.
+	runReadErr   error
+	afterRunRead func()
+	// endErr fails EndAssistantSession; endLost has it end the session yet answer false, as when another path
+	// ended it first; sessReadErr fails GetAssistantSession; liveForRunErr fails LiveAssistantSessionForRun.
+	endErr        error
+	endLost       bool
+	sessReadErr   error
+	liveForRunErr error
 }
 
 func newAssistantFake(site types.SiteConfig) *assistantFake {
@@ -175,6 +184,9 @@ func (f *assistantFake) AttachAssistantRun(_ context.Context, session, run uuid.
 func (f *assistantFake) GetAssistantSession(_ context.Context, id uuid.UUID, principal string) (types.AssistantSession, error) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
+	if f.sessReadErr != nil {
+		return types.AssistantSession{}, f.sessReadErr
+	}
 	s, ok := f.sessions[id]
 	if principal == "" || !ok || s.Principal != principal {
 		return types.AssistantSession{}, store.ErrNotFound
@@ -204,6 +216,12 @@ func (f *assistantFake) LiveAssistantSession(_ context.Context, principal string
 }
 
 func (f *assistantFake) LiveAssistantSessionForRun(_ context.Context, run uuid.UUID) (types.AssistantSession, error) {
+	f.amu.Lock()
+	err := f.liveForRunErr
+	f.amu.Unlock()
+	if err != nil {
+		return types.AssistantSession{}, err
+	}
 	return f.findSession(func(s types.AssistantSession) bool { return s.Live() && s.RunID != nil && *s.RunID == run })
 }
 
@@ -293,6 +311,9 @@ func assistantIsTurn(e types.AssistantEvent) bool {
 func (f *assistantFake) NextAssistantTurn(_ context.Context, session uuid.UUID, after int64) (types.AssistantEvent, bool, error) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
+	if s, ok := f.sessions[session]; !ok || !s.Live() {
+		return types.AssistantEvent{}, false, store.ErrNotFound
+	}
 	first := true
 	for _, e := range f.events[session] {
 		if !assistantIsTurn(e) {
@@ -340,16 +361,50 @@ func (f *assistantFake) TouchAssistantSession(_ context.Context, session uuid.UU
 	return nil
 }
 
+func (f *assistantFake) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
+	f.amu.Lock()
+	err, after := f.runReadErr, f.afterRunRead
+	f.amu.Unlock()
+	if err != nil {
+		return types.AgentRun{}, err
+	}
+	run, err := f.integStore.GetRun(ctx, id)
+	if after != nil {
+		after()
+	}
+	return run, err
+}
+
+// setRunRead sets the run read's error and its after-read step.
+func (f *assistantFake) setRunRead(err error, after func()) {
+	f.amu.Lock()
+	defer f.amu.Unlock()
+	f.runReadErr, f.afterRunRead = err, after
+}
+
+// runState is the stored state of run, read past the run read's error.
+func (f *assistantFake) runState(t *testing.T, run uuid.UUID) types.RunState {
+	t.Helper()
+	r, err := f.integStore.GetRun(context.Background(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.State
+}
+
 func (f *assistantFake) EndAssistantSession(_ context.Context, session uuid.UUID, reason string) (bool, error) {
 	f.amu.Lock()
 	defer f.amu.Unlock()
+	if f.endErr != nil {
+		return false, f.endErr
+	}
 	s, ok := f.sessions[session]
 	if !ok || !s.Live() {
 		return false, nil
 	}
 	s.State, s.EndReason = types.AssistantSessionEnded, reason
 	f.sessions[session] = s
-	return true, nil
+	return !f.endLost, nil
 }
 
 func (f *assistantFake) EraseAssistantSessionPersonalFields(_ context.Context, principals []string) ([]store.ErasedAssistantSession, int, error) {
@@ -797,6 +852,143 @@ func TestAssistantAnotherPersonsSessionIsNotFound(t *testing.T) {
 	if !got.Live() || len(got.Draft) != 0 || len(f.eventsOf(s.ID)) != 0 {
 		t.Errorf("another person's calls changed the session: %s, draft %q, %d events", got.State, got.Draft, len(f.eventsOf(s.ID)))
 	}
+}
+
+// A DELETE whose run stop fails answers 500 with the session ended and the run still running; a second DELETE
+// of the ended session stops the run. An end the store refuses answers 500 and leaves the session live.
+func TestAssistantDeleteFinishesTheRunStop(t *testing.T) {
+	site, bind := assistantTwoProviders()
+	f := newAssistantFake(site)
+	srv, _ := assistantSessionServer(t, f)
+	person := "sub-stop-" + uuid.NewString()
+	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
+	run := f.seedRun(t, person)
+	s := assistantLiveSession(person, &run, bind)
+	f.seed(s)
+	// The owner check reads the run first; every read after it, the stop's among them, fails.
+	f.setRunRead(nil, func() { f.setRunRead(fmt.Errorf("store down"), nil) })
+	wantReason(t, doSSO(t, srv, http.MethodDelete, assistantPath(s.ID, ""), cookie, ""), http.StatusInternalServerError, reasonInternalError)
+	if got := f.session(s.ID); got.Live() {
+		t.Errorf("the session = %s after the first DELETE, want ended", got.State)
+	}
+	if got := f.runState(t, run); got != types.RunRunning {
+		t.Errorf("the run = %s after a stop that could not read it, want RUNNING", got)
+	}
+	f.setRunRead(nil, nil)
+	if w := doSSO(t, srv, http.MethodDelete, assistantPath(s.ID, ""), cookie, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("the second DELETE = %d %s, want 204", w.Code, w.Body)
+	}
+	if got := f.runState(t, run); got != types.RunKilled {
+		t.Errorf("the run = %s after the second DELETE, want KILLED", got)
+	}
+
+	t.Run("a replaced session whose run's live session cannot be read", func(t *testing.T) {
+		run := f.seedRun(t, person)
+		old := assistantLiveSession(person, &run, bind)
+		old.State, old.EndReason = types.AssistantSessionEnded, types.AssistantEndReplaced
+		f.seed(old)
+		f.seed(assistantLiveSession(person, &run, bind))
+		f.amu.Lock()
+		f.liveForRunErr = fmt.Errorf("store down")
+		f.amu.Unlock()
+		wantReason(t, doSSO(t, srv, http.MethodDelete, assistantPath(old.ID, ""), cookie, ""), http.StatusInternalServerError, reasonInternalError)
+		f.amu.Lock()
+		f.liveForRunErr = nil
+		f.amu.Unlock()
+		if got := f.runState(t, run); got != types.RunRunning {
+			t.Errorf("the replacement's run = %s after a failed read, want RUNNING", got)
+		}
+		if w := doSSO(t, srv, http.MethodDelete, assistantPath(old.ID, ""), cookie, ""); w.Code != http.StatusNoContent {
+			t.Errorf("the repeat DELETE with the read back = %d %s, want 204", w.Code, w.Body)
+		}
+		if got := f.runState(t, run); got != types.RunRunning {
+			t.Errorf("the replacement's run = %s after the repeat DELETE, want RUNNING", got)
+		}
+	})
+
+	t.Run("a DELETE another path ended first", func(t *testing.T) {
+		run := f.seedRun(t, person)
+		s := assistantLiveSession(person, &run, bind)
+		f.seed(s)
+		f.amu.Lock()
+		f.endLost = true
+		f.amu.Unlock()
+		w := doSSO(t, srv, http.MethodDelete, assistantPath(s.ID, ""), cookie, "")
+		f.amu.Lock()
+		f.endLost = false
+		f.amu.Unlock()
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("the DELETE = %d %s, want 204", w.Code, w.Body)
+		}
+		if got := f.runState(t, run); got != types.RunKilled {
+			t.Errorf("the run = %s after a DELETE that lost the end, want KILLED", got)
+		}
+	})
+
+	t.Run("an end the store refuses", func(t *testing.T) {
+		run := f.seedRun(t, person)
+		s := assistantLiveSession(person, &run, bind)
+		f.seed(s)
+		f.amu.Lock()
+		f.endErr = fmt.Errorf("store down")
+		f.amu.Unlock()
+		wantReason(t, doSSO(t, srv, http.MethodDelete, assistantPath(s.ID, ""), cookie, ""), http.StatusInternalServerError, reasonInternalError)
+		if got := f.session(s.ID); !got.Live() {
+			t.Errorf("the session = %s after a refused end, want live", got.State)
+		}
+		if got := f.runState(t, run); got != types.RunRunning {
+			t.Errorf("the run = %s after a refused end, want RUNNING", got)
+		}
+	})
+}
+
+// A stop whose kill loses the state race to a dispatch step reads the run again and kills it; one that loses on
+// every attempt answers an error and leaves the run as it is.
+func TestAssistantStopRetriesALostStateRace(t *testing.T) {
+	f := newAssistantFake(types.SiteConfig{})
+	srv, _ := assistantSessionServer(t, f)
+	ctx := context.Background()
+	seed := func(state types.RunState) uuid.UUID {
+		run, err := f.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: "sub-race", State: state, CreatedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return run.ID
+	}
+	run := seed(types.RunStarting)
+	flips := 0
+	f.setRunRead(nil, func() {
+		if flips == 0 {
+			flips++
+			if ok, err := f.integStore.UpdateRunStateIf(ctx, run, types.RunStarting, types.RunRunning); !ok || err != nil {
+				t.Errorf("the dispatch step = %v, %v", ok, err)
+			}
+		}
+	})
+	if err := srv.stopAssistantRun(ctx, run); err != nil {
+		t.Fatalf("a stop that lost one race = %v, want nil", err)
+	}
+	if got := f.runState(t, run); got != types.RunKilled || flips != 1 {
+		t.Errorf("the run = %s after %d lost races, want KILLED after 1", got, flips)
+	}
+
+	busy := seed(types.RunStarting)
+	f.setRunRead(nil, func() {
+		from, to := types.RunStarting, types.RunRunning
+		if f.runState(t, busy) == types.RunRunning {
+			from, to = to, from
+		}
+		if _, err := f.integStore.UpdateRunStateIf(ctx, busy, from, to); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := srv.stopAssistantRun(ctx, busy); err == nil {
+		t.Error("a stop that lost every race = nil, want an error")
+	}
+	if got := f.runState(t, busy); got.IsTerminal() {
+		t.Errorf("the run = %s after a stop that never won, want it left running", got)
+	}
+	f.setRunRead(nil, nil)
 }
 
 // A provider that leaves prompt inspection to its gateway never serves a create: with every marked provider
