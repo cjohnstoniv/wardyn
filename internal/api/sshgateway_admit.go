@@ -125,7 +125,7 @@ func (sl *sshChannelSlot) release() {
 // (sendChannelError on an already-accepted channel, NewChannel.Reject
 // otherwise).
 func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal string) (types.AgentRun, string) {
-	run, msg := s.liveRunForExec(ctx, runID, sshLiveRunWords)
+	run, msg := s.liveRunForExec(ctx, runID, sshLiveRunWords.copyOutFor(principal))
 	if msg != "" {
 		return types.AgentRun{}, msg
 	}
@@ -143,7 +143,16 @@ func (s *Server) sshFreshRun(ctx context.Context, runID uuid.UUID, principal str
 }
 
 // liveRunWords are one door's refusals for a run that cannot take an exec now; notRunning takes the run's state.
-type liveRunWords struct{ noRunner, notFound, notRunning, ended string }
+// copyOutBy is set only by copyOutFor, on an owner's door: a kept run is then refused as keptCopyOutRefusal decides
+// for that person. "" (every other door) refuses every kept run.
+type liveRunWords struct{ noRunner, notFound, notRunning, ended, copyOutBy string }
+
+// copyOutFor is w on a door the person principal opens themselves: the kept-run copy-out exception
+// (run_kept_copy_out.go). The command door and the UI gateway never use it.
+func (w liveRunWords) copyOutFor(principal string) liveRunWords {
+	w.copyOutBy = principal
+	return w
+}
 
 // sshLiveRunWords are an SSH channel's refusals, as the gateway has always written them.
 var sshLiveRunWords = liveRunWords{
@@ -155,7 +164,7 @@ var sshLiveRunWords = liveRunWords{
 
 // liveRunForExec is the fresh read every path that execs into a sandbox makes first (sshFreshRun, and
 // POST /runs/{id}/exec's execFreshRun): the run, refused in words' terms unless a Runner is wired and the run is
-// RUNNING with a sandbox and not kept. It holds the nil-Runner guard: under `-runner none` s.cfg.Runner is a nil
+// RUNNING with a sandbox and not kept (an owner's words, copyOutFor, may open a kept run: keptCopyOutRefusal). It holds the nil-Runner guard: under `-runner none` s.cfg.Runner is a nil
 // interface, and any method call on it panics. It does not refuse a background run: each caller decides that.
 func (s *Server) liveRunForExec(ctx context.Context, runID uuid.UUID, words liveRunWords) (types.AgentRun, string) {
 	if s.cfg.Runner == nil {
@@ -168,9 +177,15 @@ func (s *Server) liveRunForExec(ctx context.Context, runID uuid.UUID, words live
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return types.AgentRun{}, fmt.Sprintf(words.notRunning, run.State)
 	}
-	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	// A kept run is RUNNING with nothing to attach to, except on an owner's door into a run its Kubernetes runner
+	// keeps with its agent running (keptCopyOutRefusal).
 	if runIsKept(run) {
-		return types.AgentRun{}, words.ended
+		if words.copyOutBy == "" {
+			return types.AgentRun{}, words.ended
+		}
+		if msg := s.keptCopyOutRefusal(ctx, run, words.copyOutBy, words.ended); msg != "" {
+			return types.AgentRun{}, msg
+		}
 	}
 	return run, ""
 }

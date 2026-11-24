@@ -359,12 +359,12 @@ func (s *Server) stepConfinement(f *runFold, rec *foldRecorder) bool {
 		advertised, f.placed.read = offered, true
 	}
 	f.placed.classes = advertised
-	enforced, source, err := enforcedConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
+	enforced, source, raised, err := resolveConfinement(floor, f.reqCC, advertised, f.place.orgBarrier, f.baseline)
 	if err != nil {
 		writeErrorReason(f.w, http.StatusUnprocessableEntity, reasonConfinementClassConflict, err.Error())
 		return false
 	}
-	f.enforced, f.confinementDefault = enforced, source
+	f.enforced, f.confinementDefault, f.confinementRaised = enforced, source, raised
 	if f.mode == foldPreflight {
 		f.barrierOptions = draftBarrierOptions(f.place, f.ceiling, floor, f.baseline)
 	}

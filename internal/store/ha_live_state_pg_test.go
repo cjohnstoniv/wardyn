@@ -273,6 +273,57 @@ func TestPG_ReacquireAttachLease(t *testing.T) {
 	}
 }
 
+// One statement renews every key whose holder still holds a live lease, and only those: a key that names
+// another holder, or a lapsed row, is left out and its row is not moved.
+func TestPG_RenewAttachLeases(t *testing.T) {
+	ctx := context.Background()
+	pool := runsPGPoolIsolated(t)
+	pg := store.NewPG(pool)
+	var runs [4]uuid.UUID
+	for i := range runs {
+		runs[i] = persistRun(t, ctx, pool, newRun(types.RunRunning)).ID
+	}
+	a, b, c, d := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	acquire := func(run, holder uuid.UUID, ttl time.Duration) {
+		t.Helper()
+		l := store.AttachLease{RunID: run, HolderID: holder, Replica: "A", Principal: "alice", Source: "web", Since: time.Now().UTC()}
+		if ok, err := pg.AcquireAttachLease(ctx, l, uuid.Nil, ttl); err != nil || !ok {
+			t.Fatalf("acquire: ok=%v err=%v", ok, err)
+		}
+	}
+	acquire(runs[0], a, time.Second*30)
+	acquire(runs[1], b, time.Second*30)
+	acquire(runs[2], c, time.Millisecond)
+	acquire(runs[3], d, time.Second*30)
+	time.Sleep(20 * time.Millisecond)
+	expiry := func(run uuid.UUID) time.Time {
+		t.Helper()
+		got, found, err := pg.GetAttachLease(ctx, run)
+		if err != nil || !found {
+			t.Fatalf("read the lease of %s: found=%v err=%v", run, found, err)
+		}
+		return got.ExpiresAt
+	}
+	before := [4]time.Time{expiry(runs[0]), expiry(runs[1]), expiry(runs[2]), expiry(runs[3])}
+
+	// B's key names the wrong holder and C's row has lapsed.
+	got, err := pg.RenewAttachLeases(ctx, []store.AttachLeaseKey{{RunID: runs[0], HolderID: a}, {RunID: runs[1], HolderID: a}, {RunID: runs[2], HolderID: c}, {RunID: runs[3], HolderID: d}}, time.Minute)
+	if err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if len(got) != 2 || !got[store.AttachLeaseKey{RunID: runs[0], HolderID: a}] || !got[store.AttachLeaseKey{RunID: runs[3], HolderID: d}] {
+		t.Fatalf("renewed = %v, want exactly A's and D's keys", got)
+	}
+	for i, want := range [4]bool{true, false, false, true} {
+		if moved := expiry(runs[i]).After(before[i]); moved != want {
+			t.Errorf("run %d expiry moved = %v, want %v", i, moved, want)
+		}
+	}
+	if got, err := pg.RenewAttachLeases(ctx, nil, time.Minute); err != nil || len(got) != 0 {
+		t.Fatalf("no keys: got %v err=%v, want an empty map", got, err)
+	}
+}
+
 // The count moves at each end's start and finish, and an end that never finished stops counting
 // as running after ADOSignInEndsStaleAfter.
 func TestPG_ADOSignInEnds(t *testing.T) {

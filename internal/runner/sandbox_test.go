@@ -192,6 +192,23 @@ func TestBuildProxyConfig_Unattended(t *testing.T) {
 	}
 }
 
+// TestBuildProxyConfig_PushHoldRemovals: the switch reaches the sidecar's
+// "push_hold_removals" key, and a false one is omitted so an off run's config is unchanged.
+func TestBuildProxyConfig_PushHoldRemovals(t *testing.T) {
+	for _, want := range []bool{true, false} {
+		b, err := BuildProxyConfig(uuid.New(), ProxyConfig{PushHoldRemovals: want}, ProxyListenPort)
+		if err != nil {
+			t.Fatalf("BuildProxyConfig: %v", err)
+		}
+		if got := strings.Contains(string(b), `"push_hold_removals":true`); got != want {
+			t.Errorf("PushHoldRemovals=%v marshals to %s", want, b)
+		}
+		if !want && strings.Contains(string(b), "push_hold_removals") {
+			t.Errorf("an off run's config names the key: %s", b)
+		}
+	}
+}
+
 // TestBuildProxyConfig_VMAndPortRule: the VM flag and the port rule reach
 // the sidecar's config, and a container run with the rule off names neither.
 func TestBuildProxyConfig_VMAndPortRule(t *testing.T) {

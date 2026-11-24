@@ -131,7 +131,8 @@ func (s *Server) refuseUIAppsDenied(w http.ResponseWriter, r *http.Request, run 
 // security admin, never an operator. Audited as a drop unless dryRun.
 func (s *Server) boundUIApps(ctx context.Context, r *http.Request, spec *types.RunPolicySpec, ceiling governanceCeiling, dryRun bool) []string {
 	if !s.uiAppsDenied(r, *spec, ceiling) {
-		return s.boundInboundApps(ctx, r, spec, ceiling, dryRun)
+		warns := s.boundInboundApps(ctx, r, spec, ceiling, dryRun)
+		return append(warns, s.desktopAppsDeniedWarnings(r, *spec, ceiling)...)
 	}
 	dropped := make([]string, 0, len(spec.UIApps))
 	for _, a := range spec.UIApps {
@@ -175,6 +176,29 @@ func (s *Server) boundInboundApps(ctx context.Context, r *http.Request, spec *ty
 func (s *Server) inboundAppsDenied(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) bool {
 	return ceiling.Unit != nil && ceiling.Limits.DenyInteractive && !s.runUngoverned(r.Context()) &&
 		slices.ContainsFunc(spec.UIApps, func(a types.UIApp) bool { return a.Inbound })
+}
+
+// desktopAppsDeniedWarning is the create and preflight sentence for a run that keeps a desktop app under a profile
+// that denies interactive sessions: every door that opens a desktop refuses it there (refuseInteractiveAttach), so
+// the run is warned, not changed, and a limit lifted later reaches it as any door's limit does.
+const desktopAppsDeniedWarning = "The governance profile %q denies interactive sessions, so this run's desktop will not open: %s."
+
+// desktopAppsDeniedWarnings is that sentence for spec's desktop apps (types.UIApp.IsDesktop) under ceiling, or nil. It
+// binds whoever inboundAppsDenied binds, and reads the spec after the inbound drop, so an app already dropped is not named.
+func (s *Server) desktopAppsDeniedWarnings(r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling) []string {
+	if ceiling.Unit == nil || !ceiling.Limits.DenyInteractive || s.runUngoverned(r.Context()) {
+		return nil
+	}
+	var names []string
+	for _, a := range spec.UIApps {
+		if a.IsDesktop() {
+			names = append(names, a.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf(desktopAppsDeniedWarning, ceiling.Unit.Name, strings.Join(names, ", "))}
 }
 
 // uiAppsDenied is the one predicate for deny_ui_apps binding this run's ui_apps: boundUIApps strips by it and an

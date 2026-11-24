@@ -80,18 +80,24 @@ func (p *sshPumpState) end(reason string) {
 	p.cancel()
 }
 
-// output is Session -> channel (+ cast tee).
+// output is Session -> cast tee -> channel. The tee goes first, as the web pump's does (attach_pump.go), and
+// nothing is sent once the pump has ended: the caller saves the recording after the pump returns, while this
+// goroutine may still be reading, so a chunk sent after that is one the recording lacks. A chunk that was sent
+// was teed before the pump ended, so it is in the recording when the recording is saved.
 func (p *sshPumpState) output() {
 	buf := make([]byte, attachReadBuf)
 	for {
 		n, rerr := p.sess.Read(buf)
 		if n > 0 {
+			if p.castTee != nil {
+				_, _ = p.castTee.Write(buf[:n])
+			}
+			if p.ctx.Err() != nil {
+				return
+			}
 			if _, werr := p.channel.Write(buf[:n]); werr != nil {
 				p.end("client write failed")
 				return
-			}
-			if p.castTee != nil {
-				_, _ = p.castTee.Write(buf[:n])
 			}
 		}
 		if rerr != nil {

@@ -501,6 +501,8 @@ type PreflightItem struct {
 type PreflightResult struct {
 	SetupItems               []PreflightItem        `json:"setup_items"`
 	EnforcedConfinementClass types.ConfinementClass `json:"enforced_confinement_class"`
+	// ConfinementRaiseCause is "blast_radius_floor" when that floor raised the class to CC3; absent otherwise.
+	ConfinementRaiseCause string `json:"confinement_raise_cause,omitempty"`
 	// Warnings carries resolveRunPolicy's clamp notes — a member's silently
 	// narrowed inline policy, a filtered grant. The same list rides
 	// CreateRunResult.Warnings at launch, so a preview and the real thing say

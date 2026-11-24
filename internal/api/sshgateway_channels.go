@@ -547,7 +547,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 		actorType:  types.ActorHuman,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceSSH,
-		onInput:    func() { _ = s.markPresent(ctx, runID, types.ActorHuman, principal, "presence") },
+		onInput:    s.presenceOnInput(ctx, runID, types.ActorHuman, principal),
 		cols:       cols,
 		rows:       rows,
 		// Promotion: this channel just became the writer without reconnecting.
@@ -589,7 +589,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 			// to park this goroutine forever: cancel never ran, and the evicted
 			// pump kept its exec (a tmux client on the SHARED session), its
 			// TouchRun keepalive (the idle reaper never fires) and one of the
-			// run's four channel slots until the TCP connection died. Write
+			// run's channel slots until the TCP connection died. Write
 			// authority was already revoked, so what leaked was the session, not
 			// a second writer — which is exactly why the courtesy may wait a
 			// little and the teardown may not.
@@ -701,7 +701,7 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		sendChannelError(channel, msg)
 		return
 	}
-	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords.copyOutFor(principal), runner.ExecSpec{
 		Argv: sshExecArgv(command),
 		Env:  env,
 	})
@@ -773,7 +773,7 @@ func (s *Server) handleSSHDirectTCPIP(ctx context.Context, runID uuid.UUID, prin
 	defer chCancel(errSSHChannelClosed)
 	ctx = chCtx
 
-	sess, err := s.execFresh(ctx, runID, sshLiveRunWords, runner.ExecSpec{
+	sess, err := s.execFresh(ctx, runID, sshLiveRunWords.copyOutFor(principal), runner.ExecSpec{
 		Argv: sshRelayArgv(run.MachineKind, int(m.DestPort)),
 	})
 	if err != nil {

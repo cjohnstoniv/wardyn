@@ -81,23 +81,38 @@ func setSSHKeepaliveEvery(d time.Duration) (prev time.Duration) {
 // frees the attach slots they hold. It returns when ctx ends.
 //
 // recheck, when set, runs first on every tick and returns why the connection may no longer stand ("" if
-// it may): an idle connection opens no channel, so without it a deleted key or a revoked session would
-// keep the connection, and its slots, until the client left. A reason for which sshReasonTransient is
-// true (a failed store read) does not close it: a store blip must not drop every idle connection at once.
-func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
+// it may) and whether that is a read that failed: an idle connection opens no channel, so without it a deleted
+// key or a revoked session would keep the connection, and its slots, until the client left. A reason that is a
+// failed store read does not close it at once: the connection rides the site's session budget
+// (session_budget.go), then closes; a key that is gone closes it at the next tick.
+func sshProbeConn(ctx context.Context, conn ssh.Conn, b *sessionBudget, recheck func() (reason string, unread bool)) {
 	every := sshKeepaliveEvery()
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	defer b.leave()
 	for {
+		retry := b.retryC()
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+		case <-retry:
+			// A retry asks the recheck alone: the tick's probe keeps its own clock.
+			reason, unread := recheck()
+			if ctx.Err() != nil {
+				return // the connection ended on its own meanwhile
+			}
+			if sshProbeEnds(conn, b, reason, unread) {
+				return
+			}
+			continue
 		}
 		if recheck != nil {
-			if reason := recheck(); reason != "" && !sshReasonTransient(reason) {
-				slog.Info("ssh gateway: closing an idle connection whose key is no longer authorized", slog.String("reason", reason))
-				_ = conn.Close()
+			reason, unread := recheck()
+			if ctx.Err() != nil {
+				return // the connection ended on its own meanwhile
+			}
+			if sshProbeEnds(conn, b, reason, unread) {
 				return
 			}
 		}
@@ -121,18 +136,32 @@ func sshProbeConn(ctx context.Context, conn ssh.Conn, recheck func() string) {
 	}
 }
 
+// sshProbeEnds folds one recheck into the connection's budget and closes it when it must end: a key that is gone at
+// once, a read that failed once no recheck has answered for the session budget.
+func sshProbeEnds(conn ssh.Conn, b *sessionBudget, reason string, unread bool) bool {
+	v := b.step("key", reason != "", unread)
+	if !v.ends() {
+		return false
+	}
+	if v == budgetSpent {
+		b.end()
+	}
+	slog.Info("ssh gateway: closing a connection whose key is no longer authorized or could not be confirmed", slog.String("reason", reason))
+	_ = conn.Close()
+	return true
+}
+
 const (
 	// sshMaxAuthTries bounds per-connection auth attempts. Set explicitly
 	// (rather than relying on ssh.ServerConfig's own default-when-zero of 6)
 	// so the bound is self-documenting here, not implicit in a zero value.
 	sshMaxAuthTries = 6
-	// maxSSHHandshakes bounds connections this process is handshaking at
-	// once, from Accept until NewServerConn returns, and
-	// Config.SSHMaxHandshakesPerSource bounds one source address's share of
-	// them. A connection accepted over either is closed immediately — before
-	// any handshake byte is read or written — so the bound bites before a
-	// goroutine or a NewServerConn call is spent on it.
-	maxSSHHandshakes = 64
+	// DefaultSSHMaxHandshakes is Config.SSHMaxHandshakes' default: the connections this process is handshaking
+	// at once, from Accept until NewServerConn returns, while Config.SSHMaxHandshakesPerSource bounds one
+	// source address's share of them. A connection accepted over either is closed immediately — before any
+	// handshake byte is read or written — so the bound bites before a goroutine or a NewServerConn call is
+	// spent on it.
+	DefaultSSHMaxHandshakes = 64
 	// DefaultSSHMaxHandshakesPerSource is Config.SSHMaxHandshakesPerSource's default.
 	DefaultSSHMaxHandshakesPerSource = 16
 	// DefaultSSHMaxConnections is Config.SSHMaxConnections' default: the bound
@@ -140,7 +169,7 @@ const (
 	// the handshake bounds, so long-lived sessions never use them up and
 	// connections still handshaking never use up this one; a connection
 	// authenticated over it is closed.
-	DefaultSSHMaxConnections = 64
+	DefaultSSHMaxConnections = 256
 	// DefaultSSHMaxConnectionsPerPrincipal is Config.SSHMaxConnectionsPerPrincipal's default: how many of
 	// those authenticated connections one person may hold, so one person cannot take every slot. Counted
 	// by the principal the key is registered to; a connection authenticated over it is told why and closed.
@@ -152,7 +181,7 @@ const (
 	// from the SAME per-run counter — a single run may have open across every
 	// SSH connection combined. A resource-exhaustion bound, not a product
 	// limit.
-	defaultSSHSessionsPerRun = 4
+	defaultSSHSessionsPerRun = 8
 	// maxSSHSyncSessionsPerRun is the separate per-run cap on `wardyn-sync`
 	// channels (docs/design/0.9/PLAN.md §9.4): a sync never takes a shell's
 	// slot and a shell never takes a sync's.
@@ -265,7 +294,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 		_ = ln.Close()
 	}()
 
-	lim := &sshConnLimits{handshakes: make(chan struct{}, maxSSHHandshakes), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
+	lim := &sshConnLimits{handshakes: make(chan struct{}, cmp.Or(s.cfg.SSHMaxHandshakes, DefaultSSHMaxHandshakes)), established: make(chan struct{}, cmp.Or(s.cfg.SSHMaxConnections, DefaultSSHMaxConnections)),
 		perSource: cmp.Or(s.cfg.SSHMaxHandshakesPerSource, DefaultSSHMaxHandshakesPerSource), sources: map[string]int{},
 		perPrincipal: s.sshPerPrincipalCap(), principals: map[string]int{}, metrics: &s.metrics}
 	s.metrics.sshLimits.Store(lim)
@@ -291,7 +320,7 @@ func (s *Server) serveSSH(ctx context.Context, ln net.Listener, signer ssh.Signe
 			s.sshGoTracked(func() { s.handleSSHConn(ctx, conn, cfg, lim, src) })
 		default:
 			lim.leaveSource(src)
-			lim.refused(sshBoundHandshake, maxSSHHandshakes)
+			lim.refused(sshBoundHandshake, cap(lim.handshakes))
 			_ = conn.Close()
 		}
 	}
@@ -364,7 +393,7 @@ func (s *Server) sshServerConfig(signer ssh.Signer) *ssh.ServerConfig {
 // on the NEXT socket I/O, so it does nothing while this function is blocked
 // on a store call or an audit write. Without its own bound, a slow/stuck
 // backend call here lets an UNAUTHENTICATED client park a handshake slot
-// (one of maxSSHHandshakes) indefinitely.
+// (one of Config.SSHMaxHandshakes) indefinitely.
 func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 	ctx, cancel := context.WithTimeout(s.cfg.BaseCtx, sshAuthTimeout)
 	defer cancel()
@@ -377,12 +406,14 @@ func (s *Server) sshAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permiss
 	}
 	rec, err := s.cfg.Store.GetSSHKeyByFingerprint(ctx, fp)
 	if err != nil {
+		reason := "unregistered key"
 		if !errors.Is(err, store.ErrNotFound) {
-			// The audit row below keeps its reason, actor and bucket; the log says it was
-			// the store, not a stranger's key (#2782).
+			// A store fault is not a stranger's key: the row says so, and the log carries the error (#2782). The actor
+			// and bucket stay the unknown key's, since no key was read.
 			slog.ErrorContext(ctx, "api: ssh key lookup failed; refusing the connection", slog.String("run_id", runID.String()), slog.Any("err", err))
+			reason = "key lookup failed"
 		}
-		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, "unregistered key")
+		s.sshAuditAuthFailure(ctx, conn, &runID, "unknown", fp, reason)
 		return nil, errors.New("ssh: unknown key")
 	}
 	// Defense in depth: re-verify byte-equality against the STORED key
@@ -637,9 +668,11 @@ func (s *Server) handleSSHConn(ctx context.Context, nc net.Conn, cfg *ssh.Server
 	// closes the connection, so its doors end with it and the stop's wait (sshGoTracked) does not wait on the client.
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)); _ = sconn.Close() })()
 	dataOut := s.sshDataOut(connCtx, runID)
+	b := s.newSessionBudget(connCtx, sessionWatchID{Run: runID, Actor: types.ActorHuman, Principal: principal, Surface: sessionSurfaceSSH})
 	sshGo(func() {
-		sshProbeConn(connCtx, sconn, func() string {
-			return sshSupportStrict(sconn.Permissions, s.sshCurrentKey(connCtx, sconn.Permissions))
+		sshProbeConn(connCtx, sconn, b, func() (string, bool) {
+			reason := s.sshCurrentKey(connCtx, sconn.Permissions)
+			return reason, sshRecheckUnread(sconn.Permissions, reason)
 		})
 	})
 
@@ -708,8 +741,13 @@ const (
 	sshReasonCutoffLookup = "SSH session cutoff lookup failed"
 )
 
+// The reason sshCurrentKey gives when the connection's run no longer exists, or its run_id
+// extension does not parse: an answer, not a failed read, so the connection closes at the next tick.
+const sshReasonRunGone = "SSH key's run no longer exists"
+
 // sshReasonTransient reports whether reason says a store read failed rather than that the key is gone.
-// A new channel is refused on either; the keepalive recheck closes an idle connection only on the latter.
+// A new channel is refused on either; the keepalive recheck closes a connection at once on the latter, and on
+// the former once the session budget runs out.
 func sshReasonTransient(reason string) bool {
 	switch reason {
 	case sshReasonKeyLookup, sshReasonRunLookup, sshReasonCutoffLookup:
@@ -754,9 +792,12 @@ func (s *Server) sshCurrentKey(ctx context.Context, permissions *ssh.Permissions
 		// from the run: an open connection must not outlive that.
 		runID, err := uuid.Parse(permissions.Extensions["run_id"])
 		if err != nil {
-			return sshReasonRunLookup
+			return sshReasonRunGone
 		}
 		run, err := s.cfg.Store.GetRun(ctx, runID)
+		if errors.Is(err, store.ErrNotFound) {
+			return sshReasonRunGone
+		}
 		if err != nil {
 			return sshReasonRunLookup
 		}
