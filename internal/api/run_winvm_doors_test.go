@@ -18,6 +18,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/recording"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -100,16 +101,28 @@ func TestWindowsVMServiceRequestRefused(t *testing.T) {
 	}
 }
 
+// poolDefaultsStore gives the Windows VM test store the runner pool reads that recording needs, with an organisation
+// that requires nothing.
+type poolDefaultsStore struct {
+	*winvmStore
+	store.RunnerPoolStore
+}
+
+func (poolDefaultsStore) GetRunnerPoolOrgDefaults(context.Context) (types.RunnerPoolDefaults, error) {
+	return types.RunnerPoolDefaults{}, nil
+}
+
 // With a recording store and no level set, a Windows VM launch is refused 403 with field recording, and so is
-// one into a pool that requires recording, whatever the policy says. A policy that says off passes on to the
-// runner checks.
+// one into a pool that requires recording, whatever the policy says. A saved policy that says off passes on to
+// the runner checks; a member's inline policy cannot go under the organisation's level, so it would not.
 func TestWindowsVMRecordingWiring(t *testing.T) {
-	srv, _, _ := winvmServer(t, true)
+	srv, ws, _ := winvmServer(t, true)
 	rs, err := recording.NewFSStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv.cfg.RecordingStore = rs
+	srv.cfg.Store = poolDefaultsStore{winvmStore: ws} // reads the pool's requirement, as the real store does
 	off := types.RunPolicySpec{Recording: types.RecordingOff}
 	required := runPlacement{pooled: true, placement: types.PlacementLocal, row: types.RunnerPool{Recording: types.RecordingRequired}}
 	for name, tc := range map[string]struct {
@@ -121,13 +134,13 @@ func TestWindowsVMRecordingWiring(t *testing.T) {
 		"a pool that records":    {spec: off, place: required, msg: windowsRecordingMsg},
 		"a terminal level asked": {spec: types.RunPolicySpec{Recording: types.RecordingTerminal}, msg: "would be recorded at terminal"},
 	} {
-		rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), winvmReq(), tc.spec, tc.place, governanceCeiling{}, true)
+		rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), winvmReq(), tc.spec, tc.place, governanceCeiling{}, false)
 		wantWinRefusal(t, name, rf, http.StatusForbidden, reasonWindowsVMFeatureRefused, "recording")
 		if rf != nil && !strings.Contains(rf.body.Error, tc.msg) {
 			t.Errorf("%s: %q, want it to say %q", name, rf.body.Error, tc.msg)
 		}
 	}
-	rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), winvmReq(), off, runPlacement{}, governanceCeiling{}, true)
+	rf := srv.windowsPlacementRefusal(winvmHTTP(memberContext()), winvmReq(), off, runPlacement{}, governanceCeiling{}, false)
 	wantWinRefusal(t, "recording off", rf, http.StatusUnprocessableEntity, reasonWindowsVMRunnerUnsupported, "")
 }
 
