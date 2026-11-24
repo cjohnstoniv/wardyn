@@ -5,7 +5,8 @@
 -- hash_format. A format 2 row with a salt that is not 64 lowercase hex, and any format other than 1 or 2,
 -- is refused. This file holds only the function and the chain trigger's two statements, so it is pure DDL,
 -- and it is the last file db.replayTriggerMigrations replays: a restored trigger is left with this body.
--- It needs the columns and audit_row_hash_v2 from the migration before it. Idempotent.
+-- The migration before it holds the same function body, so the two never disagree. It needs the columns and
+-- audit_row_hash_v2 from that migration. Idempotent.
 
 DO $mig$
 DECLARE
