@@ -66,6 +66,9 @@ func (p *Provider) mint(ctx context.Context, runID uuid.UUID, id spiffeid.ID, hu
 		if err := p.ensureEntry(ctx, runID, id); err != nil {
 			return identity.RunIdentity{}, err
 		}
+		if err := p.refuseRevokedRun(ctx, runID); err != nil {
+			return identity.RunIdentity{}, err
+		}
 	}
 	token, err := p.server.MintJWTSVID(ctx, id, audience, identity.RunTokenTTL)
 	if err != nil {
@@ -115,6 +118,21 @@ func (p *Provider) ensureEntry(ctx context.Context, runID uuid.UUID, id spiffeid
 		return fmt.Errorf("spire identity: create entry for run %s: %w", runID, err)
 	}
 	return nil
+}
+
+// refuseRevokedRun is checked after ensureEntry: a mint that raced the run's RevokeRun (a renew or a
+// queued start against a stop) must not leave an entry that the revoke already deleted re-created. When
+// the run is revoked, or the denylist cannot say, the run's entry is deleted again and the mint refused.
+func (p *Provider) refuseRevokedRun(ctx context.Context, runID uuid.UUID) error {
+	revoked, err := p.revocations.IsRevoked(ctx, "", runID)
+	if err == nil && !revoked {
+		return nil
+	}
+	refusal := fmt.Errorf("spire identity: run %s is revoked, so no token is minted", runID)
+	if err != nil {
+		refusal = fmt.Errorf("spire identity: revocation check for run %s failed (failing closed): %w", runID, err)
+	}
+	return errors.Join(refusal, p.deleteEntries(ctx, runID))
 }
 
 // runSelector is the one selector only runID's entry carries.

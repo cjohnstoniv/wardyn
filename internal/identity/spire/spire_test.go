@@ -146,6 +146,11 @@ func TestSpire_EntryLifecycle(t *testing.T) {
 	if len(h.srv.Entries()) != 0 || len(ev) != 3 || ev[1] != "denylist "+run.String() || ev[2] != "delete "+entries[0].ID {
 		t.Fatalf("revoke events %v, want the denylist written before the entry delete", ev)
 	}
+	// A mint after the revoke (a renew or a queued start racing the stop) must not leave the entry the
+	// revoke deleted re-created.
+	if ri, err := h.p.MintRunIdentity(ctx, run, "alice", "", aud, false); err == nil || ri.Token != "" || len(h.srv.Entries()) != 0 {
+		t.Fatalf("mint after RevokeRun = (%q, %v) with %d entries, want an error and no entry", ri.Token, err, len(h.srv.Entries()))
+	}
 }
 
 // S8, S8b, S9: a server outage fails mint and renew closed and writes no row; the current token

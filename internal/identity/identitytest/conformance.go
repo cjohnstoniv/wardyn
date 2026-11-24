@@ -186,9 +186,17 @@ func revokeSparesConformance(t *testing.T, p identity.Provider) {
 	}
 }
 
+// A provider may fail closed at the mint (one that checks the denylist before it mints) or at Verify; it
+// never yields a token that verifies.
 func revocationErrorConformance(t *testing.T, p identity.Provider) {
-	ri := mint(t, p, uuid.New(), "a", "a", false)
-	_, err := p.Verify(context.Background(), ri.Token, conformanceAud)
+	ri, err := p.MintRunIdentity(context.Background(), uuid.New(), "a", "a", conformanceAud, false)
+	if err != nil {
+		if ri.Token != "" {
+			t.Fatal("a mint that failed closed still returned a token")
+		}
+		return
+	}
+	_, err = p.Verify(context.Background(), ri.Token, conformanceAud)
 	var rev *identity.RevokedTokenError
 	if err == nil || errors.As(err, &rev) {
 		t.Fatalf("verify with a failing revocation store = %v, want an ordinary error (fail closed)", err)
