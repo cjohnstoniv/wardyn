@@ -139,6 +139,9 @@ type SiteConfig struct {
 	// Sessions is how open sessions behave while Wardyn cannot check access (#4057). A POINTER for the same
 	// byte-identical-GET reason as the provider blocks; nil reads as the defaults.
 	Sessions *SiteSessions `json:"sessions,omitempty"`
+	// FeatureSwitches is the features block (site_features.go): the features new in 0.11, each off until an admin
+	// turns it on. Read it only through internal/api's siteFeatureOn and siteFeatureSettings.
+	FeatureSwitches *SiteFeatureSwitches `json:"features,omitempty"`
 	// EffectiveScmHosts is READ-ONLY, SERVER-OWNED: ScmHosts minus hosts a
 	// provider row claims, union enabled providers' hosts. A real field
 	// (not a wrapper key) so a get|set round trip still decodes under

@@ -325,7 +325,7 @@ var reasonWireValueShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // reasons_portal_registration.go and reasons_portal_lifecycle.go the issuer portal ones. Every reader of the whole set (this guard, and the
 // coverage guard in reason_coverage_guard_test.go) reads this list, so a file left off it hides its values from
 // both.
-var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go", "reasons_service_grant.go", "reasons_portal_exchange.go", "reasons_portal_registration.go", "reasons_portal_lifecycle.go"}
+var reasonsGoFiles = []string{"reasons.go", "reasons_routes.go", "reasons_revive.go", "reasons_governance.go", "reasons_kept_machine.go", "reasons_desktop_review.go", "reasons_policies.go", "reasons_service_grant.go", "reasons_portal_exchange.go", "reasons_portal_registration.go", "reasons_portal_lifecycle.go", "reasons_site_features.go"}
 
 // reasonsGoConstValues parses every top-level const's string-literal value in
 // reasonsGoFiles via go/parser rather than a line-anchored regex, so a
