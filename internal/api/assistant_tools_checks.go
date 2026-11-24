@@ -283,9 +283,19 @@ func (s *Server) assistantValidate(r *http.Request, sub assistantSubject, caller
 	case sub.targetKind == types.AssistantTargetTemplate:
 		return s.assistantValidateTemplate(r, sub)
 	}
-	// Any other governance kind: reviewFor refuses a body its route would refuse.
+	// Any other governance kind: its route's own validator refuses the body, as restrictionReviewFor runs it.
+	// reviewFor then only reads, so its error is a failed read and a 500, never a message to the model.
+	if sub.govKind == govKindRestriction && sub.draft != nil {
+		var body types.RestrictionWrite
+		if err := decodeHeldPayload(sub.draft, &body); err != nil {
+			return []assistantFieldError{{Message: "the draft is not a restriction: " + err.Error()}}, nil
+		}
+		if err := validateRestriction(&body); err != nil {
+			return []assistantFieldError{{Message: err.Error()}}, nil
+		}
+	}
 	if _, err := s.reviewFor(ctx, sub.govKind, sub.key, nil, sub.draft, caller); err != nil {
-		return []assistantFieldError{{Message: err.Error()}}, nil
+		return nil, err
 	}
 	return []assistantFieldError{}, nil
 }

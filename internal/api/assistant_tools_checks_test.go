@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"testing"
 
@@ -157,5 +159,39 @@ func TestAssistantToolListsAreNeverEmpty(t *testing.T) {
 				t.Errorf("listed tool %s has no handler", tool.Name)
 			}
 		}
+	}
+}
+
+// assistantFailingRestrictions is a store whose restriction read fails, for the validator's failure case.
+type assistantFailingRestrictions struct {
+	store.Store
+	store.RestrictionStore
+}
+
+func (assistantFailingRestrictions) GetRestriction(context.Context, uuid.UUID) (types.Restriction, error) {
+	return types.Restriction{}, errors.New("pq: connection reset SECRET-READ-TEXT")
+}
+
+// On a restriction change, validate keeps the route validator's refusal as a message, but a failed read is an
+// error (a 500), never the raw text handed to the model as a field error.
+func TestAssistantValidateRestrictionReadFailureIsAnError(t *testing.T) {
+	s := &Server{cfg: Config{Store: assistantFailingRestrictions{}}}
+	r := httptest.NewRequest(http.MethodPost, "/", nil)
+	sub := assistantSubject{govKind: govKindRestriction, key: uuid.NewString()}
+
+	sub.draft = json.RawMessage(`{"name":"","spec":{},"limits":{},"members":[]}`)
+	errs, err := s.assistantValidate(r, sub, reviewCaller{})
+	if err != nil || len(errs) != 1 || errs[0].Message == "" {
+		t.Fatalf("invalid body: errs=%v err=%v, want one validator message", errs, err)
+	}
+
+	sub.draft = json.RawMessage(`{"name":"tighten","spec":{},"limits":{},"members":[]}`)
+	errs, err = s.assistantValidate(r, sub, reviewCaller{})
+	if err == nil || errs != nil {
+		t.Fatalf("failed read: errs=%v err=%v, want an error and no message", errs, err)
+	}
+	ref := assistantCheckFailed(err)
+	if ref == nil || ref.status != http.StatusInternalServerError || regexp.MustCompile(`SECRET-READ-TEXT|pq:`).MatchString(ref.msg) {
+		t.Errorf("failed read refusal = %+v, want a 500 without the store's text", ref)
 	}
 }
