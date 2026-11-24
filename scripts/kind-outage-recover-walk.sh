@@ -63,6 +63,7 @@ pass() { printf '  \033[1;32m[pass]\033[0m %s\n' "$*"; }
 fail() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"; FAILED=1; }
 FAILED=0
 PAUSED_TEXT="network is paused until Wardyn can check the run again"
+CLOSED_TEXT="this run's egress is closed"
 POLICY_BASE="\"allowed_domains\":[\"${HOST}\"],\"first_use_approval\":\"always_deny\",\"min_confinement_class\":\"CC1\",\"auto_stop_after_sec\":-1"
 # wait_minute N T0 sleeps until N minutes after T0 (a $SECONDS reading).
 wait_minute() { local t=$(($2 + $1 * 60 - SECONDS)); ((t <= 0)) || sleep "${t}"; }
@@ -123,15 +124,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# qs_create NAME OUTAGE: a server-mode run (interactive, idle) with OUTAGE ("" or ',"outage":{...}'); prints its id.
+# qs_create VAR NAME OUTAGE: creates a server-mode run (interactive, idle) with OUTAGE ("" or ',"outage":{...}') and
+# stores its id in VAR. It runs in this shell, not a subshell, so its failure ends the walk, and cleanup kills every
+# run already stored.
 qs_create() {
-  local code id
-  code="$(qs_api POST /api/v1/runs "{\"agent\":\"claude-code\",\"repo\":\"local:kind-outage-$1\",\"interactive\":true,
-    \"inline_policy\":{${POLICY_BASE},\"resources\":{\"cpu_millis\":250,\"memory_mib\":256}$2}}")"
-  [[ "${code}" == 200 || "${code}" == 201 ]] || { cat "${TMPDIR}/qs.json" >&2; die "POST /runs for run $1 answered ${code}"; }
-  id="$(jq -r '.id // empty' "${TMPDIR}/qs.json")"
-  [[ -n "${id}" ]] || die "the create response for run $1 carried no id"
-  echo "${id}"
+  local -n created_id="$1"
+  local code
+  code="$(qs_api POST /api/v1/runs "{\"agent\":\"claude-code\",\"repo\":\"local:kind-outage-$2\",\"interactive\":true,
+    \"inline_policy\":{${POLICY_BASE},\"resources\":{\"cpu_millis\":250,\"memory_mib\":256}$3}}")"
+  [[ "${code}" == 200 || "${code}" == 201 ]] || { cat "${TMPDIR}/qs.json" >&2; die "POST /runs for run $2 answered ${code}"; }
+  created_id="$(jq -r '.id // empty' "${TMPDIR}/qs.json")"
+  [[ -n "${created_id}" ]] || die "the create response for run $2 carried no id"
 }
 # qs_wait_renewed RUN...: waits up to 20 minutes for each RUN's token_renewed_at to move past its reading at RUNNING.
 qs_wait_renewed() {
@@ -162,8 +165,8 @@ leg_a() {
   wait_healthy "${QS_BASE}" 10 2 || die "${QS_BASE}/healthz did not answer"
 
   step "A: run A (default outage terms) and run B (strict, a 30-minute allowance), server-mode Kubernetes runs"
-  RUN_A="$(qs_create a "")"
-  RUN_B="$(qs_create b ',"outage":{"allowance_minutes":30,"strict":true}')"
+  qs_create RUN_A a ""
+  qs_create RUN_B b ',"outage":{"allowance_minutes":30,"strict":true}'
   qs_wait_renewed "${RUN_A}" "${RUN_B}"
   for id in "${RUN_A}" "${RUN_B}"; do
     out="$(qs_https "${id}")"
@@ -178,8 +181,11 @@ leg_a() {
   wait_minute 35 "${t0}"
   out="$(qs_https "${RUN_A}")"
   [[ "${out}" == 2* || "${out}" == 3* ]] && pass "minute 35: run A's ${HOST} answers (${out})" || fail "minute 35: run A's ${HOST} should answer inside its allowance, got '${out}'"
-  out="$(qs_https "${RUN_B}")"
-  [[ "${out}" == 000* ]] && pass "minute 35: run B's ${HOST} does not answer past its strict allowance (${out})" || fail "minute 35: run B's ${HOST} should not answer past its strict allowance, got '${out}'"
+  # Its proxy must still be up and refusing: no answer at all would be a dead proxy, which proves nothing.
+  out="$(qs_forward "${RUN_B}")"
+  [[ "${out##*$'\n'}" == 503 && "${out}" == *"${CLOSED_TEXT}"* ]] \
+    && pass "minute 35: run B's proxy refuses past its strict allowance (503, closed)" \
+    || fail "minute 35: run B's proxy should answer 503 with the closed body past its strict allowance, got '${out//$'\n'/ | }'"
   wait_minute 65 "${t0}"
   out="$(qs_forward "${RUN_A}")"
   [[ "${out##*$'\n'}" == 503 && "${out}" == *"${PAUSED_TEXT}"* ]] \

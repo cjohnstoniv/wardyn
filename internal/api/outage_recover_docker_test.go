@@ -45,6 +45,9 @@ const (
 	// ordPausedBody is the proxy's refusal while its run's network is paused (internal/egress/proxy/self_lapse.go
 	// pausedBody).
 	ordPausedBody = "wardyn: this run's network is paused until Wardyn can check the run again"
+	// ordClosedBody is the proxy's refusal once its gate has lapsed, as a strict run's does at its allowance
+	// (self_lapse.go refuseClosed).
+	ordClosedBody = "wardyn: this run's egress is closed"
 	// ordStrictHint is the failure hint of a run its strict outage terms end (run_lost.go sweepLapsedRunTokens).
 	ordStrictHint = "the run's strict outage terms end it: its network was not confirmed within its allowance"
 	// ordControlHost is the name a proxy reaches the host by: the driver maps it to the Docker host gateway in
@@ -209,8 +212,9 @@ func TestOutageRecover_ServerDocker_Docker(t *testing.T) {
 	if code, body := ordFetch(agentA, httpPort); code != http.StatusOK || !strings.Contains(body, "internal") {
 		t.Errorf("minute %d: run A's allowed host answered %d %q, want 200 internal (the default terms keep its network for an hour)", first, code, body)
 	}
-	if code, body := ordFetch(agentB, httpPort); code == http.StatusOK || strings.Contains(body, "internal") {
-		t.Errorf("minute %d: run B's allowed host answered %d %q, want no answer (its strict 30-minute allowance is spent)", first, code, body)
+	// Its proxy must still be up and refusing: no answer at all would be a dead proxy, which proves nothing.
+	if code, body := ordFetch(agentB, httpPort); code != http.StatusServiceUnavailable || !strings.Contains(body, ordClosedBody) {
+		t.Errorf("minute %d: run B's proxy answered %d %q, want 503 with %q (its strict 30-minute allowance is spent)", first, code, body, ordClosedBody)
 	}
 	ordSleepUntil(stopAt.Add(time.Duration(second) * time.Minute))
 	if code, body := ordFetch(agentA, httpPort); code != http.StatusServiceUnavailable || !strings.Contains(body, ordPausedBody) {
