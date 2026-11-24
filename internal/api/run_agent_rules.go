@@ -17,6 +17,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/agentpolicy"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -278,15 +279,34 @@ func agentRulesReassertFlag(data map[string]any, layers []sealLayer) {
 
 // recordBoundPolicy is the policy a workspace record or verify session launches under: the session's own, met
 // with the rules of the agent it runs (stepRunAgent) as a run's policy is, then held inside the boundary. It
-// only narrows. A rule the session cannot meet refuses the launch, answered as the create door answers it (422
-// with the same reason); rules that cannot be read fail it as a server error, never launch without them.
-func (s *Server) recordBoundPolicy(ctx context.Context, ceiling governanceCeiling, policy types.RunPolicySpec) (types.RunPolicySpec, error) {
+// only narrows. The session launches at the strongest class the runner offers (class, of caps). A rule it cannot
+// meet refuses the launch with agent_rules_conflict or agent_rules_invalid: a confinement floor above that class,
+// or inner walls the interactive claude-code session cannot launch with. Rules that cannot be read fail it as a
+// server error, never launch without them.
+func (s *Server) recordBoundPolicy(ctx context.Context, ceiling governanceCeiling, policy types.RunPolicySpec, class types.ConfinementClass, caps runner.Capabilities) (types.RunPolicySpec, error) {
 	source := policySourceRecord{knobs: startProvenance(memberProvenance)}
 	if _, refusal := s.agentRulesRunStep(ctx, createRunRequest{Agent: stepRunAgent}, &policy, &source); refusal != nil {
-		if refusal.err != nil {
-			return policy, fmt.Errorf("%s: %w", refusal.operation, refusal.err)
+		return policy, recordRulesRefusal(refusal)
+	}
+	if floor := policy.MinConfinementClass; floor.Rank() > class.Rank() {
+		if rec := source.knobs["min_confinement_class"]; rec.Layer == policyref.LayerAgentRules {
+			_, whoStart := agentRulesLabel(rec.Name)
+			msg := fmt.Sprintf("%s set min_confinement_class %s: runner %q cannot enforce confinement_class %s (available: %s). Ask a security admin to change the agent rules, or use a runner that offers it.",
+				whoStart, floor, caps.Driver, floor, classesOrNone(caps.ConfinementClasses))
+			return policy, &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reasonAgentRulesConflict, err: errors.New(msg)}
 		}
-		return policy, &sourceRefusal{status: refusal.status, reason: refusal.body.Reason, err: errors.New(refusal.body.Error)}
+	}
+	if _, refusal := agentRulesInnerWallsFor(createRunRequest{Agent: stepRunAgent, Interactive: true}, policy, nil, class, source); refusal != nil {
+		return policy, recordRulesRefusal(refusal)
 	}
 	return boundaryRecordPolicy(ceiling, policy)
+}
+
+// recordRulesRefusal is a run refusal as the record launch returns it: a server error as an error, anything else
+// as the *sourceRefusal handleRecordWorkspace answers with its own status and reason.
+func recordRulesRefusal(refusal *runRefusal) error {
+	if refusal.err != nil {
+		return fmt.Errorf("%s: %w", refusal.operation, refusal.err)
+	}
+	return &sourceRefusal{status: refusal.status, reason: refusal.body.Reason, err: errors.New(refusal.body.Error)}
 }

@@ -637,7 +637,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	run.Interactive = true
 	run.ModelProviderID = mp.provider.ID
 	// The session's policy, built one function over (recordSessionPolicy).
-	policy, merr := s.recordBoundPolicy(ctx, ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains))
+	policy, merr := s.recordBoundPolicy(ctx, ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains), cc, caps)
 	if merr != nil {
 		return types.AgentRun{}, false, abort(merr)
 	}
