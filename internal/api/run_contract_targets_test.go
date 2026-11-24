@@ -199,7 +199,8 @@ func TestWorkspaceSelectionsShape(t *testing.T) {
 		{"malformed id", sels(client.WorkspaceSelection{WorkspaceID: "A"}), reasonWorkspaceSelectionInvalid},
 		{"listed twice", sels(client.WorkspaceSelection{WorkspaceID: a}, client.WorkspaceSelection{WorkspaceID: a}), reasonWorkspaceSelectionInvalid},
 		// r1 H2: another spelling of a valid id would miss the options keyed by it.
-		{"upper-case id", sels(client.WorkspaceSelection{WorkspaceID: strings.ToUpper(a), Repos: repos()}), reasonWorkspaceSelectionInvalid},
+		// A fixed id with letters: a random one can be all digits, and then upper case changes nothing.
+		{"upper-case id", sels(client.WorkspaceSelection{WorkspaceID: strings.ToUpper("6f9619ff-8b86-4d01-b42d-00c04fc964ff"), Repos: repos()}), reasonWorkspaceSelectionInvalid},
 		{"braced id", sels(client.WorkspaceSelection{WorkspaceID: "{" + a + "}", Repos: repos()}), reasonWorkspaceSelectionInvalid},
 		{"urn id", sels(client.WorkspaceSelection{WorkspaceID: "urn:uuid:" + a, Repos: repos()}), reasonWorkspaceSelectionInvalid},
 		{"too many", sels(many...), reasonWorkspaceSelectionInvalid},
