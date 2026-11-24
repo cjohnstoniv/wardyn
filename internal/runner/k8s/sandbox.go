@@ -310,7 +310,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 
-	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP.
+	// (4) Proxy pod, then poll until it is ready and has its CNI-assigned IP (startProxyPod: a runner redraws a fenced IP).
 	proxyPod, err := d.buildProxyPod(proxyPodInputs{
 		RunID: spec.RunID, Namespace: ns, SecretName: secretName(spec.RunID),
 		Deadline: d.podDeadline(spec.Resources.LifetimeCap), ControlPlaneURL: spec.ProxyConfig.ControlPlaneURL,
@@ -320,19 +320,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(err)
 	}
 	preferNode(proxyPod, warmNode)
-	createdProxy, err := d.createPod(ctx, spec.RunID, componentProxy, proxyPod)
-	if err != nil {
-		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
-	}
-
 	clock := d.newStartClock()
-	proxyIP, err := d.waitPodIP(ctx, clock, ns, proxyPodName(spec.RunID), spec.NotifyWaiting)
+	createdProxy, proxyIP, err := d.startProxyPod(ctx, clock, spec, proxyPod)
 	if err != nil {
-		return fail(fmt.Errorf("k8s: proxy pod never became ready: %w", err))
-	}
-	if d.runnerMode() && d.cfg.IPFenced != nil && d.cfg.IPFenced(proxyIP) {
-		// Contained before it ever opens, rather than running to its deadline.
-		return fail(fmt.Errorf("k8s: proxy pod %s: %w", proxyIP, errRelayIPFenced))
+		return fail(err)
 	}
 	proxyAddr, err := d.keepAddress(ctx, ns, spec.RunID, keepSvc, proxyIP)
 	if err != nil {
@@ -488,7 +479,9 @@ func (d *Driver) waitContainerRunning(ctx context.Context, clock *startClock, ns
 	// Last reason REPORTED, so the report fires on change, not on a tick.
 	var lastReason string
 	var pulls pullWatch
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
@@ -626,7 +619,9 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName s
 	var lastPod *corev1.Pod
 	var lastGetErr error
 	var lastReason string
-	err := clock.poll(ctx, func(pollCtx context.Context) (bool, bool, error) {
+	b := d.podBell(ns, podName)
+	defer b.stop()
+	err := clock.poll(ctx, b, func(pollCtx context.Context) (bool, bool, error) {
 		pod, gerr := d.readPod(pollCtx, ns, podName)
 		if tolerateGetError(gerr, &lastGetErr) {
 			return false, false, nil
@@ -641,6 +636,12 @@ func (d *Driver) waitPodIP(ctx context.Context, clock *startClock, ns, podName s
 			if onWaiting != nil {
 				onWaiting(reason)
 			}
+		}
+		if clock.fenced != nil && pod.Status.PodIP != "" && clock.fenced(pod.Status.PodIP) {
+			// On every read, not after Ready: a runner's proxy on a fenced IP never listens (the relay
+			// refuses its first renew), so it would lapse a minute later as a renew failure.
+			ip = pod.Status.PodIP
+			return false, room, errFencedDraw
 		}
 		if err := proxyStartFailure(pod); err != nil {
 			return false, room, err

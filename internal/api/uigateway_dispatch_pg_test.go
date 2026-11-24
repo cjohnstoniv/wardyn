@@ -210,6 +210,7 @@ func TestUIRelayIssuerPortal_ZeroBytesAfterDeadline_PG(t *testing.T) {
 				}
 				free()
 				r := answerWithin(t, ans, 10*time.Second)
+				rig.dr.settle(2 * time.Second) // the writes the answer raced, recorded before they are read
 				late, all := rig.dr.bytesAtOrAfter(by)
 				if late != 0 {
 					t.Fatalf("%d bytes passed the driver at or after the dispatch time (%d in all)", late, all)

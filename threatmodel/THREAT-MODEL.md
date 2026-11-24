@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.2). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.5). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -417,7 +417,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
-| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
+| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, on by default; `off` turns it off) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
 | A corporate root for the runner's own connection | `--org-ca-file` is trusted for that connection and registration only, never a sandbox mount or run proxy; a uid-and-mode hygiene rule for the trust store adds no reach | #70 |
 
 - B1–B11 are unchanged for a run placed `remote`.
@@ -437,7 +437,7 @@ A run gets what every layer allows. The run's policy record names the layer that
   - Agent pods keep egress to their own proxy only; the proxy gains one explicit runnerd peer (`runnerdPeerRules`, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)).
 - **Boot refusals** (`k8sRunnerHooks` in [`cmd/wardyn-runnerd/production_k8s.go`](../cmd/wardyn-runnerd/production_k8s.go)).
   - runnerd boots only on an `enforced` egress-canary verdict. `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL` and `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` are refused on a runner (`errRunnerNetPolOverride`).
-  - A SelfSubjectAccessReview that finds a missing verb refuses boot (`CheckRunnerAccess`), and so do another runner's objects in the runs namespace (`CheckForeignObjects`).
+  - A SelfSubjectAccessReview that finds a missing verb refuses boot (`CheckRunnerAccess`), and so do another runner's objects in the runs namespace (`CheckForeignObjects`). `pods: watch` is the one granted verb the review does not ask for: without it the pod waits poll and runnerd starts.
   - A schedulable node of the runner's architecture whose kubelet is below 1.31 refuses boot, named (`kubelet_below_floor`, `CheckKubeletFloor`).
   - A cluster that rewrites a pod's source address toward the relay Service refuses boot (`relay_source_rewritten`, `ProbeRelaySource`).
 - **Hard deny.** Every run's proxy refuses `svc`, the cluster domain, the relay address, runnerd's pod IP, the API server addresses the chart reads at `helm install` and `helm upgrade` (a `helm template` render adds none), and any CIDRs in `egress.hardDenyCIDRs`, which is empty by default: set it to the cluster's pod and service CIDRs. It checks the name and every resolved address before `internal_hosts` lifts anything (`NewHardDeny`, [`internal/runner/k8s/hard_deny.go`](../internal/runner/k8s/hard_deny.go)). A run on an organisation runner reaches no in-cluster service inside that denied set. With the runner's own `--upstream-proxy`, a name the run's proxy cannot resolve gets only the name and suffix check and goes to that proxy by name, so keep that proxy outside the cluster ([k8s-runners.md](../docs/operations/k8s-runners.md#in-cluster-services-are-unreachable)).
@@ -594,7 +594,7 @@ is not the deployment described above.**
 | | GitHub's endpoint takes no audience or resource indicator, so this credential is not audience-bound (the RFC 8707 discipline in Wardyn is the per-run IDENTITY token's, `internal/identity`, which is a different credential). | |
 | | Kill-switch cascade on run end **[shipped]**; bot-branch-only push confinement **[shipped, default-on]** ([`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)). Endpoint deny, lane exclusivity and the `VerifyRefRuleset` gate: asset #4. Token-side confinement is read-verifiable and gateable, never created by Wardyn. | |
 | Confused-deputy against the token broker | Callers authenticated by their run's identity token; egress allowlist and injection-rule registration are separate capabilities. | B4 |
-| Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
+| Insider hiding behind agent identity | The run identity token carries `sub` (the person), `act` (the run's SPIFFE ID) and `sponsor`; the agent never replaces the human in the chain — it is added to it. An audit row names one actor and its run (`run_id`), so who is behind an agent's row is that run's `created_by` ([ARCHITECTURE.md](../ARCHITECTURE.md#security-invariants), item 4). A run's commits name that creator as author and the run as committer by default; code in the sandbox can change both. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. | B5, ID |
 | | PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. | |
 | | Above that line nothing separates duties — residual #14. | |
@@ -609,7 +609,7 @@ is not the deployment described above.**
 | Delegation-chain-splicing on nested `act` claims (IETF March 2026) | Chain integrity-protected end-to-end. Flagged as active research; we defend and monitor, not declare solved. | ID, B5 |
 | Inter-tenant lateral movement | Docker: a separate per-run L0 network per sandbox (no shared bridge, no cross-run route) + per-run identity scoping **[shipped]**. Kubernetes: default-deny east-west NetworkPolicy **[shipped]** (empty-ingress + own-proxy-only egress per sandbox pod, [`internal/runner/k8s/sandbox.go`](../internal/runner/k8s/sandbox.go)). | B1, L0 (L1), ID |
 | Fleet-policy disablement before malicious action | Policy changes are themselves audited — policy CRUD emits `policy.create/update/delete` **[shipped]**. Fail-closed narrow-only managed settings (`disableBypassPermissionsMode`) 🟢 **[shipped]** for hold runs (`internal/agentpolicy`). | AU |
-| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and bounded concurrent counts: 64 connections handshaking (one over it is closed before any handshake byte), at most 16 of them from one source address (`WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE`), and, counted apart, 64 authenticated connections (`WARDYN_SSH_MAX_CONNECTIONS`). Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and writes a throttled warning. **Residual:** behind a shared ingress or NAT every client shares one source address, and enough sources together can still fill the shared handshake bound until their deadlines. | B9 |
+| Slowloris / connection exhaustion against the SSH pre-auth listener | **[v0.5+ shipped]** Per-connection handshake deadline (cleared once authenticated — never bounds a live session), `MaxAuthTries`, and bounded concurrent counts: 64 connections handshaking by default (`WARDYN_SSH_MAX_HANDSHAKES`; one over it is closed before any handshake byte), at most 16 of them from one source address (`WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE`), and, counted apart, 256 authenticated connections by default (`WARDYN_SSH_MAX_CONNECTIONS`). Every refusal counts in `wardyn_ssh_connections_refused_total{bound}` and writes a throttled warning. **Residual:** behind a shared ingress or NAT every client shares one source address, and enough sources together can still fill the shared handshake bound until their deadlines. | B9 |
 | | `ssh.NewServerConn` otherwise blocks forever with no library-default timeout. | |
 | | A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. | |
 | | These bounds are load-bearing rather than belt-and-braces: the DAEMON default is off (`WARDYN_SSH_LISTEN` unset), but the one-line installer and the desktop envelope both ship it ON at `:2222` (see B9). | |
@@ -628,7 +628,7 @@ is not the deployment described above.**
 | Relay reaching a port the operator never declared | **[v0.6 shipped]** Only ports in the policy's `ui_apps` — operator-authored, at most 8, validated wherever a policy enters (stored, inline, `WARDYN_DEFAULT_POLICY`). | B1, B10 |
 | | The port is captured from the effective policy AT TICKET REDEMPTION into the signed cookie, so no later request can name a different one, and the dial target is re-verified per connection. | |
 | | Policy names an app, never a command string: what starts is the image's own `/usr/local/bin/wardyn-ui-<name>` launcher. `ssh -L` remains the undeclared-port escape hatch, bounded by its own owner-or-admin gate. | |
-| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec, bounded per-run at 8 concurrent (`maxUIConnsPerRun`, vs `WARDYN_SSH_MAX_SESSIONS_PER_RUN` (default 4)), pooled idle connections closed after 90s. | B10, B1 |
+| Exec/resource exhaustion through relay connections | **[v0.6 shipped]** Each relay connection is one live `socat` exec, bounded per-run at 8 concurrent (`maxUIConnsPerRun`, vs `WARDYN_SSH_MAX_SESSIONS_PER_RUN` (default 8)), pooled idle connections closed after 90s. | B10, B1 |
 | | That bounds connections, NOT the execs behind them: neither substrate offers "kill this exec", so a `socat` whose app-side half is still held lingers until the sandbox stops. | |
 | | Published, not hidden — [`docs/UI-SANDBOXES.md`](../docs/UI-SANDBOXES.md) "Resource bounds", `uiIdleConnTimeout`'s own comment ([`internal/api/uigateway.go`](../internal/api/uigateway.go)), and [`scripts/run-e2e-ui-sandbox.sh`](../scripts/run-e2e-ui-sandbox.sh), which asserts what this promises (20 relayed requests must not become 20 execs). A run reload per connection means a stopped run stops serving (409). | |
 | Cross-site forged request against a signed-in console session (CSRF) | **[v0.7.3 shipped — in EVERY mode]** Cookie-authenticated writes must be same-origin: [detail](#cross-site-forged-request-against-a-signed-in-console-session-csrf). | ID, B10-adjacent |
@@ -2474,7 +2474,7 @@ These risks are **not closed by v1 Wardyn**.
       - (a) holds unchanged: a restored row opens until its wrapping-key version is disabled in Key Vault.
     - (e) **Crypto-erasure (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for the rows it covers, and for no others.
       - A person's credential written with it on has its data key under that person's own `cred` principal key.
-      - And an erase destroys that key, so the row cannot be read on any replica at its next use, whatever a backup holds of the row.
+      - And an erase destroys that key, so this database cannot read the row on any replica at its next use, nor a copy of the row restored into it from a backup.
       - **The scope is exactly the v3 rows.**
         - A v1 row, a row written while the setting was off, an external-store pointer (the value lives in the organisation's store), the operator namespace and the boot keys are only deleted.
         - And `credential.erase` reports the two apart (`crypto_erased`, `deleted`).
@@ -2682,7 +2682,7 @@ These risks are **not closed by v1 Wardyn**.
     - The portal's own credential (`wdp_`) plus the person's token buys a delegated token (`wdg_`).
     - A stolen portal credential alone mints nothing, but the portal already sees its signed-in people's tokens, so a compromised portal reaches every such person in its registered group.
     - That is at user reach only, on the delegation allow-list only (`delegationAllowed` in [`internal/api/delegation.go`](../internal/api/delegation.go); every other route is 403 `delegation_scope`), and recorded as `data.via` on every row.
-    - `GET /runs/{id}/output` reads command output only. A row recovered from the recording, or an interactive run's pane snapshot, is withheld from a delegated token and answered as if absent, with an audited `delegation_scope` refusal naming the run. A portal never starts the recording repair, and the failure hint's quote of the recording is dropped from the run reads it receives.
+    - `GET /runs/{id}/output` reads command output only. An interactive run's pane snapshot is withheld from every delegated token, and so is output recovered from a recording, except that an issuer portal's grant reads its own person's non-interactive command output recovered from the run's recording: masked output events of the main recording, with no input and no attach session. A recovery that failed, left a gap or was erased is answered to that grant as a run with no recording, so the answer tells the grant nothing of the recording's state. A withheld source falls through to the run's stdout tail or shared chunks, else to the no-row answer; a portal's withheld source writes no refusal row, and a portal's read that answers `run_output_not_captured`, `run_output_not_kept`, `run_output_interactive` or the retention window's `run_output_expired` writes `run.output.refuse` with that reason. The failure hint's quote of the recording is dropped from the run reads every portal receives.
     - Bounds: revoking the portal, or `POST /sessions/revoke` for the person, ends its outstanding tokens on their next request (the lookup joins the portal's `revoked_at`; the person's cutoff is `IsSessionRevoked`).
     - A disable made ONLY at the identity provider is seen at the next exchange, so it lags by at most the ten-minute token lifetime (`delegatedTokenTTL`), not the subject token's own.
     - A UI-app session a portal opens through an attach ticket is a credential derived from the grant and is bounded by it (0.8.5, #1475).
@@ -3072,7 +3072,7 @@ These risks are **not closed by v1 Wardyn**.
     - After pending actions, retained audit history replays before READY, chained in arrival order with `data.observed_at` and `data.spooled`; its content is self-reported (#73).
     - A verified owning, claimed, non-revoked runner may replay a killed run's retained audit history (`IngestRunnerDecision`). This is audit only: it cannot revive the run or restore credentials.
     - A kill, end or stop issued offline waits as a pending action the runner applies first; token deny and broker revoke run at once.
-    - After a runner restarts, its runs stop reaching the network until each is revived. This is fail-closed.
+    - After a runner restarts, each run's proxy keeps its network only until the lapse time the runner saved from its last lease, never more than `runTokenLapseAfter` (`1h5m`) after the restart and with no grace, so a runner restarting in a loop still cuts each run off on time. The restart grants nothing else: no exec, start, proxy replacement or local attach until the organisation's fresh lease. A run with no saved lapse time or past it, whose creation did not finish, whose last change failed or whose last start or command lost its result, or already being contained, is cut off at once and stays so until it is revived. A restart in the middle of a proxy replacement keeps whichever proxy is there (the earlier one, the new one, or none) until the same saved time. The saved time is wall-clock: a host clock set back before a restart can lengthen one run's network by up to `1h5m` per restart, which needs root on the host.
     - Revoking a runner while it is offline ends its runs KILLED and denies their tokens at once. The runner keeps its sandboxes until it reconnects and is answered `REVOKED`, and the lapse stops their proxies.
     - This replaces #54's window for a local run: the same length, with decisions late rather than lost.
 
@@ -3211,7 +3211,7 @@ These risks are **not closed by v1 Wardyn**.
 
     - Choosing `org_cluster` trusts the cluster's admins with each run's Secrets, the Secrets holding `runner_resident` values, etcd backups and each run's MITM CA key. runnerd's ServiceAccount can read any Secret by name in its own dedicated namespace.
     - Its runs are placed `local`, so their decisions, recordings, output and posture are `runner_asserted`, as a laptop's are (`EvidenceFor`, [`internal/placement/placement.go`](../internal/placement/placement.go); #73). Trusted-output runs stay on the organisation's own substrate.
-    - runnerd's ServiceAccount lists every Node, with names, addresses, labels, taints and images. In its runs namespace it creates, execs into, patches and adds ephemeral containers to pods ([`deploy/helm/wardyn-runnerd/templates/rbac.yaml`](../deploy/helm/wardyn-runnerd/templates/rbac.yaml)). A cluster that will not grant the node list cannot host one.
+    - runnerd's ServiceAccount lists every Node, with names, addresses, labels, taints and images. In its runs namespace it creates, watches, execs into, patches and adds ephemeral containers to pods ([`deploy/helm/wardyn-runnerd/templates/rbac.yaml`](../deploy/helm/wardyn-runnerd/templates/rbac.yaml)). A cluster that will not grant the node list cannot host one.
     - **runnerd down.** A run's proxy lapses for good at its last successful renew plus the run-token TTL and is never restarted, so a longer runnerd outage ends its runs. Meanwhile the proxy refuses new requests once runnerd's write-ahead grant is spent (`remoteSink`, [`internal/egress/proxy/remote_sink.go`](../internal/egress/proxy/remote_sink.go)).
     - **Unconfirmed stops.** A sandbox pod on a lost or partitioned node, or whose deletion a finalizer or admission webhook holds, may not be confirmed stopped. Its proxy can serve cached-policy egress until its lapse.
       - The run then reads termination unknown (`errTerminationUnknown`, [`internal/runner/k8s/stop_proxy.go`](../internal/runner/k8s/stop_proxy.go)). It keeps its policies and records, and its slot while no agent exit has been observed, until the node returns or an operator records the node powered off (two people under four-eyes, or after a name reuse).
@@ -3271,7 +3271,7 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; off by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
+95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; on by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
     - With `WARDYN_ATTACH_LOCAL` on, a person's `wardyn attach` on their own runner keeps the terminal bytes on that computer. The organisation admits it exactly as a relay attach and grants it only on that person's own person runner: never break-glass, a sponsor or an organisation's runner.
     - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
     - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.
@@ -3705,7 +3705,7 @@ Claude sign-in's token, each the person's own on their model provider.
 - The 32 MiB per-request buffer (only when inspection is enabled) raises proxy memory vs. the prior streaming path.
   - It is bounded per-request AND in aggregate.
     - The extractor's live-heap amplification (~5.3x, and independent of which detectors are on) means two concurrent in-cap bodies would exceed the proxy sidecar's 256 MiB cgroup cap.
-    - So concurrent extraction is limited by a semaphore (`maxConcurrentScans`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)) and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
+    - So scans run side by side only while their bodies, plus 1 MiB each, fit within one largest body (`scanOverhead`, [`internal/egress/proxy/llm_budget.go`](../internal/egress/proxy/llm_budget.go)), and `wardyn-proxy` sets the Go GC's soft memory limit from that same cgroup ceiling at boot.
     - The buffered bytes are charged to a retained-bytes budget (`maxRetainedScanBytes`) from before the read until the request is done with them.
   - The slot and the budget belong to one engine (`scanBudget`): the sidecar's single proxy, or one run's `via_org` engine inside wardynd. One run's inspections never wait on another run's.
   - A body is read before the slot is taken, so a body that arrives slowly holds only the bytes it has sent, never the slot.
@@ -3985,7 +3985,7 @@ What the pack can and cannot show, and why every gap is closed toward refusal:
     - Four compressed 31 MiB blobs are a 34 KB request.
     - And the proxy sidecar has a hard 256 MiB cap.
   - Inspection takes the same process-wide slot and retained-bytes budget as LLM request scanning, and a push that cannot get them in time is refused, never forwarded unread.
-  - The slot is one wide (`internal/egress/proxy`'s `maxConcurrentScans`), so inspections run one at a time.
+  - A push takes the whole slot (`internal/egress/proxy`'s `inspectPush`), so it is inspected alone.
   - One inspection is bounded beyond its body at about 296 MiB, as `internal/gitpack`'s package comment breaks down:
     - `maxInflatedBytes` (128 MiB) of inflated objects,
     - per-object bookkeeping held under 160 bytes an object by `maxObjects` (200,000; about 30 MiB),
@@ -4035,11 +4035,11 @@ The residuals particular to holding:
   - A non-interactive run (`proxy.Config.Unattended`, stamped at dispatch from the run's own flag) has nobody to ask.
     - So a review match is refused with no approval raised, and the control plane refuses such a raise too (`admitPushContentRaise`).
   - The flag is control-plane-authored; the sandbox cannot set it.
-- **A hold costs the sidecar a connection and its buffer.**
-  - The buffer stays charged to the process-wide retained-bytes budget for the whole hold (at most 600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past that a push is refused, never forwarded.
+- **A hold costs the sidecar a connection, and its buffer only when small.**
+  - A push of at most 1 MiB (`maxHeldPushBytes`) stays charged to the retained-bytes budget for the whole hold (at most 600 seconds), and at most `maxPushHoldsActive` pushes are held at once; past that a push is refused, never forwarded.
+  - A larger push gives its buffer back once the hold starts, so it cannot crowd out LLM inspection.
+    - Approved, it is refused with a reason git prints: push the same commits again, which the approval lets through.
   - The hold is taken after the inspection slot is given back, so it does not hold the slot.
-    - But the held pack stays charged to the retained-scan budget (the engine's `scanBudget`) for the whole hold, up to 600 seconds,
-      - so while held packs fill that budget other buffered scans on the run's sidecar (an LLM request body, another push) cannot retain theirs and fail closed (refused, never forwarded unread) until the hold ends.
 - **The Azure DevOps Entra lane runs the rules before its capability gate.**
   - `Proxy.serveADOGit` inspects a push that moves a ref (`applyPushRules`) before `awaitADOCapability`, so nobody is asked for `code_write` on a push the rules refuse, and a review hold is decided before any capability hold.
   - Its refusals are the plain `403` the other lanes give, so git prints `HTTP 403`, with two exceptions the agent can act on.

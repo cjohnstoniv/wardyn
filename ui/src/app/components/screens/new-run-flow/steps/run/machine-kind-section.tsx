@@ -136,7 +136,7 @@ export function MachineKindSection({ kind, agents = [], macosBase, windowChoice,
           <dl data-testid="nr-vm-barrier" className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
             <dt className="text-muted-foreground">{NR_MACHINE.BARRIER_LABEL}</dt>
             <dd className="font-medium">{NR_MACHINE.BARRIER_VM}</dd>
-            <dd className="col-start-2 text-[11px] text-muted-foreground">{NR_MACHINE.BARRIER_VM_WHY}</dd>
+            <dd className="col-start-2 text-meta text-muted-foreground">{NR_MACHINE.BARRIER_VM_WHY}</dd>
           </dl>
           <section aria-label={NR_MACHINE.CHANGES_TITLE} className="rounded-[9px] border border-border bg-surface-2 p-3.5 text-xs">
             <p className="mb-2.5 font-semibold" aria-hidden="true">{NR_MACHINE.CHANGES_TITLE}</p>

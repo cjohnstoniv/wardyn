@@ -57,20 +57,23 @@ function ItemRow({ item, now }: { item: RunInItem; now: number }) {
  * offer. While the units load nothing is drawn unless the draft already carries a choice, so a person with one
  * unit never sees the question flash by.
  */
-export function RunInField({ run, runIn, notice, homeFallbackName, dispatch }: {
-  run: RunInRead; runIn?: string; notice?: string; homeFallbackName?: string; dispatch: React.Dispatch<DraftAction>;
+export function RunInField({ run, runIn, notice, homeFallbackName, pickedName, dispatch }: {
+  run: RunInRead; runIn?: string; notice?: string; homeFallbackName?: string; pickedName?: string; dispatch: React.Dispatch<DraftAction>;
 }) {
   const id = React.useId();
   const loading = run.status === "loading";
   const failed = run.status === "failed";
   const choices = run.status === "ready" ? run.choices : undefined;
-  if (loading ? !runIn : failed ? !homeFallbackName && !runIn : !choices || !(shown(choices) || notice)) return null;
+  // A pick the units do not list while the person's requests could not be read is kept (reconcileRunIn): it is drawn
+  // as picked, by the name it had when picked (pickedName) or else by its value, with the failure beneath.
+  const unchecked = !!runIn && !!choices && !choices.requestsRead && !itemFor(choices, runIn);
+  if (loading ? !runIn : failed ? !homeFallbackName && !runIn : !choices || !(shown(choices) || notice || unchecked)) return null;
 
   const item = itemFor(choices, runIn);
   const selected = item ?? choices?.home;
-  const home = !item || isHome(item);
-  const value = failed ? HOME_PLACEHOLDER : selected?.unitId ?? "";
-  const text = failed ? (homeFallbackName ? NR_RUN_IN.HOME_VALUE(homeFallbackName) : "") : isHome(selected) && selected ? NR_RUN_IN.HOME_VALUE(selected.name) : selected?.name;
+  const home = !unchecked && (!item || isHome(item));
+  const value = failed ? HOME_PLACEHOLDER : unchecked ? (runIn ?? "") : selected?.unitId ?? "";
+  const text = failed ? (homeFallbackName ? NR_RUN_IN.HOME_VALUE(homeFallbackName) : "") : unchecked ? pickedName ?? runIn : isHome(selected) && selected ? NR_RUN_IN.HOME_VALUE(selected.name) : selected?.name;
   // An empty group is not drawn.
   const groups = GROUPS.map((g) => ({ ...g, rows: choices?.items.filter((i) => i.group === g.group) ?? [] })).filter((g) => g.rows.length > 0);
   const choose = (unitId: string) => {
@@ -111,6 +114,7 @@ export function RunInField({ run, runIn, notice, homeFallbackName, dispatch }: {
       </Field>
       {item?.group === "elevated" && <Note tone="info">{RL.endsElevation(weekdayClock(item.endsAt))}</Note>}
       {failed && <p className="mt-2 text-xs leading-snug text-muted-foreground">{NR_RUN_IN.UNITS_UNREADABLE}</p>}
+      {unchecked && <p className="mt-2 text-xs leading-snug text-muted-foreground">{NR_RUN_IN.REQUESTS_UNREADABLE(text ?? "")}</p>}
       {notice && (
         <Note tone="amber" role="status">
           <span className="flex items-start gap-2 text-sm">

@@ -154,7 +154,7 @@ func TestSCIMCovCreateGroup(t *testing.T) {
 }
 
 func TestSCIMCovCreateGroupStoreFailures(t *testing.T) {
-	for _, method := range []string{"CreateScimGroup", "AddScimGroupMembers", "ScimGroupMembers"} {
+	for _, method := range []string{"CreateScimGroup", "AddScimGroupMembers"} {
 		t.Run(method, func(t *testing.T) {
 			st := newSCIMCovStore()
 			e := newSCIMCovEnv(t, st)
@@ -175,6 +175,24 @@ func TestSCIMCovCreateGroupMemberFailureLeavesNoGroup(t *testing.T) {
 		t.Fatalf("the retry = %d %s, want 201", w.Code, w.Body.String())
 	}
 	scimCovWantError(t, e.scim(http.MethodPost, "/scim/v2/Groups", body), http.StatusConflict, "uniqueness")
+}
+
+// The create answers with what it recorded: no read of the members follows the commit, so a read that would fail
+// cannot turn a stored group into a 500 whose retry is a 409.
+func TestSCIMCovCreateGroupAnswersWhatItRecorded(t *testing.T) {
+	st := newSCIMCovStore()
+	pat := scimCovPerson(st, "sub-p")
+	e := newSCIMCovEnv(t, st)
+	st.failNext("ScimGroupMembers", errSCIMCovBoom, -1)
+	body := fmt.Sprintf(`{"externalId":"g1","displayName":"G","members":[{"value":%q},{"value":%q}]}`, pat.ID, uuid.New())
+	w := e.scim(http.MethodPost, "/scim/v2/Groups", body)
+	got := scimCovDecode[scimCovGroupBody](t, w)
+	if w.Code != http.StatusCreated || len(got.Members) != 1 || got.Members[0].Value != pat.ID.String() {
+		t.Fatalf("POST with the member read failing = %d %s, want 201 with the one recorded member", w.Code, w.Body.String())
+	}
+	if n := st.callCount("ScimGroupMembers"); n != 0 {
+		t.Errorf("the create read its members back %d time(s)", n)
+	}
 }
 
 func TestSCIMCovPatchGroupRefusals(t *testing.T) {
@@ -548,9 +566,9 @@ func TestSCIMCovDeleteGroupRemovesAMemberAddedAfterTheListing(t *testing.T) {
 	}
 }
 
-// A DELETE whose second pass fails answers 5xx with the group already gone: the provider's retry finds no group,
-// and the sweeper finishes the removal the delete left pending.
-func TestSCIMCovDeleteGroupSecondPassFailureIsFinishedBySweeper(t *testing.T) {
+// A member added after the DELETE's listing whose cut then fails keeps the group: the delete refuses while their
+// cut is owed, the answer is a 5xx, and the provider's retry cuts them and deletes the group.
+func TestSCIMCovDeleteGroupKeepsTheGroupWhenALateMembersCutFails(t *testing.T) {
 	st := newSCIMCovStore()
 	late := scimCovPerson(st, "sub-late")
 	g := st.addGroup(scimCovGroupExternal, "Engineering")
@@ -558,21 +576,22 @@ func TestSCIMCovDeleteGroupSecondPassFailureIsFinishedBySweeper(t *testing.T) {
 	e.rev.set(nil, errors.New("cut unavailable"))
 
 	scimCovWantRetry(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), "cut unavailable")
-	if _, ok := st.groups[g.ID]; ok {
-		t.Fatal("the group is still stored; the failure was not in the second pass")
+	if _, ok := st.groups[g.ID]; !ok {
+		t.Fatal("the group is gone although the late member's cut failed")
 	}
 	if steps := st.pendingSteps(late.ID, store.JobKindGroupRemove); len(steps) == 0 {
-		t.Fatal("the late member's removal is not pending after the failed second pass")
+		t.Fatal("the late member's removal is not pending after the failed cut")
 	}
-	scimCovWantError(t, e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""), http.StatusNotFound, "")
 
 	e.rev.set(nil, nil)
-	st.sweepRemovals = true
-	if err := e.srv.SweepSCIMPurge(context.Background()); err != nil {
-		t.Fatal(err)
+	if w := e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), ""); w.Code != http.StatusNoContent {
+		t.Fatalf("the retried DELETE = %d %s, want 204", w.Code, w.Body.String())
+	}
+	if _, ok := st.groups[g.ID]; ok {
+		t.Error("the retried DELETE left the group")
 	}
 	if steps := st.pendingSteps(late.ID, store.JobKindGroupRemove); len(steps) != 0 {
-		t.Errorf("the sweeper left the late member's removal pending: %v", steps)
+		t.Errorf("the retried DELETE left the late member's removal pending: %v", steps)
 	}
 	if rows := e.auditRows("scim.group.member_remove"); len(rows) != 1 || rows[0].Target != late.ID.String() {
 		t.Errorf("removal rows %+v, want one for the late member", rows)
@@ -709,7 +728,7 @@ func TestSCIMCovGroupSnapshotMatch(t *testing.T) {
 			t.Errorf("%s: match = %t, want %t", c.name, got, c.want)
 		}
 	}
-	if err := (&Server{}).removeGroupMembers(context.Background(), nil, store.ScimGroup{}, nil, "x", false); err != nil {
+	if err := (&Server{}).removeGroupMembers(context.Background(), nil, store.ScimGroup{}, nil, "x", false, false); err != nil {
 		t.Errorf("removing no one = %v, want nil", err)
 	}
 }
@@ -736,5 +755,29 @@ func TestSCIMCovSupersededLogsWhatItDrops(t *testing.T) {
 	}
 	if err := unlessSuperseded(t.Context(), cause, id); err != cause {
 		t.Errorf("a plain failure answered %v, want it unchanged", err)
+	}
+}
+
+// alwaysOwedStore refuses every group delete as owed: a member keeps arriving between the passes.
+type alwaysOwedStore struct{ *scimCovStore }
+
+func (s alwaysOwedStore) DeleteScimGroup(ctx context.Context, id uuid.UUID) error {
+	_ = s.scimCovStore.DeleteScimGroup(ctx, id) // counted; its answer is replaced
+	return store.ErrGroupRemovalOwed
+}
+
+// The DELETE gives up after its bounded passes with the incomplete 5xx, and the group is never deleted.
+func TestSCIMCovDeleteGroupGivesUpAfterItsPasses(t *testing.T) {
+	st := newSCIMCovStore()
+	g := st.addGroup(scimCovGroupExternal, "Engineering", scimCovPerson(st, "sub-1").ID)
+	e := newSCIMCovEnv(t, alwaysOwedStore{st})
+
+	w := e.scim(http.MethodDelete, "/scim/v2/Groups/"+g.ID.String(), "")
+	scimCovWantRetry(t, w)
+	if !strings.Contains(w.Body.String(), "deprovisioning is incomplete") {
+		t.Errorf("body %s, want the incomplete detail", w.Body.String())
+	}
+	if got := st.callCount("DeleteScimGroup"); got != scimGroupDeletePasses {
+		t.Errorf("DeleteScimGroup asked %d times, want %d", got, scimGroupDeletePasses)
 	}
 }

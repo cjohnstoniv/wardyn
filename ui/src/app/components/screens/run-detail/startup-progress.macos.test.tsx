@@ -6,7 +6,7 @@
 // A macOS VM's start phases on the run page (mock M-D1 frames 1 to 4).
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { AgentRun } from "../../../lib/types";
+import { makeRun } from "../../../../test/factories";
 import { RUN_STARTUP, RUN_STARTUP_MACOS } from "../run-status-detail";
 import { StartupProgress } from "./startup-progress";
 
@@ -17,7 +17,7 @@ afterEach(() => vi.useRealTimers());
 
 const T0 = Date.UTC(2000, 0, 1, 12);
 const iso = (ms: number) => new Date(ms).toISOString();
-const run = { id: "run-1", state: "STARTING", created_at: iso(T0), updated_at: iso(T0), machine_kind: "macos_vm" } as AgentRun;
+const run = makeRun({ id: "run-1", state: "STARTING", created_at: iso(T0), updated_at: iso(T0), machine_kind: "macos_vm" });
 
 const rows = () => screen.getAllByRole("listitem").map((li) => [li.textContent, li.getAttribute("data-state")]);
 

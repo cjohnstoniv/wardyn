@@ -28,6 +28,7 @@ import (
 	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/foldersync"
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 )
 
 // Bounds keep detection fast and safe on large/hostile trees.
@@ -91,7 +92,7 @@ func DetectGitHubReposIn(dir *os.Root) (github []string, otherHosts []string) {
 		if _, skip := skipDirNames[d.Name()]; (skip && p != ".") || d.Name() == ".git" {
 			return fs.SkipDir
 		}
-		if depthUnder(p) > maxDepth {
+		if pathutil.DepthUnder(p) > maxDepth {
 			return fs.SkipDir
 		}
 		// A repo's .git is a directory (normal) or a "gitdir:" pointer file
@@ -127,14 +128,6 @@ func ResolveRoot(root string) string {
 		return clean
 	}
 	return resolved
-}
-
-// depthUnder returns how many path segments the slash-separated rel is below the walk's root.
-func depthUnder(rel string) int {
-	if rel == "." {
-		return 0
-	}
-	return strings.Count(rel, "/") + 1
 }
 
 // resolveConfigPath returns the slash-separated path inside dir of the config

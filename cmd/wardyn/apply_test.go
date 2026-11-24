@@ -715,3 +715,35 @@ func TestApplyDryRunJSONOmitsAPreflightThePreviewLacks(t *testing.T) {
 		t.Errorf("the entry lost its preview:\n%s", out)
 	}
 }
+
+// TestRefusedLaunchSaysWhatKeepsRunning: a refused launch of a workload with no running run (a first apply, or one
+// whose run ended) says no run was started; one whose run is live says it keeps running. apply and restart alike.
+func TestRefusedLaunchSaysWhatKeepsRunning(t *testing.T) {
+	prev := uuid.New()
+	refused := sdk.WorkloadLaunch{State: sdk.WorkloadRefused, Reason: "egress_ceiling", Message: "the policy asks for more egress than your ceiling"}
+	for _, tc := range []struct {
+		name string
+		w    sdk.Workload
+		want string
+	}{
+		{"first apply", sdk.Workload{Name: "web"}, "no run was started"},
+		{"its run had ended", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunCompleted)}, "no run was started"},
+		{"its run is live", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunRunning)}, "the previous run keeps running"},
+		{"its service run had ended", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunFailed) + "/unknown"}, "no run was started"},
+		{"its service run is live", sdk.Workload{Name: "web", RunID: &prev, State: string(types.RunRunning) + "/healthy"}, "the previous run keeps running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			answer := replyJSON(http.StatusOK, sdk.WorkloadApplyResult{Workload: tc.w, Outcome: sdk.WorkloadCreated, Launch: refused})
+			rig := newRouteRig(t, map[string]func(http.ResponseWriter, []byte){putWeb: answer, "POST /api/v1/workloads/web/restart": answer})
+			var ee *exitError
+			_, err := rig.run(t, "apply", "-f", writeTemplateFile(t, "w.yaml", webYAML))
+			if !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "workload/web: "+tc.want) {
+				t.Errorf("apply: err = %v, want exit 1 saying %q", err, tc.want)
+			}
+			_, err = rig.run(t, "workload", "restart", "web")
+			if !errors.As(err, &ee) || ee.code != 1 || !strings.Contains(err.Error(), "workload/web was refused: "+tc.want) {
+				t.Errorf("restart: err = %v, want exit 1 saying %q", err, tc.want)
+			}
+		})
+	}
+}

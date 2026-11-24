@@ -284,6 +284,8 @@ export const LOCAL_RUN = {
     `${name} reports its runner stopped this run's network after an hour offline. The agent and files are kept on ${name}. Revive reconnects it.`,
   STOPPED_LATE: (name: string) =>
     `${name} was offline for over an hour, and this run's network was still on when it came back, so Wardyn had its runner stop it then. The agent and files are kept on ${name}. Revive reconnects it.`,
+  COPY_OUT_BODY: (name: string) =>
+    `${name} reports its runner stopped this run's network, and the agent is still running on ${name}. You can copy your work out with the terminal, SSH or the Files panel's download, where this run's policy allows them, until the run's end. A run on a Kubernetes runner can't be revived.`,
   REVOKED_TITLE: (name: string) => `${name} was revoked`,
   REVOKED_BODY: (name: string) => `This run's credentials were revoked, and ${name} was told to stop its network. Anything it wrote stays on ${name}.`,
   REVOKED_OFFLINE_TITLE: (name: string) => `${name} was revoked while offline`,

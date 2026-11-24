@@ -76,11 +76,8 @@ func NormaliseOrgURL(raw string) string {
 	return scheme + "://" + host + port + strings.TrimRight(u.EscapedPath(), "/")
 }
 
-// TokenSHA256 is hex(sha256(token)), the form Credential records.
-func TokenSHA256(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
-}
+// TokenSHA256 is types.TokenDigest, the form Credential records.
+func TokenSHA256(token string) string { return types.TokenDigest(token) }
 
 // StatusError is a non-2xx answer from the organisation. RetryAfter is the
 // parsed Retry-After header; WWWAuthenticate lets Revoked tell the

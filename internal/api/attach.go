@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -254,10 +255,18 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNotRunning, "run is not RUNNING; cannot attach (state="+string(run.State)+")")
 		return
 	}
-	// A kept run is RUNNING with its agent stopped: nothing to attach to.
+	// A kept run is RUNNING with nothing to attach to, except for its owner's own ticket into a run its Kubernetes
+	// runner keeps with its agent running (keptCopyOutRefusal). A support helper's or an issuer portal's ticket is
+	// refused as on any kept run.
 	if runIsKept(run) {
-		writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, "run has ended; cannot attach")
-		return
+		by := ""
+		if ta, ok := ticketActorFromContext(ctx); admit.admitBy.IsZero() && (!ok || ta.support == uuid.Nil) {
+			_, by = actorFromRequest(r)
+		}
+		if msg := s.keptCopyOutRefusal(actx, run, by, "run has ended; cannot attach"); msg != "" {
+			writeErrorReason(w, http.StatusConflict, reasonAttachRunKept, msg)
+			return
+		}
 	}
 	if run.SandboxRef == "" {
 		writeErrorReason(w, http.StatusConflict, reasonAttachNoSandbox, "run has no sandbox; cannot attach")
@@ -375,7 +384,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		actorType:  principalType,
 		since:      s.cfg.Now().UTC(),
 		source:     attachSourceWeb,
-		onInput:    func() { _ = s.markPresent(ctx, id, principalType, principal, "presence") },
+		onInput:    s.presenceOnInput(ctx, id, principalType, principal),
 		cols:       opts.Cols,
 		rows:       opts.Rows,
 		via:        via,
@@ -542,12 +551,38 @@ func (s *Server) attachFinishCtx(ctx context.Context) (context.Context, *types.D
 	return finishCtx, nil
 }
 
-// attachKeepalive periodically bumps the run's updated_at so the idle reaper
-// does not stop a session a human is actively attached to. It runs until ctx is
-// cancelled (the pump ended / the handler returned). A TouchRun error is benign
-// here — the worst case is the reaper sees the run as idle, which the never-reap
-// policy escape hatch covers for long unattended sessions.
+// attachKeepalive keeps the run's updated_at moving so the idle reaper does not stop a session a human is actively
+// attached to, for as long as ctx lives (the pump ended, the handler returned, the relayed connection closed). Every
+// holder on the run shares one writer on this replica (touchRunEvery), which stops with the run's last holder: a
+// browser holding eight relay connections writes the row once per interval, not eight times. A TouchRun error is
+// benign here — the worst case is the reaper sees the run as idle, which the never-reap policy escape hatch covers
+// for long unattended sessions.
 func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
+	k := &s.keepalives
+	k.mu.Lock()
+	r := k.runs[id]
+	if r == nil {
+		wctx, stop := context.WithCancel(s.cfg.BaseCtx)
+		r = &runKeepalive{stop: stop}
+		if k.runs == nil {
+			k.runs = map[uuid.UUID]*runKeepalive{}
+		}
+		k.runs[id] = r
+		go s.touchRunEvery(wctx, id)
+	}
+	r.holders++
+	k.mu.Unlock()
+	<-ctx.Done()
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if r.holders--; r.holders == 0 {
+		r.stop()
+		delete(k.runs, id)
+	}
+}
+
+// touchRunEvery is a run's one keepalive writer: TouchRun every attachKeepaliveEvery until ctx ends.
+func (s *Server) touchRunEvery(ctx context.Context, id uuid.UUID) {
 	t := time.NewTicker(s.attachKeepaliveEvery())
 	defer t.Stop()
 	for {
@@ -558,6 +593,19 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 			_ = s.cfg.Store.TouchRun(ctx, id)
 		}
 	}
+}
+
+// runKeepaliveState is this replica's keepalive writers, one per run with a holder (attachKeepalive). Zero value is
+// ready to use.
+type runKeepaliveState struct {
+	mu   sync.Mutex
+	runs map[uuid.UUID]*runKeepalive
+}
+
+// runKeepalive is one run's writer and how many holders keep it.
+type runKeepalive struct {
+	holders int
+	stop    context.CancelFunc
 }
 
 // parseUint16 parses a decimal string to a uint16, returning 0 on any error

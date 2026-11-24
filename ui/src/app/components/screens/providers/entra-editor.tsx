@@ -107,7 +107,7 @@ function CapRow({
       data-testid={id}
     >
       {locked ? (
-        <span className="relative mt-0.5 inline-flex size-4 items-center justify-center rounded border-[1.5px] border-danger bg-danger-subtle text-[11px] font-bold leading-none text-danger">
+        <span className="relative mt-0.5 inline-flex size-4 items-center justify-center rounded border-[1.5px] border-danger bg-danger-subtle text-meta font-bold leading-none text-danger">
           <span aria-hidden="true">✕</span>
           <input type="checkbox" id={domId} className="sr-only" aria-label={nameOf(cap)} checked={false} disabled readOnly />
         </span>

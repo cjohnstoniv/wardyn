@@ -34,12 +34,14 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -354,13 +356,66 @@ func execInPod(ctx context.Context, restCfg *rest.Config, cs *kubernetes.Clients
 	if err != nil {
 		return "", fmt.Errorf("build spdy executor: %w", err)
 	}
-	var out bytes.Buffer
+	var out execOutput
 	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:  stdin,
 		Stdout: &out,
 		Stderr: &out,
 	})
 	return out.String(), err
+}
+
+// execOutput is an exec's combined stdout and stderr. client-go copies the two streams on separate goroutines into
+// whatever writers it is given, so one bytes.Buffer given as both loses output: io.Copy into a *bytes.Buffer is its
+// ReadFrom, which takes its offset when it starts, and a stream that ends with nothing read after the other one wrote
+// cuts the buffer back to that offset. execOutput has no ReadFrom, so io.Copy only calls Write, under the lock.
+type execOutput struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (o *execOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.Write(p)
+}
+
+func (o *execOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
+
+// TestExecOutputKeepsStdoutWhenStderrEndsLast copies two streams into one execOutput the way client-go copies an
+// exec's stdout and stderr. stderr's copy is already blocked in its first Read when stdout's whole output arrives, and
+// it ends, with nothing read, after stdout's copy has returned. That order left the node-restart probes empty: a
+// bytes.Buffer in execOutput's place ends with "" here.
+func TestExecOutputKeepsStdoutWhenStderrEndsLast(t *testing.T) {
+	var out execOutput
+	stderr := &lateEOF{entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(&out, stderr)
+	}()
+	<-stderr.entered
+	if _, err := io.Copy(&out, strings.NewReader(probeDone+"\n")); err != nil {
+		t.Fatalf("copy stdout: %v", err)
+	}
+	close(stderr.release)
+	<-done
+	if got := out.String(); got != probeDone+"\n" {
+		t.Fatalf("combined output = %q, want %q", got, probeDone+"\n")
+	}
+}
+
+// lateEOF is a stream with nothing on it: its one Read says it was entered, waits for release and returns io.EOF.
+type lateEOF struct{ entered, release chan struct{} }
+
+func (r *lateEOF) Read([]byte) (int, error) {
+	close(r.entered)
+	<-r.release
+	return 0, io.EOF
 }
 
 // buildHopfakeBinary builds test/conformance/hopfake for the cluster node's

@@ -27,12 +27,13 @@ import (
 // and move time with b.tick, break a method with b.failOn("SupportGrantLive", err), and read the rows with
 // b.row and b.rows.
 type fakeSupportGrants struct {
-	mu    sync.Mutex
-	now   time.Time
-	runOf func(uuid.UUID) (types.AgentRun, bool)
-	list  []store.SupportGrant
-	fail  map[string]error
-	lives []supportLiveCall
+	mu     sync.Mutex
+	now    time.Time
+	runOf  func(uuid.UUID) (types.AgentRun, bool)
+	list   []store.SupportGrant
+	fail   map[string]error
+	lives  []supportLiveCall
+	failed int // SupportGrantLive calls that answered with an error
 }
 
 // supportLiveCall is one SupportGrantLive call, so a test can pin who stamps last_seen_at.
@@ -79,6 +80,13 @@ func (f *fakeSupportGrants) rows() []store.SupportGrant {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.list)
+}
+
+// failedLives is how many SupportGrantLive calls have answered with an error.
+func (f *fakeSupportGrants) failedLives() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failed
 }
 
 // liveCalls is every SupportGrantLive call so far.
@@ -222,6 +230,7 @@ func (f *fakeSupportGrants) SupportGrantLive(_ context.Context, run uuid.UUID, h
 	defer f.mu.Unlock()
 	f.lives = append(f.lives, supportLiveCall{Run: run, Helper: helper, Grant: grant, Stamp: stamp})
 	if err := f.fail["SupportGrantLive"]; err != nil {
+		f.failed++
 		return store.SupportGrant{}, false, false, err
 	}
 	for i, g := range f.list {

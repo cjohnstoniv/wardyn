@@ -31,12 +31,15 @@ type uiGatewayState struct {
 	uiDesktopSink func(uiSession) rfbfilter.Sink
 	uiReadyMu     sync.Mutex
 	uiReady       map[string]time.Time
+	uiReadySwept  time.Time
+	uiProbing     map[string]chan struct{} // the launcher probe running per run/app key, closed when it ends (uiProbeTurn)
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
-	uiReassertMu sync.Mutex
-	uiReassert   map[string]time.Time
-	uiProxyOnce  sync.Once
-	uiProxy      *httputil.ReverseProxy
+	uiReassertMu    sync.Mutex
+	uiReassert      map[string]time.Time
+	uiReassertSwept time.Time
+	uiProxyOnce     sync.Once
+	uiProxy         *httputil.ReverseProxy
 	// uiDispatch is the dispatch gate's state: issuer portals' single-use proxy and the slot wait
 	// (uigateway_dispatch.go).
 	uiDispatch uiDispatchState

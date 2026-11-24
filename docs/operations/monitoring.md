@@ -38,6 +38,9 @@
 | `wardyn_drive_probe_errors_total` | Counter. Docker `host_path` drive agent-readability probes that could not run at all. The probe fails open: the caller falls back to "cannot tell" rather than refusing (`WARDYN_DRIVE_PROBE_IMAGE`, [ENV.md](../ENV.md)). |
 | `wardyn_runner_pool_queue_depth{pool_id}`, `wardyn_runner_pool_slots_used{pool_id}` | Gauges. Runs waiting in each runner pool's queue and runs holding a slot there, from a 15-second snapshot; aggregate with `max()` across replicas, never `sum()`. The label is the pool's id, never its name or an owner. |
 | `wardyn_runner_pool_queue_wait_seconds{outcome}` | Histogram. How long runs waited in a pool's queue, by how they left it: `started`, `timeout`, `cancelled` or `refused`. |
+| `wardyn_run_start_phase_seconds{phase}` | Histogram, for runs that reached RUNNING: `before_dispatch` (creation to dispatch, any pool queue wait included), `prepare`, `create` (the runner's sandbox create), `confirm` (the proxy's confirmation) and `total`. |
+| `wardyn_http_request_seconds{route}` | Histogram. Time to answer a request, by the route pattern it matched, or `unmatched`. An attach or stream counts its whole session, so read those routes apart. Per replica. |
+| `wardyn_egress_decision_record_seconds{decision}` | Histogram. From a proxy taking a request to wardynd recording its `allow`, `deny` or `hold` decision, for proxies that post directly; a runner's spooled rows are not counted. Includes any approval wait. Clock skew reads as 0. |
 | `wardyn_run_start_wait_seconds{reason}` | Summary (sum and count). Time a sandbox still being created spent waiting on each substrate reason, such as pulling an image, waiting for a node, or a reference that will not pull. See [Start deadlines](../OPERATIONS.md#the-start-deadlines). |
 | `wardyn_sso_refresh_total{outcome}` | Control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by `success`, `spent`, `transport_error` or `unavailable`. It graphs the same distinction the `harness.credential.refresh` audit row's `spent` field and expiry check make. |
 | `wardyn_credential_reauth_total{outcome}` | Counter. Mid-run model-credential re-auth workflows, by outcome: `requested`, `resolved`, `expired`, `cancelled` or `timeout`. The timeout series is the one to watch for a sign-in nobody answered; the egress deny counter does not count it. |
@@ -54,6 +57,7 @@
 - The held figures are summed per runner kind, never across kinds: the basis is requests for `k8s` and caps for `docker`. They are configured reservations, not observed use.
 - `wardyn_sso_refresh_total{outcome="spent"}` increments once per refresh token AWS retires, at the `CreateToken` call that discovers it. Later dispatches on that token short-circuit uncounted, so the series reads how many sessions AWS retired, not how many times people hit a dead one.
 - A climbing `transport_error` or `unavailable` series means the SSO-OIDC endpoint itself is in trouble.
+- `wardyn_audit_partitions_ahead` is left out when wardynd cannot read it (`/setup/status` then warns that it could not be checked), so alert on its absence while `wardyn_store_up` is 1, as well as on a value below 3.
 
 ## Model token usage
 
@@ -104,7 +108,7 @@
 
 ## Substrate and sweep health
 
-- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it.
+- `/readyz` answers for the store only, and stays that way. The chart's readinessProbe reads it where `readinessProbe.path` is `/readyz`; the default is `/healthz`.
 - A substrate fault that pulled every replica out of the Service would take the console down with them, and the console is the one place the fault is visible.
 - A broken substrate and a stalled sweep show instead on two gauges and on one `/setup/status` row, `substrate_health`, which an operator sees and a member does not.
 

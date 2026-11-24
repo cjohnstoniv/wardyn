@@ -27,7 +27,7 @@
 # RELEASING.md 6145 = ours 6124 + theirs 6026 - base 6005 at the 0.10 W4c merge of origin/main ba16e8564 (W4b) onto the train.
 # RELEASING.md 6145, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).
 # RELEASING.md 6155 = ours 6145 + theirs 6036 - base 6026 at the 0.10 W4c merge of origin/main 7e33976ca onto the train.
-RELEASING.md=6293 share=35 # 6293 measured (+10: keep PRERELEASE=auto, as verify-release fails a wrong pick); earlier: 6283 measured (+19: the corrections from the release review)
+RELEASING.md=6364 share=35 # 6364 measured at the 0.10.4 train merge (ours 6293 plus 9 over its budget from the CI job changes, theirs 6355, base 6293: the latest-version changes); earlier: 6355 measured (+21: never rerun an older tag's release run); earlier: 6334 measured (+41: the float-latest job and its rerun); earlier: 6293 measured (+10: keep PRERELEASE=auto, as verify-release fails a wrong pick); earlier: 6283 measured (+19: the corrections from the release review)
 # ROADMAP.md 5870 measured after merging G-chores-a.
 # ROADMAP.md 5988 adds 118 over 5870: 0.9 final docs pass, measured: the New Run line of the 0.9 scope and the 0.10 scope table.
 # ROADMAP.md 6133 adds 33 over 6100: the v0.9.3-rc.1 Shipped row the release commit adds.
@@ -69,7 +69,7 @@ RELEASING.md=6293 share=35 # 6293 measured (+10: keep PRERELEASE=auto, as verify
 # ROADMAP.md 2097 = 2055 + 42, measured: the v0.10.0 Shipped row.
 # ROADMAP.md 2099 = 2097 + 2, measured: the rc.1 to rc.13 row's own label.
 # ROADMAP.md 2143 = 2099 + 44, measured: the v0.10.1 Shipped row.
-ROADMAP.md=2168 share=5 # 2168 measured (+25: the v0.10.2 Shipped row the release commit adds)
+ROADMAP.md=2290 share=5 # 2290 measured (+43: the v0.10.5 Shipped row the release commit adds); earlier: 2247 measured (+43: the v0.10.4 Shipped row)
 # docs/DEMO-SCRIPT.md 6884 adds 17 over 6867: 0.9 final docs pass 2, measured: the demo script no longer cites the removed wizard's code.
 docs/DEMO-SCRIPT.md=6881 share=35 # -9 (internal wording removed), measured
 # docs/LIVE-TESTS.md 2517, measured at the 0.10 W4c merge of OFFLINE-VM a359ef27b onto the train (two merge bases, VM-A 47c283334 and main 3cea1aa73, so no single base to subtract).

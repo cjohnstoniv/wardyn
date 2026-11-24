@@ -8,7 +8,6 @@ package k8s
 import (
 	"context"
 	"io"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +32,8 @@ func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) err
 		return err
 	}
 	pods := d.clientset.CoreV1().Pods(ns)
+	bell := d.podBell(ns, ref)
+	defer bell.stop()
 	for {
 		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
 		switch {
@@ -45,6 +46,7 @@ func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) err
 			return nil
 		}
 		if execContainerStarted(pod) {
+			bell.stop() // the log stream lasts the run and needs no bell
 			rc, err := pods.GetLogs(ref, &corev1.PodLogOptions{Container: execContainerName, Follow: !execContainerTerminated(pod)}).Stream(ctx)
 			if err != nil {
 				return err
@@ -53,10 +55,9 @@ func (d *Driver) RecoverOutput(ctx context.Context, ref string, w io.Writer) err
 			_, err = io.Copy(w, rc)
 			return err
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(execWaitPollInterval):
+		// Read again on the pod's next change, or every execWaitPollInterval while the pod watch is not live.
+		if err := bell.sleep(ctx, execWaitPollInterval, podWatchLongResync); err != nil {
+			return err
 		}
 	}
 }

@@ -115,7 +115,7 @@ export function TemplatesScreen() {
   const publish = async (t: TemplateSummary) => {
     setBusyId(t.id);
     try {
-      await templatesApi.publishToOrg(t.id);
+      await templatesApi.publishToOrg(t.id, t.revision);
       toast.success(T.PUBLISHED(t.name));
     } catch (e) {
       toast.error(getErrorMessage(e));
@@ -266,7 +266,7 @@ export function TemplatesScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>{T.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={busyId !== null}
               onClick={(e) => {
                 e.preventDefault();

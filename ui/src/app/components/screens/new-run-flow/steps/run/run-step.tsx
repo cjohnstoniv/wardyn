@@ -175,7 +175,7 @@ export function RunStep({ go, deps }: NewRunScreenProps & { deps?: { load: LoadP
           )}
         </CommandSection>
       )}
-      <RunInField run={runIn} runIn={intent.run_in} notice={draft.guided.runInCleared} homeFallbackName={list?.allowance?.unit_name} dispatch={dispatch} />
+      <RunInField run={runIn} runIn={intent.run_in} notice={draft.guided.runInCleared} homeFallbackName={list?.allowance?.unit_name} pickedName={lastPicked?.unitId === intent.run_in ? lastPicked?.name : undefined} dispatch={dispatch} />
       <QuestionBlock label={NR_RUN.WHERE_LABEL}>
         <MachineKindSection
           kind={intent.machine_kind ?? "container"}

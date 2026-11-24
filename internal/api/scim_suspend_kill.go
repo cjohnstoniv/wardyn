@@ -6,12 +6,14 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // killStep is step 3. Every non-terminal run a target owns joins the ledger as pending, and so does
@@ -136,8 +138,16 @@ func (s *Server) killPendingRun(ctx context.Context, o leaverOrigin, st scimStor
 		// one added it, closes with no teardown and no kill counted. A row that already pins a run.kill receipt is
 		// not spared: a claim pins it in the transaction that killed the run, so that kill was applied (whichever
 		// worker made it, alive or not) and its teardown and receipt are still owed; the pass below takes it over.
-		slog.InfoContext(ctx, "api: a suspension left a run made after its deactivation", slog.String("identity", id.String()), slog.String("run", j.Target))
-		return finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0})
+		// Nor is a KILLED run whose row has a failed attempt: an earlier pass applied that kill and its teardown
+		// failed, so the teardown and the kill's count are still owed.
+		applied, err := s.killAppliedEarlier(ctx, j, runID)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			slog.InfoContext(ctx, "api: a suspension left a run made after its deactivation", slog.String("identity", id.String()), slog.String("run", j.Target))
+			return finishStep(ctx, st, id, key, map[string]int{"runs_killed": 0})
+		}
 	}
 	tctx := ctx
 	if led, at, guarded := o.portalLedger(ctx, st, id); guarded {
@@ -153,6 +163,20 @@ func (s *Server) killPendingRun(ctx context.Context, o leaverOrigin, st scimStor
 		return failKillRow(ctx, tctx, st, id, key, err)
 	}
 	return finishKillRow(ctx, tctx, st, id, key)
+}
+
+// killAppliedEarlier says an earlier attempt on row j applied the kill of runID: the row has a failed attempt
+// and the run is KILLED. A finished row reopened for a run that is live again has attempts too, but its run
+// is not KILLED.
+func (s *Server) killAppliedEarlier(ctx context.Context, j store.DeprovisionJob, runID uuid.UUID) (bool, error) {
+	if j.Attempts == 0 {
+		return false, nil
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return false, fmt.Errorf("read run %s: %w", runID, err)
+	}
+	return run.State == types.RunKilled, nil
 }
 
 // failKillRow is the row's answer to a teardown that failed with err.

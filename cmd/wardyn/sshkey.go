@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
@@ -207,11 +208,30 @@ func ensureLocalSSHKey(path string) (pub ssh.PublicKey, generated bool, err erro
 		if serr != nil {
 			return nil, false, fmt.Errorf("ssh-key: %s: %w", path, serr)
 		}
-		// The .pub sibling is part of the documented contract; restore it when a
-		// key was copied here without one.
-		if _, perr := os.Stat(path + ".pub"); errors.Is(perr, os.ErrNotExist) {
+		// The .pub sibling is part of the documented contract: restore it when a key was copied here without
+		// one, and refuse one that is anything but this key's one line (another key's, after a private key was
+		// replaced; or this key followed by more), which a person or script reading the .pub would take for the
+		// registered key. The fix named is to move the .pub aside: moving the private key aside would make the
+		// next run generate a new key and overwrite the .pub.
+		raw, perr := os.ReadFile(path + ".pub")
+		switch {
+		case errors.Is(perr, os.ErrNotExist):
 			if werr := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(signer.PublicKey()), 0o644); werr != nil {
 				return nil, false, fmt.Errorf("ssh-key: write %s.pub: %w", path, werr)
+			}
+		case perr != nil:
+			return nil, false, fmt.Errorf("ssh-key: read %s.pub: %w", path, perr)
+		default:
+			companion, _, _, rest, aerr := ssh.ParseAuthorizedKey(raw)
+			if aerr != nil {
+				return nil, false, fmt.Errorf("ssh-key: %s.pub is not a readable public key (%v): move %s.pub aside and it is written again from %s; nothing was registered", path, aerr, path, path)
+			}
+			if len(bytes.TrimSpace(rest)) > 0 {
+				return nil, false, fmt.Errorf("ssh-key: %s.pub holds more than one key line: move %s.pub aside and it is written again from %s; nothing was registered", path, path, path)
+			}
+			if !bytes.Equal(companion.Marshal(), signer.PublicKey().Marshal()) {
+				return nil, false, fmt.Errorf("ssh-key: %s.pub is %s, not the public key of %s (%s): move %s.pub aside and it is written again from %s; nothing was registered",
+					path, ssh.FingerprintSHA256(companion), path, ssh.FingerprintSHA256(signer.PublicKey()), path, path)
 			}
 		}
 		return signer.PublicKey(), false, nil

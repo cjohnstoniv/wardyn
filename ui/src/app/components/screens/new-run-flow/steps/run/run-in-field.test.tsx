@@ -38,9 +38,9 @@ function read(over: Partial<RunInRead> = {}): RunInRead {
   return { status: "ready", choices: runInChoices([PLATFORM, DATA, PAYMENTS], LIST, NOW), list: LIST, now: NOW, reload: vi.fn(), ...over };
 }
 
-function setup(props: { run?: RunInRead; runIn?: string; notice?: string; homeFallbackName?: string } = {}) {
+function setup(props: { run?: RunInRead; runIn?: string; notice?: string; homeFallbackName?: string; pickedName?: string } = {}) {
   const dispatch = vi.fn<(a: DraftAction) => void>();
-  const utils = render(<RunInField run={props.run ?? read()} runIn={props.runIn} notice={props.notice} homeFallbackName={props.homeFallbackName} dispatch={dispatch} />);
+  const utils = render(<RunInField run={props.run ?? read()} runIn={props.runIn} notice={props.notice} homeFallbackName={props.homeFallbackName} pickedName={props.pickedName} dispatch={dispatch} />);
   /** The intent after every edit dispatched so far, from one that already holds `runIn`. */
   const edited = (from: RunIntent = props.runIn ? { run_in: props.runIn } : {}) => dispatch.mock.calls.reduce((i, [a]) => (a.type === "edit" ? a.apply(i) : i), from);
   return { dispatch, edited, ...utils };
@@ -189,5 +189,22 @@ describe("Run in field: choosing", () => {
     await userEvent.click(trigger());
     await userEvent.click(screen.getByRole("option", { name: /^Data science/ }));
     expect(dispatch).toHaveBeenCalledWith({ type: "guided", patch: { runInCleared: undefined } });
+  });
+});
+
+describe("Run in field: requests not read", () => {
+  const unread = () => read({ choices: runInChoices([PLATFORM], null, NOW), list: null });
+
+  it("draws a pick it cannot check by the name it had, with the failure and no home hint", () => {
+    setup({ run: unread(), runIn: "u-bill", pickedName: "Billing" });
+    expect(trigger()).toHaveTextContent("Billing");
+    expect(screen.getByText(NR_RUN_IN.REQUESTS_UNREADABLE("Billing"))).toBeInTheDocument();
+    expect(screen.queryByText(NR_RUN_IN.HINT)).toBeNull();
+    expect(NR_RUN_IN.REQUESTS_UNREADABLE("Billing")).toBe("Couldn't load your requests, so Billing can't be checked here. The run asks for Billing, and the server checks your access when it starts.");
+  });
+
+  it("names it by its value when the name it had is not known", () => {
+    setup({ run: unread(), runIn: "u-bill" });
+    expect(trigger()).toHaveTextContent("u-bill");
   });
 });

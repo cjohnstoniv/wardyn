@@ -32,11 +32,15 @@ type macWindowRevocations struct {
 	mu      sync.Mutex
 	revoked bool
 	err     error
+	failed  atomic.Int64 // reads that answered with err
 }
 
 func (r *macWindowRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.err != nil {
+		r.failed.Add(1)
+	}
 	return r.revoked, r.err
 }
 func (r *macWindowRevocations) RevokeSub(context.Context, string) error { return nil }
@@ -52,16 +56,18 @@ func (r *macWindowRevocations) set(revoked bool, err error) {
 // presence clock, and a run read a test can fail.
 type macWindowStore struct {
 	*desktopSiteStore
-	mu          sync.Mutex
-	runners     map[uuid.UUID]types.Runner
-	runnerErr   error
-	prefs       map[string]json.RawMessage
-	getRunErr   error
-	tokens      map[uuid.UUID]bool
-	cliSessions map[uuid.UUID]store.CLISessionRow
-	stamps      atomic.Int32
-	touched     atomic.Int32
-	prefsWrite  atomic.Int32
+	mu           sync.Mutex
+	runners      map[uuid.UUID]types.Runner
+	runnerErr    error
+	prefs        map[string]json.RawMessage
+	getRunErr    error
+	stallRunRead bool         // GetRun waits for its context to end, as a database that stops answering
+	stalledReads atomic.Int32 // stalled GetRun calls that have returned
+	tokens       map[uuid.UUID]bool
+	cliSessions  map[uuid.UUID]store.CLISessionRow
+	stamps       atomic.Int32
+	touched      atomic.Int32
+	prefsWrite   atomic.Int32
 }
 
 func (s *macWindowStore) GetRunner(_ context.Context, id uuid.UUID) (types.Runner, error) {
@@ -85,8 +91,13 @@ func (s *macWindowStore) setRunner(rn types.Runner) {
 
 func (s *macWindowStore) GetRun(ctx context.Context, id uuid.UUID) (types.AgentRun, error) {
 	s.mu.Lock()
-	err := s.getRunErr
+	err, stall := s.getRunErr, s.stallRunRead
 	s.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		s.stalledReads.Add(1)
+		return types.AgentRun{}, ctx.Err()
+	}
 	if err != nil {
 		return types.AgentRun{}, err
 	}
@@ -160,6 +171,12 @@ func (s *macWindowStore) failRunRead(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getRunErr = err
+}
+
+func (s *macWindowStore) stallRunReads(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stallRunRead = on
 }
 
 func (s *macWindowStore) GetPrincipalPref(_ context.Context, principal, key string) (json.RawMessage, error) {
@@ -821,6 +838,7 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newMacWindowRig(t)
+			r.h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a re-check that can't read ends the window at once
 			w := r.mustOpen()
 			r.tick() // nothing changed: the window stays
 			time.Sleep(20 * time.Millisecond)
@@ -841,6 +859,132 @@ func TestMacWindowRecheckEndsTheWindow(t *testing.T) {
 				t.Errorf("close rows = %d, want one", got)
 			}
 		})
+	}
+}
+
+// A re-check that cannot read rides the budget: the window stays, and a later answer closes the window with one
+// rode_through row and no takeover.close.
+func TestMacWindowRecheck_RidesAnUnreadCheck(t *testing.T) {
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
+	w := r.mustOpen()
+	r.rev.set(false, errors.New("conn closed by peer"))
+	r.tick()
+	macWindowEventually(t, "the unread credential check", func() bool { return r.rev.failed.Load() >= 1 })
+	r.rev.set(false, nil)
+	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+	if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceWindow {
+		t.Fatalf("row %v, want rode_through on the window", data[0])
+	}
+	if len(r.rows("takeover.close")) != 0 || r.h.srv.macWindows.open(r.h.run.ID) != w {
+		t.Fatal("the window ended on a credential read that failed once")
+	}
+}
+
+// Past the budget the window ends as refused_on_recheck with the unread reason, the same rows as at budget 0.
+func TestMacWindowRecheck_BudgetEndsAsRefusedOnRecheck(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(r *macWindowRig)
+		by     string
+	}{
+		{"the credential can't be read", func(r *macWindowRig) { r.rev.set(false, errors.New("conn closed by peer")) }, uiDeniedReasonRevocationUnavailable},
+		{"the run can't be read", func(r *macWindowRig) { r.st.failRunRead(errors.New("conn closed by peer")) }, reasonRunUnreadable},
+		{"the site config can't be read", func(r *macWindowRig) {
+			on := true
+			r.st.setSite(types.SiteConfig{MacOSVM: &types.SiteMacOSVM{AllowAttendedWindow: &on}}, errors.New("conn closed by peer"))
+		}, reasonRunUnreadable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMacWindowRig(t)
+			r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(50*time.Millisecond), 10*time.Millisecond
+			r.mustOpen()
+			tc.change(r)
+			r.tick()
+			c := r.closeRow()
+			if c["reason"] != macWindowRefusedRecheck || c["refused_by"] != tc.by {
+				t.Errorf("close = reason %v refused_by %v, want %q %q", c["reason"], c["refused_by"], macWindowRefusedRecheck, tc.by)
+			}
+			_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+			if data[0]["result"] != "ended" {
+				t.Errorf("row %v, want ended", data[0])
+			}
+		})
+	}
+}
+
+// A person revoked while a window is riding an unread credential check ends it with the revoke's reason, and the
+// window's one row is refused.
+func TestMacWindowRecheck_RefusalAfterUnreadWritesRefusedRow(t *testing.T) {
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), 10*time.Millisecond
+	r.mustOpen()
+	r.rev.set(false, errors.New("conn closed by peer"))
+	r.tick()
+	macWindowEventually(t, "the unread credential check", func() bool { return r.rev.failed.Load() >= 1 })
+	r.rev.set(true, nil)
+	if c := r.closeRow(); c["reason"] != macWindowRevoked {
+		t.Fatalf("close reason = %v, want %s", c["reason"], macWindowRevoked)
+	}
+	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+	if data[0]["result"] != "refused" || data[0]["surface"] != sessionSurfaceWindow {
+		t.Fatalf("row %v, want refused on the window", data[0])
+	}
+}
+
+// A profile composition nothing satisfies is a definite refusal at a window's re-check (not unread, so it never
+// rides the budget); a profile read that fails is unread.
+func TestMacWindowRecheck_UnsatisfiableProfileIsNotUnread(t *testing.T) {
+	base := types.GovernanceUnit{ID: uuid.New(), Name: "baseline", Ceiling: types.RunPolicySpec{AllowedMethods: []string{"GET"}}}
+	post := []string{"POST"}
+	child := types.GovernanceUnit{ID: uuid.New(), Name: "team", ParentID: &base.ID, Overlay: &types.CeilingOverlay{AllowedMethods: &post}}
+	for _, tc := range []struct {
+		name   string
+		units  []types.GovernanceUnit
+		err    error
+		unread bool
+	}{
+		{"nothing satisfies the overlay", []types.GovernanceUnit{base, child}, nil, false},
+		{"the profile read fails", []types.GovernanceUnit{base, child}, errors.New("conn closed by peer"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newMacWindowRig(t)
+			w := r.mustOpen()
+			r.h.store.sshMemStore.mu.Lock()
+			r.h.store.profiles, r.h.store.profilesErr = tc.units, tc.err
+			r.h.store.sshMemStore.mu.Unlock()
+			r.set(func(run *types.AgentRun) { run.UnitID = &child.ID })
+			reason, _, unread := r.h.srv.macWindowRecheck(context.Background(), w)
+			if reason != macWindowRefusedRecheck || unread != tc.unread {
+				t.Errorf("macWindowRecheck = %q unread %v, want %q unread %v", reason, unread, macWindowRefusedRecheck, tc.unread)
+			}
+		})
+	}
+}
+
+// macUnmeetableStore is the Mac rig's store with a restriction that denies every placement.
+type macUnmeetableStore struct {
+	*macWindowStore
+	store.RestrictionStore // nil: the fold calls only GetRestrictionsByID
+	id                     uuid.UUID
+}
+
+func (s *macUnmeetableStore) GetRestrictionsByID(context.Context, []uuid.UUID) ([]types.Restriction, error) {
+	deny := []types.Placement{types.PlacementLocal, types.PlacementRemote}
+	return []types.Restriction{{ID: s.id, Name: "walled", Limits: types.RestrictionLimits{DenyPlacements: &deny}}}, nil
+}
+
+// A restriction whose meet nothing satisfies (a *composer.OverlayError through foldRestrictionLimits, which
+// macWindowCheck sends on as a server error) is a refusal at a window's re-check, never unread.
+func TestMacWindowRecheck_UnmeetableRestrictionIsNotUnread(t *testing.T) {
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test = ptr(time.Hour) // the window's watch then reads no budget from the store swapped below
+	w := r.mustOpen()
+	rid := uuid.New()
+	r.h.srv.cfg.Store = &macUnmeetableStore{macWindowStore: r.st, id: rid}
+	r.set(func(run *types.AgentRun) { run.RestrictionIDs = []uuid.UUID{rid} })
+	if reason, _, unread := r.h.srv.macWindowRecheck(context.Background(), w); reason != macWindowRefusedRecheck || unread {
+		t.Errorf("macWindowRecheck = %q unread %v, want %q unread false", reason, unread, macWindowRefusedRecheck)
 	}
 }
 
@@ -1635,4 +1779,54 @@ func TestMacWindowEndsWithItsCredential(t *testing.T) {
 			t.Fatalf("authority = %+v, want bound to token %s", a, tok)
 		}
 	})
+}
+
+// A re-check whose run read never returns gives up at its bound and counts as unread: at budget 0 the window ends
+// as refused_on_recheck, instead of the watch waiting on the database for good.
+func TestMacWindowRecheck_AStalledReadIsBounded(t *testing.T) {
+	prev := macWindowRecheckWait
+	macWindowRecheckWait = 50 * time.Millisecond
+	t.Cleanup(func() { macWindowRecheckWait = prev })
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test = ptr(time.Duration(0)) // a re-check that can't read ends the window at once
+	r.mustOpen()
+	r.st.stallRunReads(true)
+	r.tick()
+	c := r.closeRow()
+	if c["reason"] != macWindowRefusedRecheck || c["refused_by"] != reasonRunUnreadable {
+		t.Errorf("close = reason %v refused_by %v, want %q %q", c["reason"], c["refused_by"], macWindowRefusedRecheck, reasonRunUnreadable)
+	}
+	if !r.sub.session(0).closed.Load() {
+		t.Error("the runner's session was not closed, so its view stays up")
+	}
+}
+
+// After a stalled re-check gave up, the watch still sees wardynd go down and closes the window with its row.
+func TestMacWindowRecheck_ShutdownAfterAStalledRead(t *testing.T) {
+	prev := macWindowRecheckWait
+	macWindowRecheckWait = 50 * time.Millisecond
+	t.Cleanup(func() { macWindowRecheckWait = prev })
+	r := newMacWindowRig(t)
+	r.h.srv.sessionBudgets.test, r.h.srv.sessionBudgets.retry = ptr(time.Hour), time.Hour // the window rides the budget
+	base, down := context.WithCancel(context.Background())
+	defer down()
+	r.h.srv.cfg.BaseCtx = base
+	w := r.mustOpen()
+	r.st.stallRunReads(true)
+	r.tick()
+	macWindowEventually(t, "the stalled run read to give up", func() bool { return r.st.stalledReads.Load() >= 1 })
+	if len(r.rows("takeover.close")) != 0 || r.h.srv.macWindows.open(r.h.run.ID) != w {
+		t.Fatal("the window ended on one unread check inside an hour's budget")
+	}
+	down()
+	c := r.closeRow()
+	if c["reason"] != macWindowLinkLost {
+		t.Errorf("close reason %v, want %q", c["reason"], macWindowLinkLost)
+	}
+}
+
+func TestMacWindowRecheckWaitStaysUnderTheInterval(t *testing.T) {
+	if macWindowRecheckWait != 10*time.Second || macWindowRecheckWait >= macWindowRecheckEvery {
+		t.Fatalf("macWindowRecheckWait = %v, want 10s and under the %v re-check interval", macWindowRecheckWait, macWindowRecheckEvery)
+	}
 }

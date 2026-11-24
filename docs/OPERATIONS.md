@@ -380,19 +380,28 @@ The items to collect on each deployment are listed in
 Compose recipe.
 
 ```sh
+# Name the installation first. A host can run several (scripts/ci-run.sh gives each
+# its own COMPOSE_PROJECT_NAME and WARDYN_NS): set both as that installation was
+# started, or leave both unset for the default one. Every command below then reaches
+# that installation's containers and volumes only.
+export COMPOSE_PROJECT_NAME WARDYN_NS
+NS="${WARDYN_NS:-wardyn}"
+
 # 0. Quiesce active work, then stop the writer while taking the database
 #    and audit-fallback backups as one recovery set.
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
-# 1. Postgres (the container name is ${WARDYN_NS:-wardyn}-postgres)
-docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
+# 1. Postgres, through this project's postgres service
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres pg_dump -U wardyn wardyn > "$NS-$(date +%F).sql"
 
 # 2. Recordings — ONLY under WARDYN_RECORDING_STORE=fs. With the default `pg`
 #    store step 1 already captured them; this volume is empty.
-#    (`recordings` is the ONE explicitly-named volume, so no project prefix —
-#     see docker-compose.yaml)
-docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
-  tar czf /to/recordings-$(date +%F).tar.gz -C /from .
+#    (`recordings` is the ONE explicitly-named volume, $NS-recordings, so no
+#     project prefix — see docker-compose.yaml; the inspect stops on a name
+#     this host does not have)
+docker volume inspect "$NS-recordings" >/dev/null &&
+docker run --rm -v "$NS-recordings":/from -v "$PWD":/to alpine \
+  tar czf "/to/$NS-recordings-$(date +%F).tar.gz" -C /from .
 
 # 3. The age key — copy WARDYN_AGE_KEY out of deploy/compose/.env into your
 #    secret manager. A Postgres dump without it is unreadable ciphertext.
@@ -404,6 +413,9 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 #        docker run --rm -v "$v":/from -v "$PWD":/to alpine \
 #          tar czf "/to/$v-$(date +%F).tar.gz" -C /from .
 #      done
+#    Drive volumes carry no installation label: on a host with two
+#    installations, keep only the volumes whose wardyn.drive id this
+#    installation's GET /api/v1/drives lists.
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
@@ -424,12 +436,19 @@ boots against the restored data, and Postgres as the ONLY thing running while th
 dump loads.
 
 ```sh
+# Name the installation first. A host can run several (scripts/ci-run.sh gives each
+# its own COMPOSE_PROJECT_NAME and WARDYN_NS): set both as that installation was
+# started, or leave both unset for the default one. Every command below then reaches
+# that installation's containers and volumes only.
+export COMPOSE_PROJECT_NAME WARDYN_NS
+NS="${WARDYN_NS:-wardyn}"
+
 # 0. Stop every wardynd replica; none starts again until step 3b. Then, while the
 #    database you are replacing can still be read, record its revocation
 #    high-water mark: every session it issued sits at or below it. (That
 #    database is gone? See "Revocation order" below the block.)
 docker compose -f deploy/compose/docker-compose.yaml stop wardynd
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -Atc \
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -Atc \
   "SELECT last_value FROM oidc_revocation_seq" > revocation-hwm.txt
 
 # 1. Age key FIRST, before anything boots against the restored data — copy
@@ -447,20 +466,20 @@ docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
 #    abort the whole load with a nonzero exit, instead of silently skipping
 #    it and leaving a partial database with no error.
-docker exec -i wardyn-postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < wardyn-<date>.sql
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -v ON_ERROR_STOP=1 wardyn < "$NS-<date>.sql"
 
 # 3b. A restore rewinds the sequence that orders revocations against sessions. Before any
 #     wardynd starts, set it strictly above step 0's mark. A fixed increment cannot prove
 #     that: restoring the same dump twice lands on the same value, below sessions issued
 #     after the first restore. A dump from a release that predates the sequence has none:
 #     run `wardynd -migrate-only` first, then this step.
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c \
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c \
   "SELECT setval('oidc_revocation_seq', GREATEST((SELECT last_value FROM oidc_revocation_seq), $(cat revocation-hwm.txt)) + 1)"
 
 # 4. Recordings — `fs` store only; the default `pg` store already came back
 #    in step 3.
-docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
-  tar xzf /from/recordings-<date>.tar.gz -C /to
+docker run --rm -v "$NS-recordings":/to -v "$PWD":/from alpine \
+  tar xzf "/from/$NS-recordings-<date>.tar.gz" -C /to
 
 # 5. User drives — backup step 4's tarballs. The dump in step 3 brought back
 #    the drive ROWS; it holds none of the BYTES. Skip this and the runner
@@ -489,7 +508,7 @@ docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
 make setup
 
 # 7. Verify — row count first:
-docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
+docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
 #    Startup already decrypts the persisted signing key and fails closed if
 #    the age key does not match. Also verify an application secret, which a
 #    row count cannot prove: launch a run against any workspace/policy that
@@ -522,7 +541,7 @@ commands are the ones in "Back them up" and "Restore them", and in
 | Deployment | Database | Age identity and keys | Recordings (file store only) | Drives | Audit spool, `.consumed`, `.quarantine` |
 |---|---|---|---|---|---|
 | **Compose** | The `postgres_data` volume; the dump comes from the `${WARDYN_NS:-wardyn}-postgres` container. | `WARDYN_AGE_KEY` in `deploy/compose/.env`, plus the file `WARDYN_PLATFORM_KEY_FILE` names if you set it. With `WARDYN_KEK=transit`, `azurekv` or `awskms`, the key lives in the external key service (Vault, Azure Key Vault or AWS KMS), which you back up separately. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. The default `pg` store is already in the dump. | One Docker volume per person, labelled `wardyn.managed=true`. A `host_path` drive is a share you already back up. | The `audit` volume, `<project>_audit`, mounted at `/data/audit`: `audit-spool.jsonl`, `.consumed` and `.quarantine` (`WARDYN_AUDIT_SPOOL` on the `wardynd` service in [`deploy/compose/docker-compose.yaml`](../deploy/compose/docker-compose.yaml)). |
-| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)), so a desktop restore recovers runs, audit and drives, but not stored secrets. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
+| **Managed desktop** | The `postgres_data` volume of the Compose project `wardyn-desktop` (the `compose` helper in [`deploy/desktop/wardyn-desktop.sh`](../deploy/desktop/wardyn-desktop.sh)). Stop the converge job first (`wardyn.timer` on Linux, the launchd job on macOS), or it restarts the stack under you. | **Not in the set, deliberately.** `age.key` stays on the device ([DESKTOP.md](DESKTOP.md#why-agekey-never-rides-in-an-mdm-payload)). Restored on the same device, with its `age.key` in place, the stored secrets open again and the console comes back. Restored onto a replacement device, which mints its own `age.key`, wardynd cannot open the boot keys in the restored database and stops before it serves, so there is no console; the recordings, the drive volumes and the database's rows other than its sealed values stay readable offline. If you set `WARDYN_PLATFORM_KEY_FILE`, keep that file. | The `${WARDYN_NS:-wardyn}-recordings` volume, only under `WARDYN_RECORDING_STORE=fs`. | One Docker volume per person, as on Compose (a drive volume per person). | `/data/audit/audit-spool.jsonl`, `.consumed` and `.quarantine`, on the project's `audit` volume. |
 | **Helm** | The Postgres you operate (`postgres.dsn`); the chart renders none. Use that Postgres's own backup. | The Secret holding the `age-key` entry (`secrets.ageKeyFromSecret=true`), `secrets.ageKey`, or an operator-owned Secret named by `secrets.ageKeySecretRef`, or the key wired through `env`/`extraEnv`; the `WARDYN_PLATFORM_KEY_FILE` file if set; or the external key service for Vault Transit, Azure Key Vault or AWS KMS. `secrets.allowEphemeralAgeKey=true` makes a backup unrecoverable. | The PVC, with `persistence.enabled=true` (store `fs`). With `persistence.enabled=false` the store is `off`; `env.WARDYN_RECORDING_STORE=pg` puts them in the dump. | One PVC per drive: a snapshot per claim ("User drives on Kubernetes"). | `<persistence.mountPath>/audit-spool.jsonl`, `.consumed` and `.quarantine` on the PVC. With the default `persistence.enabled=false` they sit on a `/tmp` emptyDir, so the precondition is: enable persistence, or drain and copy them before scaling to zero. |
 
 **Inventory.** `wardynd -recovery-inventory`, run with the daemon's environment, prints each item above as JSON with its location for the deployment it sees (Compose, the managed desktop or Helm, from the runner and `WARDYN_MANAGED_DIR`). It opens no database connection and reads no key; only setting names appear, never values ([design](design/0.9/recovery-set.md#12-slices)).
@@ -548,7 +567,8 @@ commands are the ones in "Back them up" and "Restore them", and in
   has loaded the dump and before step 3b, replace the session key the way
   [the boot keys are replaced](operations/secrets-and-keys.md), so the next boot
   mints a new one:
-  `docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`.
+  `docker compose -f deploy/compose/docker-compose.yaml exec -T postgres psql -U wardyn -d wardyn -c "DELETE FROM secrets WHERE owned_by = '' AND name = 'wardyn-session-key';"`,
+  with the installation named as in the block above.
   Then run step 3b with `0` in place of the mark. Every person then signs in again.
 - **Drives.** Record the volume to drive id to person map at backup time. After
   a restore, a volume you recreate by hand is adopted by name, so the
@@ -740,11 +760,15 @@ commands are the ones in "Back them up" and "Restore them", and in
   - A request-path audit write that cannot get the lock within 5s **fails, and the event goes to the local spool** to
     be replayed when the lock clears.
   - That is the same degraded path a store outage uses, not a dropped event.
+  - At most four of a replica's own audit writes (those not made inside a larger transaction) wait for the lock at once (half the database pool when that is smaller).
+  - A write that finds every turn taken waits inside the same 5 seconds and then goes to the spool the same way.
+  - Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
   - The one exception is a **credential mint**, whose audit row shares the mint's transaction: there the timeout
     refuses the mint, because a credential that could not be audited is not one to issue.
   - The bound is `lock_timeout`, set `LOCAL` on the audit transaction, so it fires only while WAITING for the lock.
   - A slow-but-progressing insert is never aborted by it — and it is deliberately shorter than the drain's 15s pass,
     so the request path yields before the background drain does.
+  - The wait for a turn is not `lock_timeout`: a write queued behind four slow but progressing writes can go to the spool after 5 seconds with no lock stuck.
 
 - **Strict audit (`WARDYN_AUDIT_STRICT=on`, flag `-audit-strict`, default off).**
   - With strict mode on, a covered change is refused if its audit intent row cannot be written first.
@@ -1086,6 +1110,7 @@ psql -Atc "SELECT 'db:     ' || audit_partition_digest('audit_events_p202610')"
   at that tier; a super admin's export re-hashes in full. Cross-check that the marker appears only on the actions
   [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier) lists, that each row's
   `redacted_fields` names only that action's withheld fields, and that the marked rows number `redacted_rows`.
+- Withheld is not hidden from a reader who can guess the value: the stored hashes take no key, so a candidate value can be checked against a marked row ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md#host-detail-below-the-super-admin-tier)).
 
 - **Rows written before the upgrade** keep `NULL` hashes, are reported as `legacy`, and are never a failure.
   - There is no backfill, on purpose: hashes computed after the fact by the same process that could have altered the
@@ -1267,6 +1292,8 @@ pending policy.
     - the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it,
     - so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and
       nothing changed: retry.
+    - any other `audit_retention_drop_failed` (`500`) means wardynd cannot tell whether the drop committed: read
+      `GET /api/v1/audit/retention` first, and retry only if the partition is still listed.
   - `GET /audit/chain/verify` then starts from that anchor and still re-hashes every retained row; a partition removed
     any other way fails verify.
 
@@ -1291,7 +1318,8 @@ curl -fsS -H "Authorization: Bearer $WARDYN_TOKEN" "$WARDYN_URL/api/v1/audit/cha
 - `GET /audit/retention` lists every partition with its row count, state (`closed`, `open` or `future`) and whether a
   drop would take it now; for one it would refuse, `refusal` is the reason it would refuse with.
 - The two answers are the same function's, so they cannot disagree.
-- The row counts are exact (a scan of each partition), so the status call costs as much as the largest partition.
+- The row counts are exact: the call counts every retained partition in turn, so its cost grows with the total rows
+  retained and with the number of partitions.
 
 - **Pre-0.8.6 history** sits in one legacy partition that ends at the upgrade.
   - It becomes droppable once the upgrade itself is older than the window, and it is dropped whole;
@@ -1564,8 +1592,9 @@ erases one person's retained records by explicit scope, in one audited act
   from the sign-in token and the role map.
 - It is off until `WARDYN_SCIM_TOKEN` is set, and it mounts only on a single-tenant, commercial-cloud Entra issuer.
 - A SCIM request naming a user by id answers not found for a user of another issuer or tenant; group requests ignore such a user named as a member.
+- A group `DELETE` is the one exception: before the group goes, it cuts the browser sessions and revokes the group-holding API tokens of every member it removes, a user of another issuer or tenant included. Until every cut is recorded the group stays, and the answer is a 5xx the identity provider retries.
 - `GET /scim/status` lists only the people of its own SCIM issuer and tenant, and never a person an issuer portal introduced: that person's stuck steps are on [the portal's own status view](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
-- A group lookup by `displayName` that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
+- A group lookup by `displayName` compares the whole name, spaces included, ignoring case. One that matches more than 100 groups answers 400 `tooMany` rather than a list that claims to be complete; narrow it by `externalId`.
 - A group `PATCH` whose earlier member operation failed answers that failure first, as a 5xx the identity provider retries. A member add that reaches a group being deleted answers 404 only when nothing earlier failed.
 
 | Provisioning event | What Wardyn does |
@@ -1592,6 +1621,9 @@ erases one person's retained records by explicit scope, in one audited act
      its emails name two different people, the suspension refuses until an admin resolves it.
    - `userName` and `emails` may change (renames are accepted as a projection update and the old values are kept as
      removal aliases); `externalId` may not change on a bound identity.
+   - The email a user answers with is the one the last create, update or replace named as primary (else its first
+     email), or for a PATCH the last address it sets, until the person's next sign-in records the email that sign-in
+     carries.
 5. If you provision groups, map each group's `externalId` to the value the sign-in's groups claim carries for it: the
    group's object id.
    - A SCIM group removal revokes a person's API tokens only when the token's login-time group snapshot holds that
@@ -1699,7 +1731,7 @@ lose access now, do not wait for it:
 - **Role changes that are not SCIM group removals** at the identity provider still lag until the person signs in
   again. A group removal also lags for API tokens when the sign-in's groups claim carries names, not the object ids
   the group's `externalId` holds ("Turn it on", step 5): it then cuts sessions only.
-- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their console sessions only (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
+- **Identity-provider logout is opt-in.** Signing out at the identity provider does not end a Wardyn session unless `WARDYN_OIDC_BACKCHANNEL_LOGOUT` is on and the provider posts its logout token to `/auth/backchannel-logout` ([ENV.md](ENV.md#wardyn_oidc_backchannel_logout)), or `WARDYN_OIDC_FRONTCHANNEL_LOGOUT` is on and the provider's sign-out page loads `/auth/frontchannel-logout` with `iss` and `sid` ([ENV.md](ENV.md#wardyn_oidc_frontchannel_logout)), which is what Entra ID offers. SCIM deprovisioning is a separate revocation. A person's own sign-out ends their browser and CLI sign-ins and leaves their personal API tokens and SSH keys (`session.revoke` with `sessions_only`, [AUDIT-ACTIONS](AUDIT-ACTIONS.md)).
 - **Shared computers.** After an SSO sign-out the console tells the person to sign out of the identity provider too. That session stays live, so the next person could press Sign in with SSO and arrive as them.
 - **Long-lived connections.** A suspension kills every live run, which ends its attach and SSH sessions. Other
   console streams end at their next authentication check or reconnect.
@@ -2280,7 +2312,7 @@ predates it.
 - Every control a source or workspace can carry — a secret by name, an egress host, write access to a directory, a named integration — is a row with ONE axis.
 - **Required** rides along with every run that attaches the workspace, **Optional** is a per-run opt-in.
 - `PUT /api/v1/workspaces/{id}/requirements` writes the workspace's own overlay rows (`handleSetWorkspaceRequirements`, [`internal/api/workspace_requirements.go`](../internal/api/workspace_requirements.go)); the workspace detail page is the surface that writes them.
-  - A `write:<path>` key is checked against the server's own files. For a folder on a person's runner, use the source's `--writable` instead: such a key can be refused ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
+  - A `write:<path>` key is checked against the server's own files, unless the path is a folder the workspace binds to a person's runner or a path inside one: such a key is checked by its text alone ([A workspace folder on your runner](operations/hybrid-laptops.md#a-workspace-folder-on-your-runner)).
 - Launch and preflight both read `effectiveRequirements(ws)` — the same fold — so Review can never predict something launch won't do.
 - A `scan_seeded` requirement can never auto-grant a secret on its own: the scanner reads untrusted repo content, so only an operator's direct declaration attaches a credential (the fail-closed provenance rule above).
 
@@ -2288,10 +2320,28 @@ predates it.
 
 Moved to [integrations.md](operations/integrations.md#integrations).
 
+## Open sessions while the database is unreachable
+
+- An open terminal, desktop, window on a Mac, app session, inbound stream or SSH connection checks every 30 seconds
+  that its person may still use it. A check that answers no (signed out, revoked, an ended grant, a profile that now
+  denies it) ends the session at that check.
+- A check that gets no answer, because the database is unreachable or slow, does not end it. The session asks
+  again every 5 seconds and ends only when no check has answered for the session budget, counted from the first one
+  that got none. A terminal takes no input meanwhile.
+- Set the budget with `"sessions": {"unconfirmed_budget_s": N}` in `PUT /site-config`. N is 0 to 120 seconds; the default is 30. With 0 a session ends at the first check that gets no answer;
+  an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each wardynd reads the setting at most once a minute, and a session keeps the budget it started
+  with.
+- So a database outage ends an open session about 30 seconds plus the budget after its last good check: about 60
+  seconds by default, about 155 at 120. A terminal closes in a way the console reconnects on, and a desktop viewer
+  retries. An inbound stream also keeps its own 30-second grace since its last good check.
+- Every such wait writes a `session.unconfirmed` audit row, at a budget of 0 too: `rode_through` when a check
+  answered again, `ended` when the budget ran out, `refused` when a check that answered no ended the session
+  inside the wait, `closed` when the session ended by itself inside the wait.
+
 ## Network: upstream proxy and egress redirects
 
 - `SiteConfig` (`GET`/`PUT /api/v1/site-config`, `wardyn site-config get|set`) is the operator-wide network config, kept in Postgres beside [State stores](#state-stores): the corporate upstream proxy and the outbound redirects every run's egress inherits. Unconfigured is a valid, common state.
-- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
+- `PUT /site-config` replaces the keys the body names. A top-level block the body leaves out keeps its stored value: `agent_providers`, `model_providers`, `workspace_providers`, `components`, `images`, `sessions`, `macos_vm`, `branding`, `policy_help`, `internal_hosts`, `upstream_proxy_no_proxy`, `governance_max_depth`, `sign_in_help_text` and `sign_in_help_url`. Inside `macos_vm`, each switch and limit left out is kept too. `runners`, `recording`, the egress baseline, `integrations` and `onboarding_completed_at` change only through their own routes. To turn something off, send it: `"allow_kept_machines": false`, or `"images": {"admission": {"mode": "off"}}`.
 - It lives in the database, so `make reset` and `make reset-all` take it with the volume. To keep it, run `wardyn site-config get > corp-baseline.json` before and `wardyn site-config set corp-baseline.json` after. The document carries secret **names**, never values, so it is safe to keep beside the repo.
 - Values never round-trip, so `set` re-attaches the names even when a named secret was never restored. It prints a warning for each dangling ref, and the setup checklist's "Site config" row grades `warn` while one remains.
 
@@ -3206,7 +3256,7 @@ Or leave `daemon.json` alone and give Wardyn its own range:
 - Each run network then takes the next free `/28` of it (`WARDYN_DOCKER_RUN_SUBNET_SIZE` changes the length).
 - Free means no network on the daemon overlaps it, so a restart, a second replica and other stacks all count.
 - A full range refuses the run with a sentence naming the setting.
-- The orphan sweep removes the network of a run that is gone, which hands its subnet back.
+- The orphan sweep removes the network of a run that is gone, which hands its subnet back. It does so with or without this range.
 
 ### The start deadlines
 
@@ -3447,8 +3497,9 @@ Naming these is the point of the walk, not a caveat on it:
   - So `timeout` always means "the owner had the whole window".
 - **`timeout` is the label to alert on**, and the one to tune `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` against: it means a sandbox's model call was FAILED because nobody signed in inside the budget.
   - A rising `timeout` beside a `wait_seconds` average near the budget says people are only just making it — lengthen the budget, or make the request more visible.
-  - A rising `timeout` with a LOW `wait_seconds` says the opposite.
-  - The agent's SDK is giving up before the hold does, and the knob should come DOWN below that SDK's own patience so the call fails fast instead of late.
+  - `wait_seconds` samples only the requests a sign-in answered; a request that timed out adds nothing to it.
+  - So a rising `timeout` with a LOW `wait_seconds` average can mean the agent's SDK gives up before the hold does, and a few prompt sign-ins beside many unanswered requests look the same.
+  - Bring the knob DOWN below that SDK's own patience, so the call fails fast instead of late, only once the agent's own log shows its model call timing out first.
 - A series that is mostly `expired` is a deployment whose people never see the request at all — check that the console is reachable and that the roster names real principals.
   - Mostly `cancelled` means the runs are ending (killed, or finishing) before anyone answers.
 - **A hold expiry is deliberately NOT counted on `wardyn_egress_denies_total`.**
@@ -4207,11 +4258,12 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0290` (`0290_principal_groups`) creates `principal_groups`: a row for each person's last SSO sign-in to Wardyn and for their last token exchange through each portal, with the email, groups and partial-groups flag it carried. Each row also keeps when it was issued (`issued_at`): for a portal exchange, when its token was issued; for an SSO sign-in, the database's time of the sign-in. A token issued before the row's does not replace it, so an older token that is still valid cannot put back a group a newer one dropped. Rows the migration fills have none. A row is written before its session or delegated token is issued, and a sign-in or exchange whose row cannot be written is refused. A SCIM removal of a person from a group takes that group's `externalId` out of every row of the person the SCIM user is bound to; only a sign-in or an exchange adds one. The migration fills the sign-in rows from `key_domain_login_groups` (`0121`'s table) and the email of each person's most recent identity row. That email is the identity row's lowercased form, so until the person signs in again, a `user` grant or deny that names a non-ASCII email in other than lower case does not match a filled row. Erasing a person's credentials, or purging them, deletes their rows. The migration also grants `SELECT, INSERT, UPDATE, DELETE` on `principal_groups` to every role that was granted `DELETE` on `key_domain_login_groups`, other than that table's owner. A split-role install whose app role is neither one of those roles nor a member of one, and does not pick up new tables through step 4's `ALTER DEFAULT PRIVILEGES`, grants it the same by hand. Until it does, every SSO sign-in and portal token exchange is refused, and so are a SCIM removal from a group and erasing a person's credentials or purging them. A running run that a person owns and that carries a component then gets no credential, no gateway token for an organisation MCP server and no gateway client certificate (`503`). Going back to an earlier release needs a database restore, as after any migration.
 - `0291` (`0291_runner_event_refusal_windows`) creates `runner_event_refusal_windows`: each runner's current window of `runner.event.refuse` rows (its start, the rows it wrote and the refusals it suppressed), so the bound holds across replicas and restarts. The next window overwrites the row; a row goes with its runner. The migration grants `SELECT, INSERT, UPDATE` on it to every role granted `UPDATE` on `runner_spool_cursors`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no refusal is recorded, and a runner resends each event the organisation refuses.
 - `0292` (`0292_agent_runs_data_out`) adds the nullable `agent_runs.data_out` (`0001`'s table): the run's `data_out` rule, written at dispatch and kept when audit retention removes the run's policy records. Existing runs are filled from the policy records retention has kept, except a run at policy generation 2 or later whose current generation's record is missing: it is left NULL and its rule reads as unreadable. Any other run with none left is set to `blocked` if it predates the newest record retention removed, plus a day, and is not queued, pending or starting with no sandbox. No grant changes.
-- `0293` (`0293_run_support_grants`) creates `run_support_grants`: each request by a super admin to help inside another person's running run, with the owner's answer, the doors and minutes the owner allowed, and when and why the grant ended. It adds `support_grant` and `support_expires` to `attach_tickets` (`0026`'s table) and `support` to `run_attach_leases` (`0129`'s), and runs `CREATE OR REPLACE FUNCTION run_support_grants_end_with_run()` for a trigger on `agent_runs` (`0001`'s table) that ends a run's open grant in the statement that stops the run or marks it lost. The function runs as the migrator, so a run write never fails for want of this table's grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on the table to every role granted `DELETE` on `run_attach_leases`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no support request or answer is recorded, and approving and denying approval holds works as before. The run watcher's sweep (which needs `SELECT` and `UPDATE`), its list of live grants and the check of whether a person was a run's helper skip a role without `SELECT` on the table, and erasing a person's run tasks skips the grant blank for a role without `INSERT`, which can have written no row; a role with `INSERT` but not `UPDATE` fails that erasure.
+- `0293` (`0293_run_support_grants`) creates `run_support_grants`: each request by a super admin to help inside another person's running run, with the owner's answer, the doors and minutes the owner allowed, and when and why the grant ended. It adds `support_grant` and `support_expires` to `attach_tickets` (`0026`'s table) and `support` to `run_attach_leases` (`0129`'s), and runs `CREATE OR REPLACE FUNCTION run_support_grants_end_with_run()` for a trigger on `agent_runs` (`0001`'s table) that ends a run's open grant in the statement that stops the run or marks it lost. The function runs as the migrator, so a run write never fails for want of this table's grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on the table to every role granted `DELETE` on `run_attach_leases`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no support request or answer is recorded, approval decisions are refused (the server cannot tell whether the person deciding helped in the run), and a person's erasure fails. The run watcher's sweep (which needs `SELECT` and `UPDATE`) and its list of live grants skip a role without `SELECT` on the table; erasing a person's run tasks needs `SELECT`, and `UPDATE` when a grant still holds a reason or an email.
 - `0294` (`0294_portal_issuer`) adds the issuer-portal columns to `delegates` (`0094`'s table; `issuer` is empty on every existing row, which is a console portal as before) and the portal person's columns to `principal_identities` (`0113`'s table). It creates `portal_issuers`, `console_issuers`, `portal_grants` and `portal_person_portals`, and `CREATE FUNCTION principal_identities_portal_lifecycle()` for a trigger on `principal_identities` that refuses a portal person's deactivation deadline, reactivation or purge written by anything but the portal's own store writes, whatever binary sends the SQL. It refuses to run, naming the count, while a `delegates` row with no issuer has an empty `scope_group`: set a group on each, or revoke the portal and delete the row, then upgrade. The migration grants `SELECT, INSERT` on `console_issuers`, and `SELECT, INSERT, UPDATE, DELETE` on the other three, to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then a server with console sign-in configured does not start, because at boot it reads `portal_issuers` and records its console issuer in `console_issuers`.
 - `0295` (`0295_provider_service_grant`) creates `provider_service_grant_status`: each server's last token request outcome for a provider's service grant. The migration grants `SELECT, INSERT, UPDATE, DELETE` on it to every role granted `UPDATE` on `delegates`, other than that table's owner. A split-role install whose app role is not one of those, nor a member of one, nor covered by step 4's `ALTER DEFAULT PRIVILEGES`, grants it by hand; until then no service grant's token request outcome is recorded.
 - `0297` (`0297_portal_team_drives`) lets `user_drive_grants` (`0054`'s table, whose subject-type check `0079` last replaced) hold a `portal` allocation: a team drive given to an issuer portal, named by the portal's id in canonical lowercase form, with no directory name. It adds `agent_runs.portal_drives` (`0001`'s table), not null, default false, marking a run that mounted a portal's drive, and a check that such a run names the portal that created it, applied to new and changed rows only. Existing rows are unchanged. It creates no table, so no grant changes.
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
+- `0300` (`0300_agent_runs_end_time_idx`) adds `agent_runs_end_time_idx` on `agent_runs` (`0001`'s table): the end time the Runs board orders and windows ended runs by, then `id`. It is built without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds. On a large table, run `CREATE INDEX CONCURRENTLY IF NOT EXISTS agent_runs_end_time_idx ON agent_runs ((CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END) DESC, id DESC);` before you upgrade, and the migration finds it built. No grant changes. If that build fails, drop the index and run it again.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.
@@ -4428,6 +4480,26 @@ helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
   -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
 ```
 
+If your values pin `image.digest`, change the digest in the same upgrade. The chart pulls the digest
+(`repo:tag@digest`), so a new tag beside the old digest runs the old image, which may then refuse the database the
+new release migrated. Read the new digest from the registry, verify that digest, upgrade with it, and check what
+runs:
+
+```sh
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:<new-tag>     # the "Digest:" line is <new-digest>
+cosign verify \
+  --certificate-identity "https://github.com/cjohnstoniv/wardyn/.github/workflows/release.yml@refs/tags/v<new-tag>" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "ghcr.io/cjohnstoniv/wardynd@<new-digest>"
+helm -n wardyn upgrade wardyn ./deploy/helm/wardyn \
+  -f your-values.yaml --set image.tag=<new-tag> --set image.digest=<new-digest> --wait --timeout 5m
+kubectl -n wardyn get deploy/wardyn \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="wardynd")].image}'   # ends in @<new-digest>
+```
+
+`/healthz`'s `version` field then names the new release. A mirror works the same way with its own repository in
+place of `ghcr.io/cjohnstoniv/wardynd`; verify the digest, which a mirror keeps.
+
 Keeping the values in a version-controlled file makes what is deployed reviewable,
 and it steps around two Helm sharp edges.
 
@@ -4561,7 +4633,10 @@ kubectl -n wardyn scale deploy/wardyn --replicas=0
 # 2. Run the migration once, from the NEW image, with the DSN the Deployment uses
 #    (WARDYN_PG_MIGRATE_DSN when you split roles). Any Job that runs
 #    `wardynd -migrate-only` in the new image works; wait for it to complete.
-# 3. Upgrade the release; the new pod finds nothing left to migrate.
+#    Values that pin image.digest: run it from ghcr.io/cjohnstoniv/wardynd@<new-digest>,
+#    the digest verified as above.
+# 3. Upgrade the release; the new pod finds nothing left to migrate. Values that
+#    pin image.digest add --set image.digest=<new-digest>, the digest step 2 ran.
 helm -n wardyn upgrade wardyn ./deploy/helm/wardyn -f your-values.yaml --set image.tag=<new-tag> --wait --timeout 5m
 ```
 
@@ -4953,6 +5028,16 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 - That is already true of the admin reclaim verb. Read the chart's `drives.reclaim` comment first.
 - A person's own runner never mounts a member drive. The volume would sit on that person's laptop, out of the server's reach.
 
+**A delete that did not finish.**
+
+- A delete whose answer is not a confirmed delete keeps the drive deleting once the call to the runner was made: a daemon or API error, the 30-second time-out, or an unknown reply. No run attaches it, and it counts toward `max_per_person`. The answer is 503 `member_drive_delete_failed`, and a Kubernetes claim that is already terminating answers the same. A 503 before that call gives the drive back, and the list does not show it as deleting.
+- The drive is missing from its owner's drives and from New Run. The member drives list (`GET /api/v1/drives/member`, `wardyn drive member list`) shows it with `deleting: true` and its `object`.
+- The kept work folder of a run that ended before it started is left the same way if the server stops before deleting it.
+- Nothing retries it on Docker or Kubernetes. A delete a minute after the last try does: the owner's `DELETE /api/v1/me/drives/{id}`, or a super admin's `DELETE /api/v1/drives/member/{id}` (`wardyn drive member delete <id> --yes`). Sooner, the answer is 409 `member_drive_busy`. Every try that takes the delete over writes `drive.member.delete`; a 409 `member_drive_busy` writes none.
+- A disk drive kept on a Mac waits for its Mac instead, and the delete finishes when the Mac reconnects.
+- If the retry keeps failing on Docker, check that `docker volume inspect --format '{{ index .Labels "wardyn.drive" }}' <object>` prints the drive's id. Remove the volume with `docker volume rm <object>`, never `-f`: Docker refuses a volume a container still uses, and that refusal is the check that no run holds it. Then delete the drive again: a super admin's delete answers `already_absent`, the owner's answers 204, and the record goes.
+- On Kubernetes, wait until the claim has finished terminating, then delete the drive again.
+
 **Keep a run's work folder.**
 
 - With `keep_main_drive: true`, a run that asks for `keep_work_folder` gets a member drive, named after the run, mounted at `/home/agent/work` in place of scratch.
@@ -4985,7 +5070,6 @@ INFO wardynd: ssh gateway listening listen=:2222 advertise=127.0.0.1:2222 host_k
 
 **Orphans.**
 
-- A delete that stops part way leaves the drive hidden from its owner. A second delete after one minute takes it over. The admin list shows it as `deleting`.
 - A drive deleted while a run was launching against it can leave an object with no row. Find it by the `wardyn.drive` label and remove it by hand, as in "User drives on Docker".
 - Nothing sweeps these for you.
 
@@ -5518,8 +5602,10 @@ kubectl -n <runsNamespace> delete pvc wardyn-drive-<drive-slug>-<home>
 
 ## High availability
 
-- `ha.enabled` runs two or more wardynd replicas on Kubernetes so that the loss of a
-  node does not stop the control plane.
+- `ha.enabled` lets wardynd run two or more replicas on Kubernetes; set `replicas` to
+  2 or more yourself (the chart keeps your value, 1 by default).
+- A node failure then stops the control plane only when every ready replica was on that
+  node: the default anti-affinity prefers separate nodes and does not require them.
 - It is one documented switch: the chart sets
   `WARDYN_HA=true`, the daemon skips the single-instance lock, and both refuse every
   configuration that would make a second replica unsafe.

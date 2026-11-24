@@ -349,9 +349,8 @@ func unmatchedLines(a, b []string) []string {
 // times are normalised. The fixture is the pre-origin behaviour written out; a run that disagrees prints both lists,
 // then the lines only one of them has. The kill's identity revocation is one of the events: the identity provider
 // writes it to the same recorder. So is the key delete the credential sweep writes for each form it sweeps
-// (sweepTarget), with nothing to delete. The run output finish's row is not: it is written on its own goroutine, which reads
-// the run while the kill clears its sandbox ref, so whether this run, with no output row, gets a capture gap row
-// depends on which lands first, and that row is the output contract's, not the shared helpers'.
+// (sweepTarget), with nothing to delete. The run output finish's row is not: it is written on its own goroutine, and it is the output
+// contract's, not the shared helpers'.
 func TestPortalLifecycle_SharedHelpersSCIMOutputUnchanged_PG(t *testing.T) {
 	e := newSCIMEnv(t)
 	const sub, email, oid = "sub-baseline", "baseline.me@corp.example", "aaaaaaaa-0000-4000-8000-0000000000c1"

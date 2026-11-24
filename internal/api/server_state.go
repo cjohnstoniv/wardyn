@@ -53,20 +53,26 @@ type Server struct {
 	locks lockState
 	// lastTouch debounces the decision-ingest TouchRun UPDATEs per run (see
 	// shouldTouch in internal.go). Zero value is ready to use.
-	lastTouchMu sync.Mutex
-	lastTouch   map[uuid.UUID]time.Time
+	lastTouchMu    sync.Mutex
+	lastTouch      map[uuid.UUID]time.Time
+	lastTouchSwept time.Time // when pruneStale last swept lastTouch
+	// healthzCache holds /healthz's last probe for cfg.HealthzProbeTTL (healthz_cache.go). Zero value is ready.
+	healthzCache healthzProbeCache
 	// keepaliveEvery overrides attachKeepaliveInterval for THIS server only. It
 	// exists so a test can watch the keepalive tick without waiting 30 real
 	// seconds; nothing sets it in production and the zero value means "use the
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
+	keepalives     runKeepaliveState // this replica's one keepalive writer per run (attachKeepalive)
 	// pingEvery overrides attachPingInterval for THIS server only (the liveness
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
 	// on a millisecond clock instead of the real 30s budget.
-	pingEvery     time.Duration
-	authorityTest attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	pingEvery      time.Duration
+	authorityTest  attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
+	sessionBudgets sessionBudgetState     // the site's open-session budget as last read, and the tests' overrides (session_budget.go)
+	attachRuns     attachRunWatchState    // the shared run read every open attach socket's re-check uses (attach_run_watch.go)
 	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
 	localCovered    func(runID uuid.UUID) bool

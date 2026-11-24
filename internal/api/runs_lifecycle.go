@@ -904,7 +904,7 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	s.kickRunResidentErase(revokeCtx, id)
 	// (7) Its output, on a tracked goroutine: the drain barrier and the write
 	// never delay the kill's answer, and the sandbox is already gone.
-	s.finishRunOutputDetached(ctx, id)
+	s.finishRunOutputDetached(ctx, id, run.SandboxRef)
 
 	// Honest outcome: the kill-switch is the central governance control and
 	// the audit log is the system of record. If ANY teardown/revocation step
@@ -940,7 +940,9 @@ func (s *Server) killTeardownTail(ctx context.Context, run types.AgentRun, kille
 	// to tell a sandbox that never started from an empty capture (reconcileRecordRun in workspace_run.go).
 	if kerr == nil && !queued && s.cfg.Runner != nil && run.SandboxRef != "" {
 		if c, ok := s.cfg.Store.(sandboxRefRetainingClearer); ok {
-			_ = c.ClearSandboxRefRetaining(revokeCtx, id)
+			if c.ClearSandboxRefRetaining(revokeCtx, id) == nil {
+				s.reclaimRunImageAfterTeardown(revokeCtx, id)
+			}
 		}
 	}
 

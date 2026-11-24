@@ -18,6 +18,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 )
 
 // listenHost extracts the host portion of a listen address, tolerating a bare
@@ -170,7 +172,7 @@ func listenHostIPs(host string) ([]net.IP, bool) {
 	// make the most common local bind depend on the host's resolver — and a
 	// deployment whose /etc/hosts is odd would silently lose the loopback
 	// classification rather than gain a better one.
-	if strings.EqualFold(host, "localhost") {
+	if loopback.Host(strings.ToLower(host)) {
 		return []net.IP{net.IPv4(127, 0, 0, 1)}, true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), listenLookupTimeout)

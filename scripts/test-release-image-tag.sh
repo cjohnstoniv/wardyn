@@ -157,25 +157,77 @@ df="$ROOT/deploy/compose/Dockerfile.wardynd"
 [ "$(grep -c 'internal/version.releaseBuild=\${RELEASE_BUILD}' "$df")" -eq 4 ] || fail "Dockerfile.wardynd does not stamp releaseBuild into wardynd and every wardyn build"
 grep -q 'run_in_image /host/wardyn-linux-amd64' "$PI" || fail "the image check does not run the linux/amd64 host CLI from the image"
 
-# Moving tags: the build pushes only the per-commit tag; :latest and the other names are applied by a later step, after
-# the image has been checked and signed, and each must resolve to the signed digest.
+# Names: every tag, the per-commit one included, is applied after the image has been checked and signed. The build
+# pushes by digest under no name. The sign and retag steps' own scripts run here with docker and cosign stubbed: the
+# signature goes on the built digest, each name is then pointed at that digest and read back, and a failed signature,
+# a failed copy or a name that resolves to another digest fails the step.
 runtags "$sha" ""
-grep -qx 'first_tag=ghcr.io/cjohnstoniv/wardynd:sha-1111111' "$out" || fail "the tags step did not output the per-commit tag as first_tag: $(cat "$out")"
-later="$(awk '/^later_tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out")"
-grep -qx 'ghcr.io/cjohnstoniv/wardynd:latest' <<<"$later" || fail "later_tags does not hold :latest for main's tip"
-! grep -q 'sha-1111111' <<<"$later" || fail "later_tags repeats the per-commit tag"
+names="$(awk '/^tags<<TAGEOF$/ { on = 1; next } /^TAGEOF$/ { on = 0 } on' "$out")"
+[ "$names" = "ghcr.io/cjohnstoniv/wardynd:sha-1111111
+ghcr.io/cjohnstoniv/wardynd:latest" ] || fail "the tags step does not list the per-commit tag and then :latest for main's tip: $(cat "$out")"
 step_line() { grep -n "^      - name: $1\$" "$PI" | head -1 | cut -d: -f1 || true; }
 b_line="$(grep -n '^        id: build$' "$PI" | head -1 | cut -d: -f1 || true)"
 c_line="$(step_line 'Check the image reports its revision')"
 g_line="$(step_line 'Sign the pushed image (keyless, by digest)')"
-r_line="$(step_line 'Point the remaining tags at the signed image')"
+r_line="$(step_line 'Point the tags at the signed image')"
 [ -n "$b_line" ] && [ -n "$c_line" ] && [ -n "$g_line" ] && [ -n "$r_line" ] || fail "publish-image.yml lacks the build, check, sign or retag step"
 [ "$b_line" -lt "$c_line" ] && [ "$c_line" -lt "$g_line" ] && [ "$g_line" -lt "$r_line" ] || fail "publish-image.yml must build, check, sign, then retag, in that order"
-shallow='^ {0,6}[^ ]' # the next line leaves the tags value: no second tag under it
-grep -A1 '^          tags: ' "$PI" | sed -n '1,2p' | { IFS= read -r l1; IFS= read -r l2; [ "$l1" = '          tags: ${{ steps.tags.outputs.first_tag }}' ] && [[ "$l2" =~ $shallow ]]; } || fail "the build pushes more than the per-commit tag"
+# The build is an action, so its keys are read: no tags or push key, and one image output pushed by digest.
+build_with="$(awk -v b="$b_line" 'NR > b && /^      - / { exit } NR > b' "$PI")"
+! grep -Eq '^          (tags|push):' <<<"$build_with" || fail "the build step pushes a tag: $build_with"
+[ "$(grep -c '^          outputs: ' <<<"$build_with")" -eq 1 ] \
+  && grep -qx '          outputs: type=image,name=ghcr.io/cjohnstoniv/wardynd,push-by-digest=true,name-canonical=true,push=true' <<<"$build_with" \
+  || fail "the build step does not push the image by digest under no name: $build_with"
 [ "$(grep -c 'imagetools create' "$PI")" -eq 1 ] && [ "$(grep -n 'imagetools create' "$PI" | cut -d: -f1)" -gt "$g_line" ] || fail "a tag is applied outside the retag step that follows the signature"
-grep -q 'imagetools create --tag "\$t" "\$IMAGE_REF"' "$PI" || fail "the retag step does not copy the signed digest"
-grep -q 'want the signed' "$PI" || fail "the retag step does not check each tag's digest against the signed one"
+step_run() { # NAME: the run script of publish-image.yml's step NAME, a `run: |` block or a one-line run
+  awk -v name="      - name: $1" '
+    $0 == name { want = 1; next }
+    want && /^      - / { exit }
+    want && /^        run: \|$/ { grab = 1; next }
+    want && /^        run: / { sub(/^        run: /, ""); print; exit }
+    grab && /^          / { sub(/^          /, ""); print; next }
+    grab { exit }
+  ' "$PI"
+}
+step_run 'Sign the pushed image (keyless, by digest)' >"$WORK/sign.sh"
+step_run 'Point the tags at the signed image' >"$WORK/retag.sh"
+[ -s "$WORK/sign.sh" ] && [ -s "$WORK/retag.sh" ] || fail "no run script in the sign or the retag step"
+mkdir -p "$WORK/pub"
+cat >"$WORK/pub/docker" <<'STUB'
+#!/usr/bin/env bash
+echo "docker $*" >>"$STUBLOG"
+case "$*" in
+  "buildx imagetools create "*) [ -z "${CREATE_FAIL:-}" ] ;;
+  "buildx imagetools inspect "*) echo "${INSPECT_DIGEST:-$WANT_DIGEST}" ;;
+esac
+STUB
+cat >"$WORK/pub/cosign" <<'STUB'
+#!/usr/bin/env bash
+echo "cosign $*" >>"$STUBLOG"
+[ -z "${COSIGN_FAIL:-}" ]
+STUB
+chmod +x "$WORK/pub/docker" "$WORK/pub/cosign"
+signed="ghcr.io/cjohnstoniv/wardynd@$digest"
+pub() { # SCRIPT [VAR=value...]: runs one step's script with the stubs first on PATH -> sets rc; the calls land in $WORK/publog
+  local s="$1"; shift
+  : >"$WORK/publog"; rc=0
+  env PATH="$WORK/pub:$PATH" STUBLOG="$WORK/publog" WANT_DIGEST="$digest" IMAGE_REF="$signed" DIGEST="$digest" TAGS="$names" "$@" \
+    bash -e "$WORK/$s" >"$WORK/pubout" 2>&1 || rc=$?
+}
+pub sign.sh
+[ "$rc" -eq 0 ] && [ "$(cat "$WORK/publog")" = "cosign sign --yes $signed" ] || fail "the sign step does not sign the built digest, and only that (rc $rc): $(cat "$WORK/publog")"
+pub sign.sh COSIGN_FAIL=1
+[ "$rc" -ne 0 ] || fail "the sign step carried on past a failed signature"
+pub retag.sh
+[ "$rc" -eq 0 ] && [ "$(cat "$WORK/publog")" = "docker buildx imagetools create --tag ghcr.io/cjohnstoniv/wardynd:sha-1111111 $signed
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:sha-1111111 --format {{.Manifest.Digest}}
+docker buildx imagetools create --tag ghcr.io/cjohnstoniv/wardynd:latest $signed
+docker buildx imagetools inspect ghcr.io/cjohnstoniv/wardynd:latest --format {{.Manifest.Digest}}" ] \
+  || fail "the retag step does not point each name at the signed digest and read it back (rc $rc): $(cat "$WORK/publog")"
+pub retag.sh CREATE_FAIL=1
+[ "$rc" -ne 0 ] || fail "the retag step carried on past a failed copy"
+pub retag.sh INSPECT_DIGEST=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+[ "$rc" -ne 0 ] || fail "the retag step accepted a name that resolves to another digest"
 
 # Publisher guard: a job that holds packages or id-token write (its own permissions block, or the workflow's when it has
 # none) must not execute a file taken out of the image on the runner. The image is unsigned until that job signs it, so
@@ -304,7 +356,7 @@ PIN_STEPS='      - uses: actions/checkout
       - uses: docker/build-push-action
       - name: Check the image reports its revision
       - name: Sign the pushed image (keyless, by digest)
-      - name: Point the remaining tags at the signed image'
+      - name: Point the tags at the signed image'
 PIN_JOB="$(cat <<'PIN_JOB_END'
 needs: gate
 if: needs.gate.outputs.green == 'true'
@@ -365,9 +417,8 @@ if [ -n "${EXTRA_TAG:-}" ]; then
 tags+=("ghcr.io/cjohnstoniv/wardynd:${EXTRA_TAG}")
 fi
 {
-echo "first_tag=${tags[0]}"
-echo "later_tags<<TAGEOF"
-printf '%s\n' "${tags[@]:1}"
+echo "tags<<TAGEOF"
+printf '%s\n' "${tags[@]}"
 echo "TAGEOF"
 if [ "$REF_TYPE" = "tag" ]; then echo "revision="; else echo "revision=${SHA}"; fi
 } >> "$GITHUB_OUTPUT"
@@ -377,12 +428,11 @@ id: build
 with:
 context: .
 file: deploy/compose/Dockerfile.wardynd
-push: true
+outputs: type=image,name=ghcr.io/cjohnstoniv/wardynd,push-by-digest=true,name-canonical=true,push=true
 platforms: linux/amd64,linux/arm64
 provenance: false
 build-args: |
 REVISION=${{ steps.tags.outputs.revision }}
-tags: ${{ steps.tags.outputs.first_tag }}
 - name: Check the image reports its revision
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
@@ -430,11 +480,11 @@ echo "image reports: $got"
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
 run: cosign sign --yes "${IMAGE_REF}"
-- name: Point the remaining tags at the signed image
+- name: Point the tags at the signed image
 env:
 IMAGE_REF: ghcr.io/cjohnstoniv/wardynd@${{ steps.build.outputs.digest }}
 DIGEST: ${{ steps.build.outputs.digest }}
-LATER_TAGS: ${{ steps.tags.outputs.later_tags }}
+TAGS: ${{ steps.tags.outputs.tags }}
 run: |
 set -euo pipefail
 while IFS= read -r t; do
@@ -442,7 +492,7 @@ while IFS= read -r t; do
 docker buildx imagetools create --tag "$t" "$IMAGE_REF"
 now="$(docker buildx imagetools inspect "$t" --format '{{.Manifest.Digest}}')"
 [ "$now" = "$DIGEST" ] || { echo "::error::$t points at $now, want the signed $DIGEST"; exit 1; }
-done <<< "$LATER_TAGS"
+done <<< "$TAGS"
 PIN_JOB_END
 )"
 publisher_whole_pin() { # reads the workflow on stdin; prints each difference, exits 1 on any
@@ -622,5 +672,150 @@ awk '
   /\$\("?\$(helper|agent)"?[[:space:]]/ || /"\$RUNNER_TEMP\/pkg\/[^"]*wardyn[^"]*"[[:space:]]+version/ { if (exec == "") exec = $0 }
   END { flush(); exit found }
 ' "$WF" || fail "a step whose env holds the Apple secrets executes a tree-built binary"
+
+# scripts/float-latest.sh and its wiring in release.yml: the one place `:latest` on the float-latest rows is written.
+# git, curl and cosign are stubs on PATH, so nothing here touches a network or a registry.
+command -v yq >/dev/null && command -v jq >/dev/null || { echo "test-release-image-tag: yq and jq are required" >&2; exit 1; }
+FL="$WORK/fl"
+mkdir -p "$FL/bin"
+cat >"$FL/bin/git" <<'STUB'
+#!/usr/bin/env bash
+echo "git $*" >>"$FL/calls"
+[ "$1" = ls-remote ] || exit 99
+while read -r t; do printf '0000000000000000000000000000000000000000\trefs/tags/%s\n' "$t"; done <"$FL/tags"
+STUB
+cat >"$FL/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+echo "curl $*" >>"$FL/calls"
+url=""
+for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
+case "$url" in
+  https://ghcr.io/token\?*) echo '{"token":"t"}'; exit 0 ;;
+  https://ghcr.io/v2/cjohnstoniv/*/manifests/*)
+    r="${url#https://ghcr.io/v2/cjohnstoniv/}"; img="${r%%/*}"; ref="${r##*/}"
+    code=404; digest=""
+    if [ -f "$FL/reg/$img/$ref" ]; then code=200; digest="$(cat "$FL/reg/$img/$ref")"; fi
+    [ -f "$FL/reg/$img/$ref.code" ] && code="$(cat "$FL/reg/$img/$ref.code")"
+    if [ -n "$digest" ]; then printf 'HTTP/2 %s\r\ndocker-content-digest: %s\r\n\r\n\n%s' "$code" "$digest" "$code"
+    else printf 'HTTP/2 %s\r\n\r\n\n%s' "$code" "$code"; fi
+    exit 0 ;;
+esac
+exit 99
+STUB
+cat >"$FL/bin/cosign" <<'STUB'
+#!/usr/bin/env bash
+echo "cosign $*" >>"$FL/calls"
+case "$1" in
+  verify)
+    [ "$3" = --certificate-identity ] && [ "$5" = --certificate-oidc-issuer ] || exit 99
+    [ "$6" = https://token.actions.githubusercontent.com ] || exit 1
+    tag="${4##*refs/tags/}"
+    [ -f "$FL/signed/${2#*@}" ] && grep -qxF "$tag" "$FL/signed/${2#*@}" ;;
+  copy)
+    [ "$2" = --force ] && [ "$#" -eq 4 ] || exit 99
+    echo "$*" >>"$FL/copies"
+    dest="${4%:latest}"; mkdir -p "$FL/reg/${dest##*/}"
+    if [ -n "${COPY_WRONG:-}" ]; then echo "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >"$FL/reg/${dest##*/}/latest"
+    else echo "${3#*@}" >"$FL/reg/${dest##*/}/latest"; fi ;;
+  *) exit 99 ;;
+esac
+STUB
+chmod +x "$FL/bin/git" "$FL/bin/curl" "$FL/bin/cosign"
+
+d() { printf 'sha256:%063d%s' 0 "$1"; }
+D1="$(d 1)"; D2="$(d 2)"; D3="$(d 3)"; D4="$(d 4)"; D5="$(d 5)"
+IMG=ghcr.io/cjohnstoniv
+fl_reset() { rm -rf "$FL/reg" "$FL/signed" "$FL/tags" "$FL/copies" "$FL/calls" "$FL/out" "$FL/err"; mkdir -p "$FL/reg" "$FL/signed"; : >"$FL/tags"; unset FL_COPY_WRONG; }
+fl_tag() { printf '%s\n' "$@" >>"$FL/tags"; }
+fl_image() { # IMAGE VERSION DIGEST: the version's tag in the registry, signed by the run for v<VERSION>
+  mkdir -p "$FL/reg/$1"; echo "$3" >"$FL/reg/$1/$2"; echo "v$2" >>"$FL/signed/$3"
+}
+fl_latest() { mkdir -p "$FL/reg/$1"; echo "$2" >"$FL/reg/$1/latest"; }
+fl_run() { # DRY (empty: unset) REF IMAGE...
+  local dry="$1"; shift
+  FL_RC=0
+  if [ -n "$dry" ]; then
+    env PATH="$FL/bin:$PATH" FL="$FL" COPY_WRONG="${FL_COPY_WRONG:-}" DRY_RUN="$dry" bash "$ROOT/scripts/float-latest.sh" "$@" >"$FL/out" 2>"$FL/err" || FL_RC=$?
+  else
+    env -u DRY_RUN PATH="$FL/bin:$PATH" FL="$FL" bash "$ROOT/scripts/float-latest.sh" "$@" >"$FL/out" 2>"$FL/err" || FL_RC=$?
+  fi
+}
+fl_rc() { [ "$FL_RC" -eq "$2" ] || fail "float-latest $1: rc $FL_RC, want $2: $(cat "$FL/out" "$FL/err")"; }
+fl_out() { grep -qF -- "$2" "$FL/out" || fail "float-latest $1: stdout lacks [$2]: $(cat "$FL/out")"; }
+fl_err() { grep -qF -- "$2" "$FL/err" || fail "float-latest $1: stderr lacks [$2]: $(cat "$FL/err")"; }
+fl_copies() { # NAME EXPECTED_LINE...: $FL/copies holds exactly these lines (none: no copy)
+  local n="$1" got want; shift
+  got="$(cat "$FL/copies" 2>/dev/null || true)"; want="$(printf '%s\n' "$@")"; [ "$#" -gt 0 ] || want=""
+  [ "$got" = "$want" ] || fail "float-latest $n: copies [$got], want [$want]"
+}
+fl_copy_line() { echo "copy --force $IMG/$1@$2 $IMG/$1:latest"; }
+fl_case1() { fl_reset; fl_tag v0.10.9 v0.11.0; fl_image agent-base 0.10.9 "$D1"; fl_image agent-base 0.11.0 "$D2"; fl_latest agent-base "$D2"; }
+fl_case2() { fl_case1; fl_tag v0.11.1; fl_image agent-base 0.11.1 "$D3"; }
+
+# 1 an older-line final does not float
+fl_case1; fl_run false v0.10.9 agent-base; fl_rc 1 0
+fl_out 1 "PLAN agent-base latest=$D2 target=v0.11.0 $D2 action=keep"; fl_copies 1
+[ "$(cat "$FL/reg/agent-base/latest")" = "$D2" ] || fail "float-latest 1: :latest moved"
+# 2 the newest final floats
+fl_case2; fl_run false v0.11.1 agent-base; fl_rc 2 0
+fl_out 2 "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 2 "moved $IMG/agent-base:latest -> $D3"
+fl_copies 2 "$(fl_copy_line agent-base "$D3")"
+# 3 inverted completion: the lower final's job finishes after the higher's
+fl_case2; fl_latest agent-base "$D3"; fl_run false v0.10.9 agent-base; fl_rc 3 0
+fl_out 3 "target=v0.11.1 $D3 action=keep"; fl_copies 3
+# 4 repair: a lower run finds :latest below the highest published final and moves it up
+fl_case2; fl_tag v0.10.10; fl_image agent-base 0.10.10 "$D4"; fl_run false v0.10.10 agent-base; fl_rc 4 0
+fl_out 4 "target=v0.11.1 $D3 action=move"; fl_copies 4 "$(fl_copy_line agent-base "$D3")"
+# 4b numeric order: v0.10.10 is above v0.10.9
+fl_reset; fl_tag v0.10.9 v0.10.10; fl_image agent-base 0.10.9 "$D1"; fl_image agent-base 0.10.10 "$D4"; fl_latest agent-base "$D1"
+fl_run false v0.10.9 agent-base; fl_rc 4b 0
+fl_out 4b "PLAN agent-base latest=$D1 target=v0.10.10 $D4 action=move"; fl_copies 4b "$(fl_copy_line agent-base "$D4")"
+# 5 a tag whose image is not published yet is skipped
+fl_case2; fl_tag v0.11.2; fl_run false v0.11.1 agent-base; fl_rc 5 0
+fl_out 5 "skip agent-base:0.11.2: not published"; fl_copies 5 "$(fl_copy_line agent-base "$D3")"
+# 6 an RC ref skips before any read
+fl_case2; fl_run false v0.11.2-rc.1 agent-base; fl_rc 6 0
+[ "$(cat "$FL/out")" = "float-latest: v0.11.2-rc.1 is a prerelease tag: skipped, no write" ] || fail "float-latest 6: stdout [$(cat "$FL/out")]"
+[ ! -s "$FL/calls" ] || fail "float-latest 6: an RC read something: $(cat "$FL/calls")"; fl_copies 6
+# 6b a branch ref prints the plan and writes nothing
+fl_case2; fl_run true chore/release-0.11.2 agent-base; fl_rc 6b 0
+fl_out 6b "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 6b "not a final release tag: no write"; fl_copies 6b
+# 7 a dry run writes nothing
+fl_case2; fl_run true v0.11.1 agent-base; fl_rc 7 0
+fl_out 7 "action=move"; fl_out 7 "DRY RUN: no write"; fl_copies 7
+# 8 a candidate whose digest is signed by another tag's run fails closed, with nothing written for any image
+fl_case2; rm -f "$FL/signed/$D3"; echo v0.11.0 >"$FL/signed/$D3"
+fl_image agent-codex-cli 0.11.1 "$D5"; fl_latest agent-codex-cli "$D2"
+fl_run false v0.10.9 agent-codex-cli agent-base; fl_rc 8 1
+fl_err 8 "agent-base:0.11.1"; fl_copies 8
+# 9 a registry answer other than 200 or 404 fails closed
+fl_case2; echo 500 >"$FL/reg/agent-base/0.11.1.code"; fl_run false v0.10.9 agent-base; fl_rc 9 1; fl_copies 9
+# 10 nothing published at or above the run's tag
+fl_reset; fl_tag v0.11.0 v0.11.1; fl_image agent-base 0.11.0 "$D2"; fl_run false v0.11.1 agent-base; fl_rc 10 1
+fl_err 10 "no published final at or above v0.11.1"; fl_copies 10
+# 11 a copy that lands on another digest fails
+fl_case2; FL_COPY_WRONG=1; fl_run false v0.11.1 agent-base; fl_rc 11 1; fl_err 11 "after the copy, expected $D3"
+# 12 a final ref that is not a tag on origin
+fl_case1; fl_run false v0.12.0 agent-base; fl_rc 12 1; fl_err 12 "v0.12.0 is not a tag on origin"; fl_copies 12
+# 13 each image is decided on its own
+fl_case2; fl_image agent-codex-cli 0.11.1 "$D5"; fl_latest agent-codex-cli "$D5"
+fl_run false v0.11.1 agent-base agent-codex-cli; fl_rc 13 0
+fl_out 13 "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 13 "PLAN agent-codex-cli latest=$D5 target=v0.11.1 $D5 action=keep"
+fl_copies 13 "$(fl_copy_line agent-base "$D3")"
+# 14 no DRY_RUN is a usage error
+fl_case2; fl_run "" v0.11.1 agent-base; fl_rc 14 2; fl_copies 14
+
+# The wiring in release.yml. (The two ui-sandbox jobs share their steps by a YAML anchor, so the one allowed line is read twice: sort -u.)
+[ "$(yq -r '.jobs["float-latest"].concurrency.group' "$WF")" = release-floating-aliases ] || fail "float-latest job is not in the release-floating-aliases group"
+[ "$(yq -r '.jobs["float-latest"].concurrency["cancel-in-progress"]' "$WF")" = false ] || fail "the float-latest group cancels in-progress runs"
+for j in preflight-green images promote; do
+  [ "$(yq -r '.jobs["float-latest"].needs | contains(["'"$j"'"])' "$WF")" = true ] || fail "float-latest does not need $j"
+done
+[ "$(yq -r '.jobs["float-latest"].steps[-1].env.DRY_RUN' "$WF")" = "\${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}" ] || fail "the float-latest step's DRY_RUN is not the tag-ref and dry_run guard"
+yq -r '.jobs["float-latest"].steps[-1].run' "$WF" >"$FL/step.sh"
+grep -qF 'scripts/float-latest.sh "$REF_NAME"' "$FL/step.sh" || fail "the float-latest step does not run scripts/float-latest.sh with REF_NAME"
+[ "$(yq -r '.jobs.promote.env.IMAGES' "$WF" | yq -r '.[] | select(.["float-latest"] == "true") | .name' | sort | tr '\n' ' ')" = "agent-aws-sso agent-base agent-codex-cli " ] || fail "the promote rows that float :latest are not agent-aws-sso agent-base agent-codex-cli"
+others="$(yq -r '.jobs | to_entries | .[] | select(.key != "float-latest") | .value.steps[]? | (.run // ""), (.with.tags // "")' "$WF" | grep -v '^[[:space:]]*#' | grep ':latest' | sed 's/^[[:space:]]*//' | sort -u || true)"
+[ "$others" = 'echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:latest" >> "$GITHUB_OUTPUT"' ] || fail "a job other than float-latest writes :latest: [$others]"
 
 echo "test-release-image-tag: ok"

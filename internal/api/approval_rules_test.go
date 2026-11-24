@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -126,5 +128,97 @@ func TestApprovalRuleDryRunSelectsStoredRuleOnlyByName(t *testing.T) {
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "kinds is required") {
 			t.Errorf("%s = %d %s; want 400 kinds is required", name, w.Code, w.Body)
 		}
+	}
+}
+
+// TestApprovalRuleDryRunHonoursTheWaitBudget: a pending row at or past its expiry, which the sweep has not yet
+// moved, is skipped as already decided, as Decide's conditional update would refuse it; one still ahead of it, or
+// with no expiry, would be approved. The clock is the server's, which a store with no database clock stands in for.
+func TestApprovalRuleDryRunHonoursTheWaitBudget(t *testing.T) {
+	t.Setenv(envApprovalRules, approvalRulesOn)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	at := func(d time.Duration) *time.Time { return new(now.Add(d)) }
+	for _, c := range []struct {
+		name    string
+		expires *time.Time
+		want    string
+	}{
+		{"expired a minute ago", at(-time.Minute), "skip/" + reasonApprovalAlreadyDecided},
+		{"expires at this instant", at(0), "skip/" + reasonApprovalAlreadyDecided},
+		{"expires a minute ahead", at(time.Minute), "would_approve/"},
+		{"no expiry", nil, "would_approve/"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRuleFix(t)
+			f.srv.cfg.Now = func() time.Time { return now }
+			ap, err := f.aps.Request(context.Background(), types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalToolCall,
+				RequestedScope: json.RawMessage(ruleToolScope), ExpiresAt: c.expires})
+			if err != nil {
+				t.Fatal(err)
+			}
+			w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
+			var rep approvalRuleReport
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rep) != nil || len(rep.Pending) != 1 {
+				t.Fatalf("dry run = %d %s", w.Code, w.Body)
+			}
+			if got := rep.Pending[0].Outcome + "/" + rep.Pending[0].Reason; got != c.want || rep.Pending[0].ApprovalID != ap.ID {
+				t.Fatalf("outcome = %s; want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// pagedRuleStore serves the approval feed newest first from rows, and after each read a new request lands at its
+// head, as one raised during the dry run would. Every other Pager read panics (nil).
+type pagedRuleStore struct {
+	*ruleStore
+	store.Pager
+	rows  []types.ApprovalRequest
+	reads []store.Page
+}
+
+func (s *pagedRuleStore) ListApprovalsPage(_ context.Context, _ types.ApprovalState, p store.Page) ([]types.ApprovalRequest, error) {
+	s.reads = append(s.reads, p)
+	rows := s.rows
+	head := rows[0]
+	head.ID, head.RequestedAt = uuid.New(), head.RequestedAt.Add(time.Second)
+	s.rows = append([]types.ApprovalRequest{head}, rows...)
+	end := len(rows)
+	if p.Limit > 0 {
+		end = min(p.Offset+p.Limit, len(rows))
+	}
+	if p.Offset >= end {
+		return []types.ApprovalRequest{}, nil
+	}
+	return rows[p.Offset:end], nil
+}
+
+// TestApprovalRuleDryRunReadsTheRecentFeedOnce: the 7-day look back reads the feed in one bounded read, so a request
+// raised during the scan neither repeats a row nor hides one. Read by OFFSET pages, the row that landed at the head
+// pushed the last row of a page onto the next page too.
+func TestApprovalRuleDryRunReadsTheRecentFeedOnce(t *testing.T) {
+	t.Setenv(envApprovalRules, approvalRulesOn)
+	f := newRuleFix(t)
+	ps := &pagedRuleStore{ruleStore: f.st}
+	now := time.Now()
+	for i := range 300 {
+		ps.rows = append(ps.rows, types.ApprovalRequest{ID: uuid.New(), RunID: f.run.ID, Kind: types.ApprovalToolCall, State: types.ApprovalApproved,
+			RequestedScope: json.RawMessage(ruleToolScope), RequestedAt: now.Add(-time.Duration(i+1) * time.Minute)})
+	}
+	f.srv.cfg.Store = ps
+	w := do(t, f.srv, http.MethodPost, "/api/v1/governance/approval-rules/dry-run", adminToken, approvalRuleBody)
+	var rep approvalRuleReport
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rep) != nil {
+		t.Fatalf("dry run = %d %s", w.Code, w.Body)
+	}
+	seen := map[uuid.UUID]bool{}
+	for _, r := range rep.Recent {
+		if seen[r.ApprovalID] {
+			t.Fatalf("approval %s reported twice", r.ApprovalID)
+		}
+		seen[r.ApprovalID] = true
+	}
+	if len(rep.Recent) != 300 || rep.RecentTruncated || len(ps.reads) != 1 || ps.reads[0] != (store.Page{Limit: approvalRuleHistoryScan + 1}) {
+		t.Fatalf("recent = %d rows (truncated %v) over reads %+v; want 300 in one read of %d", len(rep.Recent), rep.RecentTruncated, ps.reads, approvalRuleHistoryScan+1)
 	}
 }

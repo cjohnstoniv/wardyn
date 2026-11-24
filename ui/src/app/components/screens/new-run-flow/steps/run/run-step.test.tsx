@@ -15,6 +15,7 @@ import { RUNNER_POOL_REFUSAL } from "../../../../../lib/runner-pool-refusals";
 import { SCHEDULE_REFUSAL } from "../../../../../lib/schedule-refusals";
 import type { RunnerPoolCatalogueEntry, RunnerPoolList } from "../../../../../lib/types/runner-pools";
 import { NR_RUN } from "../../../../wardyn/copy/new-run/run";
+import { CC_MATRIX_WHERE } from "../../../../wardyn/cc-meta";
 import { NR_SHARED } from "../../../../wardyn/copy/new-run/shared";
 import { SERVICE_FORM, SERVICE_FORM_ERRORS, SERVICE_PAUSE_WARNING } from "../../../../wardyn/copy/run-service";
 import { NR_MACHINE } from "../../../../wardyn/copy/new-run/machine";
@@ -432,9 +433,9 @@ describe("Run step: barrier", () => {
   it("shows where it runs for a User pool only", async () => {
     show(AGENT, list([SHARED, TEAM_LAPTOPS]));
     const select = await poolSelect();
-    expect(screen.queryByText(NR_RUN.ROW_WHERE)).not.toBeInTheDocument();
+    expect(screen.queryByText(CC_MATRIX_WHERE.label)).not.toBeInTheDocument();
     await userEvent.selectOptions(select, TEAM_LAPTOPS.id);
-    expect((await screen.findAllByText(NR_RUN.ROW_WHERE)).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(CC_MATRIX_WHERE.label)).length).toBeGreaterThan(0);
   });
 
   it("reads the pool's scope as the console's pool word", () => {

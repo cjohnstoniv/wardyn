@@ -129,7 +129,7 @@ describe("SummaryHeader — attachable chip predicate", () => {
   it("a super admin keeps 'attachable' on an operator-owned run", () => {
     renderHeader(
       <OperatorProvider operator={true} principal="sam@acme.io">
-        <SummaryHeader run={{ ...runningInteractive, operator_owned: true } as AgentRun} terminal={false} onKill={() => {}} />
+        <SummaryHeader run={{ ...runningInteractive, operator_owned: true }} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.getByText("Interactive — attachable")).toBeInTheDocument();
@@ -139,7 +139,7 @@ describe("SummaryHeader — attachable chip predicate", () => {
 // 0.9 (M-RN-3 RS3, #111): a neutral chip names the computer of a LOCAL run beside the barrier; a remote run's
 // default place needs none (RN-Q14), so its header is what it was.
 describe("SummaryHeader — where a local run is", () => {
-  const onLaptop = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" } as AgentRun;
+  const onLaptop: AgentRun = { ...runningInteractive, placement: "local", runner_id: "11111111-2222-3333-4444-555555555555", runner_name: "laptop-7" };
 
   it("shows 'On {name}' for a local run", () => {
     renderHeader(
@@ -153,7 +153,7 @@ describe("SummaryHeader — where a local run is", () => {
   it.each([["remote"], [""]] as const)("shows no chip for a run whose placement is %j", (placement) => {
     renderHeader(
       <OperatorProvider operator={false}>
-        <SummaryHeader run={{ ...onLaptop, placement } as AgentRun} terminal={false} onKill={() => {}} />
+        <SummaryHeader run={{ ...onLaptop, placement }} terminal={false} onKill={() => {}} />
       </OperatorProvider>,
     );
     expect(screen.queryByText(/^On /)).toBeNull();
@@ -201,7 +201,7 @@ describe("SummaryHeader — the workload chip (T3-b)", () => {
 
 // #3034: the run's lifetime is two pill menus ending the facts row, not a full-width band under the header.
 describe("SummaryHeader — the lifetime pills", () => {
-  const live = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } } as AgentRun;
+  const live: AgentRun = { ...runningInteractive, created_by: "me", wait_budget_sec: 4 * 3600, run_limits: { user_changes_limits: true } };
 
   it("draws 'Ends: never' and 'Waits up to 4 h' in the facts row when the page can refresh the run", () => {
     renderHeader(
@@ -224,7 +224,7 @@ describe("SummaryHeader — the lifetime pills", () => {
     rerender(
       <MemoryRouter>
         <OperatorProvider operator={true}>
-          <SummaryHeader run={{ ...live, state: "COMPLETED" } as AgentRun} terminal onKill={() => {}} onLifetimeChanged={() => {}} />
+          <SummaryHeader run={{ ...live, state: "COMPLETED" }} terminal onKill={() => {}} onLifetimeChanged={() => {}} />
         </OperatorProvider>
       </MemoryRouter>,
     );

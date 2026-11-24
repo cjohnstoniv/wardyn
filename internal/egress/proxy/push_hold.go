@@ -76,6 +76,11 @@ const (
 	maxPushHoldsActive = 16
 	// maxPushHoldKeys bounds the distinct pushes one run's sidecar remembers.
 	maxPushHoldKeys = 256
+	// maxHeldPushBytes is the largest push a hold keeps in memory, charged to the run's
+	// inspection budget, so it is forwarded the moment an admin approves it: at most
+	// maxPushHoldsActive x 1 MiB of the 64 MiB budget. A larger push gives its bytes back before
+	// the hold waits and, once approved, is pushed again (awaitPushDecision).
+	maxHeldPushBytes = 1 << 20
 )
 
 // pushHoldSecond is what one of push_rules.hold_seconds lasts. A var (not a
@@ -89,10 +94,13 @@ var pushHoldSecond = time.Second
 // forwarded push authenticates with.
 type pushTarget struct {
 	repo, actsAs string
-	// writeToGit, when set, answers a refusal the agent can act on in git's own
-	// terms, because git does not print a 403's body: paths that could not be
-	// worked out, and a match on a run with nobody to ask.
+	// writeToGit answers a refusal the agent can act on in git's own terms, because git does not print a
+	// 403's body: paths that could not be worked out, and a match on a run with nobody to ask. The Entra
+	// lane sets its own; applyPushRules sets one from the buffered push for every other lane.
 	writeToGit func(w http.ResponseWriter, msg string)
+	// dropPush, set for a push larger than maxHeldPushBytes, gives the buffered push back before
+	// the hold waits.
+	dropPush func()
 }
 
 // appPushTarget is the GitHub App lane's target.
@@ -152,6 +160,11 @@ func (rv pushReview) headline() string {
 // fix is what the person can change about the push itself.
 func (rv pushReview) fix() string {
 	return cmp.Or(tipRemedy(rv.why), "remove these paths from the push")
+}
+
+// resentHeadline answers a push approved after its bytes were given back for the hold.
+func (rv pushReview) resentHeadline() string {
+	return "an admin approved this push while it was held, but a push this large is not kept in memory during a hold"
 }
 
 func (rv pushReview) deniedHeadline() string {
@@ -287,14 +300,21 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 	if rv.unresolved {
 		noun = "unresolved"
 	}
-	refuse := func(src, headline, remedy string) bool {
+	refuseTo := func(toGit bool, src, headline, remedy string) bool {
 		deny(src)
-		if target.writeToGit != nil && (rv.unresolved || p.pushHolds.unattended) {
+		if target.writeToGit != nil && toGit {
 			target.writeToGit(w, refusalLine(headline, rv.why, remedy, paths))
 			return false
 		}
 		http.Error(w, pathsBody("wardyn: "+headline, paths, noun, rv.why, remedy), http.StatusForbidden)
 		return false
+	}
+	refuse := func(src, headline, remedy string) bool {
+		return refuseTo(rv.unresolved || p.pushHolds.unattended, src, headline, remedy)
+	}
+	// Approved after its bytes were given back: said where git prints it, since the push must be sent again.
+	resent := func() bool {
+		return refuseTo(true, ruleSourceGitPushHeld, rv.resentHeadline(), "push the same commits again; the approval lets them through")
 	}
 	if p.pushHolds.unattended {
 		remedy := rv.fix() + ", or run the task interactively so an admin can approve it"
@@ -313,7 +333,7 @@ func (p *Proxy) holdPush(w http.ResponseWriter, r *http.Request, rules *pushRule
 		return refuse(ruleSourceGitPushHeld, why, "retry the push later")
 	}
 	defer p.pushHolds.leave()
-	return p.awaitPushDecision(w, r, rules.hold, id, scope, types.NewPushPathList(paths), key, rv, refuse)
+	return p.awaitPushDecision(w, r, rules.hold, id, scope, types.NewPushPathList(paths), key, rv, refuse, target.dropPush, resent)
 }
 
 // admit files key and takes an active slot. A push already decided comes back
@@ -365,9 +385,12 @@ func (h *pushHolds) record(key string, id uuid.UUID, state approvalState) {
 }
 
 // awaitPushDecision raises (or rejoins) the push's approval and polls it until
-// it is decided or the hold runs out.
+// it is decided or the hold runs out. When the first poll does not decide it,
+// drop (when set) gives the buffered push back before the hold waits, and an
+// approval after that is answered by resent: the bytes to forward are gone.
 func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold time.Duration, id uuid.UUID,
-	scope types.PushContentScope, list types.PushPathList, key string, rv pushReview, refuse func(src, headline, remedy string) bool) bool {
+	scope types.PushContentScope, list types.PushPathList, key string, rv pushReview, refuse func(src, headline, remedy string) bool,
+	drop func(), resent func() bool) bool {
 	headline := rv.headline()
 	if p.approval == nil {
 		return refuse(ruleSourceGitPushHeld, headline+", and this proxy has no way to ask for one", "retry the push")
@@ -411,6 +434,7 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 	}
 	tick := time.NewTicker(holdPollInterval)
 	defer tick.Stop()
+	dropped := false
 	for {
 		// Polled at once as well as on each tick: a retry rejoining a row that
 		// was decided while nobody was waiting is answered without a delay.
@@ -418,6 +442,9 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 			switch ar.State {
 			case types.ApprovalApproved:
 				p.pushHolds.record(key, id, apApproved)
+				if dropped {
+					return resent()
+				}
 				return true
 			case types.ApprovalDenied:
 				p.pushHolds.record(key, id, apDenied)
@@ -427,6 +454,10 @@ func (p *Proxy) awaitPushDecision(w http.ResponseWriter, r *http.Request, hold t
 				return refuse(ruleSourceGitPushHeld, headline+", and the request closed without a decision",
 					"push again to ask again")
 			}
+		}
+		if drop != nil && !dropped {
+			drop()
+			dropped = true
 		}
 		select {
 		case <-ctx.Done():

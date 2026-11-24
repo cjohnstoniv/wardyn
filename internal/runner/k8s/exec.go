@@ -153,7 +153,9 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 func (d *Driver) followExecOutput(ns, ref string, w io.Writer) error {
 	ctx := context.Background()
 	pods := d.clientset.CoreV1().Pods(ns)
-	for errs := 0; ; time.Sleep(execWaitPollInterval) {
+	b := d.podBell(ns, ref)
+	defer b.stop()
+	for errs := 0; ; {
 		pod, err := pods.Get(ctx, ref, metav1.GetOptions{})
 		if err != nil {
 			if isNotFound(err) {
@@ -162,6 +164,7 @@ func (d *Driver) followExecOutput(ns, ref string, w io.Writer) error {
 			if errs++; errs >= execWaitMaxProbeErrors {
 				return err
 			}
+			_ = b.sleep(ctx, execWaitPollInterval, execWaitPollInterval)
 			continue
 		}
 		errs = 0
@@ -169,8 +172,10 @@ func (d *Driver) followExecOutput(ns, ref string, w io.Writer) error {
 			return nil
 		}
 		if !execContainerStarted(pod) {
+			_ = b.sleep(ctx, execWaitPollInterval, podWatchLongResync)
 			continue
 		}
+		b.stop()
 		rc, err := pods.GetLogs(ref, &corev1.PodLogOptions{Container: execContainerName, Follow: true}).Stream(ctx)
 		if err != nil {
 			slog.Warn("wardynd: exec output tail: could not follow the agent's log", slog.String("ref", ref), slog.Any("err", err))
@@ -258,14 +263,14 @@ func recordCmd(runID uuid.UUID, argv []string) []string {
 // apiserver, carrying no in-memory exec-id map to lose across a wardynd
 // restart (unlike docker's agentExecs map). Errors if Exec was never called for ref.
 func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
-	// ponytail: a 1s Get-poll of the pod, not a Watch. A watch.Interface
-	// would save apiserver chatter, but polling is a five-line loop against
-	// the same kubernetes.Interface every clientset satisfies. Upgrade if
-	// poll volume ever shows up as real apiserver load.
+	// Each read is live from the apiserver. Between reads it sleeps on the pod's bell: a change of the pod wakes it at
+	// once, and while the pod watch is live the timer is podWatchLongResync.
 	ns, err := d.refNamespace(ctx, ref)
 	if err != nil {
 		return 0, fmt.Errorf("k8s: exec wait: %w", err)
 	}
+	b := d.podBell(ns, ref)
+	defer b.stop()
 	errs := 0
 	for {
 		pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
@@ -319,10 +324,24 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				return 0, fmt.Errorf("k8s: exec wait: get pod (%d consecutive errors): %w", errs, err)
 			}
 		}
-		select {
-		case <-ctx.Done():
-			return 0, fmt.Errorf("k8s: exec wait: %w", ctx.Err())
-		case <-time.After(execWaitPollInterval):
+		if errs > 0 { // an error is retried on the 1 s budget execWaitMaxProbeErrors counts; a ring must not spend it faster
+			t := time.NewTimer(execWaitPollInterval)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return 0, fmt.Errorf("k8s: exec wait: %w", ctx.Err())
+			case <-t.C:
+			}
+			continue
+		}
+		resync := podWatchLongResync
+		if d.cfg.AgentSandbox {
+			// With the agent-sandbox backend the verdict also rests on the Sandbox (agentPodReplaced), and a
+			// Sandbox change rings no pod bell.
+			resync = execWaitPollInterval
+		}
+		if err := b.sleep(ctx, execWaitPollInterval, resync); err != nil {
+			return 0, fmt.Errorf("k8s: exec wait: %w", err)
 		}
 	}
 }

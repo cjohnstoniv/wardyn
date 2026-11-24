@@ -298,6 +298,51 @@ func TestSCIMCovStatusLastTokenSlotTiedTimestampsFollowAuditOrder(t *testing.T) 
 	}
 }
 
+// The slot read looks at the last 30 days first and reads further back only when they name no bearer, with
+// the same answer either way.
+func TestSCIMCovStatusLastTokenSlotReadsTheRecentWindowFirst(t *testing.T) {
+	t0 := scimCovNow
+	slotReads := func(p *scimCovPaged) (n int, firstSince time.Time) {
+		for _, f := range p.filters {
+			if f.DataContainsAny != "" {
+				if n == 0 {
+					firstSince = f.Since
+				}
+				n++
+			}
+		}
+		return n, firstSince
+	}
+	for _, c := range []struct {
+		name  string
+		rows  []types.AuditEvent
+		want  string
+		reads int
+	}{
+		{"a bearer row this week", []types.AuditEvent{scimCovAudit("scim.user.write", "x", t0.Add(-time.Hour), `{"slot":"next"}`)}, "next", 1},
+		{"only an old bearer row", []types.AuditEvent{scimCovAudit("scim.user.write", "x", t0.Add(-90*24*time.Hour), `{"slot":"primary"}`)}, "primary", 2},
+		{"a recent sweeper row and an old bearer row", []types.AuditEvent{
+			scimCovAudit("scim.user.deactivate", "x", t0, `{"slot":"sweeper"}`),
+			scimCovAudit("scim.user.write", "x", t0.Add(-90*24*time.Hour), `{"slot":"next"}`),
+		}, "next", 2},
+		{"no bearer row at all", nil, "", 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, paged := scimCovPagedEnv(t, newSCIMCovStore(), c.rows)
+			if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != c.want {
+				t.Fatalf("status = %d, last_token_slot %q, want %q", w.Code, body.LastTokenSlot, c.want)
+			}
+			n, since := slotReads(paged)
+			if n != c.reads {
+				t.Errorf("%d slot read(s), want %d", n, c.reads)
+			}
+			if since.IsZero() || t0.Sub(since) < 29*24*time.Hour || t0.Sub(since) > 31*24*time.Hour {
+				t.Errorf("first slot read since %v, want about 30 days before %v", since, t0)
+			}
+		})
+	}
+}
+
 func TestSCIMCovStatusAuditReadFailures(t *testing.T) {
 	for _, c := range []struct{ name, action string }{
 		{"the slot read", ""},

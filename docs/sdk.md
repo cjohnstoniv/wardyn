@@ -277,10 +277,17 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   The runner that served the run decides between `stdout` and `recording`:
   only a recorded run on a Kubernetes runner under the session recorder reads `recording`
   (OPERATIONS.md "Run output").
-  The latter two retain the recording's owner-or-operator privacy
-  gate, even after recording is disabled.
-  A portal's delegated token reads `stdout` output only; for the other two
-  it gets the 409 a run with no such row gives, audited `delegation_scope`.
+  `pane_snapshot` and `recording` keep the recording's owner-or-operator privacy gate,
+  even after recording is disabled. A portal never reads `pane_snapshot`. An issuer
+  portal's grant reads `stdout` and a successful `recording` recovery of its person's
+  own non-interactive runs; a recording that is missing, failed or erased answers it as a run with no
+  recording. A console portal's delegated token reads `stdout` only. A withheld source
+  falls through to the run's stdout tail or shared chunks when there are any (200,
+  `source: stdout`), and otherwise to the answer a run with no such row gives (409).
+  A portal's withheld source writes no refusal row. When a portal's read answers
+  `run_output_not_captured`, `run_output_not_kept`, `run_output_interactive` or the
+  retention window's `run_output_expired`, it writes `run.output.refuse` with the same
+  reason, once per read.
 - `incomplete` on `stdout` says bytes may be missing.
   On `recording` it is always true and says the output cannot be vouched byte-complete.
 - `capture_gap` says capture or recovery
@@ -607,6 +614,7 @@ A template is a saved run setup, whole or partial, kept for yourself, published 
   - Saving one writes no stored policy.
 - An update needs `expected_revision`, the revision you read. Another current revision answers `409` `template_revision_conflict` and changes nothing; keep your edits, reload, and apply them again.
   - Every revision stays readable by number; scope and kind never change (copy a template to publish it elsewhere).
+- A copy (`CopyTemplate`) may name `expected_revision`, the revision you reviewed. Another current revision answers `409` `template_revision_conflict` and copies nothing; without it the copy takes the current revision.
 - A refused document answers `TemplateSaveRefusal`: the first diagnostic's `error` and `reason`, and every diagnostic with its path.
 - A shared template holds references (secret names, workspace and drive ids), never values, and its readers see those names.
 - `created_by` and `updated_by` are set only for someone who may write the template.
@@ -869,13 +877,13 @@ start.
 | `runner_limits_invalid` | `400`: `limits` is missing or not a valid set (runs at once 1 to 64, at least one CPU, disk in whole GiB, no per-run amount past its total); `422`: a total past what the runner last reported. |
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
-| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
-| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
+| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. A runner on 0.10.4 or later first replaces the proxy pod up to twice, so the reason means every try was given a held address or a pod could not be proven stopped. Launch the run again. |
+| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules`, `push_hold_removals` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run that sets any of these on such a runner is refused `409` with it. |
 | `gateway_identity_changed` | A run asked for a gateway token, or a revive was asked for, and its model provider was changed or turned off after the run started: `403` on the token, `409` on the revive. Create a new run, or edit the provider back. |
 | `gateway_identity_unavailable` | `503`: Wardyn couldn't read what a gateway token depends on, or the save that turns gateway identity on couldn't make the signing key, so nothing was issued or saved. |
 | `gateway_access_cut` | A run asked for a gateway token, or a revive was asked for, and the portal that launched the run was revoked with `?cut_in_flight=true`: `403` on the token, `409` on the revive. Permanent for that run; start a new run. |
 | `invalid_cut_in_flight_param` | `DELETE /admin/delegates/{id}`, `400`: `cut_in_flight` is not `true` or `false`, is given twice, or the query does not parse. Nothing was revoked. |
-| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. |
+| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. A revive of such a run is refused `409` with it. |
 | `node_record_invalid` | `POST /runs/{id}/node-record`, `400`: `attestation` is not `node_powered_off` or `no_prior_holder`, `source` is not `provider_console`, `management_controller` or `other`, `source_id` is missing, longer than 256 characters or holds control characters, or `tuple` is missing. |
 | `node_record_refused` | `POST /runs/{id}/node-record`, `409`: the run is not held as containment pending, the runner's record (`tuple`) changed since the form was loaded, `no_prior_holder` was sent after a recorded name reuse or for a run with a causal node association, or another stop for the run already waits for its runner. A held record whose run moved before its approval is refused at the approval the same way. |
 | `node_record_human_only` | `POST /runs/{id}/node-record`, `403`: the admin token or an API token made it, or approved a held one (a node record is made and approved from a signed-in session), or the record needs two people and the server runs in local mode, which cannot show who they are. |
@@ -947,6 +955,7 @@ start.
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_decidable_by` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `invalid_service_param` | `GET /runs?service=` is present but not `1` or `0`, an empty value included. |
+| `invalid_counts_param` | `GET /runs?counts=`, sent with one of the list parameters, is present but not `skip`. |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals` and `GET /runs`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_run_past_lifetime` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the run reached its lifetime cap first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -1166,7 +1175,7 @@ start.
 | `workload_policy_pin_mismatch` / `workload_policy_pin_invalid` | A workload's policy pin. `PUT /workloads/{name}/policy-pin` with `{"digest":"<hex>"}` sets it (`PinWorkloadPolicy`) and `DELETE` clears it (`UnpinWorkloadPolicy`), on the caller's own workload only; any other caller gets `404` `workload_not_found`. `400` `workload_policy_pin_invalid`: the digest is not 64 lowercase hex characters. `workload_policy_pin_mismatch` is a refused launch's reason, never an HTTP error reason: the launch's policy has another launch policy digest than the pin. An apply or a restart answers `200` with it as `launch.reason`, the previous run keeps running, and `last_refusal` records it; a preview answers `launch.state` `would_refuse`. A run that waited in its pool's queue is held to the pin again when it starts, and ends with this reason when it is off the pin. The launch policy digest covers the policy as the launch resolves it: the stored policy its `policy_id` names or the default, its `inline_policy` and `overrides`, the owner's ceiling, walls and boundary, and what its workspaces, repositories, components, tool rules and size add. It does not cover what is added as the run starts, the confinement class above the policy's minimum or the run's lifetime limit, so it is not the run's `policy_digest`. The digest to pin is a preview's `launch.policy_digest`. It is comparable within one Wardyn version. |
 | `api_token_no_human` / `api_token_from_delegated_token` / `api_token_member_mode_mint` / `api_token_name_invalid` / `api_token_ttl_invalid` / `api_token_cap_reached` | `POST /api/v1/tokens` (self-service mint) and `DELETE`; the invitation claim and the sponsor's service-token mint answer the mint guards with the same sentences, and `api_token_cap_reached` (`422`) there means `20` live tokens on the identity for the sponsor's mint, but on an invitation claim the cap is the claimer's own live tokens. |
 | `owner_ambiguous` / `owner_unresolved` | The shared owner/principal resolver shape: more than one known principal matches a name, or none does. `secrets.go`'s admin `?owner=` resolution (`ownerRefusalReason`) and `sshkeys_admin.go`'s `resolveSSHKeyOwner` (also reached from `POST /sessions/revoke`'s SSH-key cutoff) both answer from this one vocabulary rather than each inventing its own. |
-| `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser sessions end; API tokens and SSH keys keep working) goes with `sub`, not `all`. |
+| `sessions_revoke_param_invalid` | `POST /sessions/revoke`: the body must set exactly one of `sub`/`all`, and `sessions_only` (browser and CLI sign-ins end; personal API tokens and SSH keys keep working) goes with `sub`, not `all`. |
 | `identity_not_found` | `POST /admin/identities/{id}/unbind` named no identity row. |
 | `identity_not_bound` | `POST /admin/identities/{id}/unbind` found the row with no principal to clear, or bound to another one by the time it was locked. Read it again. |
 | `identity_not_rebindable` | `POST /admin/identities/{id}/unbind` named an identity with no object id (not an Entra person keyed by tenant and object id); unbinding it would orphan it. |
@@ -1664,6 +1673,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
 - `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
+- `counts=skip` leaves the two hidden-count headers below out, for a poll that already has them. `counts` is read only together with one of the parameters above: on its own it is ignored and does not select this ordered list.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers
