@@ -31,6 +31,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - An approval rule's dry run reports a pending approval past its wait budget, which the expiry sweep has not yet moved, as `skip` with `approval_already_decided`, as a real decision would refuse it. Before, it reported `would_approve` (#4154).
 - A governance preview of a write that renames a unit and changes its limits shows the unit's old name as where each affected person was, and the new name as where they are (#4161).
 - Clearing a pool as the organisation default clears nothing when another pool has become the default since the page loaded, and says which pool it is now. Before, it cleared that other pool (#4163).
+- `wardyn run logs --follow` against a server older than 0.9.4 says it needs 0.9.4 or later, instead of printing the trail once and then nothing (#4146).
+- `wardyn run logs --follow` reads a quiet run less often: the wait doubles from `--interval` up to 10 seconds and returns to `--interval` once anything new arrives, and each read after the first asks for 20 events instead of the server's default 1,000. On a run with a long trail, a quiet minute now costs the server under a third of the requests and a tenth of the rows (#4147).
+- The CLI's version notice prints nothing when it cannot tell which of the two versions is newer, instead of the advice for a newer server (#4155).
+- The Windows installer, `install-cli.ps1`, puts `wardyn.exe` back when the swap fails or is interrupted, and a run after one that stopped mid-swap restores the parked `wardyn.exe.old` before it downloads anything (#4156).
+- The Helm chart's probes use HTTPS when the server serves TLS itself, that is when `WARDYN_TLS_CERT` and `WARDYN_TLS_KEY` are both set by a value or a `valueFrom`. A name-only `extraEnv` entry counts as unset. Before, such a pod never became ready (#4158).
+- A refused `wardyn apply` or `wardyn workload restart` of a workload with no running run says no run was started, instead of saying the previous run keeps running (#4164).
+- A killed `wardyn sync --git` send no longer leaves its bundle-scan directory in the sync state directory for good: the next send removes it once it is ten minutes old and no running send holds it (#4173).
 
 ### Security
 
@@ -42,6 +49,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - On a Linux VM, the guest's root can no longer create a file, folder or link in a shared folder, nor make root a file's owner (#3464). Before, such a file landed on the host as the runner's user, as the agent's own files do. A folder mounted inside another writable folder now gets its mount folder made in that folder on the host, as in a container.
 - Unbinding a sign-in identity is now refused while a capability deny names the person's old sign-in subject. After the unbind the person signs in under a new subject, which the deny did not name, so they were no longer denied. Move the deny to the person's email, which the new binding keeps, then unbind. The `identity_principal_in_use` refusal now counts these denies.
 - Publishing a template to the organisation from the console now names the revision the publisher saw. If the template was saved again since, the server answers `409` `template_revision_conflict` and publishes nothing. `POST /templates/{id}/copy` takes an optional `expected_revision` for the same check; without it a copy takes the current revision, as before.
+- The per-commit `wardynd` image that main publishes (`:sha-<commit>`) is now pushed by digest and named only after it has been checked and signed, as `:latest` already was. Before, the per-commit name pointed at the image before its check and its signature.
+- `wardyn ssh-key ensure` refuses a `.pub` file beside the key that is not exactly that key's public line: another key's, an unreadable one, or the key followed by more. It names both fingerprints, registers nothing and changes no file. Move the `.pub` aside and it is written again.
 
 ## [0.10.4] — 2026-11-24
 

@@ -107,7 +107,7 @@ func workloadRestartCmd(client clientFn) *cobra.Command {
 		Short: "Start a fresh run of the stored spec, then end the old one",
 		Long: "Start a new run of the workload as stored, then end the previous run. Use it to start a workload\n" +
 			"again after its run ended, or to replace a run that is still going. If the organisation refuses the\n" +
-			"new run, the previous one keeps running and the command exits 1.",
+			"new run, the previous one (if any) keeps running and the command exits 1.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			res, err := client().RestartWorkload(cmd.Context(), args[0], owner)
@@ -121,7 +121,7 @@ func workloadRestartCmd(client clientFn) *cobra.Command {
 				}
 			}
 			if res.Launch.State == sdk.WorkloadRefused {
-				return &exitError{code: 1, err: fmt.Errorf("workload/%s was refused: the previous run keeps running", args[0])}
+				return &exitError{code: 1, err: fmt.Errorf("workload/%s was refused: %s", args[0], refusalLeft(res.Workload))}
 			}
 			return nil
 		},
