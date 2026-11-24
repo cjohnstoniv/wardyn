@@ -6,8 +6,9 @@
 # the walk mints, with runners on, a member token holding the self-host grant, and wardyn-runnerd's register and
 # serve on the host. Sourced, not exec'd. The caller sets, before sourcing: PROJECT, ORG_HOST, ORG_PORT, ORG_URL,
 # ADMIN_TOKEN, MEMBER, MEMBER_TOKEN, RUNNER_NET, PG_CONTAINER, POOL, EVIDENCE_DIR, TMP, and SERVE_PID, ORG_WARDYND,
-# ORG_PROXY and RIDS empty; and AGENT_IMAGE before org_up. ORG_ADMIN_PORT, if set, adds a second published port on 127.0.0.1 for calls a runner cut must not touch. It defines pass and fail itself only if the caller has
-# not. scripts/lib/common.sh and scripts/lib/walk-api.sh must already be sourced.
+# ORG_PROXY and RIDS empty; and AGENT_IMAGE before org_up. ORG_ADMIN_PORT, if set, adds a second published port on
+# 127.0.0.1 for calls a runner cut must not touch. It defines pass and fail itself only if the caller has not.
+# scripts/lib/common.sh and scripts/lib/walk-api.sh must already be sourced.
 declare -F pass >/dev/null || pass() { printf '  [pass] %s\n' "$*"; }
 declare -F fail >/dev/null || fail() { printf '  [FAIL] %s\n' "$*"; FAILED=1; }
 

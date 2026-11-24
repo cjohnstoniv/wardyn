@@ -45,9 +45,9 @@
 # freeze can fall between two checks.
 #
 # NOT COVERED HERE, so #4080 is not closed by this walk alone: T1's retryable mint (no brokered credential on a
-# hosted runner); the terminal, desktop and portal app sessions (a browser leg); T1 and T2 on server Docker; T6 and T5 on a Kubernetes runner
-# (READY within 60 s, the owner's copy-out); T3 on server Kubernetes; T4's sessions (they are served by wardynd
-# itself); the laptop and VM legs.
+# hosted runner); the terminal, desktop and portal app sessions (a browser leg); T1 and T2 on server Docker; T6 and
+# T5 on a Kubernetes runner (READY within 60 s, the owner's copy-out); T3 on server Kubernetes; T4's sessions (they
+# are served by wardynd itself); the laptop and VM legs.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -335,13 +335,22 @@ wait_out() {
 # from this host's processes (wardyn-runnerd) and from its containers, by original destination, so Docker's DNAT
 # and its userland proxy are both matched. The walk's own calls go to ADMIN_URL, which the cut does not match.
 runner_link() {
-  local op=-I chain
-  [[ "$1" == up ]] && op=-D
+  local chain rc=0
+  if [[ "$1" == down ]]; then
+    CUT=1 # before the first insert, so a failure part-way is still undone by the cleanup
+    for chain in OUTPUT DOCKER-USER; do
+      sudo -n iptables -I "${chain}" -p tcp -m conntrack --ctorigdst "${ORG_HOST}" --ctorigdstport "${ORG_PORT}" \
+        -j REJECT --reject-with tcp-reset || return 1
+    done
+    return 0
+  fi
+  # Best effort on both chains: a delete that fails on one never stops the other.
   for chain in OUTPUT DOCKER-USER; do
-    sudo -n iptables "${op}" "${chain}" -p tcp -m conntrack --ctorigdst "${ORG_HOST}" --ctorigdstport "${ORG_PORT}" \
-      -j REJECT --reject-with tcp-reset || return 1
+    sudo -n iptables -D "${chain}" -p tcp -m conntrack --ctorigdst "${ORG_HOST}" --ctorigdstport "${ORG_PORT}" \
+      -j REJECT --reject-with tcp-reset || rc=1
   done
-  if [[ "$1" == down ]]; then CUT=1; else CUT=""; fi
+  [[ "${rc}" -ne 0 ]] || CUT=""
+  return "${rc}"
 }
 
 cleanup_compose() {
