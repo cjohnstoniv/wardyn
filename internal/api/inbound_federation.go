@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -368,13 +369,17 @@ func (s *Server) validateInboundTrust(req inboundTrustRequest) (types.InboundTru
 	return t, "", ""
 }
 
+// inboundRoleNames are the role names the service name pattern admits. A trust never names one, so a trust's
+// identity reads as a service identity and never as a role.
+var inboundRoleNames = []string{oidc.RoleAdmin, oidc.RoleSecurityAdmin, oidc.RoleUser, oidc.RemovedRoleMember}
+
 // inboundTrustShape is validateInboundTrust's field checks (steps 1 to 6).
 func (s *Server) inboundTrustShape(req inboundTrustRequest) (types.InboundTrust, string) {
 	if !serviceNameRE.MatchString(req.Name) {
 		return types.InboundTrust{}, "name: 3 to 63 of a-z, 0-9 and -, starting with a letter"
 	}
-	if !serviceNameRE.MatchString(req.ServiceIdentity) {
-		return types.InboundTrust{}, "service_identity: the name of a service identity"
+	if !serviceNameRE.MatchString(req.ServiceIdentity) || slices.Contains(inboundRoleNames, req.ServiceIdentity) {
+		return types.InboundTrust{}, "service_identity: the name of a service identity, never a role"
 	}
 	if _, msg := inboundTrustURL("issuer", req.Issuer); msg != "" {
 		return types.InboundTrust{}, msg

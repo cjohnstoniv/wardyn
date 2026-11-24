@@ -145,7 +145,7 @@ func TestInboundExchange_RateLimitedBeforeParse(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/inbound/exchange", body)
 	r.RemoteAddr = peer
 	w := httptest.NewRecorder()
-	h.srv.Handler().ServeHTTP(w, r)
+	panicFails(t, h.srv.Handler()).ServeHTTP(w, r)
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "10" || respReason(w) != reasonInboundExchangeRateLimited {
 		t.Fatalf("11th attempt: %d Retry-After %q %s, want 429 with Retry-After 10", w.Code, w.Header().Get("Retry-After"), w.Body.String())
 	}
