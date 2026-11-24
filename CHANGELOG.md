@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- A run on Kubernetes writes a `run.sandbox.start` audit row when its sandbox is created, naming the node it was scheduled on and the RuntimeClass and handler it runs under. It is written before the policy readback, so a start that then fails still says where it ran. A runner older than this release writes no such row.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

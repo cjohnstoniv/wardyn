@@ -815,6 +815,7 @@ func (s *Server) recordStartedSandbox(ctx context.Context, run types.AgentRun, s
 	s.recordDesktopVMSignIns(ctx, run, sb)
 	s.auditKeychainTrust(ctx, run, sb)
 	s.auditNoNetworkProxyOnly(ctx, run, sb)
+	s.auditSandboxStart(ctx, run, sb)
 	return nil
 }
 
