@@ -21,8 +21,10 @@
 #   has its proxy stopped within 15 s of the restart, and the running run's lease is renewed within 60 s of the
 #   organisation coming back.
 #
-# Both Postgres faults on kind freeze every process in its container (SIGSTOP, then SIGCONT): the quickstart's
-# Postgres has no volume, so it cannot be stopped without losing the database. T1 freezes up to three times, 40 s
+# Both Postgres faults on kind freeze every postgres process (SIGSTOP, then SIGCONT) from the kind node, which sees
+# them in an ancestor PID namespace: inside the container the postmaster is PID 1 and ignores SIGSTOP from its own
+# namespace. The quickstart's Postgres has no volume, so it cannot be stopped without losing the database. Each
+# freeze is proved by a fresh connection that must not complete within 5 s. T1 freezes up to three times, 40 s
 # apart, until a session check lands inside a freeze: a check runs every 30 s and gives up after 5 s, so one 20 s
 # freeze can fall between two checks.
 #
@@ -60,19 +62,21 @@ done
 SH
 )"
 
-# fetch_window LOG FROM TO: "<fetches> <failed> <longest gap between successes, s>" for the lines stamped FROM..TO.
+# fetch_window LOG FROM TO: "<fetches> <failed> <longest gap without a success, s>" for the lines stamped FROM..TO.
+# The gap counts the stretch from FROM to the first success and from the last success to TO, so failures at the
+# window's start or end show; a window with no success at all is one gap, TO - FROM.
 fetch_window() {
   awk -v from="$2" -v to="$3" '$1 >= from && $1 <= to {
       n++
-      if ($2 == "200") { if (prev && $1 - prev > gap) gap = $1 - prev; prev = $1 } else f++
-    } END { printf "%d %d %d\n", n, f, gap }' "$1"
+      if ($2 == "200") { if ($1 - (ok ? prev : from) > gap) gap = $1 - (ok ? prev : from); prev = $1; ok = 1 } else f++
+    } END { if (!ok) gap = to - from; else if (to - prev > gap) gap = to - prev; printf "%d %d %d\n", n, f, gap }' "$1"
 }
 
 # ── kind leg: T1 and T2 ─────────────────────────────────────────────────────
 kind_leg() {
   [[ "${WARDYN_TEST_K8S:-}" == "1" ]] || skip_lane "cp-outage-walk (kind): set WARDYN_TEST_K8S=1 to run it (skipping)."
   [[ "${WARDYN_ACK_SHARED_QUICKSTART:-}" == "1" ]] || skip_lane "cp-outage-walk (kind): set WARDYN_ACK_SHARED_QUICKSTART=1 to confirm the wardyn-quickstart cluster may have its database frozen (skipping)."
-  for bin in kubectl curl jq ssh ssh-keygen; do
+  for bin in kubectl docker curl jq ssh ssh-keygen; do
     command -v "${bin}" >/dev/null 2>&1 || die "${bin} not found on PATH"
   done
   TMP="$(mktemp -d /tmp/wardyn-cp-outage.XXXXXX)"
@@ -80,16 +84,22 @@ kind_leg() {
   NAMESPACE="wardyn"
   RUNS_NAMESPACE="wardyn-runs"
   RELEASE="wardyn"
+  KIND_NODE="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}-control-plane"
   BASE="http://127.0.0.1:${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
   k() { kubectl --context "${CONTEXT}" "$@"; }
   ADMIN_TOKEN="$(k -n "${NAMESPACE}" get secret wardyn-auth -o jsonpath='{.data.admin-token}' 2>/dev/null | base64 -d 2>/dev/null)"
   [[ -n "${ADMIN_TOKEN}" ]] || die "could not read the admin token from Secret wardyn-auth"
   api() { walk_api "${BASE}" "${ADMIN_TOKEN}" "${TMP}/resp.json" 10 "$@"; }
   psql1() { k -n "${NAMESPACE}" exec deployment/postgres -- psql -U wardyn -d wardyn -tAc "$1" 2>&1; }
-  # pg_signal STOP|CONT: every process in the Postgres container but this shell.
-  pg_signal() {
-    k -n "${NAMESPACE}" exec deployment/postgres -- sh -c \
-      'for p in /proc/[0-9]*; do n="${p#/proc/}"; [ "$n" = "$$" ] || kill -s "$1" "$n" 2>/dev/null; done; true' _ "$1"
+  # pg_signal STOP|CONT: every postgres process on the kind node (-x: the exact process name, so nothing else).
+  pg_signal() { docker exec "${KIND_NODE}" pkill "-$1" -x postgres; }
+  # pg_freeze: freeze Postgres, then prove it: a fresh connection must not complete within 5 s.
+  pg_freeze() {
+    pg_signal STOP || die "could not freeze Postgres on ${KIND_NODE} (no postgres process, or no pkill there)"
+    if timeout 5 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec deployment/postgres -- \
+      psql -U wardyn -d wardyn -h 127.0.0.1 -tAc 'select 1' >/dev/null 2>&1; then
+      die "the Postgres freeze did not take effect"
+    fi
   }
   run_state() { api GET "/api/v1/runs/$1" >/dev/null; jq -r '.state // empty' "${TMP}/resp.json"; }
   audit_count() { psql1 "SELECT count(*) FROM audit_events WHERE run_id = '$1' AND action = '$2' $3"; }
@@ -169,7 +179,7 @@ kind_leg() {
   t1_from="$(date +%s)"
   for cycle in 1 2 3; do
     FROZEN=1
-    pg_signal STOP || die "could not freeze Postgres"
+    pg_freeze
     for _ in $(seq 1 10); do
       ready_now || ready_lost=1
       sleep 2
@@ -216,7 +226,7 @@ kind_leg() {
   local fs fe ssh_end="" back=""
   fs="$(date +%s)"
   FROZEN=1
-  pg_signal STOP || die "could not freeze Postgres"
+  pg_freeze
   for _ in $(seq 1 150); do
     if [[ -z "${ssh_end}" ]] && ! kill -0 "${SSH_PID}" 2>/dev/null; then ssh_end="$(date +%s)"; fi
     sleep 2

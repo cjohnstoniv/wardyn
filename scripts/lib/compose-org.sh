@@ -31,14 +31,17 @@ stop_serve() {
   SERVE_PID=""
 }
 
-# Runs and their networks are labelled by runner, so a runner id removes what it made.
+# Runs and their networks are labelled by runner, so a runner id removes what it made. The sandboxes the organisation's
+# own server runs are labelled with its control-plane network (${PROJECT}-internal), so that label removes those.
 clean_runners() {
-  local rid
+  local rid dep="wardyn.deployment=${PROJECT}-internal"
   for rid in ${RIDS}; do
     docker ps -aq --filter "label=wardyn.runner-id=${rid}" | xargs -r docker rm -f >/dev/null 2>&1
     docker volume ls -q --filter "label=wardyn.runner-id=${rid}" | xargs -r docker volume rm >/dev/null 2>&1
     docker network ls -q --filter "label=wardyn.runner-id=${rid}" | xargs -r docker network rm >/dev/null 2>&1
   done
+  docker ps -aq --filter "label=${dep}" | xargs -r docker rm -f >/dev/null 2>&1
+  docker network ls -q --filter "label=${dep}" | xargs -r docker network rm >/dev/null 2>&1
 }
 
 org_down() {
