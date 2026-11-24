@@ -700,7 +700,7 @@ PERSON_TOKEN=""
 PERSON_RUN_ID=""
 pwardyn() { WARDYN_URL="${BASE}" WARDYN_TOKEN="${PERSON_TOKEN}" timeout 90 env -u WARDYN_ADMIN_TOKEN "${TCLI}" "$@"; }
 pssh() { WARDYN_URL="${BASE}" WARDYN_TOKEN="${PERSON_TOKEN}" timeout 90 env -u WARDYN_ADMIN_TOKEN ssh "$@"; }
-papi() { walk_api "${BASE}" "${PERSON_TOKEN}" "${TMPDIR}/presp.json" "" "$@"; }
+papi() { walk_api "${BASE}" "${PERSON_TOKEN}" "${TMPDIR}/presp.json" 30 "$@"; }
 seed_person_token() { # PRINCIPAL -> prints the raw token once its row is in
   local principal="$1" raw sha
   raw="wdn_$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
@@ -727,17 +727,31 @@ ticket_audit_rows() {
   jq "[.[] | select(${1})] | length" "${TMPDIR}/resp.json"
 }
 
+# wait_ticket_audit JQ-FILTER -> prints how many of the person's run's audit rows the filter keeps, read for up to
+# five seconds (rows land a moment after the connection) until there is one
+wait_ticket_audit() {
+  local n=0
+  for _ in $(seq 1 5); do
+    n="$(ticket_audit_rows "$1")"
+    [[ "${n}" -ge 1 ]] && break
+    sleep 1
+  done
+  printf '%s' "${n}"
+}
+
 ssh_tickets_block() {
   local out rc tk s1 s2 reply a_port b_port n p
+  # Ports picked on this host never take the stack's own.
+  local -a stack_ports=("${API_PORT}" "${PG_PORT}" "${SSH_PORT}" "${UI_SANDBOX_PORT}" "${REGISTRY_PORT}")
   PERSON_TOKEN="$(seed_person_token e2e-person)" || { fail "tickets: set-up: could not seed the person's api token"; return 1; }
-  s1=$(curl -sS -o "${TMPDIR}/me.json" -w '%{http_code}' "${BASE}/api/v1/me" -H "Authorization: Bearer ${PERSON_TOKEN}")
+  s1=$(curl -sS --max-time 30 -o "${TMPDIR}/me.json" -w '%{http_code}' "${BASE}/api/v1/me" -H "Authorization: Bearer ${PERSON_TOKEN}")
   if [[ "${s1}" == "200" && "$(jq -r '.principal' "${TMPDIR}/me.json")" == "e2e-person" ]]; then
     pass "tickets: set-up: the seeded api token signs in as e2e-person"
   else
     fail "tickets: set-up: the seeded token's /me: status ${s1}"
     return 1
   fi
-  if [[ "$(curl -sS "${BASE}/healthz" | jq -r '.ssh.tickets // false')" == "true" ]]; then
+  if [[ "$(curl -sS --max-time 30 "${BASE}/healthz" | jq -r '.ssh.tickets // false')" == "true" ]]; then
     pass "tickets: set-up: /healthz reports ssh.tickets=true"
   else
     fail "tickets: set-up: /healthz does not report ssh.tickets=true (WARDYN_SSH_TICKETS not reaching wardynd)"
@@ -780,7 +794,7 @@ ssh_tickets_block() {
   # a refusal can only be the ticket's.
   out=$(pwardyn run exec "${PERSON_RUN_ID}" -- sh -c 'nohup socat TCP-LISTEN:3000,reuseaddr,fork EXEC:/bin/cat >/tmp/e2e-t3000.log 2>&1 </dev/null & nohup socat TCP-LISTEN:5000,reuseaddr,fork EXEC:/bin/cat >/tmp/e2e-t5000.log 2>&1 </dev/null & sleep 1; echo listeners-started' </dev/null 2>"${TMPDIR}/t-listen.err")
   [[ "${out}" == *listeners-started* ]] || fail "tickets: forward set-up: listeners did not start: ${out} $(cat "${TMPDIR}/t-listen.err")"
-  a_port="$(pick_free_port)"
+  a_port="$(pick_free_port "${stack_ports[@]}")"
   # Not through pwardyn: a background function would leave TFWD_PID naming a subshell, not the process to stop.
   WARDYN_URL="${BASE}" WARDYN_TOKEN="${PERSON_TOKEN}" timeout 90 env -u WARDYN_ADMIN_TOKEN "${TCLI}" \
     run forward "${PERSON_RUN_ID}" "${a_port}:3000" </dev/null >"${TMPDIR}/t-forward.log" 2>&1 &
@@ -801,8 +815,8 @@ ssh_tickets_block() {
   wait "${TFWD_PID}" 2>/dev/null || true
   TFWD_PID=""
   # The second port: one ssh holding two -L on a proxy that mints a ticket for port 3000 alone.
-  a_port="$(pick_free_port)"
-  b_port="$(pick_free_port "${a_port}")"
+  a_port="$(pick_free_port "${stack_ports[@]}")"
+  b_port="$(pick_free_port "${stack_ports[@]}" "${a_port}")"
   WARDYN_URL="${BASE}" WARDYN_TOKEN="${PERSON_TOKEN}" timeout 90 env -u WARDYN_ADMIN_TOKEN ssh \
     "${SSH_OPTS[@]}" -o ControlPath=none -o ExitOnForwardFailure=yes -N \
     -L "127.0.0.1:${a_port}:127.0.0.1:3000" -L "127.0.0.1:${b_port}:127.0.0.1:5000" \
@@ -817,10 +831,12 @@ ssh_tickets_block() {
   done
   out="$(probe_port "${b_port}" wardyn-ticket-second-port)"
   sleep 2
-  if [[ "${reply}" == "wardyn-ticket-forward-probe" && -z "${out}" ]]; then
-    pass "tickets: a second port (5000) on the same ticket is refused while 3000 works (row 25)"
+  # An empty reply alone could be a dead listener: the gateway's own refusal row for port 5000 must exist too.
+  n="$(wait_ticket_audit '.action=="ssh.channel.reject" and .data.reason=="ticket_port" and .data.port==5000')"
+  if [[ "${reply}" == "wardyn-ticket-forward-probe" && -z "${out}" && "${n}" -ge 1 ]]; then
+    pass "tickets: a second port (5000) on the same ticket is refused by the gateway (ticket_port row) while 3000 works (row 25)"
   else
-    fail "tickets: second port (row 25): port 3000 echoed '${reply}', port 5000 echoed '${out}' ($(cat "${TMPDIR}/t-forward2.log"))"
+    fail "tickets: second port (row 25): port 3000 echoed '${reply}', port 5000 echoed '${out}', ticket_port rows for 5000: ${n} ($(cat "${TMPDIR}/t-forward2.log"))"
   fi
   kill "${TSSH_PID}" >/dev/null 2>&1 || true
   wait "${TSSH_PID}" 2>/dev/null || true
@@ -854,33 +870,34 @@ ssh_tickets_block() {
   # Rows 17-19: a ticket at the wrong door, and a spent one. A GET with no WebSocket upgrade still redeems (and
   # burns) the ticket at the door, which is how a ticket is spent without a client.
   tk="$(mint_ticket ssh-exec)" || tk=""
-  s1=$(curl -sS -o /dev/null -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
-  s2=$(curl -sS -o "${TMPDIR}/door.json" -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
-  if [[ -n "${tk}" && "${s1}" != "403" && "${s2}" == "403" && "$(jq -r '.reason' "${TMPDIR}/door.json")" == "ui_gateway_ticket_invalid" ]]; then
-    pass "tickets: a replayed ssh-exec ticket at /ssh is refused 403 ui_gateway_ticket_invalid (row 17; first redeem ${s1})"
+  s1=$(curl -sS --max-time 30 -o /dev/null -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
+  s2=$(curl -sS --max-time 30 -o "${TMPDIR}/door.json" -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
+  if [[ -n "${tk}" && "${s1}" == "426" && "${s2}" == "403" && "$(jq -r '.reason' "${TMPDIR}/door.json")" == "ui_gateway_ticket_invalid" ]]; then
+    pass "tickets: a replayed ssh-exec ticket at /ssh is refused 403 ui_gateway_ticket_invalid (row 17; the first redeem passed every check and lacked only the upgrade, 426)"
   else
     fail "tickets: replayed ssh-exec ticket (row 17): minted=$([[ -n "${tk}" ]] && echo yes || echo no) first=${s1} replay=${s2} body=$(cat "${TMPDIR}/door.json")"
   fi
   tk="$(mint_ticket)" || tk=""
-  s1=$(curl -sS -o /dev/null -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
-  if [[ -n "${tk}" && "${s1}" == "403" ]]; then
-    pass "tickets: a terminal ticket at /ssh is refused 403 (row 18)"
+  s1=$(curl -sS --max-time 30 -o "${TMPDIR}/door.json" -w '%{http_code}' -H "Wardyn-Ticket: ${tk}" "${BASE}/api/v1/runs/${PERSON_RUN_ID}/ssh")
+  if [[ -n "${tk}" && "${s1}" == "403" && "$(jq -r '.reason' "${TMPDIR}/door.json")" == "ui_gateway_ticket_invalid" ]]; then
+    pass "tickets: a terminal ticket at /ssh is refused 403 ui_gateway_ticket_invalid (row 18)"
   else
-    fail "tickets: terminal ticket at /ssh (row 18): minted=$([[ -n "${tk}" ]] && echo yes || echo no) status=${s1}, want 403"
+    fail "tickets: terminal ticket at /ssh (row 18): minted=$([[ -n "${tk}" ]] && echo yes || echo no) status=${s1} body=$(cat "${TMPDIR}/door.json"), want 403 ui_gateway_ticket_invalid"
   fi
   tk="$(mint_ticket ssh-exec)" || tk=""
-  s1=$(curl -sS -o /dev/null -w '%{http_code}' "${BASE}/api/v1/runs/${PERSON_RUN_ID}/attach?ticket=${tk}")
-  if [[ -n "${tk}" && "${s1}" == "403" ]]; then
-    pass "tickets: an ssh ticket at /attach is refused 403 (row 19)"
+  s1=$(curl -sS --max-time 30 -o "${TMPDIR}/door.json" -w '%{http_code}' "${BASE}/api/v1/runs/${PERSON_RUN_ID}/attach?ticket=${tk}")
+  if [[ -n "${tk}" && "${s1}" == "403" && "$(jq -r '.reason' "${TMPDIR}/door.json")" == "ui_gateway_ticket_invalid" ]]; then
+    pass "tickets: an ssh ticket at /attach is refused 403 ui_gateway_ticket_invalid (row 19)"
   else
-    fail "tickets: ssh ticket at /attach (row 19): minted=$([[ -n "${tk}" ]] && echo yes || echo no) status=${s1}, want 403"
+    fail "tickets: ssh ticket at /attach (row 19): minted=$([[ -n "${tk}" ]] && echo yes || echo no) status=${s1} body=$(cat "${TMPDIR}/door.json"), want 403 ui_gateway_ticket_invalid"
   fi
 
   # Row 23: a shell request on an ssh-exec connection. ssh-proxy asks for an exec ticket; ssh -T then asks for a shell.
   out=$(printf 'echo wardyn-ticket-shell-marker\n' | pssh "${SSH_OPTS[@]}" -o ControlPath=none -T \
     -o "ProxyCommand=${TCLI} run ssh-proxy ${PERSON_RUN_ID} --for exec" "${PERSON_RUN_ID}@127.0.0.1" 2>&1); rc=$?
-  if [[ "${rc}" -ne 0 && "${out}" != *wardyn-ticket-shell-marker* ]]; then
-    pass "tickets: a shell request on an ssh-exec connection is refused (rc=${rc}) and nothing ran (row 23)"
+  # Only the gateway's own refusal counts: its sentence on stderr and exit status 1. A failed connection exits 255.
+  if [[ "${rc}" -eq 1 && "${out}" == *"was issued for one command and does not open a terminal"* && "${out}" != *wardyn-ticket-shell-marker* ]]; then
+    pass "tickets: a shell request on an ssh-exec connection gets the gateway's refusal (rc=1) and nothing ran (row 23)"
   else
     fail "tickets: shell on an ssh-exec connection (row 23): rc=${rc} out=${out}"
   fi
@@ -897,26 +914,25 @@ ssh_tickets_block() {
   # Audit: ssh.authenticate success with auth=ticket for each connect, and the two refusals the rows above caused.
   # Rows land a moment after the connection, so each count is read for up to five seconds.
   for p in ssh-exec ssh-forward ssh-shell ssh-sync; do
-    n=0
-    for _ in $(seq 1 5); do
-      n="$(ticket_audit_rows ".action==\"ssh.authenticate\" and .outcome==\"success\" and .data.auth==\"ticket\" and .data.purpose==\"${p}\"")"
-      [[ "${n}" -ge 1 ]] && break
-      sleep 1
-    done
+    n="$(wait_ticket_audit ".action==\"ssh.authenticate\" and .outcome==\"success\" and .data.auth==\"ticket\" and .data.purpose==\"${p}\"")"
     if [[ "${n}" -ge 1 ]]; then
       pass "tickets: audit: ${n} ssh.authenticate success row(s) with auth=ticket, purpose ${p}"
     else
       fail "tickets: audit: no ssh.authenticate success row with auth=ticket, purpose ${p}"
     fi
   done
-  for p in ticket_port ticket_purpose; do
-    n="$(ticket_audit_rows ".action==\"ssh.channel.reject\" and .data.reason==\"${p}\"")"
-    if [[ "${n}" -ge 1 ]]; then
-      pass "tickets: audit: ${n} ssh.channel.reject row(s) with reason ${p} (row $([[ "${p}" == ticket_port ]] && echo 25 || echo 23))"
-    else
-      fail "tickets: audit: no ssh.channel.reject row with reason ${p}"
-    fi
-  done
+  n="$(wait_ticket_audit '.action=="ssh.channel.reject" and .data.reason=="ticket_port" and .data.port==5000')"
+  if [[ "${n}" -ge 1 ]]; then
+    pass "tickets: audit: ${n} ssh.channel.reject row(s), reason ticket_port, port 5000 (row 25)"
+  else
+    fail "tickets: audit: no ssh.channel.reject row with reason ticket_port and port 5000 (row 25)"
+  fi
+  n="$(wait_ticket_audit '.action=="ssh.channel.reject" and .data.reason=="ticket_purpose" and .data.purpose=="ssh-exec" and .data.channel_type=="shell"')"
+  if [[ "${n}" -ge 1 ]]; then
+    pass "tickets: audit: ${n} ssh.channel.reject row(s), reason ticket_purpose, purpose ssh-exec, channel shell (row 23)"
+  else
+    fail "tickets: audit: no ssh.channel.reject row with reason ticket_purpose, purpose ssh-exec, channel shell (row 23)"
+  fi
 }
 ssh_tickets_block || fail "tickets: the block stopped at its set-up (see the line above)"
 
