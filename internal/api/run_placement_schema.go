@@ -86,8 +86,9 @@ var localDispatchFields = map[reflect.Type][]string{
 	reflect.TypeFor[types.ProviderHeader]():       strings.Fields("Name Value"), // non-secret by validation (proxy.ReservedExtraHeader, ExtraHeaderValueRefusal): a secret-shaped value is refused
 	reflect.TypeFor[types.ProviderHarness]():      strings.Fields("Harness Model FastModel Path AuthHeader AuthFormat"),
 	reflect.TypeFor[types.RunHarness]():           strings.Fields("Harness ModelProviderID Starts Task"),
-	// RunnerSettings: RequireManagedDevice is a bool refusing personal-trust runners; MDMDevice* are a public CA bundle and a CRL URL,
-	// no credential, and not sent to runners; MachineKindDenials are trust class and kind pairs, no credential.
+	// RunnerSettings: RequireManagedDevice is a bool refusing personal-trust runners. MDMDevice* are a public CA bundle and a CRL URL:
+	// no credential, and not sent to runners. MachineKindDenials are trust class and kind pairs: no credential, judged by the server
+	// and not sent to runners either.
 	reflect.TypeFor[types.RunnerSettings]():    strings.Fields("Enabled RequireManagedDevice MDMDeviceCAPEM MDMDeviceCRLURL MachineKindDenials"),
 	reflect.TypeFor[types.MachineKindDenial](): strings.Fields("Trust MachineKind"), // a trust class and a machine kind; no credential
 	reflect.TypeFor[types.SiteBranding]():      strings.Fields("LogoPath"),
