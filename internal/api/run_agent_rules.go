@@ -57,8 +57,12 @@ func includedHarnessIDs(req createRunRequest) []string {
 
 // runHarnessIDs is the ids of the harnesses a stored run includes: its harness rows, else its agent. A run
 // with no id (a create-time stand-in) has none, and a store that keeps no harness rows has the agent alone.
+// A server-launched step that runs no agent (a source scan, or a workspace step that is not an interactive
+// session) has none either: its Agent is only the step default (stepRunAgent), and its WorkspaceID and
+// SourceID are set by the server alone, so no request can name them to leave the rules. A record or verify
+// session is interactive and a harness login is a run of the vendor CLI, so both stay bound.
 func (s *Server) runHarnessIDs(ctx context.Context, run types.AgentRun) ([]string, error) {
-	if run.ID == uuid.Nil {
+	if run.ID == uuid.Nil || !isModelRun("", run.WorkspaceID, run.SourceID, run.Interactive) {
 		return nil, nil
 	}
 	var ids []string

@@ -38,6 +38,7 @@ type agentRulesTestStore struct {
 	rules      []types.AgentRules
 	rulesErr   error
 	harnessErr error
+	rows       []types.RunHarness // the run's stored harness rows, when set
 }
 
 func (s *agentRulesTestStore) ListAgentRules(context.Context) ([]types.AgentRules, error) {
@@ -58,6 +59,9 @@ func (s *agentRulesTestStore) DeleteAgentRules(context.Context, string, int) (ty
 func (s *agentRulesTestStore) ListRunHarnesses(ctx context.Context, id uuid.UUID) ([]types.RunHarness, error) {
 	if s.harnessErr != nil {
 		return nil, s.harnessErr
+	}
+	if s.rows != nil {
+		return s.rows, nil
 	}
 	return s.wallsStore.ListRunHarnesses(ctx, id)
 }
@@ -812,5 +816,70 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 	var refusal *sourceRefusal
 	if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonAgentRulesInvalid || calls != 0 {
 		t.Errorf("an invalid stored rule: %d sandboxes, err %v, want a 422 %s refusal and no sandbox", calls, err, reasonAgentRulesInvalid)
+	}
+}
+
+// TestRunHarnessIDs: the harnesses a stored run includes. Stored rows win over the agent; a run with no rows has
+// its agent; a stand-in with no id has none; and a server-launched step that runs no agent has none, while a
+// record or verify session (interactive) and a harness login keep theirs.
+func TestRunHarnessIDs(t *testing.T) {
+	ctx := context.Background()
+	srv, st := agentRulesServer(t)
+	id, ws, src := uuid.New(), uuid.New(), uuid.New()
+	for name, tc := range map[string]struct {
+		run  types.AgentRun
+		rows []types.RunHarness
+		want []string
+	}{
+		"stored rows, in order":      {types.AgentRun{ID: id, Agent: "claude-code"}, []types.RunHarness{{Harness: "codex-cli"}, {Harness: "claude-code"}}, []string{"codex-cli", "claude-code"}},
+		"stored rows over the agent": {types.AgentRun{ID: id, Agent: "claude-code"}, []types.RunHarness{{Harness: "codex-cli"}}, []string{"codex-cli"}},
+		"no rows: the agent":         {types.AgentRun{ID: id, Agent: "claude-code"}, nil, []string{"claude-code"}},
+		"no rows, no agent":          {types.AgentRun{ID: id}, nil, nil},
+		"no run id":                  {types.AgentRun{Agent: "claude-code"}, []types.RunHarness{{Harness: "claude-code"}}, nil},
+		"a source scan":              {types.AgentRun{ID: id, Agent: "claude-code", SourceID: &src}, nil, nil},
+		"a workspace step":           {types.AgentRun{ID: id, Agent: "claude-code", WorkspaceID: &ws}, nil, nil},
+		"a record session":           {types.AgentRun{ID: id, Agent: "claude-code", WorkspaceID: &ws, Interactive: true}, nil, []string{"claude-code"}},
+		"a harness login":            {types.AgentRun{ID: id, Agent: "codex-cli", Task: harnessLoginTask, Interactive: true}, nil, []string{"codex-cli"}},
+		"a task named like a scan":   {types.AgentRun{ID: id, Agent: "claude-code", Task: "source scan"}, nil, []string{"claude-code"}},
+	} {
+		st.rows = tc.rows
+		got, err := srv.runHarnessIDs(ctx, tc.run)
+		if err != nil || !slices.Equal(got, tc.want) {
+			t.Errorf("%s: runHarnessIDs = %v, %v, want %v", name, got, err, tc.want)
+		}
+	}
+	st.rows, st.harnessErr = nil, errors.New("the store is down")
+	if got, err := srv.runHarnessIDs(ctx, types.AgentRun{ID: id, Agent: "claude-code"}); err == nil {
+		t.Errorf("an unreadable harness table answered %v, nil, want the error", got)
+	}
+}
+
+// TestAgentRulesSeal_ServerStepsAreNotBound: a source scan or a workspace build step that runs no agent is not
+// sealed by the agent's rules and not refused when they cannot be read, though its agent is the step default;
+// an interactive record session is.
+func TestAgentRulesSeal_ServerStepsAreNotBound(t *testing.T) {
+	ctx := context.Background()
+	srv, st := agentRulesServer(t, claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com"), WithheldGrants: []types.GrantSpec{{Kind: types.GrantSSHKey}}}))
+	ws, src := uuid.New(), uuid.New()
+	scan := types.AgentRun{ID: uuid.New(), Agent: "claude-code", SourceID: &src, CreatedBy: "sub-agent-rules"}
+	step := types.AgentRun{ID: uuid.New(), Agent: "claude-code", WorkspaceID: &ws, CreatedBy: "sub-agent-rules"}
+	record := types.AgentRun{ID: uuid.New(), Agent: "claude-code", WorkspaceID: &ws, Interactive: true, CreatedBy: "sub-agent-rules"}
+	for name, run := range map[string]types.AgentRun{"scan": scan, "workspace step": step} {
+		if layers := srv.agentRulesSealLayers(ctx, run); len(layers) != 0 {
+			t.Errorf("%s: sealed by %+v, want no agent rules layer", name, layers)
+		}
+	}
+	if layers := srv.agentRulesSealLayers(ctx, record); !sealHas(layers, func(l sealLayer) bool { return len(l.withheldGrants) == 1 }) {
+		t.Errorf("record session: layers %+v, want the claude-code rules", layers)
+	}
+	st.rulesErr = errors.New("the store is down")
+	if floor, err := srv.agentRulesRecordingFloor(ctx, scan, nil); err != nil || floor != "" {
+		t.Errorf("a scan's recording floor = %q, %v, want none and no read", floor, err)
+	}
+	if _, err := srv.liveWithholding(ctx, step); err != nil {
+		t.Errorf("a workspace step's live mint: %v", err)
+	}
+	if _, err := srv.liveWithholding(ctx, record); err == nil {
+		t.Error("a record session's live mint read nothing from an unreadable table")
 	}
 }
