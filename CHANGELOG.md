@@ -23,7 +23,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - If you write the Kubernetes runs Role yourself (`k8s.rbac.create=false` on the `wardyn` chart, or `rbac.create=false` on the `wardyn-runnerd` chart), add `watch` to its `pods` rule in each runs namespace. Without it nothing fails and the runner still starts: Wardyn checks its pods on a timer as before and logs one warning per namespace.
-- Kubernetes: Wardyn now refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. Add the selector, and move that toleration into the RuntimeClass, first.
+- Kubernetes: Wardyn now refuses to boot when a pinned CC2 or CC3 RuntimeClass tolerates a taint but has no `scheduling.nodeSelector`, or cannot be read. It also refuses when `k8s.sandbox.tolerations` tolerates a taint the class tolerates, or a selector key disagrees. Before upgrading, add the selector and remove from `k8s.sandbox.tolerations` any toleration the RuntimeClass already carries; the 0.10.4 Kata recipe put one there.
 
 ## [0.10.4] — 2026-11-24
 
