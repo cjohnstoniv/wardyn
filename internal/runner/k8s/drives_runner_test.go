@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -32,6 +33,19 @@ func keptDriveRunner(t *testing.T, drives bool) (*runnerHarness, uuid.UUID) {
 	self := uuid.New()
 	h.d.cfg.RunnerID, h.d.cfg.Drives = self.String(), drives
 	return h, self
+}
+
+// wireKeptDriveCreate sets the harness up so a create runs past preflight against a stand-in proxy, as
+// runnerCreateHarness does, and so reaches the drive's claim.
+func wireKeptDriveCreate(t *testing.T, h *runnerHarness) {
+	t.Helper()
+	px := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(px.Close)
+	h.d.cfg.ProxyImage = "registry.example/wardyn-proxy:pinned"
+	h.d.cfg.Sink = &fakeSink{h: h}
+	h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
+	installProbedProxyReactor(h, px.Listener.Addr().String(), nil)
+	installAgentRunningReactor(t, h.cs)
 }
 
 // keptDrive is a drive an administrator keeps on runner self, in namespace ns: a static claim, read-only.
@@ -64,14 +78,8 @@ func assertKeptRefusalCreatedNothing(t *testing.T, h *runnerHarness) {
 }
 
 func TestCreateSandbox_RunnerMountsAKeptClaim(t *testing.T) {
-	px := httptest.NewServer(http.NotFoundHandler())
-	defer px.Close()
 	h, self := keptDriveRunner(t, true)
-	h.d.cfg.ProxyImage = "registry.example/wardyn-proxy:pinned"
-	h.d.cfg.Sink = &fakeSink{h: h}
-	h.d.cfg.ControlPlaneRelay = func(*url.URL) (string, error) { return "10.96.0.40", nil }
-	installProbedProxyReactor(h, px.Listener.Addr().String(), nil)
-	installAgentRunningReactor(t, h.cs)
+	wireKeptDriveCreate(t, h)
 	addKeptClaim(t, h, testNamespace, keptDriveClaimName)
 	h.cs.ClearActions()
 
@@ -146,6 +154,8 @@ func TestCreateSandbox_RunnerRefusesADriveNotKeptHere(t *testing.T) {
 		{"another runner", func(d *types.DriveMount) { d.RunnerID = &other }},
 		{"no runner", func(d *types.DriveMount) { d.RunnerID = nil }},
 		{"no namespace", func(d *types.DriveMount) { d.Namespace = "" }},
+		{"runner id is not a uuid", nil},
+		{"second of two drives is not kept", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, self := keptDriveRunner(t, true)
@@ -154,8 +164,18 @@ func TestCreateSandbox_RunnerRefusesADriveNotKeptHere(t *testing.T) {
 
 			spec := testSandboxSpec()
 			d := keptDrive(self, testNamespace)
-			tc.change(&d)
+			switch {
+			case tc.change != nil:
+				tc.change(&d)
+			case tc.name == "runner id is not a uuid":
+				h.d.cfg.RunnerID = testRunnerID
+			}
 			spec.Drives = []types.DriveMount{d}
+			if tc.name == "second of two drives is not kept" {
+				second := keptDrive(self, testNamespace)
+				second.DriveID, second.ObjectName, second.Target, second.Namespace = uuid.New(), "wardyn-drive-team-d-9f3a1c", runner.DrivesRoot+"/team", otherNamespace
+				spec.Drives = []types.DriveMount{d, second}
+			}
 			if _, err := h.d.CreateSandbox(context.Background(), spec); !errors.Is(err, errRunnerDriveNotKept) {
 				t.Fatalf("err = %v, want errRunnerDriveNotKept", err)
 			}
@@ -196,22 +216,34 @@ func TestCreateSandbox_ServerRefusesADriveKeptOnARunner(t *testing.T) {
 	}
 }
 
+// TestCreateSandbox_KeptClaimForeignLabelsStillRefused: a kept claim passes the same identity check as any
+// static claim (driveClaimIdentity). The create is wired to reach the claim, and a claim stamped with this
+// drive's own subject still mounts, so each refusal below is the identity check and nothing earlier.
 func TestCreateSandbox_KeptClaimForeignLabelsStillRefused(t *testing.T) {
-	for name, labels := range map[string]map[string]string{
-		"a managed claim":      {labelManaged: "true"},
-		"another subject":      {labelDriveSubject: "ffffffffffffffffffff"},
-		"another drive's home": {labelDriveHome: "d-0000"},
+	for _, tc := range []struct {
+		name    string
+		labels  map[string]string
+		wantErr error
+	}{
+		{"a managed claim", map[string]string{labelManaged: "true"}, errDriveClaimForeign},
+		{"another subject", map[string]string{labelDriveSubject: "ffffffffffffffffffff"}, errDriveClaimForeign},
+		{"this drive's own subject", map[string]string{labelDriveSubject: testDriveSubject}, nil},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			h, self := keptDriveRunner(t, true)
-			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: keptDriveClaimName, Namespace: testNamespace, UID: "uid-kept-claim", Labels: labels}}
+			wireKeptDriveCreate(t, h)
+			claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: keptDriveClaimName, Namespace: testNamespace, UID: "uid-kept-claim", Labels: tc.labels}}
 			if _, err := h.cs.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.Background(), claim, metav1.CreateOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			spec := testSandboxSpec()
+			spec.RunID = h.runID
 			spec.Drives = []types.DriveMount{keptDrive(self, testNamespace)}
-			if _, err := h.d.CreateSandbox(context.Background(), spec); !errors.Is(err, errDriveClaimForeign) {
-				t.Fatalf("err = %v, want errDriveClaimForeign", err)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, err := h.d.CreateSandbox(ctx, spec)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}
