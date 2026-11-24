@@ -324,7 +324,7 @@ var templateNestedCarried = map[string]string{
 	"ComponentCLI":        "kind azure aws github kubectl",
 	"ComponentDefinition": "description hosts secrets config cli mcp",
 	"ComponentDelivery":   "mode host header format plain_http var file",
-	"ComponentMCP":        "url transport launch gateway_audience",
+	"ComponentMCP":        "url transport launch gateway_audience sandbox",
 	"ComponentMCPLaunch":  "command args",
 	"ComponentRef":        "id inline name builtin org repos access mcp_harnesses",
 	"ComponentSecret":     "secret_name shared delivery",
@@ -340,8 +340,10 @@ var templateNestedCarried = map[string]string{
 		"classified_markers scan_attachments inspect_forward_egress max_scan_bytes on_scanner_error require_inspectable_llm intercept_tls block_min_severity",
 	"PushRuleOverride":   "provider host org deny_paths require_review_paths",
 	"PushRulesSpec":      "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
+	"PushRulesOverlay":   "deny_paths max_inspect_pack_mib require_review_paths hold_seconds deny_new_executables max_file_size_mib deny_all",
 	"DriveAttachment":    "drive_id read_only",
 	"ResourceLimits":     "cpu_millis memory_mib pids_limit disk_mib",
+	"ResourcesOverlay":   "cpu_millis memory_mib pids_limit disk_mib",
 	"RunService":         "restart port health",
 	"RunHostOverrides":   "add_allowed add_denied remove_allowed remove_denied",
 	"RunEgressOverrides": "first_use_approval allow_all_egress",
@@ -358,6 +360,12 @@ var templateNestedCarried = map[string]string{
 	"WorkspaceMount":     "source target read_only",
 	"WorkspaceRepo":      "repo target ref",
 	"WorkspaceSelection": "workspace_id enabled_optional read_only target repos",
+	"CeilingOverlay": "allowed_domains denied_domains allow_all_egress refuse_ip_literals first_use_approval first_use_hold_seconds max_holds " +
+		"allowed_methods host_rules min_confinement_class eligible_grants auto_stop_after_sec workspace_mounts workspace_repos llm_inspection " +
+		"ui_apps resources tool_rules git_push_any_branch push_rules azure_devops_capabilities github_capabilities harness_inner_walls desktop " +
+		"recording data_out",
+	"ComponentMCPSandbox":       "policy",
+	"ComponentMCPSandboxPolicy": "mode overlay spec",
 }
 
 var templateNestedExcluded = map[string]TemplateFieldRule{
