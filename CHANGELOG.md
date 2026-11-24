@@ -18,7 +18,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, DELETE` on `runner_drains` to every role
   that was granted UPDATE on the runners table, other than its owner. If the app role is not one of those roles or a member of one, and
   does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the
-  migration has run. Until then no run can be placed on a registered runner, and a drain cannot be set.
+  migration has run. Until then no run can be placed on a registered runner, the runner lists and a runner's detail answer 500, a lost run's revive answers 503, and a drain cannot be set.
 
 ### Before you upgrade
 

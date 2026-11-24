@@ -217,3 +217,22 @@ func TestRunnerDrain_AttachAndExecUnaffected(t *testing.T) {
 		t.Fatalf("files that read a runner's drain = %v, want %v: a door that reads it must be named here and in the drain's docs", readers, want)
 	}
 }
+
+// reviveRunProxy, the one door a lost run's revive goes through, calls the drain refusal before it marks the
+// run reviving. The PG test through the route pins the behaviour; this pins the call where no database runs.
+func TestRunnerDrain_ReviveRunProxyCallsRefusal(t *testing.T) {
+	src, err := os.ReadFile("run_revive.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	start := strings.Index(text, "func (s *Server) reviveRunProxy(")
+	if start < 0 {
+		t.Fatal("reviveRunProxy not found in run_revive.go")
+	}
+	body := text[start:]
+	call, mark := strings.Index(body, "s.reviveDrainRefusal(ctx, run, actorType, actor)"), strings.Index(body, "s.markReviving(run)")
+	if call < 0 || mark < 0 || call > mark {
+		t.Fatalf("reviveRunProxy calls reviveDrainRefusal at %d and markReviving at %d; the refusal must come first", call, mark)
+	}
+}

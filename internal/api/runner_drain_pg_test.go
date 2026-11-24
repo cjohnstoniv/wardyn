@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -105,7 +106,7 @@ func TestRunnerDrain_ViewHidesCreatedByFromOwner_PG(t *testing.T) {
 
 // A revoke leaves the drain row, inert: the drain routes answer 404 for the runner, and a drain of an
 // unclaimed runner is refused by the store.
-func TestRunnerDrains_RevokeLeavesTheRowInert_PG(t *testing.T) {
+func TestRunnerDrain_RevokeLeavesTheRowInert_PG(t *testing.T) {
 	e := newOrgRunnerEnv(t, false)
 	ctx := context.Background()
 	id := e.claimedRunner("sub-person")
@@ -206,5 +207,63 @@ func TestRunnerDrain_LostRunReviveRefused_PG(t *testing.T) {
 	}
 	if rerr := e.srv.reviveDrainRefusal(context.Background(), run, types.ActorHuman, "alice"); rerr != nil {
 		t.Fatalf("after the undrain the revive is refused: %+v", rerr)
+	}
+}
+
+// POST /runs/{id}/revive on a lost run whose runner is drained answers 409 runner_draining with one denied
+// run.revive row, through the real route: it fails if reviveRunProxy stops calling reviveDrainRefusal. After
+// the undrain the revive no longer answers that reason.
+func TestRunnerDrain_ReviveRouteRefusesLostRun_PG(t *testing.T) {
+	const owner = "sub-pg-drain-revive"
+	h, _ := newRunOwnerPGHarness(t)
+	ctx := t.Context()
+	pg := h.srv.cfg.Store.(store.PG)
+	runnerID := uuid.New()
+	fp := "fp-" + runnerID.String()
+	if _, err := pg.CreateRunner(ctx, types.Runner{ID: runnerID, Owner: owner, Name: "laptop", PublicKey: append(runnerID[:], runnerID[:]...),
+		KeyFingerprint: fp, OrgURLSHA256: federation.OrgURLSHA256(poolTestOrgURL), Limits: roomyRunnerLimits()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pg.ClaimRunner(ctx, runnerID, owner, fp, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	run, err := pg.CreateRun(ctx, types.AgentRun{ID: uuid.New(), CreatedBy: owner, Agent: "claude-code", ConfinementClass: types.CC1,
+		State: types.RunRunning, RunnerTarget: "docker", Task: "t", RunnerID: &runnerID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != types.RunRunning {
+		if ok, err := pg.UpdateRunStateIf(ctx, run.ID, run.State, types.RunRunning); err != nil || !ok {
+			t.Fatalf("UpdateRunStateIf: %v %v", ok, err)
+		}
+	}
+	if err := pg.SetSandboxRef(ctx, run.ID, "wardyn-agent-"+run.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pg.MarkRunLost(ctx, run.ID, types.LostOutage, time.Now(), 0); err != nil || !ok {
+		t.Fatalf("MarkRunLost: %v %v", ok, err)
+	}
+	h.srv.cfg.Runner = &pgReviveRunner{fakeRunner: &fakeRunner{}}
+	h.srv.cfg.ControlPlaneURL = "http://127.0.0.1:8080"
+	if _, set, err := pg.DrainRunner(ctx, runnerID, types.RunnerDrain{CreatedBy: "alice", CreatedAt: time.Now().UTC(), Reason: "node pool upgrade"}); err != nil || !set {
+		t.Fatalf("DrainRunner = %v, %v", set, err)
+	}
+	if code, reason := reviveReason(t, h, run, false); code != http.StatusConflict || reason != "runner_draining" {
+		t.Fatalf("revive of a lost run on a drained runner = %d %q, want 409 runner_draining", code, reason)
+	}
+	denied := 0
+	for _, ev := range h.audit.snapshot() {
+		if ev.Action == "run.revive" && ev.Outcome == "denied" && ev.RunID != nil && *ev.RunID == run.ID && strings.Contains(string(ev.Data), "runner_draining") {
+			denied++
+		}
+	}
+	if denied != 1 {
+		t.Fatalf("denied run.revive rows naming runner_draining = %d, want 1", denied)
+	}
+	if _, cleared, err := pg.UndrainRunner(ctx, runnerID); err != nil || !cleared {
+		t.Fatalf("UndrainRunner = %v, %v", cleared, err)
+	}
+	if _, reason := reviveReason(t, h, run, false); reason == "runner_draining" {
+		t.Fatal("after the undrain the revive still answers runner_draining")
 	}
 }
