@@ -760,9 +760,11 @@ commands are the ones in "Back them up" and "Restore them", and in
   - If that write fails, the request is refused `503 audit_unavailable` and its handler never runs.
   - The handler's own detailed row can still spool: it is written after the change, as with strict mode off.
   - Covered: every POST, PUT, PATCH and DELETE under `/policies`, `/governance`, `/approvals`, `/permissions` (grants, enforcement and availability),
-    `/drives/grants`, `/wall-presets`, `/templates`, `/me/walls` and `/assistant/settings`.
+    `/drives/grants`, `/wall-presets`, `/templates`, `/me/walls`, `/assistant/settings`, `/assistant/sessions` and
+    `/assistant/preview`.
   - Not covered, because each reads and answers and changes nothing: the POSTs `/policies/grade`, `/governance/check`,
-    `/governance/dry-run`, `/governance/approval-rules/dry-run`, `/templates/import` and `/templates/{id}/policy-check`.
+    `/governance/dry-run`, `/governance/approval-rules/dry-run`, `/templates/import`, `/templates/{id}/policy-check` and
+    `/assistant/preview`.
   - The row is written for every covered request that passed sign-in, one its route then refuses included, so it says a
     change was asked for, not that it happened.
   - The trade: while the store cannot take writes, covered changes are refused instead of being queued.
@@ -4246,6 +4248,7 @@ image digests in `wardyn.env`, not a re-run of anything
 - `0298` (`0298_deprovision_event_payload`) adds four nullable columns to `deprovision_jobs` (`0127`'s table) for a portal person's suspension and purge: `audit_event_payload`, the actor and data of the audit event a step's first attempt pinned beside `0196`'s id and time, held sealed under a person's audit key so erasing the key erases it, and cleared when the step finishes; and `kill_claimed_at`, `kill_claim_id` and `kill_from`, the claim on one run's kill and the state it was killed from. No grant changes.
 - `0300` (`0300_agent_runs_end_time_idx`) adds `agent_runs_end_time_idx` on `agent_runs` (`0001`'s table): the end time the Runs board orders and windows ended runs by, then `id`. It is built without `CONCURRENTLY`, so writes to `agent_runs` wait while it builds. On a large table, run `CREATE INDEX CONCURRENTLY IF NOT EXISTS agent_runs_end_time_idx ON agent_runs ((CASE WHEN lost_reason = 'ended' THEN lost_at ELSE ended_at END) DESC, id DESC);` before you upgrade, and the migration finds it built. No grant changes. If that build fails, drop the index and run it again.
 - `0400` (`0400_governance_change_approvals`) adds `required_approvals` and `require_security` to `governance_changes` (`0126`'s table) and the nullable `roles` to `principal_groups`, and creates `governance_change_approvals` (each person's approval of a held change) and `governance_approval_counts` (a kind's own count). The migration grants `SELECT, INSERT, UPDATE, DELETE` on both new tables to every role granted `UPDATE` on `governance_changes`, other than that table's owner.
+- `0401` (`0401_assistant_sessions`) creates `assistant_sessions`, a row for each assistant session with the person it acts as, its target, provider and model, state and draft, and `assistant_session_events`, its transcript. Both are granted to the roles that write `run_attach_leases`.
 - `0085` is named for its `CREATE OR REPLACE FUNCTION push_content_paths_immutable()`,
   but it is not an instance of the hazard: it creates that function and the
   `push_content_paths` table in the same file, so the migrator owns both from the start.

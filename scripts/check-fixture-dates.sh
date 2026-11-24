@@ -270,6 +270,8 @@ declare -A ALLOWLIST=(
   # compares the printed date and time to those literals; the conformance self-test passes a fixed now in as the clock.
   ["cmd/wardyn-runnerd/macos_vm_machines_test.go"]=5
   ["test/conformance/macvm/kept_test.go"]=1
+  ["pkg/client/governance_review_test.go"]=10 # passthrough only: approval, impact and live-run times decoded as given, never compared to the clock
+  ["cmd/wardyn/governance_review_test.go"]=10 # passthrough only: proposal, expiry and approval times decoded and printed as given, never compared to the clock
 )
 
 fail=0

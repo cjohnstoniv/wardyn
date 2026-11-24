@@ -53,7 +53,9 @@
 //     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
 //     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange, GetGovernanceChangeImpact,
+//     ApproveGovernanceChangeWithReason, TakeBackGovernanceApproval
+//   - approval counts (/api/v1/governance/approval-counts): GetApprovalCounts, PutApprovalCounts
 //   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
 //     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -142,6 +144,9 @@
 //     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
 //     remove one from a group. Authenticated by its own bearer
 //     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
+//   - /api/v1/assistant      — the assistant: its settings (super admin) and a person's
+//     sessions (preview, start, messages, edits, the event stream, end). A console
+//     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
 //   - /api/v1/assistant      — the organisation's assistant settings (0.11): read and saved from the

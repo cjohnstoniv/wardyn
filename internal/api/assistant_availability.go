@@ -4,10 +4,13 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -59,7 +62,7 @@ func assistantAvailability(set *types.AssistantSettings, purpose types.Assistant
 			continue
 		}
 		p := providers[i]
-		if p.Disabled || !m.Serves(purpose) || !p.Serves(types.AssistantHarness) || p.Kind.IsBedrock() || defers(p) {
+		if !assistantMarkLive(m, p, purpose, defers) {
 			continue
 		}
 		live = true
@@ -92,6 +95,44 @@ func assistantAvailability(set *types.AssistantSettings, purpose types.Assistant
 	first := usable[0].provider
 	return availabilityAnswer{State: types.AssistantNotConnected, Reason: reasonAssistantNotConnected,
 		ProviderID: first.ID, ProviderName: providerDisplayName(first)}
+}
+
+// assistantMarkLive is the one definition of a live mark: its provider is on, pairs with the claude-code
+// harness, is not Bedrock, does not defer prompt inspection and the mark serves the purpose.
+func assistantMarkLive(m types.AssistantProviderMark, p types.ModelProvider, purpose types.AssistantPurpose, defers func(types.ModelProvider) bool) bool {
+	return !p.Disabled && m.Serves(purpose) && p.Serves(types.AssistantHarness) && !p.Kind.IsBedrock() && !defers(p)
+}
+
+// assistantBindingHolds reports why a session's own binding no longer holds, "" when it does. It never
+// consults generic availability: a ready answer on another provider or model authorises nothing here. In order:
+// the purpose is still on (reasonAssistantOff); then the provider with the binding's id exists with the same
+// UID and is not disabled, a mark for it still serves the purpose, the binding's model is still on that mark
+// (the harness model when its list is empty) and, when the person's allowed models are non-empty, in them, the
+// person's ceiling does not deny the UID, and the person still holds a credential
+// (reasonAssistantSessionProviderChanged). It is assistantAvailability's live-mark predicate, asked of one provider.
+func assistantBindingHolds(set *types.AssistantSettings, purpose types.AssistantPurpose, b types.AssistantBinding, providers []types.ModelProvider,
+	defers func(types.ModelProvider) bool, denyUIDs, allowedModels []string, connected func(types.ModelProvider) bool) string {
+	if set == nil || !set.On(purpose) {
+		return reasonAssistantOff
+	}
+	i := slices.IndexFunc(providers, func(p types.ModelProvider) bool { return p.ID == b.ProviderID })
+	if i < 0 || providers[i].UID != b.ProviderUID || b.ProviderUID == "" {
+		return reasonAssistantSessionProviderChanged
+	}
+	p := providers[i]
+	j := slices.IndexFunc(set.Normalized().Providers, func(m types.AssistantProviderMark) bool { return m.ProviderID == p.ID })
+	if j < 0 || !assistantMarkLive(set.Normalized().Providers[j], p, purpose, defers) {
+		return reasonAssistantSessionProviderChanged
+	}
+	models := set.Normalized().Providers[j].Models
+	if len(models) == 0 {
+		models = []string{harnessModelOf(p)}
+	}
+	if !slices.Contains(models, b.Model) || (len(allowedModels) > 0 && !slices.Contains(allowedModels, b.Model)) ||
+		slices.Contains(denyUIDs, p.UID) || !connected(p) {
+		return reasonAssistantSessionProviderChanged
+	}
+	return ""
 }
 
 // harnessModelOf is the model p's claude-code harness uses, "" when it names none.
@@ -130,39 +171,91 @@ func (s *Server) handleGetMyAssistant(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, assistantOffAnswer)
 		return
 	}
-	_, ceiling, err := s.resolveDispatchCeiling(ctx)
+	lim, err := s.assistantLimitsFor(ctx, sc, principalFromRequest(r))
 	if err != nil {
-		writeServerError(w, r, "resolve governance ceiling", err)
+		writeServerError(w, r, "resolve the assistant's limits", err)
 		return
 	}
-	var deny, allowed []string
-	if !ceiling.Operator {
-		deny, allowed = ceiling.Limits.DenyModelProviders, modelLimitOf(ceiling).models
+	ans := assistantAvailability(sc.Assistant, purpose, siteProviders(sc), inspectionDeferredFor, lim.deny, lim.allowed, lim.connected)
+	if ans.State == types.AssistantReady {
+		full, err := s.assistantAtRunLimit(ctx, lim.ceiling, principalFromRequest(r), purpose)
+		if err != nil {
+			writeServerError(w, r, "count the person's runs", err)
+			return
+		}
+		if full {
+			ans = availabilityAnswer{State: types.AssistantAtRunLimit, Reason: reasonAssistantAtRunLimit}
+		}
 	}
-	// A provider the person is not granted ("Available to") is one start would refuse, so it counts as
-	// denied, asked of the helper dispatch asks.
-	for _, m := range sc.Assistant.Providers {
+	writeJSON(w, http.StatusOK, ans)
+}
+
+// assistantLimits is what the person's own ceiling and credentials say about the providers a mark names.
+type assistantLimits struct {
+	ceiling       governanceCeiling
+	deny, allowed []string
+	connected     func(types.ModelProvider) bool
+}
+
+// assistantLimitsFor reads the person's ceiling and provider grants and builds the credential check, for ctx's
+// person: the provider UIDs denied to them (the ceiling's, and every marked provider they are not granted, which
+// start would refuse), the models their ceiling allows (nil for an operator), and whether they hold a
+// credential for a provider.
+func (s *Server) assistantLimitsFor(ctx context.Context, sc types.SiteConfig, principal string) (assistantLimits, error) {
+	_, ceiling, err := s.resolveDispatchCeiling(ctx)
+	if err != nil {
+		return assistantLimits{}, err
+	}
+	lim := assistantLimits{ceiling: ceiling}
+	if !ceiling.Operator {
+		lim.deny, lim.allowed = ceiling.Limits.DenyModelProviders, modelLimitOf(ceiling).models
+	}
+	var marks []types.AssistantProviderMark
+	if sc.Assistant != nil {
+		marks = sc.Assistant.Providers
+	}
+	for _, m := range marks {
 		p, ok := modelProviderByID(sc.ModelProviders, m.ProviderID)
 		if !ok || p.UID == "" {
 			continue
 		}
 		granted, gerr := s.capSeamAllowed(ctx, capModelProvider, p.ID)
 		if gerr != nil {
-			writeServerError(w, r, "resolve model provider grant", gerr)
-			return
+			return assistantLimits{}, gerr
 		}
 		if !granted {
-			deny = append(slices.Clone(deny), p.UID)
+			lim.deny = append(slices.Clone(lim.deny), p.UID)
 		}
 	}
-	owner := runIdentitySubject(ctx, principalFromRequest(r))
+	owner := runIdentitySubject(ctx, principal)
 	statusCtx := secretstore.WithPurpose(ctx, secretstore.PurposeStatus)
-	connected := func(p types.ModelProvider) bool {
+	lim.connected = func(p types.ModelProvider) bool {
 		switch s.providerAccessFor(statusCtx, p, owner).State {
 		case modelAccessLive, modelAccessExpiring:
 			return true
 		}
 		return false
 	}
-	writeJSON(w, http.StatusOK, assistantAvailability(sc.Assistant, purpose, siteProviders(sc), inspectionDeferredFor, deny, allowed, connected))
+	return lim, nil
+}
+
+// assistantAtRunLimit reports whether the person's max_concurrent_runs is spent, so a new run would be
+// refused. A person who already has a live session for the purpose reuses its run when they start again.
+func (s *Server) assistantAtRunLimit(ctx context.Context, ceiling governanceCeiling, principal string, purpose types.AssistantPurpose) (bool, error) {
+	limit := ceiling.Limits.MaxConcurrentRuns
+	if limit <= 0 || ceiling.Unit == nil {
+		return false, nil
+	}
+	if ss, ok := s.cfg.Store.(store.AssistantSessionStore); ok {
+		if _, err := ss.LiveAssistantSession(ctx, principal, purpose); err == nil {
+			return false, nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return false, err
+		}
+	}
+	active, err := s.cfg.Store.CountActiveRunsBy(ctx, principal)
+	if err != nil {
+		return false, err
+	}
+	return active >= limit, nil
 }

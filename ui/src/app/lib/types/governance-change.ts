@@ -38,6 +38,10 @@ export interface GovernanceChange {
   // GET /governance/changes/{id}: who could decide it, the proposer left out (changeApprover,
   // internal/api/governance_unit_admin.go).
   approvers?: GovernanceChangeApprover[];
+  // Where the approvals stand, on a pending change that needs more than one: absent when one person decides, so a
+  // deployment that never sets a minimum gets no new key. A list row carries only required, have, require_security
+  // and viewer. Route-only: the stored change has no such field.
+  approvals?: GovernanceChangeApprovals;
   // POST /governance/changes/{id}/approve only: the change is applied, but it could not revoke every API token
   // that may still hold the role it took away; detail is the server's remedy.
   tokens_revocation_failed?: boolean;
@@ -48,6 +52,73 @@ export interface GovernanceChange {
   // A 202's pending_change only: advisory sentences for the proposer (a deciders rule under which a host rule
   // hold is decided once at most). Not stored with the change.
   warnings?: string[];
+}
+
+// The tier an approver stood in, recomputed at the latest re-check and capped at the tier stored at approval.
+export type ApproverTier = "super_admin" | "security_admin" | "unit_admin";
+
+// Why an approval no longer counts. cant_confirm: there is no sign-in record, or it cannot establish the role.
+export type ApprovalDropped =
+  | "deactivated"
+  | "token_revoked"
+  | "session_revoked"
+  | "role_removed"
+  | "grant_removed"
+  | "cant_confirm";
+
+// One approval given so far. A dropped one is kept, with counts false.
+export interface ApprovalEntry {
+  approver: string;
+  tier: ApproverTier;
+  unit_name?: string;
+  reason?: string;
+  approved_at: string;
+  counts: boolean;
+  dropped?: ApprovalDropped;
+  dropped_at?: string;
+}
+
+// One person who can still approve. email is the people directory's; show it, else the principal.
+export interface ApprovalEligible {
+  principal: string;
+  email?: string;
+  tier: ApproverTier;
+  unit_name?: string;
+}
+
+// What the people count leaves out: people whose role cannot be confirmed (count), or a pool past its cap.
+export interface ApprovalUncountable {
+  why: "unconfirmed_people" | "too_many_people";
+  count?: number;
+}
+
+// Whether enough people can still approve. cant_reach_reason says which half fails and is never derived here.
+export type ApprovalReach = "ok" | "cant_reach" | "cant_confirm";
+
+// The caller's own standing. Absent for the admin token, which never counts.
+export interface ApprovalViewer {
+  state: "can_approve" | "approved" | "proposer" | "cannot_be_last" | "not_eligible";
+  last?: boolean;
+  approved_at?: string;
+}
+
+// GET /governance/changes/{id}'s approvals block. Every field after viewer is on the read of one change only.
+export interface GovernanceChangeApprovals {
+  required: number;
+  require_security: boolean;
+  have: number;
+  entries?: ApprovalEntry[];
+  eligible?: ApprovalEligible[];
+  uncountable?: ApprovalUncountable[];
+  reach?: ApprovalReach;
+  // Only with reach cant_reach: count when too few people can still approve, security when none of them is a
+  // security admin.
+  cant_reach_reason?: "count" | "security";
+  still_needed?: number;
+  remaining_eligible?: number;
+  proposer_active?: boolean;
+  reject_reason_required?: boolean;
+  viewer?: ApprovalViewer;
 }
 
 // types.ChangeNote (internal/types/governance_change_note.go).

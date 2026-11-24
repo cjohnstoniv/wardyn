@@ -34,6 +34,8 @@ var namespaceCensusColumns = []censusColumn{
 	{"api_tokens", "principal", false, ""},
 	{"approval_rules", "created_by", false, ""},
 	{"approvals", "decided_by", false, ""},
+	// A session acts as its person, so a stored portal principal there is what a registration's census must find.
+	{"assistant_sessions", "principal", false, ""},
 	{"attach_tickets", "principal", false, ""},
 	{"aws_sso_refused_tokens", "owner", false, ""},
 	{"aws_sso_spent_tokens", "owner", false, ""},
@@ -155,6 +157,9 @@ var namespaceCensusExempt = map[string]string{
 	"agent_runs.wall_preset":                    "a run's own settings and recorded state, not a list that names people",
 	"api_tokens.groups":                         "group names or claim values, never a person principal",
 	"approvals.requested_scope":                 "a run's own settings and recorded state, not a list that names people",
+	"assistant_session_events.payload":          "transcript events; confer nothing, swept with the run output",
+	"assistant_sessions.draft":                  "a draft confers nothing; what it names is checked when it becomes a held change or a write",
+	"assistant_sessions.person_letters":         "the letters a transcript uses for people's names; confers nothing, swept with the transcript",
 	"attach_tickets.via_actor":                  "the agent a provider named as acting, recorded and never authorised",
 	"audit_events.data":                         "audit rows confer no authority; the policy rows of a running run are read by the census with its own query",
 	"base_images.steps":                         "workspace, source and image content; the owner is a TEXT column the census reads",
