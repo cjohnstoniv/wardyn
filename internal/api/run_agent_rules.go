@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -74,8 +75,13 @@ func (s *Server) runHarnessIDs(ctx context.Context, run types.AgentRun) ([]strin
 	return ids, nil
 }
 
-// agentRulesFor is the rules that bind a run including harnesses; nil for a store that keeps none.
+// agentRulesFor is the rules that bind a run including harnesses; nil for a store that keeps none. A list that
+// names no harness a rule can bind ("", "none" and nothing) reads nothing: no rule binds such a run
+// (agentpolicy.RulesFor), so an unreadable table cannot refuse it.
 func (s *Server) agentRulesFor(ctx context.Context, harnesses []string) ([]types.AgentRules, error) {
+	if !slices.ContainsFunc(harnesses, func(h string) bool { return h != "" && h != "none" }) {
+		return nil, nil
+	}
 	rs, ok := s.cfg.Store.(store.AgentRulesStore)
 	if !ok {
 		return nil, nil

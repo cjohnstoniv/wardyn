@@ -628,3 +628,50 @@ func TestExplainRunPolicy_AgentRuleChangeIsNotWalls(t *testing.T) {
 		t.Errorf("a bounded run's changes = %+v, want the deny under limits and never walls", got)
 	}
 }
+
+// TestAgentRulesFor_NoBindableHarnessReadsNothing: a run whose harnesses hold no id a rule can bind ("", "none",
+// nothing) is not refused by an unreadable rules table, at the create step, the recording floor, the seal and
+// the live mint; the same table still refuses a run that includes a harness at each of them.
+func TestAgentRulesFor_NoBindableHarnessReadsNothing(t *testing.T) {
+	ctx := context.Background()
+	srv, st := agentRulesServer(t, claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com")}))
+	st.rulesErr = errors.New("the store is down")
+	for name, harnesses := range map[string][]string{"nil": nil, "empty": {}, "blank": {""}, "none": {"none"}, "blank and none": {"", "none"}} {
+		if rules, err := srv.agentRulesFor(ctx, harnesses); rules != nil || err != nil {
+			t.Errorf("agentRulesFor(%s) = %v, %v, want nothing read", name, rules, err)
+		}
+	}
+	for name, req := range map[string]createRunRequest{"no agent": {Task: "t"}, "your own tools": {Agent: "none", Task: "t"}} {
+		if _, _, _, refusal := agentRulesStep(t, srv, req, types.RunPolicySpec{}); refusal != nil {
+			t.Errorf("create step, %s: refused %+v", name, refusal)
+		}
+	}
+	// The recording floor with nil harnesses for a create-time stand-in (no run id), and for a stored run of no agent.
+	if floor, err := srv.wallsRecordingFloor(ctx, types.AgentRun{CreatedBy: "sub-agent-rules"}, nil); err != nil || floor != "" {
+		t.Errorf("floor of a stand-in run = %q, %v, want none", floor, err)
+	}
+	none := types.AgentRun{ID: uuid.New(), Agent: "none", CreatedBy: "sub-agent-rules"}
+	if floor, err := srv.agentRulesRecordingFloor(ctx, none, nil); err != nil || floor != "" {
+		t.Errorf("floor of a run of no agent = %q, %v, want none", floor, err)
+	}
+	if layers := srv.agentRulesSealLayers(ctx, none); len(layers) != 0 {
+		t.Errorf("seal of a run of no agent = %+v, want no layer (never the shut layer)", layers)
+	}
+	if _, err := srv.liveWithholding(ctx, none); err != nil {
+		t.Errorf("live mint of a run of no agent: %v", err)
+	}
+	// With a harness the unreadable table still refuses, at every one of them.
+	claude := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "sub-agent-rules"}
+	if _, _, _, refusal := agentRulesStep(t, srv, claudeRun, types.RunPolicySpec{}); refusal == nil || refusal.err == nil {
+		t.Errorf("create step with a harness: %+v, want a server error", refusal)
+	}
+	if _, err := srv.agentRulesRecordingFloor(ctx, claude, nil); err == nil {
+		t.Error("floor of a claude-code run read nothing from an unreadable table")
+	}
+	if layers := srv.agentRulesSealLayers(ctx, claude); len(layers) != 1 || layers[0].rec.Name != "" {
+		t.Errorf("seal of a claude-code run = %+v, want the one shut layer", layers)
+	}
+	if _, err := srv.liveWithholding(ctx, claude); err == nil {
+		t.Error("live mint of a claude-code run read nothing from an unreadable table")
+	}
+}
