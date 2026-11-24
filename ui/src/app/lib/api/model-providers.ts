@@ -73,10 +73,11 @@ export const modelProviders = {
   // A save may also be refused (400) for reasons the body's `error` names
   // verbatim: a still-default provider being removed, a Claude subscription
   // whose sign-in image hasn't resolved yet, or a plain validation failure.
-  async putModelProviders(next: ModelProviders, etag: string | null): Promise<ModelProvidersSnapshot> {
+  // restricted: every provider this save adds is restricted before the block is written.
+  async putModelProviders(next: ModelProviders, etag: string | null, opts: { restricted?: boolean } = {}): Promise<ModelProvidersSnapshot> {
     const headers: Record<string, string> = {};
     if (etag) headers["If-Match"] = etag;
-    const res = await wfetch("/model-providers", {
+    const res = await wfetch(opts.restricted ? "/model-providers?restricted=true" : "/model-providers", {
       method: "PUT", asPerson: true,
       headers,
       body: JSON.stringify(next),

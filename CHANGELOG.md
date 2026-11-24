@@ -11,6 +11,28 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
+- With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
+
+## [0.10.3] — 2026-11-23
+
+### Added
+
+- An issuer portal's person can read their own non-interactive run's command output on a runner that does not capture it, such as Kubernetes: `GET /runs/{id}/output` recovers it from the run's recording, masked, with no input and no attach session. An interactive run's output and its pane snapshot stay closed to every portal.
+- Audit action `run.output.refuse`: a portal's read of `GET /runs/{id}/output` that ends with 409 `run_output_not_captured`, `run_output_not_kept` or `run_output_interactive`, or the retention window's 410 `run_output_expired`, records the same reason and status the answer carried.
+
+### Changed
+
+- An issuer portal's person runs in the portal's pinned unit, and any unit under it, without holding a membership there. With no `run_in`, a run now lands in the pin unit unless the person holds a home membership in the pin unit or a unit under it. So after upgrading, a person who joined a unit as a workaround may see runs land in the pin unit instead, and a membership outside the pin no longer refuses a run with no `run_in`. A `run_in` outside the pin is still refused. A strict workspace, or an organisation component pinned to a unit, still needs an actual membership, at launch and at every extension, resume and revive. Console portals and console sign-ins are unchanged. See [where a portal's person runs](docs/operations/api-tokens.md#where-a-portals-person-runs).
+- `GET /runs/{id}/output` no longer writes an `authz.denied` row when it withholds the pane snapshot or recording-derived output from a portal. A console security admin reading another person's pane snapshot or recording output is still audited `not_owner`.
+
+### Fixed
+
+- The API tokens page now says that a provider token issued before a suspension stays refused after the person is reactivated: its exchange answers 400 `invalid_grant`, audited `session_revoked`.
+- An SSH helper whose shell was still opening when the run's owner joined now sees why the session closed, instead of a silent close (#4184).
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
