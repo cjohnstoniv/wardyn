@@ -42,9 +42,12 @@ type assistantFake struct {
 	// runReadErr fails GetRun; afterRunRead runs after each run read GetRun answers, outside amu.
 	runReadErr   error
 	afterRunRead func()
-	// endErr fails EndAssistantSession; sessReadErr fails GetAssistantSession.
-	endErr      error
-	sessReadErr error
+	// endErr fails EndAssistantSession; endLost has it end the session yet answer false, as when another path
+	// ended it first; sessReadErr fails GetAssistantSession; liveForRunErr fails LiveAssistantSessionForRun.
+	endErr        error
+	endLost       bool
+	sessReadErr   error
+	liveForRunErr error
 }
 
 func newAssistantFake(site types.SiteConfig) *assistantFake {
@@ -213,6 +216,12 @@ func (f *assistantFake) LiveAssistantSession(_ context.Context, principal string
 }
 
 func (f *assistantFake) LiveAssistantSessionForRun(_ context.Context, run uuid.UUID) (types.AssistantSession, error) {
+	f.amu.Lock()
+	err := f.liveForRunErr
+	f.amu.Unlock()
+	if err != nil {
+		return types.AssistantSession{}, err
+	}
 	return f.findSession(func(s types.AssistantSession) bool { return s.Live() && s.RunID != nil && *s.RunID == run })
 }
 
@@ -395,7 +404,7 @@ func (f *assistantFake) EndAssistantSession(_ context.Context, session uuid.UUID
 	}
 	s.State, s.EndReason = types.AssistantSessionEnded, reason
 	f.sessions[session] = s
-	return true, nil
+	return !f.endLost, nil
 }
 
 func (f *assistantFake) EraseAssistantSessionPersonalFields(_ context.Context, principals []string) ([]store.ErasedAssistantSession, int, error) {
@@ -872,6 +881,49 @@ func TestAssistantDeleteFinishesTheRunStop(t *testing.T) {
 	if got := f.runState(t, run); got != types.RunKilled {
 		t.Errorf("the run = %s after the second DELETE, want KILLED", got)
 	}
+
+	t.Run("a replaced session whose run's live session cannot be read", func(t *testing.T) {
+		run := f.seedRun(t, person)
+		old := assistantLiveSession(person, &run, bind)
+		old.State, old.EndReason = types.AssistantSessionEnded, types.AssistantEndReplaced
+		f.seed(old)
+		f.seed(assistantLiveSession(person, &run, bind))
+		f.amu.Lock()
+		f.liveForRunErr = fmt.Errorf("store down")
+		f.amu.Unlock()
+		wantReason(t, doSSO(t, srv, http.MethodDelete, assistantPath(old.ID, ""), cookie, ""), http.StatusInternalServerError, reasonInternalError)
+		f.amu.Lock()
+		f.liveForRunErr = nil
+		f.amu.Unlock()
+		if got := f.runState(t, run); got != types.RunRunning {
+			t.Errorf("the replacement's run = %s after a failed read, want RUNNING", got)
+		}
+		if w := doSSO(t, srv, http.MethodDelete, assistantPath(old.ID, ""), cookie, ""); w.Code != http.StatusNoContent {
+			t.Errorf("the repeat DELETE with the read back = %d %s, want 204", w.Code, w.Body)
+		}
+		if got := f.runState(t, run); got != types.RunRunning {
+			t.Errorf("the replacement's run = %s after the repeat DELETE, want RUNNING", got)
+		}
+	})
+
+	t.Run("a DELETE another path ended first", func(t *testing.T) {
+		run := f.seedRun(t, person)
+		s := assistantLiveSession(person, &run, bind)
+		f.seed(s)
+		f.amu.Lock()
+		f.endLost = true
+		f.amu.Unlock()
+		w := doSSO(t, srv, http.MethodDelete, assistantPath(s.ID, ""), cookie, "")
+		f.amu.Lock()
+		f.endLost = false
+		f.amu.Unlock()
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("the DELETE = %d %s, want 204", w.Code, w.Body)
+		}
+		if got := f.runState(t, run); got != types.RunKilled {
+			t.Errorf("the run = %s after a DELETE that lost the end, want KILLED", got)
+		}
+	})
 
 	t.Run("an end the store refuses", func(t *testing.T) {
 		run := f.seedRun(t, person)

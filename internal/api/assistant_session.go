@@ -538,11 +538,15 @@ func (s *Server) handleDeleteAssistantSession(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var err error
+	ended := false
 	if sess.Live() {
-		_, err = s.endAssistantSession(r.Context(), ss, sess, types.AssistantEndPerson, true)
-	} else {
-		// A repeated DELETE finishes what an earlier one could not: the session ended, its run may not have.
-		err = s.stopUnusedAssistantRun(context.WithoutCancel(r.Context()), ss, sess)
+		ended, err = s.endAssistantSession(r.Context(), ss, sess, types.AssistantEndPerson, true)
+	}
+	if err == nil && !ended {
+		// A repeated DELETE, or one another path ended the session before, finishes the stop: the session ended,
+		// its run may not have. The session may have been replaced, so a failed read of the run's live session
+		// answers 500 rather than stop a run the replacement uses.
+		err = s.stopUnusedAssistantRun(context.WithoutCancel(r.Context()), ss, sess, true)
 	}
 	if err != nil {
 		writeServerError(w, r, "end assistant session", err)

@@ -172,13 +172,19 @@ func (s *Server) stopAssistantRun(ctx context.Context, runID uuid.UUID) error {
 	return fmt.Errorf("stop assistant run %s: the run kept changing state", runID)
 }
 
-// stopUnusedAssistantRun stops sess's run unless a newer live session uses it.
-func (s *Server) stopUnusedAssistantRun(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession) error {
+// stopUnusedAssistantRun stops sess's run unless a newer live session uses it. A read of the run's live session
+// that fails stops the run, unless failClosed is set: then it returns the error and stops nothing, for a caller
+// whose session may have been replaced and whose run may be the replacement's.
+func (s *Server) stopUnusedAssistantRun(ctx context.Context, ss store.AssistantSessionStore, sess types.AssistantSession, failClosed bool) error {
 	if sess.RunID == nil {
 		return nil
 	}
-	if live, err := ss.LiveAssistantSessionForRun(ctx, *sess.RunID); err == nil && live.ID != sess.ID {
+	live, err := ss.LiveAssistantSessionForRun(ctx, *sess.RunID)
+	switch {
+	case err == nil && live.ID != sess.ID:
 		return nil
+	case err != nil && !errors.Is(err, store.ErrNotFound) && failClosed:
+		return fmt.Errorf("read the assistant run's live session: %w", err)
 	}
 	return s.stopAssistantRun(ctx, *sess.RunID)
 }
@@ -236,7 +242,7 @@ func (s *Server) endAssistantSession(ctx context.Context, ss store.AssistantSess
 	if !stopRun {
 		return true, nil
 	}
-	if err := s.stopUnusedAssistantRun(ctx, ss, sess); err != nil {
+	if err := s.stopUnusedAssistantRun(ctx, ss, sess, false); err != nil {
 		slog.WarnContext(ctx, "wardynd: could not stop an assistant run", slog.String("session", sess.ID.String()), slog.Any("err", err))
 		return true, err
 	}
