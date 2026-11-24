@@ -66,6 +66,76 @@ func TestToolsExecBaseItemForms(t *testing.T) {
 	}
 }
 
+// An app item from a zip or a disk image is unpacked or copied into its own stage, made root's with no group
+// or other write there, and only then copied into /Applications; the first step that fails is the answer and
+// nothing after it runs. Every other form, including the admin profile's ditto, runs as given.
+func TestToolsExecAppItemIsMadeRootsBeforeItsCopy(t *testing.T) {
+	E := MacItemStageDir + "/edr"
+	stage := E + "/" + itemAppStage
+	for _, c := range []struct {
+		name string
+		argv []string
+		want [][]string
+	}{
+		{"zip", []string{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", MacApplications}, [][]string{
+			{"/bin/rm", "-rf", stage},
+			{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", stage},
+			{"/usr/sbin/chown", "-R", "-P", "root:wheel", stage},
+			{"/bin/chmod", "-R", "-P", "go-w", stage},
+			{"/usr/bin/ditto", stage, MacApplications},
+		}},
+		{"dmg", []string{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Tool.app"}, [][]string{
+			{"/bin/rm", "-rf", stage},
+			{"/usr/bin/ditto", E + "/mnt/Tool.app", stage + "/Tool.app"},
+			{"/usr/sbin/chown", "-R", "-P", "root:wheel", stage},
+			{"/bin/chmod", "-R", "-P", "go-w", stage},
+			{"/usr/bin/ditto", stage + "/Tool.app", MacApplications + "/Tool.app"},
+		}},
+		{"a package runs as given", []string{"/usr/sbin/installer", "-pkg", E + "/item.pkg", "-target", "/"}, [][]string{
+			{"/usr/sbin/installer", "-pkg", E + "/item.pkg", "-target", "/"},
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newToolsRig(t)
+			if w := rig.exec(c.argv...); w.Code != 200 || !strings.Contains(w.Body.String(), `"exit_code":0`) {
+				t.Fatalf("%q = %d %s, want 200 exit 0", c.argv, w.Code, w.Body)
+			}
+			if !slices.EqualFunc(rig.ran, c.want, slices.Equal) {
+				t.Errorf("ran %q, want %q", rig.ran, c.want)
+			}
+		})
+	}
+
+	t.Run("a failed chown stops before the copy", func(t *testing.T) {
+		rig := newToolsRig(t)
+		var ran [][]string
+		rig.t.run = func(_ context.Context, argv []string) ([]byte, int, error) {
+			ran = append(ran, argv)
+			if argv[0] == "/usr/sbin/chown" {
+				return []byte("chown: denied\n"), 1, nil
+			}
+			return nil, 0, nil
+		}
+		w := rig.exec("/usr/bin/ditto", "-x", "-k", E+"/item.zip", MacApplications)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"exit_code":1`) || !strings.Contains(w.Body.String(), "chown: denied") {
+			t.Fatalf("answer = %d %s, want the chown's exit 1 and output", w.Code, w.Body)
+		}
+		if len(ran) != 3 || slices.ContainsFunc(ran, func(a []string) bool { return a[0] == "/usr/bin/ditto" && a[len(a)-1] == MacApplications }) {
+			t.Errorf("ran %q, want rm, unpack, chown and no copy into /Applications", ran)
+		}
+	})
+
+	for _, argv := range [][]string{
+		{"/usr/bin/ditto", "-x", "-k", E + "/item.zip", "/usr/local/bin"},
+		{"/usr/bin/ditto", E + "/item.mobileconfig", AdminProfile("edr")},
+		{"/usr/bin/ditto", E + "/mnt/Tool.app", MacApplications + "/Other.app"},
+	} {
+		if steps := appInstallSteps(argv); steps != nil {
+			t.Errorf("appInstallSteps(%q) = %q, want nil", argv, steps)
+		}
+	}
+}
+
 // A push may write an item's staged file of its kind, or a file item's destination; never a harness's
 // managed settings, Wardyn's own files or anything outside the roots.
 func TestToolsPushBaseItems(t *testing.T) {

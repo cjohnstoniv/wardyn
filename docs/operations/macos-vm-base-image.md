@@ -167,7 +167,7 @@ An operator can have prepare install packages, apps, files, configuration profil
 | Kind | File | Installed with | Also takes |
 |---|---|---|---|
 | `pkg` | `.pkg` | `installer -pkg … -target /` | `secret_files` |
-| `app` | `.zip` of the bundle, or `.dmg` | `ditto` into `/Applications`; a `.dmg` is attached read-only first | `app`: the bundle in the `.dmg` (`Name.app`) |
+| `app` | `.zip` of the bundle, or `.dmg` | unpacked (or, from a `.dmg` attached read-only, copied) into the item's own folder, made `root:wheel` with no group or other write, then copied into `/Applications` | `app`: the bundle in the `.dmg` (`Name.app`) |
 | `file` | any | pushed to `dest`, root's, mode 0644 | `dest`: under `/Library`, `/usr/local` or `/opt` |
 | `profile` | `.mobileconfig` | staged for approval in `edit-base` | `identifier`: its `PayloadIdentifier` |
 | `ca` | one X.509 v3 CA certificate (`CA:TRUE`), `.pem`, `.cer`, `.crt` or `.der` | trusted in the System keychain for SSL | none |

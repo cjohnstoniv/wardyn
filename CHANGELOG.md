@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Security
+
+- A macOS VM base's `app` item, from a `.zip` or a `.dmg`, is now owned by `root:wheel` in `/Applications`, with no file writable by its group or others. Before, it kept the owners and modes stored in the archive or disk image, which could leave files that the run's user owns, or that anyone can write, in `/Applications`. The guest agent now unpacks the app into the item's own folder, fixes its owners and modes there, and only then copies it into place. A base made with `macos-vm prepare` on this version has it at once. An existing base picks this up from the second `macos-vm update-tools` on this version: the first one installs the new guest agent, and the second one reinstalls the items with it. Not yet tried on a real Mac.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

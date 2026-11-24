@@ -337,10 +337,22 @@ func (t *Tools) handleExec(w http.ResponseWriter, r *http.Request) {
 	if run == nil {
 		run = runCombined
 	}
-	out, code, err := run(r.Context(), in.Argv)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	steps := appInstallSteps(in.Argv)
+	if steps == nil {
+		steps = [][]string{in.Argv}
+	}
+	var out []byte
+	code := 0
+	for _, step := range steps { // the first step that fails is the answer
+		o, c, err := run(r.Context(), step)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out, code = append(out, o...), c
+		if c != 0 {
+			break
+		}
 	}
 	if update && in.Argv[1] == "-l" {
 		t.listCLTLabels(string(out))
@@ -808,9 +820,9 @@ func itemPushAllowed(dest string) bool {
 //	/bin/mkdir -p -m 0755 D                           a file item's directory (ItemDestAllowed)
 //	/bin/rm -rf S/<name>                              an item's stage directory, after its install
 //	/usr/sbin/installer -pkg S/<name>/item.pkg -target /
-//	/usr/bin/ditto -x -k S/<name>/item.zip /Applications
+//	/usr/bin/ditto -x -k S/<name>/item.zip /Applications       run as appInstallSteps: made root's first
 //	/usr/bin/hdiutil attach -nobrowse -readonly -noautoopen -mountpoint S/<name>/mnt S/<name>/item.dmg
-//	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app
+//	/usr/bin/ditto S/<name>/mnt/<App>.app /Applications/<App>.app   run as appInstallSteps too
 //	/usr/bin/hdiutil detach -force S/<name>/mnt
 //	/usr/bin/profiles list                            the profiles installed, read back
 //	/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain S/<name>/item.cer
@@ -841,6 +853,43 @@ func itemArgvAllowed(argv []string) bool {
 // directory), which the agent does itself (makeDirAll) because mkdir follows a link among its parents.
 func isItemDirForm(argv []string) bool {
 	return len(argv) == 5 && argv[0] == "/bin/mkdir" && argv[1] == "-p"
+}
+
+// itemAppStage is the folder, inside an app item's own stage directory (root's, 0700), that the app is unpacked
+// or copied into before it goes to /Applications. Its leading dot keeps it apart from every file a push may
+// write there (ItemSecretPattern), and the host's rm -rf of the stage directory removes it with the rest.
+const itemAppStage = ".app-stage"
+
+// appInstallSteps is what an app item's install form, already allowed, runs as; nil for every other argv. An
+// archive or disk image keeps the owners and modes it was made with, and ditto as root would put files the
+// run's user owns, or that anyone may write, into /Applications. So the app goes into the item's stage first,
+// is made root's with no group or other write there (neither command follows a link), and only then is copied
+// into place. The host sends the same form to every agent; an older one runs it as given.
+func appInstallSteps(argv []string) [][]string {
+	var stage string
+	var unpack, place []string
+	switch {
+	case len(argv) == 5 && argv[0] == "/usr/bin/ditto" && argv[1] == "-x" && argv[2] == "-k" &&
+		isItemFile(argv[3], ItemZip) && argv[4] == MacApplications:
+		stage = filepath.Dir(argv[3]) + "/" + itemAppStage
+		unpack = []string{"/usr/bin/ditto", "-x", "-k", argv[3], stage}
+		place = []string{"/usr/bin/ditto", stage, MacApplications}
+	case len(argv) == 3 && argv[0] == "/usr/bin/ditto" && ItemAppPattern.MatchString(filepath.Base(argv[1])) &&
+		isItemFile(filepath.Dir(argv[1]), ItemMount) && argv[2] == MacApplications+"/"+filepath.Base(argv[1]):
+		stage = filepath.Dir(filepath.Dir(argv[1])) + "/" + itemAppStage
+		app := stage + "/" + filepath.Base(argv[1])
+		unpack = []string{"/usr/bin/ditto", argv[1], app}
+		place = []string{"/usr/bin/ditto", app, argv[2]}
+	default:
+		return nil
+	}
+	return [][]string{
+		{"/bin/rm", "-rf", stage},
+		unpack,
+		{"/usr/sbin/chown", "-R", "-P", "root:wheel", stage},
+		{"/bin/chmod", "-R", "-P", "go-w", stage},
+		place,
+	}
 }
 
 // itemForms checks each item form's whole argv, by its command and first argument.
