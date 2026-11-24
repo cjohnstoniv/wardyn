@@ -622,16 +622,34 @@ func TestSupportUI_EveryHelperRequestRechecksWithNoDebounce(t *testing.T) {
 	})
 }
 
-// check-2 M7: an owner's relayed request is not watched, and neither is any session without a grant: the
-// context comes back as it went in and the grant record is never read.
-func TestSupportUI_OwnersStreamIsNotWatched(t *testing.T) {
+// An owner's relayed request, and any session without a grant, runs under the limit watch alone: the context is a
+// derived one that ends with stop or with its parent, and the grant record is never read.
+func TestSupportUI_OwnersStreamGetsOnlyTheLimitWatch(t *testing.T) {
 	setSupportWatch(t, 20*time.Millisecond, 2*time.Second)
 	rig := newSupportUIRig(t, "web_apps")
-	parent := context.Background()
-	if ctx, stop := rig.srv.supportWatchCtx(parent, uiSession{}); ctx != parent {
-		t.Fatal("a session with no grant got a derived context")
-	} else {
-		stop()
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	ctx, stop := rig.srv.supportWatchCtx(parent, uiSession{})
+	if ctx == parent {
+		t.Fatal("a session with no grant got its parent context, not the limit watch's")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("the limit watch's context is already done: %v", ctx.Err())
+	}
+	stop()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stop did not cancel the limit watch's context")
+	}
+	parent2, cancelParent2 := context.WithCancel(context.Background())
+	ctx2, stop2 := rig.srv.supportWatchCtx(parent2, uiSession{})
+	defer stop2()
+	cancelParent2()
+	select {
+	case <-ctx2.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the parent did not cancel the limit watch's context")
 	}
 	owner := rig.session(rig.ticket(rig.run.ID, rig.owner, oidc.RoleUser), "code")
 	ended := rig.openStream("events", owner)
