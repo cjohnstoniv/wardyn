@@ -297,14 +297,17 @@ type bootFlags struct {
 	// multiAgentTasks lets a background agent task run several agents side by side
 	// (off by default in 0.10.0).
 	multiAgentTasks *bool
+	// pushHoldRemovals holds a push that removes a require_review_paths file from a
+	// branch it updates, on GitHub and Azure DevOps (off by default in 0.10.4).
+	pushHoldRemovals *bool
 	// proxyResponseScrub has every run's proxy replace a value it injected when a
 	// relayed response echoes it back (off by default in 0.10.0).
 	proxyResponseScrub *bool
 	// pushHoldCanonicalRepos keys a held git_pat push to github.com on one
 	// spelling of its repository (off by default in 0.10.0).
 	pushHoldCanonicalRepos *bool
-	// attachLocal lets a person's CLI attach to their run on their own runner's computer (off by
-	// default in 0.10.0; only "on" enables it).
+	// attachLocal lets a person's CLI attach to their run on their own runner's computer (on by
+	// default; only "on" enables it, so any other value is off).
 	attachLocal *string
 	// envSecretPlaceholders / fileSecretPlaceholders keep a host-bound env or
 	// file secret's value at the proxy (off by default in 0.10.0).
@@ -433,9 +436,10 @@ type bootFlags struct {
 	sshMaxSessionsPerRun *int
 	sshChannels          *string // validated by parseSSHChannels
 	// sshMaxConns and sshPerSource are the gateway's established-connection
-	// ceiling and per-source handshake bound.
-	sshMaxConns  *int
-	sshPerSource *int
+	// ceiling and per-source handshake bound; sshMaxHandshakes is the handshake total.
+	sshMaxConns      *int
+	sshPerSource     *int
+	sshMaxHandshakes *int
 	// sshPerPrincipal is one person's share of sshMaxConns; 0 = the default.
 	sshPerPrincipal *int
 	// syncDeny is api.Config.SyncDeny before ParseSyncDeny splits and checks it.
@@ -455,6 +459,8 @@ type bootFlags struct {
 	oidcSessionTTL *time.Duration
 	// sessionLife is the console session-lifetime behaviours, each off by default.
 	sessionLife sessionLifeFlags
+	// outage is the control-plane outage behaviours (lapse sweep rule M, orphan-sweep hold).
+	outage outageFlags
 	// cliSignIn is CLI sign-in (wardyn login), off by default.
 	cliSignIn cliSignInFlags
 	// governanceChangeTTL is how long a governance change held for a second human waits — see
@@ -481,6 +487,9 @@ type bootFlags struct {
 	// allowUnknownMigrations is the break-glass past db.Migrate's downgrade
 	// refusal (a database a newer wardynd migrated) — see connectAndMigrate.
 	allowUnknownMigrations *bool
+
+	// lockPoolMaxConns is WARDYN_LOCK_POOL_MAX_CONNS (boot_lock_pool.go).
+	lockPoolMaxConns *int
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -543,6 +552,7 @@ func parseBootFlags() *bootFlags {
 		execOutputTailTTL:      flagDuration("exec-output-tail-ttl", "WARDYN_EXEC_OUTPUT_TAIL_TTL", 24*time.Hour, "how long a run's output tail is kept after its last output (duration)"),
 		runOutputTailBytes:     flagIntEnv("run-output-tail-bytes", "WARDYN_RUN_OUTPUT_TAIL_BYTES", 65536, "size of each non-interactive run's in-memory output tail and the cap on GET /runs/{id}/output?tail= (bytes, 1024 to 1048576)"),
 		runOutputPersist:       flagBool("run-output-persist", "WARDYN_RUN_OUTPUT_PERSIST", true, `persist each run's final masked output tail in Postgres so it outlives a restart and is readable from any replica; "off" keeps it in memory only`),
+		lockPoolMaxConns:       flagIntEnv("lock-pool-max-conns", "WARDYN_LOCK_POOL_MAX_CONNS", 8, "connections each replica holds for cross-replica locks at once, and guarded credential-write dials (1-64)"),
 		runOutputRetention:     flagIntEnv("run-output-retention-days", "WARDYN_RUN_OUTPUT_RETENTION_DAYS", 30, "delete persisted run output older than this many days (0 keeps it forever)"),
 		confinementMap:         flagEnv("confinement-map", "WARDYN_CONFINEMENT_MAP", "", `optional per-class substrate/runtime pins, e.g. "CC2=runsc;CC3=kata-qemu". Empty (default) uses the built-in defaults`),
 		trustDomain:            flagEnv("trust-domain", "WARDYN_TRUST_DOMAIN", embedded.DefaultTrustDomain, "SPIFFE trust domain"),
@@ -648,9 +658,10 @@ func parseBootFlags() *bootFlags {
 		envSecretPlaceholders:    flagBool("env-secret-placeholders", "WARDYN_ENV_SECRET_PLACEHOLDERS", false, "an env_secret grant whose scope names a host gets a placeholder in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		fileSecretPlaceholders:   flagBool("file-secret-placeholders", "WARDYN_FILE_SECRET_PLACEHOLDERS", false, "a file_secret grant whose scope names a host gets a placeholder file in the sandbox, which the run's proxy replaces with the value on requests to that host (default false)"),
 		runnerSecretPlaceholders: flagBool("runner-secret-placeholders", "WARDYN_RUNNER_SECRET_PLACEHOLDERS", false, "a runner_resident env_secret or file_secret grant whose scope names a host gets a placeholder on the runner, which the organisation's egress replaces with the value on requests to that host (default false)"),
-		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "off", `"on": a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; anything else keeps every attach on the relay`),
+		attachLocal:              flagEnv("attach-local", "WARDYN_ATTACH_LOCAL", "on", `"on" (the default): a person's CLI on their own runner's computer attaches to their run there, the terminal staying on that computer while the organisation keeps the admission, the writer lease, the recording and the audit; "off" (or any other value) keeps every attach on the relay`),
 		pushHoldCanonicalRepos:   flagBool("push-hold-canonical-repos", "WARDYN_PUSH_HOLD_CANONICAL_REPOS", false, "have each run's egress proxy name a held git_pat push to github.com by its repository lowercased and without .git, so one admin decision covers every spelling; off names the path as git spelled it"),
 		proxyResponseScrub:       flagBool("proxy-response-scrub", "WARDYN_PROXY_RESPONSE_SCRUB", false, "have each run's egress proxy replace a credential it added when an upstream response echoes it back to the sandbox (default false)"),
+		pushHoldRemovals:         flagBool("push-hold-removals", "WARDYN_PUSH_HOLD_REMOVALS", false, "have each run's egress proxy hold a GitHub or Azure DevOps push that removes a require_review_paths file from a branch it updates, as it holds one that changes it (default false)"),
 		gitPATBrokerOffRefused:   flagBool("git-pat-broker-off-refused", "WARDYN_GIT_PAT_BROKER_OFF_REFUSED", false, "while WARDYN_GIT_PAT_BROKER is off, refuse a run that would hold a resident PAT on operators' runs too; a member's run is refused it either way (default false)"),
 		multiAgentTasks:          flagBool("multi-agent-tasks", "WARDYN_MULTI_AGENT_TASKS", false, "let a background agent task run several agents side by side in one sandbox, each on its own tools[].task: every agent's rules are met (strictest wins), the run ends when the last agent exits and fails if any failed; off refuses a request that gives an agent its own task"),
 
@@ -755,16 +766,18 @@ func parseBootFlags() *bootFlags {
 		sshAdvertise:           flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail Connect pane; advisory only. Empty (default) publishes no address, so "wardyn run ssh" refuses`),
 		oidcSessionTTL:         flagDuration("oidc-session-ttl", "WARDYN_OIDC_SESSION_TTL", 0, "how long a console session lasts from sign-in, instead of ending at the ID token's expiry (duration; 0 = the ID token's expiry; at most 24h)"),
 		sessionLife:            registerSessionLifeFlags(),
+		outage:                 registerOutageFlags(),
 		cliSignIn:              registerCLISignInFlags(),
 		sshProxyCommand:        flagEnv("ssh-proxy-command", "WARDYN_SSH_PROXY_COMMAND", "", `ssh ProxyCommand published on /healthz for people to reach the SSH gateway through a TLS-terminating listener on 443; the console and "wardyn run ssh" show it, the daemon never runs it. No control characters, newlines or single quotes; at most 512 bytes. Empty (default) publishes none`),
 		roleStampTTL:           flagDuration("role-stamp-ttl", "WARDYN_ROLE_STAMP_TTL", 0, "how old an API token's or console session's role stamp may be before its owner must sign in again (duration; 0 = off)"),
 		governanceChangeTTL:    flagDuration("governance-change-ttl", "WARDYN_GOVERNANCE_CHANGE_TTL", 72*time.Hour, "how long a governance change held for a second human (WARDYN_GOVERNANCE_SECOND_HUMAN) waits for approval before it expires (duration; must be positive)"),
 		syncDeny:               flagEnv("sync-deny", "WARDYN_SYNC_DENY", "", "comma-separated ignore patterns (git's syntax) that 'wardyn sync' leaves out on top of every .gitignore and .wardynignore, and that no ignore file can take back, e.g. '.env*,*.pem'; at most 64 patterns of 256 bytes, no control characters. Empty (default) adds none"),
-		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 4, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
+		sshMaxSessionsPerRun:   flagIntEnv("ssh-max-sessions-per-run", "WARDYN_SSH_MAX_SESSIONS_PER_RUN", 8, "most concurrent SSH channels (shell, exec, sftp, -L forward) one run may hold across every connection, integer 1 to 64; wardyn-sync channels have their own cap of 2"),
 		sshChannels:            flagEnv("ssh-channels", "WARDYN_SSH_CHANNELS", "", "comma list of the SSH channel kinds the gateway serves: shell, exec, sftp, forward; sftp also covers wardyn sync and exec also covers POST /runs/{id}/exec. Empty (default) serves all four"),
 		sshMaxConns:            flagIntEnv("ssh-max-connections", "WARDYN_SSH_MAX_CONNECTIONS", api.DefaultSSHMaxConnections, "most authenticated SSH gateway connections open at once, per replica (integer, at least 1); one authenticated over it is closed"),
 		sshPerPrincipal:        flagIntEnv("ssh-max-connections-per-principal", "WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL", 0, "most authenticated SSH gateway connections one person may hold, per replica (integer; 0 = 8 with single sign-on, else all of WARDYN_SSH_MAX_CONNECTIONS); one over it is told why and closed"),
 		sshPerSource:           flagIntEnv("ssh-max-handshakes-per-source", "WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE", api.DefaultSSHMaxHandshakesPerSource, "most SSH gateway connections one source address may have handshaking at once, per replica (integer, at least 1); one over it is closed before any byte"),
+		sshMaxHandshakes:       flagIntEnv("ssh-max-handshakes", "WARDYN_SSH_MAX_HANDSHAKES", api.DefaultSSHMaxHandshakes, "most SSH gateway connections handshaking at once, per replica, from every source together (integer, at least 1); one over it is closed before any byte"),
 		localFolderSeedWait:    flagDuration("local-folder-seed-wait", "WARDYN_LOCAL_FOLDER_SEED_WAIT", api.DefaultLocalFolderSeedWait, "how long a run with a local folder holds its agent for the folder's first 'wardyn sync' before it fails, never past the run's own end (duration, positive)"),
 		computerFolders:        flagBool("computer-folders", "WARDYN_COMPUTER_FOLDERS", false, "let a run take a folder from its creator's own folder-only runner ('wardyn-runnerd serve --substrate folders'), which Wardyn seeds before the agent starts (default false)"),
 		sshRoleTTL:             flagDuration("ssh-role-ttl", "WARDYN_SSH_ROLE_TTL", 24*time.Hour, "how stale a registered SSH key's admin-override stamp may be before the gateway refuses it (duration)"),

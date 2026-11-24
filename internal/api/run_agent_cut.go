@@ -99,8 +99,8 @@ func (s *Server) stopProxyOnly(ctx context.Context, ref string) (cutKind, error)
 	}
 }
 
-// keepable reports a sandbox this server can keep with its agent cut off: rule R, stopTerminalSandbox
-// and quiesceKeptSandbox ask it.
+// keepable reports a sandbox this server can keep with its agent cut off: rule R and stopTerminalSandbox
+// ask it (quiesceRunnerRun keeps only a run whose cut it made itself).
 func (s *Server) keepable(run types.AgentRun) bool {
 	if run.MachineKind.IsVM() || s.cfg.Runner == nil {
 		return false

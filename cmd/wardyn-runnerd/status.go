@@ -158,12 +158,13 @@ func (w *statusWriter) failed(stage, reason string, at time.Time, refusal bool) 
 	w.write()
 }
 
-// refusalAfter reports whether the writer holds a start refusal with no stage that is newer than at: a
-// pending summary of an older refusal at a stage must not be replayed over it.
-func (w *statusWriter) refusalAfter(at time.Time) bool {
+// holdsStartRefusal reports whether the writer holds a start refusal with no stage. A pending summary of
+// a refusal at a stage is never replayed over it: every refusal at a stage clears it first (failed), so
+// the one held is the newer, whatever the clocks said when each was made.
+func (w *statusWriter) holdsStartRefusal() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.cur.StartRefusal != nil && w.cur.StartRefusal.At.After(at)
+	return w.cur.StartRefusal != nil
 }
 
 // startError records a start that failed with no stage (a bad flag): the error is the last one, and is kept

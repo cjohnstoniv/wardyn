@@ -303,6 +303,7 @@ const (
 	reasonInvalidSponsoredParam     = "invalid_sponsored_param"      // ?sponsored= is not "" or "exclude"
 	reasonInvalidNoEndParam         = "invalid_no_end_param"         // ?no_end= is not "", "0", or "1"
 	reasonInvalidServiceParam       = "invalid_service_param"        // ?service= is present and not "0" or "1"
+	reasonInvalidCountsParam        = "invalid_counts_param"         // ?counts= is not "" or "skip"
 	reasonRunsSearchQueryTooLong    = "runs_search_query_too_long"   // ?q= exceeds the maximum search length
 	reasonInvalidLimitParam         = "invalid_limit_param"          // ?limit= does not parse as a non-negative integer
 	reasonInvalidOffsetParam        = "invalid_offset_param"         // ?offset= does not parse as a non-negative integer
@@ -718,8 +719,9 @@ const (
 	reasonNodeRecordHumanOnly   = "node_record_human_only"  // the admin token, an API token, or local mode, which cannot show who the people were
 )
 
-// A run refused at create because it sets a run proxy setting its runner's wardyn-runnerd does not
-// carry (sandboxCreateFailure, remote.ProxySettingError): the run.create failure row's reason.
+// A run refused at create, or a revive refused before its claim, because it sets a run proxy setting its
+// runner's wardyn-runnerd does not carry (sandboxCreateFailure, proxySettingRunnerRefusal,
+// remote.ProxySettingError): the run.create failure row's reason, and the revive's.
 const reasonRunnerProxySetting = "runner_proxy_setting_unsupported"
 
 // A run's gateway identity (internal_gateway_identity.go): the provider no longer matches what the run was
@@ -737,8 +739,9 @@ const (
 	reasonInvalidCutInFlightParam = "invalid_cut_in_flight_param"
 )
 
-// A run refused at create because its laptop local model is on a port the runner's person has not allowed
-// (sandboxCreateFailure, remote.LocalModelPortError): the run.create failure row's reason.
+// A run refused at create because its laptop local model is on a port the runner's person has not allowed,
+// or a revive refused before its claim for the same port (sandboxCreateFailure, proxySettingRunnerRefusal,
+// remote.LocalModelPortError): the run.create failure row's reason.
 const reasonRunnerLocalModelPort = "runner_local_model_port_not_allowed"
 
 // A request with no session and no bearer on a deployment with single sign-on and no admin token

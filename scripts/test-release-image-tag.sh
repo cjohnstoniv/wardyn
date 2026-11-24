@@ -623,4 +623,149 @@ awk '
   END { flush(); exit found }
 ' "$WF" || fail "a step whose env holds the Apple secrets executes a tree-built binary"
 
+# scripts/float-latest.sh and its wiring in release.yml: the one place `:latest` on the float-latest rows is written.
+# git, curl and cosign are stubs on PATH, so nothing here touches a network or a registry.
+command -v yq >/dev/null && command -v jq >/dev/null || { echo "test-release-image-tag: yq and jq are required" >&2; exit 1; }
+FL="$WORK/fl"
+mkdir -p "$FL/bin"
+cat >"$FL/bin/git" <<'STUB'
+#!/usr/bin/env bash
+echo "git $*" >>"$FL/calls"
+[ "$1" = ls-remote ] || exit 99
+while read -r t; do printf '0000000000000000000000000000000000000000\trefs/tags/%s\n' "$t"; done <"$FL/tags"
+STUB
+cat >"$FL/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+echo "curl $*" >>"$FL/calls"
+url=""
+for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
+case "$url" in
+  https://ghcr.io/token\?*) echo '{"token":"t"}'; exit 0 ;;
+  https://ghcr.io/v2/cjohnstoniv/*/manifests/*)
+    r="${url#https://ghcr.io/v2/cjohnstoniv/}"; img="${r%%/*}"; ref="${r##*/}"
+    code=404; digest=""
+    if [ -f "$FL/reg/$img/$ref" ]; then code=200; digest="$(cat "$FL/reg/$img/$ref")"; fi
+    [ -f "$FL/reg/$img/$ref.code" ] && code="$(cat "$FL/reg/$img/$ref.code")"
+    if [ -n "$digest" ]; then printf 'HTTP/2 %s\r\ndocker-content-digest: %s\r\n\r\n\n%s' "$code" "$digest" "$code"
+    else printf 'HTTP/2 %s\r\n\r\n\n%s' "$code" "$code"; fi
+    exit 0 ;;
+esac
+exit 99
+STUB
+cat >"$FL/bin/cosign" <<'STUB'
+#!/usr/bin/env bash
+echo "cosign $*" >>"$FL/calls"
+case "$1" in
+  verify)
+    [ "$3" = --certificate-identity ] && [ "$5" = --certificate-oidc-issuer ] || exit 99
+    [ "$6" = https://token.actions.githubusercontent.com ] || exit 1
+    tag="${4##*refs/tags/}"
+    [ -f "$FL/signed/${2#*@}" ] && grep -qxF "$tag" "$FL/signed/${2#*@}" ;;
+  copy)
+    [ "$2" = --force ] && [ "$#" -eq 4 ] || exit 99
+    echo "$*" >>"$FL/copies"
+    dest="${4%:latest}"; mkdir -p "$FL/reg/${dest##*/}"
+    if [ -n "${COPY_WRONG:-}" ]; then echo "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >"$FL/reg/${dest##*/}/latest"
+    else echo "${3#*@}" >"$FL/reg/${dest##*/}/latest"; fi ;;
+  *) exit 99 ;;
+esac
+STUB
+chmod +x "$FL/bin/git" "$FL/bin/curl" "$FL/bin/cosign"
+
+d() { printf 'sha256:%063d%s' 0 "$1"; }
+D1="$(d 1)"; D2="$(d 2)"; D3="$(d 3)"; D4="$(d 4)"; D5="$(d 5)"
+IMG=ghcr.io/cjohnstoniv
+fl_reset() { rm -rf "$FL/reg" "$FL/signed" "$FL/tags" "$FL/copies" "$FL/calls" "$FL/out" "$FL/err"; mkdir -p "$FL/reg" "$FL/signed"; : >"$FL/tags"; unset FL_COPY_WRONG; }
+fl_tag() { printf '%s\n' "$@" >>"$FL/tags"; }
+fl_image() { # IMAGE VERSION DIGEST: the version's tag in the registry, signed by the run for v<VERSION>
+  mkdir -p "$FL/reg/$1"; echo "$3" >"$FL/reg/$1/$2"; echo "v$2" >>"$FL/signed/$3"
+}
+fl_latest() { mkdir -p "$FL/reg/$1"; echo "$2" >"$FL/reg/$1/latest"; }
+fl_run() { # DRY (empty: unset) REF IMAGE...
+  local dry="$1"; shift
+  FL_RC=0
+  if [ -n "$dry" ]; then
+    env PATH="$FL/bin:$PATH" FL="$FL" COPY_WRONG="${FL_COPY_WRONG:-}" DRY_RUN="$dry" bash "$ROOT/scripts/float-latest.sh" "$@" >"$FL/out" 2>"$FL/err" || FL_RC=$?
+  else
+    env -u DRY_RUN PATH="$FL/bin:$PATH" FL="$FL" bash "$ROOT/scripts/float-latest.sh" "$@" >"$FL/out" 2>"$FL/err" || FL_RC=$?
+  fi
+}
+fl_rc() { [ "$FL_RC" -eq "$2" ] || fail "float-latest $1: rc $FL_RC, want $2: $(cat "$FL/out" "$FL/err")"; }
+fl_out() { grep -qF -- "$2" "$FL/out" || fail "float-latest $1: stdout lacks [$2]: $(cat "$FL/out")"; }
+fl_err() { grep -qF -- "$2" "$FL/err" || fail "float-latest $1: stderr lacks [$2]: $(cat "$FL/err")"; }
+fl_copies() { # NAME EXPECTED_LINE...: $FL/copies holds exactly these lines (none: no copy)
+  local n="$1" got want; shift
+  got="$(cat "$FL/copies" 2>/dev/null || true)"; want="$(printf '%s\n' "$@")"; [ "$#" -gt 0 ] || want=""
+  [ "$got" = "$want" ] || fail "float-latest $n: copies [$got], want [$want]"
+}
+fl_copy_line() { echo "copy --force $IMG/$1@$2 $IMG/$1:latest"; }
+fl_case1() { fl_reset; fl_tag v0.10.9 v0.11.0; fl_image agent-base 0.10.9 "$D1"; fl_image agent-base 0.11.0 "$D2"; fl_latest agent-base "$D2"; }
+fl_case2() { fl_case1; fl_tag v0.11.1; fl_image agent-base 0.11.1 "$D3"; }
+
+# 1 an older-line final does not float
+fl_case1; fl_run false v0.10.9 agent-base; fl_rc 1 0
+fl_out 1 "PLAN agent-base latest=$D2 target=v0.11.0 $D2 action=keep"; fl_copies 1
+[ "$(cat "$FL/reg/agent-base/latest")" = "$D2" ] || fail "float-latest 1: :latest moved"
+# 2 the newest final floats
+fl_case2; fl_run false v0.11.1 agent-base; fl_rc 2 0
+fl_out 2 "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 2 "moved $IMG/agent-base:latest -> $D3"
+fl_copies 2 "$(fl_copy_line agent-base "$D3")"
+# 3 inverted completion: the lower final's job finishes after the higher's
+fl_case2; fl_latest agent-base "$D3"; fl_run false v0.10.9 agent-base; fl_rc 3 0
+fl_out 3 "target=v0.11.1 $D3 action=keep"; fl_copies 3
+# 4 repair: a lower run finds :latest below the highest published final and moves it up
+fl_case2; fl_tag v0.10.10; fl_image agent-base 0.10.10 "$D4"; fl_run false v0.10.10 agent-base; fl_rc 4 0
+fl_out 4 "target=v0.11.1 $D3 action=move"; fl_copies 4 "$(fl_copy_line agent-base "$D3")"
+# 4b numeric order: v0.10.10 is above v0.10.9
+fl_reset; fl_tag v0.10.9 v0.10.10; fl_image agent-base 0.10.9 "$D1"; fl_image agent-base 0.10.10 "$D4"; fl_latest agent-base "$D1"
+fl_run false v0.10.9 agent-base; fl_rc 4b 0
+fl_out 4b "PLAN agent-base latest=$D1 target=v0.10.10 $D4 action=move"; fl_copies 4b "$(fl_copy_line agent-base "$D4")"
+# 5 a tag whose image is not published yet is skipped
+fl_case2; fl_tag v0.11.2; fl_run false v0.11.1 agent-base; fl_rc 5 0
+fl_out 5 "skip agent-base:0.11.2: not published"; fl_copies 5 "$(fl_copy_line agent-base "$D3")"
+# 6 an RC ref skips before any read
+fl_case2; fl_run false v0.11.2-rc.1 agent-base; fl_rc 6 0
+[ "$(cat "$FL/out")" = "float-latest: v0.11.2-rc.1 is a prerelease tag: skipped, no write" ] || fail "float-latest 6: stdout [$(cat "$FL/out")]"
+[ ! -s "$FL/calls" ] || fail "float-latest 6: an RC read something: $(cat "$FL/calls")"; fl_copies 6
+# 6b a branch ref prints the plan and writes nothing
+fl_case2; fl_run true chore/release-0.11.2 agent-base; fl_rc 6b 0
+fl_out 6b "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 6b "not a final release tag: no write"; fl_copies 6b
+# 7 a dry run writes nothing
+fl_case2; fl_run true v0.11.1 agent-base; fl_rc 7 0
+fl_out 7 "action=move"; fl_out 7 "DRY RUN: no write"; fl_copies 7
+# 8 a candidate whose digest is signed by another tag's run fails closed, with nothing written for any image
+fl_case2; rm -f "$FL/signed/$D3"; echo v0.11.0 >"$FL/signed/$D3"
+fl_image agent-codex-cli 0.11.1 "$D5"; fl_latest agent-codex-cli "$D2"
+fl_run false v0.10.9 agent-codex-cli agent-base; fl_rc 8 1
+fl_err 8 "agent-base:0.11.1"; fl_copies 8
+# 9 a registry answer other than 200 or 404 fails closed
+fl_case2; echo 500 >"$FL/reg/agent-base/0.11.1.code"; fl_run false v0.10.9 agent-base; fl_rc 9 1; fl_copies 9
+# 10 nothing published at or above the run's tag
+fl_reset; fl_tag v0.11.0 v0.11.1; fl_image agent-base 0.11.0 "$D2"; fl_run false v0.11.1 agent-base; fl_rc 10 1
+fl_err 10 "no published final at or above v0.11.1"; fl_copies 10
+# 11 a copy that lands on another digest fails
+fl_case2; FL_COPY_WRONG=1; fl_run false v0.11.1 agent-base; fl_rc 11 1; fl_err 11 "after the copy, expected $D3"
+# 12 a final ref that is not a tag on origin
+fl_case1; fl_run false v0.12.0 agent-base; fl_rc 12 1; fl_err 12 "v0.12.0 is not a tag on origin"; fl_copies 12
+# 13 each image is decided on its own
+fl_case2; fl_image agent-codex-cli 0.11.1 "$D5"; fl_latest agent-codex-cli "$D5"
+fl_run false v0.11.1 agent-base agent-codex-cli; fl_rc 13 0
+fl_out 13 "PLAN agent-base latest=$D2 target=v0.11.1 $D3 action=move"; fl_out 13 "PLAN agent-codex-cli latest=$D5 target=v0.11.1 $D5 action=keep"
+fl_copies 13 "$(fl_copy_line agent-base "$D3")"
+# 14 no DRY_RUN is a usage error
+fl_case2; fl_run "" v0.11.1 agent-base; fl_rc 14 2; fl_copies 14
+
+# The wiring in release.yml. (The two ui-sandbox jobs share their steps by a YAML anchor, so the one allowed line is read twice: sort -u.)
+[ "$(yq -r '.jobs["float-latest"].concurrency.group' "$WF")" = release-floating-aliases ] || fail "float-latest job is not in the release-floating-aliases group"
+[ "$(yq -r '.jobs["float-latest"].concurrency["cancel-in-progress"]' "$WF")" = false ] || fail "the float-latest group cancels in-progress runs"
+for j in preflight-green images promote; do
+  [ "$(yq -r '.jobs["float-latest"].needs | contains(["'"$j"'"])' "$WF")" = true ] || fail "float-latest does not need $j"
+done
+[ "$(yq -r '.jobs["float-latest"].steps[-1].env.DRY_RUN' "$WF")" = "\${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}" ] || fail "the float-latest step's DRY_RUN is not the tag-ref and dry_run guard"
+yq -r '.jobs["float-latest"].steps[-1].run' "$WF" >"$FL/step.sh"
+grep -qF 'scripts/float-latest.sh "$REF_NAME"' "$FL/step.sh" || fail "the float-latest step does not run scripts/float-latest.sh with REF_NAME"
+[ "$(yq -r '.jobs.promote.env.IMAGES' "$WF" | yq -r '.[] | select(.["float-latest"] == "true") | .name' | sort | tr '\n' ' ')" = "agent-aws-sso agent-base agent-codex-cli " ] || fail "the promote rows that float :latest are not agent-aws-sso agent-base agent-codex-cli"
+others="$(yq -r '.jobs | to_entries | .[] | select(.key != "float-latest") | .value.steps[]? | (.run // ""), (.with.tags // "")' "$WF" | grep -v '^[[:space:]]*#' | grep ':latest' | sed 's/^[[:space:]]*//' | sort -u || true)"
+[ "$others" = 'echo "ref=ghcr.io/cjohnstoniv/${BASE_NAME}:latest" >> "$GITHUB_OUTPUT"' ] || fail "a job other than float-latest writes :latest: [$others]"
+
 echo "test-release-image-tag: ok"

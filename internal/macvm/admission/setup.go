@@ -35,7 +35,9 @@ type SetupConfig struct {
 	beforeMove func(dst string) error           // tests: runs before each entry is moved
 	afterSock  func()                           // tests: runs once sock/ is swept
 	afterSwap  func(old string)                 // tests: runs once relink swapped the new entries directory in; old is where the old one now is
-	fault      func(op, dir, name string) error // tests: an error here replaces the step op ("stat", "readdir", "quarantine") on dir's name
+	fault      func(op, dir, name string) error // tests: an error here replaces the step op ("stat", "readdir", "quarantine", "link") on dir's name
+	flagsOf    func(st unix.Stat_t) uint32      // tests: st's BSD file flags; nil: statFlags
+	fchflags   func(fd int, flags uint32) error // tests: fchflags(2); nil: the system's
 }
 
 const (
@@ -72,6 +74,12 @@ func Setup(c SetupConfig) error {
 	}
 	if c.Logf == nil {
 		c.Logf = func(format string, a ...any) { fmt.Fprintf(os.Stderr, "admission: "+format+"\n", a...) }
+	}
+	if c.flagsOf == nil {
+		c.flagsOf = statFlags
+	}
+	if c.fchflags == nil {
+		c.fchflags = fchflags
 	}
 	s := &setup{c: c, l: &Ledger{c: Config{Dir: filepath.Join(c.Base, entriesName), Fstat: c.Fstat, LockWait: c.LockWait}}}
 	defer s.closeAll()
@@ -372,15 +380,28 @@ func (s *setup) relink(dst *source) error {
 				return err
 			}
 		}
-		switch err := unix.Linkat(int(dst.f.Fd()), n, int(tf.Fd()), n, 0); {
+		err := s.faulted("link", dst.f.Name(), n)
+		if err == nil {
+			err = unix.Linkat(int(dst.f.Fd()), n, int(tf.Fd()), n, 0)
+		}
+		if errors.Is(err, unix.EPERM) && !notRegular(dst.f, n) {
+			// A regular file whose link is refused may carry the user immutable flag, which setup clears
+			// (clearUserImmutable) before it links again; anything else about it stops the run.
+			switch cerr := s.clearUserImmutable(dst.f, n); {
+			case cerr == nil:
+				err = unix.Linkat(int(dst.f.Fd()), n, int(tf.Fd()), n, 0)
+			case !errors.Is(cerr, errNotUserImmutable):
+				return cerr
+			}
+		}
+		switch {
 		case err == nil:
 			linked++
 		case errors.Is(err, unix.ENOENT): // its owner removed it
 		case errors.Is(err, unix.EPERM) && notRegular(dst.f, n):
 			// Not a file a helper reads as a VM's entry, and a hard link to it fails: any login can make
 			// one in this world-writable directory, and it must not stop every setup. It goes to a
-			// root-only quarantine. A regular file that fails the same way (the immutable flag) cannot be
-			// renamed either, so that one still stops the run.
+			// root-only quarantine.
 			if err := s.quarantineName(dst.f, n, fmt.Sprintf("%s holds %s, which is not a file and cannot be linked", dst.f.Name(), n)); err != nil && !errors.Is(err, unix.ENOENT) {
 				return err
 			}

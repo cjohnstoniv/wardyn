@@ -1,0 +1,142 @@
+name: CodeQL
+
+# Code scanning, advanced setup. Every job skips until the repository variable WARDYN_CODEQL_ADVANCED is
+# 'true': GitHub refuses an advanced upload while default setup is on, so the variable, not this file, decides
+# when it runs. Categories are default setup's (/language:<language>), so alert history carries over.
+#
+# A pull request analysis reports only the lines the pull request changed, so a release is judged on a push or
+# dispatch analysis of its exact tree, never a pull request's.
+#
+# Dispatch with `tag` (and the commit and tree recorded when it was published) to analyse a released tree that
+# predates this file: the job checks the tag out, refuses it unless both shas match, and files the analysis under
+# the tag.
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+    branches: [main, 'release/**']
+  schedule:
+    - cron: '41 4 * * 0' # weekly, Sunday 04:41 UTC
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional release tag (vX.Y.Z or vX.Y.Z-rc.N) to analyse instead of the dispatched ref"
+        type: string
+        default: ''
+      expect_commit:
+        description: "With tag: the 40-hex commit the tag must peel to"
+        type: string
+        default: ''
+      expect_tree:
+        description: "With tag: the 40-hex tree of that commit"
+        type: string
+        default: ''
+
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.ref }}-${{ inputs.tag || 'ref' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    if: vars.WARDYN_CODEQL_ADVANCED == 'true'
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: ${{ matrix.language == 'go' && 60 || 20 }}
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Check the tag inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECT_COMMIT: ${{ inputs.expect_commit }}
+          EXPECT_TREE: ${{ inputs.expect_tree }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            [ -z "$EXPECT_COMMIT$EXPECT_TREE" ] || { echo "::error::expect_commit and expect_tree need tag"; exit 1; }
+            exit 0
+          fi
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "::error::tag '$TAG' is not vX.Y.Z or vX.Y.Z-rc.N"; exit 1; }
+          [[ "$EXPECT_COMMIT" =~ ^[0-9a-f]{40}$ && "$EXPECT_TREE" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "::error::a tag dispatch needs the recorded 40-hex expect_commit and expect_tree"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
+          persist-credentials: false
+      - name: Verify the tag's commit and tree
+        if: inputs.tag != ''
+        id: tagged
+        env:
+          EXPECT_COMMIT: ${{ inputs.expect_commit }}
+          EXPECT_TREE: ${{ inputs.expect_tree }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)" tree="$(git rev-parse 'HEAD^{tree}')"
+          [ "$commit" = "$EXPECT_COMMIT" ] || { echo "::error::the tag peels to $commit, not the recorded $EXPECT_COMMIT"; exit 1; }
+          [ "$tree" = "$EXPECT_TREE" ] || { echo "::error::the tag's tree is $tree, not the recorded $EXPECT_TREE"; exit 1; }
+          echo "Analysing ${{ inputs.tag }} at commit $commit, tree $tree"
+          echo "sha=$commit" >> "$GITHUB_OUTPUT"
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - if: matrix.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: /language:${{ matrix.language }}
+          upload: never
+          output: ${{ runner.temp }}/sarif
+      # overlay-proofs.yml's cache-poisoning finding is a known false positive (#3672): both of its jobs run only
+      # on refs/heads/proofs/* refs, whose cache entries no other branch restores, and no step restores or saves a
+      # cache. A dismissal is keyed to a line, so every edit that moved the steps reopened it; this drops that one
+      # rule on that one file by id and path. The rule still reports every other workflow.
+      # The drop script comes from the dispatching commit, not the analysed tree: a tag dispatch analyses a released
+      # tree that predates this file and has no such script.
+      - name: Get the drop script from the dispatching commit
+        if: matrix.language == 'actions'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          path: .wardyn-ci
+          sparse-checkout: scripts/codeql-sarif-drop.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Drop the overlay-proofs cache-poisoning false positive
+        if: matrix.language == 'actions'
+        run: .wardyn-ci/scripts/codeql-sarif-drop.sh "${{ runner.temp }}/sarif"
+      - name: Upload the analysis
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: ${{ runner.temp }}/sarif
+          category: /language:${{ matrix.language }}
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
+          sha: ${{ steps.tagged.outputs.sha || '' }}
+      - name: Keep the SARIF of a tag analysis
+        if: inputs.tag != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: codeql-sarif-${{ inputs.tag }}-${{ matrix.language }}
+          path: ${{ runner.temp }}/sarif
+          retention-days: 90

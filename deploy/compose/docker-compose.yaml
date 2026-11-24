@@ -347,6 +347,8 @@ services:
       WARDYN_MODEL_USAGE: "${WARDYN_MODEL_USAGE:-}"
       # Empty falls back to wardynd's 5m default, so the line is inert until set in .env.
       WARDYN_MIGRATE_TIMEOUT: "${WARDYN_MIGRATE_TIMEOUT:-}"
+      # Empty takes wardynd's default, on. Set off in .env to keep every attach on the relay.
+      WARDYN_ATTACH_LOCAL: "${WARDYN_ATTACH_LOCAL:-}"
       # AWS sign-in lane: "on" or empty. "off" was removed in 0.10.0 and
       # refuses boot (docs/OPERATIONS.md "Removed in 0.10.0"). Empty lands on
       # flagEnv's own compiled default ("on") like every other empty

@@ -60,6 +60,10 @@ const (
 	// retryable condition, said as one: the relay fails CLOSED rather than
 	// serving a credential an admin may have just cancelled.
 	uiSessionUnverifiableMsg = "Could not verify this UI session; try again"
+	// uiUnitUnsatisfiableMsg is the 403 body when the run's governance profile cannot be composed at all, for an
+	// error that is not the curated overlayUnsatisfiableError (a restriction that meets to nothing). The composer's
+	// own text names the profiles' entries, so it goes to the log only.
+	uiUnitUnsatisfiableMsg = "This run's governance restrictions cannot be applied together, so it is refused until an administrator fixes them."
 )
 
 // The ui.authorize/denied `reason` values a refused re-check writes are
@@ -136,6 +140,9 @@ type uiSession struct {
 	// ViewOnly pins a VM desktop session's input off for its whole life, whatever the Mac's caps later say.
 	// Set at enter on a background run's watch alone (backgroundWatch); signed, so it can't be dropped.
 	ViewOnly bool `json:"w,omitempty"`
+	// DesktopKind marks a session on a declared app of kind desktop (types.UIAppKindDesktop): set at enter from the
+	// run's policy (newDeclaredUISession, inboundSessionFor) and signed, so it can't be dropped.
+	DesktopKind bool `json:"dk,omitempty"`
 	// Inbound marks a session on an app declared inbound: true, the one door a background run keeps
 	// (uigateway_inbound.go). Caller is the callers entry the session's principal matched, empty for the
 	// run's owner: a Caller session skips the owner rule, its run's callers being fixed at create.
@@ -455,7 +462,7 @@ func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.Ag
 	}
 	if sess.SupportGrant != uuid.Nil {
 		// A helper's session answers to its grant: live, ticking this app's door, the owner and helper still signed in.
-		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, uiSupportDoor(sess.App)); v {
+		switch _, v := s.supportMayEnter(ctx, run, sess.Principal, sess.SupportGrant, sess.supportDoor()); v {
 		case supportOK:
 		case supportUnavailable: // fail closed: a grant that cannot be read is not a grant
 			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
@@ -464,9 +471,15 @@ func (s *Server) uiSessionArms(ctx context.Context, sess uiSession, run types.Ag
 			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
 				http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 		}
-	} else if sess.Caller == "" && !s.mayEnterRunOrSponsor(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC()) {
-		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
-			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	} else if sess.Caller == "" {
+		ok, err := s.sponsorEntry(ctx, run, sess.Principal, sess.Role == oidc.RoleAdmin, time.Unix(sess.AuthorizedAt, sess.AuthorizedNs).UTC())
+		switch {
+		case err != nil:
+			slog.ErrorContext(ctx, "wardynd: ui gateway sponsor lookup failed", "run_id", sess.Run, "err", err)
+			return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		case !ok:
+			return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		}
 	}
 	if sess.backgroundWatch() {
 		if de := s.uiBackgroundWatchDenies(ctx, sess, run); de != nil {
@@ -523,6 +536,14 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	}
 	p, err := s.runUnit(ctx, run)
 	if err != nil {
+		if !unitReadFailed(err) {
+			msg := uiUnitUnsatisfiableMsg
+			if u, ok := isOverlayUnsatisfiable(err); ok {
+				msg = u.Error() // the curated sentence (governance_compose.go)
+			}
+			slog.WarnContext(ctx, "wardynd: ui gateway: the run's governance profile cannot be composed", "run_id", run.ID, "err", err)
+			return s.uiDenyReassert(sess, string(authz.ReasonGovernanceOverlayUnsatisfiable), http.StatusForbidden, msg)
+		}
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read the run's governance profile", "run_id", run.ID, "err", err)
 		return s.uiDenyReassert(sess, reasonRunUnreadable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
@@ -532,7 +553,7 @@ func (s *Server) uiSessionUnitDenies(ctx context.Context, sess uiSession, run ty
 	case p.Limits.DenyUIApps:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("UI apps are not allowed under the governance profile %q this run was launched under.", p.Name))
-	case uiAppIsDesktopSession(sess.App) && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
+	case sess.desktopSession() && p.Limits.DenyInteractive && run.Task != harnessLoginTask:
 		return s.uiDenyReassert(sess, string(authz.ReasonGovernanceUnit), http.StatusForbidden,
 			fmt.Sprintf("A desktop is not allowed under the governance profile %q this run was launched under: it denies interactive sessions.", p.Name))
 	case sess.backgroundWatch() && p.Limits.DenyBackgroundDesktopWatch:
@@ -677,8 +698,7 @@ func (s *Server) markUIReasserted(sess uiSession, now time.Time, gen uint64) {
 	}
 	if s.uiReassert == nil {
 		s.uiReassert = map[string]time.Time{}
-	} else if len(s.uiReassert) > 1024 {
-		clear(s.uiReassert)
 	}
+	pruneStale(s.uiReassert, stampTime, uiReassertInterval, now, &s.uiReassertSwept)
 	s.uiReassert[uiPassKey(sess)] = now
 }
