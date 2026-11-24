@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -361,6 +362,28 @@ func TestPlacementTrust_DispatchRefusesALaterDenial(t *testing.T) {
 	}
 	if !strings.Contains(st.failureHint, "Your organisation does not allow Linux VM sandboxes on personal runners.") {
 		t.Fatalf("failure hint %q, want the denial's sentence", st.failureHint)
+	}
+}
+
+// L2: a local run is judged against the organisation's denials at dispatch, so a site configuration that cannot be
+// read (which would read as no denials) fails the run closed, with nothing classified or stored.
+func TestPlacementTrust_DispatchFailsClosedOnAnUnreadableSiteConfig(t *testing.T) {
+	srv, ls, _, run := localDispatchFixture(t, types.PlacementLocal)
+	id := uuid.New()
+	run.RunnerID = &id
+	ls.run = run
+	st := localDispatchRunnerStore{localDispatchStore: ls, row: types.Runner{ID: id, TrustClass: types.RunnerTrustPersonal, OwnerKind: types.RunnerOwnerPerson}}
+	srv.cfg.Store = st
+	spec := localOrgNetworkSpec(run.ID)
+	ceiling := ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded())
+	if srv.admitAndStampPolicy(context.Background(), run, ceiling, types.SiteConfig{}, errors.New("pool is down"), &spec, nil, llmTransport{}, dispatchParams{}, &effectivePolicyDatum{}, func() {}) {
+		t.Fatal("a local run was admitted with its site configuration unreadable")
+	}
+	if want := "This run was not launched: the organisation's site configuration could not be read"; st.failureHint != want {
+		t.Fatalf("failure hint %q, want %q", st.failureHint, want)
+	}
+	if raw, _ := srv.loadRunProxyConfig(context.Background(), run.ID); len(raw) != 0 {
+		t.Fatalf("a refused dispatch stored a proxy config: %s", raw)
 	}
 }
 
