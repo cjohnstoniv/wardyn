@@ -28,6 +28,9 @@ const EVENT_KINDS = [
 
 // A stream that opens and gives nothing this many times in a row hands over to the long-poll.
 const STREAM_FAILURES = 2;
+// A stream that stayed open this long before it dropped was held by the server, not refused: its drop is not a failure.
+// The server holds a quiet stream for five minutes; a session that has ended answers and closes at once.
+const HELD_OPEN_MS = 60_000;
 // A long-poll that fails this many times in a row stops, and the screen says so.
 const POLL_FAILURES = 5;
 
@@ -100,9 +103,9 @@ export function openComposerStream(opts: ComposerStreamOptions): () => void {
     let got = false;
     const es = assistant.streamEvents(opts.sessionId, after);
     source = es;
-    // A stream that opened and then sat quiet through the server's hold is not a failure; only one that never opened is.
+    let openedAt: number | null = null;
     es.onopen = () => {
-      got = true;
+      openedAt = Date.now();
     };
     for (const kind of EVENT_KINDS) {
       es.addEventListener(kind, (m) => {
@@ -119,7 +122,8 @@ export function openComposerStream(opts: ComposerStreamOptions): () => void {
       es.close();
       source = null;
       if (closed) return;
-      const next = got ? 1 : failures + 1;
+      const held = openedAt !== null && Date.now() - openedAt >= HELD_OPEN_MS;
+      const next = got || held ? 1 : failures + 1;
       if (next >= STREAM_FAILURES) {
         void poll();
         return;

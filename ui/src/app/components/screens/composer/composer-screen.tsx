@@ -232,6 +232,12 @@ export function ComposerScreen() {
   // The new session's seqs start at 1 again, so what is carried over keeps its own generation.
   const again = (keepChat: boolean) => void begin({ ...EMPTY_COMPOSER, gen: fold.gen + 1, proposal: fold.proposal, items: keepChat ? fold.items : [] });
 
+  // Once the chat shows it is over, nothing more is read from the session.
+  const stopped = phase.name === "session" && (fold.toolsUnavailable || fold.providerError || fold.ended || pollEnded);
+  React.useEffect(() => {
+    if (stopped) stopStream();
+  }, [stopped, stopStream]);
+
   const over = phase.name === "session" && (phase.closed || phase.endedBy !== null || fold.ended || pollEnded || fold.toolsUnavailable || fold.providerError);
   const title = (
     <header className="flex flex-wrap items-center justify-between gap-2.5">

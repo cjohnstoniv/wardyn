@@ -81,16 +81,35 @@ describe("resuming", () => {
     vi.useRealTimers();
   });
 
-  it("does not count a stream that opened and sat quiet as a failure", () => {
-    const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, delayMs: () => 0 });
-    vi.useFakeTimers();
-    for (let i = 0; i < 4; i++) {
+  it("falls back to the poll when a stream opens and drops at once twice, as an ended session's does, and the poll tells it ended", async () => {
+    const poll = vi.spyOn(assistant, "pollEvents").mockResolvedValue({ events: [], state: "ended", letters: {} });
+    const ended = vi.fn();
+    const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, onEnded: ended, delayMs: () => 0 });
+    for (let i = 0; i < 2; i++) {
       const src = FakeSource.all[FakeSource.all.length - 1];
       src.onopen?.();
       src.drop();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledTimes(1));
+    expect(poll).toHaveBeenCalled();
+    expect(FakeSource.all).toHaveLength(2);
+    stop();
+  });
+
+  it("does not count a stream that was held open for a minute and then dropped as a failure", () => {
+    vi.useFakeTimers();
+    const poll = vi.spyOn(assistant, "pollEvents").mockResolvedValue({ events: [], state: "ended", letters: {} });
+    const stop = openComposerStream({ sessionId: ID, onEvents: () => {}, delayMs: () => 0 });
+    for (let i = 0; i < 4; i++) {
+      const src = FakeSource.all[FakeSource.all.length - 1];
+      src.onopen?.();
+      vi.advanceTimersByTime(300_000);
+      src.drop();
       vi.advanceTimersByTime(10);
     }
-    expect(FakeSource.all.length).toBe(5);
+    expect(FakeSource.all).toHaveLength(5);
+    expect(poll).not.toHaveBeenCalled();
     stop();
     vi.useRealTimers();
   });

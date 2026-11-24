@@ -355,10 +355,11 @@ describe("when the assistant stops", () => {
     expect(availability).toHaveBeenCalledTimes(1);
   });
 
-  it("ends a tools_unavailable stop, which arrives while the starting view shows, with its own line, and the poll's ended answer does not replace it", async () => {
+  it("ends a tools_unavailable stop, which arrives while the starting view shows, with its own line and no ended wording, and stops reading the session", async () => {
     await start();
     await push(ev("error", { code: "tools_unavailable", status: 404 }));
     expect(await screen.findByText(T.TOOLS_UNAVAILABLE)).toBeInTheDocument();
+    expect(FakeSource.all[0].closed).toBe(true);
     expect(screen.queryByTestId("composer-starting")).toBeNull();
     expect(screen.queryByText(T.ENDED)).toBeNull();
     expect(screen.queryByRole("button", { name: T.START_AGAIN })).toBeNull();
