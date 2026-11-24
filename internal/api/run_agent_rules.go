@@ -318,7 +318,7 @@ func (s *Server) recordBoundPolicy(ctx context.Context, ceiling governanceCeilin
 	if floor := policy.MinConfinementClass; floor.Rank() > class.Rank() {
 		if rec := source.knobs["min_confinement_class"]; rec.Layer == policyref.LayerAgentRules {
 			_, whoStart := agentRulesLabel(rec.Name)
-			msg := fmt.Sprintf("%s set min_confinement_class %s: runner %q cannot enforce confinement_class %s (available: %s). Ask a security admin to change the agent rules, or use a runner that offers it.",
+			msg := fmt.Sprintf("%s set min_confinement_class %s: runner %q cannot enforce confinement_class %s (available: %s). Ask a security admin to change the agent rules.",
 				whoStart, floor, caps.Driver, floor, classesOrNone(caps.ConfinementClasses))
 			return policy, &sourceRefusal{status: http.StatusUnprocessableEntity, reason: reasonAgentRulesConflict, err: errors.New(msg)}
 		}

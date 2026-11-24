@@ -840,7 +840,7 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 		}
 		var r *sourceRefusal
 		if !errors.As(err, &r) || r.status != http.StatusUnprocessableEntity || r.reason != reasonAgentRulesConflict || calls != 0 ||
-			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") || strings.Contains(r.Error(), "launch without") {
+			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") || strings.Contains(r.Error(), "launch without") || strings.Contains(r.Error(), "use a runner") {
 			t.Errorf("%s: %d sandboxes, err %v, want a 422 %s refusal naming the rule (%q) and no sandbox", name, calls, err, reasonAgentRulesConflict, tc.want)
 		}
 	}
