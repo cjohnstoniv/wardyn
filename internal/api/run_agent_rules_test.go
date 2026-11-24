@@ -739,3 +739,78 @@ func TestApplyAgentRulesChange_RaceIsStale(t *testing.T) {
 		t.Error("an unrelated failure was answered as stale")
 	}
 }
+
+// recordRulesStore is the record launch fixture's store with agent rules.
+type recordRulesStore struct {
+	*recordLLMModeStore
+	rules    []types.AgentRules
+	rulesErr error
+}
+
+func (s *recordRulesStore) ListAgentRules(context.Context) ([]types.AgentRules, error) {
+	return slices.Clone(s.rules), s.rulesErr
+}
+
+func (s *recordRulesStore) ListRunHarnesses(context.Context, uuid.UUID) ([]types.RunHarness, error) {
+	return nil, nil
+}
+
+func (s *recordRulesStore) PutAgentRules(context.Context, types.AgentRules, int) (types.AgentRules, error) {
+	return types.AgentRules{}, errors.New("read-only")
+}
+
+func (s *recordRulesStore) DeleteAgentRules(context.Context, string, int) (types.AgentRules, error) {
+	return types.AgentRules{}, errors.New("read-only")
+}
+
+// launchRecord launches one learning (open egress) record session over st and answers the policy it dispatched
+// and the launch error.
+func launchRecord(t *testing.T, st *recordRulesStore) (types.RunPolicySpec, int, error) {
+	t.Helper()
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
+	fr := &fakeRunner{}
+	cfg.Runner = fr
+	cfg.Broker = h.broker
+	_, _, err := New(cfg).launchRecordRun(context.Background(), "alice@example.com", st.ws, "build", "build", false)
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	return fr.lastSpec.ProxyConfig.Policy, fr.createCalls, err
+}
+
+// TestLaunchRecordRun_MeetsTheAgentRules: a workspace record session runs claude-code, so the rules for it
+// narrow its policy as they narrow a run's: a learning session is open, and a rule with an allowlist and a deny
+// closes it. Rules that cannot be read, or that no longer pass, launch nothing.
+func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
+	ws := types.Workspace{ID: uuid.New(), Name: "app", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: t.TempDir()}}}
+	newStore := func(rules ...types.AgentRules) *recordRulesStore {
+		return &recordRulesStore{recordLLMModeStore: newRecordLLMModeStore(ws), rules: rules}
+	}
+	if got, calls, err := launchRecord(t, newStore()); err != nil || calls != 1 || !got.AllowAllEgress {
+		t.Fatalf("without rules: allow_all_egress %v, %d sandboxes, err %v, want an open learning session", got.AllowAllEgress, calls, err)
+	}
+	rule := claudeRules(types.PersonalWallsSpec{AllowedDomains: wallsList("api.anthropic.com"), DeniedDomains: wallsList("evil.example.com")})
+	got, calls, err := launchRecord(t, newStore(rule))
+	if err != nil || calls != 1 {
+		t.Fatalf("with rules: %d sandboxes, err %v, want one launch", calls, err)
+	}
+	if got.AllowAllEgress || !slices.Contains(got.DeniedDomains, "evil.example.com") {
+		t.Errorf("with rules: allow_all_egress %v, denied %v, want egress closed and evil.example.com denied", got.AllowAllEgress, got.DeniedDomains)
+	}
+	// Rules for another harness do not bind it.
+	if got, _, err := launchRecord(t, newStore(types.AgentRules{Harness: "codex-cli", Spec: rule.Spec, Version: 1, UpdatedBy: "sub-admin"})); err != nil || !got.AllowAllEgress {
+		t.Errorf("rules for codex-cli: allow_all_egress %v, err %v, want the session left open", got.AllowAllEgress, err)
+	}
+	broken := newStore(rule)
+	broken.rulesErr = errors.New("the store is down")
+	if _, calls, err := launchRecord(t, broken); err == nil || calls != 0 {
+		t.Errorf("unreadable rules: %d sandboxes, err %v, want a failed launch and no sandbox", calls, err)
+	}
+	on := true
+	_, calls, err = launchRecord(t, newStore(claudeRules(types.PersonalWallsSpec{AllowAllEgress: &on})))
+	var refusal *sourceRefusal
+	if !errors.As(err, &refusal) || refusal.status != http.StatusUnprocessableEntity || refusal.reason != reasonAgentRulesInvalid || calls != 0 {
+		t.Errorf("an invalid stored rule: %d sandboxes, err %v, want a 422 %s refusal and no sandbox", calls, err, reasonAgentRulesInvalid)
+	}
+}

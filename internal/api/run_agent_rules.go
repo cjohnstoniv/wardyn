@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -91,6 +93,13 @@ func (s *Server) agentRulesFor(ctx context.Context, harnesses []string) ([]types
 		return nil, err
 	}
 	return agentpolicy.RulesFor(harnesses, all), nil
+}
+
+// agentRulesKept reports whether this server's store keeps agent rules at all; one that does not has nothing
+// to read, so no read of the run's harness rows is made for them either.
+func (s *Server) agentRulesKept() bool {
+	_, ok := s.cfg.Store.(store.AgentRulesStore)
+	return ok
 }
 
 // agentRulesLabel names a harness's rules mid-sentence (who) and at a sentence's start (whoStart).
@@ -182,6 +191,9 @@ func agentRulesInnerWallsFor(req createRunRequest, spec types.RunPolicySpec, har
 // agentRulesRecordingFloor is the highest recording level the rules of the run's harnesses name, "" when none.
 // harnesses nil reads the run's own. A read that fails is returned, never ignored.
 func (s *Server) agentRulesRecordingFloor(ctx context.Context, run types.AgentRun, harnesses []string) (types.RecordingLevel, error) {
+	if !s.agentRulesKept() {
+		return "", nil
+	}
 	if harnesses == nil {
 		var err error
 		if harnesses, err = s.runHarnessIDs(ctx, run); err != nil {
@@ -206,7 +218,7 @@ func (s *Server) agentRulesRecordingFloor(ctx context.Context, run types.AgentRu
 // allowlist. A store that keeps no rules has none. Rules or harness rows that cannot be read seal the run to no
 // egress and no credential, as unread walls do.
 func (s *Server) agentRulesSealLayers(ctx context.Context, run types.AgentRun) []sealLayer {
-	if _, ok := s.cfg.Store.(store.AgentRulesStore); !ok {
+	if !s.agentRulesKept() {
 		return nil
 	}
 	ids, err := s.runHarnessIDs(ctx, run)
@@ -236,4 +248,19 @@ func agentRulesReassertFlag(data map[string]any, layers []sealLayer) {
 			return
 		}
 	}
+}
+
+// recordBoundPolicy is the policy a workspace record or verify session launches under: the session's own, met
+// with the rules of the agent it runs (stepRunAgent) as a run's policy is, then held inside the boundary. It
+// only narrows. A rule the session cannot meet refuses the launch, answered as the create door answers it (422
+// with the same reason); rules that cannot be read fail it as a server error, never launch without them.
+func (s *Server) recordBoundPolicy(ctx context.Context, ceiling governanceCeiling, policy types.RunPolicySpec) (types.RunPolicySpec, error) {
+	source := policySourceRecord{knobs: startProvenance(memberProvenance)}
+	if _, refusal := s.agentRulesRunStep(ctx, createRunRequest{Agent: stepRunAgent}, &policy, &source); refusal != nil {
+		if refusal.err != nil {
+			return policy, fmt.Errorf("%s: %w", refusal.operation, refusal.err)
+		}
+		return policy, &sourceRefusal{status: refusal.status, reason: refusal.body.Reason, err: errors.New(refusal.body.Error)}
+	}
+	return boundaryRecordPolicy(ceiling, policy)
 }
