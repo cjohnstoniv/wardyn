@@ -777,11 +777,11 @@ func (s *recordRulesStore) DeleteAgentRules(context.Context, string, int) (types
 
 // launchRecord launches one learning (open egress) record session over st and answers the policy it dispatched
 // and the launch error.
-func launchRecord(t *testing.T, st *recordRulesStore) (types.RunPolicySpec, int, error) {
+func launchRecord(t *testing.T, st *recordRulesStore, classes ...types.ConfinementClass) (types.RunPolicySpec, int, error) {
 	t.Helper()
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
-	fr := &fakeRunner{}
+	fr := &fakeRunner{capsClasses: classes}
 	cfg.Runner = fr
 	cfg.Broker = h.broker
 	_, _, err := New(cfg).launchRecordRun(context.Background(), "alice@example.com", st.ws, "build", "build", false)
@@ -818,6 +818,31 @@ func TestLaunchRecordRun_MeetsTheAgentRules(t *testing.T) {
 	broken.rulesErr = errors.New("the store is down")
 	if _, calls, err := launchRecord(t, broken); err == nil || calls != 0 {
 		t.Errorf("unreadable rules: %d sandboxes, err %v, want a failed launch and no sandbox", calls, err)
+	}
+	// A floor above what the runner offers, and inner walls an interactive claude-code session cannot launch
+	// with, are refused and launch nothing: a rule met into the policy and never compared decorates it.
+	cc3 := types.CC3
+	for name, tc := range map[string]struct {
+		rule    types.AgentRules
+		classes []types.ConfinementClass
+		want    string
+	}{
+		"CC3 on a CC1 runner": {claudeRules(types.PersonalWallsSpec{MinConfinementClass: &cc3}), []types.ConfinementClass{types.CC1}, "cannot enforce confinement_class CC3 (available: CC1)"},
+		"approvals wardyn":    {innerRule(innerWalls("", types.InnerApprovalsWardyn)), nil, "Your organisation's rules for Claude Code"},
+	} {
+		_, calls, err := launchRecord(t, newStore(tc.rule), tc.classes...)
+		var r *sourceRefusal
+		if !errors.As(err, &r) || r.status != http.StatusUnprocessableEntity || r.reason != reasonAgentRulesConflict || calls != 0 ||
+			!strings.Contains(r.Error(), tc.want) || !strings.Contains(r.Error(), "Claude Code") {
+			t.Errorf("%s: %d sandboxes, err %v, want a 422 %s refusal naming the rule (%q) and no sandbox", name, calls, err, reasonAgentRulesConflict, tc.want)
+		}
+	}
+	// A rule the session can meet launches: CC3 on a runner that offers it, inner walls the claude-code lane meets.
+	if _, calls, err := launchRecord(t, newStore(claudeRules(types.PersonalWallsSpec{MinConfinementClass: &cc3}))); err != nil || calls != 1 {
+		t.Errorf("CC3 on a runner that offers it: %d sandboxes, err %v, want a launch", calls, err)
+	}
+	if _, calls, err := launchRecord(t, newStore(innerRule(innerWalls("", types.InnerApprovalsHarness)))); err != nil || calls != 1 {
+		t.Errorf("approvals harness on an interactive session: %d sandboxes, err %v, want a launch", calls, err)
 	}
 	on := true
 	_, calls, err = launchRecord(t, newStore(claudeRules(types.PersonalWallsSpec{AllowAllEgress: &on})))
