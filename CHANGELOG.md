@@ -11,6 +11,8 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.11.0-rc.2] — 2026-11-24
+
 ### Added
 
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role

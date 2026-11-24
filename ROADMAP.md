@@ -38,6 +38,7 @@
 | **v0.10.3** | Issuer portals: a portal's people run in its pinned unit without a membership and read their own command output recovered from the run's recording; refused reads are audited. | **Shipped (pre-alpha)** — `v0.10.3`, 2026-11-23 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.4** | Outages: a lost Kubernetes run's owner can copy its work out, and the orphan sweep holds. Security fixes for sponsor changes, runner revives, relay sources, push removals and the Kubernetes API door. | **Shipped (pre-alpha)** — `v0.10.4`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.11.0-rc.1** | rc.1, the first 0.11.0 candidate: the 0.10.4 fixes, a run's port reached through the organisation with the SSH gateway off (`wardyn run forward`), and organisation assistant settings. | **Shipped (pre-alpha)** — `v0.11.0-rc.1`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.2** | rc.2: wardynd starts while the identity provider is down, and SSH takes a single-use ticket. A site config `features` block keeps each new 0.11 feature off until an admin turns it on, and the Walls view gets its server routes. | **Shipped (pre-alpha)** — `v0.11.0-rc.2`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
