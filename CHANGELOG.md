@@ -11,16 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
-### Security
-
-- A SCIM group delete no longer leaves a member of another identity provider or tenant signed in. Before the group is deleted, Wardyn now cuts the browser sessions and revokes the group-holding API tokens of every member the delete removes, and keeps the group, answering an error the identity provider retries, until every cut is recorded.
-- A run that a SCIM suspension killed, but whose teardown failed, is now torn down again and counted even when the person is reactivated before the retry. Before, the retry could close it as a run made after the suspension, with no teardown and one kill missing from `person.deprovision`.
-
 ### Fixed
 
 - A SCIM group create now answers with the members it recorded in the same step. Before, a failed read of the members after the group was stored answered 500, and the identity provider's retry then got 409 for a group that existed.
 - A SCIM group lookup by `displayName` now compares the whole name, spaces included, still ignoring case (#4142). Before, the value's outer spaces were dropped, so a group created with a trailing space could not be found and a group named without it could be returned instead.
 - After a SCIM email rename, the user's reply and the next read now show the new address as the primary email. Before, they kept showing the first address Wardyn recorded. The old address still finds the person for a removal, and the person's next sign-in shows the email that sign-in carries.
+
+### Security
+
+- A SCIM group delete no longer leaves a member of another identity provider or tenant signed in. Before the group is deleted, Wardyn now cuts the browser sessions and revokes the group-holding API tokens of every member the delete removes, and keeps the group, answering an error the identity provider retries, until every cut is recorded.
+- A run that a SCIM suspension killed, but whose teardown failed, is now torn down again and counted even when the person is reactivated before the retry. Before, the retry could close it as a run made after the suspension, with no teardown and one kill missing from `person.deprovision`.
+- A server whose database role cannot read the support-session table no longer treats the person deciding an approval as someone who never helped in the run; it refuses the decision. A person's erasure no longer reports success while their support requests still hold a reason or an email because the role lost a table grant; it fails and is retried.
 
 ## [0.10.4] — 2026-11-24
 

@@ -83,7 +83,8 @@ type SupportGrantStore interface {
 	// table gets none.
 	LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error)
 	// SupportHelperSince reports whether principal was ever accepted as helper on run, ended or not, by a
-	// grant requested at or before at. A zero at is any accepted grant.
+	// grant requested at or before at. A zero at is any accepted grant. A role that cannot read the table gets
+	// an error, never false: the answer decides separation of duty, and a caller must refuse when it is unknown.
 	SupportHelperSince(ctx context.Context, run uuid.UUID, principal string, at time.Time) (bool, error)
 }
 
@@ -327,7 +328,9 @@ func (s PG) LiveSupportGrants(ctx context.Context) ([]SupportGrantRef, error) {
 
 // hasSupportGrantPrivilege reports whether the connected role holds every one of privileges (SELECT, INSERT or
 // UPDATE) on run_support_grants. Without the table's grant (a split-role install the migrator's grant loop
-// missed) the sweep, the live list, the helper read and the erasure blank skip their statements instead of failing.
+// missed) the sweep and the live list skip their statements instead of failing: an empty answer grants nothing.
+// The helper read and the erasure blank have no such guard, since their empty answer would let a helper decide or
+// leave text an erasure promised to remove.
 func (s PG) hasSupportGrantPrivilege(ctx context.Context, privileges ...string) (bool, error) {
 	for _, privilege := range privileges {
 		var ok bool
@@ -342,11 +345,9 @@ func (s PG) hasSupportGrantPrivilege(ctx context.Context, privileges ...string) 
 }
 
 // SupportHelperSince — see SupportGrantStore. A zero at goes in as SQL NULL: Go's zero time is year 1,
-// which would make "requested at or before at" false for every grant.
+// which would make "requested at or before at" false for every grant. There is no privilege guard: a role
+// without SELECT fails the read, and the error reaches the caller.
 func (s PG) SupportHelperSince(ctx context.Context, run uuid.UUID, principal string, at time.Time) (bool, error) {
-	if ok, err := s.hasSupportGrantPrivilege(ctx, "SELECT"); err != nil || !ok {
-		return false, err // as SweepSupportGrants: a role without the table's grant has no helper to find
-	}
 	var since *time.Time
 	if !at.IsZero() {
 		since = &at
