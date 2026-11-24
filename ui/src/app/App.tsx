@@ -41,7 +41,7 @@ import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import { ViewGate, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
 import { appURL } from "./lib/base-path";
 import type { SetupStatus } from "./lib/types";
-import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted } from "./lazy-routes";
+import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted, ComposerScreen } from "./lazy-routes";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -747,6 +747,7 @@ export default function App() {
             <Route path="/account/pools/new" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/account/pools/:id/edit" element={suspend(<PoolFormScreen scope="mine" />)} />
             <Route path="/runs" element={<RunsScreen />} />
+            <Route path="/compose" element={suspend(<ComposerScreen />)} />
             {/* Ahead of /runs/:id so "new" is never read as a run id. */}
             <Route
               path="/runs/new"

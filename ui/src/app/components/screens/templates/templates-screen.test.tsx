@@ -9,9 +9,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
+import { COMPOSER_PATH, composerHref } from "../../../lib/composer-url";
 import { SCENARIO_TEMPLATES } from "../../../lib/new-run-fixtures/scenarios/templates";
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 import type { TemplateList, TemplateSummary } from "../../../lib/types/templates";
+import { ASSISTANT } from "../../wardyn/copy/assistant";
 import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { WORKLOADS as W } from "../../wardyn/copy/workloads";
@@ -29,6 +31,9 @@ const api = vi.hoisted(() => ({
   publishToOrg: vi.fn(),
 }));
 vi.mock("./templates-api", () => ({ templatesApi: api }));
+// Each door asks once whether the assistant is ready; a test sets the answer.
+const { getMyAssistantMock } = vi.hoisted(() => ({ getMyAssistantMock: vi.fn() }));
+vi.mock("../../../lib/api/assistant", () => ({ assistant: { getMyAssistant: (...a: unknown[]) => getMyAssistantMock(...a) } }));
 
 const ID = (n: number) => `d${n}000000-0000-4000-8000-00000000000${n}`;
 const sum = (n: number, over: Partial<TemplateSummary> = {}): TemplateSummary => ({
@@ -63,6 +68,7 @@ function mount(list: TemplateList, path = "/templates") {
 const rowOf = (name: string) => screen.getByText(name).closest("li") as HTMLElement;
 
 beforeEach(() => {
+  getMyAssistantMock.mockReset().mockResolvedValue({ state: "off" });
   vi.clearAllMocks();
   api.remove.mockResolvedValue(undefined);
   api.publishToOrg.mockResolvedValue({});
@@ -408,6 +414,31 @@ describe("Templates screen: Rename", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(T.RENAMED("Weekly tests")));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.list).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The Draft with AI door beside the primary button: a link to the composer for a new template when the assistant is
+// ready, and otherwise visible and shut with its one reason.
+describe("Templates screen: Draft with AI", () => {
+  it("links a new template draft to the composer when the assistant is ready, and New from scratch stays primary", async () => {
+    getMyAssistantMock.mockResolvedValue({ state: "ready" });
+    mount({ templates: [MINE], publish: MEMBER });
+    const door = await screen.findByRole("link", { name: ASSISTANT.DRAFT_WITH_AI });
+    expect(door).toHaveAttribute("href", composerHref({ kind: "template" }));
+    expect(door.getAttribute("href")?.startsWith(COMPOSER_PATH)).toBe(true);
+    expect(getMyAssistantMock).toHaveBeenCalledTimes(1);
+    expect(getMyAssistantMock).toHaveBeenCalledWith("compose");
+    expect(screen.getByRole("link", { name: T.NEW_FROM_SCRATCH })).toHaveClass("bg-primary");
+  });
+
+  it("stays visible, shut and without a link while the assistant is off, and says why", async () => {
+    mount({ templates: [MINE], publish: MEMBER });
+    expect(await screen.findByText(ASSISTANT.OFF)).toBeInTheDocument();
+    const door = screen.getByRole("button", { name: ASSISTANT.DRAFT_WITH_AI });
+    expect(door).toBeDisabled();
+    expect(screen.queryByRole("link", { name: ASSISTANT.DRAFT_WITH_AI })).toBeNull();
+    expect(door.closest("a")).toBeNull();
+    expect(getMyAssistantMock).toHaveBeenCalledTimes(1);
   });
 });
 

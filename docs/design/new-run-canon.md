@@ -17,7 +17,7 @@ Every string the New Run flow shows lives once in this file and once in the lazy
 | Area | Rule |
 |---|---|
 | Steps | Shape, Run, Harnesses, Files, Tools and access, then Review. The eyebrow reads "Guided setup · N of 5". |
-| Start | Two paths meet at Review: Guided setup, and the YAML or JSON run document. One muted roadmap line names what is not built, with no version number. |
+| Start | Guided setup and the YAML or JSON run document meet at Review. The AI composer card opens the assistant, or says why it can't. One muted roadmap line names what is not built, with no version number. |
 | Template and Run again | Choosing one loads the saved setup and opens Review. Anything missing is a blocker that links to its step. |
 | Review | Blockers come first: local issues, unsupported document fields, template setup items, the server refusal, missing setup items, then a stale check. Launch stays shut until a check under 60 seconds old matches the draft. |
 | Name dialog | Opening it runs a fresh check. "Checked just now" shows only from that result; "Checking…" shows while it runs. A check that fails or is rate-limited leaves Launch available, since the create is the authority. |
@@ -76,6 +76,10 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DOC_BODY` | mock | Edit or import a schema-aware run document and see what the server will allow. |
 | `DOC_YAML` | mock | YAML |
 | `DOC_JSON` | mock | JSON |
+| `AI_TITLE` | deviation (the AI composer card) | AI composer |
+| `AI_BADGE` | deviation (the AI composer card) | Assisted |
+| `AI_BODY` | deviation (the AI composer card) | Describe what the run needs. The assistant drafts it with your own model credential; you accept each part and launch it yourself. |
+| `AI_FOOT` | deviation (the AI composer card) | Start composing |
 | `TRUST_LINE` | mock | Policy and availability are checked again when you launch. |
 | `ROADMAP` | mock | On the roadmap: scheduled runs and multi-agent runs. |
 

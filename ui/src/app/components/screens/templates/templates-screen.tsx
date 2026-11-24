@@ -11,6 +11,7 @@ import * as React from "react";
 import { LayoutTemplate, SearchX } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { composerHref, useAssistantDoor } from "../../../lib/composer-url";
 import { getErrorMessage } from "../../../lib/format";
 import type { TemplateList, TemplateSummary } from "../../../lib/types/templates";
 import {
@@ -25,7 +26,9 @@ import {
 } from "../../ui/alert-dialog";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import { AssistantAvailability } from "../../wardyn/assistant-availability";
 import { useConsoleMode } from "../../wardyn/console-view";
+import { ASSISTANT as ASSISTANT_COPY } from "../../wardyn/copy/assistant";
 import { NR_SAVE } from "../../wardyn/copy/new-run/save";
 import { NR_TEMPLATES as T } from "../../wardyn/copy/new-run/templates";
 import { Notice } from "../../wardyn/notice";
@@ -58,6 +61,8 @@ const KIND_OF: Record<Exclude<KindFilter, "all">, TemplateSummary["kind"]> = { t
 
 export function TemplatesScreen() {
   const admin = useConsoleMode() === "admin";
+  // The Draft with AI door is a link only when the assistant is ready for this person.
+  const door = useAssistantDoor("compose");
   const [data, setData] = React.useState<TemplateList | null>(null);
   const [loadError, setLoadError] = React.useState<{ message?: string } | null>(null);
   const [scope, setScope] = React.useState<ScopeFilter>("all");
@@ -186,9 +191,23 @@ export function TemplatesScreen() {
         title={T.TITLE}
         description={T.LEDE}
         actions={
-          <Button asChild>
-            <Link to={NEW_RUN_PATH}>{T.NEW_FROM_SCRATCH}</Link>
-          </Button>
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {door?.state === "ready" ? (
+                <Button asChild variant="outline">
+                  <Link to={composerHref({ kind: "template" })}>{ASSISTANT_COPY.DRAFT_WITH_AI}</Link>
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" disabled>
+                  {ASSISTANT_COPY.DRAFT_WITH_AI}
+                </Button>
+              )}
+              <Button asChild>
+                <Link to={NEW_RUN_PATH}>{T.NEW_FROM_SCRATCH}</Link>
+              </Button>
+            </div>
+            {door && door.state !== "ready" && <AssistantAvailability state={door.state} providerId={door.provider_id} providerName={door.provider_name} />}
+          </div>
         }
       />
 
