@@ -21,7 +21,7 @@ CVE-2026-34002 exp:2026-12-19
 # libswscale8, pulled in by chromium. The flaw is a heap write in the deband
 # filter's runtime command; chromium decodes media through FFmpeg but builds no
 # filter graph, so nothing in the image runs that filter. Debian lists it as
-# fix_deferred. Accepted 2026-11-24 by the owner for 0.10.5 and 0.11.0-rc.2.
+# fix_deferred. Accepted 2026-11-24 by the owner for 0.10.5 and 0.11.0-rc.1.
 # Next review date 2026-12-24: the id carries trivy's exp: so it lapses then and
 # the scan fails until someone reviews it. Delete it when Debian 13 ships a fix.
 CVE-2026-135736 exp:2026-12-24
