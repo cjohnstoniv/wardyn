@@ -40,7 +40,7 @@ func TestAssistantADORootFiles(t *testing.T) {
 		return ""
 	}
 	branch, files, reason := adoReadRootFiles(context.Background(), get, getFile, "https://dev.azure.com/contoso/proj/_apis/git/repositories/app", "x",
-		[]string{"Dockerfile", "package.json", "go.mod"}, 10)
+		[]string{"Dockerfile", "package.json", "go.mod"}, 16) // go.mod's 15 bytes fit, package.json's 20 do not
 	if reason != "" || branch != "trunk" || len(files) != 2 {
 		t.Fatalf("read = %q %v %q, want trunk and two files", branch, files, reason)
 	}

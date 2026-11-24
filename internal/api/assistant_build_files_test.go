@@ -473,8 +473,9 @@ func TestAssistantRepoDraftReplacesWarmAndFetchingSessions(t *testing.T) {
 }
 
 // What changes between the create and the confirm ends the session with the reason and sends nothing: the purpose
-// turned off, the kind put on the never-sent list, a provider that now defers inspection, and a workspace the
-// person can no longer launch (answered as a missing one, with nothing read or launched).
+// turned off, a provider that now defers inspection, and a workspace the person can no longer launch (answered as
+// a missing one, with nothing read or launched). A template draft has no governance kind, so never_sent_kinds,
+// which takes governance kinds only (governanceKindKnown), cannot name it.
 func TestAssistantRepoDraftConfirmRefusals(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -482,7 +483,7 @@ func TestAssistantRepoDraftConfirmRefusals(t *testing.T) {
 		status int
 		reason string
 	}{
-		{"never sent", func(e *buildFilesEnv) { e.f.site.Assistant.NeverSentKinds = []string{types.AssistantTargetTemplate} }, http.StatusConflict, reasonAssistantKindNeverSent},
+		{"purpose off", func(e *buildFilesEnv) { e.f.site.Assistant.Compose = false }, http.StatusConflict, reasonAssistantOff},
 		{"deferral", func(e *buildFilesEnv) {
 			for i := range e.f.site.ModelProviders.Providers {
 				e.f.site.ModelProviders.Providers[i].GatewayIdentity = &types.ModelProviderGatewayIdentity{Inspection: types.GatewayInspectionGateway}

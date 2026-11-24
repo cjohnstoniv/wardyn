@@ -79,7 +79,8 @@ func assistantTwoProviders() (types.SiteConfig, types.AssistantBinding) {
 }
 
 // assistantLiveSession is a live compose session of person on a new template draft. With no run it is
-// fetching, so ending it stops nothing.
+// fetching, so ending it stops nothing; a fetching session is a repository draft waiting for its files, so a
+// test that writes to the session sets assistantStartedNoRun.
 func assistantLiveSession(person string, run *uuid.UUID, b types.AssistantBinding) types.AssistantSession {
 	state := types.AssistantSessionReady
 	if run == nil {
@@ -87,6 +88,13 @@ func assistantLiveSession(person string, run *uuid.UUID, b types.AssistantBindin
 	}
 	return types.AssistantSession{ID: uuid.New(), RunID: run, Principal: person, Email: person + "@corp.example", Role: oidc.RoleUser,
 		Purpose: types.AssistantCompose, TargetKind: types.AssistantTargetTemplate, Binding: b, State: state, CreatedAt: time.Now()}
+}
+
+// assistantStartedNoRun is s past its files, as a session that takes messages and edits is, still with no run so
+// that ending it stops nothing.
+func assistantStartedNoRun(s types.AssistantSession) types.AssistantSession {
+	s.State = types.AssistantSessionStarting
+	return s
 }
 
 func (f *assistantFake) seed(s types.AssistantSession, evs ...types.AssistantEvent) {
@@ -556,7 +564,7 @@ func TestAssistantMessageAndEditStillAvailable(t *testing.T) {
 			person := "sub-avail-" + uuid.NewString()
 			cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
 			mk := func() types.AssistantSession {
-				s := assistantLiveSession(person+"-"+uuid.NewString(), nil, bind)
+				s := assistantStartedNoRun(assistantLiveSession(person+"-"+uuid.NewString(), nil, bind))
 				s.Principal = person
 				if c.review {
 					s.Purpose, s.TargetKind, s.TargetKey = types.AssistantReview, types.AssistantTargetChange, change.String()
@@ -603,7 +611,7 @@ func TestAssistantEditsAreCappedAndShareTheMessageBucket(t *testing.T) {
 	srv, _ := assistantSessionServer(t, f)
 	person := "sub-edits-" + uuid.NewString()
 	cookie := ssoSession(t, person, person+"@corp.example", oidc.RoleUser)
-	s := assistantLiveSession(person, nil, bind)
+	s := assistantStartedNoRun(assistantLiveSession(person, nil, bind))
 	f.seed(s)
 	path := assistantPath(s.ID, "/edits")
 	edit := func(n, value int, draft string) string {
