@@ -11,6 +11,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A generated workspace image that went missing now rebuilds from its recorded pins even when the image builder cannot answer a second time. Before, that failure rebuilt the image from inputs resolved again.
+- A failed audit partition drop no longer says the partition was not dropped when wardynd cannot tell whether the drop committed. It says the outcome is unknown and to read the retention status before trying again.
+- `/setup/status` now warns when it cannot read how many months of audit partitions exist ahead. Before, the warning disappeared, together with the `wardyn_audit_partitions_ahead` metric.
+- The SCIM status card's last-token read now looks at the last 30 days first, so it no longer scans the whole audit table on a store that is in use.
+
+### Security
+
+- Unbinding a sign-in identity is now refused while a capability deny names the person's old sign-in subject. After the unbind the person signs in under a new subject, which the deny did not name, so they were no longer denied. Move the deny to the person's email, which the new binding keeps, then unbind. The `identity_principal_in_use` refusal now counts these denies.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

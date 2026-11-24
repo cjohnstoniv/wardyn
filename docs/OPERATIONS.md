@@ -1272,6 +1272,8 @@ pending policy.
     - the detach needs a brief exclusive lock on the audit table and waits at most 5 seconds for it,
     - so a long audit read (or a running chain verify) can make a drop fail with `audit_retention_drop_failed` and
       nothing changed: retry.
+    - any other `audit_retention_drop_failed` (`500`) means wardynd cannot tell whether the drop committed: read
+      `GET /api/v1/audit/retention` first, and retry only if the partition is still listed.
   - `GET /audit/chain/verify` then starts from that anchor and still re-hashes every retained row; a partition removed
     any other way fails verify.
 

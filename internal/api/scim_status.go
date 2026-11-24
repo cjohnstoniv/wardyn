@@ -180,28 +180,34 @@ func (s *Server) scimAuditRows(ctx context.Context, f store.AuditFilter) ([]type
 // member removal, both of which record the slot of the request that caused them. One query reads the rows
 // whose data names either bearer, newest first by audit sequence, so the scan limit applies only to rows that
 // name a bearer and the sweeper's rows (which name the sweeper) can never crowd a real update out of it, and
-// two rows with the same timestamp are told apart by the order they were written in. Empty means no row of
-// the scan names either bearer.
+// two rows with the same timestamp are told apart by the order they were written in.
+// It reads the last 30 days first and the whole table only when they hold no such row: the newest row is in
+// the window whenever the window has one, so the answer is the same and a store in use pays for one bounded
+// read. Empty means no row of the scan names either bearer.
 func (s *Server) scimLastTokenSlot(ctx context.Context) (string, error) {
-	rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.", DataContainsAny: string(mustJSON([]map[string]string{
-		{"slot": scimSlotPrimary}, {"slot": scimSlotNext},
-	}))})
-	if err != nil {
-		return "", err
-	}
-	for _, ev := range rows { // newest first
-		if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
-			continue
+	slots := string(mustJSON([]map[string]string{{"slot": scimSlotPrimary}, {"slot": scimSlotNext}}))
+	for _, since := range []time.Time{s.cfg.Now().Add(-scimSlotRecent), {}} {
+		rows, err := s.scimAuditRows(ctx, store.AuditFilter{ActionPrefix: "scim.", DataContainsAny: slots, Since: since})
+		if err != nil {
+			return "", err
 		}
-		var d struct {
-			Slot string `json:"slot"`
-		}
-		if json.Unmarshal(ev.Data, &d) == nil && (d.Slot == scimSlotPrimary || d.Slot == scimSlotNext) {
-			return d.Slot, nil
+		for _, ev := range rows { // newest first
+			if !strings.HasPrefix(ev.Action, "scim.user.") && ev.Action != "scim.group.member_remove" {
+				continue
+			}
+			var d struct {
+				Slot string `json:"slot"`
+			}
+			if json.Unmarshal(ev.Data, &d) == nil && (d.Slot == scimSlotPrimary || d.Slot == scimSlotNext) {
+				return d.Slot, nil
+			}
 		}
 	}
 	return "", nil
 }
+
+// scimSlotRecent is the window scimLastTokenSlot reads first.
+const scimSlotRecent = 30 * 24 * time.Hour
 
 // scimDrivesToReclaim is the drives the purges listed that still need their purged person's storage
 // reclaimed, newest purge first. A purge lists a person's drives in its person.deprovision row and leaves
