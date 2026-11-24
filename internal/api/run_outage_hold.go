@@ -34,7 +34,7 @@ const (
 	outageEndUnattendedReason = "control-plane outage: this policy ends unattended runs after an outage"
 )
 
-// outageRecoveryFor reads run's recovery facts (store.RunTokenRecoverer.RunRecoveryCheck, with OUT-1's store tracker's
+// outageRecoveryFor reads run's recovery facts (store.RunTokenRecoverer.RunRecoveryCheck, with the store health tracker's
 // Recovering) and decides. outage is the pass's verdict (v.outage) or a covering window; serverRun limits the
 // unattended end to the server's own runs. A store that is not a store.RunTokenRecoverer, or a read error, answers
 // none, which leaves the caller's v0.10.2 action. A server whose identity provider cannot recover (recoverySupported

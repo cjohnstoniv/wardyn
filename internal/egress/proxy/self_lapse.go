@@ -40,7 +40,7 @@ const (
 	LapseRenewRefused = "renew_refused"
 )
 
-// lapseGate is every proxy's egress gate (D6, §6.2; #4082): open until the
+// lapseGate is every proxy's egress gate (#4082): open until the
 // last successful renew's SEND time plus the run's outage allowance (span).
 // A gate that starts closed (a k8s runner's proxy, a replacement) serves
 // nothing until its first renew. Past the deadline a pausable gate pauses: it

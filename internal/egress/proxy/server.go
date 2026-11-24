@@ -364,7 +364,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	// k8s runners: the proxy is closed until its first renew, pauses at the last renew's send time + the
 	// run's outage allowance (lapses there for good under strict terms), and the process ends on a lapse
-	// (§6.2, #4082). A pause sends the runner no frame.
+	// (#4082). A pause sends the runner no frame.
 	if cfg.SelfLapse {
 		span, strict := outageSpan(cfg)
 		p.lapse = newLapseGate(hooks.clock(), span, gateOpts{pausable: !strict, exitOnLapse: true})

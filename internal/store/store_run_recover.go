@@ -45,8 +45,8 @@ type RecoveryCheck struct {
 
 // RunTokenRecoverer is the recovery door's and the sweeps' store.
 type RunTokenRecoverer interface {
-	// RunRecoveryLineage is id's lineage. Named apart from PAUSE-2's RunTokenLineage(ctx, id) (bound, jti, prev, err),
-	// which a later lane adds to this package.
+	// RunRecoveryLineage is id's lineage, as the recover door checks it. Its name is kept apart from the pause
+	// lineage read (RunTokenLineage) another change adds to this package.
 	RunRecoveryLineage(ctx context.Context, id uuid.UUID) (TokenLineage, error)
 	// StampRunTokenRecovered records a recovery: the run must be RUNNING and not lost, and presented must be its
 	// current token (or it has none recorded). The presented token leaves the lineage: token_prev_jti is cleared, so it
@@ -91,8 +91,8 @@ var recoveryHeldSQL = fmt.Sprintf(`COALESCE((COALESCE(t.proxy_pauses, false)
 	int(OutageCoverLead/time.Second),
 	int(OutageCoverSlack/time.Second))
 
-// recoveryHeldExpr is the one hold predicate (recoveryHeldSQL), with storeRecovering the SQL boolean for "OUT-1's
-// store tracker is recovering": a placeholder, or "false" where the tracker is not known (the STATE judge).
+// recoveryHeldExpr is the one hold predicate (recoveryHeldSQL), with storeRecovering the SQL boolean for "the store
+// health tracker is recovering": a placeholder, or "false" where the tracker is not known (the STATE judge).
 func recoveryHeldExpr(storeRecovering string) string {
 	return strings.Replace(recoveryHeldSQL, storeRecoveringTerm, storeRecovering, 1)
 }
