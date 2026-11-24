@@ -278,10 +278,11 @@ func TestNewProxy_WritesTheUpstreamHopRowAtStartWithoutARunnerSink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := &decisionSink{out: io.Discard, ch: make(chan egress.DecisionLog, 4)}
+	sink := &decisionSink{out: io.Discard, ch: make(chan queuedDecision, 4)}
 	newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}), Sink: sink, Upstream: up})
 	select {
-	case d := <-sink.ch:
+	case q := <-sink.ch:
+		d := q.log
 		if d.RuleSource != egress.RuleSourceUpstreamProxy || d.Decision != egress.Allow {
 			t.Fatalf("start-up row = %s %s; want the upstream proxy's allow", d.Decision, d.RuleSource)
 		}

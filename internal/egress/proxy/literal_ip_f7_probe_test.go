@@ -75,7 +75,7 @@ func TestLiteralIPTrust_RefusesOwnSubnetAndControlPlane(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{neighbour, controlPlane.String()}}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:        publicResolver{},
 		LocalSubnets:    []*net.IPNet{ownSubnet},
 		ControlPlaneIPs: []net.IP{controlPlane},

@@ -24,6 +24,11 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Changed
 
 - The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
+- Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows unless the proxy's clock is more than 10 minutes behind the control plane's or 5 minutes ahead, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
+
+### Before you upgrade
+
+- If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
 
 ## [0.11.0-rc.2] — 2026-11-24
 

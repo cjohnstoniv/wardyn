@@ -95,7 +95,7 @@ func newAzureHarness(t *testing.T, cap int64) *azureHarness {
 		RunID:      uuid.New(),
 		Policy:     CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{azHost + ":443"}}),
 		Injector:   inj,
-		Sink:       &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:       &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:   publicResolver{},
 		Dial:       redirectDial(strings.TrimPrefix(upstream.URL, "http://")),
 		RunToken:   newTokenSource("RUNTOK"),

@@ -42,7 +42,7 @@ func newForgeRig(t *testing.T, spec types.RunPolicySpec, wire func(p *Proxy)) *f
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(spec),
-		Sink:     &decisionSink{out: sink, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: sink, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dials.Add(1)
