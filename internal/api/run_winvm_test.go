@@ -254,7 +254,8 @@ func TestWindowsVMRefusesEveryAgentFeature(t *testing.T) {
 		_, rf := srv.windowsImageDecision(winvmHTTP(ctx), winvmReq(), types.RunPolicySpec{})
 		wantWinRefusal(t, name, rf, http.StatusForbidden, reasonWindowsVMFeatureRefused, "")
 	}
-	_, rf := srv.windowsImageDecision(r, winvmReq(func(q *createRunRequest) { q.StartAt = "2026-12-01T09:00:00Z" }), types.RunPolicySpec{})
+	later := time.Now().Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	_, rf := srv.windowsImageDecision(r, winvmReq(func(q *createRunRequest) { q.StartAt = later }), types.RunPolicySpec{})
 	wantWinRefusal(t, "a scheduled start", rf, http.StatusForbidden, reasonWindowsVMFeatureRefused, "")
 	if len(ws.checks) != 0 {
 		t.Fatalf("a refused shape reached the seat check: %v", ws.checks)
