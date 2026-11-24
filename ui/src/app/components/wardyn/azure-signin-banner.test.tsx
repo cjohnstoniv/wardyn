@@ -58,6 +58,12 @@ describe("the Azure Foundry sign-in banner", () => {
     expect(screen.queryByText(ADO_SIGNIN.REASON.consent_required)).toBeNull();
   });
 
+  it("a refusal for a row this person cannot read shows the reason and no retry link", async () => {
+    land("?azure_signin_error=consent_required&azure_provider=u-other");
+    expect(await screen.findByText(ADO_SIGNIN.REASON.consent_required)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: ADO_SIGNIN.RETRY })).toBeNull();
+  });
+
   it("an unknown refusal reads as the exchange_failed sentence", async () => {
     land("?azure_signin_error=something_new&azure_provider=u-az-1");
     expect(await screen.findByText(ADO_SIGNIN.REASON.exchange_failed)).toBeInTheDocument();

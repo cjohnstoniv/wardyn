@@ -45,9 +45,9 @@ export function AzureSignInBanner() {
   }, []);
   if (!result) return null;
 
+  // The row, looked up by uid among the providers this person can read: without one, nothing to name or retry.
+  const provider = result.uid ? status?.model_providers?.find((p) => p.uid === result.uid) : undefined;
   if (result.kind === "connected") {
-    // The row's name, looked up by uid among the providers this person can read: without one, nothing to name.
-    const provider = result.uid ? status?.model_providers?.find((p) => p.uid === result.uid) : undefined;
     if (!provider) return null;
     return (
       <div className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-success-subtle px-4 py-2 text-sm text-success">
@@ -64,7 +64,7 @@ export function AzureSignInBanner() {
     <div className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-danger-subtle px-4 py-2 text-sm text-danger">
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
       <p className="min-w-0 flex-1 font-medium text-foreground">{reasonSentence(result.reason)}</p>
-      {result.uid && (
+      {provider && (
         <a href={apiURL(`/model-providers-entra/signin?uid=${encodeURIComponent(result.uid)}`)} className="shrink-0 font-medium underline underline-offset-2">
           {ADO_SIGNIN.RETRY}
         </a>
