@@ -28,7 +28,7 @@ import { Mono } from "../../wardyn/code-block";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { IMG } from "../../wardyn/copy/image-request";
 import { changeTargetRef, splitImageRef } from "../elevation/image-ref";
-import { usePrincipal, useSecurityOperator } from "../../wardyn/operator-context";
+import { useRequestIdentity, useSecurityOperator } from "../../wardyn/operator-context";
 import { EmptyState, TruncatedNote } from "../../wardyn/states";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { RiskChip, VerdictChip } from "./change-review-sections";
@@ -223,7 +223,10 @@ export function ChangesTab({
   const navigate = useNavigate();
   const open = (c: GovernanceChange) => navigate(`/admin/governance/changes/${encodeURIComponent(c.id)}`);
   const securityOperator = useSecurityOperator();
-  const principal = usePrincipal();
+  // Until /me has answered, or after it fails, the shell hands over a placeholder as the principal: it names no one,
+  // so the viewer is unknown and no row is told it needs them.
+  const identity = useRequestIdentity();
+  const principal = identity.operatorResolved ? identity.principal : "";
   // "Only security can decide" is a request of its own: the list rows do not say who could decide them, so the
   // server answers which ones are security's alone. It is read again whenever the parent reloads the list. "Needs
   // you" and "Waiting on others" read the rows already loaded.

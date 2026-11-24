@@ -330,11 +330,40 @@ describe("the Needs you and Waiting on others filters", () => {
 
   it("agree with the mark on every row: a row is kept by the filter its mark names", async () => {
     renderTab(rows());
-    const marked = (label: string) =>
-      screen.getAllByRole("row").slice(1).filter((r) => within(r).queryByTestId("changes-mark")?.textContent === label).map((r) => within(r).getAllByRole("cell")[2].textContent);
-    const needs = marked(CHANGES.NEEDS_YOU);
+    const marked = (labels: string[]) =>
+      screen
+        .getAllByRole("row")
+        .slice(1)
+        .filter((r) => labels.includes(within(r).queryByTestId("changes-mark")?.textContent ?? ""))
+        .map((r) => within(r).getAllByRole("cell")[2].textContent);
+    const pairs = [
+      { filter: CHANGES.FILTER_NEEDS_YOU, labels: [CHANGES.NEEDS_YOU] },
+      { filter: CHANGES.FILTER_WAITING, labels: [CHANGES.YOU_APPROVED, CHANGES.YOU_PROPOSED] },
+    ];
+    for (const { filter, labels } of pairs) {
+      const kept = marked(labels);
+      await userEvent.click(screen.getByRole("radio", { name: filter }));
+      expect(shownKeys()).toEqual(kept);
+      await userEvent.click(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_ALL }));
+    }
+  });
+
+  // The shell hands over a placeholder as the principal until /me has answered (and after it fails): it names no one.
+  it("tells a viewer nothing about their own row while who they are is not known", async () => {
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} principal="unknown" operatorResolved={false}>
+          <ChangesTab changes={[change({ id: "own", target_key: "own", diff: { changed: [] }, proposed_by: "unknown" })]} loadError={null} />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const cell = within(screen.getAllByRole("row")[1]).getAllByRole("cell")[4];
+    expect(cell).toHaveTextContent(CHANGES.ONE_PERSON_DECIDES);
+    expect(within(cell).queryByTestId("changes-mark")).toBeNull();
     await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_NEEDS_YOU }));
-    expect(shownKeys()).toEqual(needs);
+    expect(screen.getByText(CHANGES.FILTER_EMPTY_NEEDS_YOU)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: CHANGES.FILTER_WAITING }));
+    expect(screen.getByText(CHANGES.FILTER_EMPTY_WAITING)).toBeInTheDocument();
   });
 
   it("an empty result says so and offers the whole queue", async () => {
