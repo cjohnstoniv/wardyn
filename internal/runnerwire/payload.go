@@ -235,6 +235,10 @@ const (
 	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
+	// ProxySettingOutage is outage, the run's outage terms (#4082). Dropped, the run's proxy keeps the default
+	// terms, a longer allowance than the policy set or not strict, so such a runner is refused a run whose terms
+	// are not the default ones; a default run writes no key and is not refused.
+	ProxySettingOutage = "outage"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -261,7 +265,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules,
+	ProxySettingHostRules, ProxySettingOutage,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -275,7 +279,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
-		len(pc.Policy.HostRules) != 0} {
+		len(pc.Policy.HostRules) != 0,
+		pc.Outage != nil} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

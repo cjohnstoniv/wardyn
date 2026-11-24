@@ -66,6 +66,8 @@ var proxySettingOfField = map[string]string{
 	// route it somewhere the admin did not choose: an older remote executor must refuse the run.
 	"LLMHeaders": ProxySettingLLMHeaders,
 	"NoNetwork":  ProxySettingNoNetwork,
+	// Dropped, the run's proxy keeps the default outage terms: a longer allowance than the policy set, or not strict.
+	"Outage": ProxySettingOutage,
 }
 
 // proxyNestedSettings maps each setting that gates a field inside a top-level one to that field.

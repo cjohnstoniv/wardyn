@@ -46,6 +46,7 @@ var proxySettingCases = map[string]func(*runner.ProxyConfig){
 		pc.MCPApproveEach = &proxy.MCPApproveEachConfig{SendOnce: true}
 	},
 	runnerwire.ProxySettingNoNetwork: func(pc *runner.ProxyConfig) { pc.NoNetwork = true },
+	runnerwire.ProxySettingOutage:    func(pc *runner.ProxyConfig) { pc.Outage = &proxy.OutageConfig{AllowanceS: 1800, Strict: true} },
 	runnerwire.ProxySettingRefuseIPLiterals: func(pc *runner.ProxyConfig) {
 		pc.Policy.RefuseIPLiterals, pc.Policy.AllowAllEgress = true, true
 	},
@@ -238,6 +239,32 @@ func TestCreateSandboxRefusesHostRulesOnARunnerWithoutThem(t *testing.T) {
 	spec.RunID, spec.ProxyConfig.Policy.HostRules = uuid.New(), nil
 	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
 		t.Fatalf("a run without host rules was refused: %v", err)
+	}
+}
+
+// A runner without the outage setting is refused a run with non-default outage terms, and still gets a default run,
+// whose proxy config carries no outage key (nil Outage).
+func TestCreateSandboxRefusesOutageTermsOnARunnerWithoutThem(t *testing.T) {
+	rig := runnertest.NewRig(t, rid)
+	older := slices.DeleteFunc(slices.Clone(runnerwire.ProxySettings), func(s string) bool { return s == runnerwire.ProxySettingOutage })
+	named, err := json.Marshal(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishCaps(t, rig, `{"support":{"Classes":["CC1","CC2"]},"cpu_millis_max":4000,"memory_mib_max":8192,"version":"0.10.4","proxy_settings":`+string(named)+`}`)
+	spec := runner.SandboxSpec{RunID: uuid.New(), Image: "img", ConfinementClass: types.CC1}
+	spec.ProxyConfig.Outage = &proxy.OutageConfig{AllowanceS: 1800, Strict: true}
+	_, err = rig.Sub.CreateSandbox(ctxT(t), spec)
+	var pe *remote.ProxySettingError
+	if !errors.As(err, &pe) || pe.Setting != runnerwire.ProxySettingOutage {
+		t.Fatalf("create = %v, want a ProxySettingError naming %s", err, runnerwire.ProxySettingOutage)
+	}
+	if len(rig.Fake.Created) != 0 {
+		t.Fatal("the refused create reached the runner")
+	}
+	spec.RunID, spec.ProxyConfig.Outage = uuid.New(), nil
+	if _, err := rig.Sub.CreateSandbox(ctxT(t), spec); err != nil {
+		t.Fatalf("a run with the default outage terms was refused: %v", err)
 	}
 }
 
