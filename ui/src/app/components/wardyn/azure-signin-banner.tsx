@@ -35,7 +35,7 @@ function readAndClearAzureSignInResult(): AzureSignInResult | null {
 // A reason this console does not know reads as the exchange_failed sentence, as the Azure DevOps banner reads it.
 // Own keys only: a crafted reason such as __proto__ must not reach an inherited member.
 const reasonSentence = (reason: string): string =>
-  Object.hasOwn(ADO_SIGNIN.REASON, reason) ? (ADO_SIGNIN.REASON as Record<string, string>)[reason] : ADO_SIGNIN.REASON.exchange_failed;
+  Object.prototype.hasOwnProperty.call(ADO_SIGNIN.REASON, reason) ? (ADO_SIGNIN.REASON as Record<string, string>)[reason] : ADO_SIGNIN.REASON.exchange_failed;
 
 export function AzureSignInBanner() {
   const [result, setResult] = React.useState<AzureSignInResult | null>(null);
