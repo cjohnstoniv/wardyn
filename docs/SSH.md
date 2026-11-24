@@ -215,7 +215,7 @@ Host wardyn-<run-id>
   - An advertised ProxyCommand runs only with `--advertised-proxy`, as for `wardyn run ssh`.
   - `editor` writes that ProxyCommand into `~/.wardyn/ssh_config`, so VS Code and any `ssh wardyn-<run-id>` run it on your computer on every connection until you remove the block.
 - An operator can limit the gateway to some kinds of channel with `WARDYN_SSH_CHANNELS`: any of `shell`, `exec`, `sftp` and `forward`, all four when unset. A command that needs a kind that is off stops with one line before it dials. `sftp` also covers `wardyn sync`, and `exec` also covers `POST /runs/{id}/exec` ([ENV.md](ENV.md#wardyn_ssh_channels)).
-- When `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
+- On the key path, when `~/.wardyn/id_ed25519` (made by `wardyn ssh-key ensure`) exists, `wardyn run ssh`, `exec` and `forward` offer it with `-o IdentitiesOnly=yes` and `editor` writes it into the `Host` block; otherwise ssh offers what your agent holds. `--print` and `--config` never include it.
 - With the gateway off, `wardyn run forward` through the organisation takes a forward ticket for each connection, so it holds none of the run's terminal sessions.
 - **Known limit (Windows).** On Windows the CLI quotes the `ProxyCommand` line by the Windows argument rules, and a unit test pins that quoting on every platform. It has not been run with Windows OpenSSH (`ssh.exe`). If a ticket connection does not start on Windows, run the command again with `--key`.
 
@@ -231,7 +231,7 @@ With `WARDYN_SSH_TICKETS` on (`/healthz` reports `ssh.tickets`), `wardyn run ssh
   - `wardyn sync` dials the door from its own SSH client, and the ticket stays in its memory.
   - The CLI passes the ticket to ssh(1) in its child environment. That is acceptable because the ticket is single-use, lives 30 seconds and is spent before any SSH byte, so a copy read later is worthless. For this case that replaces the rule that a credential in a child's environment is a leak.
 - **Editors.** `run editor` writes a `Host` block whose `ProxyCommand` is `wardyn run ssh-proxy <run-id> --for editor`. The proxy takes a new ticket with your sign-in (`wardyn login`) for each connection VS Code opens. The block holds no ticket and no key.
-- **Host key.** The gateway's public host key comes from `/healthz` (`ssh.host_key`, checked against `host_key_fingerprint`) over TLS. The CLI pins it in `~/.wardyn/known_hosts` under `wardyn-gateway-<server host>`, and every command that reads `/healthz` rewrites that line, so a rotated key reaches VS Code on its next connection.
+- **Host key.** The gateway's public host key comes from `/healthz` (`ssh.host_key`, checked against `host_key_fingerprint`) over TLS. The CLI pins it in `~/.wardyn/known_hosts` under `wardyn-gateway-<server host and port>`. Every ticket-path command, and the editor's proxy on each connection, rewrites that line, so a rotated key reaches VS Code on its next connection.
 - **Each ticket opens only its own channels.**
   - `run ssh` a terminal, `exec` one command, and `forward` only the sandbox ports it names, at most 16.
   - `editor` a terminal, commands, file transfer and `-L`.

@@ -480,6 +480,44 @@ func TestProxyCommandLine_RefusesWhatItCannotCarry(t *testing.T) {
 			}
 		}
 	}
+	// Outside Windows ssh runs the line with the user's shell, and fish reads a backslash inside single quotes.
+	for _, tc := range []struct{ name, exe, base string }{
+		{"a backslash in the path", `/opt/war\dyn`, "https://wardyn.example.test/"},
+		{"a path ending in a backslash", `/opt/wardyn\`, "https://wardyn.example.test/;x;"},
+		{"a backslash in the URL", "/usr/bin/wardyn", `https://wardyn.example.test/a\`},
+	} {
+		for _, goos := range []string{"linux", "darwin"} {
+			line, err := proxyCommandLine(goos, tc.exe, testRunID, "exec", tc.base)
+			if err == nil || !strings.Contains(err.Error(), "a backslash") {
+				t.Errorf("%s (%s): line %q, err %v; want the backslash refusal", tc.name, goos, line, err)
+			}
+		}
+	}
+}
+
+// TestGatewayHostKeyAlias_OneNamePerHostAndNoPattern: two hosts never share an alias, and no alias holds a
+// known_hosts pattern character.
+func TestGatewayHostKeyAlias_OneNamePerHostAndNoPattern(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"https://h:8443/", "https://h-8443/"},
+		{"https://h_3a8443/", "https://h:8443/"},
+		{"https://a,b.example/", "https://a-b.example/"},
+	} {
+		if a, b := gatewayHostKeyAlias(pair[0]), gatewayHostKeyAlias(pair[1]); a == b {
+			t.Errorf("%s and %s share the alias %q", pair[0], pair[1], a)
+		}
+	}
+	for base, want := range map[string]string{
+		"https://Wardyn.Example.Test:8443/": "wardyn-gateway-wardyn.example.test_3a8443",
+		"https://*.example.test/":           "wardyn-gateway-_2a.example.test",
+		"https://a,b.example/":              "wardyn-gateway-a_2cb.example",
+		"https://[::1]:8443/":               "wardyn-gateway-_5b_3a_3a1_5d_3a8443",
+	} {
+		got := gatewayHostKeyAlias(base)
+		if got != want || strings.ContainsAny(got, "*?!,[]: ") {
+			t.Errorf("alias(%s) = %q, want %q", base, got, want)
+		}
+	}
 }
 
 // TestProxyCommandLine_WindowsForm pins the Windows line on every OS.
@@ -598,7 +636,7 @@ func TestProxyCommandLine_WindowsQuoting(t *testing.T) {
 func TestTicketConfigBlock_HoldsNoTicketAndNoKey(t *testing.T) {
 	got := ticketConfigBlock("https://wardyn.example.test:8443/", testRunID, "LINE")
 	want := "Host wardyn-" + testRunID + "\n  HostName wardyn.example.test\n  User " + testRunID + "\n  ProxyCommand LINE\n" +
-		"  HostKeyAlias wardyn-gateway-wardyn.example.test-8443\n  UserKnownHostsFile ~/.wardyn/known_hosts\n  StrictHostKeyChecking yes\n"
+		"  HostKeyAlias wardyn-gateway-wardyn.example.test_3a8443\n  UserKnownHostsFile ~/.wardyn/known_hosts\n  StrictHostKeyChecking yes\n"
 	if got != want {
 		t.Errorf("block =\n%q\nwant\n%q", got, want)
 	}
@@ -640,7 +678,7 @@ func TestRefreshGatewayHostKey_KeepsOtherLinesAndRefusesAMismatch(t *testing.T) 
 	hk := newTestHostKey(t)
 	path := filepath.Join(home, ".wardyn", "known_hosts")
 	const base = "https://Wardyn.Example.test:8443"
-	alias := "wardyn-gateway-wardyn.example.test-8443"
+	alias := "wardyn-gateway-wardyn.example.test_3a8443"
 	old := "other.example ssh-ed25519 AAAAother\n" + alias + " ssh-ed25519 AAAAold\n# a comment\n"
 	writeFile(t, path, old)
 	gw := sshGateway{hostKey: hk.line, fingerprint: hk.print}
@@ -808,8 +846,8 @@ func TestTicketMint_InconclusiveIsAnError(t *testing.T) {
 				f := newTicketFixture(t, ticketHealthz(hk, true, ""))
 				f.mint = tc.mint
 				got := captureSSH(t)
-				if _, err := vc.run(t, f); err == nil || len(*got) != 0 || f.dials.Load() != 0 {
-					t.Errorf("error = %v, ssh runs %d, dials %d; want an error and nothing started", err, len(*got), f.dials.Load())
+				if _, err := vc.run(t, f); err == nil || !strings.Contains(err.Error(), "could not get an SSH ticket") || len(*got) != 0 || f.dials.Load() != 0 {
+					t.Errorf("error = %v, ssh runs %d, dials %d; want \"could not get an SSH ticket\" and nothing started", err, len(*got), f.dials.Load())
 				}
 			})
 		}

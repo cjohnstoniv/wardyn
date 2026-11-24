@@ -303,8 +303,17 @@ func proxyCommandLine(goos, exe, runID, verb, base string) (string, error) {
 // proxyCommandWords is proxyCommandLine before the % doubling: the words a shell (POSIX) or the C runtime's argument
 // rules (Windows) split back.
 func proxyCommandWords(goos, exe, runID, verb, base string) (string, error) {
-	if exe == "" || strings.ContainsAny(exe, `'"`) || strings.IndexFunc(exe, unicode.IsControl) >= 0 {
-		return "", errors.New("this program's path holds a quote or a control character, so it cannot go in a ProxyCommand; run again with --key")
+	// ssh runs the line with the user's own shell; fish reads a backslash inside single quotes, so outside Windows a
+	// backslash is refused as a quote is.
+	unquotable := `'"`
+	if goos != "windows" {
+		unquotable += `\`
+	}
+	if exe == "" || strings.ContainsAny(exe, unquotable) || strings.IndexFunc(exe, unicode.IsControl) >= 0 {
+		return "", errors.New("this program's path holds a quote, a backslash or a control character, so it cannot go in a ProxyCommand; run again with --key")
+	}
+	if strings.ContainsAny(base, unquotable) {
+		return "", errBaseUnquotable
 	}
 	if _, err := checkTicketBase(base); err != nil {
 		return "", err
@@ -328,11 +337,14 @@ func windowsArgQuote(s string) string {
 	return `"` + s + strings.Repeat(`\`, n) + `"`
 }
 
+// errBaseUnquotable refuses a server URL the ProxyCommand line cannot carry.
+var errBaseUnquotable = errors.New("the server URL holds a quote, a backslash or a control character, so it cannot go in a ProxyCommand")
+
 // checkTicketBase is the server URL a ticket path may use: one that parses, https or http on a loopback host
 // (refusePlainHTTPGateway's rule), with no quote and no control character, since it goes into a ProxyCommand.
 func checkTicketBase(base string) (*url.URL, error) {
 	if strings.ContainsAny(base, `'"`) || strings.IndexFunc(base, unicode.IsControl) >= 0 {
-		return nil, errors.New("the server URL holds a quote or a control character, so it cannot go in a ProxyCommand")
+		return nil, errBaseUnquotable
 	}
 	u, err := url.Parse(base)
 	if err != nil {
@@ -362,14 +374,24 @@ func sshDoorURL(base, runID string) (string, error) {
 	return scheme + "://" + u.Host + strings.TrimRight(u.EscapedPath(), "/") + "/api/v1/runs/" + runID + "/ssh", nil
 }
 
-// gatewayHostKeyAlias is the name the gateway's host key is pinned under: one per API host, so a rotated key
-// replaces its own line.
+// gatewayHostKeyAlias is the name the gateway's host key is pinned under: one per API host and port, so a rotated
+// key replaces its own line. Every byte outside [a-z0-9.-] becomes _ and two hex digits, so two hosts never share
+// an alias (h:8443 is not h-8443) and no known_hosts pattern character (* ? ! , [ ]) can appear.
 func gatewayHostKeyAlias(base string) string {
 	host := base
 	if u, err := url.Parse(base); err == nil {
 		host = u.Host
 	}
-	return "wardyn-gateway-" + strings.ReplaceAll(strings.ToLower(host), ":", "-")
+	var b strings.Builder
+	b.WriteString("wardyn-gateway-")
+	for _, c := range []byte(strings.ToLower(host)) {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '.' || c == '-' {
+			b.WriteByte(c)
+			continue
+		}
+		fmt.Fprintf(&b, "_%02x", c)
+	}
+	return b.String()
 }
 
 // refreshGatewayHostKey checks /healthz's host_key against its fingerprint and rewrites that key's one line in
