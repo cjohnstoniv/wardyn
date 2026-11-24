@@ -2443,9 +2443,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 | Resource | `service.name=wardynd`; `service.instance.id` is `WARDYN_AUDIT_SOURCE` when set |
 | Body | the audit `action` |
 | Severity | `success` is INFO, `denied` is WARN, `failure` is ERROR |
-| Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters) |
+| Attributes | `wardyn.run_id` (run-scoped rows), `wardyn.actor`, `wardyn.target` (when set), `wardyn.outcome`, `wardyn.correlation_id` (when the row's `data` carries one, at most 128 characters), `wardyn.runner_label.<key>` (each of the row's `runner_labels`: the run's runner's operator labels) |
 
-- Nothing else from the row is sent: not `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
+- Nothing else from the row is sent: not the rest of `data`, `source_ip`, the hashes or the row id. The webhook sink's payload is the ceiling.
 
 #### OpenTelemetry metrics (`otlp_metrics`)
 

@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Runners carry labels: proposed by the runner at registration (`wardyn-runnerd register --label key=value`, the runner chart's `labels`), confirmed by a security operator (`wardyn runner label`, `PUT /runners/{id}/labels`). `run.create` and `run.queue.start` record the confirmed ones as `runner_labels`, the run read shows them, and the OTLP export carries them as `wardyn.runner_label.<key>`.
+
+### Before you upgrade
+
+- Set the runner chart's `labels` only after the control plane runs this release: an older one refuses the registration.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `runner_labels` to every role that was granted `UPDATE` on `runners`, other than that table's owner. If the app role is
+  not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step
+  in Operations, grant it the same on the table as soon as the migration has run. Until then the runner list and a
+  label write fail with a server error; runs are not affected.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
