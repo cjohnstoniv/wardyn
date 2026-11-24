@@ -136,6 +136,21 @@ func TestForgeCheckUnknownEffectRefuses(t *testing.T) {
 	assertForgeDecisionsRefuse(t, cases)
 }
 
+// TestForgeCheckHoldOnlyLiftsAGrantableCapability: adoAnswer offers a held
+// verdict for a person to grant only when a run can hold the capability. The
+// doors refuse either way when no approver is wired, so this reads the answer
+// itself.
+func TestForgeCheckHoldOnlyLiftsAGrantableCapability(t *testing.T) {
+	const s = "planted refusal sentence"
+	if got, held := adoAnswer(reqcheck.Decision[adoscope.Verdict]{Effect: reqcheck.Hold, Verdict: adoscope.Verdict{Capability: adoscope.CapDeniedTokens}, Sentence: s}); held != nil || got != s {
+		t.Fatalf("hold on a capability that is not grantable: got (%q, %v), want (%q, nil)", got, held, s)
+	}
+	got, held := adoAnswer(reqcheck.Decision[adoscope.Verdict]{Effect: reqcheck.Hold, Verdict: forgeHeldADOVerdict, Sentence: s})
+	if held == nil || held.Capability != forgeHeldADOVerdict.Capability || got != s {
+		t.Fatalf("hold on a grantable capability: got (%q, %v), want (%q, %v)", got, held, s, forgeHeldADOVerdict)
+	}
+}
+
 // forgeDecideSeams are the two variables only a test may assign.
 var forgeDecideSeams = map[string]bool{"decideADO": true, "decideGitHub": true}
 
