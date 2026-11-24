@@ -413,7 +413,7 @@ export function RemoveSSHKeyDialog({
               void confirmRemove();
             }}
             disabled={removing}
-            className="bg-danger text-danger-foreground hover:bg-danger/90"
+            variant="destructive"
           >
             <Trash2 className="size-4" /> Remove key
           </AlertDialogAction>

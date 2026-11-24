@@ -89,9 +89,9 @@ var pushHoldSecond = time.Second
 // forwarded push authenticates with.
 type pushTarget struct {
 	repo, actsAs string
-	// writeToGit, when set, answers a refusal the agent can act on in git's own
-	// terms, because git does not print a 403's body: paths that could not be
-	// worked out, and a match on a run with nobody to ask.
+	// writeToGit answers a refusal the agent can act on in git's own terms, because git does not print a
+	// 403's body: paths that could not be worked out, and a match on a run with nobody to ask. The Entra
+	// lane sets its own; applyPushRules sets one from the buffered push for every other lane.
 	writeToGit func(w http.ResponseWriter, msg string)
 }
 

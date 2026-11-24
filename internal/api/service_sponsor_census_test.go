@@ -45,7 +45,7 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, direct, redeem := map[string]int{}, map[string]int{}, map[string]int{}
+	found, direct, redeem, entry := map[string]int{}, map[string]int{}, map[string]int{}, map[string]int{}
 	callers := map[string]map[string]int{}
 	for _, e := range entries {
 		name := e.Name()
@@ -70,6 +70,8 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 						direct[fn.Name.Name]++
 					case "mayEnterRunOrSponsor":
 						redeem[fn.Name.Name]++
+					case "sponsorEntry":
+						entry[fn.Name.Name]++
 					default:
 						if _, ok := sponsorReachHelpers[sel.Sel.Name]; ok {
 							if callers[sel.Sel.Name] == nil {
@@ -115,10 +117,16 @@ func TestSponsorReach_RouteCensus(t *testing.T) {
 	// (uiEnterCommon's, moved there beside the inbound caller's ticket, which never takes this arm).
 	// inboundCaller redeems an inbound token, with no role (superAdmin false); a portal's delegated token
 	// cannot mint one (mintGuards' delegation refusal, on both token mints), so the portal refusal holds there too.
-	// uiSessionArms is the open session's re-check, after its portal's arm (uiSessionAuthority, its one caller).
-	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "uiSessionArms": 1, "inboundCaller": 1, "attachAuthority": 1}
+	wantRedeem := map[string]int{"refuseAttachEntry": 1, "uiTicketMayEnter": 1, "inboundCaller": 1}
 	if !maps.Equal(redeem, wantRedeem) {
 		t.Errorf("mayEnterRunOrSponsor is asked by %v, want %v", redeem, wantRedeem)
+	}
+	// sponsorEntry is mayEnterRunOrSponsor for a re-check: it returns the sponsor read's error, so an open session
+	// rides the session budget on a read that failed. Its callers are the two re-checks and the predicate itself.
+	// uiSessionArms is the open session's re-check, after its portal's arm (uiSessionAuthority, its one caller).
+	wantEntry := map[string]int{"mayEnterRunOrSponsor": 1, "attachAuthority": 1, "uiSessionArms": 1}
+	if !maps.Equal(entry, wantEntry) {
+		t.Errorf("sponsorEntry is asked by %v, want %v", entry, wantEntry)
 	}
 	if len(found) != 0 {
 		t.Errorf("ownsRunOrSponsorOrAdmin is also asked by %v: a route a sponsor now reaches", slices.Sorted(func(yield func(string) bool) {

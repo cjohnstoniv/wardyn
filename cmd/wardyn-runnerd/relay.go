@@ -56,7 +56,7 @@ type localRelay struct {
 	refused   int                           // closed at the cap since capWarnAt
 	capWarnAt time.Time
 	// sources is WARDYN_RELAY_ALLOWED_SOURCES: when set, a connection from outside every prefix is
-	// closed before a byte is read. Empty admits every source.
+	// closed before a byte is read. Nil admits every source; parseRelaySources never returns an empty, non-nil list.
 	sources    []netip.Prefix
 	srcRefused int // closed for their source since srcWarnAt
 	srcWarnAt  time.Time
@@ -74,9 +74,14 @@ type localRelay struct {
 // envRelaySources is the opt-in source list for the Docker local relay (off when unset).
 const envRelaySources = "WARDYN_RELAY_ALLOWED_SOURCES"
 
-// parseRelaySources reads envRelaySources' comma-separated prefixes (a bare address is its own /32 or
-// /128). An empty value is no list.
+// parseRelaySources reads envRelaySources' comma-separated prefixes (a bare address is its own /32 or /128). An
+// IPv4-mapped IPv6 prefix or address is read as the IPv4 one it maps, as admitsSource reads a source. An empty value
+// (unset) is no list; any other value that names no prefix, such as only spaces or commas, is refused, since an
+// empty list admits every source.
 func parseRelaySources(v string) ([]netip.Prefix, error) {
+	if v == "" {
+		return nil, nil
+	}
 	var out []netip.Prefix
 	for _, f := range strings.Split(v, ",") {
 		if f = strings.TrimSpace(f); f == "" {
@@ -88,11 +93,28 @@ func parseRelaySources(v string) ([]netip.Prefix, error) {
 			if aerr != nil {
 				return nil, fmt.Errorf("%s: %q is neither a prefix nor an address", envRelaySources, f)
 			}
-			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		if p, err = unmapPrefix(p); err != nil {
+			return nil, fmt.Errorf("%s: %q: %w", envRelaySources, f, err)
 		}
 		out = append(out, p.Masked())
 	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s is set to %q, which names no prefix or address; unset it to admit every source", envRelaySources, v)
+	}
 	return out, nil
+}
+
+// unmapPrefix reads an IPv4-mapped IPv6 prefix (::ffff:a.b.c.d/n, n at least 96) as the IPv4 prefix it maps.
+func unmapPrefix(p netip.Prefix) (netip.Prefix, error) {
+	if !p.Addr().Is4In6() {
+		return p, nil
+	}
+	if p.Bits() < 96 {
+		return netip.Prefix{}, errors.New("an IPv4-mapped prefix shorter than /96 also covers addresses that are not IPv4")
+	}
+	return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96), nil
 }
 
 // admitsSource reports whether c's source may use the relay: always with no list. r.mu is held.

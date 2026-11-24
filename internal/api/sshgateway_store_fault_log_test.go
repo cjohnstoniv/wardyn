@@ -26,16 +26,17 @@ func (s keyLookupStore) GetSSHKeyByFingerprint(context.Context, string) (types.S
 	return types.SSHPublicKey{}, s.err
 }
 
-// A store fault during the key lookup is logged as one (#2782); the audit row
-// keeps its reason, and a plain not-found logs nothing.
+// A store fault during the key lookup is logged as one and audited as `key lookup failed`; a plain not-found
+// logs nothing and is audited as `unregistered key`.
 func TestSSHAuth_StoreFaultOnKeyLookupIsLogged(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		err     error
-		wantLog bool
+		name       string
+		err        error
+		wantLog    bool
+		wantReason string
 	}{
-		{"store fault", errors.New("pool exhausted"), true},
-		{"unregistered key", store.ErrNotFound, false},
+		{"store fault", errors.New("pool exhausted"), true, "key lookup failed"},
+		{"unregistered key", store.ErrNotFound, false, "unregistered key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -52,8 +53,8 @@ func TestSSHAuth_StoreFaultOnKeyLookupIsLogged(t *testing.T) {
 			for _, ev := range h.audit.snapshot() {
 				reasons = append(reasons, string(ev.Data))
 			}
-			if len(reasons) != 1 || !strings.Contains(reasons[0], "unregistered key") {
-				t.Errorf("audit rows = %v, want the unchanged unregistered key row", reasons)
+			if len(reasons) != 1 || !strings.Contains(reasons[0], tc.wantReason) {
+				t.Errorf("audit rows = %v, want one row with reason %q", reasons, tc.wantReason)
 			}
 		})
 	}

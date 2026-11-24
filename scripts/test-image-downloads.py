@@ -18,7 +18,10 @@ USE = "tar -xzf /tmp/a.tgz"
 VALIDATE = 'printf \'%s\' "$sum" | grep -zExq \'[0123456789abcdefABCDEF]{64}\''
 VARIABLE_VERIFY = 'echo "$sum  /tmp/a.tgz" | sha256sum --strict -c -'
 KEY_FETCH = "wget -qO /tmp/k.asc https://example.invalid/key"
-KEY_SHOW = 'keys="$(gpg --show-keys --with-colons /tmp/k.asc)"; fpr="$(printf \'%s\\n\' "$keys" | awk -F: \'$1 == "fpr" { print $10; exit }\')"'
+KEY_SHOW_TWO_STEP = 'keys="$(gpg --show-keys --with-colons /tmp/k.asc)"; fpr="$(printf \'%s\\n\' "$keys" | awk -F: \'$1 == "fpr" { print $10; exit }\')"'
+KEY_SHOW = ('keys="$(gpg --show-keys --with-colons /tmp/k.asc)"; '
+            '[ "$(printf \'%s\\n\' "$keys" | grep -c \'^pub:\')" = 1 ] || { echo "not exactly one key" >&2; exit 1; }; '
+            'fpr="$(printf \'%s\\n\' "$keys" | awk -F: \'$1 == "fpr" { print $10; exit }\')"')
 KEY_ASSERT = '[ "$fpr" = "' + "A" * 40 + '" ] || { echo "not the pinned key: $fpr" >&2; exit 1; }'
 KEY_USE = "gpg --dearmor -o /etc/apt/keyrings/k.gpg /tmp/k.asc"
 
@@ -202,6 +205,17 @@ class ImageDownloads(unittest.TestCase):
             "wget_http": (f"RUN set -eu; wget -qO /tmp/k.asc http://example.invalid/key; {KEY_SHOW}; {KEY_ASSERT}", "https URL"),
             "wget_wrapper": ("RUN set -eu; sh -c 'wget -qO /tmp/k https://example.invalid/key'", "wget wrapper"),
             "add_url_unchecked": ("ADD https://example.invalid/a.tgz /tmp/a.tgz", "--checksum"),
+            "wget_literal_fpr": (f'RUN set -eu; {KEY_FETCH}; keys="$(gpg --show-keys --with-colons /tmp/k.asc)"; fpr="' + "A" * 40 + f'"; {KEY_ASSERT}; {KEY_USE}', "as one sequence"),
+            "wget_no_single_key_check": (f"RUN set -eu; {KEY_FETCH}; {KEY_SHOW_TWO_STEP}; {KEY_ASSERT}; {KEY_USE}", "as one sequence"),
+            "wget_keys_reassigned": (f"RUN set -eu; {KEY_FETCH}; " + KEY_SHOW.replace("exit 1; }; ", 'exit 1; }; keys="$OTHER"; ') + f"; {KEY_ASSERT}; {KEY_USE}", "as one sequence"),
+            "wget_fpr_from_another_variable": (f"RUN set -eu; {KEY_FETCH}; " + KEY_SHOW.replace('fpr="$(printf \'%s\\n\' "$keys"', 'fpr="$(printf \'%s\\n\' "$other"') + f"; {KEY_ASSERT}; {KEY_USE}", "as one sequence"),
+            "wget_refetched_after_assert": (f"RUN set -eu; {KEY_FETCH}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched more than once"),
+            "wget_fetched_after_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/k.asc; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_mentioned_before_assert": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/; command -v wget  /tmp/k.asc || :; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_named_in_another_fetch_url": (f'RUN set -eu; cp /usr/share/keys/k.asc /tmp/; wget -qO /tmp/o.asc "https://example.invalid/o# -O /tmp/k.asc "; ' + KEY_SHOW.replace("/tmp/k.asc", "/tmp/o.asc") + f"; {KEY_ASSERT}; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_named_in_a_package_install": (f"RUN set -eu; cp /usr/share/keys/k.asc /tmp/; apt-get install {{ wget -O /tmp/k.asc || true; {KEY_SHOW}; {KEY_ASSERT}; {KEY_FETCH}; {KEY_USE}", "fetched after its fingerprint"),
+            "wget_assert_never_runs": (f"RUN set -eu; {KEY_FETCH}; false && {{ {KEY_SHOW}; {KEY_ASSERT}; }}; {KEY_USE}", "among the RUN's own commands"),
+            "wget_sequence_in_a_comment": (f"RUN set -eu; {KEY_FETCH} # {KEY_SHOW}; {KEY_ASSERT}", "as one sequence"),
             "unquoted_hash_record": (f"RUN set -e; sum={HASH}; {DOWNLOAD}; echo $sum\\ \\ /tmp/a.tgz | sha256sum -c -", "double-quoted"),
         }
         for name, (text, diagnostic) in cases.items():

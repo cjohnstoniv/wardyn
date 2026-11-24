@@ -235,6 +235,9 @@ const (
 	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
+	// ProxySettingPushHoldRemovals is push_hold_removals. Dropped, the run's proxy would forward a push
+	// that removes a review path, so such a runner is refused a run that sets it.
+	ProxySettingPushHoldRemovals = "push_hold_removals"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -261,7 +264,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules,
+	ProxySettingHostRules, ProxySettingPushHoldRemovals,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -275,7 +278,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
-		len(pc.Policy.HostRules) != 0} {
+		len(pc.Policy.HostRules) != 0,
+		pc.PushHoldRemovals} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

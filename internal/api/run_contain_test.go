@@ -1244,15 +1244,22 @@ func TestQuiesce_RunnerNotConnectedKeepsRC19Answer(t *testing.T) {
 	}
 }
 
-func TestQuiesce_RunnerFenceErrorIsNotQuiescable(t *testing.T) {
+// A fence that fails leaves the agent's network unknown, so the first pass does not run.
+func TestQuiesce_RunnerFenceErrorRunsNoPass(t *testing.T) {
 	l := newContainLab(t, true)
 	id := l.connect(true)
 	l.rn.setHook(func(context.Context, string) error { return errContainBoom })
 	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
 	err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef)
-	wantNotQuiescable(t, err, "a sandbox on a runner is not kept")
-	if errors.Is(err, errContainBoom) {
-		t.Errorf("quiesce = %v: a fence error must not reach the caller as a plain error", err)
+	var cannot notQuiescable
+	if err == nil || errors.As(err, &cannot) {
+		t.Fatalf("quiesce = %v, want a plain error that runs no pass", err)
+	}
+	if !errors.Is(err, errContainBoom) || !strings.Contains(err.Error(), "its agent could not be cut off its networks") {
+		t.Errorf("quiesce = %v, want the fence error under \"its agent could not be cut off its networks\"", err)
+	}
+	if fences, stops := quiesceCalls(l); fences != 1 || stops != 0 {
+		t.Errorf("calls = %d fences, %d stops; want one fence and no stop", fences, stops)
 	}
 }
 
@@ -1329,6 +1336,88 @@ func TestQuiesce_RunnerKillTailErrorIsNotQuiescable(t *testing.T) {
 	var cannot notQuiescable
 	if err == nil || errors.As(err, &cannot) {
 		t.Errorf("a hosted run's kill error = %v, want it plain", err)
+	}
+}
+
+// A runner without the fence has its proxy stopped before the first pass: the pass then runs with no egress,
+// and nothing is killed (its own exec is all a kill could reach on Kubernetes).
+func TestQuiesce_RunnerWithoutTheFenceHasItsProxyStoppedFirst(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(false)
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	wantNotQuiescable(t, l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef), "its proxy is stopped and its agent left running")
+	if fences, stops := quiesceCalls(l); fences != 0 || stops != 1 {
+		t.Errorf("calls = %d fences, %d stops; want one proxy stop and no fence", fences, stops)
+	}
+	l.rn.mu.Lock()
+	defer l.rn.mu.Unlock()
+	if l.rn.statusReads != 0 {
+		t.Errorf("status reads = %d, want none: no kill tail ran", l.rn.statusReads)
+	}
+}
+
+func TestQuiesce_RunnerWithoutTheFenceWhoseProxyStopFailsRunsNoPass(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(false)
+	l.rn.setHook(func(context.Context, string) error { return errContainBoom })
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef)
+	var cannot notQuiescable
+	if err == nil || errors.As(err, &cannot) {
+		t.Fatalf("quiesce = %v, want a plain error that runs no pass", err)
+	}
+	if !errors.Is(err, errContainBoom) || !strings.Contains(err.Error(), "its proxy did not stop") {
+		t.Errorf("quiesce = %v, want the stop error under \"its proxy did not stop\"", err)
+	}
+	if _, stops := quiesceCalls(l); stops != 1 {
+		t.Errorf("stops = %d, want 1", stops)
+	}
+}
+
+// A runner that leaves during the stop may have queued nothing: the remote substrate refuses a queued
+// stop_proxy, and the pass does not run.
+func TestQuiesce_RunnerThatLeavesDuringTheProxyStopRunsNoPass(t *testing.T) {
+	l := newContainLab(t, true)
+	id := l.connect(false)
+	l.rn.setHook(func(context.Context, string) error { return runner.ErrRunnerOffline })
+	run := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef)
+	var cannot notQuiescable
+	if err == nil || errors.As(err, &cannot) {
+		t.Fatalf("quiesce = %v, want a plain error that runs no pass", err)
+	}
+	if !errors.Is(err, errRunnerNotHere) || !errors.Is(err, runner.ErrRunnerOffline) {
+		t.Errorf("quiesce = %v, want errRunnerNotHere and runner.ErrRunnerOffline", err)
+	}
+	if _, stops := quiesceCalls(l); stops != 1 {
+		t.Errorf("stops = %d, want 1", stops)
+	}
+}
+
+// A substrate that cannot stop its proxy alone answers noProxyStop, on a server sandbox (the first half, a
+// control: the answer is unchanged) and on a runner whose stop answers unsupported.
+func TestQuiesce_AServerSandboxThatCannotStopItsProxyAnswersNoProxyStop(t *testing.T) {
+	l := newContainLab(t, false)
+	l.rn.setHook(func(context.Context, string) error { return runner.ErrEndUnsupported })
+	run := quiesceRun(nil, types.RunKilled, "agent-exec")
+	var cannot notQuiescable
+	if err := l.srv.quiesceKeptSandbox(context.Background(), run, run.SandboxRef); !errors.As(err, &cannot) || cannot != noProxyStop {
+		t.Errorf("quiesce = %v, want noProxyStop", err)
+	}
+	if _, stops := quiesceCalls(l); stops != 1 {
+		t.Errorf("stops = %d, want 1", stops)
+	}
+
+	l2 := newContainLab(t, true)
+	id := l2.connect(false)
+	l2.rn.setHook(func(context.Context, string) error { return runner.ErrEndUnsupported })
+	onRunner := quiesceRun(&id, types.RunKilled, runner.MainProcessExecID)
+	cannot = ""
+	if err := l2.srv.quiesceKeptSandbox(context.Background(), onRunner, onRunner.SandboxRef); !errors.As(err, &cannot) || cannot != noProxyStop {
+		t.Errorf("a runner whose stop is unsupported: quiesce = %v, want noProxyStop", err)
+	}
+	if fences, stops := quiesceCalls(l2); fences != 0 || stops != 1 {
+		t.Errorf("calls = %d fences, %d stops; want one stop and no fence", fences, stops)
 	}
 }
 
