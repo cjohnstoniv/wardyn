@@ -805,6 +805,8 @@ var setupCheckNeverBlocks = map[string]bool{
 	"runner_limits":       true,
 	"credential_delivery": true,
 	"runner_arch_images":  true,
+	"k8s_isolated_pool":   true,
+	"k8s_class_any_node":  true,
 	"private_ip_refusals": true,
 	"recording":           true,
 	"github_ref_ruleset":  true, "platform_wsl": true, "platform_macos": true, "self_host_runner_grant": true, "defaults_changed": true,

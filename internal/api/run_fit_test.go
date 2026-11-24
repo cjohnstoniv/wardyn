@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -310,5 +311,42 @@ func TestRunFit_AsksAboutAnAzureGatedProxy(t *testing.T) {
 		if got := runProxyAzure(tc.primary, tc.harnesses); got != tc.want {
 			t.Errorf("%s: runProxyAzure = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The fit is told which RuntimeClass the agent pod runs under: the run's enforced class, CC3 for a VM
+// whatever class it named, and none for the queue's promotion (runFit).
+func TestRunFit_PassesTheEnforcedClass(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		enforced types.ConfinementClass
+		machine  string
+		want     types.ConfinementClass
+	}{
+		{"a CC3 run", types.CC3, "", types.CC3},
+		{"a Linux VM run that named CC1", types.CC1, "linux_vm", types.CC3},
+		{"a macOS VM run", types.CC1, "macos_vm", types.CC3},
+		{"a CC1 container run", types.CC1, "container", types.CC1},
+		{"a CC2 run", types.CC2, "", types.CC2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := fitClass(tc.enforced, tc.machine); got != tc.want {
+				t.Errorf("fitClass = %q, want %q", got, tc.want)
+			}
+			fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped}}
+			s := &Server{cfg: Config{Runner: fr}}
+			w, r := httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+			if _, refused := s.refuseRunFit(w, r, types.RunPolicySpec{}, tc.enforced, tc.machine, 0, false, false); refused {
+				t.Fatalf("refused: %s", w.Body)
+			}
+			if fr.asked.ConfinementClass != tc.want {
+				t.Errorf("the fit was asked about class %q, want %q", fr.asked.ConfinementClass, tc.want)
+			}
+		})
+	}
+	fr := &fitRunner{fakeRunner: &fakeRunner{}, fit: runner.Fit{Quotas: runner.ReadOK, Nodes: runner.ReadSkipped}}
+	(&Server{cfg: Config{Runner: fr}}).runFit(context.Background(), types.RunPolicySpec{}, 0, false, false)
+	if fr.asked.ConfinementClass != "" {
+		t.Errorf("runFit asked about class %q, want none", fr.asked.ConfinementClass)
 	}
 }

@@ -37,18 +37,27 @@ type podDemand struct {
 	// secrets and networkPolicies are the per-run objects the pod carries in the count: CreateSandbox
 	// makes them once per run, so only the first pod holds them.
 	secrets, networkPolicies int64
+	// placement is where the scheduler may put the pod: the agent pod's RuntimeClass scheduling joined to
+	// the runner's placement (classPlacement), the proxy pod's the runner's own.
+	placement Placement
 }
 
-// runPods is the run's two pods as the quota and the scheduler see them: the agent pod (its
-// requests and limits, the ratio applied) and the proxy pod, sized as CreateSandbox sizes it. Counting
-// the agent alone would under-count every run by the proxy's envelope.
-func (d *Driver) runPods(res runner.Resources) []podDemand {
+// runPods is the run's two pods as the quota and the scheduler see them: the agent pod (its requests and
+// limits, the ratio applied, with its RuntimeClass's fixed overhead) on the placement RuntimeClass
+// admission gives it, and the proxy pod, sized as CreateSandbox sizes it, on the runner's placement.
+// Counting the agent alone would under-count every run by the proxy's envelope.
+func (d *Driver) runPods(ctx context.Context, res runner.Resources) ([]podDemand, error) {
 	agent, proxy := resourceRequirements(res), proxyResources(res.ProxyAzure)
 	pc, term := d.placement.PriorityClassName, activeDeadline(res.LifetimeCap) != nil
-	return []podDemand{
-		{requests: agent.Requests, limits: agent.Limits, priorityClass: pc, terminating: term, secrets: 1, networkPolicies: 2},
-		{requests: proxy.Requests, limits: proxy.Limits, priorityClass: pc, terminating: term},
+	ap, err := d.classPlacement(ctx, res.ConfinementClass)
+	if err != nil {
+		return nil, err
 	}
+	req, lim := withOverhead(agent.Requests, agent.Limits, ap.overhead)
+	return []podDemand{
+		{requests: req, limits: lim, priorityClass: pc, terminating: term, secrets: 1, networkPolicies: 2, placement: ap.Placement},
+		{requests: proxy.Requests, limits: proxy.Limits, priorityClass: pc, terminating: term, placement: d.placement},
+	}, nil
 }
 
 // CheckFit implements runner.FitChecker. The quota half is a refusal's evidence (the caller
@@ -56,7 +65,11 @@ func (d *Driver) runPods(res runner.Resources) []podDemand {
 func (d *Driver) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit, error) {
 	ctx, cancel := context.WithTimeout(ctx, fitReadTimeout)
 	defer cancel()
-	pods := d.runPods(res)
+	pods, err := d.runPods(ctx, res)
+	if err != nil {
+		// The class could not be read: the quota half is unknown and the node half skipped, never a refusal.
+		return runner.Fit{Quotas: readState(err), Nodes: runner.ReadSkipped}, nil
+	}
 	fit := runner.Fit{Nodes: runner.ReadSkipped}
 
 	// A list, never a get: every quota that applies to a pod counts against it, and a get needs a name.
@@ -70,7 +83,7 @@ func (d *Driver) CheckFit(ctx context.Context, res runner.Resources) (runner.Fit
 		nodes, state := d.cachedNodes(ctx)
 		fit.Nodes = state
 		if state == runner.ReadOK {
-			fit.NodeShortfall = nodeShortfall(nodes, d.placement, pods)
+			fit.NodeShortfall = nodeShortfall(nodes, pods)
 		}
 	}
 	return fit, nil
@@ -104,7 +117,6 @@ func quotaFits(quotas []corev1.ResourceQuota, pods []podDemand) []runner.QuotaFi
 // quotaAxes is one quota's hard limits that some applicable pod adds to. A limit the run adds
 // nothing to is left out (a quota on requests.ephemeral-storage says nothing about a run that
 // asks for none; the apiserver's LimitRange default, which this role cannot see, may decide).
-// ponytail: RuntimeClass pod overhead also counts against a quota and is not added here.
 func quotaAxes(q *corev1.ResourceQuota, pods []podDemand) []runner.QuotaAxis {
 	hard, used := q.Status.Hard, q.Status.Used
 	if len(hard) == 0 {

@@ -31,9 +31,10 @@ type startClock struct {
 	startTimeout time.Duration
 	capacityWait time.Duration
 
-	// unplaceable (nil without the node read) reports that no node may take the pod by placement
-	// alone: that is a mistyped selector or an untolerated taint, which more time never fixes.
-	unplaceable func() bool
+	// unplaceable (nil without the node read) reports that no node may take pod by placement alone: a
+	// mistyped selector or an untolerated taint, which more time never fixes. It judges the pod as the
+	// apiserver holds it, so an agent pod's RuntimeClass scheduling counts.
+	unplaceable func(pod *corev1.Pod) bool
 
 	// fenced, set only by startProxyPod on a runner, reports a pod IP the relay still refuses for another
 	// run. waitPodIP ends on it (errFencedDraw) at the first read that shows the IP, before Ready. Nil elsewhere.
@@ -52,18 +53,19 @@ func (d *Driver) newStartClock() *startClock {
 }
 
 // placementExcludesEveryNode reads the node list (cached) and reports true only when a Ready,
-// schedulable node exists and no node at all passes the run's selector, required affinity and
-// taints, the node-lifecycle and autoscaler taints not counted (transientTaint). Zero nodes, only
-// unhealthy ones, or any node that would take the pod is doubt: false, and the pod keeps waiting for
-// room. A pool an autoscaler scales from zero reads as no match, so that case needs the flag off.
-func (d *Driver) placementExcludesEveryNode() bool {
+// schedulable node exists and no node at all passes the pod's selector (the runner's placement joined
+// with the pod's own, podPlacement), required affinity and taints, the node-lifecycle and autoscaler
+// taints not counted (transientTaint). Zero nodes, only unhealthy ones, or any node that would take
+// the pod is doubt: false, and the pod keeps waiting for room. A pool an autoscaler scales from zero reads as no match, so that case needs the flag off.
+func (d *Driver) placementExcludesEveryNode(pod *corev1.Pod) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), fitReadTimeout)
 	defer cancel()
 	nodes, state := d.cachedNodes(ctx)
 	if state != runner.ReadOK || !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.healthy }) {
 		return false
 	}
-	return !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.placementOK(d.placement, transientTaint) })
+	pl := podPlacement(d.placement, pod)
+	return !slices.ContainsFunc(nodes, func(n nodeInfo) bool { return n.placementOK(pl, transientTaint) })
 }
 
 // capacityBlocked reports a pod the scheduler cannot place for lack of room.
@@ -81,7 +83,7 @@ func capacityBlocked(pod *corev1.Pod) bool {
 
 // observe records the pod's latest scheduling verdict and reports whether it is waiting for room.
 func (c *startClock) observe(pod *corev1.Pod) bool {
-	waiting := c.capacityWait > 0 && capacityBlocked(pod) && (c.unplaceable == nil || !c.unplaceable())
+	waiting := c.capacityWait > 0 && capacityBlocked(pod) && (c.unplaceable == nil || !c.unplaceable(pod))
 	switch {
 	case waiting && c.blockedSince.IsZero():
 		c.blockedSince = c.now()

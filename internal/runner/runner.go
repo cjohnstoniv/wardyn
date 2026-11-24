@@ -48,8 +48,10 @@ type Capabilities struct {
 	// ExecOutputUncaptured: the driver cannot capture an exec's output into
 	// SandboxSpec.ExecOutput, so the control plane hands it no writer and says
 	// so to a reader rather than serving an empty capture. OR-aggregated.
-	ExecOutputUncaptured bool        `json:"-"`
-	NetworkPolicyCheck   NetPolCheck `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	ExecOutputUncaptured bool                     `json:"-"`
+	NetworkPolicyCheck   NetPolCheck              `json:"network_policy_check,omitzero"` // the k8s canary's live verdict and the time of the check that produced it; the worst across substrates
+	UntaintedPools       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass nodes the runner's own placement may also use, read at boot
+	AnyNodeClasses       []types.ConfinementClass `json:"-"`                             // k8s: pinned classes whose RuntimeClass sets no scheduling, so their pods run on any node with the runtime, read at boot
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -302,6 +304,9 @@ type Resources struct {
 	// (ProxyLimitsFor). Only FitChecker.CheckFit reads it, in-process; the sandbox create reads
 	// ProxyConfig.AzureGates, so it never rides the runner wire.
 	ProxyAzure bool `json:"-"`
+	// ConfinementClass is the class whose RuntimeClass the agent pod runs under: the k8s fit judges the pod
+	// with that class's scheduling and overhead. In-process only, like ProxyAzure; never on the runner wire.
+	ConfinementClass types.ConfinementClass `json:"-"`
 }
 
 // AttachOptions configures an interactive attach; zero Cols/Rows let the driver pick a sane default (e.g. 80x24).
