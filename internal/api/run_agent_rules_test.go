@@ -544,8 +544,15 @@ func TestAgentRulesRecordingFloor_UnreadRefusesDispatch(t *testing.T) {
 	if srv.applyDispatchRecording(context.Background(), &run, &runner.SandboxSpec{}, types.RunPolicySpec{}, dispatchCeiling{}, types.SiteConfig{}, nil) {
 		t.Error("the dispatch went on though the rules could not be read")
 	}
-	if ev := findAudit(audit.snapshot(), run.ID, "run.create", "failure"); ev == nil {
-		t.Error("no run.create failure row for the refused dispatch")
+	ev := findAudit(audit.snapshot(), run.ID, "run.create", "failure")
+	if ev == nil {
+		t.Fatal("no run.create failure row for the refused dispatch")
+	}
+	if d := auditData(t, *ev); d["error"] != "read the agent rules" {
+		t.Errorf("the failure row names %v, want the agent rules, which are what could not be read", d["error"])
+	}
+	if op, sentence := recordingFloorReadFailure(errors.New("walls")); op != "read the run owner's walls" || strings.Contains(sentence, "rules") {
+		t.Errorf("a walls read failure names %q: %q, want the walls only", op, sentence)
 	}
 }
 
@@ -951,5 +958,29 @@ func TestAgentRulesRunStep_ToolsRequestBindsEveryIncludedHarness(t *testing.T) {
 		if !slices.Equal(got, tc.want) || len(source.AgentRules) != len(tc.want) {
 			t.Errorf("%s: denied %v with %d records, want %v bound by one record each", name, got, len(source.AgentRules), tc.want)
 		}
+	}
+}
+
+// TestSealRunPolicy_AppliesTheAgentRules: the final seal of a run that includes the harness carries the rules'
+// denies, and the knob's provenance names the layer. Dropping agentRulesSealLayers from outerLayers fails it.
+func TestSealRunPolicy_AppliesTheAgentRules(t *testing.T) {
+	ctx := context.Background()
+	srv, _ := agentRulesServer(t, claudeRules(types.PersonalWallsSpec{DeniedDomains: wallsList("evil.example.com")}))
+	policy := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	prov := knobProvenance{}
+	layers := srv.sealRunPolicy(ctx, types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "sub-agent-rules"}, &policy, prov)
+	if !slices.Contains(policy.DeniedDomains, "evil.example.com") {
+		t.Errorf("sealed denied = %v, want the agent rules' evil.example.com", policy.DeniedDomains)
+	}
+	if prov["denied_domains"] != agentRulesProvenance("claude-code") {
+		t.Errorf("denied_domains provenance = %+v, want the agent rules layer", prov["denied_domains"])
+	}
+	if !sealHas(layers, func(sealLayer) bool { return true }) {
+		t.Errorf("layers = %+v, want an agent rules layer", layers)
+	}
+	other := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com"}}
+	srv.sealRunPolicy(ctx, types.AgentRun{ID: uuid.New(), Agent: "codex-cli", CreatedBy: "sub-agent-rules"}, &other, knobProvenance{})
+	if len(other.DeniedDomains) != 0 {
+		t.Errorf("a codex-cli run was sealed by the claude-code rules: %v", other.DeniedDomains)
 	}
 }
