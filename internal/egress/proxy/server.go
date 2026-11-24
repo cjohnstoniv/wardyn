@@ -344,6 +344,7 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		ScrubResponses:       cfg.ScrubResponses,
 		NoNetwork:            cfg.NoNetwork,
 		CanonicalPushRepos:   cfg.CanonicalPushRepos,
+		PushHoldRemovals:     cfg.PushHoldRemovals,
 		Attribution:          cfg.Attribution,
 		LocalSubnets:         localSubnets,
 		ControlPlaneIPs:      cpIPs,

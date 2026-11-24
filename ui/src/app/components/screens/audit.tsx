@@ -69,6 +69,9 @@ import { runPath, useConsoleMode, type ConsoleView } from "../wardyn/console-vie
 // state). Kept modest — this is a background refresh, not a chat stream.
 const AUDIT_POLL_MS = 5000;
 const NO_EVENTS: AuditEvent[] = [];
+// The sensor's state turns degraded only once its heartbeat is two minutes old, so the screen reads it on load and
+// then at most every 30 s, not on every 5 s refresh.
+const SENSOR_HEALTH_EVERY_MS = 30_000;
 
 // The four /healthz ebpf_groundtruth states. "unavailable" is the DEFAULT for
 // nearly every install (the ground-truth tier is an opt-in compose profile), so

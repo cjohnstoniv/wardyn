@@ -96,17 +96,23 @@ func (s *Server) sponsorStillEntitled(ctx context.Context, run types.AgentRun, p
 // stamp never takes the arm (a sponsor's ticket is stamped member whatever the minter's role, so the run's
 // own doors always run). A store failure refuses and is logged.
 func (s *Server) mayEnterRunOrSponsor(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) bool {
-	if mayEnterRun(run, principal, superAdmin) {
-		return true
-	}
-	if superAdmin {
-		return false
-	}
-	ok, err := s.sponsorStillEntitled(ctx, run, principal, since)
+	ok, err := s.sponsorEntry(ctx, run, principal, superAdmin, since)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: sponsor entry check failed; refusing", "run_id", run.ID, "err", err)
 	}
 	return ok && err == nil
+}
+
+// sponsorEntry is mayEnterRunOrSponsor that returns the sponsor read's error instead of refusing on it, for a
+// re-check that tells a refusal from a read that failed.
+func (s *Server) sponsorEntry(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) (bool, error) {
+	if mayEnterRun(run, principal, superAdmin) {
+		return true, nil
+	}
+	if superAdmin {
+		return false, nil
+	}
+	return s.sponsorStillEntitled(ctx, run, principal, since)
 }
 
 // runOwnerOnlyReason is the audit reason an entry refusal carries on the lanes

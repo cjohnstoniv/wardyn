@@ -59,6 +59,7 @@ Pick one of three shapes. The server records it as `shape` ([run documents](sdk.
 - **What should run?** (Application sandbox only): **Automation / script** or **Application / server**.
 - **Command** is required for an automation. It runs verbatim, and the run ends when it exits.
 - **Keep it running** (a background automation on a container) restarts the command on failure and checks a port: [Services](SERVICES.md#start-a-service).
+  - Its ports are optional, and only a port [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port) can be reached: a background run's page has no Open.
 - An **Application / server** takes a required **Start command** and one to eight **Ports**, each with a name, a port and a path. The run is interactive and keeps going until you end it or it reaches its lifetime limit.
   - Each port opens from the run page through the web app gateway. Only people who may enter the run can open it, unless the port is [callable from outside](UI-SANDBOXES.md#inbound-let-named-callers-reach-a-port). Review holds Launch when the gateway is off.
   - **Callable from outside the run** lets the callers under **Who can call it** (people, groups, service identities; **Add a caller**) reach that port through the gateway with no terminal open. It needs inbound access turned on for you.

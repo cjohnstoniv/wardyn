@@ -279,3 +279,36 @@ describe("AuditScreen — a refocus read that overtakes the new filter's first r
     expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });
+
+describe("AuditScreen — the sensor's health is not read on every refresh", () => {
+  beforeEach(() => {
+    listAuditMock.mockReset().mockResolvedValue([]);
+    getRunMock.mockReset().mockResolvedValue(undefined);
+    healthMock.mockReset().mockResolvedValue({ ebpf_groundtruth: { state: "healthy" } });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("reads the sensor's health on load and then at most every 30 s", async () => {
+    vi.useFakeTimers();
+    renderScreen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(healthMock).toHaveBeenCalledTimes(1);
+
+    // Two 5 s refreshes read the events and leave the sensor alone.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(listAuditMock.mock.calls.length).toBeGreaterThan(2);
+    expect(healthMock).toHaveBeenCalledTimes(1);
+
+    // The refresh at 30 s finds the last read old enough, and its answer reaches the chip.
+    healthMock.mockResolvedValue({ ebpf_groundtruth: { state: "degraded" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_500);
+    });
+    expect(healthMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/ground truth · degraded/i)).toBeInTheDocument();
+  });
+});

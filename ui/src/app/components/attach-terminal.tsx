@@ -70,6 +70,7 @@ import { DATA_OUT_RUN } from "./wardyn/copy/data-out-run";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 import { useAttachSession, realFit, MAX_RECONNECT_ATTEMPTS, OWNER_JOINED_REASON, type ConnState } from "./use-attach-session";
 import { useSupportHelper } from "./wardyn/support-helper-context";
+import { TerminalTitleBar } from "./wardyn/terminal-title-bar";
 import { SUPPORT_BANNER } from "./wardyn/copy/support";
 import { useSignedOut } from "../lib/use-signed-out";
 
@@ -483,7 +484,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       // after the chord continues in document order from here.
       tabIndex={-1}
       className={cn(
-        "flex flex-col overflow-hidden border border-border bg-[#0d1117] focus:outline-none",
+        "flex flex-col overflow-hidden border border-border bg-terminal focus:outline-none",
         // In native fullscreen the element already fills the screen, so it only
         // needs to drop its rounding and its fixed height. The `fixed inset-0`
         // branch is the no-API fallback described above.
@@ -492,19 +493,19 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       )}
     >
       {/* title bar */}
-      <div className="flex items-center gap-1.5 border-b border-border bg-card/60 px-3 py-2">
-        <span className="size-3 rounded-full bg-[#ff5f56]" />
-        <span className="size-3 rounded-full bg-[#ffbd2e]" />
-        <span className="size-3 rounded-full bg-[#28c840]" />
-        <span className="ml-3 truncate font-mono text-xs text-muted-foreground">
-          {connState === "connecting" && "Connecting…"}
-          {connState === "reconnecting" && "Reconnecting…"}
-          {connState === "open" && `attach — ${runId}`}
-          {/* #216 — was `[closed] {runId}` / `[error] {runId}`; state now
-              lives in TerminalConnectionStatus below, so the bar just names
-              the run. */}
-          {(connState === "closed" || connState === "error") && runId}
-        </span>
+      <TerminalTitleBar
+        title={
+          <>
+            {connState === "connecting" && "Connecting…"}
+            {connState === "reconnecting" && "Reconnecting…"}
+            {connState === "open" && `attach — ${runId}`}
+            {/* #216 — was `[closed] {runId}` / `[error] {runId}`; state now
+                lives in TerminalConnectionStatus below, so the bar just names
+                the run. */}
+            {(connState === "closed" || connState === "error") && runId}
+          </>
+        }
+      >
         {/* State chip (design board 2d). Only ever rendered from what the
             SERVER said: "driving" needs an attach-mode frame with
             read_only=false, so a daemon that never sends one shows no chip
@@ -573,7 +574,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
             {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
           </button>
         </div>
-      </div>
+      </TerminalTitleBar>
 
       {keepsIn && (
         <p data-testid="terminal-keeps-in" className="border-b border-border bg-muted/40 px-3 py-1.5 text-meta text-muted-foreground">
