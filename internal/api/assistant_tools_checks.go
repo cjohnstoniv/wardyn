@@ -276,8 +276,15 @@ func (s *Server) assistantValidate(r *http.Request, sub assistantSubject, caller
 		if err != nil {
 			return fail(err)
 		}
-		if err := validatePolicySpec(spec); err != nil {
+		// The policy save's checks (decodePolicyRequest, then ruleUIAppCallers), so a draft called valid saves.
+		if err := validateAuthoredPolicySpec(spec); err != nil {
 			return []assistantFieldError{{Message: err.Error()}}, nil
+		}
+		if err := s.ruleUIAppCallers(ctx, spec); err != nil {
+			if errors.Is(err, store.ErrDelegatePersonUnknownPortal) {
+				return []assistantFieldError{{Message: delegatePersonUnknownPortalMsg}}, nil
+			}
+			return nil, err
 		}
 		return []assistantFieldError{}, nil
 	case sub.targetKind == types.AssistantTargetTemplate:
