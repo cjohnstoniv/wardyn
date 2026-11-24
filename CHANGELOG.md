@@ -11,6 +11,19 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Before you upgrade
+
+- Set `local_folders` walls only once every control-plane replica runs this release: an older replica serves a run's folders without them.
+
+### Added
+
+- A policy knob, `local_folders`, walls off folders from a person's computer (#2990). `deny_remote` keeps them off a run on another machine, `deny_pull` keeps the sandbox's changes from coming back, `max_push_mib` and `max_pull_mib` cap one sync session or pass, and `deny` adds ignore patterns. The boundary, a unit or a run's policy can set them; each refusal names the layer that set its wall.
+- `wardyn sync --git` of a repository with SHA-256 history makes a SHA-256 repository in the sandbox. A sandbox git older than 2.29 is refused with a sentence saying it cannot hold SHA-256 history.
+
+### Fixed
+
+- `wardyn sync --git` and `--pull-commits` across a SHA-1 and a SHA-256 repository stop before any fetch with a message naming both hashes, where git used to report a corrupted pack and could leave a partial pack behind; no laptop ref is written.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added

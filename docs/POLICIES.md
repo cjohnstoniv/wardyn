@@ -68,6 +68,7 @@
 | `harness_inner_walls` | `HarnessInnerWalls` | omitted = what the harness and lane give | The harness's own walls inside Wardyn's: its `sandbox_mode` and where its `approvals` happen. Only adds walls; a looser choice refuses the run. See [below](#harness_inner_walls--harnessinnerwalls). |
 | `recording` | `string` | omitted = the organisation's level (`terminal` unless it sets one) | How much of the run is recorded: `off`, `terminal` or `screen_actions` (a desktop's screen and an action log). A ceiling's level is a minimum. `WARDYN_RECORDING_STORE=off` still records nothing. Keystrokes are never recorded at any level. See [below](#recording). |
 | `data_out` | `string` | omitted = allowed | Content leaving the run: `allowed`, `review` or `blocked`. See [below](#data_out). |
+| `local_folders` | `LocalFolderRules` | omitted = no walls | Walls for folders from a person's computer: `deny_remote`, `deny_pull`, `max_push_mib`, `max_pull_mib`, `deny`. See [below](#local_folders). |
 | `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes on every brokered lane; operator-authored, never agent-settable. See [`git_push_any_branch`](#git_push_any_branch). |
 | `push_rules` | `PushRulesSpec` | omitted = **no content rules** | Content rules for brokered git pushes on every broker lane and the Azure DevOps REST door ([details](#push_rules--pushrulesspec)). With `deny_all`, a run holding an `ssh_key`, or a `git_pat` while the git token broker is off, is refused at start. |
 | `azure_devops_capabilities` | `[]string` | omitted = the provider row's `default_profile` | This run's Azure DevOps capabilities on the per-person (Entra) lane, chosen only within the row's `capability_ceiling`; unknown or unpermitted choices are refused. See [`azure_devops_capabilities`](#azure_devops_capabilities). |
@@ -1204,6 +1205,29 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - With `review` or `blocked`, `wardyn sync` still carries file names, sizes and symlink targets out of the run, and an agent chooses them; file contents do not leave. A sftp-server the run's image replaces can hide more in those replies. Turn off interactive access and use a stock image if that matters.
 - Audit: each refusal on a path above writes `run.data_out.deny` with the `path` and the `rule`. A web app's refusals write it; a refused call to an `inbound` app with an API token writes it only within the audit rate limit shared with failed authentication.
 - A refused Files panel download keeps its `desktop.file.transfer` row. A 503 `data_out_unreadable` writes no row; it is logged.
+
+## `local_folders`
+
+Walls for folders from a person's computer (#2990): `wardyn sync` folders and computer folders a runner syncs.
+
+- The walls only narrow. A run's policy, a unit's walls and the boundary can each add one; none can take one away. `local_folders` is lockable, so a unit below a lock cannot set it.
+- Each wall names the layer that set it, so two walls of one run can name two layers: the boundary, a unit by name, or the run's own policy.
+- The walls are kept on the run when it starts, so audit retention removing its policy records does not change them. A wall change reaches runs started after it.
+
+| Wall | What it closes |
+|---|---|
+| `deny_remote: true` | A computer folder, and a `wardyn sync` folder unless the run is placed on the person's own computer (`--placement local`) and every runner it can land on is theirs. The sync channel checks the runner again |
+| `deny_pull: true` | A computer folder that syncs back, the pass back and the bring-back (403 `local_folder_walled`), and `wardyn sync --pull`, refused before it connects. Every sync session and computer-folder pass starts read-closed |
+| `max_push_mib`, `max_pull_mib` | 1 to 1048576 MiB sent in, or brought back, in one session or pass. The server ends a sync session at the limit with exit status 3 |
+| `deny` | Patterns `wardyn sync` and the runner skip, added to the deployment's `WARDYN_SYNC_DENY` |
+
+- `deny_remote` closes Wardyn's folder doors: `wardyn sync` and folders from your computer. It does not stop `sftp`, `scp` or a command that copies files into a remote run; use `data_out` and the run's SSH access for those.
+- `deny_pull` closes the sync doors back to your computer. Plain `sftp`, commands and port forwards are [`data_out`](#data_out)'s.
+- The size limits count each sync session on its own: a new `wardyn sync` session, or a new pass of a folder from your computer, starts again at zero.
+- `deny` is applied by `wardyn sync` and the runner, as `WARDYN_SYNC_DENY` is: `wardyn sync` and the runner skip a matching path. The server only relays sftp bytes and cannot stop a modified client.
+- At most 64 patterns count together with the deployment's. A policy write is not refused for passing 64 with `WARDYN_SYNC_DENY`; a run whose patterns pass 64 with it has its sync refused instead.
+- Walls that cannot be read refuse the sync channel and the bring-back (503 `local_folder_walls_unreadable`), and keep the run's sandbox for a later pass back. A run with no walls kept has none.
+- Audit: each refusal writes `run.local_folder.deny` with the `wall`, its `layer`, the unit `name` and `locked`.
 
 ## `tool_rules` — `[]ToolRule`
 
