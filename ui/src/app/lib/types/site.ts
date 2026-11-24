@@ -50,6 +50,8 @@ export interface RunnerSettings {
 export interface MachineKindDenial {
   trust_class: RunnerTrustClass;
   machine_kind: "container" | "linux_vm" | "macos_vm";
+  // The organisation site the denial holds at, by id; left out, it holds at every site.
+  site_id?: string;
 }
 
 export interface SiteConfig {

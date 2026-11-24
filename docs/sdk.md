@@ -875,7 +875,7 @@ start.
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
 | `runner_limits_invalid` | `400`: `limits` is missing or not a valid set (runs at once 1 to 64, at least one CPU, disk in whole GiB, no per-run amount past its total); `422`: a total past what the runner last reported. |
 | `runner_mdm_device_invalid` | `400`: `PUT /runners/settings` named an MDM CA or CRL URL that is not valid, or only one of the two. |
-| `machine_kind_denials_invalid` | `400`: `PUT /runners/settings` named a `machine_kind_denials` entry whose trust class or machine kind is not one of the known values, or the same pair twice. |
+| `machine_kind_denials_invalid` | `400`: `PUT /runners/settings` named a `machine_kind_denials` entry whose trust class or machine kind is not one of the known values, the same pair twice, or a `site_id` that is not a live site. |
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
 | `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |

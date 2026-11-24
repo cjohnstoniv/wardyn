@@ -54,6 +54,12 @@ Sites add one step to [which pool a run goes to](runner-pools.md#which-pool-and-
 - So a site's default pool must be able to run what people launch with the site's drives. Otherwise those launches are refused until they name a pool.
 - A queued run keeps the pool, selection and site it was admitted with, whatever happens to the site while it waits.
 
+## Machine kinds at a site
+
+- A super admin can deny a machine kind on runners of one trust class at one site and allow it at another: a `machine_kind_denials` entry with a `site_id` ([Machine kinds by trust class](hybrid-laptops.md#machine-kinds-by-trust-class)).
+- The entry holds only on runners whose pool is at that site, and only while sites are on. It can take runners away from a run, never add one.
+- Its refusal is `placement_denied` and names the site. Writing an entry for a site that is not live is refused `machine_kind_denials_invalid`.
+
 ## Proxies and failure domains
 
 - Each run's egress proxy runs beside the run, on the run's runner, so it is already at the run's site. There is no proxy per site.

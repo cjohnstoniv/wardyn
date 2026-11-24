@@ -16,6 +16,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
+	"github.com/google/uuid"
 )
 
 // CredentialOrigin is control-plane provenance for one actual dispatch field.
@@ -83,6 +84,10 @@ type LocalPlan struct {
 	// MacOSHostGateLater is set only at create, where the managed-Mac gate runs in a later step and answers
 	// a macOS VM off a managed_device runner with its own reason. Unset, the trust floor is judged here.
 	MacOSHostGateLater bool
+	// SiteID and SiteName are the organisation site of the candidate runner's pool, set where the denials
+	// are and only while sites are on. Nil, a denial keyed to a site holds nowhere for this plan.
+	SiteID   *uuid.UUID
+	SiteName string
 }
 
 // Refusal names the actual field that makes local execution ineligible.

@@ -261,7 +261,7 @@ func machineKindJudgement(t *testing.T, kind string, denials []types.MachineKind
 	f.srv.cfg.Store = localPlanTestStore{f.st}
 	f.st.siteConfig = types.SiteConfig{Runners: &types.RunnerSettings{Enabled: true, MachineKindDenials: denials}}
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil).WithContext(utCtx("user", "", nil))
-	return f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local, MachineKind: kind}, true, trusts, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
+	return f.srv.localPlacementRefusal(r, createRunRequest{Placement: placement.Local, MachineKind: kind}, true, types.ResolvedRunnerPool{}, trusts, nil, types.RunPolicySpec{}, governanceCeiling{}, runComponents{}, nil, nil, composer.Baseline{})
 }
 
 // P4: a super admin denies Linux VMs on personal runners and leaves them on managed_device ones. A pool of both
