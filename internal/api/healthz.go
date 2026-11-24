@@ -269,9 +269,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	// next" for the four sign-in refusals a person cannot clear alone. PUBLIC
 	// by design — the reader has, by definition, not signed in — and written
 	// as such (validateSignInHelp). Each value is re-checked here and dropped
-	// if it no longer passes; an unreadable store omits both, like a store
-	// with none set.
-	if sc, ok := s.siteConfigSnapshot(r.Context()); ok {
+	// if it no longer passes; an unreadable store, or one that does not answer
+	// within healthzStoreReadTimeout, omits both, like a store with none set.
+	sctx, cancel := context.WithTimeout(r.Context(), healthzStoreReadTimeout)
+	sc, ok := s.siteConfigSnapshot(sctx)
+	cancel()
+	if ok {
 		text, link := signInHelpPublic(sc)
 		if text != "" {
 			body["sign_in_help_text"] = text
@@ -332,6 +335,13 @@ func (healthzGateWriter) WriteHeader(int)             {}
 // so the stalled-store test need not wait it out;
 // TestSensorBeatReadTimeoutStaysInsideTheProbes pins the production value.
 var sensorBeatReadTimeout = 500 * time.Millisecond
+
+// healthzStoreReadTimeout bounds each of /healthz's other store reads: the site settings (the sign-in help) and
+// the node sensors. Like sensorBeatReadTimeout it gives way inside the liveness probe's 3s: a read that ran to a
+// probe's own timeout would restart the daemon over a database that only stopped answering. A read cut off here
+// reads as a failed one: the help is left out, and the sensor's verdict says it could not be read. A var so the
+// stalled-store test need not wait it out; TestHealthzStoreReadTimeoutStaysInsideTheProbes pins the production value.
+var healthzStoreReadTimeout = 500 * time.Millisecond
 
 // groundtruthBeatReadFailed is the reason /healthz gives when that read fails
 // or runs out of time (it is made only when no node row holds the sensor's
@@ -518,7 +528,8 @@ const groundtruthSensorListed = 7 * 24 * time.Hour
 // last groundtruthSensorListed, and how many of them beat within
 // groundtruthSensorGone. A store without per-node rows returns none, which
 // leaves the latest-beat reading in charge. A failed read returns its error
-// (logged here): callers must not read it as "one node".
+// (logged here): callers must not read it as "one node". The read gives way at
+// healthzStoreReadTimeout, and a read cut off there is a failed one.
 //
 // groundtruthNodeReadFailed is the reason /healthz gives for it, anonymous
 // view included: it names no node and no error text.
@@ -530,6 +541,8 @@ func (s *Server) groundtruthNodeSensors(ctx context.Context) ([]store.Groundtrut
 		return nil, 0, nil
 	}
 	now := s.cfg.Now()
+	ctx, cancel := context.WithTimeout(ctx, healthzStoreReadTimeout)
+	defer cancel()
 	rows, err := gs.ListGroundtruthSensors(ctx, now.Add(-groundtruthSensorListed))
 	if err != nil {
 		slog.WarnContext(ctx, "api: read ground-truth node sensors", slog.Any("err", err))

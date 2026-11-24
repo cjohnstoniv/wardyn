@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Fixed
+
+- A database that stops answering no longer gets the server's pod restarted by its liveness probe. `/healthz` gives up each of its database reads after half a second and still answers: it leaves out the sign-in help text and says the eBPF sensor's health could not be read. When the database answers again, the server carries on without a restart.
+
 ## [0.10.4] — 2026-11-24
 
 ### Added
