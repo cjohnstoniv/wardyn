@@ -22,6 +22,7 @@
 # against Postgres and the fake runner by internal/api/run_lost_test.go,
 # run_revive_test.go and internal/store/store_run_cap_pg_test.go instead, and
 # the live daemon-restart walk is owner-gated (a spare Docker host).
+# The control-plane outage tests (#4080) are scripts/cp-outage-walk.sh.
 #
 # WHAT THIS DOES NOT PROVE, AND WHY: it does not hold a LIVE, in-flight
 # sandbox Bedrock request the way the kind SSO walk already does (that walk's
