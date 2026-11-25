@@ -138,7 +138,13 @@ func TestInsertAuditEvents_SeqOrderIsCommitOrder_PG(t *testing.T) {
 	if err := store.InsertAuditEvent(ctx, pool, before); err != nil {
 		t.Fatal(err)
 	}
-	holder, err := pool.Begin(ctx)
+	// The lock is held on a pool of its own: this goroutine then reads through pool (WARDYN_TEST_POOL_GUARD).
+	lockPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockPool.Close()
+	holder, err := lockPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
