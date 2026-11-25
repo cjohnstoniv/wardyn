@@ -582,6 +582,7 @@ export interface RunDetail extends AgentRun {
   // Whether this caller may watch a running background macOS VM run's desktop (GET /runs/{id} only); see RunBackgroundWatch.
   background_watch?: RunBackgroundWatch;
   mac_window?: RunMacWindow; // whether this caller may open a window onto the run on their own Mac (GET /runs/{id} only)
+  local_window?: RunLocalWindow; // a window onto a live Linux VM run on the caller's own computer (GET /runs/{id} only)
   // True while an interactive macOS VM run's setup (repo clone, harness setup) runs (GET /runs/{id} only); absent otherwise.
   macos_preparing?: boolean;
   // Where a macOS VM run's disk stands on its Mac at the run's end (GET /runs/{id} only); see RunMacOSDisk.
@@ -613,6 +614,15 @@ export interface RunMacWindow {
   state: "open" | "window_open" | "site_off" | "governance" | "sign_ins_off" | "not_your_mac" | "unrecorded" | "offline" | "runner_too_old" | "not_here" | "paused" | "preparing" | "unconfirmed" | "not_run_owner";
   message?: string;
   last_close?: RunMacWindowClose; // why this person's last window closed (macWindowLastClose); absent when none has
+}
+
+// GET /runs/{id}'s local_window (localWindowView, internal/api/run_local_window.go): open while a window onto the run is
+// open; message is the sentence an open would be refused with now, absent while one is open and when nothing refuses one.
+// Absent unless a live Linux VM run, for its owner.
+export interface RunLocalWindow {
+  open: boolean;
+  opened_at?: string;
+  message?: string;
 }
 
 export interface RunMacWindowClose {
