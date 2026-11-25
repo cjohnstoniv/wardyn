@@ -23,6 +23,9 @@ type RunnerRegisterRequest struct {
 	// Arch is the Docker engine's CPU architecture ("amd64" or "arm64"), runner-reported; omitted by an
 	// older runner or when the engine could not be asked.
 	Arch string `json:"arch,omitempty"`
+	// Labels are the labels the runner proposes (wardyn-runnerd --label), stored runner_asserted: shown,
+	// never trusted. Omitted when none, so a runner with none registers against an older organisation.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // RunnerRegistration is safe to return to the anonymous runner; it has no human identity.

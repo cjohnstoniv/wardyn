@@ -188,6 +188,11 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 		writeServerError(w, r, "read runner drains", err)
 		return nil, false
 	}
+	labels, err := s.runnerLabelsOf(r.Context(), ids)
+	if err != nil {
+		writeServerError(w, r, "read runner labels", err)
+		return nil, false
+	}
 	out := make([]types.RunnerView, len(rows))
 	emails := map[string]string{}
 	// A name is a courtesy: a failed lookup leaves the opaque subject, never fails the read.
@@ -209,6 +214,7 @@ func (s *Server) runnerViews(w http.ResponseWriter, r *http.Request, rs store.Ru
 			}
 			out[i].Drain = &shown
 		}
+		applyRunnerLabels(&out[i], labels[row.ID], admin)
 		if admin {
 			continue
 		}

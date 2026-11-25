@@ -19,10 +19,17 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted UPDATE on the runners table, other than its owner. If the app role is not one of those roles or a member of one, and
   does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the
   migration has run. Until then no run can be placed on a registered runner, the runner lists and a runner's detail answer 500, a lost run's revive answers 503, and a drain cannot be set.
+- Runners carry labels: proposed by the runner at registration (`wardyn-runnerd register --label key=value`, the runner chart's `labels`), confirmed by a security operator (`wardyn runner label`, `PUT /runners/{id}/labels`). `run.create` and `run.queue.start` record the confirmed ones as `runner_labels`, the run read shows them, and the OTLP export carries them as `wardyn.runner_label.<key>`.
 
 ### Before you upgrade
 
 - Drain runners only after every control-plane replica runs this release.
+- Set the runner chart's `labels` only after the control plane runs this release: an older one refuses the registration.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `runner_labels` to every role that was granted `UPDATE` on `runners`, other than that table's owner. If the app role is
+  not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step
+  in Operations, grant it the same on the table as soon as the migration has run. Until then the runner list and a
+  label write fail with a server error; runs are not affected.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
   and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
   than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables

@@ -124,6 +124,7 @@ var auditHostReviewed = map[string]auditHostKeep{
 	"run.ssh.drop":                   {[]string{"dropped_hosts"}, keepEgress},
 	"run.subscription.inject":        {[]string{"host"}, keepEgress},
 	"runner.trust.write":             {[]string{"after", "before"}, keepValues},
+	"runner.label.write":             {[]string{"after", "before"}, "operator label maps: label syntax only, no path, URL or host:port"},
 	"runner.update":                  {[]string{"after", "before"}, "the runner's resource limits, numbers"},
 	"runner_pool.default.set":        {[]string{"after", "before"}, keepValues},
 	"runner_pool.runner.attach":      {[]string{"remote_hosted", "self_hosted"}, "runner_kind values"},

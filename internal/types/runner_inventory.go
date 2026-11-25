@@ -114,6 +114,14 @@ type RunnerView struct {
 	// Drain is set while an administrator has drained the runner: it takes no new sandbox, and its running
 	// runs go on. CreatedBy is on the administrators' routes only.
 	Drain *RunnerDrain `json:"drain,omitempty"`
+	// Labels are the operator labels, written by a security operator: the only labels run.create, the run
+	// read, the audit export and placement rules read. AssertedLabels are what the runner proposed at
+	// registration (runner_asserted): shown, never trusted. LabelsSetBy and LabelsSetAt name the operator
+	// labels' last writer, on the administrators' routes only.
+	Labels         map[string]string `json:"labels,omitempty"`
+	AssertedLabels map[string]string `json:"asserted_labels,omitempty"`
+	LabelsSetBy    string            `json:"labels_set_by,omitempty"`
+	LabelsSetAt    *time.Time        `json:"labels_set_at,omitempty"`
 }
 
 // RunnerDrain is an administrator's drain of a runner (the runner_drains table).

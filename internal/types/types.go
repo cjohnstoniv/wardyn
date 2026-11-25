@@ -177,6 +177,9 @@ type AgentRun struct {
 	RunnerName       string     `json:"runner_name,omitempty"`
 	RunnerOnline     *bool      `json:"runner_online,omitempty"`
 	RunnerLastSeenAt *time.Time `json:"runner_last_seen_at,omitempty"`
+	// RunnerLabels is the runner's current operator labels, projected on the run routes and never stored;
+	// the run's run.create row keeps the labels of its create. Absent when none or unreadable.
+	RunnerLabels map[string]string `json:"runner_labels,omitempty"`
 	// EvidenceSource says who can attest this run's evidence (OD-8): substrate or
 	// runner_asserted, empty for a legacy or unresolved record. Not
 	// `confinement_source`, which says who CHOSE the class.

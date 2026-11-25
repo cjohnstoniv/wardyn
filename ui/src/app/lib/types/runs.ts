@@ -152,6 +152,8 @@ export interface AgentRun {
   runner_name?: string;
   runner_online?: boolean;
   runner_last_seen_at?: string;
+  // The runner's current operator labels, projected on the run routes; absent when none or unreadable.
+  runner_labels?: Record<string, string>;
   // Who can attest this run's evidence: "substrate" (the organisation's own) or
   // "runner_asserted" (a runner said so, nobody can verify). Empty only for a
   // legacy or unresolved record, hence optional here.

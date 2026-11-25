@@ -67,7 +67,7 @@
 //   - runners (/api/v1/runners, /api/v1/me/runners): MintRunnerToken, RegisterRunner, ClaimRunner,
 //     ListRunners, ListRunnersPage, GetRunner, ListMyRunners, ListMyRunnersPage, GetMyRunner, SetMyRunnerLimits, ListRunnerTokens,
 //     ListRunnerTokensPage, RevokeMyRunner, RevokeRunnerToken, GetRunnerSettings, SetRunnersEnabled, MintOrgRunnerToken,
-//     ClaimOrgRunner, SetRunnerTrust, DrainRunner, UndrainRunner
+//     ClaimOrgRunner, SetRunnerTrust, DrainRunner, UndrainRunner, SetRunnerLabels
 //   - runner pools (/api/v1/runner-pools, /api/v1/runner-pool-defaults; /api/v1/me/runner-pools, /api/v1/me/runner-pool-defaults):
 //     ListRunnerPools, ListRunnerPoolsPage, ListRunnerPoolsFor, ListMyRunnerPools, GetRunnerPool, CreateRunnerPool, UpdateRunnerPool, DeleteRunnerPool, CreateMyRunnerPool, UpdateMyRunnerPool, DeleteMyRunnerPool, OwnRunnerPool, AddMyRunnerToPool,
 //     RemoveMyRunnerFromPool, AddRunnerPoolRunner, RemoveRunnerPoolRunner, GetOrgRunnerPoolDefaults, SetOrgRunnerPoolDefaults, GetMyRunnerPoolDefaults,

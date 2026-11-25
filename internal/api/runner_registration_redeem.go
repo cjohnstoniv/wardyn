@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"crypto/ed25519"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -64,6 +65,10 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, `arch must be "amd64" or "arm64"`)
 		return
 	}
+	if err := types.ValidateRunnerLabels(req.Labels); err != nil {
+		writeErrorReason(w, http.StatusUnprocessableEntity, reasonRunnerRegistrationInvalid, "labels: "+err.Error())
+		return
+	}
 	orgHash := federation.OrgURLSHA256(s.cfg.RunnerOrgURL)
 	token, valid, err := rs.ConsumeRunnerRegistrationToken(r.Context(), req.Token, orgHash, s.cfg.Now().UTC())
 	if err != nil {
@@ -91,6 +96,14 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeServerError(w, r, "register runner", err)
 		return
+	}
+	if len(req.Labels) > 0 {
+		// Display-only: a failed write leaves the runner without proposed labels and never fails its registration.
+		if ls, ok := s.cfg.Store.(store.RunnerLabelStore); ok {
+			if _, err := ls.SetRunnerLabels(r.Context(), registered.ID, types.RunnerLabelsAsserted, req.Labels, "runner:"+registered.ID.String(), s.cfg.Now().UTC()); err != nil {
+				slog.WarnContext(r.Context(), "store runner-asserted labels", slog.String("runner_id", registered.ID.String()), slog.Any("err", err))
+			}
+		}
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, types.ActorSystem, "runner:"+registered.ID.String(),
 		placement.ActionRunnerEnrol, registered.ID.String(), "success", mustJSON(map[string]any{"token_id": token.ID, "fingerprint": registered.KeyFingerprint, "limits": registered.Limits, "owner_kind": registered.OwnerKind})))

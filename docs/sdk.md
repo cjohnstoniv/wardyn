@@ -901,7 +901,7 @@ start.
 | `runner_registration_unavailable` | Runner registration requires a configured public org URL and registration store. |
 | `runner_registration_rate_limited` | Too many registration attempts; retry later. |
 | `runner_token_rate_limited` | `POST /me/runners/tokens` (`runner_registration.go`): a person minted more than 10 runner registration tokens in an hour; retry later (`429` with `Retry-After`). |
-| `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid. |
+| `runner_registration_invalid` / `runner_owner_invalid` | Registration fields or token owner are invalid, or a label is outside Kubernetes label syntax. |
 | `runner_key_already_registered` | This key is already registered; generate a new identity. |
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner, and an unclaimed runner past its wait, answer as an absent id. |
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
@@ -910,6 +910,7 @@ start.
 | `machine_kind_denials_invalid` | `400`: `PUT /runners/settings` named a `machine_kind_denials` entry whose trust class or machine kind is not one of the known values, or the same pair twice. |
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `runner_drain_invalid` | `PUT /runners/{id}/drain`: `400`, `reason` is missing or too long; `409`, the runner is not claimed. |
+| `runner_labels_invalid` | `PUT /runners/{id}/labels`: `400`, a key or value outside Kubernetes label syntax, or more than 16; `409`, the runner is not claimed. |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
 | `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. A runner on 0.10.4 or later first replaces the proxy pod up to twice, so the reason means every try was given a held address or a pod could not be proven stopped. Launch the run again. |
 | `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules`, `push_hold_removals` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run that sets any of these on such a runner is refused `409` with it. |

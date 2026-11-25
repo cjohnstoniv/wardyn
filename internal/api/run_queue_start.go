@@ -619,6 +619,7 @@ func (s *Server) auditQueueStart(st *queuedStart, started, anchor types.AgentRun
 			data["slots"] = map[string]any{"used": n}
 		}
 	}
+	s.stampRunnerLabels(st.base, started, data)
 	s.recordAudit(st.base, s.auditEvent(&started.ID, types.ActorSystem, "wardynd", "run.queue.start", started.ID.String(), "success", mustJSON(data)))
 }
 

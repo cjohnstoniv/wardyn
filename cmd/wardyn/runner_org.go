@@ -68,7 +68,7 @@ func runnerOrgCmds(client clientFn) []*cobra.Command {
 	}}
 	trust.Flags().StringVar(&reason, "reason", "", "why, kept in the audit row (required)")
 	_ = trust.MarkFlagRequired("reason")
-	return []*cobra.Command{orgToken, claimOrg, trust, nodeRecordCmd(client)}
+	return []*cobra.Command{orgToken, claimOrg, trust, runnerLabelCmd(client), nodeRecordCmd(client)}
 }
 
 // nodeRecordLong is node-record's help: the record is a signed-in person's, so

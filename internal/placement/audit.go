@@ -29,6 +29,8 @@ const (
 	// ActionRunnerDrain and ActionRunnerUndrain: an administrator drains a runner, or undrains it.
 	ActionRunnerDrain   = "runner.drain"
 	ActionRunnerUndrain = "runner.undrain"
+	// ActionRunnerLabelWrite: a security operator writes a runner's operator labels.
+	ActionRunnerLabelWrite = "runner.label.write"
 	// ActionRunnerRecoveryRequest: a revive queued recover_containment for a run its runner held contained.
 	ActionRunnerRecoveryRequest = "runner.recovery.request"
 	// ActionRunnerOfflineSummary: a runner that connected again reported why it could not before.
@@ -45,5 +47,5 @@ var AuditActions = []string{
 	ActionRunnerPostureRecord, ActionRunnerResidentErase, ActionCredentialDeliveryWrite,
 	ActionSSHSyncTransfer, ActionRunnersEnabledSet, ActionRunnerInventoryHold, ActionRunnerUpdate,
 	ActionRunnerTrustWrite, ActionRunnerRecoveryRequest, ActionRunnerOfflineSummary, ActionRunnerDrain, ActionRunnerUndrain,
-	ActionRunnerDeviceCertRecord, ActionRunnersMDMDeviceSet,
+	ActionRunnerDeviceCertRecord, ActionRunnersMDMDeviceSet, ActionRunnerLabelWrite,
 }

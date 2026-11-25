@@ -40,6 +40,7 @@ func (s *Server) mountOrgRunnerRoutes(securityOps chi.Router) {
 	securityOps.Post("/runners/{id}/claim-org", s.handleRunnerClaimOrg)
 	securityOps.Put("/runners/{id}", s.handleUpdateOrgRunner)
 	securityOps.Put("/runners/{id}/trust", s.handlePutRunnerTrust)
+	securityOps.Put("/runners/{id}/labels", s.handlePutRunnerLabels)
 	securityOps.Post("/runs/{id}/node-record", s.handlePostRunNodeRecord)
 }
 

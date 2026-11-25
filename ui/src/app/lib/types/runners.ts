@@ -107,6 +107,13 @@ export interface RunnerView {
   parked_exits?: number;
   /** Set while an administrator has drained the runner: it takes no new sandbox, and its running runs go on. created_by is on the administrators' routes only. */
   drain?: RunnerDrain;
+  /** The operator labels a security operator confirmed: the only labels audit rows, the export and placement rules read. */
+  labels?: Record<string, string>;
+  /** What the runner proposed at registration: shown, never trusted. */
+  asserted_labels?: Record<string, string>;
+  /** Administrators' routes only: who last wrote the operator labels, and when. */
+  labels_set_by?: string;
+  labels_set_at?: string;
 }
 
 /** An administrator's drain of a runner (Go types.RunnerDrain). */
@@ -278,4 +285,5 @@ export type RunnerManagementReason =
   | "runner_mdm_device_invalid"
   | "runner_limits_invalid"
   | "runner_trust_invalid"
-  | "runner_drain_invalid";
+  | "runner_drain_invalid"
+  | "runner_labels_invalid";

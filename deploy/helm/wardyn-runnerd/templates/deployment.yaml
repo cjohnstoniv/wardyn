@@ -66,6 +66,9 @@ spec:
             - --state-dir={{ $stateSub }}
             - --name={{ $fullname }}
             - {{ printf "--arch=%s" .Values.sandbox.arch | quote }}
+            {{- range $k, $v := .Values.labels }}
+            - {{ printf "--label=%s=%v" $k $v | quote }}
+            {{- end }}
             {{- if .Values.trustedCA.configMap }}
             - --trusted-ca-file=/etc/wardyn/trusted-ca/ca.pem
             {{- end }}

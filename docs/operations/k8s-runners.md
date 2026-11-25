@@ -86,7 +86,7 @@
    kubectl -n wardyn-runner logs deploy/wardyn-runner --all-containers
    ```
 
-7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours.
+7. A second security operator, signed in as themselves (an API token cannot claim), finds the runner with `wardyn runner list --all` and claims it with `wardyn runner claim-org <runner-id> --fingerprint <fingerprint>` (`POST /api/v1/runners/{id}/claim-org`). An unclaimed runner expires after 24 hours. Then confirm its labels: `wardyn runner label <runner-id> --accept-proposed`.
 8. An admin adds the runner to an organisation pool with `wardyn runner pool add <pool> <runner>` (`PUT /api/v1/runner-pools/{pool}/runners/{runner}`). `wardyn runner pool remove`, or `DELETE` on the same path, takes it out. An organisation runner goes only into an organisation pool. It serves each runs namespace for one pool only: see [Several runs namespaces](#several-runs-namespaces).
 9. Confirm in *Admin → Runners* that the runner is Online, reports its architecture and shows the trust class "Organization cluster". Runnerd boots only on an `enforced` canary verdict, so a running pod has passed it.
 10. Delete the registration Secret. The chart mounts it optional, so restarts keep working.
@@ -106,6 +106,7 @@
 | `extraRunsNamespaces` | More pre-existing runs namespaces beside `runsNamespace`, which stays the default: see [Several runs namespaces](#several-runs-namespaces). Each is unique and not the release namespace, or the render fails. Fit checks read the default quota only; tighter extra quotas refuse at pod create |
 | `sandbox.arch` | `amd64` or `arm64` (required): pinned as every run pod's `kubernetes.io/arch` selector |
 | `sandbox.maxPodLifetime` | Upper bound on both pods' `activeDeadlineSeconds`; default `168h` |
+| `labels` | `{}`; labels this runner proposes, for example cluster and region; a security operator confirms them |
 | `image.repository`, `image.tag`; `proxyImage.repository` | Runnerd and proxy images. An empty `image.tag` means the chart's app version, which the proxy image also takes |
 | `persistence.size`, `persistence.storageClass` | The runner's volume: `10Gi` and the cluster's default storage class unless set |
 | `registration.existingSecret` | The Secret holding the token under `token` (required) |

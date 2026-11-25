@@ -817,8 +817,9 @@ const (
 	reasonRunnersEnabledRequired = "runners_enabled_required"
 	reasonRunnerMDMDeviceInvalid = "runner_mdm_device_invalid" // PUT /runners/settings: an MDM CA or CRL URL that is not valid, or only one of the two
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
-	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
-	reasonRunnerDrainInvalid     = "runner_drain_invalid" // PUT /runners/{id}/drain: no reason, or an unclaimed runner
+	reasonRunnerTrustInvalid     = "runner_trust_invalid"  // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
+	reasonRunnerDrainInvalid     = "runner_drain_invalid"  // PUT /runners/{id}/drain: no reason, or an unclaimed runner
+	reasonRunnerLabelsInvalid    = "runner_labels_invalid" // PUT /runners/{id}/labels: a key or value outside label syntax, more than 16, or an unclaimed runner
 )
 
 // Runner route admission fails closed on absent or unreadable configuration.
