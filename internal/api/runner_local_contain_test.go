@@ -19,7 +19,7 @@ import (
 func TestRecordLocalContainEvents_OneRowPerRun(t *testing.T) {
 	h := newHarness(t)
 	runner, a, b := uuid.New(), uuid.New(), uuid.New()
-	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second)
 	h.srv.recordLocalContainEvents(t.Context(), []store.LocalContainEvent{
 		{RunID: a, RunnerID: runner, ContainedAt: at, Scope: "run", OperatorUID: 501},
 		{RunID: b, RunnerID: runner, ContainedAt: at, Scope: "all", OperatorUID: 0},

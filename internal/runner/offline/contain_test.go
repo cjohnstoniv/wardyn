@@ -62,13 +62,13 @@ func readReceipt(t *testing.T, m *Manager, id uuid.UUID) containReceipt {
 func TestContain_LatchIsMonotonic(t *testing.T) {
 	m, sub, _, org := managerFixture(t)
 	id := createLocal(t, m, org)
-	at := time.Date(2026, 11, 25, 1, 2, 3, 0, time.UTC)
+	at := time.Now().UTC().Truncate(time.Second)
 	putContainRequest(t, m, containRequest{Runs: []uuid.UUID{id}, RequestedAt: at, UID: 1000})
 	if err := containTick(t, m); err != nil {
 		t.Fatal(err)
 	}
 	first := *m.state.Runs[id].LocalContain
-	if first.At != at || first.Scope != "run" || first.UID != 1000 {
+	if !first.At.Equal(at) || first.Scope != "run" || first.UID != 1000 {
 		t.Fatalf("latch = %+v", first)
 	}
 	putContainRequest(t, m, containRequest{All: true, RequestedAt: at.Add(time.Hour), UID: 0})
