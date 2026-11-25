@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/hoptls"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -196,14 +197,18 @@ func (s *Server) admitMove(ctx context.Context, ms store.RunMoveStore, req moveR
 	} else if contained {
 		return nil, refuseMove(http.StatusConflict, reasonMoveLocallyContained, "The run is held contained, so it stays where it is."), nil
 	}
-	if held, err := ms.RunMoveInFlight(ctx, run.ID); err != nil {
-		return nil, nil, err
-	} else if held {
-		return nil, refuseMove(http.StatusConflict, reasonMoveBusy, "A move already holds this run."), nil
+	if ref, err := moveHeldRefusal(ctx, ms, run.ID); ref != nil || err != nil {
+		return nil, ref, err
 	}
 	dest, ref, err := s.resolveMoveDestination(ctx, run, req.To, sc)
 	if ref != nil || err != nil {
 		return nil, ref, err
+	}
+	if moveSamePlace(run, dest) {
+		return nil, refuseMoveAt(reasonMoveDestinationRefused, "same_place", "The run already runs there."), nil
+	}
+	if (run.RunnerID != nil || dest.local()) && hoptls.CheckURL(s.cfg.RunnerOrgURL) != nil {
+		return nil, refuseMove(http.StatusConflict, reasonMovePlainLink, "A runner's link to this server is not TLS, so the run's files cannot be carried over it."), nil
 	}
 	caps, ref, err := s.moveCapsRefusal(ctx, run, rec, dest)
 	if ref != nil || err != nil {
@@ -227,6 +232,35 @@ func (s *Server) admitMove(ctx context.Context, ms store.RunMoveStore, req moveR
 		return x, refuseMove(http.StatusServiceUnavailable, reasonMovePolicyUnreadable, "The destination's judgement could not be recorded; nothing was stopped."), nil
 	}
 	return x, nil, nil
+}
+
+// moveSamePlace reports whether d is where the run runs now: the same runner for a run on a runner, else the same
+// executor of the organisation's (the default one when neither names an executor).
+func moveSamePlace(run types.AgentRun, d moveDest) bool {
+	if run.RunnerID != nil || d.local() {
+		return run.RunnerID != nil && d.RunnerID != nil && *run.RunnerID == *d.RunnerID
+	}
+	return run.RunnerPoolExecutor == d.Executor
+}
+
+// moveHeldRefusal refuses a run a move holds, and a run an earlier move of which still has a sandbox to remove: the
+// sweep's removal of that sandbox must never meet one this move makes.
+func moveHeldRefusal(ctx context.Context, ms store.RunMoveStore, runID uuid.UUID) (*moveRefusal, error) {
+	if held, err := ms.RunMoveInFlight(ctx, runID); err != nil {
+		return nil, err
+	} else if held {
+		return refuseMove(http.StatusConflict, reasonMoveBusy, "A move already holds this run."), nil
+	}
+	moves, err := ms.ListRunMoves(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range moves {
+		if m.Cleanup == types.MoveCleanupPending {
+			return refuseMove(http.StatusConflict, reasonMoveBusy, "An earlier move of this run is still removing a sandbox it left; try again shortly."), nil
+		}
+	}
+	return nil, nil
 }
 
 // moveRunRefusal is step 1's terms on the run itself: RUNNING and not claimed by a Resume, interactive, keeping no

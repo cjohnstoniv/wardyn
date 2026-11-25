@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -401,8 +402,10 @@ func TestHealthSweeps_StartConditions(t *testing.T) {
 		t.Fatalf("with a runner: %+v, want run_watcher at %s and run_move at %s", withRunner, watcherSweepInterval, moveSweepInterval)
 	}
 	both := New(Config{AdminToken: adminToken, Runner: &fakeRunner{}, ImageBuilder: &sweepableImageBuilder{}}).HealthSweeps()
-	if len(both) != 3 || both[2].Name != sweephealth.OrphanedBuild || both[2].Interval != buildSweepInterval {
-		t.Fatalf("with a sweeping builder: %+v, want orphaned_build at %s", both, buildSweepInterval)
+	wantBoth := []sweephealth.Sweep{{Name: sweephealth.RunWatcher, Interval: watcherSweepInterval},
+		{Name: sweephealth.RunMove, Interval: moveSweepInterval}, {Name: sweephealth.OrphanedBuild, Interval: buildSweepInterval}}
+	if !slices.Equal(both, wantBoth) {
+		t.Fatalf("with a sweeping builder: %+v, want %+v", both, wantBoth)
 	}
 }
 

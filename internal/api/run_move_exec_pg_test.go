@@ -10,12 +10,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
+	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -65,6 +67,7 @@ func newMovePGFixture(t *testing.T, mutate func(*types.AgentRun)) *movePGFixture
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
 	cfg.BaseCtx, cfg.RunConfigKey, cfg.ControlPlaneURL = ctx, make([]byte, 32), "http://127.0.0.1:8080"
+	cfg.RunnerOrgURL = admissionOrgURL
 	f := &movePGFixture{ctx: ctx, st: st, mr: newMoveRunner(), audit: &syncAudit{}}
 	cfg.Runner, cfg.Audit = f.mr, f.audit
 	f.srv = New(cfg)
@@ -74,7 +77,7 @@ func newMovePGFixture(t *testing.T, mutate func(*types.AgentRun)) *movePGFixture
 	f.fk.srv, f.fk.rw = f.srv, pgMoveRows{st}
 	run := newFinalizeRun()
 	run.CreatedBy, run.Placement, run.Interactive, run.SandboxRef = "mover@example.com", types.PlacementRemote, true, "ref-src"
-	run.EvidenceSource = types.RunEvidenceSubstrate
+	run.EvidenceSource, run.RunnerPoolExecutor = types.RunEvidenceSubstrate, "kind-a"
 	if mutate != nil {
 		mutate(&run)
 	}
@@ -165,8 +168,6 @@ func TestMoveAudit_ShowsBothPlacements(t *testing.T) {
 		ps[1].Cause != types.PlacementCauseMove || ps[1].MoveID == nil || *ps[1].MoveID != moves[0].ID {
 		t.Errorf("placements = %+v, want origin then this move", ps)
 	}
-	f.audit.mu.Lock()
-	defer f.audit.mu.Unlock()
 	var rows int
 	for _, ev := range f.audit.snapshot() {
 		if ev.Action != "run.move" || ev.Outcome != "success" {
@@ -262,11 +263,10 @@ func TestMoveExec_OrphanedInFlightRowFails(t *testing.T) {
 	}
 }
 
-// TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged: a cluster run judged onto the owner's personal runner
-// records the runner's trust class and each kept grant's delivery at the destination, and commit writes them onto
-// the run row, so a later revive passes the trust checks.
-func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
-	f := newMovePGFixture(t, nil)
+// laptopMoveAtCommit is a move of the fixture's run to its owner's laptop, judged at step 2 and admitted, at the
+// point the executor commits: stopped at its generation, the destination recorded and the row importing.
+func (f *movePGFixture) laptopMoveAtCommit(t *testing.T) (*moveExec, types.Runner) {
+	t.Helper()
 	rid := uuid.New()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	rn, err := f.st.CreateRunner(f.ctx, types.Runner{ID: rid, Owner: f.run.CreatedBy, Name: "laptop", PublicKey: pub, KeyFingerprint: rid.String(),
@@ -298,12 +298,12 @@ func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
 	if err != nil || ref != nil {
 		t.Fatalf("judgement = %+v %v", ref, err)
 	}
-	if plan.Trust != types.RunnerTrustPersonal {
-		t.Errorf("destination trust = %q, want personal", plan.Trust)
+	from, err := f.st.RunRunnerTrustClass(f.ctx, f.run.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The commit the executor makes once the destination is imported.
 	mv, err := f.st.AdmitRunMove(f.ctx, types.RunMove{RunID: f.run.ID, FromPlacement: types.PlacementRemote, FromSandboxRef: "ref-src",
-		FromEvidenceSource: types.RunEvidenceSubstrate, ToPlacement: types.PlacementLocal, ToRunnerID: &rn.ID,
+		FromEvidenceSource: types.RunEvidenceSubstrate, FromTrustClass: from, ToPlacement: types.PlacementLocal, ToRunnerID: &rn.ID,
 		ToEvidenceSource: types.RunEvidenceRunnerAsserted}, store.RunMoveLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -312,8 +312,8 @@ func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
 	if err := (pgMoveRows{f.st}).moveMarkStopped(f.ctx, f.run.ID, at); err != nil {
 		t.Fatal(err)
 	}
-	mv.ToTrustClass, mv.ToSandboxRef, mv.ToTokenJTI = plan.Trust, "ref-dest", "jti-dest"
-	if _, err := f.st.SetRunMovePauseGen(f.ctx, mv.ID, at.UnixMicro()); err != nil {
+	mv.PauseGen, mv.ToTrustClass, mv.ToSandboxRef, mv.ToTokenJTI = at.UnixMicro(), plan.Trust, "ref-dest", "jti-dest"
+	if _, err := f.st.SetRunMovePauseGen(f.ctx, mv.ID, mv.PauseGen); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.st.SetRunMoveDestination(f.ctx, mv); err != nil {
@@ -324,9 +324,35 @@ func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := f.st.CommitRunMove(f.ctx, store.RunMoveCommit{MoveID: mv.ID, RunID: f.run.ID, PlacementFilled: true,
-		Deliveries: plan.Deliveries}); err != nil {
-		t.Fatalf("commit: %v", err)
+	cur := f.current(t)
+	return &moveExec{s: f.srv, ms: f.st, mv: mv, run: cur, rec: rec, dest: d, caps: caps, plan: plan, sc: sc,
+		actorType: types.ActorHuman, principal: cur.CreatedBy, maxBytes: 1 << 20, drained: true,
+		manifest: runner.CarriedManifest{Digest: "d0"}}, rn
+}
+
+// wantPolicyChanged asserts a commit that ended move_policy_changed naming layer, with the run row left at its source.
+func (f *movePGFixture) wantPolicyChanged(t *testing.T, end *moveEnd, layer string) {
+	t.Helper()
+	if end == nil || end.reason != reasonMovePolicyChanged || !strings.HasSuffix(end.msg, ": "+layer) {
+		t.Fatalf("commit = %+v, want move_policy_changed naming %s", end, layer)
+	}
+	if cur := f.current(t); cur.RunnerID != nil || cur.Placement != types.PlacementRemote {
+		t.Errorf("run row = %s on %v, want the source", cur.Placement, cur.RunnerID)
+	}
+}
+
+// TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged: a run moved from the organisation's executors to its
+// owner's laptop commits with the destination's trust class on the run, the move row and its placement, and a revive
+// at the destination is not refused trust_changed. A trust class that changes between step 2 and commit fails the
+// move move_policy_changed, layer trust_class. The laptop's import and lease are not driven: they need a live runner.
+func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
+	f := newMovePGFixture(t, nil)
+	x, _ := f.laptopMoveAtCommit(t)
+	if x.plan.Trust != types.RunnerTrustPersonal {
+		t.Errorf("destination trust = %q, want personal", x.plan.Trust)
+	}
+	if end := x.commit(f.ctx); end != nil {
+		t.Fatalf("commit = %+v", end)
 	}
 	cur := f.current(t)
 	if class, err := f.st.RunRunnerTrustClass(f.ctx, f.run.ID); err != nil || class != types.RunnerTrustPersonal {
@@ -338,5 +364,102 @@ func TestMoveExec_ClusterToLaptopRevivesWithoutTrustChanged(t *testing.T) {
 	ps, _ := f.st.ListRunPlacements(f.ctx, f.run.ID)
 	if len(ps) != 2 || ps[0].TrustClass != "" || ps[1].TrustClass != types.RunnerTrustPersonal {
 		t.Errorf("placements = %+v, want seq 1 '' and seq 2 personal", ps)
+	}
+	mv, err := f.st.GetRunMove(f.ctx, x.mv.ID)
+	if err != nil || mv.State != types.MoveCommitted || mv.FromTrustClass != x.mv.FromTrustClass || mv.ToTrustClass != types.RunnerTrustPersonal {
+		t.Errorf("move row = %s from %q to %q (%v), want committed from %q to personal", mv.State, mv.FromTrustClass, mv.ToTrustClass, err,
+			x.mv.FromTrustClass)
+	}
+	var absent bool
+	if err := f.st.Pool.QueryRow(f.ctx, `SELECT sandbox_absent_at IS NULL FROM agent_runs WHERE id = $1`, f.run.ID).Scan(&absent); err != nil || !absent {
+		t.Errorf("sandbox_absent_at cleared = %v %v, want NULL after commit", absent, err)
+	}
+
+	t.Run("trust class changed before commit", func(t *testing.T) {
+		g := newMovePGFixture(t, nil)
+		x, rn := g.laptopMoveAtCommit(t)
+		if _, err := store.SetRunnerTrustClassQ(g.ctx, g.st.Pool, rn.ID, types.RunnerTrustManagedDevice, "secops", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		g.wantPolicyChanged(t, x.commit(g.ctx), "trust_class")
+	})
+}
+
+// TestMoveExec_CommitJudgesTheRunAsItIsNow: commit reads the site config again: require_managed_device turned on, or
+// moving onto a person's runner turned off, between step 2 and commit fails the move move_policy_changed.
+func TestMoveExec_CommitJudgesTheRunAsItIsNow(t *testing.T) {
+	for name, c := range map[string]struct {
+		site  func(*types.SiteConfig)
+		layer string
+	}{
+		"require_managed_device": {func(sc *types.SiteConfig) {
+			sc.Runners = &types.RunnerSettings{Enabled: true, RequireManagedDevice: true}
+		}, "managed_device"},
+		"to_personal_runners": {func(sc *types.SiteConfig) {
+			sc.FeatureSwitches = siteFeaturesDoc(t, `{"features":{"run_move":{"enabled":true,"max_carried_gib":9}}}`).FeatureSwitches
+		}, reasonMoveToPersonalOff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newMovePGFixture(t, nil)
+			x, _ := f.laptopMoveAtCommit(t)
+			sc, err := f.st.GetSiteConfig(f.ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.site(&sc)
+			if _, err := f.st.PutSiteConfig(f.ctx, sc); err != nil {
+				t.Fatal(err)
+			}
+			f.wantPolicyChanged(t, x.commit(f.ctx), c.layer)
+		})
+	}
+}
+
+// TestMovePolicy_CeilingDeniesAtStepTwoAndCommit: a restriction the run holds that now denies a component the run
+// uses refuses the move at step 2, before anything stops, with layer component; the same deny written between
+// step 2 and commit fails the move move_policy_changed.
+func TestMovePolicy_CeilingDeniesAtStepTwoAndCommit(t *testing.T) {
+	f := newMovePGFixture(t, nil)
+	cs, ok := any(f.st).(store.ComponentStore)
+	if !ok {
+		t.Fatal("the Postgres store has no component seam")
+	}
+	compID := uuid.New()
+	def := types.ComponentDefinition{Hosts: []string{"github.com"}}
+	if _, err := cs.CreateComponent(f.ctx, types.Component{ID: compID, Name: "Prod Deploy", Definition: def}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.PutRunComponents(f.ctx, f.run.ID, []types.RunComponent{{RunID: f.run.ID, ComponentID: &compID, Name: "Prod Deploy",
+		Definition: def, Version: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	r := types.Restriction{ID: uuid.New(), Name: "move-deny", Limits: types.RestrictionLimits{DenyComponents: strs(uuid.NewString())},
+		Contact: &policyref.Contact{Owner: "secops", Email: "secops@corp.example"}}
+	deny := func(id string) {
+		t.Helper()
+		r.Limits.DenyComponents = strs(id)
+		if _, err := f.st.PutRestriction(f.ctx, r, "seed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deny(compID.String())
+	if err := f.st.SetRunRestrictionIDs(f.ctx, f.run.ID, []uuid.UUID{r.ID}); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.move(t, "org")
+	if reason, layer := moveAnswer(t, body); code != http.StatusForbidden || reason != reasonMoveDestinationRefused || layer != "component" {
+		t.Fatalf("move = %d %s, want 403 move_destination_refused layer component", code, body)
+	}
+	if f.fk.count("stop") != 0 {
+		t.Errorf("stops = %d, want none", f.fk.count("stop"))
+	}
+	deny(uuid.NewString())
+	f.mr.onImport = func() { deny(compID.String()) }
+	if code, body := f.move(t, "org"); code != http.StatusAccepted {
+		t.Fatalf("second move = %d %s", code, body)
+	}
+	moves := f.moves(t)
+	if len(moves) != 2 || moves[1].State != types.MoveFailed || moves[1].Failure != reasonMovePolicyChanged {
+		t.Errorf("moves = %+v, want the second failed move_policy_changed", moves)
 	}
 }

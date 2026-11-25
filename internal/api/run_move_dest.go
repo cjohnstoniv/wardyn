@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"maps"
 	"slices"
@@ -41,6 +42,8 @@ func moveSandboxSpec(run types.AgentRun, rec runSandboxSpecRecord, d moveDest, p
 		MachineKind: rec.MachineKind, Env: maps.Clone(rec.Env), Mounts: slices.Clone(rec.Mounts), Drives: slices.Clone(rec.Drives),
 		UserMountRoots: slices.Clone(rec.UserMountRoots), UserWritable: rec.UserWritable, Interactive: rec.Interactive,
 		Resources: rec.Resources,
+		// The run's labels, as dispatch sets them: a Kubernetes destination finds its pod by them.
+		Labels: map[string]string{"wardyn.run": run.ID.String(), "wardyn.agent": run.Agent},
 	}
 	if d.local() {
 		for _, key := range rec.OrgConfigKeys {
@@ -102,9 +105,13 @@ type moveExactImporter interface {
 // beneath set's roots under the move's own byte bound. It routes by the executor its target named, as a create does.
 func (s *Server) createMoveDestination(ctx context.Context, b moveDestBuild, set runner.CarriedSet, maxBytes int64, carried io.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
 	if b.executor != "" {
-		if exact, ok := s.cfg.Runner.(moveExactImporter); ok {
-			return exact.ImportSandboxOn(ctx, b.executor, b.spec, set, maxBytes, carried)
+		exact, ok := s.cfg.Runner.(moveExactImporter)
+		if !ok {
+			// Never fall back to the default importer: it would choose a substrate other than the one named.
+			return runner.Sandbox{}, runner.CarriedManifest{}, fmt.Errorf("%w: %w: no importer for executor %s", runner.ErrMoveCreate,
+				runner.ErrExecutorUnavailable, b.executor)
 		}
+		return exact.ImportSandboxOn(ctx, b.executor, b.spec, set, maxBytes, carried)
 	}
 	imp, ok := s.cfg.Runner.(runner.StateImporter)
 	if !ok {

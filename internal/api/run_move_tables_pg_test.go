@@ -52,12 +52,20 @@ func TestMoveExec_RunnerBoundTables(t *testing.T) {
 			reasonMoveSourceUnsettled},
 		{"run_teardown_holds", `INSERT INTO run_teardown_holds (run_id, runner_id, kind, since) VALUES ($1, $2, 'kill', now())`,
 			reasonMoveSourceUnsettled},
+		{"runner_pending_actions", "", reasonMoveSourceUnsettled},
 	} {
 		t.Run(c.table, func(t *testing.T) {
 			f := newMovePGFixture(t, nil)
 			rid := f.onSourceRunner(t)
 			f.mr.onImport = func() {
-				if _, err := f.st.Pool.Exec(f.ctx, c.sql, f.run.ID, rid); err != nil {
+				var err error
+				if c.sql == "" {
+					// An open end action for the run's sandbox, queued through the store's own teardown path.
+					_, _, err = f.st.QueueRunnerTeardown(f.ctx, rid, types.RunnerActionEnd, f.run.SandboxRef)
+				} else {
+					_, err = f.st.Pool.Exec(f.ctx, c.sql, f.run.ID, rid)
+				}
+				if err != nil {
 					t.Error(err)
 				}
 			}
@@ -95,6 +103,64 @@ func TestMoveExec_RunnerBoundTables(t *testing.T) {
 		}
 		if f.mr.unbound == nil {
 			t.Error("the source runner got no notice of the move")
+		}
+	})
+	// The rows a move keeps: each is seeded on the source runner and is still there after commit.
+	for table, seed := range map[string][]string{
+		"run_proxy_configs": nil,
+		"runner_executions": {`INSERT INTO runner_executions (run_id, runner_id, generation, operation) VALUES ($1, $2, gen_random_uuid(), 'start')`},
+		"runner_inventory_candidates": {`INSERT INTO runner_inventories (runner_id, session_id, owner) VALUES ($2, gen_random_uuid(), 'mover@example.com')`,
+			`INSERT INTO runner_inventory_candidates (runner_id, run_id, run_version, ref, generation) VALUES ($2, $1, 'v1', 'ref-src', gen_random_uuid())`},
+		"runner_inventory_observations": {`INSERT INTO runner_inventories (runner_id, session_id, owner) VALUES ($2, gen_random_uuid(), 'mover@example.com')`,
+			`INSERT INTO runner_inventory_observations (runner_id, run_id, assertion) VALUES ($2, $1, '{}'::jsonb)`},
+		"runner_retirements": {`INSERT INTO runner_retirements (run_id, runner_id, obligation_id, ref) VALUES ($1, $2, gen_random_uuid(), 'ref-src')`},
+		"run_node_records": {`INSERT INTO run_node_records (id, run_id, runner_id, action_id, attestation, source, source_id)
+			VALUES (gen_random_uuid(), $1, $2, gen_random_uuid(), 'node_powered_off', 'other', 'node-1')`},
+	} {
+		t.Run(table, func(t *testing.T) {
+			f := newMovePGFixture(t, nil)
+			rid := f.onSourceRunner(t)
+			for _, sql := range seed {
+				if _, err := f.st.Pool.Exec(f.ctx, sql, f.run.ID, rid); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count := func() int {
+				t.Helper()
+				var n int
+				if err := f.st.Pool.QueryRow(f.ctx, `SELECT count(*) FROM `+table+` WHERE run_id = $1`, f.run.ID).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+			before := count()
+			if before == 0 {
+				t.Fatal("nothing seeded")
+			}
+			if code, body := f.move(t, "org"); code != http.StatusAccepted {
+				t.Fatalf("move = %d %s", code, body)
+			}
+			if moves := f.moves(t); len(moves) != 1 || moves[0].State != types.MoveCommitted {
+				t.Fatalf("moves = %+v, want one committed", moves)
+			}
+			if after := count(); after != before {
+				t.Errorf("%s rows after commit = %d, want the %d kept", table, after, before)
+			}
+		})
+	}
+	t.Run("kept_machines", func(t *testing.T) {
+		f := newMovePGFixture(t, nil)
+		rid := f.onSourceRunner(t)
+		if _, err := f.st.Pool.Exec(f.ctx, `INSERT INTO kept_machines (id, name, owner_subject, runner_id, base, base_prepared_at, state, run_id, expires_at)
+			VALUES (gen_random_uuid(), 'kept-1', 'mover@example.com', $2, 'ubuntu', now(), 'in_use', $1, now() + interval '1 day')`, f.run.ID, rid); err != nil {
+			t.Fatal(err)
+		}
+		code, body := f.move(t, "org")
+		if reason, _ := moveAnswer(t, body); code != http.StatusConflict || reason != reasonMoveKeptMachine {
+			t.Errorf("kept machine = %d %s, want 409 move_kept_machine", code, body)
+		}
+		if f.fk.count("stop") != 0 || len(f.moves(t)) != 0 || f.mr.exportCount() != 0 {
+			t.Errorf("stops %d rows %d exports %d, want none", f.fk.count("stop"), len(f.moves(t)), f.mr.exportCount())
 		}
 	})
 	t.Run("sources", func(t *testing.T) {

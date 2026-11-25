@@ -441,15 +441,12 @@ func (s *Server) judgeMoveDestination(ctx context.Context, run types.AgentRun, r
 	refused := func(layer, msg string) (moveDestPlan, *moveRefusal, error) {
 		return moveDestPlan{}, refuseMoveAt(reasonMoveDestinationRefused, layer, msg), nil
 	}
-	c, rerr := s.reviveCeiling(ctx, destRun, types.ActorSystem, "wardynd")
+	c, rerr := s.reviveCeilingAdmitting(ctx, destRun, types.ActorSystem, "wardynd")
 	if rerr != nil {
 		if rerr.status >= http.StatusInternalServerError {
 			return moveDestPlan{}, nil, errors.New(rerr.msg)
 		}
-		return refused("governance_unit", "The run owner's governance profile does not admit the destination: "+rerr.msg)
-	}
-	if p, denied := deniedRunPlacement(destRun, c.denyPlacements); denied {
-		return refused("placement", placementDeniedMsg(p, c.profile))
+		return refused(moveCeilingLayer(rerr.reason), "The run owner's current ceiling does not admit the run at the destination: "+rerr.msg)
 	}
 	if d.poolRefused {
 		return refused("pool_use_policy", "The destination pool's use policy does not admit the run's owner.")
@@ -496,6 +493,22 @@ func (s *Server) judgeMoveDestination(ctx context.Context, run types.AgentRun, r
 	}
 	plan.Mint = mint
 	return plan, nil, nil
+}
+
+// moveCeilingLayer names the layer of a refusal from the owner's current ceiling: the profile's placement denies, its
+// component and model-provider denies, the boundary floor, or else the governance unit itself.
+func moveCeilingLayer(reason string) string {
+	switch reason {
+	case string(placement.ReasonPlacementDenied):
+		return "placement"
+	case reasonComponentDenied:
+		return "component"
+	case reasonModelProviderDenied:
+		return "model_provider"
+	case reasonConfinementClassConflict:
+		return "boundary_floor"
+	}
+	return "governance_unit"
 }
 
 // moveRecordRefusal is the destination judgement's terms on the recorded spec alone: a folder bound to another

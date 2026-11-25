@@ -142,11 +142,12 @@ func moveGen(ctx context.Context, run types.AgentRun) (int64, error) {
 }
 
 // committedPauseGen is the pause generation of the run's newest committed move, -1 when it has none: the stopped
-// pause such a move left at its destination is resumed before the run moves again.
-func (x *moveExec) committedPauseGen(ctx context.Context) int64 {
+// pause such a move left at its destination is resumed before the run moves again. A failed read is an error, which
+// the caller refuses on.
+func (x *moveExec) committedPauseGen(ctx context.Context) (int64, error) {
 	moves, err := x.ms.ListRunMoves(ctx, x.run.ID)
 	if err != nil {
-		return -1
+		return 0, err
 	}
 	gen := int64(-1)
 	for _, m := range moves {
@@ -154,7 +155,7 @@ func (x *moveExec) committedPauseGen(ctx context.Context) int64 {
 			gen = m.PauseGen
 		}
 	}
-	return gen
+	return gen, nil
 }
 
 const (
@@ -229,7 +230,11 @@ func (x *moveExec) heldReread(lctx context.Context, cur types.AgentRun) *moveEnd
 	if err != nil {
 		return failMove(reasonMoveStopFailed, "The run's pause could not be read under its lock.")
 	}
-	if cur.PausedReason == movePauseStopped && gen == x.committedPauseGen(lctx) {
+	committed, err := x.committedPauseGen(lctx)
+	if err != nil {
+		return failMove(reasonMoveStopFailed, "The run's earlier moves could not be read under its lock.")
+	}
+	if cur.PausedReason == movePauseStopped && gen == committed {
 		return refuseMoveEnd(reasonMoveNotRunning, moveResumeFirstMsg)
 	}
 	if gen != x.mv.PauseGen {
@@ -253,6 +258,7 @@ func (x *moveExec) stampCutLineage(lctx context.Context) *moveEnd {
 		return failMove(reasonMoveStopFailed, "The run could not be read again after its token stamp changed nothing.")
 	}
 	gen, gerr := moveGen(lctx, cur)
+	committed, cerr := x.committedPauseGen(lctx)
 	pick := func(atPause, afterStop, msg string) *moveEnd {
 		if x.stopped {
 			return refuseMoveEnd(atPause, msg)
@@ -262,7 +268,9 @@ func (x *moveExec) stampCutLineage(lctx context.Context) *moveEnd {
 	switch {
 	case cur.State != types.RunRunning || cur.LostAt != nil:
 		return pick(reasonMoveNotRunning, reasonMoveRunEnded, "The run ended or was lost while it was moved.")
-	case gerr == nil && cur.PausedReason == movePauseStopped && gen == x.committedPauseGen(lctx):
+	case cerr != nil:
+		return failMove(reasonMoveStopFailed, "The run's earlier moves could not be read after its token stamp changed nothing.")
+	case gerr == nil && cur.PausedReason == movePauseStopped && gen == committed:
 		return pick(reasonMoveNotRunning, reasonMoveNotRunning, moveResumeFirstMsg)
 	case gerr != nil || cur.PausedReason == movePauseResuming || gen != x.mv.PauseGen:
 		return pick(reasonMoveNotRunning, reasonMovePauseChanged, "A Resume took the run while it was moved.")
@@ -386,7 +394,11 @@ func (x *moveExec) carry(ctx context.Context) *moveEnd {
 	if !s.maskCovered(ctx, x.run.ID) {
 		return failMove(reasonMoveScanUncovered, "The run's secret values are not all known here, so its files cannot be checked for them.")
 	}
-	exp, err := s.cfg.Runner.(runner.StateExporter).ExportState(ctx, x.run.SandboxRef, set)
+	ex, ok := s.cfg.Runner.(runner.StateExporter)
+	if !ok {
+		return failMove(reasonMoveExportFailed, "This server's runner cannot export a run's files.")
+	}
+	exp, err := ex.ExportState(ctx, x.run.SandboxRef, set)
 	if err != nil {
 		return failMove(reasonMoveExportFailed, "The source runner could not export the run's files: "+err.Error())
 	}
@@ -413,7 +425,9 @@ func (x *moveExec) relayAndImport(ctx context.Context, b moveDestBuild, set runn
 	done := make(chan moveRelayResult, 1)
 	masker := x.s.cfg.MaskRegistry.JSONVariantMasker(x.run.ID)
 	go func() {
-		m, err := moveRelay(src, pw, set, x.maxBytes, masker)
+		in, out := &moveStreamRead{r: src}, &moveStreamWrite{w: pw}
+		m, err := moveRelay(in, out, set, x.maxBytes, masker)
+		err = moveStreamCause(err, in.err, out.err)
 		_ = pw.CloseWithError(err)
 		done <- moveRelayResult{m: m, err: err}
 	}()
@@ -466,8 +480,57 @@ func moveRelay(src io.Reader, dst io.Writer, set runner.CarriedSet, maxBytes int
 	return man, err
 }
 
-// moveRelayReason is the failure value of a relay error: each stream rule's own, and a broken stream otherwise.
+// errMoveRelayBroken marks a relay that stopped because the source's stream or the pipe to the import broke, not
+// because a stream rule refused what it read.
+var errMoveRelayBroken = errors.New("the stream broke between a runner and this server")
+
+// moveStreamRead and moveStreamWrite keep the first error the source's stream and the import's pipe answered, which
+// the archive reader and writer name as a refused entry.
+type moveStreamRead struct {
+	r   io.Reader
+	err error
+}
+
+func (m *moveStreamRead) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	if err != nil && err != io.EOF && m.err == nil {
+		m.err = err
+	}
+	return n, err
+}
+
+type moveStreamWrite struct {
+	w   io.Writer
+	err error
+}
+
+func (m *moveStreamWrite) Write(p []byte) (int, error) {
+	n, err := m.w.Write(p)
+	if err != nil && m.err == nil {
+		m.err = err
+	}
+	return n, err
+}
+
+// moveStreamCause is the relay's error by its cause: the import ending first, a broken stream, or the rule that
+// refused (err as it is).
+func moveStreamCause(err, readErr, writeErr error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(writeErr, errMoveImportEnded):
+		return errMoveImportEnded
+	case readErr != nil || writeErr != nil:
+		return fmt.Errorf("%w: %v", errMoveRelayBroken, err)
+	}
+	return err
+}
+
+// moveRelayReason is the failure value of a relay error: a broken stream, else each stream rule's own.
 func moveRelayReason(err error) string {
+	if errors.Is(err, errMoveRelayBroken) {
+		return reasonMoveRelayFailed
+	}
 	for sentinel, reason := range map[error]string{
 		movepack.ErrArchiveRefused:  reasonMoveArchiveRefused,
 		movepack.ErrCarriedTooLarge: reasonMoveCarriedTooLarge,
@@ -510,7 +573,20 @@ func (x *moveExec) commit(ctx context.Context) *moveEnd {
 	if err != nil {
 		return failMove(reasonMovePolicyChanged, "The run could not be read again before commit.")
 	}
-	again, ref, err := s.judgeMoveDestination(ctx, cur, x.rec, x.dest, x.caps, x.sc)
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return failMove(reasonMovePolicyChanged, "The site config could not be read again before commit.")
+	}
+	d, ref, err := s.resolveMoveDestination(ctx, cur, x.dest.To, sc)
+	switch {
+	case err != nil:
+		return failMove(reasonMovePolicyChanged, "The destination could not be resolved again before commit.")
+	case ref != nil:
+		return failMove(reasonMovePolicyChanged, "The destination's judgement changed: "+ref.reason)
+	}
+	dest := x.dest
+	dest.poolRefused = d.poolRefused
+	again, ref, err := s.judgeMoveDestination(ctx, cur, x.rec, dest, x.caps, sc)
 	switch {
 	case err != nil:
 		return failMove(reasonMovePolicyChanged, "The destination could not be judged again before commit.")
@@ -701,6 +777,13 @@ func (s *Server) sweepRunMove(ctx context.Context, ms store.RunMoveStore, d stor
 		if ok, err := ms.FailStaleRunMove(ctx, mv.ID, reasonMoveOrphaned); err == nil && ok {
 			mv.State, mv.Cleanup = types.MoveFailed, types.MoveCleanupPending
 			s.auditMoveEnd(ctx, mv, sys, by, failMove(reasonMoveOrphaned, ""))
+			// The executor may have recorded its destination between the list and the fail: read the row again,
+			// so the teardown below removes the sandbox it names.
+			again, err := ms.GetRunMove(ctx, mv.ID)
+			if err != nil {
+				return
+			}
+			mv = again
 		}
 	case mv.State == types.MoveCommitted && mv.ReleasedAt == nil && d.Stale:
 		if ok, err := ms.ReleaseRunMove(ctx, mv.ID, true); err == nil && ok {
@@ -712,7 +795,16 @@ func (s *Server) sweepRunMove(ctx context.Context, ms store.RunMoveStore, d stor
 	}
 	switch {
 	case mv.State == types.MoveFailed && mv.Cleanup == types.MoveCleanupPending:
-		if s.moveTeardownDestination(ctx, mv.RunID, mv.ToSandboxRef, mv.ToTokenJTI) {
+		live, err := s.moveRefLive(ctx, ms, mv, mv.ToSandboxRef)
+		switch {
+		case err != nil:
+			return
+		case live:
+			// The sandbox is the run's own, or another move's destination: only its token is this move's to revoke.
+			if s.moveTeardownDestination(ctx, mv.RunID, "", mv.ToTokenJTI) {
+				s.moveCleanupDone(ctx, ms, mv)
+			}
+		case s.moveTeardownDestination(ctx, mv.RunID, mv.ToSandboxRef, mv.ToTokenJTI):
 			s.moveCleanupDone(ctx, ms, mv)
 		}
 	case mv.State == types.MoveCommitted:
@@ -720,8 +812,12 @@ func (s *Server) sweepRunMove(ctx context.Context, ms store.RunMoveStore, d stor
 			s.moveSecondRevoke(ctx, ms, mv)
 		}
 		if mv.Cleanup == types.MoveCleanupPending {
-			// The source's sandbox, unless it is the one the run now runs on.
-			if mv.FromSandboxRef == "" || mv.FromSandboxRef == mv.ToSandboxRef {
+			// The source's sandbox, unless it is the one the run now runs on or another move's destination.
+			live, err := s.moveRefLive(ctx, ms, mv, mv.FromSandboxRef)
+			if err != nil {
+				return
+			}
+			if live || mv.FromSandboxRef == mv.ToSandboxRef {
 				s.moveCleanupDone(ctx, ms, mv)
 				return
 			}
@@ -733,6 +829,31 @@ func (s *Server) sweepRunMove(ctx context.Context, ms store.RunMoveStore, d stor
 			s.moveCleanupDone(ctx, ms, mv)
 		}
 	}
+}
+
+// moveRefLive reports whether ref must not be removed by mv's cleanup: it is empty, the run's current sandbox, or the
+// destination of another move of the run still in flight. A failed read is an error, and the cleanup waits a pass.
+func (s *Server) moveRefLive(ctx context.Context, ms store.RunMoveStore, mv types.RunMove, ref string) (bool, error) {
+	if ref == "" {
+		return true, nil
+	}
+	run, err := s.cfg.Store.GetRun(ctx, mv.RunID)
+	if err != nil {
+		return false, err
+	}
+	if run.SandboxRef == ref {
+		return true, nil
+	}
+	moves, err := ms.ListRunMoves(ctx, mv.RunID)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range moves {
+		if m.ID != mv.ID && m.State.InFlight() && m.ToSandboxRef == ref {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Server) moveCleanupDone(ctx context.Context, ms store.RunMoveStore, mv types.RunMove) {

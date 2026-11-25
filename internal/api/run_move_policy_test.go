@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"reflect"
 	"slices"
@@ -92,6 +95,49 @@ func TestMoveDest_StripsOrgConfigForRunner(t *testing.T) {
 	}
 }
 
+// TestMoveDest_KeepsRunLabels: the destination's spec carries the run's labels as dispatch sets them, for a runner
+// and for the organisation's executors.
+func TestMoveDest_KeepsRunLabels(t *testing.T) {
+	id := uuid.New()
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code"}
+	for name, d := range map[string]moveDest{"runner": {Placement: types.PlacementLocal, RunnerID: &id}, "org": {Placement: types.PlacementRemote}} {
+		spec := moveSandboxSpec(run, runSandboxSpecRecord{Image: "img"}, d, moveDestPlan{})
+		if spec.Labels["wardyn.run"] != run.ID.String() || spec.Labels["wardyn.agent"] != "claude-code" {
+			t.Errorf("%s: labels = %v, want wardyn.run and wardyn.agent", name, spec.Labels)
+		}
+		if err := runner.CheckImportSpec(spec); err != nil {
+			t.Errorf("%s: the importer refuses the labelled spec: %v", name, err)
+		}
+	}
+}
+
+// TestMoveCaps_ReadsProxySettings: the caps check asks moveProxySettingMissing, so a runner that cannot carry a
+// setting the run's proxy uses is refused before anything stops.
+func TestMoveCaps_ReadsProxySettings(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "run_move_policy.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "moveCapsRefusal" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "moveProxySettingMissing" {
+					calls++
+				}
+			}
+			return true
+		})
+	}
+	if calls == 0 {
+		t.Error("moveCapsRefusal does not call moveProxySettingMissing")
+	}
+}
+
 // TestMovePolicy_DestinationSubstrateRefused: a runner whose substrate cannot hold an imported, unstarted sandbox,
 // and an executor that runs the class exec-less, each refuse 409 move_destination_substrate before anything stops.
 func TestMovePolicy_DestinationSubstrateRefused(t *testing.T) {
@@ -156,9 +202,42 @@ func TestMovePolicyCoversEverySpecField(t *testing.T) {
 			t.Errorf("RunPolicySpec.%s has no move class", typ.Field(i).Name)
 		}
 	}
-	for name := range moveSpecFields {
+	var narrow []string
+	for name, class := range moveSpecFields {
 		if !fields[name] {
 			t.Errorf("moveSpecFields names %s, which RunPolicySpec does not have", name)
+		}
+		if class == moveFieldNarrow {
+			narrow = append(narrow, name)
+		}
+	}
+	slices.Sort(narrow)
+	if want := []string{"AllowedDomains", "DeniedDomains"}; !slices.Equal(narrow, want) {
+		t.Errorf("fields a move narrows = %v, want exactly %v", narrow, want)
+	}
+}
+
+// TestMovePolicy_SamePlanArms: commit's comparison names each part of the plan that changed, and finds two equal
+// plans the same.
+func TestMovePolicy_SamePlanArms(t *testing.T) {
+	base := moveDestPlan{Trust: types.RunnerTrustPersonal, Deliveries: map[uuid.UUID]string{},
+		Narrowed: moveNarrowed{Deny: []string{"a.example"}}}
+	if layer, same := base.samePlan(base); !same || layer != "" {
+		t.Errorf("a plan against itself = %q %v, want the same", layer, same)
+	}
+	for layer, change := range map[string]func(*moveDestPlan){
+		"trust_class": func(p *moveDestPlan) { p.Trust = types.RunnerTrustManagedDevice },
+		"grants":      func(p *moveDestPlan) { p.Mint.Keep = append(p.Mint.Keep, uuid.New()) },
+		"deliveries": func(p *moveDestPlan) {
+			p.Deliveries = map[uuid.UUID]string{uuid.New(): string(types.GrantDeliveryViaOrg)}
+		},
+		"narrowed":      func(p *moveDestPlan) { p.Narrowed.Deny = append(slices.Clone(p.Narrowed.Deny), "b.example") },
+		"managed_files": func(p *moveDestPlan) { p.DropSettings = true },
+	} {
+		other := base
+		change(&other)
+		if got, same := base.samePlan(other); same || got != layer {
+			t.Errorf("%s changed: samePlan = %q %v, want %q", layer, got, same, layer)
 		}
 	}
 }
@@ -213,6 +292,9 @@ func TestMovePolicyNarrowsOrRefuses(t *testing.T) {
 			}
 			f.wantNotStopped(t)
 			moves, _ := f.ms.ListRunMoves(context.Background(), f.run.ID)
+			if len(moves) == 0 {
+				t.Fatal("the refusal left no run_moves row")
+			}
 			for _, mv := range moves {
 				if mv.State != types.MoveRefused || mv.Failure != c.reason {
 					t.Errorf("row = %s %q, want refused %q", mv.State, mv.Failure, c.reason)

@@ -40,21 +40,23 @@ type moveFakes struct {
 	srv *Server
 	rw  moveRowWriter
 
-	mu            sync.Mutex
-	stopRefusal   string
-	stopErr       error
-	receipt       moveRevokeState
-	receiptErr    error
-	cut           bool
-	stamp         bool
-	stampErr      error
-	contained     bool
-	containedErr  error
-	mintErr       error
-	mintPlan      moveMintPlan
-	carried       moveCarriedSet
-	revokeAtPause moveRevokeState
-	resumeErr     error
+	mu          sync.Mutex
+	stopRefusal string
+	// stopRefusalErrAt is the stop-refusal call (1 is step 1's, 2 step 2's) that answers an error.
+	stopRefusalErrAt int
+	stopErr          error
+	receipt          moveRevokeState
+	receiptErr       error
+	cut              bool
+	stamp            bool
+	stampErr         error
+	contained        bool
+	containedErr     error
+	mintErr          error
+	mintPlan         moveMintPlan
+	carried          moveCarriedSet
+	revokeAtPause    moveRevokeState
+	resumeErr        error
 	// receiptAt, when set, answers the receipt at commit (the second call) instead of receipt.
 	receiptAt func(call int) moveRevokeState
 	// onStop runs inside the stop fake, under the run's lock.
@@ -137,9 +139,12 @@ func withMovePortFakes(t *testing.T) *moveFakes {
 
 func fakeMoveStopRefusal(f *moveFakes) movePort[types.AgentRun, string] {
 	return func(context.Context, types.AgentRun) (string, error) {
-		f.note("stop_refusal")
+		n := f.note("stop_refusal")
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if n == f.stopRefusalErrAt {
+			return "", errors.New("the destination's facts could not be read")
+		}
 		return f.stopRefusal, nil
 	}
 }
@@ -311,7 +316,20 @@ type moveStore struct {
 	beforeCommit func()
 	unsettled    bool
 	stamps       int
-	failWrites   bool
+	// failWrites names writes that fail once: "pause_gen" errors, "pause_gen:none" changes no row, and
+	// "advance:<state>" errors the advance to that state.
+	failWrites map[string]bool
+}
+
+// failing reports, once, whether the write named key is set to fail.
+func (s *moveStore) failing(key string) bool {
+	s.mmu.Lock()
+	defer s.mmu.Unlock()
+	if !s.failWrites[key] {
+		return false
+	}
+	delete(s.failWrites, key)
+	return true
 }
 
 func (s *moveStore) now() time.Time { return time.Now().Add(s.skew) }
@@ -489,9 +507,6 @@ func (s *moveStore) ListRunPlacements(_ context.Context, runID uuid.UUID) ([]typ
 func (s *moveStore) update(id uuid.UUID, cond func(*types.RunMove) bool, fn func(*types.RunMove)) (bool, error) {
 	s.mmu.Lock()
 	defer s.mmu.Unlock()
-	if s.failWrites {
-		return false, errors.New("the move store refuses writes")
-	}
 	m := s.find(id)
 	if m == nil || !cond(m) {
 		return false, nil
@@ -504,6 +519,12 @@ func (s *moveStore) update(id uuid.UUID, cond func(*types.RunMove) bool, fn func
 func inFlight(m *types.RunMove) bool { return m.State.InFlight() }
 
 func (s *moveStore) SetRunMovePauseGen(_ context.Context, id uuid.UUID, gen int64) (bool, error) {
+	switch {
+	case s.failing("pause_gen"):
+		return false, errors.New("the move store refuses the write")
+	case s.failing("pause_gen:none"):
+		return false, nil
+	}
 	return s.update(id, inFlight, func(m *types.RunMove) { m.PauseGen = gen })
 }
 
@@ -515,6 +536,9 @@ func (s *moveStore) SetRunMoveDestination(_ context.Context, mv types.RunMove) (
 }
 
 func (s *moveStore) AdvanceRunMove(_ context.Context, id uuid.UUID, from, to types.MoveState) (bool, error) {
+	if s.failing("advance:" + string(to)) {
+		return false, errors.New("the move store refuses the write")
+	}
 	return s.update(id, func(m *types.RunMove) bool { return m.State == from }, func(m *types.RunMove) { m.State = to })
 }
 
@@ -636,6 +660,7 @@ type moveRunner struct {
 	exports   int
 	imports   []runner.SandboxSpec
 	imported  []string
+	data      map[string]string
 	importMax int64
 	kills     []string
 	unbound   []runner.MoveUnbound
@@ -660,6 +685,9 @@ func (r *moveRunner) ExportState(_ context.Context, _ string, set runner.Carried
 	r.exports++
 	fn, files, drained := r.exportFn, slices.Clone(r.files), r.drained
 	r.mmu.Unlock()
+	// The stream's order: a path before everything beneath it, siblings by name ('/' sorts first).
+	key := func(f moveFile) string { return strings.ReplaceAll(f.h.Path, "/", "\x00") }
+	slices.SortFunc(files, func(a, b moveFile) int { return strings.Compare(key(a), key(b)) })
 	if fn != nil {
 		rc, err := fn()
 		return runner.StateExport{Stream: rc, SpoolDrained: drained}, err
@@ -709,9 +737,14 @@ func (r *moveRunner) ImportSandbox(_ context.Context, spec runner.SandboxSpec, s
 		if err != nil {
 			return runner.Sandbox{}, runner.CarriedManifest{}, errors.Join(runner.ErrMoveFiles, err)
 		}
-		_, _ = io.Copy(io.Discard, content)
+		var b strings.Builder
+		_, _ = io.Copy(&b, content)
 		r.mmu.Lock()
 		r.imported = append(r.imported, h.Path)
+		if r.data == nil {
+			r.data = map[string]string{}
+		}
+		r.data[h.Path] = b.String()
 		r.mmu.Unlock()
 	}
 	return runner.Sandbox{Ref: "ref-dest-" + spec.RunID.String()}, rd.Manifest(), nil
@@ -743,6 +776,21 @@ func (r *moveRunner) importedPaths() []string {
 	return slices.Clone(r.imported)
 }
 
+func (r *moveRunner) importedData(p string) string {
+	r.mmu.Lock()
+	defer r.mmu.Unlock()
+	return r.data[p]
+}
+
+func (r *moveRunner) lastImport() runner.SandboxSpec {
+	r.mmu.Lock()
+	defer r.mmu.Unlock()
+	if len(r.imports) == 0 {
+		return runner.SandboxSpec{}
+	}
+	return r.imports[len(r.imports)-1]
+}
+
 func (r *moveRunner) importCount() int {
 	r.mmu.Lock()
 	defer r.mmu.Unlock()
@@ -769,7 +817,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 	rf := newReviveFixture(t)
 	rf.st.mu.Lock()
 	rf.st.run.LostAt, rf.st.run.LostReason, rf.st.run.Interactive = nil, "", true
-	rf.st.run.Placement = types.PlacementRemote
+	rf.st.run.Placement, rf.st.run.RunnerPoolExecutor = types.PlacementRemote, "kind-a"
 	rf.st.mu.Unlock()
 	f := &moveFixture{reviveFixture: rf}
 	f.ms = &moveStore{reviveStore: rf.rs, site: siteFeaturesDoc(t, runMoveStoredOn), specs: map[uuid.UUID][]byte{},
@@ -779,6 +827,7 @@ func newMoveFixture(t *testing.T) *moveFixture {
 		moveDir("home/agent/work/.git"), moveReg("home/agent/work/.git/HEAD", "ref: refs/heads/main\n"),
 	}}
 	f.srv.cfg.Store, f.srv.cfg.Runner, f.srv.cfg.BaseCtx = f.ms, f.mr, t.Context()
+	f.srv.cfg.RunnerOrgURL = admissionOrgURL
 	withMoveGateOpen(t)
 	f.fk = withMovePortFakes(t)
 	f.fk.srv, f.fk.rw = f.srv, f.ms
@@ -836,10 +885,18 @@ func (f *moveFixture) only(t *testing.T) types.RunMove {
 	return moves[0]
 }
 
+// moveRowsAll is the run's run_moves rows.
+func (f *moveFixture) moveRowsAll(t *testing.T) []types.RunMove {
+	t.Helper()
+	moves, err := f.ms.ListRunMoves(context.Background(), f.run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return moves
+}
+
 // moveRows counts the run.move audit rows with outcome.
 func (f *moveFixture) moveRows(outcome string) int {
-	f.audit.mu.Lock()
-	defer f.audit.mu.Unlock()
 	n := 0
 	for _, ev := range f.audit.snapshot() {
 		if ev.Action == "run.move" && ev.Outcome == outcome {

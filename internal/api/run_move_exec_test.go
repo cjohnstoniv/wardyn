@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +78,8 @@ type moveCase struct {
 	// created: the destination was created, so the end tears it down.
 	created bool
 	code    int
+	// msg, when set, is in the answer's body.
+	msg string
 }
 
 // TestMoveExec_EveryErrorPathEndsNamed: every way a move fails or is refused after its row is admitted ends the row
@@ -89,7 +93,36 @@ func TestMoveExec_EveryErrorPathEndsNamed(t *testing.T) {
 		{name: "receipt incomplete", setup: func(_ *testing.T, f *moveFixture) { f.fk.receipt.Complete = false },
 			state: types.MoveRefused, reason: reasonMovePauseRefused},
 		{name: "receipt incomplete at a stopped pause", stop: true, setup: func(_ *testing.T, f *moveFixture) { f.fk.receipt.Complete = false },
-			state: types.MoveRefused, reason: reasonMovePauseRefused, code: http.StatusConflict},
+			state: types.MoveRefused, reason: reasonMovePauseRefused, code: http.StatusConflict, msg: movePauseAgainMsg},
+		{name: "step 2 read fails", setup: func(_ *testing.T, f *moveFixture) { f.fk.stopRefusalErrAt = 2 },
+			state: types.MoveRefused, reason: reasonMovePolicyUnreadable, code: http.StatusServiceUnavailable},
+		{name: "pause_gen write errors", setup: func(_ *testing.T, f *moveFixture) { f.ms.failWrites = map[string]bool{"pause_gen": true} },
+			state: types.MoveFailed, reason: reasonMoveStopFailed},
+		{name: "pause_gen write changes no row", setup: func(_ *testing.T, f *moveFixture) {
+			f.ms.failWrites = map[string]bool{"pause_gen:none": true}
+		}, state: types.MoveFailed, reason: reasonMoveStopFailed},
+		{name: "advance to exporting errors", setup: func(_ *testing.T, f *moveFixture) {
+			f.ms.failWrites = map[string]bool{"advance:" + string(types.MoveExporting): true}
+		}, state: types.MoveFailed, reason: reasonMoveExportFailed, created: true},
+		{name: "advance to importing errors", setup: func(_ *testing.T, f *moveFixture) {
+			f.ms.failWrites = map[string]bool{"advance:" + string(types.MoveImporting): true}
+		}, state: types.MoveFailed, reason: reasonMoveImportFailed, created: true},
+		{name: "settle answers unsettled", setup: func(_ *testing.T, f *moveFixture) {
+			f.srv.cfg.Store = &moveOwedSettle{moveStore: f.ms}
+			f.srv.cfg.Runner = &moveFreezeFails{moveRunner: f.mr}
+		}, state: types.MoveRefused, reason: reasonMovePauseRefused},
+		{name: "identity refused", setup: func(_ *testing.T, f *moveFixture) {
+			f.srv.cfg.Identity = &moveMintRefused{Provider: f.srv.cfg.Identity}
+		}, state: types.MoveFailed, reason: reasonMoveIdentityRefused},
+		{name: "source stream breaks", setup: func(_ *testing.T, f *moveFixture) {
+			f.mr.exportFn = func() (io.ReadCloser, error) {
+				return io.NopCloser(iotest.ErrReader(errors.New("connection reset"))), nil
+			}
+		}, state: types.MoveFailed, reason: reasonMoveRelayFailed, created: true},
+		{name: "git alternates outside the roots", setup: func(_ *testing.T, f *moveFixture) {
+			f.mr.files = append(f.mr.files, moveDir("home/agent/work/.git/objects"), moveDir("home/agent/work/.git/objects/info"),
+				moveReg("home/agent/work/.git/objects/info/alternates", "/srv/elsewhere/objects\n"))
+		}, state: types.MoveFailed, reason: reasonMoveGitOutsideRoots, created: true},
 		{name: "cut not made", setup: func(_ *testing.T, f *moveFixture) { f.fk.cut = false },
 			state: types.MoveRefused, reason: reasonMovePauseRefused},
 		{name: "azure devops not revoked", setup: func(_ *testing.T, f *moveFixture) { f.fk.receipt.ADO = "unfinished" },
@@ -170,6 +203,9 @@ func TestMoveExec_EveryErrorPathEndsNamed(t *testing.T) {
 			if code != want {
 				t.Fatalf("move = %d %s, want %d", code, body, want)
 			}
+			if c.msg != "" && !strings.Contains(body, c.msg) {
+				t.Errorf("answer %s, want it to say %q", body, c.msg)
+			}
 			mv := f.only(t)
 			if mv.State != c.state || mv.Failure != c.reason {
 				t.Errorf("row = %s %q, want %s %q", mv.State, mv.Failure, c.state, c.reason)
@@ -224,6 +260,181 @@ func TestMoveExec_EveryErrorPathEndsNamed(t *testing.T) {
 	} {
 		if got := moveRelayReason(errors.Join(errors.New("wrapped"), sentinel)); got != want {
 			t.Errorf("moveRelayReason(%v) = %q, want %q", sentinel, got, want)
+		}
+	}
+	// A stream that broke is the relay's failure even where the reader names a refused entry; an import that
+	// ended first is the import's.
+	refused := fmt.Errorf("%w: entry 3", movepack.ErrArchiveRefused)
+	if got := moveRelayReason(moveStreamCause(refused, errors.New("connection reset"), nil)); got != reasonMoveRelayFailed {
+		t.Errorf("source stream broke: %q, want %s", got, reasonMoveRelayFailed)
+	}
+	if got := moveStreamCause(refused, nil, fmt.Errorf("pipe: %w", errMoveImportEnded)); !errors.Is(got, errMoveImportEnded) {
+		t.Errorf("import ended first: %v, want errMoveImportEnded", got)
+	}
+	if got := moveRelayReason(moveStreamCause(refused, nil, nil)); got != reasonMoveArchiveRefused {
+		t.Errorf("refused entry: %q, want %s", got, reasonMoveArchiveRefused)
+	}
+	// The destination runner refuses the moved run's lease: the row ends failed, nothing exported.
+	t.Run("lease refused", func(t *testing.T) {
+		f := newMoveFixture(t)
+		ctx := context.Background()
+		rid := f.addRunner(t, f.run.CreatedBy, types.RunnerOwnerPerson, moveCapsAll)
+		rn, _ := f.ms.GetRunner(ctx, rid)
+		mv, err := f.ms.AdmitRunMove(ctx, types.RunMove{RunID: f.run.ID, ToPlacement: types.PlacementLocal, ToRunnerID: &rid}, store.RunMoveLimits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := &moveExec{s: f.srv, ms: f.ms, mv: mv, run: f.current(t), dest: moveDest{Placement: types.PlacementLocal, RunnerID: &rid, Runner: rn},
+			maxBytes: 1 << 20, actorType: types.ActorHuman, principal: f.run.CreatedBy}
+		end := x.carry(ctx)
+		if end == nil || end.reason != reasonMoveLeaseRefused {
+			t.Fatalf("carry = %+v, want move_lease_refused", end)
+		}
+		x.end(ctx, end)
+		if mv := f.only(t); mv.State != types.MoveFailed || mv.Failure != reasonMoveLeaseRefused || f.moveRows("failure") != 1 {
+			t.Errorf("row = %s %q with %d failure rows, want failed move_lease_refused and 1", mv.State, mv.Failure, f.moveRows("failure"))
+		}
+		if f.mr.exportCount() != 0 || f.mr.importCount() != 0 {
+			t.Errorf("exports %d imports %d, want none", f.mr.exportCount(), f.mr.importCount())
+		}
+	})
+	// The run's earlier moves cannot be read under the lock: the stop is refused, never skipped.
+	t.Run("earlier moves unreadable", func(t *testing.T) {
+		f := newMoveFixture(t)
+		ctx := context.Background()
+		mv, err := f.ms.AdmitRunMove(ctx, types.RunMove{RunID: f.run.ID}, store.RunMoveLimits{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := &moveExec{s: f.srv, ms: &moveListFails{moveStore: f.ms}, mv: mv, run: f.current(t), maxBytes: 1 << 20}
+		if end := x.stopLocked(ctx); end == nil || end.reason != reasonMoveStopFailed || f.fk.count("stop") != 0 {
+			t.Errorf("stop = %+v with %d stops, want move_stop_failed and none", end, f.fk.count("stop"))
+		}
+	})
+}
+
+// moveOwedSettle holds a settle record for every run, so the locked sequence settles the stopped sandbox.
+type moveOwedSettle struct{ *moveStore }
+
+func (s *moveOwedSettle) PauseSettleFor(context.Context, uuid.UUID) (time.Time, error) {
+	return time.Now().Add(-time.Minute), nil
+}
+
+// moveFreezeFails is a runner whose sandbox cannot be moved to its pause state.
+type moveFreezeFails struct{ *moveRunner }
+
+func (r *moveFreezeFails) FreezeSandbox(context.Context, string) error {
+	return errors.New("the runtime refused the freeze")
+}
+func (r *moveFreezeFails) ThawSandbox(context.Context, string) error {
+	return errors.New("the runtime refused the thaw")
+}
+
+// moveMintRefused is an identity provider that mints no run identity.
+type moveMintRefused struct{ identity.Provider }
+
+func (m *moveMintRefused) MintRunIdentity(context.Context, uuid.UUID, string, string, string, bool) (identity.RunIdentity, error) {
+	return identity.RunIdentity{}, errors.New("the signer is unavailable")
+}
+
+// moveListFails is a move store whose list of a run's moves fails.
+type moveListFails struct{ *moveStore }
+
+func (s *moveListFails) ListRunMoves(context.Context, uuid.UUID) ([]types.RunMove, error) {
+	return nil, errors.New("the move store is unreachable")
+}
+
+// TestMoveExec_SweepSparesLiveSandbox: a failed move whose destination the run now runs on (a retry on the same
+// runner answered the same sandbox) and a committed move whose source is the run's sandbox again are each marked
+// done with no kill; a new move is refused while an earlier one still has a sandbox to remove.
+func TestMoveExec_SweepSparesLiveSandbox(t *testing.T) {
+	f := newMoveFixture(t)
+	ctx := context.Background()
+	failed, err := f.ms.AdmitRunMove(ctx, types.RunMove{RunID: f.run.ID}, store.RunMoveLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed.ToSandboxRef = "ref-retried"
+	if _, err := f.ms.SetRunMoveDestination(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ms.EndRunMove(ctx, failed.ID, types.MoveFailed, reasonMoveImportFailed, types.MoveCleanupPending); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.move(t, "org")
+	if reason, _ := moveAnswer(t, body); code != http.StatusConflict || reason != reasonMoveBusy {
+		t.Errorf("move with cleanup pending = %d %s, want 409 move_busy", code, body)
+	}
+	if f.fk.count("stop") != 0 || len(f.moveRowsAll(t)) != 1 {
+		t.Errorf("stops %d rows %d, want none and the earlier row only", f.fk.count("stop"), len(f.moveRowsAll(t)))
+	}
+	f.ms.mu.Lock()
+	f.ms.run.SandboxRef = "ref-retried"
+	f.ms.mu.Unlock()
+	if err := f.srv.sweepRunMoves(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.mr.killed(), "ref-retried") {
+		t.Errorf("the sweep removed the run's live sandbox (kills %v)", f.mr.killed())
+	}
+	if mv, _ := f.ms.GetRunMove(ctx, failed.ID); mv.Cleanup != types.MoveCleanupDone {
+		t.Errorf("failed move cleanup = %s, want done", mv.Cleanup)
+	}
+	// A committed move whose source sandbox the run runs on again.
+	back, err := f.ms.AdmitRunMove(ctx, types.RunMove{RunID: f.run.ID, FromSandboxRef: "ref-retried"}, store.RunMoveLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	back.ToSandboxRef = "ref-other"
+	if _, err := f.ms.SetRunMoveDestination(ctx, back); err != nil {
+		t.Fatal(err)
+	}
+	f.ms.mmu.Lock()
+	if m := f.ms.find(back.ID); m != nil {
+		m.State, m.Cleanup, m.ReleasedAt = types.MoveCommitted, types.MoveCleanupPending, new(time.Time)
+	}
+	f.ms.mmu.Unlock()
+	if err := f.srv.sweepRunMoves(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.mr.killed(), "ref-retried") {
+		t.Errorf("the sweep removed the run's live sandbox as a source (kills %v)", f.mr.killed())
+	}
+	if mv, _ := f.ms.GetRunMove(ctx, back.ID); mv.Cleanup != types.MoveCleanupDone {
+		t.Errorf("committed move cleanup = %s, want done", mv.Cleanup)
+	}
+}
+
+// TestMoveAdmit_SamePlaceRefused: a destination that is where the run runs now is refused at step 1, with no row
+// and nothing stopped; the same runner, or the same executor of the organisation's, is the same place.
+func TestMoveAdmit_SamePlaceRefused(t *testing.T) {
+	f := newMoveFixture(t)
+	f.ms.mu.Lock()
+	f.ms.run.RunnerPoolExecutor = ""
+	f.ms.mu.Unlock()
+	code, body := f.move(t, "org")
+	if reason, layer := moveAnswer(t, body); code != http.StatusForbidden || reason != reasonMoveDestinationRefused || layer != "same_place" {
+		t.Errorf("move to the run's own executor = %d %s, want 403 move_destination_refused same_place", code, body)
+	}
+	if f.fk.count("stop") != 0 || len(f.moveRowsAll(t)) != 0 || f.moveRows("denied") != 1 {
+		t.Errorf("stops %d rows %d denied %d, want 0, 0 and 1", f.fk.count("stop"), len(f.moveRowsAll(t)), f.moveRows("denied"))
+	}
+	a, b := uuid.New(), uuid.New()
+	for name, c := range map[string]struct {
+		run  types.AgentRun
+		dest moveDest
+		same bool
+	}{
+		"same runner":            {types.AgentRun{RunnerID: &a}, moveDest{Placement: types.PlacementLocal, RunnerID: &a}, true},
+		"another runner":         {types.AgentRun{RunnerID: &a}, moveDest{Placement: types.PlacementLocal, RunnerID: &b}, false},
+		"runner to org":          {types.AgentRun{RunnerID: &a}, moveDest{Placement: types.PlacementRemote}, false},
+		"org to runner":          {types.AgentRun{}, moveDest{Placement: types.PlacementLocal, RunnerID: &a}, false},
+		"default executor":       {types.AgentRun{}, moveDest{Placement: types.PlacementRemote}, true},
+		"same named executor":    {types.AgentRun{RunnerPoolExecutor: "kind-a"}, moveDest{Placement: types.PlacementRemote, Executor: "kind-a"}, true},
+		"another named executor": {types.AgentRun{RunnerPoolExecutor: "kind-a"}, moveDest{Placement: types.PlacementRemote}, false},
+	} {
+		if got := moveSamePlace(c.run, c.dest); got != c.same {
+			t.Errorf("%s: same place %v, want %v", name, got, c.same)
 		}
 	}
 }
@@ -374,6 +585,12 @@ func TestMoveExec_KeepsGitAndTranscripts(t *testing.T) {
 			t.Errorf("%s did not arrive (imported %v)", p, got)
 		}
 	}
+	if head := f.mr.importedData("home/agent/work/.git/HEAD"); head != "ref: refs/heads/main\n" {
+		t.Errorf("HEAD after import = %q, want the source's", head)
+	}
+	if got := f.mr.importedData("home/agent/.claude/projects/run/session.jsonl"); got != `{"role":"user"}`+"\n" {
+		t.Errorf("transcript after import = %q, want the source's", got)
+	}
 	if mv := f.only(t); mv.ManifestSHA256 == "" || mv.Bytes == 0 {
 		t.Errorf("committed row manifest %q bytes %d, want both recorded", mv.ManifestSHA256, mv.Bytes)
 	}
@@ -485,5 +702,19 @@ func TestMoveExec_RefusesPlainRunnerLink(t *testing.T) {
 			t.Errorf("%q: exports %d imports %d, want none", url, f.mr.exportCount(), f.mr.importCount())
 		}
 		_, _ = f.ms.EndRunMove(context.Background(), mv.ID, types.MoveFailed, "test", types.MoveCleanupNone)
+	}
+	// The same link is refused at step 1, before anything is admitted or stopped, for a run on a runner.
+	g := newMoveFixture(t)
+	rid := uuid.New()
+	g.ms.mu.Lock()
+	g.ms.run.RunnerID, g.ms.run.Placement = &rid, types.PlacementLocal
+	g.ms.mu.Unlock()
+	g.srv.cfg.RunnerOrgURL = "http://wardyn.corp.example"
+	code, body := g.move(t, "org")
+	if reason, _ := moveAnswer(t, body); code != http.StatusConflict || reason != reasonMovePlainLink {
+		t.Errorf("admission over a plain link = %d %s, want 409 move_plain_link", code, body)
+	}
+	if g.fk.count("stop") != 0 || len(g.moveRowsAll(t)) != 0 {
+		t.Errorf("stops %d rows %d, want none", g.fk.count("stop"), len(g.moveRowsAll(t)))
 	}
 }
