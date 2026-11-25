@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/authz"
@@ -142,9 +143,9 @@ func wallsTopoPGSeeds() []struct {
 
 // TestWallsTopologyUnitCountersMatchAudit: with every class seeded inside a unit admin's subtree and outside it,
 // the sum of their units' counters equals the egress rows GET /api/v1/audit returns them for the window, less
-// the control-plane-host rows and the upstream start rows, and each class equals wallsClassify over the same
-// stored rows. A 129-character host and a host with a space are in neither the unit view nor hosts[], and their
-// rows still count.
+// the control-plane-host rows, the upstream start rows and the rows the walls reader skips because their data
+// does not decode, and each class equals wallsClassify over the same stored rows. A 129-character host and a
+// host with a space are in neither the unit view nor hosts[], and their rows still count.
 func TestWallsTopologyUnitCountersMatchAudit(t *testing.T) {
 	e := newUnitAuditEnv(t)
 	ctx := context.Background()
@@ -181,6 +182,27 @@ func TestWallsTopologyUnitCountersMatchAudit(t *testing.T) {
 			hidden[r.ID] = true
 		} else {
 			want.add(v, 1, false)
+		}
+	}
+	// store.AuditWallsRows skips and logs a row whose data does not decode, and GET /audit still serves it. The
+	// env's own egress row of each run (seedRun) is one: its cause is an object, which no writer stores.
+	stored, err := e.pool.Query(ctx, `SELECT id, data FROM audit_events WHERE action LIKE 'egress.%' AND run_id = ANY($1)`, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := pgx.CollectRows(stored, func(row pgx.CollectableRow) (types.AuditEvent, error) {
+		var ev types.AuditEvent
+		var data []byte
+		err := row.Scan(&ev.ID, &data)
+		ev.Data = data
+		return ev, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if _, err := store.DecodeDecisionRow(ev, time.Time{}, 0); err != nil {
+			hidden[ev.ID] = true
 		}
 	}
 	if got := *want.wire(false).(*WallsUnitCounters); got != sum {
