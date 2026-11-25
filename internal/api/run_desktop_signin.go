@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/net/publicsuffix"
 
+	"github.com/cjohnstoniv/wardyn/internal/authz"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -90,7 +91,7 @@ const (
 	signinEndExpired    = "expired"
 	signinEndRunEnded   = "run_ended"
 	signinEndFailed     = "failed"
-	signinEndGovernance = "governance_unit" // the run's profile now denies interactive sessions (run_desktop_signin_sweep.go)
+	signinEndGovernance = string(authz.ReasonGovernanceUnit) // the run's profile now denies interactive sessions (run_desktop_signin_sweep.go)
 )
 
 // signinContinueTries is how many sweep passes retry a sign-in whose agent is
