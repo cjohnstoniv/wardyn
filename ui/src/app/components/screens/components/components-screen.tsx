@@ -38,6 +38,7 @@ import { PageContainer } from "../../wardyn/page-container";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
 import { EmptyState, ErrorState, TableSkeleton, failureSentence, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
 import { ComponentEditor } from "./component-editor";
+import { imageNamesTagOrDigest } from "./component-editor-model";
 
 // What the row says about who may use it. Read per row, because the restriction
 // bit and the allow list are two facts and only the pair says "nobody".
@@ -162,7 +163,16 @@ export function ComponentsScreen() {
               {rows.map((c) => (
                 <React.Fragment key={c.id}>
                   <TableRow>
-                    <TableCell className="font-medium text-foreground">{c.name}</TableCell>
+                    <TableCell className="font-medium text-foreground">
+                      {c.name}
+                      {c.definition.image && (
+                        <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-xs font-normal text-muted-foreground">
+                          <span>{T.NEEDS_IMAGE}</span>
+                          <code className="font-mono text-foreground">{c.definition.image}</code>
+                          {!imageNamesTagOrDigest(c.definition.image) && <span>{T.NEEDS_IMAGE_ANY}</span>}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell>{T.N_HOSTS(c.definition.hosts.length)}</TableCell>
                     <TableCell>{T.N_SECRETS((c.definition.secrets ?? []).length)}</TableCell>
                     {/* Unmounted while the control is open, so closing it re-reads what it changed. */}

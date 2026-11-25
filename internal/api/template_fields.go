@@ -322,7 +322,7 @@ var templateNestedCarried = map[string]string{
 	"CLIKubectl":          "server ca_pem service_account namespaces access approve_each",
 	"CLIServiceAccount":   "namespace name",
 	"ComponentCLI":        "kind azure aws github kubectl",
-	"ComponentDefinition": "description hosts secrets config cli mcp",
+	"ComponentDefinition": "description hosts secrets config cli mcp image",
 	"ComponentDelivery":   "mode host header format plain_http var file",
 	"ComponentMCP":        "url transport launch gateway_audience",
 	"ComponentMCPLaunch":  "command args",

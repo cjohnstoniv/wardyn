@@ -245,6 +245,20 @@ export function CustomComponentDialog({
         </Field>
         <FieldError id="ccd-hosts" text={errors.hosts} />
 
+        <Field label={T.IMAGE} htmlFor="ccd-image" hint={T.IMAGE_HINT}>
+          <Input
+            id="ccd-image"
+            disabled={saving}
+            value={draft.image ?? ""}
+            maxLength={255}
+            placeholder={T.IMAGE_PLACEHOLDER}
+            onChange={(e) => setDraft({ ...draft, image: e.target.value })}
+            className="font-mono placeholder:font-sans"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </Field>
+
         <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS}</legend>
           <p className="text-xs text-muted-foreground">{T.SECRETS_HINT}</p>

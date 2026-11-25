@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { Component } from "../../../lib/types";
-import { blankSecret, blankSetting, draftOf, headerHostChoices, newUuid, requestOf, withStored } from "./component-editor-model";
+import { blankSecret, blankSetting, draftOf, headerHostChoices, imageNamesTagOrDigest, newUuid, requestOf, withStored } from "./component-editor-model";
 import { aheadByHours } from "../../../lib/test-clock";
 
 const stored: Component = {
@@ -57,6 +57,24 @@ describe("requestOf", () => {
   it("omits secrets and config when there are none, and drops nameless settings", () => {
     const req = requestOf({ name: "n", hosts: "", secrets: [], settings: [blankSetting(), { ...blankSetting(), name: " K ", value: "v" }] });
     expect(req).toEqual({ name: "n", definition: { hosts: [], config: { K: "v" } } });
+  });
+});
+
+describe("the image requirement", () => {
+  it("is sent trimmed when set and left out when blank, and a stored one goes back unchanged", () => {
+    const withImage = { ...stored, definition: { ...stored.definition, image: "ghcr.io/acme/tools:1.2" } };
+    expect(requestOf(draftOf(withImage))).toEqual({ name: "Payments API", definition: withImage.definition });
+    expect(requestOf({ name: "n", hosts: "", image: " ghcr.io/acme/tools ", secrets: [], settings: [] }).definition.image).toBe("ghcr.io/acme/tools");
+    expect(requestOf({ name: "n", hosts: "", image: "  ", secrets: [], settings: [] }).definition).not.toHaveProperty("image");
+    expect(requestOf(draftOf(null)).definition).not.toHaveProperty("image");
+  });
+
+  it("names a tag or digest only when the reference carries one", () => {
+    for (const ref of ["ghcr.io/acme/tools:1.2", "tools:1.2", "ghcr.io/acme/tools@sha256:" + "a".repeat(64), "ghcr.io/acme/tools:1.2@sha256:" + "a".repeat(64)]) {
+      expect(imageNamesTagOrDigest(ref), ref).toBe(true);
+    }
+    // A registry port is not a tag.
+    for (const ref of ["nginx", "ghcr.io/acme/tools", "localhost:5000/tools"]) expect(imageNamesTagOrDigest(ref), ref).toBe(false);
   });
 });
 
