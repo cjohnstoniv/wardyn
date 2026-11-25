@@ -51,6 +51,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 - The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
 - Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows unless the proxy's clock is more than 10 minutes behind the control plane's or 5 minutes ahead, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
+- A browser desktop that has control now also gives way to a window onto a Linux VM run on the person's own computer, and is view only while one is open, as it is for a window on the Mac. Its close code stays `4006`, with the shorter reason "A window is open on the person's computer, so this desktop only watches. Open it again from the run page to watch it.", which fits a WebSocket close frame.
 
 ### Before you upgrade
 
