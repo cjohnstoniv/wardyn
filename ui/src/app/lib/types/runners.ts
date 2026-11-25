@@ -270,4 +270,5 @@ export type RunnerManagementReason =
   | "runners_org_url_invalid"
   | "runners_enabled_required"
   | "runner_limits_invalid"
-  | "runner_trust_invalid";
+  | "runner_trust_invalid"
+  | "runner_drain_invalid";
