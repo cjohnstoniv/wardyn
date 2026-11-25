@@ -36,14 +36,15 @@ func newProxy(opts Options) *Proxy {
 		nd := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
 		dial = nd.DialContext
 	}
-	res := opts.Resolver
-	if res == nil {
-		res = netResolver{}
-	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
+	res := opts.Resolver
+	if res == nil {
+		res = netResolver{}
+	}
+	res = newCachedResolver(res, now) // every lookup of the run's hosts goes through the one cache
 	evaluator := opts.Evaluator
 	if evaluator == nil {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
@@ -182,8 +183,11 @@ func newProxy(opts Options) *Proxy {
 			DialContext: dc,
 			// HTTP/1.1 only, which is what controlTransport stays; offerHTTP2
 			// turns HTTP/2 on for the egress transport alone, a few lines below.
-			ForceAttemptHTTP2:     false,
-			MaxIdleConns:          64,
+			ForceAttemptHTTP2: false,
+			MaxIdleConns:      64,
+			// Go's default of 2 makes a burst of more than two requests to one host open, and handshake,
+			// a new connection each.
+			MaxIdleConnsPerHost:   egressIdlePerHost,
 			IdleConnTimeout:       60 * time.Second,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ExpectContinueTimeout: time.Second,

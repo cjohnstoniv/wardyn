@@ -66,6 +66,7 @@ type Server struct {
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
+	keepalives     runKeepaliveState // this replica's one keepalive writer per run (attachKeepalive)
 	// pingEvery overrides attachPingInterval for THIS server only (the liveness
 	// probe on an otherwise-idle attach socket) — same reason and same
 	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
@@ -73,6 +74,7 @@ type Server struct {
 	pingEvery      time.Duration
 	authorityTest  attachAuthorityTimings // per-server test overrides, the same shape as pingEvery
 	sessionBudgets sessionBudgetState     // the site's open-session budget as last read, and the tests' overrides (session_budget.go)
+	attachRuns     attachRunWatchState    // the shared run read every open attach socket's re-check uses (attach_run_watch.go)
 	// localAttachSubs (localAttachSubFor) and localCovered (promotionCovered) replace a local attach's substrate and corpus proof; queueRace runs at each queueRace* point (queueRaceAt). Tests only.
 	localAttachSubs func(id uuid.UUID) localAttachSub
 	localCovered    func(runID uuid.UUID) bool

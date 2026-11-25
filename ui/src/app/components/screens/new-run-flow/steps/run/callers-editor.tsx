@@ -37,7 +37,7 @@ function Item({ icon, text, mono, aside, added, onPick }: { icon: React.ReactNod
   return (
     <button type="button" className={ITEM} disabled={added} onClick={onPick}>
       <span className="text-muted-foreground" aria-hidden="true">{icon}</span>
-      <span className={mono ? "min-w-0 flex-1 truncate font-mono text-[13px]" : "min-w-0 flex-1 truncate"}>{text}</span>
+      <span className={mono ? "min-w-0 flex-1 truncate font-mono text-body" : "min-w-0 flex-1 truncate"}>{text}</span>
       {added ? (
         <span className="flex items-center gap-1 text-xs text-muted-foreground"><Check size={13} aria-hidden="true" />{NR_RUN.CALLER_ADDED}</span>
       ) : (
@@ -159,7 +159,7 @@ export function CallersEditor({ app, index, onChange }: CallersEditorProps) {
           return (
             <span key={caller} data-caller={caller} className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted/40 py-1 pr-1 pl-2 text-sm">
               <span className="text-xs text-muted-foreground">{callerKindLabel(callerKind(caller))}</span>
-              <span className={mono ? "min-w-0 truncate font-mono text-[13px]" : "min-w-0 truncate"}>{value}</span>
+              <span className={mono ? "min-w-0 truncate font-mono text-body" : "min-w-0 truncate"}>{value}</span>
               <button
                 type="button"
                 aria-label={NR_RUN.CALLER_REMOVE_ARIA(value)}

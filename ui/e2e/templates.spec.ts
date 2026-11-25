@@ -569,7 +569,7 @@ test.describe("Templates: Publish to organization (FR-0120)", () => {
     await rowOf(page, NIGHTLY.name).getByRole("button", { name: T.PUBLISH }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: T.PUBLISH }).click();
     await expect(page.getByText(T.PUBLISHED(NIGHTLY.name))).toBeVisible();
-    expect(copies).toEqual([{ scope: "org" }]);
+    expect(copies).toEqual([{ scope: "org", expected_revision: NIGHTLY.revision }]);
   });
 });
 

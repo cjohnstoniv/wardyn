@@ -32,6 +32,7 @@ type uiGatewayState struct {
 	uiReadyMu     sync.Mutex
 	uiReady       map[string]time.Time
 	uiReadySwept  time.Time
+	uiProbing     map[string]chan struct{} // the launcher probe running per run/app key, closed when it ends (uiProbeTurn)
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
 	uiReassertMu    sync.Mutex

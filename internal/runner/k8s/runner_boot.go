@@ -58,7 +58,8 @@ func (c accessCheck) String() string {
 // runnerAccess lists every verb §4 grants: the server Role in each runs namespace plus pods: patch,
 // secrets create/get/delete/deletecollection in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
 // and nodes: list. A runner that lists workload namespaces (design T3 §2.5) also needs the WardynWorkload
-// Role in each: the resource's get, list and watch, and its status's patch.
+// Role in each: the resource's get, list and watch, and its status's patch. pods: watch is granted too
+// but never asked: without it the pod waits poll (podwatch.go), so its absence refuses no boot.
 func runnerAccess(runsNSs []string, ownNS string, workloadNSs []string) []accessCheck {
 	var out []accessCheck
 	add := func(ns, group, resource string, verbs ...string) {
@@ -318,7 +319,7 @@ func (d *Driver) ProbeRelaySource(ctx context.Context, target string, port int32
 	return relaySourceVerdict(got.Status.PodIP, src)
 }
 
-// probeIPPoll is how often watchProbeIP reads the probe pod.
+// probeIPPoll is how often watchProbeIP reads the probe pod while the pod watch is not live.
 const probeIPPoll = 100 * time.Millisecond
 
 // probeIPWait is how long the verdict waits for the IP after the relay saw the connection (a
@@ -327,10 +328,10 @@ var probeIPWait = 30 * time.Second
 
 // watchProbeIP sends the probe pod's IP on seen the first time a read shows one, then returns. A pod
 // that is gone sends "" at once, so the verdict falls through without waiting out probeIPWait. It
-// also returns when ctx ends.
+// reads the pod again on each change the pod watch rings (podwatch.go). It also returns when ctx ends.
 func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- string) {
-	t := time.NewTicker(probeIPPoll)
-	defer t.Stop()
+	bell := d.podBell(ns, name)
+	defer bell.stop()
 	for {
 		got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
 		switch {
@@ -341,10 +342,8 @@ func (d *Driver) watchProbeIP(ctx context.Context, ns, name string, seen chan<- 
 			seen <- ""
 			return
 		}
-		select {
-		case <-ctx.Done():
+		if bell.sleep(ctx, probeIPPoll, podWatchResync) != nil {
 			return
-		case <-t.C:
 		}
 	}
 }

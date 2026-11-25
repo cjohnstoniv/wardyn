@@ -150,7 +150,7 @@ type Proxy struct {
 	// gitTokens caches minted installation tokens per grant so a single clone
 	// (info/refs + git-upload-pack) does not re-mint — mandatory for single-use
 	// approval-gated grants. Guarded by gitTokMu; each entry single-flights its
-	// own re-mint via gitTokEntry.reMu.
+	// own re-mint via gitTokEntry.turn.
 	gitTokMu  sync.Mutex
 	gitTokens map[uuid.UUID]*gitTokEntry
 

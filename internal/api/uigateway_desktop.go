@@ -467,6 +467,12 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 		}
 	}
 	release, ok := s.acquireUIConn(sess.Run)
+	switch {
+	case !ok && !gated: // the run's idle relay connections may hold its slots
+		release, ok = s.uiSlotAfterIdleClose(sess.Run)
+	case !ok: // an issuer portal's stream does not wait on the close; its retry finds the slot
+		s.uiIdleCloseAsync()
+	}
 	if !ok {
 		_ = c.Close(desktopCloseUnreachable, uiConnCapMsg)
 		return

@@ -30,7 +30,7 @@ The dry run writes nothing, not even an audit row.
 
 - A body with any other key is a draft. A draft needs at least one approval kind. Omitting kinds or sending an empty list returns 400.
 
-- Each `PENDING` approval the rule matches runs the dry-run decide path: `would_approve`, or `skip` with the gate's reason.
+- Each `PENDING` approval the rule matches runs the dry-run decide path: `would_approve`, or `skip` with the gate's reason. A row past its wait budget that the expiry sweep has not yet moved is `skip` with `approval_already_decided`, as a real decision would refuse it.
 - Approvals from the last 7 days are matched on the rule's predicates only, labelled `predicate_match`. `recent_truncated` says the look back stopped at 1,000 rows.
 
 ## Rule

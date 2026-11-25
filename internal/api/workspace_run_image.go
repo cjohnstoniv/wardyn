@@ -469,7 +469,8 @@ func (s *Server) buildGeneratedImage(ctx context.Context, runID uuid.UUID, prima
 	var pins workspacescan.Pins
 	rebuild := false
 	if reason == types.ImageBuildReasonImageMissing {
-		if rec, _, _ := s.imageBuildView(ctx, primary); rec != nil && rec.Lane == types.ImageBuildLaneGenerated {
+		// The image is already known gone; asking the builder again could only fail and lose the pins.
+		if rec := currentImageBuild(primary); rec != nil && rec.Lane == types.ImageBuildLaneGenerated {
 			rebuild, pins = true, workspacescan.PinsFromInputs(rec.Inputs)
 		}
 	}

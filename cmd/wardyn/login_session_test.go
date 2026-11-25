@@ -999,7 +999,9 @@ func TestLoginVersionNotice(t *testing.T) {
 		{"0.10.0", "0.10.0+abc1234", ""},
 		{"0.10.0", "0.10.2", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "0.10.2")},
 		{"0.10.2", "0.9.6", fmt.Sprintf(copyNoticeServerOlder, "0.10.2", "https://o", "0.9.6")},
-		{"0.10.0", "dev", fmt.Sprintf(copyNoticeServerNewer, "0.10.0", "https://o", "dev")},
+		{"0.10.0", "dev", ""},
+		{"0.10.0", "0.10.1-rc.2", ""},
+		{"0.10.0-rc.3", "0.10.0", ""},
 	} {
 		if got := noticeLine(tc.cli, "https://o", tc.server); got != tc.want {
 			t.Errorf("noticeLine(%q, %q) = %q, want %q", tc.cli, tc.server, got, tc.want)

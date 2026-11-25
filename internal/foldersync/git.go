@@ -16,10 +16,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
+	"github.com/cjohnstoniv/wardyn/internal/filelock"
 )
 
 // Git history for `wardyn sync --git` and `--pull-commits`. .git itself never
@@ -270,20 +272,71 @@ func makeCheckedBundle(ctx context.Context, root, branch, head, path string, org
 	return checkBundleAllowed(ctx, path, branch, tip, orgDeny)
 }
 
+// A bundle scan's repository is made in a directory named scanDirPrefix+<random> beside the bundle, in the sync
+// state directory every run's sync shares. Its sync holds the lock file scanLockName inside it for as long as the
+// scan runs, so another sync can tell a live scan from one a killed send left behind.
+const (
+	scanDirPrefix = "wardyn-bundle-scan-"
+	scanLockName  = "owner.lock"
+	// scanSweepAge is how old a scan directory must be before a sweep looks at it, which covers the moment between
+	// making the directory and taking its lock.
+	scanSweepAge = 10 * time.Minute
+)
+
+// sweepAbandonedScans removes the scan directories in dir that a killed send left behind: each entry, read by name,
+// that is a directory (not a symbolic link) named with scanDirPrefix, older than scanSweepAge, whose lock no live
+// sync holds or that has none. Every failure is skipped: the sweep tidies, it never stops a send.
+func sweepAbandonedScans(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), scanDirPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < scanSweepAge {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if f, err := os.OpenFile(filepath.Join(path, scanLockName), os.O_RDWR, 0); err == nil {
+			lerr := filelock.TryLock(f)
+			_ = f.Close() // released before the removal: Windows cannot remove an open file
+			if lerr != nil {
+				continue // a live send holds it, or it cannot be locked: leave it
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		_ = os.RemoveAll(path)
+	}
+}
+
 // checkBundleAllowed reads the bundle at path, the file that is sent, in an empty repository of its own,
 // so nothing in the laptop's checkout (a replace ref, a graft, a config) changes what is inspected: the
 // scan sees the commits the bundle's pack carries. The repository is made beside the bundle (a send's state
-// directory, not a memory-backed temp one) and removed on every path.
+// directory, not a memory-backed temp one) and removed on every path; a send killed mid-scan leaves it, and a later
+// scan's sweepAbandonedScans removes it.
 func checkBundleAllowed(ctx context.Context, path, branch, tip string, orgDeny []string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(abs), "wardyn-bundle-scan-")
+	sweepAbandonedScans(filepath.Dir(abs))
+	dir, err := os.MkdirTemp(filepath.Dir(abs), scanDirPrefix)
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
+	lock, err := os.OpenFile(filepath.Join(dir, scanLockName), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close() // runs before the RemoveAll above: Windows cannot remove an open file
+	if err := filelock.TryLock(lock); err != nil {
+		return err
+	}
 	env := cleanGitEnv(dir)
 	repo := filepath.Join(dir, "scan.git")
 	// The scanner holds the bundle's own hash: a SHA-1 repository cannot import a SHA-256 bundle. SHA-1 takes

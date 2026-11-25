@@ -144,7 +144,13 @@ const desktopTestViewer = `<!doctype html><html lang="en" data-wardyn-desktop=""
 // console bundle's desktop.html in WARDYN_UI_DIR.
 func newDesktopHarness(t *testing.T) (*uiHarness, *desktopFakeRunner) {
 	t.Helper()
-	h := newUIHarness(t, okBackend())
+	return desktopHarnessOn(t, okBackend())
+}
+
+// desktopHarnessOn is newDesktopHarness with backend behind the run's relayed apps.
+func desktopHarnessOn(t *testing.T, backend http.Handler) (*uiHarness, *desktopFakeRunner) {
+	t.Helper()
+	h := newUIHarness(t, backend)
 	h.run.MachineKind = types.MachineLinuxVM
 	h.store.putRun(h.run)
 	dir := t.TempDir()

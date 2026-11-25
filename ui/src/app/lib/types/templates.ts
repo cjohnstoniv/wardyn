@@ -183,6 +183,8 @@ export interface TemplateCopyRequest {
   scope: TemplateScope;
   group_id?: string;
   name?: string;
+  /** The revision the caller reviewed: a template that has moved on since answers 409 template_revision_conflict and nothing is copied. */
+  expected_revision?: number;
 }
 
 /** GET /admin/template-group-admins. */

@@ -79,3 +79,38 @@ func TestTreeEffectResolvesBothSidesWithTheInputsHanded(t *testing.T) {
 		t.Errorf("walls under the handed hard_limits boundary = %+v, want the boundary's CC3 floor", got)
 	}
 }
+
+// noRunsStore has no live run, for a treeEffect whose walls changed. Any other call panics (nil store).
+type noRunsStore struct{ store.Store }
+
+func (noRunsStore) ListUndispatchedRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
+
+func (noRunsStore) ListTerminalRunsWithSandbox(context.Context) ([]types.AgentRun, error) {
+	return nil, nil
+}
+
+func (noRunsStore) ListLiveRuns(context.Context) ([]types.AgentRun, error) { return nil, nil }
+
+func (noRunsStore) GetRunsByID(context.Context, []uuid.UUID) ([]types.AgentRun, error) {
+	return nil, nil
+}
+
+// TestTreeEffectNamesTheUnitBeforeARename: a write that renames a unit and changes its limits reports each affected
+// membership with the name the unit had before (from_unit_name) and the name it has after (unit_name).
+func TestTreeEffectNamesTheUnitBeforeARename(t *testing.T) {
+	srv := &Server{cfg: Config{DefaultPolicy: govDeployment(), Store: noRunsStore{}}}
+	old := govProfile("payments")
+	renamed := *old
+	renamed.Name, renamed.Limits = "payments-eu", types.GovernanceLimits{}
+	def := types.GovernanceUnit{ID: store.DefaultUnitID, Name: "Default"}
+	m := types.GovernanceMembership{ID: uuid.New(), SubjectType: types.CapabilitySubjectUser, Subject: "sub-rename", UnitID: old.ID, Priority: 1}
+	before := treeSnapshot{units: []types.GovernanceUnit{def, *old}, memberships: []types.GovernanceMembership{m}}
+	after := treeSnapshot{units: []types.GovernanceUnit{def, renamed}, memberships: []types.GovernanceMembership{m}}
+	report, err := srv.treeEffect(context.Background(), before, after, wallInputs{limit: maxUnitDepthDefault, boundary: types.Boundary{Mode: types.BoundaryNoLimits}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.People) != 1 || report.People[0].FromUnitName != "payments" || report.People[0].UnitName != "payments-eu" || len(report.People[0].Changes) == 0 {
+		t.Fatalf("people = %+v; want one row from payments to payments-eu with its limit change", report.People)
+	}
+}

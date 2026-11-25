@@ -183,7 +183,7 @@ function Machines({ tuple, since }: { tuple: NodeTuple; since: string }) {
   return (
     <div className="mt-2">
       <h5 className="font-medium text-foreground">{C.MACHINES_LABEL}</h5>
-      <ul data-testid="run-node-record-machines" className="mt-1 space-y-1 font-mono text-[11px] text-muted-foreground">
+      <ul data-testid="run-node-record-machines" className="mt-1 space-y-1 font-mono text-meta text-muted-foreground">
         {tuple.pods.map((p) => (
           <li key={p.uid}>
             <div>{C.pod(p.component, p.uid)}</div>
@@ -202,7 +202,7 @@ function Machines({ tuple, since }: { tuple: NodeTuple; since: string }) {
       {tuple.reuses && tuple.reuses.length > 0 && (
         <>
           <h5 className="mt-1.5 font-medium text-foreground">{C.REUSES_LABEL}</h5>
-          <ul data-testid="run-node-record-reuses" className="mt-1 font-mono text-[11px] text-muted-foreground">
+          <ul data-testid="run-node-record-reuses" className="mt-1 font-mono text-meta text-muted-foreground">
             {tuple.reuses.map((r) => (
               <li key={`${r.uid}/${r.machine_id}/${r.system_uuid}`}>{C.reuse(r.name, r.uid, r.machine_id, r.system_uuid)}</li>
             ))}

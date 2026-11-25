@@ -813,44 +813,6 @@ func (s *Server) watchMacWindow(ctx context.Context, w *macWindow) {
 	}
 }
 
-// macWindowRecheck asks again what the open asked: the run as it stands now, the person's credential and the
-// rows of macWindowRefusal, with the same own-runner rule (no delegate, no service identity, no operator-owned
-// run). It returns the close reason, "" while the window may stay, the check that refused, and whether that is
-// a read that failed. Anything it cannot read is unread: the window rides the session budget, then ends as
-// refused_on_recheck. A window that stays stamps the run's presence and touches the run, so an open window
-// keeps the run from idling out from under the person. A window that ends touches nothing.
-func (s *Server) macWindowRecheck(ctx context.Context, w *macWindow) (reason, by string, unread bool) {
-	run, err := s.cfg.Store.GetRun(ctx, w.runID)
-	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: could not re-check a window", "run_id", w.runID, "err", err)
-		return macWindowRefusedRecheck, reasonRunUnreadable, !errors.Is(err, store.ErrNotFound)
-	}
-	if isTerminalRunState(run.State) || runIsKept(run) {
-		return macWindowRunEnded, "", false
-	}
-	revoked, err := s.macWindowRevoked(ctx, w.auth)
-	if err != nil {
-		slog.ErrorContext(ctx, "wardynd: could not re-check a window's credential", "run_id", w.runID, "err", err)
-		return macWindowRefusedRecheck, uiDeniedReasonRevocationUnavailable, true
-	}
-	if revoked {
-		return macWindowRevoked, "", false
-	}
-	if run.RunnerID == nil || *run.RunnerID != w.runnerID {
-		return macWindowRefusedRecheck, reasonMacWindowNotYourMac, false
-	}
-	rf := s.macWindowRefusal(ctx, run, w.auth, macWindowAsk{reopen: true})
-	switch {
-	case rf == nil:
-		_, _ = s.stampPresence(ctx, w.runID, types.ActorHuman, w.auth.Principal, macWindowSurface)
-		_ = s.cfg.Store.TouchRun(ctx, w.runID) // as attachKeepalive: an error only leaves the run to the reaper
-		return "", "", false
-	case rf.err == nil && rf.decision == nil && (rf.body.Reason == reasonMacWindowOffline || rf.body.Reason == reasonMacWindowNotHere):
-		return macWindowRunnerOffline, rf.body.Reason, false
-	}
-	return macWindowRefusedRecheck, macWindowRefusalReason(rf), rf.err != nil && unitReadFailed(rf.err)
-}
-
 // macWindowView is what GET /runs/{id} says of a window onto the run.
 type macWindowView struct {
 	// State is one of the macWindowState* states. Only macWindowStateOpen shows a button.

@@ -217,6 +217,8 @@ func (s *Server) decisionAfter(ctx context.Context, dl egress.DecisionLog) {
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
+	// From the proxy taking the request to this row's record (metrics_latency.go).
+	s.metrics.decisionRecorded(dl.Decision, dl.Request.Time, s.cfg.Now())
 	s.countReauthTimeout(ctx, dl)
 }
 

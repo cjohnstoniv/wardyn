@@ -100,7 +100,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// Exec's agent-run — uses `agent-run --idle`, which prepares the workspace then idles so the
 	// attach shell isn't empty. Every other run keeps the minimal CA-only idle script, since cloning
 	// on the shared idle PID would drop the clone out of the task's recording.
-	idleCmd := []string{"sh", "-c", runner.AgentIdleScript}
+	idleCmd := taskIdleCmd()
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}

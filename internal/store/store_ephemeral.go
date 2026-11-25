@@ -10,8 +10,6 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -27,8 +25,7 @@ import (
 // reaches SQL, so a live-DB reader (reporting role, hot standby, pg_dump)
 // can't read a usable bearer credential off the row.
 func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
+	return types.TokenDigest(token)
 }
 
 // AttachTicket is what one redeemed single-use WS attach ticket carries: the

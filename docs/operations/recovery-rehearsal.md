@@ -134,12 +134,13 @@ spec:
 |---|---|---|
 | Pairing | The restored database is at the manifest's audit head and the spool files are the recorded bytes | That nothing was written between the dump and the manifest; that case refuses, naming `audit head` |
 | Audit chain | Every audit row's hash chain verifies | |
-| Key use | The keys in this process open every stored row: credentials, principal keys, pre-envelope rows. Unwrapping through a Vault Transit or Azure Key Vault key is the code path in use, but this release's tests do not exercise it | Values held in an external store, which are counted `external` and never read |
+| Key use | The keys in this process open every `secrets` row (pre-envelope rows included) and every live principal key. Unwrapping through Vault Transit or Azure Key Vault is the code path in use; this release's tests do not exercise it | Values held in an external store, counted `external` and never read. The run masking records, which it does not open (see below) |
 | Recordings | Each cast parses, and under `fs` the tree equals the manifest's | That a recording is the one a person remembers |
 | Drives | Each staged drive object equals the manifest's digest, and no drive object is in the set that the manifest does not list | Homes that were never staged: the manifest records the homes in the set, and a drive with none |
 
+- The run masking records are sealed under principal keys. The rehearsal does not read them: wardynd opens each as it loads it, and refuses to relay or store a run's output while it cannot open that run's record.
 - The verdict does not look for rows in the target that the manifest does not describe, except later audit rows (pairing) and extra stored secrets (counted per key class). The manifest is the only reference ([residual](../design/0.9/recovery-set.md#10-residuals-and-threat-model-delta) (a)).
 - A restored set from before an erasure brings the erased data back while the wrapping key lives.
 - The manifest is plain JSON and not signed: it detects a mismatched pair, and anyone who can rewrite the stored set can rewrite it.
-- The rehearsal opens every stored value in memory, as an operator holding the keys and the dump already can offline. The begin row `recovery.rehearse.begin` records that it did.
+- The rehearsal opens every stored credential and live principal key in memory, as an operator holding the keys and the dump already can offline. The begin row `recovery.rehearse.begin` records that it did.
 - The target checks defend against mistakes. They do not stop a key-holder who controls both database addresses.

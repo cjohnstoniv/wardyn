@@ -576,7 +576,7 @@ describe("IdentityWidget: where the run ran", () => {
 // 0.9 (packet M-RN-3 RS1, RS1b): the Identity widget's Sync rows. Ended sessions are the run's
 // ssh.sync.transfer audit rows (bytes_in is INTO the sandbox); open ones are RunDetail.sync.open.
 describe("IdentityWidget: Sync rows", () => {
-  const run = {
+  const run: RunDetail = {
     id: "run-1",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -589,7 +589,7 @@ describe("IdentityWidget: Sync rows", () => {
     spiffe_id: "spiffe://x",
     runner_target: "docker",
     placement: "remote",
-  } as AgentRun;
+  };
   const transfer = (dir: string, bytesIn: number, bytesOut: number, hoursAgo = 1, extra: Record<string, unknown> = {}): AuditEvent => ({
     id: `${dir}-${bytesIn}-${hoursAgo}`,
     time: aheadByHours(-hoursAgo),
@@ -599,8 +599,8 @@ describe("IdentityWidget: Sync rows", () => {
     outcome: "success",
     data: { dir, direction: "push", bytes_in: bytesIn, bytes_out: bytesOut, ...extra },
   });
-  const renderRows = (over: Record<string, unknown> = {}, audit: AuditEvent[] = [], onGoAudit = () => {}) =>
-    render(<IdentityWidget run={{ ...run, ...over } as AgentRun} audit={audit} onGoPolicy={() => {}} onGoAudit={onGoAudit} />);
+  const renderRows = (over: Partial<RunDetail> = {}, audit: AuditEvent[] = [], onGoAudit = () => {}) =>
+    render(<IdentityWidget run={{ ...run, ...over }} audit={audit} onGoPolicy={() => {}} onGoAudit={onGoAudit} />);
 
   it("shows per directory the bytes to and from the sandbox and the last activity, summed over ended sessions", () => {
     renderRows({}, [transfer("/workspace/app", 4_000_000, 1000), transfer("/workspace/app", 200_000, 0, 2)]);
@@ -703,7 +703,7 @@ describe("IdentityWidget: Sync rows", () => {
     expect(await screen.findByText("Nothing synced yet.")).toBeInTheDocument();
   });
 
-  it.each<[string, Record<string, unknown>, Record<string, unknown>, number]>([
+  it.each<[string, Record<string, unknown>, Partial<RunDetail>, number]>([
     ["SSH off", { status: "ok", ssh: { enabled: false } }, {}, 1],
     ["no answer from /healthz", {}, {}, 1],
     ["a finished run", { status: "ok", ssh: { enabled: true } }, { state: "SUCCEEDED" }, 0],
@@ -726,7 +726,7 @@ describe("IdentityWidget: Sync rows", () => {
 
 // 0.9 (M-RN-3 RS3): where a run runs, and for a local run whose evidence the computer reported, whose word it is.
 describe("IdentityWidget: Runs on and Evidence", () => {
-  const base = {
+  const base: AgentRun = {
     id: "run-1",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -742,7 +742,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
     runner_id: "11111111-2222-3333-4444-555555555555",
     runner_name: "laptop-7",
     evidence_source: "runner_asserted",
-  } as AgentRun;
+  };
   const renderAs = (run: AgentRun, principal: string) =>
     render(
       <OperatorProvider operator={false} principal={principal}>
@@ -766,19 +766,19 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   });
 
   it("no Evidence row or note unless the computer vouched for the evidence", () => {
-    renderAs({ ...base, evidence_source: "substrate" } as AgentRun, "me");
+    renderAs({ ...base, evidence_source: "substrate" }, "me");
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/is a computer its owner administers/)).not.toBeInTheDocument();
   });
 
   it("names a runner the server could not read by a short id, never an empty name", () => {
-    renderAs({ ...base, runner_name: undefined } as AgentRun, "me");
+    renderAs({ ...base, runner_name: undefined }, "me");
     expect(screen.getByText("Runner 11111111 · your computer")).toBeInTheDocument();
   });
 
   // C2: a remote run says where it ran (0.9.1: placed or not), and never carries the Evidence row or note.
   it.each(["substrate", "runner_asserted"] as const)("a remote run has no Evidence, whatever its evidence_source (%s)", (evidence_source) => {
-    renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source } as AgentRun, "me");
+    renderAs({ ...base, placement: "remote", runner_id: undefined, runner_name: undefined, evidence_source }, "me");
     expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.queryByText("The only place this run could run.")).not.toBeInTheDocument();
     expect(screen.queryByText("Evidence")).not.toBeInTheDocument();
@@ -789,10 +789,10 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   // #2822: the harness's own walls the run launched with sit under its policy row; a run with none
   // recorded (no catalog harness, or created before the field) shows nothing there.
   it("the policy row says the run's inner walls when the run recorded them", () => {
-    const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } } as AgentRun, "me");
+    const view = renderAs({ ...base, inner_walls: { sandbox_mode: "off", approvals: "wardyn" } }, "me");
     expect(screen.getByText("Harness walls: harness sandbox off, approvals in Wardyn")).toBeInTheDocument();
     view.unmount();
-    const bound = renderAs({ ...base, inner_walls: { sandbox_mode: "workspace-write", approvals: "none" } } as AgentRun, "me");
+    const bound = renderAs({ ...base, inner_walls: { sandbox_mode: "workspace-write", approvals: "none" } }, "me");
     expect(screen.getByText(/^Harness walls: harness sandbox workspace-write, /)).toBeInTheDocument();
     bound.unmount();
     renderAs(base, "me");
@@ -800,7 +800,7 @@ describe("IdentityWidget: Runs on and Evidence", () => {
   });
 
   it("a remote run the resolver placed says where, and that it was the only place", () => {
-    renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" } as AgentRun, "me");
+    renderAs({ ...base, placement: "remote", placement_filled: true, runner_id: undefined, runner_name: undefined, evidence_source: "substrate" }, "me");
     expect(screen.getByText("Docker host")).toBeInTheDocument();
     expect(screen.getByText("The only place this run could run.")).toBeInTheDocument();
   });

@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -22,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/loopback"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vm/guestagent"
@@ -94,13 +94,9 @@ func sshEnvAllowed(name string) bool {
 // namespace has no route anywhere else regardless (it cannot create egress —
 // invariant 3), but this is validated up front so a non-loopback ask is
 // refused with a clear reason instead of silently rewritten or left to fail
-// inside the sandbox.
+// inside the sandbox. "localhost" is matched in any case.
 func sshIsSandboxLoopback(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return loopback.Host(strings.ToLower(host))
 }
 
 // sshRelayArgv is the in-sandbox command that copies its stdio to the sandbox's own

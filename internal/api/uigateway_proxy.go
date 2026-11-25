@@ -28,8 +28,11 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 			// pipe-backed conn shows up as a frozen UI.
 			FlushInterval: -1,
 			Transport: &http.Transport{
-				DialContext:  s.uiDial,
-				MaxIdleConns: maxUIConnsPerRun * 4,
+				DialContext: s.uiDial,
+				// No pool-wide idle cap: MaxIdleConnsPerHost keeps each run's app to its 8, an idle connection
+				// holds one of the run's slots, and uiIdleConnTimeout closes it. A pool-wide cap closed one
+				// run's idle connections because other runs were busy, and each closed one redialled.
+				MaxIdleConns: 0,
 				// A host is one run's app (run:port); a request past the cap waits for a pooled conn (serveUIRelay).
 				MaxConnsPerHost: maxUIConnsPerRun, MaxIdleConnsPerHost: maxUIConnsPerRun,
 				IdleConnTimeout: uiIdleConnTimeout,

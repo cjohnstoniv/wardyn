@@ -32,11 +32,11 @@ it honest, tokens for a person who never signs in, and the portals that act for 
 - Revoking a human (`POST /api/v1/sessions/revoke`, `wardyn session revoke`) also revokes their API tokens, removes their registered SSH keys, and refuses their UI-app sessions at the next re-check, whether the revoke names the subject or the email.
   - The `all` arm applies all three actions deployment-wide, including the calling admin's own credentials.
   - Plan to re-mint tokens and re-register SSH keys after a global revoke.
-- To end only a person's browser sessions, send `"sessions_only": true` with `sub`: a session-only cut is stamped and nothing else changes.
-  - Their browser sessions end on every instance; their API tokens, SSH keys, portal-delegated tokens and sponsored services keep working; an API token can still approve a governance change.
-  - No token-borne credential is refused by the cut; an event stream a token opened before the cut closes at its next keepalive and reconnects.
+- To end only a person's sign-ins, send `"sessions_only": true` with `sub`: a session-only cut ends their browser and CLI sign-ins, and nothing else changes.
+  - Their browser sessions end on every instance, and each CLI sign-in ends at once with the tokens it holds. Their personal API tokens, SSH keys, portal-delegated tokens and sponsored services keep working; a personal API token can still approve a governance change.
+  - No personal API token is refused by the cut; an event stream one opened before the cut closes at its next keepalive and reconnects.
   - It is refused (`sessions_revoke_param_invalid`) with `all`.
-  - The audit row is the usual `session.revoke`, with `sessions_only` set and both counts `0`.
+  - The audit row is the usual `session.revoke`, with `sessions_only` set, `tokens_revoked` and `ssh_keys_deleted` both `0`, and `cli_sessions_ended` counting the CLI sign-ins it ended.
   - The People drawer's "Sign out everywhere" sends it.
 - **No `role` parameter on `POST /me/tokens`.**
   - A token always mints at the caller's own current role; there is no deliberately-downgraded mint.
@@ -194,7 +194,7 @@ a new login ends the last.
   secret; an old secret presented again ends the session (`cli.session.reuse_detected`).
 - **Ending it.** `POST /sessions/revoke` (every scope, including `sessions_only`), a console sign-out, Signed-in CLIs
   (`DELETE /me/cli-sessions/{id}`) and SCIM deactivation end the session and its tokens at once. A sessions-only cut
-  leaves the person's own API tokens working, as before; `session.revoke` counts `cli_sessions_ended`.
+  leaves the person's personal API tokens and SSH keys working; `session.revoke` counts `cli_sessions_ended`.
   The CLI then says why only when the sign-in was signed out, reached its lifetime or went unused past its idle
   lifetime; every other end reads the same.
 - **Admins.** An admin's CLI acts as role `user`. `wardyn login --admin` asks for a fresh approval and gives a 1-hour
@@ -272,7 +272,7 @@ a new login ends the last.
   - Only a row keyed by tenant and object id can be unbound (`409`, `identity_not_rebindable`, otherwise); any other is found by its principal alone and would be orphaned.
   - A deactivated or purged identity is refused too (`409`, `identity_deactivated`).
   - The unbind clears only the row's principal. It keeps `authority_epoch`, `deactivated_at` and the SCIM linkage, and it cuts the released `sub`'s sessions.
-  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key, a claimed runner, an unspent runner registration token or a run that has not ended, sponsors a service identity, or is named by a pending invitation. Revoke or end them, then unbind.
+  - **The old `sub` must hold nothing first.** After the re-bind a suspension reaches only the new `sub`, so the unbind is refused (`409`, `identity_principal_in_use`, with the counts) while the old `sub` still holds an API token, an SSH key, a claimed runner, an unspent runner registration token or a run that has not ended, is named by a capability deny, sponsors a service identity, or is named by a pending invitation. Revoke or end them, move a deny to the person's email (which the re-bind keeps), then unbind.
   - Its stored credentials, workspaces and drive stay under the old principal, which the person no longer signs in as: expect to re-create them.
   - It writes an `identity.unbind` audit row naming the principal it released and the admin who did it. The next sign-in's bind is not audited; it shows as the identity's new principal on People.
 - `POST /people` answers `409` rather than create an ambiguous identity.

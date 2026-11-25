@@ -109,7 +109,7 @@ function Notice({ title, body, tone = "muted", children }: { title: string; body
         {tone === "danger" && <TriangleAlert className="size-3.5 flex-none text-danger" aria-hidden="true" />}
         {title}
       </strong>
-      {body && <p className="text-[13px] text-muted-foreground">{body}</p>}
+      {body && <p className="text-body text-muted-foreground">{body}</p>}
       {children}
     </div>
   );
@@ -167,7 +167,7 @@ export function ComputerChoose({ value, onChange, onNotNow }: {
   if (folderRunners.length === 0) {
     return (
       <Notice title={NR_FILES.COMPUTER_NO_RUNNER} body={NR_FILES.COMPUTER_NO_RUNNER_BODY}>
-        {runnersError && <p className="text-[13px] text-muted-foreground">{runnersError}</p>}
+        {runnersError && <p className="text-body text-muted-foreground">{runnersError}</p>}
         <span className="flex flex-wrap items-center gap-3 pt-1">
           <Link to="/account" className="text-sm font-semibold text-primary hover:underline">{NR_FILES.COMPUTER_SET_UP}</Link>
           <Button type="button" variant="ghost" size="sm" onClick={onNotNow}>{NR_FILES.COMPUTER_NOT_NOW}</Button>
@@ -180,7 +180,7 @@ export function ComputerChoose({ value, onChange, onNotNow }: {
     const away = runner ?? folderRunners[0];
     return (
       <Notice tone="danger" title={NR_FILES.COMPUTER_OFFLINE} body={NR_FILES.COMPUTER_OFFLINE_BODY(away.name)}>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           {NR_FILES.COMPUTER_LAST_SEEN(away.name, away.last_seen_at ? relativeTime(away.last_seen_at) : "—")}
         </p>
       </Notice>
@@ -215,7 +215,7 @@ export function ComputerChoose({ value, onChange, onNotNow }: {
         )}
         <Chip>{NR_FILES.COMPUTER_ONLINE}</Chip>
       </div>
-      <nav aria-label={NR_FILES.START_FOLDER_LABEL} className="flex flex-wrap items-center gap-1 text-[13px]">
+      <nav aria-label={NR_FILES.START_FOLDER_LABEL} className="flex flex-wrap items-center gap-1 text-body">
         <span className={FIELD_LABEL}>{NR_FILES.START_FOLDER_LABEL}</span>
         {crumbs.map((c, i) => (
           <React.Fragment key={c}>
@@ -263,7 +263,7 @@ export function ComputerChoose({ value, onChange, onNotNow }: {
           ) : (
             <span aria-busy="true" className="text-muted-foreground">…</span>
           )}
-          <label className="mt-1 flex items-center gap-2 text-[13px] text-muted-foreground">
+          <label className="mt-1 flex items-center gap-2 text-body text-muted-foreground">
             {/* `wardyn sync`'s rules always leave out what .gitignore lists, so this is shown, never switched off. */}
             <input type="checkbox" checked disabled className="size-4 accent-primary" />
             {NR_FILES.COMPUTER_GITIGNORE}
@@ -306,13 +306,13 @@ export function ComputerMount({ choice, path, onPath, direction, onDirection, er
         <KindTile kind="computer" />
         <strong className="text-[15px] font-semibold">{choice.name}</strong>
         <Chip>{NR_FILES.COMPUTER_TITLE}</Chip>
-        <span className="text-[13px] text-muted-foreground">{NR_FILES.COMPUTER_ON(choice.runner)}</span>
+        <span className="text-body text-muted-foreground">{NR_FILES.COMPUTER_ON(choice.runner)}</span>
       </div>
       <div className="flex flex-col gap-1.5">
         <label htmlFor={inputId} className={FIELD_LABEL}>{NR_FILES.STEP_MOUNT}</label>
         <input
           id={inputId}
-          className="h-[42px] rounded-md border border-border-strong bg-input-background px-3 font-mono text-[13px]"
+          className="h-[42px] rounded-md border border-border-strong bg-input-background px-3 font-mono text-body"
           value={path}
           aria-invalid={!!error || undefined}
           aria-describedby={errorId}
@@ -338,7 +338,7 @@ function Changes({ direction, onDirection, name }: { direction: "both" | "in"; o
           <input type="radio" name={name} className="mt-0.5 size-4 accent-primary" checked={direction === value} onChange={() => onDirection(value)} />
           <span className="flex flex-col gap-0.5">
             <strong className="font-semibold">{label}</strong>
-            <span className="text-[13px] text-muted-foreground">{body}</span>
+            <span className="text-body text-muted-foreground">{body}</span>
           </span>
         </label>
       ))}

@@ -463,7 +463,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - there is no generically-correct default peer.
   - **Scope this in any cluster where "wardynd can reach 443/6443 anywhere" is not an acceptable posture** — set it to a raw `NetworkPolicyPeer` list (same shape as `networkPolicy.egress.extra`), e.g. an `ipBlock` naming your cluster's actual apiserver/load-balancer CIDR.
 
-- RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/delete/deletecollection; `pods/ephemeralcontainers` update;
+- RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/watch/delete/deletecollection; `pods/ephemeralcontainers` update;
 - `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first; `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`;
 - secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection — deliberately **no** `get`, `list` or `watch` on `secrets`:
 - every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
@@ -474,6 +474,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - the cluster-scoped ClusterRole covers `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver only ever resolves one by name).
 - One rule is conditional, and it is the only one switched twice: `persistentvolumeclaims` get+create, rendered only with `drives.enabled`, plus `delete` only with `drives.reclaim.enabled` — see [User drives](#user-drives-drivesenabled) below.
 - A run's `disk_mib` cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the runner already creates, and eviction is read back through the `pods: get` the Role already has.
+- `watch` on `pods` only wakes the pod waits (a start, a stop, a task's exit, the canary); each wait still decides on a `get` or `list`. A Role you write yourself under `k8s.rbac.create=false` may leave it out: the waits then poll as before and wardynd logs one warning per runs namespace.
 
 - **Two releases on one cluster is supported.**
   - The namespaced objects are named from the release, and the two cluster-scoped ones additionally carry the release namespace — `<namespace>-<fullname>-k8s-runtimeclasses`, so `helm install wardyn -n team-a` renders `team-a-wardyn-k8s-runtimeclasses`.
@@ -1095,7 +1096,8 @@ uiSandbox:
   - A render with `replicas > 1` and no `ha.enabled` fails with an explicit message.
   - wardynd also takes a Postgres advisory lock at boot ([`cmd/wardynd/single_instance.go`](../../../cmd/wardynd/single_instance.go)) and refuses to serve if it can't get it, so a replica added by `kubectl scale` without HA mode exits instead of serving.
 - `ha.enabled`: **high availability.**
-  - Runs two or more replicas so that one node failing does not stop the control plane.
+  - Lets the Deployment run two or more replicas. It does not raise `replicas`, which keeps its value (1 by default): set it to 2 or more.
+  - A node failure stops the control plane only when every ready replica was on that node, and the anti-affinity below prefers separate nodes without requiring them.
   - Sets `WARDYN_HA=true`, lifts the `replicas > 1` refusal, adds a PodDisruptionBudget (`minAvailable: 1`) and a preferred pod anti-affinity across nodes (an `affinity.podAntiAffinity` of your own replaces it), and keeps the audit spool on the per-pod `/tmp` emptyDir.
   - The PodDisruptionBudget renders only at two or more replicas, since one pod would block every node drain.
   - Default `false`.

@@ -61,6 +61,12 @@ run nine-then-ok "FAIL:a" "FAIL:a" "FAIL:a" "FAIL:a" "FAIL:a" "FAIL:a" "FAIL:a" 
 run poll-lines in_progress in_progress completed success
 [ "$(grep -c 'status ' <<<"$out")" -eq 3 ] || fail "want one status line per poll (3): $out"
 
+# A status the script does not know ends the step at the same bound, naming it.
+run unknown-status bogus bogus bogus bogus bogus bogus bogus bogus bogus bogus completed success
+[ "$rc" -ne 0 ] || fail "unknown status: want a failed step, got rc=0"
+[ "$calls" -eq 10 ] || fail "unknown status: want 10 reads, got $calls"
+grep -q "unknown status 'bogus'" <<<"$out" || fail "unknown status: not named: $out"
+
 # The verdict is the conclusion.
 run failure completed failure
 [ "$rc" -ne 0 ] || fail "concluded failure: want a failed step"
