@@ -171,6 +171,15 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 		st.Message = waitingReason(pod)
 	case corev1.PodRunning:
 		st.State = types.RunRunning
+		// A pod stays Running while any container runs, so with extra containers the agent's exit does
+		// not move the phase: read the agent container itself. A one-container pod keeps the phase alone.
+		if code := containerExitCode(pod, mainContainerName); code != nil && len(pod.Spec.Containers) > 1 {
+			st.State, st.ExitCode = types.RunFailed, code
+			if *code == 0 {
+				st.State = types.RunStopped
+			}
+			st.Message = "the agent container exited while an extra container was still running"
+		}
 	case corev1.PodSucceeded:
 		code := 0
 		st.State = types.RunStopped

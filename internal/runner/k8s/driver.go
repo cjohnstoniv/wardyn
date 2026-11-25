@@ -538,6 +538,9 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// point, in place and unreplaceable before any container starts. True
 		// only while that path exists, for UserDrives' reason.
 		ManagedFiles: true,
+		// Runs SandboxSpec.Containers in the agent pod (extra_containers.go). True only while that path
+		// exists; TestCreateSandbox_ExtraContainersShape pins the two together.
+		ExtraContainers: true,
 		// A run's disk_mib becomes the agent container's
 		// resources.limits[ephemeral-storage]; the kubelet enforces it by
 		// EVICTING the pod (measured periodically; the write is never
