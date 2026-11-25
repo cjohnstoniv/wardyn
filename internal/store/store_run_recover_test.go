@@ -24,7 +24,7 @@ func TestRecoveryHeldExpr_JudgeAndSweepsShareOnePredicate(t *testing.T) {
 			t.Errorf("the %s's hold predicate does not end on the runner's report of its proxy down", name)
 		}
 	}
-	for _, field := range []string{"'proxy_stopped_at'", "'containment_pending'"} {
+	for _, field := range []string{"'proxy_stopped_at'", "'containment_pending'", "i.created_at > a.token_renewed_at"} {
 		if !strings.Contains(runnerReportsProxyDownSQL, field) {
 			t.Errorf("the runner report term does not read %s", field)
 		}

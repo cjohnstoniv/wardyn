@@ -65,11 +65,15 @@ const storeRecoveringTerm = "<store_recovering>"
 var tokenExpirySQL = fmt.Sprintf(`a.token_renewed_at + interval '%d seconds'`, int(identity.RunTokenTTL/time.Second))
 
 // runnerReportsProxyDownSQL is TRUE for an agent_runs row (alias a) whose runner's latest STATE report of it, on its
-// current session (runner_inventory_observations), has its proxy stopped or holds it containment pending. Nothing can
-// recover such a run's proxy. The STATE judge stores each report before it judges it (intakeRunnerStateRow), so the
-// judge and the sweeps read the same report.
-const runnerReportsProxyDownSQL = `EXISTS (SELECT 1 FROM runner_inventory_observations o WHERE o.runner_id = a.runner_id
-	AND o.run_id = a.id AND (o.assertion->>'proxy_stopped_at' IS NOT NULL OR jsonb_typeof(o.assertion->'containment_pending') = 'object'))`
+// current session (runner_inventory_observations), has its proxy stopped or holds it containment pending, and was taken
+// after the run's last renew or recovery: its session began (runner_inventories.created_at) after token_renewed_at.
+// Nothing can recover such a run's proxy. An older report says nothing of the proxy a revive's replace started since,
+// whose renewals moved the stamp past it. The STATE judge stores each report before it judges it
+// (intakeRunnerStateRow), so the judge and the sweeps read the same report.
+const runnerReportsProxyDownSQL = `EXISTS (SELECT 1 FROM runner_inventory_observations o
+	JOIN runner_inventories i ON i.runner_id = o.runner_id
+	WHERE o.runner_id = a.runner_id AND o.run_id = a.id AND i.created_at > a.token_renewed_at
+	AND (o.assertion->>'proxy_stopped_at' IS NOT NULL OR jsonb_typeof(o.assertion->'containment_pending') = 'object'))`
 
 // recoveryHeldSQL is the one hold predicate with every duration filled in at package init, over agent_runs a LEFT JOIN
 // run_outage_terms t. A run is held while its proxy pauses, its lineage is not cut, its strict allowance (if strict)

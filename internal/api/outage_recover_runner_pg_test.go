@@ -211,3 +211,23 @@ func TestRunnerState_JudgeAndSweepsAgreeOnTheHold_PG(t *testing.T) {
 		})
 	}
 }
+
+// A report of the proxy stopped that is older than the run's last renew ends no hold. A revive after a containment, in
+// the same runner session, replaced the proxy, whose renewals moved the run's stamp past that report; a runner-link
+// outage after that holds the run as before.
+func TestOfflineFromRunner_StoppedReportBeforeTheLastRenewKeepsTheHold_PG(t *testing.T) {
+	f := ohRunnerFixture(t)
+	run := ohRunnerRun(t, f, 70*time.Minute, ohPauses)
+	if err := ohPage(t, f, run, true); err != nil && !errors.Is(err, store.ErrRunnerReconciliationRequired) {
+		t.Fatalf("STATE page = %v", err)
+	}
+	// The session that carried the report began before the run's last renew, 70 minutes ago.
+	ohExec(t, f.st, `UPDATE runner_inventories SET created_at = now() - interval '100 minutes' WHERE runner_id = $1`, f.rn.ID)
+	ohOpenWindow(t, f.st, store.OutageKindRunnerLink, &f.rn.ID, 70*time.Minute)
+
+	if rc := ohCheck(t, f.st, run.ID); !rc.Held {
+		t.Fatal("a stopped-proxy report older than the run's last renew ended the hold")
+	}
+	ohOfflineSweep(t, f)
+	ohRequireUnmarked(t, f.st, f.srv.cfg.Audit.(*syncAudit), run, "the run held past an older report")
+}
