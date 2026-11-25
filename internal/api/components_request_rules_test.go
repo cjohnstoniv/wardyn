@@ -264,6 +264,17 @@ func TestRequestRulesCreateDoors(t *testing.T) {
 					t.Fatalf("%s = %d %s, want success", door, w.Code, w.Body.String())
 				}
 				f.st.components = nil // the next door's ref stores its row again
+				if door == policyPreviewPath {
+					// The preview's spec is the compiled policy: the component's rules are one set of it.
+					var preview policyPreviewResponse
+					if err := json.Unmarshal(w.Body.Bytes(), &preview); err != nil {
+						t.Fatal(err)
+					}
+					set := types.HostRuleSet{Rules: rulesDefinition(rulesHost).RequestRules}
+					if !slices.ContainsFunc(preview.Spec.HostRules, func(s types.HostRuleSet) bool { return reflect.DeepEqual(s, set) }) {
+						t.Errorf("preview host_rules = %+v, want the component's set %+v", preview.Spec.HostRules, set)
+					}
+				}
 				if door != componentDoors[0] {
 					continue
 				}
