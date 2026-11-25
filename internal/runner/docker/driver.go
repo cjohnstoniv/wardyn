@@ -349,6 +349,11 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		return substrate.ClassSupport{}, fmt.Errorf("docker: info: %w", err)
 	}
 	c := capabilitiesForWith(infoRes.Info, d.cfg.ConfinementRuntimes, d.cfg.Record)
+	// A registered runner runs no MCP sandbox (CreateMCPSandbox), so it advertises none.
+	var mcpKinds []types.MachineKind
+	if !d.runnerMode() {
+		mcpKinds = []types.MachineKind{types.MachineContainer}
+	}
 	return substrate.ClassSupport{
 		Classes:          c.ConfinementClasses,
 		Resolved:         c.Resolved,
@@ -369,7 +374,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
 		// Per-class Freeze/Thaw support — see capabilitiesForWith.
 		Freeze:          c.Freeze,
-		MCPSandboxKinds: []types.MachineKind{types.MachineContainer}, // mcp_sandbox.go
+		MCPSandboxKinds: mcpKinds, // mcp_sandbox.go
 	}, nil
 }
 

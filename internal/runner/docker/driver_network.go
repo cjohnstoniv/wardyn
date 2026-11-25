@@ -357,8 +357,11 @@ func (d *Driver) createNamedRunNetwork(ctx context.Context, name string, labels 
 		return "", err
 	}
 	if err := d.checkRunNetwork(ctx, id, remedyDaemon); err != nil {
-		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it.
-		_, _ = d.cli.NetworkRemove(context.Background(), id, client.NetworkRemoveOptions{})
+		// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand it. Bounded as the subnet
+		// probe's removal is (probeRemoveBound).
+		rmCtx, cancel := context.WithTimeout(context.Background(), probeRemoveBound)
+		defer cancel()
+		_, _ = d.cli.NetworkRemove(rmCtx, id, client.NetworkRemoveOptions{})
 		return "", err
 	}
 	return id, nil

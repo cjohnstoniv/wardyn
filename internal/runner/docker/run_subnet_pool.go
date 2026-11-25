@@ -117,7 +117,7 @@ func (d *Driver) poolRunSubnet(ctx context.Context, lost []netip.Prefix) (netip.
 	}
 	subnet, ok := nextRunSubnet(d.cfg.RunSubnetPool, d.cfg.RunSubnetBits, used)
 	if !ok {
-		return netip.Prefix{}, fmt.Errorf("docker: create internal network: no free /%d subnet is left in %s=%s for this run's network (each sandbox holds one): widen the range, or end runs to free one",
+		return netip.Prefix{}, fmt.Errorf("docker: create internal network: no free /%d subnet is left in %s=%s for this run's network (each sandbox holds one, as does each MCP server's sandbox and the run's relay link): widen the range, or end runs to free one",
 			d.cfg.RunSubnetBits, EnvRunSubnetPool, d.cfg.RunSubnetPool)
 	}
 	return subnet, nil

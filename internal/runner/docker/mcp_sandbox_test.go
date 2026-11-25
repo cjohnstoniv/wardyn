@@ -46,6 +46,9 @@ func mcpTestSpec(ord int, class types.ConfinementClass) runner.MCPSandboxSpec {
 		SecretEnv:   map[string]string{"SERVER_TOKEN": "s3cret"},
 		PlatformEnv: map[string]string{"WARDYN_MCP_LAUNCH_JSON": `{"command":"files-server"}`},
 		ProxyConfig: []byte(mcpTestConfig),
+		// The config's token_sha256; the ordinals the tests use are each run's first ones, so rank is ordinal.
+		RelayTokenSHA256: "ab",
+		RelayRank:        ord,
 	}
 }
 
@@ -229,9 +232,10 @@ func TestMCPHostBinaryOutsideManagedFileDir(t *testing.T) {
 // or its proxy, and no docker socket in either.
 func TestMCPSandboxHostConfigHasNoHostMounts(t *testing.T) {
 	for _, tc := range []struct {
-		class types.ConfinementClass
-		krun  bool
-	}{{types.CC1, false}, {types.CC2, false}, {types.CC3, true}} {
+		class   types.ConfinementClass
+		krun    bool
+		runtime string
+	}{{types.CC1, false, "runc"}, {types.CC2, false, runtimeRunsc}, {types.CC3, true, runtimeKrun}} {
 		t.Run(string(tc.class), func(t *testing.T) {
 			f, d := newMCPRig(t)
 			f.info = infoWithRuntimes("runsc", "krun")
@@ -241,6 +245,9 @@ func TestMCPSandboxHostConfigHasNoHostMounts(t *testing.T) {
 			}
 			c, p := f.containers[mcpContainerName(id, 0)], f.containers[mcpProxyName(id, 0)]
 			h := c.host
+			if runtimeOrRunc(h.Runtime) != tc.runtime || p.host.Runtime != "" {
+				t.Errorf("container runtime %q, MCP proxy runtime %q; want %s and the daemon's default", h.Runtime, p.host.Runtime, tc.runtime)
+			}
 			if len(h.Mounts) != 1 || h.Mounts[0].Type != mount.TypeTmpfs || h.Mounts[0].Target != "/tmp" || h.Mounts[0].Source != "" {
 				t.Errorf("container mounts = %+v; want exactly the one tmpfs at /tmp", h.Mounts)
 			}
@@ -351,8 +358,14 @@ func TestMCPSandboxStatusLiveOnlyWithBoth(t *testing.T) {
 	if err != nil || !st.Live || st.RelayAddr != sb.RelayAddr {
 		t.Fatalf("status after start = %+v, %v; want live at %s", st, err, sb.RelayAddr)
 	}
-	if err := d.StartMCPSandbox(ctx, sb.ID); err == nil {
-		t.Error("a second start was accepted; the proxy's config was written once")
+	if err := d.StartMCPSandbox(ctx, sb.ID); !errors.Is(err, runner.ErrMCPSandboxNotCreatedHere) {
+		t.Errorf("a second start = %v; want ErrMCPSandboxNotCreatedHere, the proxy's config was written once", err)
+	}
+	f.mu.Lock()
+	f.containers[mcpContainerName(sb.ID.RunID, 0)].state = &container.State{Status: "exited", ExitCode: 1}
+	f.mu.Unlock()
+	if st, err := d.MCPSandboxStatus(ctx, sb.ID); err != nil || st.Live {
+		t.Errorf("status with the container exited and the proxy up = %+v, %v; want dead", st, err)
 	}
 	if err := d.StopMCPProxies(ctx, agentContainerName(sb.ID.RunID)); err != nil {
 		t.Fatalf("StopMCPProxies: %v", err)
@@ -417,11 +430,14 @@ func TestStopMCPProxiesDrainsThenRemoves(t *testing.T) {
 		t.Fatalf("StopMCPProxies: %v", err)
 	}
 	timeout := strconv.Itoa(int(stopTimeout.Seconds()))
-	want := []string{"drain",
-		"stop " + mcpProxyName(id, 0) + " " + timeout, "remove " + mcpProxyName(id, 0),
-		"stop " + mcpProxyName(id, 1) + " " + timeout, "remove " + mcpProxyName(id, 1)}
-	if !slices.Equal(log, want) {
-		t.Errorf("calls = %q\nwant %q", log, want)
+	if len(log) != 5 || log[0] != "drain" {
+		t.Fatalf("calls = %q; want the one drain first, then a stop and a remove per proxy", log)
+	}
+	for _, ord := range []int{0, 1} {
+		stop, remove := slices.Index(log, "stop "+mcpProxyName(id, ord)+" "+timeout), slices.Index(log, "remove "+mcpProxyName(id, ord))
+		if stop < 1 || remove < stop {
+			t.Errorf("calls = %q; want proxy %d stopped with the stop timeout, then removed", log, ord)
+		}
 	}
 	for _, ord := range []int{0, 1} {
 		if gone(f, mcpContainerName(id, ord)) {
@@ -592,8 +608,8 @@ func TestAttachExecRefuseMCPSandboxRef(t *testing.T) {
 	}
 }
 
-// TestCreateMCPSandboxRefusesWithoutItsContract: a spec Validate refuses, a registered runner and an engine
-// older than 26 are refused before anything is created.
+// TestCreateMCPSandboxRefusesWithoutItsContract: a spec Validate refuses, an engine older than 28, a relay token
+// digest unlike the config's and a registered runner are refused before anything is created.
 func TestCreateMCPSandboxRefusesWithoutItsContract(t *testing.T) {
 	ctx := context.Background()
 	f, d := newMCPRig(t)
@@ -603,10 +619,15 @@ func TestCreateMCPSandboxRefusesWithoutItsContract(t *testing.T) {
 		t.Error("a spec with no proxy config was accepted")
 	}
 	f.info.ServerVersion = "25.0.3"
-	if _, err := d.CreateMCPSandbox(ctx, mcpTestSpec(0, types.CC1)); err == nil || !strings.Contains(err.Error(), "Engine 26") {
+	if _, err := d.CreateMCPSandbox(ctx, mcpTestSpec(0, types.CC1)); !errors.Is(err, runner.ErrMCPSandboxHostReachable) {
 		t.Errorf("an Engine 25 create = %v; want refused", err)
 	}
 	f.info.ServerVersion = "29.4.2"
+	mismatch := mcpTestSpec(0, types.CC1)
+	mismatch.RelayTokenSHA256 = "cd"
+	if _, err := d.CreateMCPSandbox(ctx, mismatch); err == nil || !strings.Contains(err.Error(), "token_sha256") {
+		t.Errorf("a token digest unlike the config's = %v; want refused", err)
+	}
 	d.cfg.RunnerID = "r1"
 	if _, err := d.CreateMCPSandbox(ctx, mcpTestSpec(0, types.CC1)); err == nil {
 		t.Error("a registered runner created an MCP sandbox")
@@ -630,5 +651,258 @@ func TestSweepHoldingKillsOrphanMCPSandboxes(t *testing.T) {
 	}
 	if !hasNet(h.f, relayLinkName(h.runID)) || h.removed(h.ref) {
 		t.Error("the hold removed the relay link or the agent container")
+	}
+}
+
+// TestMCPSandboxFoundWithoutItsNetwork: an MCP sandbox whose network is gone is still found by its containers, and
+// removed by the run-wide kill, the run's teardown and the orphan sweep.
+func TestMCPSandboxFoundWithoutItsNetwork(t *testing.T) {
+	for _, way := range []string{"kill", "teardown", "sweep"} {
+		t.Run(way, func(t *testing.T) {
+			f, d := newMCPRig(t)
+			ctx := context.Background()
+			id := testSpec().RunID
+			createMCP(t, d, 0)
+			sb, err := d.CreateSandbox(ctx, testSpec())
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			f.mu.Lock()
+			delete(f.networks, mcpNetName(id, 0))
+			delete(f.subnets, mcpNetName(id, 0))
+			old := time.Now().Add(-time.Hour).Unix()
+			for _, name := range []string{mcpContainerName(id, 0), mcpProxyName(id, 0)} {
+				f.listItems = append(f.listItems, container.Summary{ID: name, Names: []string{"/" + name}, Created: old, Labels: f.containers[name].cfg.Labels})
+			}
+			f.mu.Unlock()
+			switch way {
+			case "kill":
+				err = d.KillRunMCPSandboxes(ctx, id)
+			case "teardown":
+				err = d.KillSandbox(ctx, sb.Ref)
+			case "sweep":
+				_, err = d.SweepOrphanedSandboxes(ctx, time.Minute, func(uuid.UUID) bool { return true })
+			}
+			if err != nil {
+				t.Fatalf("%s: %v", way, err)
+			}
+			if !gone(f, mcpContainerName(id, 0)) || !gone(f, mcpProxyName(id, 0)) {
+				t.Errorf("the %s left an MCP container whose network was gone", way)
+			}
+		})
+	}
+}
+
+// TestCreateMCPSandboxUndoKeepsNetworkWhenRemoveFails: a failed create whose container cannot be removed keeps the
+// MCP network, and the run-wide kill then removes all of it.
+func TestCreateMCPSandboxUndoKeepsNetworkWhenRemoveFails(t *testing.T) {
+	f, d := newMCPRig(t)
+	ctx := context.Background()
+	id := testSpec().RunID
+	f.failCopyToContainer = true
+	f.failRemove = map[string]int{mcpContainerName(id, 0): 1}
+	if _, err := d.CreateMCPSandbox(ctx, mcpTestSpec(0, types.CC1)); err == nil {
+		t.Fatal("a create whose host program copy failed was accepted")
+	}
+	if gone(f, mcpContainerName(id, 0)) || !gone(f, mcpProxyName(id, 0)) || !hasNet(f, mcpNetName(id, 0)) {
+		t.Fatal("the undo removed the MCP network while the container it could not remove was left")
+	}
+	if err := d.KillRunMCPSandboxes(ctx, id); err != nil {
+		t.Fatalf("KillRunMCPSandboxes: %v", err)
+	}
+	if !gone(f, mcpContainerName(id, 0)) || hasNet(f, mcpNetName(id, 0)) {
+		t.Error("the run-wide kill left the failed create's container or network")
+	}
+}
+
+// TestCreateMCPSandboxRefusesImageVolume: an image VOLUME no mount covers is refused, naming it, and the create
+// leaves nothing; one under the tmpfs at /tmp is covered.
+func TestCreateMCPSandboxRefusesImageVolume(t *testing.T) {
+	f, d := newMCPRig(t)
+	id := testSpec().RunID
+	f.imageVolumes = map[string][]string{"busybox:latest": {"/data", "/tmp"}}
+	_, err := d.CreateMCPSandbox(context.Background(), mcpTestSpec(0, types.CC1))
+	if err == nil || !strings.Contains(err.Error(), "VOLUME /data,") {
+		t.Fatalf("CreateMCPSandbox = %v; want the open VOLUME refused", err)
+	}
+	if strings.Contains(err.Error(), "/tmp") {
+		t.Errorf("the refusal %q names /tmp, which the tmpfs covers", err)
+	}
+	if f.containers[mcpContainerName(id, 0)] != nil || !gone(f, mcpProxyName(id, 0)) || hasNet(f, mcpNetName(id, 0)) {
+		t.Error("a refused create left an MCP object")
+	}
+}
+
+// TestCreateMCPSandboxRefusesHostReachableNetwork: an engine older than 28 is refused with
+// runner.ErrMCPSandboxHostReachable, also with EnvAllowHostReachableRunNetwork set, before anything is created.
+func TestCreateMCPSandboxRefusesHostReachableNetwork(t *testing.T) {
+	f, d := newMCPRig(t)
+	f.info.ServerVersion = "27.5.1"
+	d.cfg.AllowHostReachableRunNetwork = true
+	_, err := d.CreateMCPSandbox(context.Background(), mcpTestSpec(0, types.CC1))
+	if !errors.Is(err, runner.ErrMCPSandboxHostReachable) || !strings.Contains(err.Error(), EnvAllowHostReachableRunNetwork) {
+		t.Errorf("an Engine 27 create with the opt-out set = %v; want ErrMCPSandboxHostReachable naming the setting", err)
+	}
+	if len(f.networks) != 0 || len(f.containers) != 0 {
+		t.Errorf("a refused create made objects: networks %v", f.networks)
+	}
+}
+
+// hungStopDocker's MCP proxy stops each take hang, or end with their context; it records each kill's context.
+type hungStopDocker struct {
+	*fakeDocker
+	hang  time.Duration
+	mu    *sync.Mutex
+	kills *[]killSeen
+}
+
+// killSeen is a kill's context as the kill saw it: live or not, and how long it had left.
+type killSeen struct {
+	live, bounded bool
+	left          time.Duration
+}
+
+func (h hungStopDocker) ContainerStop(ctx context.Context, id string, o client.ContainerStopOptions) (client.ContainerStopResult, error) {
+	if strings.HasPrefix(id, "wardyn-mcp-proxy-") {
+		select {
+		case <-ctx.Done():
+			return client.ContainerStopResult{}, ctx.Err()
+		case <-time.After(h.hang):
+		}
+	}
+	return h.fakeDocker.ContainerStop(ctx, id, o)
+}
+
+func (h hungStopDocker) ContainerKill(ctx context.Context, id string, o client.ContainerKillOptions) (client.ContainerKillResult, error) {
+	dl, bounded := ctx.Deadline()
+	h.mu.Lock()
+	*h.kills = append(*h.kills, killSeen{live: ctx.Err() == nil, bounded: bounded, left: time.Until(dl)})
+	h.mu.Unlock()
+	return h.fakeDocker.ContainerKill(ctx, id, o)
+}
+
+func newHungStopRig(t *testing.T, hang time.Duration, servers int) (*fakeDocker, *Driver, *[]killSeen) {
+	t.Helper()
+	f := newFakeDocker()
+	f.images["busybox:latest"], f.images["wardyn-proxy:dev"] = true, true
+	kills := &[]killSeen{}
+	d := newWithClient(hungStopDocker{fakeDocker: f, hang: hang, mu: &sync.Mutex{}, kills: kills}, Config{ProxyImage: "wardyn-proxy:dev"})
+	for ord := range servers {
+		createMCP(t, d, ord)
+	}
+	return f, d, kills
+}
+
+// TestStopMCPProxiesStopsInParallel: five proxies whose stops each take the whole wait finish in about one wait,
+// not five.
+func TestStopMCPProxiesStopsInParallel(t *testing.T) {
+	const hang = 500 * time.Millisecond
+	f, d, _ := newHungStopRig(t, hang, 5)
+	id := testSpec().RunID
+	start := time.Now()
+	if err := d.StopMCPProxies(context.Background(), agentContainerName(id)); err != nil {
+		t.Fatalf("StopMCPProxies: %v", err)
+	}
+	if took := time.Since(start); took >= 3*hang {
+		t.Errorf("five hung proxies took %s to stop; want about one stop's %s", took, hang)
+	}
+	for ord := range 5 {
+		if !gone(f, mcpProxyName(id, ord)) {
+			t.Errorf("MCP proxy %d was not removed", ord)
+		}
+	}
+}
+
+// TestKillRunMCPSandboxesKillsAfterItsContextEnds: stops cut short by the caller's context each still end in one
+// kill, on a live context bounded by mcpFinalKillBound, and the sandboxes are removed.
+func TestKillRunMCPSandboxesKillsAfterItsContextEnds(t *testing.T) {
+	f, d, kills := newHungStopRig(t, time.Minute, 5)
+	id := testSpec().RunID
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_ = d.KillRunMCPSandboxes(ctx, id) // removes on the ended context may answer it; the kills are the point
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("the kill took %s after its context ended", took)
+	}
+	if len(*kills) != 5 {
+		t.Fatalf("%d kills; want one per hung proxy", len(*kills))
+	}
+	for _, k := range *kills {
+		if !k.live || !k.bounded || k.left > mcpFinalKillBound {
+			t.Errorf("a final kill saw %+v; want a live context bounded by %s", k, mcpFinalKillBound)
+		}
+	}
+	for ord := range 5 {
+		if !gone(f, mcpProxyName(id, ord)) {
+			t.Errorf("MCP proxy %d was not removed", ord)
+		}
+	}
+}
+
+// TestMCPRelayAddrByRank: each rank has its own relay address from the top of the link, clear of the agent's
+// proxy, until the link has no room; a rank with no room is refused with a sentence, on a /29 and a /28.
+func TestMCPRelayAddrByRank(t *testing.T) {
+	for _, tc := range []struct {
+		bits, room int
+	}{{29, 4}, {28, 12}} {
+		t.Run(strconv.Itoa(tc.bits), func(t *testing.T) {
+			f, d := newMCPRig(t)
+			ctx := context.Background()
+			id := testSpec().RunID
+			d.cfg.RunSubnetPool, d.cfg.RunSubnetBits = netip.MustParsePrefix("10.200.0.0/16"), tc.bits
+			last := mcpTestSpec(0, types.CC1)
+			last.RelayRank = tc.room - 1
+			sb, err := d.CreateMCPSandbox(ctx, last)
+			if err != nil {
+				t.Fatalf("rank %d on a /%d: %v", last.RelayRank, tc.bits, err)
+			}
+			link := f.subnets[relayLinkName(id)]
+			agentAt, _ := hostFromBottom(link, relayAgentProxyHost)
+			want, _ := hostFromTop(link, tc.room)
+			if got := netip.MustParseAddrPort(sb.RelayAddr).Addr(); got != want || got == agentAt {
+				t.Errorf("rank %d on %s pinned at %s; want %s, clear of the agent's proxy at %s", last.RelayRank, link, got, want, agentAt)
+			}
+			over := mcpTestSpec(1, types.CC1)
+			over.RelayRank = tc.room
+			_, err = d.CreateMCPSandbox(ctx, over)
+			if err == nil || !strings.Contains(err.Error(), "has room for "+strconv.Itoa(tc.room)+" MCP servers") {
+				t.Errorf("rank %d on a /%d = %v; want refused with the link's room", over.RelayRank, tc.bits, err)
+			}
+			if hasNet(f, mcpNetName(id, 1)) || f.containers[mcpProxyName(id, 1)] != nil {
+				t.Error("a refused rank left an MCP object")
+			}
+		})
+	}
+}
+
+// TestAgentProxyPinnedOnRelayLink: the agent's proxy joins the relay link at relayAgentProxyHost.
+func TestAgentProxyPinnedOnRelayLink(t *testing.T) {
+	f, d := newMCPRig(t)
+	id := testSpec().RunID
+	createMCP(t, d, 0)
+	if _, err := d.CreateSandbox(context.Background(), testSpec()); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	want, err := hostFromBottom(f.subnets[relayLinkName(id)], relayAgentProxyHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pinnedOn(t, f, proxyContainerName(id), relayLinkName(id)); got != want {
+		t.Errorf("the agent's proxy is on the relay link at %s; want %s", got, want)
+	}
+}
+
+// TestClassesNoMCPSandboxKindsInRunnerMode: a registered runner, which runs no MCP sandbox, advertises none.
+func TestClassesNoMCPSandboxKindsInRunnerMode(t *testing.T) {
+	_, d := newMCPRig(t)
+	ctx := context.Background()
+	cs, err := d.Classes(ctx)
+	if err != nil || !slices.Equal(cs.MCPSandboxKinds, []types.MachineKind{types.MachineContainer}) {
+		t.Fatalf("local Classes = %v, %v; want the container kind", cs.MCPSandboxKinds, err)
+	}
+	d.cfg.RunnerID = "r1"
+	if cs, err = d.Classes(ctx); err != nil || len(cs.MCPSandboxKinds) != 0 {
+		t.Errorf("runner-mode Classes = %v, %v; want none", cs.MCPSandboxKinds, err)
 	}
 }

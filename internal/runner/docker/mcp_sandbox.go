@@ -14,12 +14,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"path"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
@@ -36,9 +39,10 @@ import (
 // a network of its own, and an MCP proxy holding the server's sealed egress policy on that network, on the
 // control-plane-facing network and on the run's relay link. The link is the one network the MCP proxies share
 // with the agent's proxy, which reaches each server only through its MCP proxy; the agent itself is on no MCP
-// network and not on the link. Nothing of the host is in either container: no mount but the container's tmpfs,
-// no device but krun's own, no docker socket and no published port. The link lives as long as the run: only
-// teardown and the orphan sweep remove it, so a server's re-create keeps its relay address.
+// network and not on the link. Nothing of the host is in either container: no mount but a tmpfs at each one's
+// /tmp, no image volume, no device but krun's own, no docker socket and no published port. Each can still write
+// its own container layer. The link lives as long as the run: only teardown and the orphan sweep remove it, so a
+// server's re-create keeps its relay address.
 
 var (
 	_ runner.MCPSandboxer    = (*Driver)(nil)
@@ -53,10 +57,15 @@ const (
 	mcpHostMaxBytes  = 64 << 20
 	// mcpHostPort is the port that program serves the server on in its container.
 	mcpHostPort = "8765"
-	// mcpScratchBytes sizes the MCP container's one writable place, a tmpfs at /tmp.
+	// mcpScratchBytes sizes the MCP container's tmpfs at /tmp, its writable place beside its own layer.
 	mcpScratchBytes = 256 << 20
 	// labelMCPRelayAddr carries an MCP proxy's relay address, ip:port, for MCPSandboxStatus.
 	labelMCPRelayAddr = "wardyn.mcp-relay-addr"
+	// relayAgentProxyHost is the agent's proxy's place on the relay link, from the bottom: the first after the
+	// network's own address and its gateway. The MCP proxies are pinned from the top (mcpRelayAddr).
+	relayAgentProxyHost = 2
+	// mcpFinalKillBound bounds the one kill a stop makes after its context has ended.
+	mcpFinalKillBound = 5 * time.Second
 )
 
 var errMCPNoShell = errors.New("docker: an MCP server's sandbox takes no shell, exec or attach")
@@ -82,8 +91,8 @@ func (d *Driver) CreateMCPSandbox(ctx context.Context, spec runner.MCPSandboxSpe
 		return runner.MCPSandbox{}, err
 	}
 	id := spec.ID
-	if id.RunID == uuid.Nil || id.Ordinal < 0 {
-		return runner.MCPSandbox{}, fmt.Errorf("docker: an MCP sandbox needs a run and an ordinal, not %s/%d", id.RunID, id.Ordinal)
+	if id.RunID == uuid.Nil || id.Ordinal < 0 || spec.RelayRank < 0 {
+		return runner.MCPSandbox{}, fmt.Errorf("docker: an MCP sandbox needs a run, an ordinal and a relay rank, not %s/%d/%d", id.RunID, id.Ordinal, spec.RelayRank)
 	}
 	// A registered runner's proxy decisions go through its decision sink, one producer per run.
 	if d.runnerMode() {
@@ -94,11 +103,11 @@ func (d *Driver) CreateMCPSandbox(ctx context.Context, spec runner.MCPSandboxSpe
 		return runner.MCPSandbox{}, fmt.Errorf("docker: info: %w", err)
 	}
 	info := infoRes.Info
-	// The container's lookups go to its proxy only on an engine whose embedded resolver forwards an internal
-	// network's queries to the server HostConfig.DNS names; an older engine is reachable only by opting out of
-	// the run network's isolation.
-	if engineMajor(info.ServerVersion) < minResolvConfSubpathEngineMajor {
-		return runner.MCPSandbox{}, fmt.Errorf("docker: an MCP sandbox needs Docker Engine %d or later; this one is %q", minResolvConfSubpathEngineMajor, info.ServerVersion)
+	// The server is third-party code: its networks must have no address on the Docker host, which needs the
+	// engine runNetworkIsolation needs. EnvAllowHostReachableRunNetwork admits an agent's run, never an MCP sandbox.
+	if engineMajor(info.ServerVersion) < minIsolatedEngineMajor {
+		return runner.MCPSandbox{}, fmt.Errorf("docker: %w: this Docker Engine is %q, and an MCP server's sandbox needs Docker Engine %s or later; "+
+			"%s does not admit one: upgrade Docker Engine, or use a remote (HTTPS) MCP server", runner.ErrMCPSandboxHostReachable, info.ServerVersion, minIsolatedEngine, EnvAllowHostReachableRunNetwork)
 	}
 	runtimeName, _, err := resolveRuntime(id.Class, info, d.cfg.ConfinementRuntimes)
 	if err != nil {
@@ -109,7 +118,7 @@ func (d *Driver) CreateMCPSandbox(ctx context.Context, spec runner.MCPSandboxSpe
 			return runner.MCPSandbox{}, err
 		}
 	}
-	relayPort, err := mcpRelayPort(spec.ProxyConfig)
+	relayPort, err := mcpRelayInbound(spec.ProxyConfig, spec.RelayTokenSHA256)
 	if err != nil {
 		return runner.MCPSandbox{}, err
 	}
@@ -117,11 +126,15 @@ func (d *Driver) CreateMCPSandbox(ctx context.Context, spec runner.MCPSandboxSpe
 	if err != nil {
 		return runner.MCPSandbox{}, err
 	}
-	created := []func(){}
+	created := []mcpUndo{}
 	undo := func() {
-		// Background, like CreateSandbox's rollback: a cancelled create must not strand what it made.
+		// Background, like CreateSandbox's rollback: a cancelled create must not strand what it made. A container
+		// that cannot be removed keeps the MCP network, so the run-wide listing still finds the sandbox by both.
+		kept := false
 		for i := len(created) - 1; i >= 0; i-- {
-			created[i]()
+			if u := created[i]; !(u.network && kept) {
+				kept = u.remove() != nil || kept
+			}
 		}
 	}
 	sb, err := d.createMCPObjects(ctx, spec, info, runtimeName, linkSubnet, relayPort, &created)
@@ -132,16 +145,27 @@ func (d *Driver) CreateMCPSandbox(ctx context.Context, spec runner.MCPSandboxSpe
 	return sb, nil
 }
 
+// mcpUndo is one removal of a failed create; network marks the MCP network's.
+type mcpUndo struct {
+	remove  func() error
+	network bool
+}
+
 // createMCPObjects is CreateMCPSandbox's creates, each appending its removal to created.
 func (d *Driver) createMCPObjects(ctx context.Context, spec runner.MCPSandboxSpec, info system.Info, runtimeName string,
-	linkSubnet netip.Prefix, relayPort string, created *[]func()) (runner.MCPSandbox, error) {
+	linkSubnet netip.Prefix, relayPort string, created *[]mcpUndo) (runner.MCPSandbox, error) {
 	id := spec.ID
 	netName := mcpNetName(id.RunID, id.Ordinal)
 	netID, err := d.createNamedRunNetwork(ctx, netName, d.labels(id.RunID, componentMCPNetwork, spec.Labels), info.ServerVersion)
 	if err != nil {
 		return runner.MCPSandbox{}, err
 	}
-	*created = append(*created, func() { _, _ = d.cli.NetworkRemove(context.Background(), netID, client.NetworkRemoveOptions{}) })
+	*created = append(*created, mcpUndo{network: true, remove: func() error {
+		rctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+		defer cancel()
+		_, err := d.cli.NetworkRemove(rctx, netID, client.NetworkRemoveOptions{})
+		return err
+	}})
 	netSubnet, err := d.ipv4Subnet(ctx, netID)
 	if err != nil {
 		return runner.MCPSandbox{}, err
@@ -153,9 +177,9 @@ func (d *Driver) createMCPObjects(ctx context.Context, spec runner.MCPSandboxSpe
 	if err != nil {
 		return runner.MCPSandbox{}, fmt.Errorf("docker: MCP network %s: %w", netName, err)
 	}
-	// One address per server on the link, from its ordinal: a re-create of the server takes the same one.
-	if addrs.relay, err = hostFromTop(linkSubnet, 1+id.Ordinal); err != nil {
-		return runner.MCPSandbox{}, fmt.Errorf("docker: relay link %s for MCP server %d: %w", relayLinkName(id.RunID), id.Ordinal, err)
+	// One address per server on the link, from its rank: a re-create of the server takes the same one.
+	if addrs.relay, err = mcpRelayAddr(linkSubnet, spec.RelayRank); err != nil {
+		return runner.MCPSandbox{}, err
 	}
 	relayAddr := net.JoinHostPort(addrs.relay.String(), relayPort)
 	cfgJSON, err := d.mcpProxyConfig(id.RunID, spec.ProxyConfig, addrs.container)
@@ -164,14 +188,14 @@ func (d *Driver) createMCPObjects(ctx context.Context, spec runner.MCPSandboxSpe
 	}
 	proxyID, err := d.createMCPProxy(ctx, spec, cfgJSON, addrs, relayAddr)
 	if proxyID != "" {
-		*created = append(*created, func() { d.removeQuietly(proxyID) })
+		*created = append(*created, mcpUndo{remove: func() error { return d.removeCreated(proxyID) }})
 	}
 	if err != nil {
 		return runner.MCPSandbox{}, err
 	}
 	ctrID, err := d.createMCPContainer(ctx, spec, info, runtimeName, addrs)
 	if ctrID != "" {
-		*created = append(*created, func() { d.removeQuietly(ctrID) })
+		*created = append(*created, mcpUndo{remove: func() error { return d.removeCreated(ctrID) }})
 	}
 	if err != nil {
 		return runner.MCPSandbox{}, err
@@ -186,8 +210,15 @@ func (d *Driver) createMCPObjects(ctx context.Context, spec runner.MCPSandboxSpe
 	return runner.MCPSandbox{ID: id, RelayAddr: relayAddr}, nil
 }
 
-func (d *Driver) removeQuietly(id string) {
-	_, _ = d.cli.ContainerRemove(context.Background(), id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+// removeCreated removes a container a failed create made; one that is gone already counts as removed.
+func (d *Driver) removeCreated(id string) error {
+	rctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+	defer cancel()
+	_, err := d.cli.ContainerRemove(rctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	if isNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 // ensureRelayLink answers the subnet of the run's relay link, creating the link on the run's first MCP create.
@@ -238,7 +269,7 @@ func firstIPv4(cfgs []network.IPAMConfig, name string) (netip.Prefix, error) {
 
 // hostFromTop is the address n below the last of the IPv4 subnet p. Pinned addresses are taken from the top so
 // they stay clear of the gateway Docker takes and of the addresses it hands out from the bottom (the agent's
-// proxy on the relay link); one that would reach the subnet's first three is refused.
+// proxy on the relay link, pinned at relayAgentProxyHost); one that would reach the subnet's first three is refused.
 func hostFromTop(p netip.Prefix, n int) (netip.Addr, error) {
 	p = p.Masked()
 	if !p.Addr().Is4() {
@@ -254,12 +285,40 @@ func hostFromTop(p netip.Prefix, n int) (netip.Addr, error) {
 	return netip.AddrFrom4(out), nil
 }
 
-// mcpRelayPort is the port of the config's mcp_relay_inbound.listen, which the MCP proxy keeps when its host is
-// rewritten to its relay-link address (bindProxyListeners).
-func mcpRelayPort(cfgJSON []byte) (string, error) {
+// hostFromBottom is the address n above the first of the IPv4 subnet p.
+func hostFromBottom(p netip.Prefix, n int) (netip.Addr, error) {
+	p = p.Masked()
+	if !p.Addr().Is4() || n < 1 || uint64(n)+1 >= uint64(1)<<(32-p.Bits()) {
+		return netip.Addr{}, fmt.Errorf("subnet %s has no room for address %d from the bottom", p, n)
+	}
+	b := p.Addr().As4()
+	var out [4]byte
+	binary.BigEndian.PutUint32(out[:], binary.BigEndian.Uint32(b[:])+uint32(n))
+	return netip.AddrFrom4(out), nil
+}
+
+// mcpRelayAddr is the relay address of the MCP server of rank on the run's relay link: n = 1 + rank from the top,
+// so each rank has its own, and the first three from the bottom stay the network's, its gateway's and the agent's
+// proxy's.
+func mcpRelayAddr(link netip.Prefix, rank int) (netip.Addr, error) {
+	if a, err := hostFromTop(link, 1+rank); err == nil && rank >= 0 {
+		return a, nil
+	}
+	room := 0
+	if link.Addr().Is4() && link.Bits() <= 30 {
+		room = 1<<(32-link.Bits()) - 4
+	}
+	return netip.Addr{}, fmt.Errorf("docker: the run's relay link (%s) has room for %d MCP servers, and this is server number %d. "+
+		"Give run networks a larger subnet (%s), or attach fewer MCP servers that start from a command", link.Masked(), room, rank+1, EnvRunSubnetSize)
+}
+
+// mcpRelayInbound is the port of the config's mcp_relay_inbound.listen, which the MCP proxy keeps when its host is
+// rewritten to its relay-link address (bindProxyListeners). The config's token_sha256 must be the spec's.
+func mcpRelayInbound(cfgJSON []byte, tokenSHA256 string) (string, error) {
 	var c struct {
 		Inbound *struct {
-			Listen string `json:"listen"`
+			Listen      string `json:"listen"`
+			TokenSHA256 string `json:"token_sha256"`
 		} `json:"mcp_relay_inbound"`
 	}
 	if err := json.Unmarshal(cfgJSON, &c); err != nil {
@@ -267,6 +326,9 @@ func mcpRelayPort(cfgJSON []byte) (string, error) {
 	}
 	if c.Inbound == nil {
 		return "", errors.New("docker: an MCP proxy's config needs mcp_relay_inbound")
+	}
+	if tokenSHA256 == "" || c.Inbound.TokenSHA256 != tokenSHA256 {
+		return "", errors.New("docker: the MCP proxy config's mcp_relay_inbound.token_sha256 is not the spec's RelayTokenSHA256")
 	}
 	_, port, err := net.SplitHostPort(c.Inbound.Listen)
 	if err != nil || port == "" {
@@ -366,8 +428,8 @@ func (d *Driver) createMCPProxy(ctx context.Context, spec runner.MCPSandboxSpec,
 }
 
 // createMCPContainer creates the MCP container, not started: the run's image hardened as the agent is, on the MCP
-// network only at its pinned address, its one resolver its proxy, its one writable place a tmpfs at /tmp, and the
-// host program as its entrypoint. Its environment is the server's own, Wardyn's closed list, and the proxy
+// network only at its pinned address, its one resolver its proxy, no mount but a tmpfs at /tmp beside its own
+// writable layer, no image volume, and the host program as its entrypoint. Its environment is the server's own, Wardyn's closed list, and the proxy
 // variables last, so they win. It answers the id of what it created, also with an error.
 func (d *Driver) createMCPContainer(ctx context.Context, spec runner.MCPSandboxSpec, info system.Info, runtimeName string, addrs mcpAddrs) (string, error) {
 	runID, ord := spec.ID.RunID, spec.ID.Ordinal
@@ -379,6 +441,9 @@ func (d *Driver) createMCPContainer(ctx context.Context, spec runner.MCPSandboxS
 	}}}
 	host.DNS = []netip.Addr{addrs.proxy}
 	host.ExtraHosts = []string{"wardyn-mcp-proxy:" + addrs.proxy.String()}
+	if err := d.refuseMCPImageVolumes(ctx, spec.Image, host); err != nil {
+		return "", err
+	}
 	proxyURL := "http://wardyn-mcp-proxy:" + strconv.Itoa(runner.ProxyListenPort)
 	env := slices.Concat(envSlice(spec.Env), envSlice(spec.SecretEnv), envSlice(d.withRunnerTrustedCA(spec.PlatformEnv)), []string{
 		"HTTP_PROXY=" + proxyURL, "HTTPS_PROXY=" + proxyURL, "http_proxy=" + proxyURL, "https_proxy=" + proxyURL,
@@ -410,6 +475,23 @@ func (d *Driver) createMCPContainer(ctx context.Context, spec runner.MCPSandboxS
 			slog.String("detail", capErr.Error()))
 	}
 	return resp.ID, nil
+}
+
+// refuseMCPImageVolumes refuses an image whose VOLUME no mount of host covers: the daemon would back it with an
+// anonymous volume, a writable place on the Docker host outside the container (openVolumes, as the agent's check).
+func (d *Driver) refuseMCPImageVolumes(ctx context.Context, image string, host *container.HostConfig) error {
+	insp, err := d.cli.ImageInspect(ctx, image)
+	if err != nil {
+		return fmt.Errorf("docker: read image %s to check its volumes: %w", image, err)
+	}
+	if insp.Config == nil {
+		return nil
+	}
+	if open := openVolumes(slices.Collect(maps.Keys(insp.Config.Volumes)), coveredTargets(host)); len(open) > 0 {
+		return fmt.Errorf("docker: image %s declares VOLUME %s, and an MCP server's sandbox takes no volume: use an image without it",
+			image, strings.Join(open, ", "))
+	}
+	return nil
 }
 
 // copyMCPHost copies the host program out of the created MCP proxy and into the created container at
@@ -458,12 +540,13 @@ func (d *Driver) copyMCPHost(ctx context.Context, proxyID, ctrID string) error {
 
 // StartMCPSandbox starts the MCP proxy with its config, waits until it says it is listening, then starts the
 // container. On a failure it stops the proxy it started; the row's end removes the rest. Only the process that
-// created the sandbox holds its proxy's config, so a sandbox another process created is refused.
+// created the sandbox holds its proxy's config, so a sandbox another process created is refused
+// (runner.ErrMCPSandboxNotCreatedHere).
 func (d *Driver) StartMCPSandbox(ctx context.Context, id runner.MCPSandboxID) error {
 	name := mcpProxyName(id.RunID, id.Ordinal)
 	v, ok := d.mcpStarts.LoadAndDelete(name)
 	if !ok {
-		return fmt.Errorf("docker: MCP sandbox %s/%d was not created by this process, or was started already; kill it and create it again", id.RunID, id.Ordinal)
+		return fmt.Errorf("docker: MCP sandbox %s/%d: %w; kill it and create it again", id.RunID, id.Ordinal, runner.ErrMCPSandboxNotCreatedHere)
 	}
 	st := v.(mcpStart)
 	marker := d.proxyPrintsReadyMarker(ctx, st.image)
@@ -482,7 +565,10 @@ func (d *Driver) StartMCPSandbox(ctx context.Context, id runner.MCPSandboxID) er
 		}
 	}
 	if err != nil {
-		return errors.Join(err, d.stopMCPProxy(context.WithoutCancel(ctx), id.RunID, id.Ordinal))
+		// The stop outlives a cancelled start, bounded by its own stop timeout and a kill.
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout+mcpFinalKillBound)
+		defer cancel()
+		return errors.Join(err, d.stopMCPProxy(sctx, id.RunID, id.Ordinal))
 	}
 	return nil
 }
@@ -501,10 +587,18 @@ func (d *Driver) KillRunMCPSandboxes(ctx context.Context, runID uuid.UUID) error
 		return err
 	}
 	d.drainSink(ctx, runID)
-	var errs []error
-	for _, ord := range ords {
-		errs = append(errs, d.killMCP(ctx, runID, ord))
+	return eachMCPOrdinal(ords, func(ord int) error { return d.killMCP(ctx, runID, ord) })
+}
+
+// eachMCPOrdinal runs fn for every ordinal at once, so the run's proxies' stop timeouts overlap instead of adding
+// up, and joins the errors.
+func eachMCPOrdinal(ords []int, fn func(ord int) error) error {
+	errs := make([]error, len(ords))
+	var wg sync.WaitGroup
+	for i, ord := range ords {
+		wg.Go(func() { errs[i] = fn(ord) })
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
@@ -545,18 +639,21 @@ func (d *Driver) StopMCPProxies(ctx context.Context, agentRef string) error {
 		return err
 	}
 	d.drainSink(ctx, runID)
-	var errs []error
-	for _, ord := range ords {
-		errs = append(errs, d.stopMCPProxy(ctx, runID, ord))
-	}
-	return errors.Join(errs...)
+	return eachMCPOrdinal(ords, func(ord int) error { return d.stopMCPProxy(ctx, runID, ord) })
 }
 
 func (d *Driver) stopMCPProxy(ctx context.Context, runID uuid.UUID, ord int) error {
 	name := mcpProxyName(runID, ord)
 	timeout := int(stopTimeout.Seconds())
 	if _, err := d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout}); err != nil && !isNotFound(err) {
-		if _, kerr := d.cli.ContainerKill(ctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
+		// A stop cut short by its context still ends in one kill, bounded, so the proxy does not outlive the call.
+		kctx := ctx
+		if ctx.Err() != nil {
+			var cancel context.CancelFunc
+			kctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), mcpFinalKillBound)
+			defer cancel()
+		}
+		if _, kerr := d.cli.ContainerKill(kctx, name, client.ContainerKillOptions{Signal: "KILL"}); kerr != nil && !isNotFound(kerr) && !isNotRunning(kerr) {
 			return fmt.Errorf("docker: stop MCP proxy: %w; kill MCP proxy: %w", err, kerr)
 		}
 	}
@@ -595,21 +692,38 @@ func (d *Driver) MCPSandboxStatus(ctx context.Context, id runner.MCPSandboxID) (
 	return sb, nil
 }
 
-// runMCPOrdinals lists the ordinals of the run's MCP sandboxes by their networks: created first and removed
-// last, a sandbox's network is there while any of its objects is.
+// runMCPOrdinals lists the ordinals of the run's MCP sandboxes by their networks and by their containers, so a
+// sandbox is found while any of its objects is, also a container whose network is gone.
 func (d *Driver) runMCPOrdinals(ctx context.Context, runID uuid.UUID) ([]int, error) {
 	res, err := d.cli.NetworkList(ctx, client.NetworkListOptions{Filters: client.Filters{}.Add("label", labelRun+"="+runID.String())})
 	if err != nil {
 		return nil, fmt.Errorf("docker: list the run's MCP networks: %w", err)
 	}
 	var ords []int
-	for _, n := range res.Items {
-		l := n.Labels
-		if l[labelRun] != runID.String() || l[labelComponent] != componentMCPNetwork || l[labelManaged] != "true" || d.otherDeployment(l) {
-			continue
+	add := func(l map[string]string, components []string, name string) {
+		if l[labelRun] != runID.String() || !slices.Contains(components, l[labelComponent]) || l[labelManaged] != "true" || d.otherDeployment(l) {
+			return
 		}
-		if ord, ok := mcpOrdinalOf(n.Name, runID); ok && !slices.Contains(ords, ord) {
+		if ord, ok := mcpOrdinalOf(name, runID); ok && !slices.Contains(ords, ord) {
 			ords = append(ords, ord)
+		}
+	}
+	for _, n := range res.Items {
+		add(n.Labels, []string{componentMCPNetwork}, n.Name)
+	}
+	if lister, ok := d.cli.(containerListerAPI); ok {
+		cres, err := lister.ContainerList(ctx, client.ContainerListOptions{
+			All: true, // a created or exited sandbox is the one most likely left behind
+			// Label filters are ANDed: the run's, and any component (matched above).
+			Filters: client.Filters{}.Add("label", labelComponent).Add("label", labelRun+"="+runID.String()),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("docker: list the run's MCP containers: %w", err)
+		}
+		for _, c := range cres.Items {
+			for _, name := range c.Names {
+				add(c.Labels, []string{componentMCP, componentMCPProxy}, name)
+			}
 		}
 	}
 	slices.Sort(ords)
@@ -630,15 +744,21 @@ func mcpOrdinalOf(name string, runID uuid.UUID) (int, bool) {
 	return ord, slices.Contains([]string{mcpNetName(runID, ord), mcpProxyName(runID, ord), mcpContainerName(runID, ord)}, name)
 }
 
-// joinRelayLink connects the run's proxy cid to the run's relay link, when its MCP sandboxes made one. The agent
-// container never joins it.
+// joinRelayLink connects the run's proxy cid to the run's relay link, when its MCP sandboxes made one, pinned at
+// relayAgentProxyHost so no address the daemon hands out can be an MCP proxy's. The agent container never joins it.
 func (d *Driver) joinRelayLink(ctx context.Context, runID uuid.UUID, cid string) error {
-	if _, err := d.relayLinkSubnet(ctx, runID); isNotFound(err) {
+	link, err := d.relayLinkSubnet(ctx, runID)
+	if isNotFound(err) {
 		return nil
 	} else if err != nil {
 		return err
 	}
-	if _, err := d.cli.NetworkConnect(ctx, relayLinkName(runID), client.NetworkConnectOptions{Container: cid, EndpointConfig: &network.EndpointSettings{}}); err != nil {
+	at, err := hostFromBottom(link, relayAgentProxyHost)
+	if err != nil {
+		return fmt.Errorf("docker: relay link %s: %w", relayLinkName(runID), err)
+	}
+	ep := &network.EndpointSettings{IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: at}}
+	if _, err := d.cli.NetworkConnect(ctx, relayLinkName(runID), client.NetworkConnectOptions{Container: cid, EndpointConfig: ep}); err != nil {
 		return fmt.Errorf("docker: connect proxy to the relay link: %w", err)
 	}
 	return nil

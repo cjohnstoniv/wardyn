@@ -42,7 +42,6 @@ var runnerContextCensus = map[runnerContextSite]runnerContextRow{
 	{"docker/driver_dns.go", "Driver.mountProxyResolver", "Background"}:       {1, ctxCreate},
 	{"docker/driver_exec.go", "Driver.followMainProcessOutput", "Background"}: {1, ctxOwnLoop},
 	{"docker/driver_network.go", "Driver.CreateSandbox", "Background"}:        {1, ctxCreate},
-	{"docker/driver_network.go", "Driver.createRunNetwork", "Background"}:     {1, ctxCreate},
 	{"docker/driver_network.go", "Driver.runNetworkAndProxy", "Background"}:   {3, ctxCreate},
 	{"docker/macvm.go", "Driver.createMacVM", "Background"}:                   {1, ctxCreate},
 	{"docker/macvm.go", "newMacVMRun", "Background"}:                          {1, ctxOwnHandle},
