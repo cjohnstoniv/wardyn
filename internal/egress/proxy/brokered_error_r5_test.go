@@ -199,7 +199,7 @@ func TestSharedGatewayDirectRequestIsUninspected(t *testing.T) {
 	}
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{sharedGatewayHost}}),
-		Resolver: publicResolver{}, Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Resolver: publicResolver{}, Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		LLMUpstreams: map[string]string{
 			anthropicHost: "https://" + sharedGatewayHost + "/anthropic",
 			openaiHost:    "https://" + sharedGatewayHost + "/openai",
@@ -220,7 +220,7 @@ func TestSharedGatewayThatIsTheRunEndpointIsInspected(t *testing.T) {
 	cu := captureUpstream(t, false, "{}")
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{sharedGatewayHost}}),
-		Resolver: publicResolver{}, Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Resolver: publicResolver{}, Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Dial: redirectDial(upstreamAddr(cu.srv)),
 		LLMUpstreams: map[string]string{
 			anthropicHost: "https://" + sharedGatewayHost + "/anthropic",

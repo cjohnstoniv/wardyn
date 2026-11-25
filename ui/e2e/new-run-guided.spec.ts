@@ -140,7 +140,9 @@ test.describe("New Run, Start and Run: the shared pieces", () => {
     await expect(page.getByRole("article")).toHaveCount(0);
     await expect(page.getByRole("button", { name: new RegExp(`^${NR_START.GUIDED_TITLE}`) })).toBeVisible();
     await expect(page.getByRole("region", { name: NR_START.DOC_TITLE })).toBeVisible();
-    await expect(page.getByText("AI composer")).toHaveCount(0);
+    // The AI composer card is always shown; with no assistant set up it stays shut, so the real paths are still two.
+    await expect(page.getByText(NR_START.AI_TITLE, { exact: true })).toHaveCount(1);
+    await expect(page.getByRole("button", { name: NR_START.AI_FOOT })).toBeDisabled();
     await expect(page.getByText(NR_SHARED.COMING_SOON)).toHaveCount(0);
     await expect(page.getByText(NR_START.ROADMAP, { exact: true })).toBeVisible();
     await expect(page.getByText(NR_START.ROADMAP)).not.toContainText(/\d/);

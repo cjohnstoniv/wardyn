@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -35,14 +36,29 @@ func (c *WebSocket) ReadFrame(ctx context.Context) (Frame, error) {
 	if typ != websocket.MessageBinary {
 		return Frame{}, fmt.Errorf("%w: expected a binary WebSocket message", ErrBadFrame)
 	}
-	return Decode(b)
+	return decodeOwned(b)
 }
 
+// dataFrameBuf holds encode buffers for DATA frames, the only frames sent at volume; their size is bounded
+// (MaxDataFrame plus the header), so a pooled buffer never pins a control frame's megabyte.
+var dataFrameBuf = sync.Pool{New: func() any { b := make([]byte, 0, HeaderLen+MaxDataFrame); return &b }}
+
 func (c *WebSocket) WriteFrame(ctx context.Context, f Frame) error {
-	b, err := f.Encode(nil)
+	if f.Type != TypeData {
+		b, err := f.Encode(nil)
+		if err != nil {
+			return err
+		}
+		return c.conn.Write(ctx, websocket.MessageBinary, b)
+	}
+	bp := dataFrameBuf.Get().(*[]byte)
+	defer dataFrameBuf.Put(bp)
+	b, err := f.Encode((*bp)[:0])
 	if err != nil {
 		return err
 	}
+	*bp = b
+	// Write copies b into the connection's own buffer before it returns, so b is free again then.
 	return c.conn.Write(ctx, websocket.MessageBinary, b)
 }
 

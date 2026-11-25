@@ -291,7 +291,7 @@ func applyEnvelopeChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	if ch.Op == "delete" {
 		removed, err := store.DeleteEnvelopeQ(ctx, q, p.UnitID)
 		if err != nil {
-			return govApplied{}, s.envelopeRefusal(ctx, err)
+			return govApplied{}, s.envelopeRefusal(withUnitScopeTx(ctx, q), err)
 		}
 		return govApplied{action: envelopeDeleteAction, target: p.UnitID.String(), data: envelopeAuditData(p.UnitID, removed.ApprovedGroups, nil)}, nil
 	}
@@ -301,7 +301,7 @@ func applyEnvelopeChange(s *Server, r *http.Request, q store.Querier, ch types.G
 	}
 	saved, err := store.SetEnvelopeQ(ctx, q, p.UnitID, groups, ch.ProposedBy)
 	if err != nil {
-		return govApplied{}, s.envelopeRefusal(ctx, err)
+		return govApplied{}, s.envelopeRefusal(withUnitScopeTx(ctx, q), err)
 	}
 	return govApplied{action: envelopeSetAction, target: p.UnitID.String(), data: envelopeAuditData(p.UnitID, cur.ApprovedGroups, saved.ApprovedGroups)}, nil
 }

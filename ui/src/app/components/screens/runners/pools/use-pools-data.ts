@@ -17,12 +17,17 @@
 // list.
 // ponytail: the list itself should carry state, revision and limits for oversight rows; then no per-pool read.
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { HttpError } from "../../../../lib/api/core";
 import { runnerPools } from "../../../../lib/api/runner-pools";
 import type { RunnerPool, RunnerPoolCatalogueEntry } from "../../../../lib/types/runner-pools";
-import { useLoad } from "../use-load";
+import { queryClient } from "../../../../lib/query-client";
+import { usePoll } from "../../../../lib/use-poll";
 
 export const POLL_MS = 30_000;
+
+const POOLS_KEY = ["runners", "pools"];
+const POOLS_KEY_STR = JSON.stringify(POOLS_KEY);
 
 export type PoolsStatus = "loading" | "ready" | "error" | "unavailable";
 
@@ -79,40 +84,73 @@ async function readAll(known: Map<string, RunnerPool> | undefined, open: string 
 }
 
 export function usePoolsData(openPoolId: string | null): PoolsData & { reload: () => void; retry: () => void } {
-  const [data, setData] = React.useState<PoolsData>(EMPTY);
   // What the last read knew, and the open pool, as the next silent read sees them.
   const known = React.useRef(new Map<string, RunnerPool>());
   const open = React.useRef(openPoolId);
   open.current = openPoolId;
+  // The first read, and a Retry, read every pool; any other read asks only for what is new and the open pool.
+  const full = React.useRef(true);
 
-  const read = useLoad(
+  // One key for the whole tab: the list, the default and each pool's own record are one answer.
+  const q = useQuery(
     {
-      fetch: (silent) => readAll(silent ? known.current : undefined, open.current),
-      start: () => setData((d) => ({ ...d, status: "loading" })),
-      ok: (r) => {
-        known.current = new Map(r.entries.map((e) => [e.pool.id, e.pool]));
-        setData({ status: "ready", message: "", ...r });
+      queryKey: POOLS_KEY,
+      queryFn: () => {
+        const wantFull = full.current;
+        full.current = false;
+        return readAll(wantFull ? undefined : known.current, open.current);
       },
-      // A silent read that failed says nothing on a tab that is showing pools, but one that overtook a
-      // full load is the only answer that load will get: leaving "loading" up would never offer Retry.
-      fail: (e, silent) =>
-        setData((d) => {
-          if (silent && d.status !== "loading") return d;
-          return e instanceof HttpError && e.status === 501 ? { ...EMPTY, status: "unavailable", message: e.message } : { ...d, status: "error" };
-        }),
     },
-    POLL_MS,
+    queryClient,
   );
+  React.useEffect(() => {
+    if (q.data) known.current = new Map(q.data.entries.map((e) => [e.pool.id, e.pool]));
+  }, [q.data]);
+
+  // The first failure stays on screen: a later silent read that fails never replaces it, and only an answer clears it.
+  const [held, setHeld] = React.useState<{ key: string; error: unknown } | null>(null);
+  const [retrying, setRetrying] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (q.isSuccess) setHeld(null);
+    else if (q.isError) setHeld((h) => (h?.key === POOLS_KEY_STR ? h : { key: POOLS_KEY_STR, error: q.error }));
+  }, [q.isSuccess, q.isError, q.error]);
+  const err = held?.key === POOLS_KEY_STR ? held.error : q.isError ? q.error : null;
+
+  // With no data a read in flight is cancelled, not joined, so a hung first read never holds the tab on loading.
+  // During a Retry the tick joins the Retry's read instead, so the Retry's loading lasts until its answer.
+  const tick = () =>
+    retrying === POOLS_KEY_STR
+      ? q.refetch({ cancelRefetch: false })
+      : queryClient.getQueryData(POOLS_KEY) === undefined
+        ? queryClient.cancelQueries({ queryKey: POOLS_KEY, exact: true }).then(() => q.refetch())
+        : q.refetch({ cancelRefetch: false });
+  usePoll(tick, POLL_MS, false);
 
   // Opening a pool's details reads that pool then, not at the next tick: its state and revision are what the
   // sheet shows and what Switch off sends back. The first load has just read every pool.
+  const { refetch } = q;
   const mounted = React.useRef(false);
   React.useEffect(() => {
-    if (mounted.current && openPoolId) void read(true);
+    if (mounted.current && openPoolId) void refetch();
     mounted.current = true;
-  }, [openPoolId, read]);
+  }, [openPoolId, refetch]);
 
-  const reload = React.useCallback(() => void read(true), [read]);
-  const retry = React.useCallback(() => void read(false), [read]);
-  return { ...data, reload, retry };
+  const reload = React.useCallback(() => void refetch(), [refetch]);
+  const retry = React.useCallback(() => {
+    full.current = true;
+    setHeld(null);
+    setRetrying(POOLS_KEY_STR);
+    void queryClient
+      .cancelQueries({ queryKey: POOLS_KEY, exact: true })
+      .then(() => refetch())
+      .then((r) => {
+        if (r.isError) setHeld({ key: POOLS_KEY_STR, error: r.error });
+      })
+      .finally(() => setRetrying(null));
+  }, [refetch]);
+
+  if (retrying === POOLS_KEY_STR) return { ...EMPTY, ...q.data, status: "loading", reload, retry };
+  if (q.data !== undefined) return { ...EMPTY, ...q.data, status: "ready", reload, retry };
+  if (err instanceof HttpError && err.status === 501) return { ...EMPTY, status: "unavailable", message: err.message, reload, retry };
+  return { ...EMPTY, status: err !== null ? "error" : "loading", reload, retry };
 }

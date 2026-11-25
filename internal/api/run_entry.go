@@ -96,17 +96,23 @@ func (s *Server) sponsorStillEntitled(ctx context.Context, run types.AgentRun, p
 // stamp never takes the arm (a sponsor's ticket is stamped member whatever the minter's role, so the run's
 // own doors always run). A store failure refuses and is logged.
 func (s *Server) mayEnterRunOrSponsor(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) bool {
-	if mayEnterRun(run, principal, superAdmin) {
-		return true
-	}
-	if superAdmin {
-		return false
-	}
-	ok, err := s.sponsorStillEntitled(ctx, run, principal, since)
+	ok, err := s.sponsorEntry(ctx, run, principal, superAdmin, since)
 	if err != nil {
 		slog.ErrorContext(ctx, "wardynd: sponsor entry check failed; refusing", "run_id", run.ID, "err", err)
 	}
 	return ok && err == nil
+}
+
+// sponsorEntry is mayEnterRunOrSponsor that returns the sponsor read's error instead of refusing on it, for a
+// re-check that tells a refusal from a read that failed.
+func (s *Server) sponsorEntry(ctx context.Context, run types.AgentRun, principal string, superAdmin bool, since time.Time) (bool, error) {
+	if mayEnterRun(run, principal, superAdmin) {
+		return true, nil
+	}
+	if superAdmin {
+		return false, nil
+	}
+	return s.sponsorStillEntitled(ctx, run, principal, since)
 }
 
 // runOwnerOnlyReason is the audit reason an entry refusal carries on the lanes
@@ -162,8 +168,8 @@ func (v entryVerdict) unavailable() bool {
 	return v == verdictRevocationUnavailable || v == verdictDelegationUnavailable || v == verdictPortalUnitUnavailable
 }
 
-// redeemAttachTicket is the one redemption of an attach ticket, for the terminal
-// WebSocket and the UI gateway alike (#1474, #1475). The ticket is burned first,
+// redeemTicketFor is the one redemption of an attach ticket, for the terminal
+// WebSocket, the forward door and the UI gateway (#1474, #1475). The ticket is burned first,
 // before any check. It is then refused when it carries no authority time (a row
 // from before the column: a zero time never means exempt), when the person's
 // session was revoked since it was admitted, and when it came through a portal
@@ -172,13 +178,19 @@ func (v entryVerdict) unavailable() bool {
 //
 // The returned actor is empty for verdictInvalid and names the ticket's
 // principal for every other verdict, so the caller audits who was refused.
-func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.UUID) (ticketActor, entryVerdict, error) {
+// A ticket minted for a purpose other than door ("" takes only a ticket with
+// none) is refused as invalid after the burn: an SSH ticket opens only
+// GET /runs/{id}/ssh, an attach-forward ticket only the forward door.
+func (s *Server) redeemTicketFor(ctx context.Context, tok string, runID uuid.UUID, door string) (ticketActor, entryVerdict, error) {
 	start := time.Now()
 	ta, ok, err := consumeAttachTicket(ctx, s.cfg.Store, tok, runID, s.cfg.Now())
 	if err != nil {
 		return ticketActor{}, verdictOK, err
 	}
 	if !ok || ta.authorizedAt.IsZero() {
+		return ticketActor{}, verdictInvalid, nil
+	}
+	if ta.purpose != "" && ta.purpose != door {
 		return ticketActor{}, verdictInvalid, nil
 	}
 	ta.checkStart = start
@@ -200,6 +212,11 @@ func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.
 		}
 	}
 	return ta, v, nil
+}
+
+// redeemAttachTicket is the UI gateway's redemption: a ticket minted for any purpose is invalid there.
+func (s *Server) redeemAttachTicket(ctx context.Context, tok string, runID uuid.UUID) (ticketActor, entryVerdict, error) {
+	return s.redeemTicketFor(ctx, tok, runID, "")
 }
 
 // ticketAuthority asks whether the authority a redeemed ticket carries still holds: the revocation cuts

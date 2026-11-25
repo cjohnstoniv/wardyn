@@ -39,7 +39,7 @@ func redirectDial(addr string) func(ctx context.Context, network, _ string) (net
 func newTestProxy(t *testing.T, spec types.RunPolicySpec, upstreamAddr string, ap *approvalClient, inj *injector) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	// No background poster started; emit() only needs the buffer + chan.
 	p := newProxy(Options{
 		RunID:    uuid.New(),
@@ -209,7 +209,7 @@ func TestPlainHTTPRequiresAbsoluteURI(t *testing.T) {
 func TestPrivateIPDeniedEndToEnd(t *testing.T) {
 	// Resolver returns a private IP; even an allowed host must be denied.
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"internal.test"}}),
@@ -632,7 +632,7 @@ func TestUpstreamProxyStartupRowIsNotActivity(t *testing.T) {
 	newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 		Resolver: publicResolver{},
 		Upstream: up,
 	})

@@ -76,6 +76,7 @@ block="$(awk '/^# A "\(not yet published\)" section is true only/{f=1} /^# â”€â”
 R="$(mktemp -d)"; trap 'rm -rf "$TMP" "$R"' EXIT
 mkdir -p "$R/.github/workflows" "$R/deploy/images"
 printf 'jobs:\n  publish:\n    strategy:\n      matrix:\n        include:\n          - name: wardynd\n          - name: wardynd-fips\n' > "$R/.github/workflows/release.yml"
+mkdir -p "$R/internal/version" && printf 'const Version = "1.2.0-rc.2"\n' > "$R/internal/version/version.go"
 (cd "$R" && git init -q && git add -A && git -c user.name=t -c user.email=t@t commit -qm one && git tag v1.0.0)
 run_stale() { (cd "$R" && fail=0 && GPL_OFFER=deploy/images/THIRD-PARTY-GPL.md && eval "$block" 2>&1; echo "fail=$fail"); }
 printf '## `ghcr.io/cjohnstoniv/wardynd-fips` (not yet published)\n' > "$R/deploy/images/THIRD-PARTY-GPL.md"

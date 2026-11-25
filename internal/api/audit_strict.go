@@ -26,9 +26,11 @@ import (
 
 // auditStrictRoutes is every covered change, keyed as chi.Walk reports a route: each POST, PUT, PATCH
 // and DELETE under /policies, /governance, /approvals, /permissions, /drives/grants,
-// /wall-presets, /templates and /me/walls, less auditStrictExcluded. Wall presets, templates and a
-// person's own walls carry policy, so they are covered. TestAuditStrictCensus fails on a change under
-// those prefixes that is in neither table, and on a covered route auditStrictIntent does not wrap.
+// /wall-presets, /templates, /me/walls, /agent-rules, /assistant/settings, /assistant/sessions and /assistant/preview,
+// less auditStrictExcluded. Wall presets, templates, a person's own walls, an organisation's agent rules and the
+// assistant settings carry policy, so they are covered; so is every write to an assistant session, which acts as its
+// person. TestAuditStrictCensus fails on a change under those prefixes that is in neither table, and on a covered
+// route auditStrictIntent does not wrap.
 var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/policies":        true,
 	"PUT /api/v1/policies/{id}":    true,
@@ -49,11 +51,13 @@ var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/governance/changes/{id}/approve":        true,
 	"POST /api/v1/governance/changes/{id}/reject":         true,
 	"PUT /api/v1/governance/changes/{id}/note":            true,
+	"DELETE /api/v1/governance/changes/{id}/approval":     true,
 	"POST /api/v1/governance/requests":                    true,
 	"POST /api/v1/governance/requests/{id}/approve":       true,
 	"POST /api/v1/governance/requests/{id}/reject":        true,
 	"PUT /api/v1/governance/egress-baseline":              true,
 	"PUT /api/v1/governance/boundary":                     true,
+	"PUT /api/v1/governance/approval-counts":              true,
 	"PUT /api/v1/governance/recording":                    true,
 	"POST /api/v1/governance/restrictions":                true,
 	"PUT /api/v1/governance/restrictions/{id}":            true,
@@ -86,6 +90,16 @@ var auditStrictRoutes = map[string]bool{
 
 	"PUT /api/v1/me/walls":    true,
 	"DELETE /api/v1/me/walls": true,
+
+	"PUT /api/v1/assistant/settings": true,
+
+	"POST /api/v1/assistant/sessions":               true,
+	"POST /api/v1/assistant/sessions/{id}/messages": true,
+	"POST /api/v1/assistant/sessions/{id}/edits":    true,
+	"DELETE /api/v1/assistant/sessions/{id}":        true,
+
+	"PUT /api/v1/agent-rules/{harness}":    true,
+	"DELETE /api/v1/agent-rules/{harness}": true,
 }
 
 // auditStrictExcluded is the POSTs under those prefixes that change nothing: each reads, works an answer
@@ -98,6 +112,7 @@ var auditStrictExcluded = map[string]bool{
 	"POST /api/v1/governance/approval-rules/dry-run": true,
 	"POST /api/v1/templates/import":                  true,
 	"POST /api/v1/templates/{id}/policy-check":       true,
+	"POST /api/v1/assistant/preview":                 true, // the records a session would send, read and shown; it starts nothing
 }
 
 // strictIntentBodyCap bounds the body read to hash it. It is above every covered handler's own cap, so a

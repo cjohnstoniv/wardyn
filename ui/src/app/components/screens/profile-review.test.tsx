@@ -237,7 +237,9 @@ describe("ProfileReview", () => {
       expect.objectContaining({ subject: "team-docs", capability: "policy", value: "pol-1", effect: "allow" }),
       "",
     );
-    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true, "");
+    // The create carried the restriction, so no second write follows the list.
+    expect(createPolicyMock.mock.calls[0][2]).toEqual({ restricted: true });
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
   });
 
   it("a save whose create answers after another person signed in still writes the list as the person who saved", async () => {
@@ -258,9 +260,9 @@ describe("ProfileReview", () => {
 
     setExpectedPrincipal("b@example.com");
     created({ id: "pol-1" });
-    await waitFor(() => expect(putAvailabilityMock).toHaveBeenCalled());
+    await waitFor(() => expect(upsertGrantMock).toHaveBeenCalled());
     expect(upsertGrantMock).toHaveBeenCalledWith(expect.objectContaining({ subject: "team-docs", value: "pol-1" }), "a@example.com");
-    expect(putAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1", true, "a@example.com");
+    expect(putAvailabilityMock).not.toHaveBeenCalled();
     setExpectedPrincipal("");
   });
 
@@ -282,7 +284,7 @@ describe("ProfileReview", () => {
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent(AVAILABILITY.CREATE_PARTIAL_TITLE);
     expect(alert).toHaveTextContent("That group doesn't exist.");
-    expect(alert).toHaveTextContent(AVAILABILITY.CREATE_PARTIAL_EVERYONE);
+    expect(alert).toHaveTextContent(AVAILABILITY.CREATE_PARTIAL_RESTRICTED);
     expect(onClose).not.toHaveBeenCalled();
     await waitFor(() => expect(getAvailabilityMock).toHaveBeenCalledWith("policy", "pol-1"));
     expect(createPolicyMock).toHaveBeenCalledTimes(1);

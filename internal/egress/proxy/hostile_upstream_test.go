@@ -161,7 +161,8 @@ func awaitDecision(t *testing.T, p *Proxy, done <-chan struct{}) []egress.Decisi
 	var rows []egress.DecisionLog
 	for {
 		select {
-		case d := <-p.sink.ch:
+		case q := <-p.sink.ch:
+			d := q.log
 			rows = append(rows, d)
 		default:
 			return rows

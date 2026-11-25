@@ -860,7 +860,7 @@ func (m *macOSVMs) startJob(ctx context.Context, j helperJob) error {
 		return never(fmt.Errorf("start the macOS VM helper: %w", err))
 	}
 	exited := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(exited) }()
+	go func() { _ = cmd.Wait(); m.noteHelperExit(e.ID); close(exited) }()
 	m.changed()
 	if err := m.awaitClaim(ctx, e.ID, j, cmd, exited, never); err != nil || j.out == nil {
 		return err

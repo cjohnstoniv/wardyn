@@ -422,10 +422,17 @@ func TestPG_RunnerSpoolPreparesEveryEventBeforeTheChainLock(t *testing.T) {
 	// A scan pair is two audit rows: the second prepare runs after the first insert unless every event is prepared first.
 	row.Decision.Scan = &egress.ScanSummary{Action: "alert", Channel: "model", FindingsTotal: 101}
 	row = rehashSpoolRow(t, row)
+	// The probe is on a pool of its own: the ingest holds a connection from pool on this goroutine
+	// (WARDYN_TEST_POOL_GUARD).
+	prober, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prober.Close()
 	var calls, free atomic.Int32
 	prepare := func(ctx context.Context, ev types.AuditEvent) (types.AuditEvent, error) {
 		calls.Add(1)
-		conn, err := pool.Acquire(ctx)
+		conn, err := prober.Acquire(ctx)
 		if err != nil {
 			return ev, err
 		}

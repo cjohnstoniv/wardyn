@@ -386,7 +386,7 @@ func newLaptopFixture(t *testing.T) *laptopFixture {
 	}
 	f.caPEM = certPEM
 	cpAddr := upstreamAddr(cp)
-	sink := &decisionSink{out: &lockedBuilder{b: f.sink}, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: &lockedBuilder{b: f.sink}, ch: make(chan queuedDecision, 64)}
 	f.p = newProxy(Options{
 		RunID: uuid.New(), Sink: sink, CA: ca, Resolver: publicResolver{},
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"other.example"}, FirstUseApproval: types.FirstUseWaitForReview}),

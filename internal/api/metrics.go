@@ -549,8 +549,8 @@ func (s *Server) MetricsText(ctx context.Context) []byte {
 //
 // They exist because a store outage makes every counter above simply stop
 // moving, which a scrape cannot tell apart from a quiet cluster: wardyn_store_up
-// is the same Postgres ping /readyz makes (0 = the pod is out of the Service's
-// endpoints and runs are failing their durable writes), and
+// is the same Postgres ping /readyz makes (0 = runs are failing their durable writes, and a pod whose
+// readiness reads /readyz is out of the Service's endpoints), and
 // wardyn_audit_spool_lines is the backlog those failed writes are spooling to
 // disk. A spool that grows and never drains back to 0 is the fallback doing
 // its job while the drain loop is not doing its own — invisible until now

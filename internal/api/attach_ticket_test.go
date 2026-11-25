@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -112,7 +113,7 @@ func TestAttachTicketStoreError(t *testing.T) {
 	if err == nil {
 		t.Fatal("store failure was swallowed; the caller would 403 a healthy ticket")
 	}
-	if ok || ta != (ticketActor{}) {
+	if ok || !reflect.DeepEqual(ta, ticketActor{}) {
 		t.Fatalf("store failure must not authenticate: ok=%v actor=%+v", ok, ta)
 	}
 }

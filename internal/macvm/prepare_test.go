@@ -711,6 +711,60 @@ func TestPrepareLeakedHook(t *testing.T) {
 	}
 }
 
+// An install VM the framework refuses with its VM limit calls the Leaked hook once; any other install
+// error does not; a failing hook is logged and the prepare still returns the install error.
+func TestPrepareInstallLeakedHook(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		installErr error
+		hookErr    error
+		wantCalls  int
+	}{
+		{"vm limit", fmt.Errorf("%w: boom", macvm.ErrVMLimit), nil, 1},
+		{"other error", errors.New("boom"), nil, 0},
+		{"hook fails", fmt.Errorf("%w: boom", macvm.ErrVMLimit), errors.New("ledger busy"), 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPrep(t)
+			f.eng.InstallFunc = func(context.Context, *macvmtest.Machine, string, func(float64)) error { return tc.installErr }
+			calls := 0
+			f.opts.Leaked = func() error { calls++; return tc.hookErr }
+			_, err := macvm.Prepare(context.Background(), f.opts)
+			if err == nil || !errors.Is(err, tc.installErr) || !strings.Contains(err.Error(), macvm.InstallFailurePrefix) {
+				t.Fatalf("Prepare returned %v, want the install error under %q", err, macvm.InstallFailurePrefix)
+			}
+			if calls != tc.wantCalls {
+				t.Fatalf("Leaked calls: %d, want %d", calls, tc.wantCalls)
+			}
+			if f.fb.Boots() != 0 {
+				t.Fatalf("first boots = %d, want 0", f.fb.Boots())
+			}
+			if tc.hookErr != nil && !strings.Contains(f.logs.String(), "ledger busy") {
+				t.Fatalf("the hook's error was not logged: %s", f.logs.String())
+			}
+		})
+	}
+}
+
+// The install process's exit status is the VM limit's only way across the process boundary.
+func TestInstallExit(t *testing.T) {
+	if macvm.InstallVMLimitExit != 3 {
+		t.Fatalf("InstallVMLimitExit = %d, want 3", macvm.InstallVMLimitExit)
+	}
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{nil, 0},
+		{fmt.Errorf("install: %w", macvm.ErrVMLimit), macvm.InstallVMLimitExit},
+		{errors.New("x"), 1},
+	} {
+		if got := macvm.InstallExit(tc.err); got != tc.want {
+			t.Errorf("InstallExit(%v) = %d, want %d", tc.err, got, tc.want)
+		}
+	}
+}
+
 // failingTransport answers every request with err and counts them.
 type failingTransport struct {
 	err   error

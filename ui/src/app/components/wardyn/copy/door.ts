@@ -18,6 +18,7 @@ export const BANNER = {
   B4: (harness: string, name: string, token: boolean) =>
     `${harness} runs use ${name}, and no ${token ? "token" : "key"} is available.`,
   B5: (harness: string) => `${harness} runs use your Claude subscription, and you're not signed in to Claude.`,
+  B6: (harness: string, name: string) => `${harness} runs use ${name}, and you are not signed in to Azure.`,
   B8: (n: number) => `${n} of your model connections need you.`,
   REVIEW: "Review",
 } as const;
@@ -34,7 +35,9 @@ export const CONNECTIONS = {
     `Your connection was removed because an admin changed this provider’s connection method. Review ${host}, then connect again.`,
   STORE_UNREADABLE: "Could not check your connection. Your credential may still be stored. Wait a moment, then re-check.",
   C6_LINE: (name: string) => `Your AWS sign-in for ${name} no longer works.`,
+  C6_LINE_AZURE: (name: string) => `Your Azure sign-in for ${name} no longer works.`,
   SIGN_IN_CLAUDE: "Sign in to Claude",
+  SIGN_IN_AZURE: "Sign in to Azure",
   // A stored sign-in's door, always offered: a session AWS refuses to renew
   // still reads as signed in until a run is refused.
   SIGN_IN_AGAIN,
@@ -93,6 +96,15 @@ export const CLAUDE_DOOR = {
   DESCRIPTION:
     "Signs you in with your own Claude subscription for your Claude Code runs. The sign-in runs in the terminal in this dialog.",
   SIGNED_IN_TOAST: "Signed in to Claude — your runs can use your subscription now",
+} as const;
+
+// The Azure Foundry door: a sign-in with Microsoft for one provider row, its button ADO_ENTRA.CONNECT_CTA.
+export const AZURE_DOOR = {
+  TITLE: (name: string) => `Sign in to Azure for ${name}`,
+  BODY: (name: string) =>
+    `You'll go to your organisation's Microsoft sign-in and come straight back. After that your runs reach ${name} as you, not with a key shared by everyone.`,
+  NOTE: "Your sign-in is stored for you alone and attached at the proxy, so it never enters the sandbox. It works only for this provider's deployments.",
+  CONNECTED: (name: string) => `${name} is connected.`,
 } as const;
 
 export const KEY_DOOR = {

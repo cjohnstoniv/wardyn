@@ -32,7 +32,7 @@ func modelGateProxy(t *testing.T, allowed []string) (*Proxy, *capturedUpstream, 
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{}),
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver: fakeResolver{m: map[string][]net.IP{modelGateHost: ips("10.40.1.5")}},
 		Dial:     redirectDial(upstreamAddr(up.srv)),
 		Injector: staticInj(map[string]injectedHeader{modelGateHost: {name: "X-Api-Key", value: "BROKERED-KEY"}}),
@@ -577,7 +577,7 @@ func TestAllowedModels_ViaOrgGated(t *testing.T) {
 func TestAllowedModels_PolicyMethodKeepsItsRow(t *testing.T) {
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedMethods: []string{http.MethodGet}}),
-		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+		Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}, Resolver: publicResolver{}})
 	p.allowedModels = modelSet([]string{"claude-sonnet-5"})
 	rec := httptest.NewRecorder()
 	p.serveMITMRequest(rec, httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/v1/messages", strings.NewReader(`{"model":"claude-opus-9"}`)), anthropicHost, 443)
@@ -653,7 +653,7 @@ func TestAllowedModels_OpaqueModelTunnelRefused(t *testing.T) {
 			p := newProxy(Options{
 				RunID:           uuid.New(),
 				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append(hosts, "registry.npmjs.org")}),
-				Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+				Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 				Resolver:        publicResolver{},
 				LLMChannelHosts: map[string]string{"foundry.corp.internal": anthropicHost},
 				LLMUpstreams:    map[string]string{openaiHost: "https://llm-gateway.corp.internal/v1"},
@@ -727,7 +727,7 @@ func TestAllowedModels_FileAndSkillUploadsRefused(t *testing.T) {
 	for _, rest := range []string{"v1/files", "v1/skills"} {
 		buf := &bytes.Buffer{}
 		p := newProxy(Options{RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-			Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{}})
+			Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}, Resolver: publicResolver{}})
 		p.allowedModels = modelSet([]string{"model-a"})
 		req := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+"/"+rest, failReader{t})
 		rec := httptest.NewRecorder()

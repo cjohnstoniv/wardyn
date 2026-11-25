@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -16,8 +17,9 @@ func runnersEnabled(cfg types.SiteConfig) bool { return cfg.Runners != nil && cf
 
 // carryRunners keeps the stored runner settings on a generic site-config write. Enablement has its own
 // audited, HTTPS-validated door, as does require_managed_device, so a document naming a different value
-// of either is refused rather than quietly ignored; an echo of the stored values, or no mention at all,
-// carries them forward. False: answered.
+// of either is refused rather than quietly ignored; so is a non-empty MDM device CA or CRL URL that differs
+// from the stored one. An echo of the stored values, or no mention at all, carries them forward. False:
+// answered.
 func carryRunners(w http.ResponseWriter, cfg *types.SiteConfig, existing types.SiteConfig) bool {
 	if cfg.Runners != nil && cfg.Runners.Enabled != runnersEnabled(existing) {
 		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRunnersViaOwnRoute,
@@ -29,9 +31,25 @@ func carryRunners(w http.ResponseWriter, cfg *types.SiteConfig, existing types.S
 			"runners.require_managed_device is a super-admin switch: change it with PUT /runners/settings, not PUT /site-config")
 		return false
 	}
+	if stored := runnerSettingsOf(existing); cfg.Runners != nil && (mdmFieldDiffers(cfg.Runners.MDMDeviceCAPEM, stored.MDMDeviceCAPEM) ||
+		mdmFieldDiffers(cfg.Runners.MDMDeviceCRLURL, stored.MDMDeviceCRLURL)) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRunnersViaOwnRoute,
+			"runners.mdm_device_ca_pem and runners.mdm_device_crl_url are super-admin settings: change them with PUT /runners/settings, not PUT /site-config")
+		return false
+	}
+	if cfg.Runners != nil && cfg.Runners.MachineKindDenials != nil && !slices.Equal(cfg.Runners.MachineKindDenials, machineKindDenialsOf(existing)) {
+		writeErrorReason(w, http.StatusBadRequest, reasonSiteConfigRunnersViaOwnRoute,
+			"runners.machine_kind_denials is a super-admin switch: change it with PUT /runners/settings, not PUT /site-config")
+		return false
+	}
 	cfg.Runners = existing.Runners
 	return true
 }
+
+// mdmFieldDiffers is whether a site-config body names an MDM field with a value other than the stored one.
+// An empty field is no mention: a client built before the fields cannot name them, and clearing goes through
+// PUT /runners/settings.
+func mdmFieldDiffers(body, stored string) bool { return body != "" && body != stored }
 
 // handleGetRunnerSettings is GET /api/v1/runners/settings: whether runners are on, and whether a new local
 // run needs a managed device, which the runners page reads while the runner routes themselves answer
@@ -63,17 +81,23 @@ func (s *Server) runnersEnableRefusal() string {
 	return ""
 }
 
-// handlePutRunnerSettings is PUT /api/v1/runners/settings {enabled, require_managed_device}: the one door
-// that turns runners on or off and sets the managed-device requirement. SUPER admin only; PUT /site-config
-// cannot reach either. A field left out is left as stored. Turning off is never refused.
+// handlePutRunnerSettings is PUT /api/v1/runners/settings {enabled, require_managed_device,
+// mdm_device_ca_pem, mdm_device_crl_url, machine_kind_denials}: the one door that turns runners on or off, sets the
+// managed-device requirement, the MDM device CA and the machine-kind denials. SUPER admin only; PUT /site-config cannot reach any of them. A field left out is left as stored. Turning off is never refused.
 func (s *Server) handlePutRunnerSettings(w http.ResponseWriter, r *http.Request) {
 	var req types.RunnerSettingsRequest
 	if !decodeStrict(w, r, &req) {
 		return
 	}
-	if req.Enabled == nil && req.RequireManagedDevice == nil {
-		writeErrorReason(w, http.StatusBadRequest, reasonRunnersEnabledRequired, "enabled is required: send {\"enabled\": true} or {\"enabled\": false}, or {\"require_managed_device\": true|false}")
+	if req.Enabled == nil && req.RequireManagedDevice == nil && req.MDMDeviceCAPEM == nil && req.MDMDeviceCRLURL == nil && req.MachineKindDenials == nil {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunnersEnabledRequired, "enabled is required: send {\"enabled\": true} or {\"enabled\": false}, or {\"require_managed_device\": true|false}, or {\"mdm_device_ca_pem\": \"...\", \"mdm_device_crl_url\": \"...\"}, or {\"machine_kind_denials\": [...]}")
 		return
+	}
+	if req.MachineKindDenials != nil {
+		if err := types.ValidateMachineKindDenials(*req.MachineKindDenials); err != nil {
+			writeErrorReason(w, http.StatusBadRequest, reasonMachineKindDenialsInvalid, "Machine-kind denials: "+err.Error())
+			return
+		}
 	}
 	if req.Enabled != nil && *req.Enabled {
 		if msg := s.runnersEnableRefusal(); msg != "" {

@@ -120,7 +120,9 @@ request, and reviewed before it reaches `main`.
 - Dependent work stacks: branch from the previous PR's branch, write
   `Depends on #N` in the PR body, retarget to `main` after #N merges.
 - A database migration takes the next free number at rebase time, never a
-  number reserved in advance.
+  number reserved in advance, from the band of the branch it targets
+  (`internal/db/migration_bands.tsv`: 0300-0399 on release/0.10, 0400-0599
+  on main). A forward-ported migration keeps its number.
 
 ### Pull requests
 
@@ -200,8 +202,9 @@ WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-race-pg
 
 Kubernetes conformance runs in `.github/workflows/ci.yml`'s `conformance-k8s`
 job against kind with Calico; see that job's setup for a local run. The additional
-cluster walks, including `scripts/run-e2e-ssh-k8s.sh` and the **AWS SSO walk**,
-are manual proofs against `make kind-quickstart` and self-skip without
+cluster walks, including the **AWS SSO walk**, are manual proofs against `make kind-quickstart`;
+`scripts/run-e2e-ssh-k8s.sh` also runs in `nightly.yml`'s `kind-survival-walk` job,
+and every walk self-skips without
 `WARDYN_TEST_K8S=1`. No workflow runs the AWS SSO walk,
 `scripts/kind-sso-walk.sh`: with `make kind-sso` it stands up Dex with two
 principals and an on-cluster fake of AWS IAM Identity Center, then proves that a
