@@ -57,6 +57,7 @@ export const NR_TOOLS = {
   DETAIL_NETWORK: "Network",
   DETAIL_CREDENTIAL: "Credential",
   DETAIL_MCP: "MCP",
+  DETAIL_IMAGE: "Image",
   DETAIL_NOTE: "Note",
   DETAIL_NONE: "None",
   DETAIL_MCP_BODY: "Turn it on for a harness under Harness setup.",
