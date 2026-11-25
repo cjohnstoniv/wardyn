@@ -179,6 +179,7 @@ type Server struct {
 	preflightLimiter     *principalLimiter
 	policyPreviewLimiter *principalLimiter
 	deviceRouteState                 // the device routes' process state (server_devices.go)
+	inboundExchangeState             // the inbound exchange door's limiter (inbound_exchange.go)
 	supportState                     // the open support grants this replica knows, for the audit window (support_grant.go)
 	cliSignInState                   // CLI sign-in's rate limiters (cli_sign_in.go)
 	scimState                        // the SCIM routes' rate limiters (scim_auth.go)

@@ -68,6 +68,7 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	s.mountPeopleRoutes(securityOps)
 	s.mountInvitationRoutes(r, securityOps)
 	s.mountServiceIdentityRoutes(r, securityOps)
+	s.mountInboundFederationRoutes(r, securityOps)
 	s.mountSCIMStatusRoute(securityOps)
 	// Run-detail widget layout: per-user, per-preset, server-synced so a layout survives a new machine (localStorage
 	// would not). Scoped to the caller's OWN principal at the store, like the ssh-keys block above, never the body's.
