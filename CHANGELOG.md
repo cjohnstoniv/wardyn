@@ -50,6 +50,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
+- Preview URLs in the console. The run page has a Preview URLs tile where the run's creator creates a preview of a port (private, or Organisation where the ceiling allows), opens it in its own tab, copies an Organisation preview's link and revokes it; a security admin sees the tile to list and revoke, and a background run's tile says it has no web application gateway. An Organisation link is the console route `/previews/<run-id>/<port>`, which mints the ticket and enters in the same tab. Settings has a Preview URLs card for the switch and the ceiling, and the cockpit's layout gains the tile.
 
 ### Changed
 

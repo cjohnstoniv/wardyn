@@ -41,7 +41,7 @@ import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import { ViewGate, useViewAccess, viewLanding, viewOfPath } from "./components/wardyn/console-view";
 import { appURL } from "./lib/base-path";
 import type { SetupStatus } from "./lib/types";
-import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted, ComposerScreen } from "./lazy-routes";
+import { NewRunRoute, RunDetailScreen, ApprovalsScreen, PoliciesScreen, BoundaryScreen, GovernanceScreen, ChangeReviewPage, DrivesScreen, ProvidersScreen, ImagesScreen, ComponentsScreen, TemplatesScreen, WorkloadsScreen, PermissionsScreen, UserTypesScreen, CredentialsScreen, PeopleScreen, RunnersScreen, PoolFormScreen, SecretsScreen, AdminSettingsScreen, YourAccountScreen, CliSignInScreen, OpenAppScreen, PreviewOpenScreen, WorkspacesScreen, WorkspaceDetailScreen, AuditScreen, RecordingScreen, GettingStarted, ComposerScreen } from "./lazy-routes";
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
@@ -765,6 +765,7 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            <Route path="/previews/:run/:port" element={suspend(<PreviewOpenScreen />)} />
             <Route path="/templates" element={suspend(<TemplatesScreen />)} />
             <Route path="/workloads" element={suspend(<WorkloadsScreen />)} />
             <Route

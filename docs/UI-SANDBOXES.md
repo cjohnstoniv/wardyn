@@ -520,6 +520,50 @@ curl -H "Authorization: Bearer $INBOUND_TOKEN" "$UI/r/$RUN_ID/api/health"
 - A busy run writes up to 50 `inbound.allow` rows a second, in bursts of up to 100, so filter them when reading the run's trail.
   - One caller writes at most the same over all the runs they call.
 
+### Preview URLs
+
+A preview opens a port a run is already listening on, in its own browser tab, without a `ui_apps` entry. The gateway presents it as the app `__preview-<port>`.
+
+- Previews are off until `features.preview_urls.enabled` is true in site config. They need the UI gateway (`WARDYN_UI_SANDBOX_LISTEN`); turning them on without it is refused `400` `site_config_invalid`.
+- In the console, an administrator sets this under Settings, in Connections, on the Preview URLs card.
+- `features.preview_urls.max_visibility` is the widest a preview can be: `private` (the default) or `org`. `org` needs host mode (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`).
+- Revoking a preview, lowering the ceiling or switching previews off ends its open connections within 30 seconds. Lowering the ceiling or switching off also revokes every preview above it, each recorded as `preview.revoke`.
+
+#### Create, open and revoke
+
+- The run's creator creates one with `PUT /api/v1/runs/{id}/previews/{port}`, sending `{"visibility": "private"|"org", "ttl_seconds": N}`.
+  - An absent `visibility` is `private`. `ttl_seconds` runs from 3600 to 604800 and defaults to 86400.
+  - The same call with the same visibility extends the preview. Another visibility revokes it and stores a new one.
+- `GET /api/v1/runs/{id}/previews` lists the live previews and `DELETE /api/v1/runs/{id}/previews/{port}` revokes one. The run's creator and a security admin may call both, with previews on or off.
+- `POST /api/v1/runs/{id}/previews/{port}/ticket` mints the single-use ticket that opens one, answering `{ticket, expires_in_seconds}`. It goes through the same bind and enter hand-off as [Open an app](#3-open-an-app), with the app `__preview-<port>`.
+- In the console, the run page has a Preview URLs tile for the run's creator and for a security admin, who lists and revokes. A background run's tile says it has no web application gateway.
+- An Organisation preview's Copy link is the console route `/previews/<run-id>/<port>`. It mints that ticket and enters in the same tab.
+
+#### Who can open one
+
+- A private preview admits whoever the run's entry rule admits: its creator, and an administrator on a run no person owns. A role alone never admits anyone.
+- An Organisation preview also admits any other person signed in to the console. The ticket records `caller` as `owner` or `preview:org` in `preview.open`.
+- A person a preview does not admit, a preview that has ended and a missing run all get the foreign-run `404` `run_not_found` from the ticket route.
+- A preview on the gateway's own address refuses a visitor it does not admit with `403` `not_authorized`, and one that has ended or been revoked with `403` `revoked`.
+
+#### What a preview needs
+
+- The port is from 1024 to 65535, other than 3128, which the run's proxy uses. A declared web app's port is opened as that app, not as a preview.
+- The run is running and not kept, and is not a background task. Its profile does not set `deny_ui_apps` or `deny_interactive`.
+- The run's `data_out` rule allows content out. A rule that keeps content in refuses with `403` `preview_data_out`.
+- The relay probes the port and never starts anything. A port with no listener answers `502` `preview_not_listening`, and a paused run answers `409` `preview_run_paused`.
+- Previews never use a support session's door: a helper cannot open one.
+
+#### Activity and recording
+
+- Viewing a preview does not keep its run awake and does not wake a paused run. Work the run does to answer a request counts as the run's own activity.
+- Content inside a preview is not recorded, as for relayed apps. Wardyn records that a preview was created, opened, denied and revoked (see [`preview.open`](AUDIT-ACTIONS.md)), never what was sent or shown.
+
+#### Where the UI origin sits
+
+- The console's own cookies carry no `Domain` attribute, so a preview's origin never receives them.
+- A page on a sibling subdomain can still set a cookie for the parent domain, as for any relayed app. Keep nothing whose non-HttpOnly cookies matter on the registrable domain the UI origin shares, as described under [Bounds](#bounds).
+
 ## 4. Deployment
 
 > [!NOTE]
