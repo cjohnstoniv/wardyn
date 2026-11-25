@@ -98,6 +98,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`, 
 | `github.com/jackc/pgservicefile` | MIT | https://github.com/jackc/pgservicefile/blob/5a60cdf6a761/LICENSE |
 | `github.com/jackc/pgx/v5` | MIT | https://github.com/jackc/pgx/blob/v5.12.0/LICENSE |
 | `github.com/jackc/puddle/v2` | MIT | https://github.com/jackc/puddle/blob/v2.2.3/LICENSE |
+| `github.com/jezek/xgb` | BSD-3-Clause | https://github.com/jezek/xgb/blob/v1.3.1/LICENSE |
 | `github.com/json-iterator/go` | MIT | https://github.com/json-iterator/go/blob/v1.1.12/LICENSE |
 | `github.com/kr/fs` | BSD-3-Clause | https://github.com/kr/fs/blob/v0.1.0/LICENSE |
 | `github.com/moby/docker-image-spec/specs-go/v1` | Apache-2.0 | https://github.com/moby/docker-image-spec/blob/v1.3.1/LICENSE |
