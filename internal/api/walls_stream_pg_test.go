@@ -225,8 +225,10 @@ func TestWallsStreamUnitCountersMatchAudit_PG(t *testing.T) {
 			t.Errorf("sample %s is a row GET /api/v1/audit does not serve this caller", id)
 			continue
 		}
+		// The stream serves every sample in the unit view; the feed keeps the member view for a run the caller
+		// created, so its row is read through the unit view too (a host with a space or past 128 characters is not served).
 		var data map[string]any
-		_ = json.Unmarshal(ev.Data, &data)
+		_ = json.Unmarshal(unitViewData(ev.Data), &data)
 		host, _ := data["host"].(string)
 		port, _ := data["port"].(float64)
 		approval, _ := data["approval_id"].(string)
