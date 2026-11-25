@@ -466,7 +466,7 @@ function MappingsTable({
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
               disabled={busy || (showDeleteGuard && !ack)}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               onClick={(e) => {
                 e.preventDefault();
                 void confirmDelete();

@@ -718,7 +718,8 @@ describe("App — the AI composer route", () => {
   it("opens from the AI composer card on the New run start screen", async () => {
     vi.stubGlobal("fetch", mockFetch({ assistant: ready }).fetch);
     renderApp("/runs/new");
-    await userEvent.click(await screen.findByRole("link", { name: NR_START.AI_FOOT }));
+    // The card is a disabled button until the assistant read lands; the whole app's first render can take past the 1 s default.
+    await userEvent.click(await screen.findByRole("link", { name: NR_START.AI_FOOT }, { timeout: 5000 }));
     await expectComposer();
   });
 

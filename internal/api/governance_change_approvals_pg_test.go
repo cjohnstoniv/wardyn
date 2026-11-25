@@ -11,6 +11,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -359,6 +361,31 @@ func TestPG_Approvals_RequireSecurity(t *testing.T) {
 	}
 }
 
+// mintCLIAccess mints a cli_access token of sub as a CLI sign-in does: a session and its first access token,
+// written together (store.PG.CreateCLISession), both with role. It returns the token and its plaintext.
+func (e *apEnv) mintCLIAccess(sub, email, role string) (types.APIToken, string) {
+	e.t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	now, notTruncated := time.Now().UTC(), false
+	exp := now.Add(time.Hour)
+	sess := store.CLISessionRow{ID: uuid.New(), Identity: store.CLIIdentity{Principal: sub, Email: email, Role: role,
+		UserType: types.UserTypeStandard, GroupsTruncated: &notTruncated, RevSeq: 1},
+		IdentityStampedAt: now, Machine: "laptop", Store: types.CLIStoreKeychain, PublicKey: pub, CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+	tok, err := e.pg.CreateCLISession(context.Background(), sess, "wdc_"+uuid.NewString(), types.APIToken{
+		ID: uuid.New(), Principal: sub, Email: email, Role: role, UserType: types.UserTypeStandard,
+		Name: "CLI: laptop", GroupsTruncated: &notTruncated, CreatedAt: now, ExpiresAt: &exp,
+		Kind: types.APITokenKindCLIAccess, CLISessionID: &sess.ID,
+	}, raw)
+	if err != nil {
+		e.t.Fatalf("mint the CLI token: %v", err)
+	}
+	return tok, raw
+}
+
 // TestPG_Approvals_CLITokenTierIsCapped: a CLI access token publishes the user role, so a person whose record
 // says security admin and who is admitted through a unit-admin grant approves at the unit-admin tier, and the
 // security rule refuses their final approval. An admin-token caller still takes today's bypass.
@@ -367,14 +394,7 @@ func TestPG_Approvals_CLITokenTierIsCapped(t *testing.T) {
 	e.requireCounts(govKindMembership, 2, true)
 	e.seedPeople()
 	e.grant(e.a, types.CapabilitySubjectUser, govSubAlice)
-	raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
-	notTruncated := false
-	if _, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{
-		ID: uuid.New(), Principal: govSubAlice, Email: "alice@corp.example", Role: oidc.RoleUser, UserType: types.UserTypeStandard,
-		Kind: types.APITokenKindCLIAccess, Name: "cli", GroupsTruncated: &notTruncated,
-	}, raw); err != nil {
-		t.Fatalf("mint the CLI token: %v", err)
-	}
+	_, raw := e.mintCLIAccess(govSubAlice, "alice@corp.example", oidc.RoleUser)
 	ch := e.heldOn(e.a2)
 	e.approve(e.adminA, ch.ID, http.StatusOK)
 	w := do(t, e.srv, http.MethodPost, approvePath(ch.ID), raw, "")
@@ -579,21 +599,10 @@ func TestPG_Approvals_PoolIsTheSameForAnyCaller(t *testing.T) {
 	}
 }
 
-// unitScopeCounter is a store that counts UnitScope reads.
-type unitScopeCounter struct {
-	store.PG
-	n *atomic.Int64
-}
-
-func (c unitScopeCounter) UnitScope(ctx context.Context, unit uuid.UUID, users, groups []string, strict bool) (bool, error) {
-	c.n.Add(1)
-	return c.PG.UnitScope(ctx, unit, users, groups, strict)
-}
-
-// grantReads counts the reads of the unit-admin grants.
+// grantReads counts the reads of the unit-admin grants (n) and the unit-scope reads (scope) on a transaction.
 type grantReads struct {
 	store.Querier
-	n *atomic.Int64
+	n, scope *atomic.Int64
 }
 
 func (g grantReads) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
@@ -603,14 +612,22 @@ func (g grantReads) Query(ctx context.Context, sql string, args ...any) (pgx.Row
 	return g.Querier.Query(ctx, sql, args...)
 }
 
+func (g grantReads) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "WITH RECURSIVE chain") {
+		g.scope.Add(1)
+	}
+	return g.Querier.QueryRow(ctx, sql, args...)
+}
+
 // TestPG_Approvals_ScopeReadsCountHoldersNotCandidates: 50 candidates who are not security admins, two named by a
-// grant (one by user subject, one by group subject), one unit, kind governance_membership. UnitScope is read
-// exactly twice and the grants exactly once, and the two holders are the eligible people.
+// grant (one by user subject, one by group subject), one unit, kind governance_membership. The unit scope is
+// read exactly twice, on the pool's own transaction, and the grants exactly once, and the two holders are the
+// eligible people.
 func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 	var scopeReads, grantListReads atomic.Int64
-	e := newApEnv(t, 2, func(c *Config) { c.Store = unitScopeCounter{PG: c.Store.(store.PG), n: &scopeReads} })
+	e := newApEnv(t, 2)
 	for i := range 50 {
-		sub := "sub-ap-cand-" + strings.Repeat("x", 1) + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		sub := "sub-ap-cand-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		e.record(sub, sub+"@corp.example", []string{apGroupUsers}, nil, false)
 	}
 	holderUser := "sub-ap-cand-aa"
@@ -620,7 +637,7 @@ func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 	e.grant(e.a, types.CapabilitySubjectGroup, "grp-ap-holders")
 
 	err := e.srv.cfg.Store.DryRunGovernance(context.Background(), func(q store.Querier) error {
-		in, err := e.srv.loadPoolInputs(context.Background(), grantReads{Querier: q, n: &grantListReads})
+		in, err := e.srv.loadPoolInputs(context.Background(), grantReads{Querier: q, n: &grantListReads, scope: &scopeReads})
 		if err != nil {
 			return err
 		}
@@ -629,7 +646,7 @@ func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if names := principalsOf(got.Eligible); !slices.Equal(names, []string{holderGroup, holderUser}) {
+		if names := principalsOf(got.Eligible); !slices.Equal(names, []string{holderUser, holderGroup}) {
 			t.Errorf("eligible = %v, want the two holders", names)
 		}
 		return nil
@@ -638,7 +655,7 @@ func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n := scopeReads.Load(); n != 2 {
-		t.Errorf("UnitScope reads = %d, want 2 (one for each holder)", n)
+		t.Errorf("unit-scope reads = %d, want 2 (one for each holder)", n)
 	}
 	if n := grantListReads.Load(); n != 1 {
 		t.Errorf("unit-admin grant reads = %d, want 1", n)
@@ -684,6 +701,9 @@ func TestPG_Approvals_OneDistinctHuman(t *testing.T) {
 	e.record("sub-ap-4", "", []string{apGroupUsers}, nil, false)
 	e.record("sub-ap-5", "", []string{apGroupUsers}, nil, false)
 	e.record("sub-ap-old", "old@corp.example", []string{apGroupUsers}, nil, false)
+	// Proposed before the read transaction opens: a request on this goroutine inside it would ask the pool for a
+	// second connection.
+	held := e.heldOn(e.a2)
 
 	poolOn(t, e.srv, func(in *poolInputs) {
 		got, err := e.srv.poolForKind(in, govKindMembership, e.a2.ID)
@@ -708,7 +728,7 @@ func TestPG_Approvals_OneDistinctHuman(t *testing.T) {
 			}
 		}
 
-		ch := e.heldOn(e.a2)
+		ch := held
 		counted := []countedPerson{{Principal: "sub-ap-gone", Email: "old@corp.example"}, {Principal: "sub-ap-1", Email: "ap@corp.example"}}
 		pool, err := e.srv.poolForChange(in, ch, counted)
 		if err != nil {
@@ -902,7 +922,17 @@ func TestPG_Approvals_PortalKindsRecordThenApply(t *testing.T) {
 		e := newRegPG(t)
 		e.h.srv.cfg.GovernanceMinApprovals = 2
 		third := accessSession(t, "root3", "root3@corp.example", oidc.RoleAdmin, []string{})
-		recordsFor(t, e.st, "root2", "root3")
+		// The harness's role map names root@ and sec@ alone (newDelegationPG), so root2 and root3 are super
+		// admins on their sign-in records through a group the store maps to admin: an approval re-derives the
+		// approver's role from that record, whatever the session says.
+		if _, err := e.st.UpsertRoleMapping(context.Background(), types.RoleMapping{Value: apGroupRoot, Role: oidc.RoleAdmin, CreatedBy: "seed"}); err != nil {
+			t.Fatal(err)
+		}
+		for _, sub := range []string{"root2", "root3"} {
+			if err := e.st.PutPrincipalSignIn(context.Background(), sub, sub+"@corp.example", []string{apGroupRoot}, nil, false); err != nil {
+				t.Fatal(err)
+			}
+		}
 		change, _, w := e.proposeHeld(t, map[string]any{"issuer": "https://approvals-two.example.com"})
 		if change == "" {
 			t.Fatalf("proposal = %d %s", w.Code, w.Body.String())
@@ -1136,15 +1166,7 @@ func TestPG_Approvals_ACLITokenApprovalSurvivesARefreshAndASignOut(t *testing.T)
 	_, _ = e.newUnitAdmin(sub)
 	mint := func() (uuid.UUID, string) {
 		t.Helper()
-		raw := apiTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
-		notTruncated := false
-		tok, err := e.pg.CreateAPIToken(context.Background(), types.APIToken{
-			ID: uuid.New(), Principal: sub, Email: sub + "@corp.example", Role: oidc.RoleUser, UserType: types.UserTypeStandard,
-			Kind: types.APITokenKindCLIAccess, Name: "cli", GroupsTruncated: &notTruncated,
-		}, raw)
-		if err != nil {
-			t.Fatalf("mint the CLI token: %v", err)
-		}
+		tok, raw := e.mintCLIAccess(sub, sub+"@corp.example", oidc.RoleUser)
 		return tok.ID, raw
 	}
 	// approvedWith is a held change that sub approved with a new CLI token, then what happens to that token,

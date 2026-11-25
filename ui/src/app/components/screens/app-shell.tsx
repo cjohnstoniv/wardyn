@@ -272,6 +272,9 @@ const SubstrateHealthBanner = React.lazy(() =>
 const AdoSignInBanner = React.lazy(() =>
   import("../wardyn/ado-signin-banner").then((m) => ({ default: m.AdoSignInBanner })),
 );
+const AzureSignInBanner = React.lazy(() =>
+  import("../wardyn/azure-signin-banner").then((m) => ({ default: m.AzureSignInBanner })),
+);
 const OidcSignInResult = React.lazy(() =>
   import("../wardyn/oidc-signin-result").then((m) => ({ default: m.OidcSignInResult })),
 );
@@ -755,6 +758,9 @@ export function AppShell({
               condition like the bands below it. */}
               <React.Suspense fallback={null}>
                 <AdoSignInBanner />
+              </React.Suspense>
+              <React.Suspense fallback={null}>
+                <AzureSignInBanner />
               </React.Suspense>
               <React.Suspense fallback={null}>
                 <OidcSignInResult />

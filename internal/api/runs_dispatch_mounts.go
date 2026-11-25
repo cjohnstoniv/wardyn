@@ -211,9 +211,14 @@ const envMacOSVMs = "WARDYN_MACOS_VMS"
 // support_off, and the console is told the option is off (SetupFeatures.SupportSessions).
 const envSupportSessions = "WARDYN_SUPPORT_SESSIONS"
 
+// envAttachForward turns on port forwarding over the organisation (attach_forward.go): GET /runs/{id}/attach/forward
+// relays one TCP connection to a port on the sandbox's own loopback, for a deployment whose SSH gateway is off. Off, the default,
+// the route answers 409 run_forward_off and writes a run.port.forward failure row. Read only through attachForwardOn.
+const envAttachForward = "WARDYN_ATTACH_FORWARD"
+
 // envToggles names every switch this package reads with envEnabled.
 // TestEnvTogglesListEveryEnvEnabledRead fails when a call site is missing here.
-var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs, envSupportSessions}
+var envToggles = []string{envEgressSecondHuman, envCapabilitySecondHuman, envGovernanceSecondHuman, envAllowMemberEnvSecret, envAllowAgentTelemetry, envGitPATAPIBitbucketServer, envScheduledRuns, envMCPLocalServers, envMacOSVMs, envSupportSessions, envAttachForward}
 
 // ValidateEnvToggles reads each envToggles switch once, so a value that is
 // neither truthy nor falsey exits 2 at boot, in every auth mode, rather than

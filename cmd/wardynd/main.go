@@ -43,6 +43,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg" // also registers the "pg" secret store
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -226,12 +227,6 @@ func run() error {
 	}
 	defer releaseInstance()
 
-	// bootCtx bounds the REST of the boot sequence (signing-key load, optional
-	// features) — unrelated to the connect/migrate split above, which now runs
-	// under its own two budgets rather than sharing this one.
-	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
-	defer cancel()
-
 	// SecretRegistry: process-wide secret masking registry. Minted github_token
 	// values and resolved api_key injection values are registered here so they
 	// can be masked ("<secret-hidden>") from PTY/asciicast captures and audit
@@ -260,6 +255,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// bootCtx bounds the REST of the boot sequence (the boot-key reads, signing-key load,
+	// optional features). It starts once the secret store is open: opening it can convert rows
+	// or prove key domains for longer than this budget, under rootCtx, and must not use it up.
+	bootCtx, cancel := context.WithTimeout(rootCtx, 30*time.Second)
+	defer cancel()
 	// The key-domain service behind /key-domains: the domains the file
 	// declares (already built and proven by the store above), and the
 	// assignments that place a person's next principal key.
@@ -404,6 +404,8 @@ func run() error {
 	holder := sweeperHolder()
 	leader := db.NewSweeperLeader(pool, holder)
 	ticks := sweephealth.New(db.NewSweepTicks(pool), holder, nil)
+	health := storehealth.New(time.Now, orZero(f.outage.lapseRecoveryGrace))
+	go health.Run(rootCtx, st.Ping)
 	receiptKeys, checkpointStatus := startAuditCheckpoints(rootCtx, *f.auditCheckpointInterval, bootKeys, st, maskedRec)
 	// Nil unless WARDYN_AUDIT_SINKS has an otlp_metrics block; started after the workers below.
 	otlpMetrics := newOTLPMetrics(*f.auditSinks)
@@ -421,6 +423,7 @@ func run() error {
 		ImageAdmissionConfig:  api.ImageAdmissionConfig{ImageAdmitter: imageAdmission},
 		SweeperLease:          leader,
 		SweepHealth:           ticks,
+		StoreHealth:           health,
 		Store:                 st,
 		Identity:              idp,
 		// Reads its row on first use, so an install with identity off has no key
@@ -433,7 +436,7 @@ func run() error {
 		// sweeper (runApprovalSweeper) enforces the same value, and dispatch
 		// mirrors it onto a hold-mode run's sandbox (RL-1).
 		ApprovalExpiryAfter: *f.approvalExpiryAfter,
-		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace, RunMaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0)},
+		RunLeaseConfig:      api.RunLeaseConfig{EndedRunGrace: *f.endedRunGrace, RunMaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), LapseMassSharePct: orZero(f.outage.lapseMassShare), LapseMassMin: orZero(f.outage.lapseMassMin), OrphanSweepHold: orZero(f.outage.orphanSweepHold)},
 		// Same minter, second use: the setup checklist asks it whether GitHub
 		// confines the App to the run branch namespace. nil when no App is
 		// configured, which omits the row.
@@ -468,6 +471,7 @@ func run() error {
 		DesktopSignins:       *f.desktopSignins == "on",
 		StartAfterReadback:   *f.startAfterReadback == "on",
 		DemoVideoBaseURL:     knobs.demoVideoBaseURL,
+		HealthzProbeTTL:      2 * time.Second,
 		CLIArtifactBase:      knobs.cliArtifactBase,
 		OrgCAFingerprints:    knobs.orgCAFingerprints,
 		RunnerTarget:         runnerTarget,
@@ -555,6 +559,7 @@ func run() error {
 		RefuseGitPATBrokerOff:    *f.gitPATBrokerOffRefused,
 		ScrubProxyResponses:      *f.proxyResponseScrub,
 		CanonicalPushRepos:       *f.pushHoldCanonicalRepos,
+		PushHoldRemovals:         *f.pushHoldRemovals,
 		AttachLocal:              strings.EqualFold(strings.TrimSpace(*f.attachLocal), "on"),
 		EnvSecretPlaceholders:    *f.envSecretPlaceholders,
 		FileSecretPlaceholders:   *f.fileSecretPlaceholders,
@@ -587,6 +592,7 @@ func run() error {
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
 		SSHChannels:          sshChannelSet(f.sshChannels),
+		SSHTickets:           *f.sshTickets,
 		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		ComputerFolders:      *f.computerFolders,
@@ -596,6 +602,7 @@ func run() error {
 		// The SSH gateway's established-connection ceiling and per-source handshake bound.
 		SSHMaxConnections:             *f.sshMaxConns,
 		SSHMaxHandshakesPerSource:     *f.sshPerSource,
+		SSHMaxHandshakes:              *f.sshMaxHandshakes,
 		SSHMaxConnectionsPerPrincipal: *f.sshPerPrincipal,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
@@ -650,7 +657,7 @@ func run() error {
 
 	// Periodic goroutines (lifecycle reaper, groundtruth token rotator, approval
 	// expiry sweeper) + the boot-time reconciliation pass (C3).
-	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, gtWrite)
+	startBackgroundWorkers(rootCtx, f, srv, run, pool, st, idp, brk, maskedRec, feats.recStore, leader, ticks, health, gtWrite)
 	// OTLP metrics, off unless the sinks config has an otlp_metrics block; on every replica.
 	startOTLPMetrics(rootCtx, otlpMetrics, srv.MetricsText)
 

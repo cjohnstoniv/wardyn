@@ -158,7 +158,7 @@ func providerDisplayName(p types.ModelProvider) string {
 func (s *Server) handleGetMyAssistant(w http.ResponseWriter, r *http.Request) {
 	purpose := types.AssistantPurpose(r.URL.Query().Get("purpose"))
 	if !purpose.Valid() {
-		writeErrorReason(w, http.StatusBadRequest, reasonAssistantSettingsInvalid, "purpose must be compose or review") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonAssistantSettingsInvalid, "purpose must be compose or review")
 		return
 	}
 	ctx := r.Context()

@@ -30,6 +30,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/keydomain"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore/subjectkey"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/workspacescan"
@@ -45,6 +46,8 @@ type Config struct {
 	// SweepHealth records each sweep's ticks in the shared sweep_ticks record and reads them
 	// back for the gauges and the substrate_health setup row. Nil records and reports nothing.
 	SweepHealth *sweephealth.Tracker
+	// StoreHealth is how long the store has been healthy, for the lapse sweep's outage rule (rule M); nil turns that rule off.
+	StoreHealth *storehealth.Tracker
 	// Store is the abstract persistence seam (run/policy/grant/approval/audit CRUD + reads),
 	// used instead of *pgxpool.Pool so a future pure-Go backend can be swapped in. Defaults
 	// to a store.NewPG(Pool) adapter when wired from wardynd.
@@ -134,7 +137,7 @@ type Config struct {
 	// ponytail: process-local. Under WARDYN_HA a replica that does not hold a runner's session
 	// answers offline for a runner attached to another; the upgrade is a shared presence read.
 	RunnerOnline func(id uuid.UUID) bool
-	// AttachLocal (WARDYN_ATTACH_LOCAL=on, off by default) allows a person's CLI on their own runner's
+	// AttachLocal (WARDYN_ATTACH_LOCAL, on by default) allows a person's CLI on their own runner's
 	// computer to attach to their run there (transport=local, attach_local.go), and tells such runners
 	// so in AUTH_OK. Off, a transport=local attach answers 409 attach_local_unavailable (flag_off).
 	AttachLocal bool
@@ -591,6 +594,9 @@ type Config struct {
 	// CanonicalPushRepos (WARDYN_PUSH_HOLD_CANONICAL_REPOS; off by default in
 	// 0.10.0) stamps proxy.Config.CanonicalPushRepos on every new dispatch.
 	CanonicalPushRepos bool
+	// PushHoldRemovals (WARDYN_PUSH_HOLD_REMOVALS; off by default) stamps
+	// proxy.Config.PushHoldRemovals on every new dispatch.
+	PushHoldRemovals bool
 	// EnvSecretPlaceholders / FileSecretPlaceholders (WARDYN_ENV_SECRET_PLACEHOLDERS,
 	// WARDYN_FILE_SECRET_PLACEHOLDERS; off by default in 0.10.0): an env_secret
 	// or file_secret grant whose scope names a host gets a placeholder in the
@@ -676,9 +682,11 @@ type Config struct {
 	// operator's value at boot.
 	SSHMaxSessionsPerRun int
 	SSHChannels          map[string]bool // WARDYN_SSH_CHANNELS: the kinds served; nil = all (sshChannelOn)
-	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
-	// one address's handshakes and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
-	SSHMaxConnections, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
+	SSHTickets           bool            // WARDYN_SSH_TICKETS: GET /runs/{id}/ssh and the ssh-* ticket purposes (sshgateway_ticket.go); off by default
+	// SSHMaxConnections (WARDYN_SSH_MAX_CONNECTIONS) bounds established gateway connections, SSHMaxHandshakes
+	// (WARDYN_SSH_MAX_HANDSHAKES) the handshakes in progress, SSHMaxHandshakesPerSource (WARDYN_SSH_MAX_HANDSHAKES_PER_SOURCE)
+	// one address's share of them and SSHMaxConnectionsPerPrincipal (WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL) one person's connections; 0 is the default.
+	SSHMaxConnections, SSHMaxHandshakes, SSHMaxHandshakesPerSource, SSHMaxConnectionsPerPrincipal int
 	// SyncDeny is WARDYN_SYNC_DENY: the organisation's ignore patterns, served
 	// on GET /runs/{id} as sync.deny for `wardyn sync` to apply above every
 	// ignore file in the synced tree. Empty adds none.
@@ -762,6 +770,9 @@ type Config struct {
 	// boundary as TrustedCAPEM above — never a SiteConfig field,
 	// never agent-reachable.
 	DemoVideoBaseURL string
+	// HealthzProbeTTL is how long /healthz reuses its runner, NetworkPolicy and sensor reads (healthz_cache.go).
+	// Zero (the default, and every test's) reads them on every request; cmd/wardynd sets two seconds.
+	HealthzProbeTTL time.Duration
 	// CLIArtifactBase is WARDYN_CLI_ARTIFACT_BASE, validated at boot by
 	// ValidateCLIArtifactBase: an internal mirror that holds the release's
 	// assets under <base>/v<version>/. /healthz publishes it as

@@ -94,10 +94,11 @@ func TestPG_ApprovalCounts_UnsetMinimumOnAFreshDeployment(t *testing.T) {
 	}
 }
 
-// countsReadCounter counts what one GET reads: the sign-in records, the unit-admin grants and the unit scopes.
+// countsReadCounter counts what one GET reads: the sign-in records, the unit-admin grants, and the unit scopes
+// read on the store (scopes) and on the read's own transaction (txScopes).
 type countsReadCounter struct {
 	store.PG
-	records, grants, scopes *atomic.Int64
+	records, grants, scopes, txScopes *atomic.Int64
 }
 
 func (c countsReadCounter) UnitScope(ctx context.Context, unit uuid.UUID, users, groups []string, strict bool) (bool, error) {
@@ -124,8 +125,15 @@ func (q countsQuerier) Query(ctx context.Context, sql string, args ...any) (pgx.
 	return q.Querier.Query(ctx, sql, args...)
 }
 
+func (q countsQuerier) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "JOIN governance_unit_admins") {
+		q.c.txScopes.Add(1)
+	}
+	return q.Querier.QueryRow(ctx, sql, args...)
+}
+
 func newCounter() countsReadCounter {
-	return countsReadCounter{records: &atomic.Int64{}, grants: &atomic.Int64{}, scopes: &atomic.Int64{}}
+	return countsReadCounter{records: &atomic.Int64{}, grants: &atomic.Int64{}, scopes: &atomic.Int64{}, txScopes: &atomic.Int64{}}
 }
 
 // TestPG_ApprovalCounts_OneGETReadsRecordsAndGrantsOnce: whatever the number of kinds and units, one GET reads
@@ -146,7 +154,8 @@ func TestPG_ApprovalCounts_OneGETReadsRecordsAndGrantsOnce(t *testing.T) {
 }
 
 // TestPG_ApprovalCounts_ScopeReadsCountGrantHolders: 40 candidates who are not security admins, 3 of them grant
-// holders, and 2 units: one GET reads the unit scope at most 2 × 2 × 3 = 12 times, and never with no grant.
+// holders, and 2 units: one GET reads the unit scope on its own transaction at most 2 × 2 × 3 = 12 times, and
+// never with no grant.
 // counterEnv is an approvals env at the minimum 2 whose store counts the unit-scope reads, with one unit under
 // the default.
 func counterEnv(t *testing.T) (*apEnv, *govEnv, countsReadCounter, types.GovernanceUnit) {
@@ -171,9 +180,9 @@ func TestPG_ApprovalCounts_ScopeReadsCountGrantHolders(t *testing.T) {
 		sub := "sub-counts-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		e.record(sub, sub+"@corp.example", []string{apGroupUsers}, nil, false)
 	}
-	c.scopes.Store(0)
+	c.txScopes.Store(0)
 	e.counts(g.alice)
-	if n := c.scopes.Load(); n != 0 {
+	if n := c.txScopes.Load(); n != 0 {
 		t.Errorf("unit scope reads with no grant = %d, want 0", n)
 	}
 	for _, sub := range []string{"sub-counts-aa", "sub-counts-ba", "sub-counts-ca"} {
@@ -181,9 +190,9 @@ func TestPG_ApprovalCounts_ScopeReadsCountGrantHolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	c.scopes.Store(0)
+	c.txScopes.Store(0)
 	e.counts(g.alice)
-	if n := c.scopes.Load(); n > 12 || n == 0 {
+	if n := c.txScopes.Load(); n > 12 || n == 0 {
 		t.Errorf("unit scope reads = %d, want 1 to 12 (two for each unit and holder)", n)
 	}
 }
@@ -212,11 +221,13 @@ func TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
 	smallest, unitName := -1, ""
+	// The units are read before the pool's transaction opens: a pool read inside it would take a second
+	// connection while the transaction holds one.
+	units, err := e.pg.ListGovernanceUnits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	poolOn(t, e.srv, func(in *poolInputs) {
-		units, err := e.pg.ListGovernanceUnits(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
 		for _, u := range units {
 			res, err := e.srv.poolForKind(in, govKindMembership, u.ID)
 			if err != nil {
@@ -409,8 +420,13 @@ func TestPG_ApprovalCounts_APersonsEditIsHeld(t *testing.T) {
 	e.requireCounts(govKindRoleMapping, 3, false)
 	const body = `{"default":{"required":2},"kinds":[]}`
 	ch := e.pending(e.call(e.alice, http.MethodPut, approvalCountsPath, body))
-	if ch.TargetKind != govKindApprovalCounts || ch.RequiredApprovals != 3 || ch.RequireSecurity {
-		t.Errorf("held %s needing %d (security %v), want governance_approval_counts needing 3", ch.TargetKind, ch.RequiredApprovals, ch.RequireSecurity)
+	// The wire carries the count only in the read model's approvals block, so the stored change is read.
+	held, err := e.pg.GetGovernanceChange(context.Background(), ch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held.TargetKind != govKindApprovalCounts || held.RequiredApprovals != 3 || held.RequireSecurity {
+		t.Errorf("held %s needing %d (security %v), want governance_approval_counts needing 3", held.TargetKind, held.RequiredApprovals, held.RequireSecurity)
 	}
 	if w := e.call(e.carol, http.MethodPost, rejectPath(ch.ID), `{"reason":"not now"}`); w.Code != http.StatusOK {
 		t.Fatalf("reject = %d %s", w.Code, w.Body)

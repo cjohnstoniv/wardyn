@@ -538,7 +538,7 @@ func refuseAssistantDeferral(p types.ModelProvider) *assistantRefusal {
 	if !inspectionDeferredFor(p) {
 		return nil
 	}
-	return assistantRefusalFor(http.StatusConflict, reasonAssistantDefersInspection, "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.") // PROPOSED: the board's words
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantDefersInspection, "This provider leaves prompt inspection to its gateway, so it can't serve the assistant.")
 }
 
 // gatewayBindingHolds is the one predicate a mint and a revive share: the live

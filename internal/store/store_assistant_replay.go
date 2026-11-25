@@ -54,7 +54,7 @@ type RunHostDecisionReader interface {
 	// excludeRunIDs are runs that never count (the assistant's own runs). They are left out in SQL before
 	// both the total and the recent-run cap, so an excluded run neither displaces an ordinary run from the
 	// sample nor stays in RunsInScope or RunsCounted, whether or not it has a host-list row. The caller
-	// builds the set (see LANE-TOOLS, simulate); nil or empty excludes nothing.
+	// builds the set; nil or empty excludes nothing.
 	RunHostDecisions(ctx context.Context, scope ReplayScope, since, until time.Time, maxRuns int, excludeRunIDs []uuid.UUID) ([]RunHostDecision, ReplayTotals, error)
 }
 

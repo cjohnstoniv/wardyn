@@ -17,7 +17,7 @@ import (
 const govKindAssistantSettings = "assistant_settings"
 
 // assistantLocalModeMsg answers a widening in local mode, where no second super admin can decide it.
-const assistantLocalModeMsg = "This change would be held for a second super admin, and local mode authenticates nobody, so no one could decide it. Configure SSO to widen the assistant settings." // PROPOSED
+const assistantLocalModeMsg = "This change would be held for a second super admin, and local mode authenticates nobody, so no one could decide it. Configure SSO to widen the assistant settings."
 
 // assistantHoldDecidable reports whether a held widening could ever be decided, answering 503 itself when
 // not. The PUT asks it before holding one and decideGovernanceChange before approving one, so a change

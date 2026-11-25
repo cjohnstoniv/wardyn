@@ -465,6 +465,7 @@ export const CHANGES = {
     governance_image_request: "Image",
     governance_unit_admin: "Unit admin",
     approval_rule: "Approval rule",
+    agent_rules: "Agent rules",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

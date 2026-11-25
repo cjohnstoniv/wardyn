@@ -943,7 +943,7 @@ With `WARDYN_SECRET_STORE=vaultkv`, every stored credential's value lives in you
                                        principal in base32hex, lowercase, unpadded
 ```
 
-- Each value is `{"value": "<base64>"}` with `custom_metadata` `wardyn-owner`, `wardyn-name`, `wardyn-kind` and `wardyn-format`, and `max_versions` `WARDYN_VAULT_KV_MAX_VERSIONS` (default 1, so a replaced value does not linger).
+- Each value is `{"value": "<base64>", "wardyn-write": "<id>"}`, the id a random name for the write that made it, with `custom_metadata` `wardyn-owner`, `wardyn-name`, `wardyn-kind` and `wardyn-format`, and `max_versions` `WARDYN_VAULT_KV_MAX_VERSIONS` (default 1, so a replaced value does not linger).
 - A read derives the path from the row's owner and name, and refuses a row that points anywhere else.
 - It then refuses a value whose metadata names another row: a pointer moved by a database writer reads nothing.
 - Removing a credential is `DELETE metadata/<path>`, every version at once.

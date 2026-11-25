@@ -46,7 +46,7 @@ func (s *Server) assistantRateRefused(w http.ResponseWriter, person string) bool
 		return false
 	}
 	w.Header().Set("Retry-After", "3")
-	writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantRateLimited, "Too many messages. Wait a few seconds.") // PROPOSED
+	writeErrorReason(w, http.StatusTooManyRequests, reasonAssistantRateLimited, "Too many messages. Wait a few seconds.")
 	return true
 }
 
@@ -54,7 +54,7 @@ func (s *Server) assistantRateRefused(w http.ResponseWriter, person string) bool
 func (s *Server) assistantStore(w http.ResponseWriter) (store.AssistantSessionStore, bool) {
 	ss, ok := s.cfg.Store.(store.AssistantSessionStore)
 	if !ok {
-		writeErrorReason(w, http.StatusNotImplemented, reasonAssistantSessionsUnavailable, "Assistant sessions are not available on this server.") // PROPOSED
+		writeErrorReason(w, http.StatusNotImplemented, reasonAssistantSessionsUnavailable, "Assistant sessions are not available on this server.")
 	}
 	return ss, ok
 }
@@ -103,7 +103,7 @@ func (s *Server) handleCreateAssistantSession(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if req.PreviewDigest != prep.digest {
-		writeErrorReason(w, http.StatusConflict, reasonAssistantPreviewStale, "What will be sent changed since the preview. Preview again.") // PROPOSED
+		writeErrorReason(w, http.StatusConflict, reasonAssistantPreviewStale, "What will be sent changed since the preview. Preview again.")
 		return
 	}
 	sess, ref := s.assistantStart(r.Context(), ss, prep, req.Purpose)
@@ -139,7 +139,7 @@ func (s *Server) assistantStart(ctx context.Context, ss store.AssistantSessionSt
 	case errors.Is(err, store.ErrNotFound):
 		return s.assistantStartFresh(ctx, ss, prep, purpose)
 	case err != nil:
-		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read your sessions.") // PROPOSED
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read your sessions.")
 	}
 	if old.Binding == prep.binding && old.RunID != nil {
 		live, _, err := s.assistantRunState(ctx, *old.RunID)
@@ -173,7 +173,7 @@ func (s *Server) assistantRunState(ctx context.Context, run uuid.UUID) (live boo
 
 // assistantRunUnreadable is the 503 of a run the store could not read: the session is left as it is.
 func assistantRunUnreadable() *assistantRefusal {
-	return assistantRefusalFor(http.StatusServiceUnavailable, "", "Could not read the assistant's run. Try again.") // PROPOSED
+	return assistantRefusalFor(http.StatusServiceUnavailable, "", "Could not read the assistant's run. Try again.")
 }
 
 func (s *Server) assistantReuseRun(ctx context.Context, ss store.AssistantSessionStore, prep *assistantPrep, purpose types.AssistantPurpose, old types.AssistantSession) (types.AssistantSession, *assistantRefusal) {
@@ -182,9 +182,9 @@ func (s *Server) assistantReuseRun(ctx context.Context, ss store.AssistantSessio
 	sess, err := ss.ReplaceAssistantSession(ctx, old.ID, row, reset)
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrAssistantSessionLive):
-		return types.AssistantSession{}, assistantRefusalFor(http.StatusConflict, reasonAssistantSessionNotFound, "Another session started first. Try again.") // PROPOSED
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusConflict, reasonAssistantSessionNotFound, "Another session started first. Try again.")
 	case err != nil:
-		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.") // PROPOSED
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.")
 	}
 	s.assistantChanged(old.ID, old.RunID)
 	s.assistantEndAudit(context.WithoutCancel(ctx), ss, old, types.AssistantEndReplaced)
@@ -196,9 +196,9 @@ func (s *Server) assistantReuseRun(ctx context.Context, ss store.AssistantSessio
 // the scan launch answers them; anything else is a server error.
 func (s *Server) assistantLaunchRefusal(err error) *assistantRefusal {
 	if assistantRunLimited(err) {
-		return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You're at your run limit. End a run to start the assistant.") // PROPOSED: the settings card's words
+		return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You're at your run limit. End a run to start the assistant.")
 	}
-	ref := assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the assistant's run.") // PROPOSED
+	ref := assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the assistant's run.")
 	ref.custom = func(w http.ResponseWriter, r *http.Request) bool { return s.writeScanLaunchRefusal(w, r, err) }
 	return ref
 }
@@ -214,9 +214,9 @@ func (s *Server) assistantStartFresh(ctx context.Context, ss store.AssistantSess
 	if err != nil {
 		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, "the assistant session could not start")
 		if errors.Is(err, store.ErrAssistantSessionLive) {
-			return types.AssistantSession{}, assistantRefusalFor(http.StatusConflict, reasonAssistantSessionNotFound, "Another session started first. Try again.") // PROPOSED
+			return types.AssistantSession{}, assistantRefusalFor(http.StatusConflict, reasonAssistantSessionNotFound, "Another session started first. Try again.")
 		}
-		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.") // PROPOSED
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.")
 	}
 	if body, merr := json.Marshal(assistantRecordsEvent(prep, "", sess.ID)); merr == nil {
 		_, err = ss.AppendAssistantEvent(ctx, sess.ID, types.AssistantEventState, body)
@@ -224,7 +224,7 @@ func (s *Server) assistantStartFresh(ctx context.Context, ss store.AssistantSess
 	if err != nil {
 		s.endAssistantSession(ctx, ss, sess, types.AssistantEndProviderError, false)
 		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, "the assistant session could not start")
-		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.") // PROPOSED
+		return types.AssistantSession{}, assistantRefusalFor(http.StatusInternalServerError, "", "Could not start the session.")
 	}
 	s.assistantDispatch(ctx, l)
 	return sess, nil
@@ -241,13 +241,13 @@ func (s *Server) assistantOwned(w http.ResponseWriter, r *http.Request) (store.A
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	person := oidcHumanFromContext(r.Context())
 	if err != nil || person == "" {
-		writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.") // PROPOSED
+		writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.")
 		return nil, types.AssistantSession{}, false
 	}
 	sess, err := ss.GetAssistantSession(r.Context(), id, person)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.") // PROPOSED
+			writeErrorReason(w, http.StatusNotFound, reasonAssistantSessionNotFound, "Session not found.")
 		} else {
 			writeServerError(w, r, "read assistant session", err)
 		}
@@ -320,23 +320,23 @@ func (s *Server) assistantAvailableNow(ctx context.Context, sess types.Assistant
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return fail(http.StatusInternalServerError, "", "Could not read the settings.") // PROPOSED
+		return fail(http.StatusInternalServerError, "", "Could not read the settings.")
 	}
 	lim, err := s.assistantLimitsFor(ctx, sc, sess.Principal)
 	if err != nil {
-		return fail(http.StatusInternalServerError, "", "Could not read your limits.") // PROPOSED
+		return fail(http.StatusInternalServerError, "", "Could not read your limits.")
 	}
 	providers := siteProviders(sc)
 	switch reason := assistantBindingHolds(sc.Assistant, sess.Purpose, sess.Binding, providers, inspectionDeferredFor, lim.deny, lim.allowed, lim.connected); reason {
 	case "":
 	case reasonAssistantOff:
-		return fail(http.StatusConflict, reasonAssistantOff, "The assistant is off for your organisation.") // PROPOSED: the board's words
+		return fail(http.StatusConflict, reasonAssistantOff, "The assistant is off for your organisation.")
 	default:
-		return fail(http.StatusConflict, reasonAssistantSessionProviderChanged, "The assistant's provider or model changed. Start again to see what will be sent.") // PROPOSED text
+		return fail(http.StatusConflict, reasonAssistantSessionProviderChanged, "The assistant's provider or model changed. Start again to see what will be sent.")
 	}
 	kind, err := s.assistantSessionGovKind(ctx, sess)
 	if err != nil {
-		return fail(http.StatusInternalServerError, "", "Could not read the target.") // PROPOSED
+		return fail(http.StatusInternalServerError, "", "Could not read the target.")
 	}
 	if ref := assistantNeverSent(sc.Assistant, kind); ref != nil {
 		return ref
@@ -374,7 +374,7 @@ func assistantLiveOr409(w http.ResponseWriter, sess types.AssistantSession) bool
 }
 
 func writeAssistantEnded(w http.ResponseWriter) {
-	writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "This session has ended.") // PROPOSED
+	writeErrorReason(w, http.StatusConflict, reasonAssistantSessionNotFound, "This session has ended.")
 }
 
 // writeAssistantAppendError answers an append that failed: a session that ended since it was read is 409,
@@ -422,7 +422,7 @@ func (s *Server) handleAssistantMessage(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if strings.TrimSpace(req.Text) == "" || utf8.RuneCountInString(req.Text) > assistantMessageMax {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "A message is 1 to 8000 characters.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "A message is 1 to 8000 characters.")
 		return
 	}
 	if s.assistantRateRefused(w, sess.Principal) {
@@ -477,7 +477,7 @@ func (s *Server) handleAssistantEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !assistantEditsValid(req) {
-		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "An edit names at most 50 fields of 8000 characters each, with a draft of at most 256 KiB.") // PROPOSED
+		writeErrorReason(w, http.StatusBadRequest, reasonInvalidRequestBody, "An edit names at most 50 fields of 8000 characters each, with a draft of at most 256 KiB.")
 		return
 	}
 	if s.assistantRateRefused(w, sess.Principal) {

@@ -70,7 +70,11 @@ func (d *Driver) StartMacPrepNet(ctx context.Context, entryID string) (*os.File,
 		undo()
 		return nil, nil, err
 	}
-	netID, err := d.createRunNetwork(ctx, id, labels)
+	version, err := d.engineVersion(ctx)
+	if err != nil {
+		return fail(err)
+	}
+	netID, err := d.createRunNetwork(ctx, id, labels, version)
 	if err != nil {
 		return nil, nil, err
 	}

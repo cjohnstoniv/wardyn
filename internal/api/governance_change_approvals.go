@@ -127,7 +127,10 @@ type approvalCaller struct {
 // approvalRun is one decision's account of an approval under the rules: who approved, and what the
 // transaction recorded, for the audit row and the answer after it commits.
 type approvalRun struct {
-	caller         approvalCaller
+	caller approvalCaller
+	// revSeq is the revocation sequence the approval row records, read before the decision's transaction
+	// opens so the read never asks the pool for a second connection inside it.
+	revSeq         int64
 	have, required int
 	tier           string
 	// drops are the earlier approvals this decision found no longer counting, for the audit row.
@@ -433,7 +436,7 @@ func (s *Server) recordApproval(ctx context.Context, r *http.Request, q store.Qu
 	if err := s.replayApply(ctx, r, q, kind, ch); err != nil {
 		return err
 	}
-	if err := s.writeApproval(ctx, r, q, ch, ar, drops); err != nil {
+	if err := s.writeApproval(ctx, q, ch, ar, drops); err != nil {
 		return err
 	}
 	return store.ErrGovernanceApprovalRecorded
@@ -463,7 +466,7 @@ func (s *Server) finishApproval(ctx context.Context, r *http.Request, q store.Qu
 		return err
 	}
 	*applied = a
-	if err := s.writeApproval(ctx, r, q, ch, ar, drops); err != nil {
+	if err := s.writeApproval(ctx, q, ch, ar, drops); err != nil {
 		return err
 	}
 	counted := make([]string, 0, len(kept)+1)
@@ -495,18 +498,12 @@ func (s *Server) proposerInactive(ctx context.Context, q store.Querier, ch types
 
 // writeApproval writes what an approval changes: the drop marks of the earlier approvals that stopped
 // counting, then the approver's own row (a new one, or their dropped one replaced). The revocation sequence is
-// read before any write, and a failure to read it records nothing. A token caller's row names the token
-// re-read on q.
-func (s *Server) writeApproval(ctx context.Context, r *http.Request, q store.Querier, ch types.GovernanceChange, ar *approvalRun, drops []approvalDrop) error {
+// the one approvalRunFor read before the transaction opened. A token caller's row names the token re-read on q.
+func (s *Server) writeApproval(ctx context.Context, q store.Querier, ch types.GovernanceChange, ar *approvalRun, drops []approvalDrop) error {
 	c := ar.caller
-	approvedAt := s.cfg.Now().UTC()
-	issue, err := s.mintIssue(r.Context(), c.principal, approvedAt)
-	if err != nil {
-		return err
-	}
 	row := store.GovernanceChangeApproval{
 		ChangeID: ch.ID, Approver: c.principal, ApproverEmail: c.email, Tier: ar.tier, UnitScope: c.scope,
-		Reason: c.reason, RevSeq: issue.Seq,
+		Reason: c.reason, RevSeq: ar.revSeq,
 	}
 	tok, err := s.recheckLiveToken(ctx, q)
 	if err != nil {
@@ -558,8 +555,9 @@ func droppedData(drops []approvalDrop) []map[string]string {
 
 // approvalRunFor starts a decision under the approval rules: nil (today's path) for the admin token, a reject
 // and a change the rules do not cover. An approve reads its optional reason and the unit scope it decides in; a
-// reject by someone other than the proposer must give a reason. It writes the refusal and reports false when
-// the body is refused.
+// reject by someone other than the proposer must give a reason. An approve also reads the revocation sequence
+// its row records, here before the transaction: read earlier, it can only count more cuts as after the approval.
+// It writes the refusal or the error and reports false when the body is refused or the read fails.
 func (s *Server) approvalRunFor(w http.ResponseWriter, r *http.Request, head types.GovernanceChange, approve, bypass bool,
 	principal, email, rejectReason string) (*approvalRun, bool) {
 	if bypass || !s.multi(head) {
@@ -581,7 +579,12 @@ func (s *Server) approvalRunFor(w http.ResponseWriter, r *http.Request, head typ
 	if units, strict, scoped := unitChangeScope(head); scoped {
 		c.scope = s.auditUnitScope(r.Context(), units[0], strict)
 	}
-	return &approvalRun{caller: c}, true
+	issue, err := s.mintIssue(r.Context(), principal, s.cfg.Now().UTC())
+	if err != nil {
+		writeServerError(w, r, "read the revocation sequence", err)
+		return nil, false
+	}
+	return &approvalRun{caller: c, revSeq: issue.Seq}, true
 }
 
 // answerRecordedApproval answers an approval that was recorded and left the change pending: the
@@ -676,7 +679,7 @@ func (s *Server) writeChangeView(w http.ResponseWriter, r *http.Request, ch type
 
 // approvalsRead builds the approvals block: every approval re-checked read-only (so a drop shows on page
 // load; nothing is persisted), then who else can approve, then what the caller can do. It runs on one
-// rolled-back transaction, with the unit scope read through the request's shared memo.
+// rolled-back transaction, and every predicate it asks reads the unit scope on that transaction.
 func (s *Server) approvalsRead(r *http.Request, ch types.GovernanceChange) (*approvalsRead, error) {
 	var blk *approvalsRead
 	err := s.cfg.Store.DryRunGovernance(r.Context(), func(q store.Querier) error {
@@ -826,7 +829,7 @@ func (s *Server) viewerOf(r *http.Request, q store.Querier, in *poolInputs, kind
 		return &approvalViewer{State: viewerNotEligible}, nil // the same human as an approver, by an email nothing vouches for
 	}
 	last := blk.Have+1 >= blk.Required
-	if !kind.approver.allowed(s, r) {
+	if !kind.approver.allowed(s, r.WithContext(withUnitScopeTx(ctx, q))) {
 		return &approvalViewer{State: viewerNotEligible}, nil
 	}
 	tier, err := s.viewerTier(r, q, &in.recordInputs, kind, principal)
@@ -843,7 +846,7 @@ func (s *Server) viewerOf(r *http.Request, q store.Querier, in *poolInputs, kind
 }
 
 // viewerTier is the tier the caller's approval would be given at, "" when their latest sign-in record
-// would refuse them. It is callerTier read-only, through the request's shared memo.
+// would refuse them. It is callerTier read-only, on the read's transaction.
 func (s *Server) viewerTier(r *http.Request, q store.Querier, in *recordInputs, kind govKind, principal string) (string, error) {
 	tier, err := s.callerTier(r.Context(), r, q, in, kind, principal)
 	var refusal *govRefusal

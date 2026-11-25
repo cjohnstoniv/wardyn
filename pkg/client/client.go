@@ -100,6 +100,9 @@
 //
 //   - /api/v1/user-types     — the org's user types (0.8)
 //   - /api/v1/key-domains    — which declared key domain wraps a person's next principal key (0.8.6). Security tier
+//   - /api/v1/agent-rules    — the organisation's rules for each agent harness: list, replace and delete.
+//     Security tier, held for a second security admin when the second-person switch is on, and authored
+//     in the console's Policies screen
 //   - /api/v1/approval-notify — each approval notification channel's delivery health (0.8.6).
 //     Security tier, and read by the console's Settings card rather than by tooling
 //   - /api/v1/permissions    — capability grants and per-kind enforcement (0.7)
@@ -149,6 +152,7 @@
 //     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
+//   - /api/v1/walls          — the Walls view's topology and live stream, and /api/v1/runs/{id}/walls: the 3D view's reads, a console surface rather than tooling
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller

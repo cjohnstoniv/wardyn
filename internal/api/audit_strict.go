@@ -26,10 +26,11 @@ import (
 
 // auditStrictRoutes is every covered change, keyed as chi.Walk reports a route: each POST, PUT, PATCH
 // and DELETE under /policies, /governance, /approvals, /permissions, /drives/grants,
-// /wall-presets, /templates, /me/walls, /assistant/settings, /assistant/sessions and /assistant/preview, less
-// auditStrictExcluded. Wall presets, templates, a person's own walls and the assistant settings carry policy, so they
-// are covered; so is every write to an assistant session, which acts as its person. TestAuditStrictCensus fails on
-// a change under those prefixes that is in neither table, and on a covered route auditStrictIntent does not wrap.
+// /wall-presets, /templates, /me/walls, /agent-rules, /assistant/settings, /assistant/sessions and /assistant/preview,
+// less auditStrictExcluded. Wall presets, templates, a person's own walls, an organisation's agent rules and the
+// assistant settings carry policy, so they are covered; so is every write to an assistant session, which acts as its
+// person. TestAuditStrictCensus fails on a change under those prefixes that is in neither table, and on a covered
+// route auditStrictIntent does not wrap.
 var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/policies":        true,
 	"PUT /api/v1/policies/{id}":    true,
@@ -97,6 +98,9 @@ var auditStrictRoutes = map[string]bool{
 	"POST /api/v1/assistant/sessions/{id}/edits":               true,
 	"POST /api/v1/assistant/sessions/{id}/build-files/confirm": true,
 	"DELETE /api/v1/assistant/sessions/{id}":                   true,
+
+	"PUT /api/v1/agent-rules/{harness}":    true,
+	"DELETE /api/v1/agent-rules/{harness}": true,
 }
 
 // auditStrictExcluded is the POSTs under those prefixes that change nothing: each reads, works an answer

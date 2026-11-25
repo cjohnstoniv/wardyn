@@ -213,12 +213,16 @@ var queryIDMatrix = map[string]queryIDRoute{
 // non-id stays a non-id wherever it is read. An id-shaped name read by a new
 // function is NOT covered here — it needs its own queryIDMatrix row.
 var queryParamNotAnID = map[string]string{
+	"port":                      "GET /runs/{id}/attach/forward: a port number from 1 to 65535 on the path run's own sandbox loopback, already authorised by the ticket and the entry rule; it names no entity",
+	"check":                     "GET /runs/{id}/attach/forward: 1 asks for every check and a 204 without opening anything; it names no entity",
 	"limit":                     "page window (parseListPage)",
+	"version":                   "DELETE /agent-rules/{harness}: the version of the rules the caller read, which the delete must still match; a number, no entity",
 	"run_in":                    "GET /policies/default: one of the caller's own units to read their ceiling in, by id or exact name; a unit they are not in, another person's or none, is the same 403 unit_not_a_context (TestDefaultPolicyContexts), so it selects no other principal's entity and tells no one which units exist",
 	"key":                       "GET /runs/{id}/recording-chain: a recording key of the path's run, already authorised by the recording read's rule; the range query matches it only on that run's own desktop.recording.write row (run_id = the path id), so another run's key is the same 404 as an unknown one (TestRecordingChain_ReadersOnly)",
 	"from":                      "GET /runs/{id}/recording-chain: an RFC 3339 time where the recording started; it bounds the range to the path run's own rows and names no entity",
 	"agent":                     "GET /runs/{id}/output: a harness id whose lines to keep from the run's own output; the run is the path's, already authorised, and the id names no entity",
 	"purpose":                   "POST /runs/{id}/attach/ticket: ui marks a UI-app ticket, which skips the terminal session cap; the run is the path's, already authorised, and the word names no entity",
+	"ports":                     "POST /runs/{id}/attach/ticket: the port numbers an ssh-forward or attach-forward ticket may reach, on the path run's own sandbox; it names no entity",
 	"runner_pool_id":            "GET /me/drives: an organisation runner pool the caller's own drive catalogue is checked against; a pool the caller may not use answers exactly as one that does not exist (pool_checked false), and no principal's entity is selected",
 	"run_type":                  "GET /runner-pools: background or interactive, the kind of run the caller's own pool list is judged for; it names no entity",
 	"filter":                    "GET /scim/v2/Users and GET /scim/v2/Groups (SCIM bearer only, never a member): the identity provider's own userName, externalId or emails.value eq filter (displayName or externalId for Groups); the routes admit no human credential at all (classSCIM)",
@@ -255,6 +259,7 @@ var queryParamNotAnID = map[string]string{
 	"partition":                 "GET /audit/export (security tier): the name of one audit partition. Not a principal's entity: a session below the security tier gets the empty export before the value is read, so it names nothing a member can reach",
 	"form":                      "GET /audit/export?partition=: readable|raw projection of that partition (the same security-tier gate)",
 	"force":                     "operator confirmation flag",
+	"restricted":                "POST /policies and PUT /model-providers (operator routes, createRestricted): only \"true\" is accepted, which restricts the policy or each provider the write adds before it is stored; a flag that only closes what the write creates, it names no entity",
 	"confirm":                   "operator confirmation flag",
 	"acknowledge_access_change": "operator confirmation flag",
 	"include":                   "response projection switch",
@@ -294,12 +299,16 @@ var queryParamNotAnID = map[string]string{
 	"include_killed": "run list visibility flag (killedVisibleFor's 24h default); narrows/widens within an already-scoped listing",
 	"no_end":         "run list filter for live runs with no end; narrows an already-scoped listing, never widens it",
 	"service":        "run list filter for service runs; narrows an already-scoped listing, never widens it",
+	"counts":         "run list switch (skip) that leaves the two hidden-count headers out; names no entity and changes no row of an already-scoped listing",
 	"workspace":      "run list exact-match filter (COALESCE(NULLIF(repo,''), workspace_path)); narrows an already-scoped listing, never widens it",
 	"subject_type":   "Explain grid (security tier route): the grant subject kind asked about",
 	"subject":        "Explain grid (security tier route): the grant subject asked about, over the table that tier already reads whole",
 	"kinds":          "Explain grid (security tier route): capability kind names, a closed set",
 	"runner":         "GET /machines/kept (super admin only, operatorOnly): a runner id narrowing the deployment-wide kept-machine list that tier already reads whole; a runner is shared infrastructure, not a principal's entity, and a member gets the router's 403 before it is read",
 	"v":              "GET /branding/logo (anonymous): the logo's content digest, which only decides whether the answer is cached for good; it names no entity",
+	// The Walls view's routes.
+	"window": "GET /walls/topology: how far back the topology reads, a duration from 1m to 15m; it names no entity",
+	"edges":  "GET /walls/topology: summary or full, how much edge detail the topology serves; it names no entity",
 }
 
 // queryParamDynamicReads names the parameters a function reads through a

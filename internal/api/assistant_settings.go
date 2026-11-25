@@ -17,7 +17,7 @@ import (
 // door to it; PUT /site-config carries it forward. A PUT that only narrows applies at once; one that
 // widens anything is held for a super admin to approve (assistant_settings_hold.go).
 
-const assistantIfMatchMsg = "If-Match is required. GET /assistant/settings, then send its ETag back." // PROPOSED
+const assistantIfMatchMsg = "If-Match is required. GET /assistant/settings, then send its ETag back."
 
 // assistantState is the stored block as GET answers it, a PUT replaces it and an approval compares it: a
 // missing block reads as the zero block, normalised so equal blocks hash equal.
@@ -159,7 +159,7 @@ func (s *Server) writeAssistantNarrowing(w http.ResponseWriter, r *http.Request,
 	return before, false
 }
 
-const assistantStaleMsg = "If-Match does not match the current assistant settings. GET /assistant/settings again and retry." // PROPOSED
+const assistantStaleMsg = "If-Match does not match the current assistant settings. GET /assistant/settings again and retry."
 
 // carryAssistant keeps the stored assistant block on a generic site-config write. The block has its own
 // audited door, so a document naming a different one is refused rather than quietly ignored; an echo of

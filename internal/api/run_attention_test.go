@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -275,6 +277,120 @@ func TestMeAttentionCounts(t *testing.T) {
 	}
 	if got.PendingApprovals != 2 {
 		t.Fatalf("pending_approvals = %d, want 2 (both of the member's OWN run's pending rows, scoped like GET /approvals)", got.PendingApprovals)
+	}
+}
+
+// recordingRunsStore is fakeRunsFilteredStore that also keeps every RunFilter it was asked to list, and counts the
+// hidden-count reads.
+type recordingRunsStore struct {
+	*fakeRunsFilteredStore
+	rmu     sync.Mutex
+	filters []store.RunFilter
+	counts  int
+}
+
+func (s *recordingRunsStore) ListRunsFiltered(ctx context.Context, f store.RunFilter, p store.Page) ([]types.AgentRun, error) {
+	s.rmu.Lock()
+	s.filters = append(s.filters, f)
+	s.rmu.Unlock()
+	return s.fakeRunsFilteredStore.ListRunsFiltered(ctx, f, p)
+}
+
+func (s *recordingRunsStore) CountHiddenRuns(ctx context.Context, f store.RunFilter) (int, int, error) {
+	s.rmu.Lock()
+	s.counts++
+	s.rmu.Unlock()
+	return s.fakeRunsFilteredStore.CountHiddenRuns(ctx, f)
+}
+
+func (s *recordingRunsStore) seen() []store.RunFilter {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	return append([]store.RunFilter(nil), s.filters...)
+}
+
+var _ store.RunsFilteredPager = (*recordingRunsStore)(nil)
+
+// recordingFixture is meAttentionFixture over a recordingRunsStore.
+func recordingFixture(t *testing.T) (*Server, *authzStore, *authzApprovals, *recordingRunsStore) {
+	t.Helper()
+	ast := newAuthzStore()
+	rec := &recordingRunsStore{fakeRunsFilteredStore: &fakeRunsFilteredStore{ast}}
+	aap := newAuthzApprovals(ast)
+	h := newHarness(t)
+	cfg := baseTestConfig(h, rec)
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Approvals = aap
+	return New(cfg), ast, aap, rec
+}
+
+// attentionCandidatesAsked is whether some live read the store saw carried the attention narrowing, with the
+// "active" status the attention reads use.
+func attentionCandidatesAsked(rec *recordingRunsStore) bool {
+	for _, f := range rec.seen() {
+		if f.AttentionCandidates && reflect.DeepEqual(f.Statuses, []string{"active"}) {
+			return true
+		}
+	}
+	return false
+}
+
+// The badge's live read asks the store for attention candidates only, and the count is the one the case has
+// always had: the narrowing drops rows whose attention is nil, never one that counts.
+func TestMeAttentionCountsTheSameWithCandidateNarrowing(t *testing.T) {
+	srv, ast, aap, rec := recordingFixture(t)
+	memberSess := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleUser)
+
+	ownRun := uuid.New()
+	foreignRun := uuid.New()
+	ast.mu.Lock()
+	ast.runs[ownRun] = types.AgentRun{ID: ownRun, CreatedBy: "sub-member", State: types.RunRunning}
+	ast.runs[foreignRun] = types.AgentRun{ID: foreignRun, CreatedBy: "sub-someone-else", State: types.RunRunning}
+	ast.mu.Unlock()
+	aap.mu.Lock()
+	aap.byID[uuid.New()] = pendingRow(ownRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
+	aap.byID[uuid.New()] = pendingRow(ownRun, types.ApprovalToolCall, `{}`, nil)
+	aap.byID[uuid.New()] = pendingRow(foreignRun, types.ApprovalEgressDomain, `{"host":"h","mode":"wait_for_review"}`, nil)
+	aap.mu.Unlock()
+
+	got := meAttentionOf(t, doSSO(t, srv, http.MethodGet, "/api/v1/me/attention?view=user", memberSess, ""))
+	if got.NeedsYou != 1 || got.PendingApprovals != 2 {
+		t.Fatalf("needs_you = %d, pending_approvals = %d, want 1 and 2", got.NeedsYou, got.PendingApprovals)
+	}
+	if !attentionCandidatesAsked(rec) {
+		t.Errorf("the attention read did not narrow to candidates; the store saw %+v", rec.seen())
+	}
+}
+
+// status=needs reads the live set with the same narrowing, and its body is the one it returns without it.
+func TestListRunsNeedsStatusSetsAttentionCandidates(t *testing.T) {
+	const member = "sub-needs-narrow"
+	run := func(i byte) uuid.UUID { return uuid.UUID{15: i} }
+	seed := func(ast *authzStore, aap *authzApprovals) {
+		ast.mu.Lock()
+		ast.runs[run(1)] = types.AgentRun{ID: run(1), CreatedBy: member, State: types.RunRunning}
+		ast.runs[run(2)] = types.AgentRun{ID: run(2), CreatedBy: member, State: types.RunRunning}
+		ast.runs[run(3)] = types.AgentRun{ID: run(3), CreatedBy: member, State: types.RunRunning}
+		ast.mu.Unlock()
+		aap.mu.Lock()
+		aap.byID[uuid.UUID{14: 1}] = pendingRow(run(1), types.ApprovalEgressDomain, `{"host":"h1","mode":"wait_for_review"}`, nil)
+		aap.byID[uuid.UUID{14: 2}] = pendingRow(run(2), types.ApprovalToolCall, `{}`, nil)
+		aap.mu.Unlock()
+	}
+	memberSess := ssoSession(t, member, "narrow@corp.example", oidc.RoleUser)
+
+	plainSrv, plainAst, plainAap := meAttentionFixture(t)
+	seed(plainAst, plainAap)
+	want := idsOf(decodeRuns(t, doSSO(t, plainSrv, http.MethodGet, "/api/v1/runs?view=user&status=needs", memberSess, "")))
+
+	srv, ast, aap, rec := recordingFixture(t)
+	seed(ast, aap)
+	got := idsOf(decodeRuns(t, doSSO(t, srv, http.MethodGet, "/api/v1/runs?view=user&status=needs", memberSess, "")))
+	if !reflect.DeepEqual(got, want) || len(got) != 1 || !got[run(1)] {
+		t.Errorf("status=needs returned %v with the recording store and %v without, want only %v", got, want, run(1))
+	}
+	if !attentionCandidatesAsked(rec) {
+		t.Errorf("status=needs did not narrow to candidates; the store saw %+v", rec.seen())
 	}
 }
 

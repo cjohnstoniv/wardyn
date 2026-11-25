@@ -75,6 +75,9 @@ const SEGMENT_EMPTY: Record<RunSegment, string> = {
 };
 
 const POLL_MS = 3000;
+// The hidden-run counts are a count over the caller's whole history, so the board reads them on load and at most
+// once a minute, not on every poll; a poll in between keeps the last counts it read.
+const COUNTS_EVERY_MS = 60_000;
 const SETUP_POLL_MS = 5000;
 
 export function RunsScreen() {
@@ -149,26 +152,36 @@ export function RunsScreen() {
     [view, adminView, filters.scope, filters.status, filters.endedWithin, filters.includeKilled, filters.workspace, filters.q],
   );
   const servicesPicked = filters.segment === "services";
-  const fetchRuns = React.useCallback(() => {
-    const id = ++requestIdRef.current;
-    // The segment counts and the "your runs" total read the plain page; the Services segment's rows, hidden
-    // counts and truncation read the service-only one.
-    return Promise.all([
-      api.listRunsFiltered(serverFilter),
-      servicesPicked ? api.listRunsFiltered({ ...serverFilter, service: true }) : Promise.resolve(null),
-    ])
-      .then(
+  const countsAtRef = React.useRef(0);
+  const plainHiddenRef = React.useRef(0);
+  const fetchRuns = React.useCallback(
+    (withCounts: boolean) => {
+      const id = ++requestIdRef.current;
+      const skipCounts = !withCounts && Date.now() - countsAtRef.current < COUNTS_EVERY_MS;
+      // The segment counts and the "your runs" total read the plain page; the Services segment's rows, hidden
+      // counts and truncation read the service-only one.
+      return Promise.all([
+        api.listRunsFiltered({ ...serverFilter, skipCounts }),
+        servicesPicked ? api.listRunsFiltered({ ...serverFilter, service: true, skipCounts }) : Promise.resolve(null),
+      ]).then(
         ([res, svc]) => {
           if (requestIdRef.current !== id) return; // superseded — ignore
+          const shown = svc ?? res;
+          if (res.countsRead) {
+            countsAtRef.current = Date.now();
+            plainHiddenRef.current = res.hiddenOlder + res.hiddenKilled;
+          }
           setRunsList(res.runs);
           setServiceRuns(svc ? svc.runs : null);
-          setHiddenOlder((svc ?? res).hiddenOlder);
-          setHiddenKilled((svc ?? res).hiddenKilled);
-          setTruncated((svc ?? res).truncated);
+          if (shown.countsRead) {
+            setHiddenOlder(shown.hiddenOlder);
+            setHiddenKilled(shown.hiddenKilled);
+          }
+          setTruncated(shown.truncated);
           setPlainTruncated(res.truncated);
-          setPlainHidden(res.hiddenOlder + res.hiddenKilled);
+          setPlainHidden(plainHiddenRef.current);
           if (!adminView && filters.q === "" && filters.status === "all" && filters.workspace === "all") {
-            setOwned({ n: res.runs.length + res.hiddenOlder + res.hiddenKilled, more: res.truncated });
+            setOwned({ n: res.runs.length + plainHiddenRef.current, more: res.truncated });
           }
           setStatus("ready");
           setLoadedOnce(true);
@@ -178,12 +191,14 @@ export function RunsScreen() {
           throw err; // let load()'s own catch below turn this into "error"
         },
       );
-  }, [serverFilter, servicesPicked, adminView, filters.q, filters.status, filters.workspace]);
+    },
+    [serverFilter, servicesPicked, adminView, filters.q, filters.status, filters.workspace],
+  );
 
   const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
   const load = React.useCallback(() => {
     setStatus("loading");
-    fetchRuns().catch((e) => {
+    fetchRuns(true).catch((e) => {
       setLoadMessage(failureSentence(e));
       setStatus("error");
     });
@@ -205,7 +220,7 @@ export function RunsScreen() {
     void navigate("/runs/new", { replace: true });
   }, [location.state, navigate]);
 
-  const refresh = React.useCallback(() => fetchRuns().catch(() => {}), [fetchRuns]);
+  const refresh = React.useCallback(() => fetchRuns(false).catch(() => {}), [fetchRuns]);
   // The page polls the filtered window instead of a flat 1000-row read
   // (design.md §4) — no manual-refresh control or "Live" chip; polling alone
   // carries the "alive" fact now.

@@ -95,7 +95,12 @@ if wait_state crash '"restarts":2' 8; then
 else
     bad "exit 1 did not restart twice: $(state crash)"
 fi
-log="$(cat "$tmp/crash.log")"
+# The supervisor writes the state file just before it logs the restart, so wait for the line.
+for ((i = 0; i < 20; i++)); do
+    log="$(cat "$tmp/crash.log")"
+    [[ "$log" == *"restart 2 in 2s"* ]] && break
+    sleep 0.1
+done
 if [[ "$log" == *"restart 1 in 1s"* && "$log" == *"restart 2 in 2s"* ]]; then ok "backoff 1 s then 2 s"
 else bad "backoff log: $log"; fi
 stop "$sup"

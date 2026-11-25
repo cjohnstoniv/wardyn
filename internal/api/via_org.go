@@ -91,6 +91,7 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		s.denyViaOrg(w, r, claims, placement.ReasonRelayRunnerMismatch, "the run's via_org egress belongs to another runner")
 		return
 	}
+	s.holdViaOrgGrant(run, grant)
 	token, _ := bearerToken(r)
 	run.token.Store(&token)
 	gen, st, refused, ok := s.admitViaOrg(w, r, run, claims, grant.ID)
@@ -180,9 +181,17 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 // refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
 // after the grant id is the sandbox's, so the route never relies on a gate that reads the path. A
 // terminal or kept run is refused as refuseTerminalRun refuses it, with no grace. A paused run is refused for every
-// via_org grant (409 run_paused) until it is resumed.
+// via_org grant (409 run_paused) until it is resumed. It reads the run only when internalAuth's gate carried none.
 func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
-	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	// internalAuth's liveness gate read this request's run a moment ago and carried it (contextWithLiveRun): its
+	// row is judged here, not a second read. On this route the gate never lets a terminal run through (pathHasAny
+	// cuts the path at the door), so this switch refuses what it refused when it read the run itself. A request
+	// that reached the handler without the gate reads the run.
+	run, live := liveRunFromContext(r.Context())
+	var err error
+	if !live || run.ID != claims.RunID {
+		run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
@@ -206,19 +215,22 @@ func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, cl
 }
 
 // viaOrgGrant reads the run's grant and its destination: the grant must be this run's and recorded
-// via_org, else delivery_not_via_org.
+// via_org, else delivery_not_via_org. A grant this run's via_org state already checked is not read again (viaOrgHeldGrant).
 func (s *Server) viaOrgGrant(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) (types.CredentialGrant, viaOrgDestination, bool) {
-	grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), claims.RunID)
-	if err != nil {
-		writeServerError(w, r, "list grants for via_org", err)
-		return types.CredentialGrant{}, viaOrgDestination{}, false
+	g, held := s.viaOrgHeldGrant(claims.RunID, grantID)
+	if !held {
+		grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), claims.RunID)
+		if err != nil {
+			writeServerError(w, r, "list grants for via_org", err)
+			return types.CredentialGrant{}, viaOrgDestination{}, false
+		}
+		i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
+		if i < 0 || grants[i].RunID != claims.RunID || grants[i].Delivery != types.GrantDeliveryViaOrg {
+			s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "not a via_org grant of this run")
+			return types.CredentialGrant{}, viaOrgDestination{}, false
+		}
+		g = grants[i]
 	}
-	i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
-	if i < 0 || grants[i].RunID != claims.RunID || grants[i].Delivery != types.GrantDeliveryViaOrg {
-		s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "not a via_org grant of this run")
-		return types.CredentialGrant{}, viaOrgDestination{}, false
-	}
-	g := grants[i]
 	switch g.Spec.Kind {
 	case types.GrantAPIKey:
 		rule, err := injectionRuleFromScope(g.Spec.Scope)

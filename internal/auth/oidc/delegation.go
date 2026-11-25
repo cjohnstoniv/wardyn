@@ -52,10 +52,11 @@ func (a *Authenticator) ClientID() string { return a.cfg.ClientID }
 // and exp as Expiry. denied is non-empty on any refusal, with a zero Session. The caller records
 // an attach to a person set up by object id with RecordAttach once it has admitted the exchange.
 func (a *Authenticator) VerifySubjectToken(r *http.Request, raw, portalClientID string, reserved func(string) bool) (Session, string) {
-	if a.subjectVerifier == nil {
+	st, _ := a.state() // a pending authenticator has no verifier: nil, so refused
+	if st.subjectVerifier == nil {
 		return Session{}, SubjectTokenInvalid
 	}
-	tok, err := a.subjectVerifier.Verify(r.Context(), raw)
+	tok, err := st.subjectVerifier.Verify(r.Context(), raw)
 	if err != nil {
 		return Session{}, SubjectTokenInvalid
 	}

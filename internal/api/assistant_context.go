@@ -40,7 +40,7 @@ func (f *assistantRefusal) write(w http.ResponseWriter, r *http.Request) {
 // assistantTargetGone is the one refusal for a target the person cannot read or that does not exist, so the
 // answer never says which.
 func assistantTargetGone() *assistantRefusal {
-	return assistantRefusalFor(http.StatusNotFound, reasonAssistantTargetNotFound, "That target was not found.") // PROPOSED
+	return assistantRefusalFor(http.StatusNotFound, reasonAssistantTargetNotFound, "That target was not found.")
 }
 
 func assistantRefusalFor(status int, reason, msg string) *assistantRefusal {
@@ -52,7 +52,7 @@ func assistantNeverSent(set *types.AssistantSettings, kind string) *assistantRef
 	if kind == "" || set == nil || !slices.Contains(set.NeverSentKinds, kind) {
 		return nil
 	}
-	return assistantRefusalFor(http.StatusConflict, reasonAssistantKindNeverSent, "Your organisation keeps this kind of record away from the assistant.") // PROPOSED: the board's words
+	return assistantRefusalFor(http.StatusConflict, reasonAssistantKindNeverSent, "Your organisation keeps this kind of record away from the assistant.")
 }
 
 // assistantStaticKind is the governance kind a target names by its own kind, before anything is read: only a
@@ -106,13 +106,13 @@ func (s *Server) assistantResolveTarget(tr *http.Request, t types.AssistantTarge
 	ctx := tr.Context()
 	if t.ID == "" {
 		if t.Kind == types.AssistantTargetChange {
-			return out, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "A review needs a change.") // PROPOSED
+			return out, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "A review needs a change.")
 		}
 		return out, nil
 	}
 	id, err := uuid.Parse(t.ID)
 	if err != nil {
-		return out, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "The target id is not valid.") // PROPOSED
+		return out, assistantRefusalFor(http.StatusBadRequest, reasonInvalidRequestBody, "The target id is not valid.")
 	}
 	switch t.Kind {
 	case types.AssistantTargetUnit:
@@ -161,7 +161,7 @@ func (s *Server) assistantReadFailed(err error) *assistantRefusal {
 	if err == nil || errors.Is(err, store.ErrNotFound) {
 		return assistantTargetGone()
 	}
-	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the target.") // PROPOSED
+	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the target.")
 }
 
 // assistantJSON is v as indented JSON text for a record.
@@ -373,10 +373,10 @@ type assistantPrep struct {
 func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpose, target types.AssistantTarget) (*assistantPrep, *assistantRefusal) {
 	snap := assistantSnapshotOf(r.Context())
 	if assistantNoPerson(snap) {
-		return nil, assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "The assistant works for a signed-in person.") // PROPOSED
+		return nil, assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "The assistant works for a signed-in person.")
 	}
 	if !purpose.Valid() || !target.ValidFor(purpose) {
-		return nil, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "Compose takes a run, unit or template. Review takes a change.") // PROPOSED
+		return nil, assistantRefusalFor(http.StatusBadRequest, reasonAssistantPurposeTargetMismatch, "Compose takes a run, unit or template. Review takes a change.")
 	}
 	prep := &assistantPrep{snap: snap}
 	if ref := s.assistantAvailable(r, purpose, prep); ref != nil {
@@ -404,7 +404,7 @@ func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpos
 	}
 	in, err := s.assistantInputs(tr, rt, purpose, prep.sc.Assistant, snap)
 	if err != nil {
-		return nil, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the records.") // PROPOSED
+		return nil, assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the records.")
 	}
 	prep.target, prep.payload = rt, assistant.FirstPayload(in)
 	prep.digest = assistant.PreviewDigest(prep.binding, prep.payload.Sections)
@@ -415,9 +415,9 @@ func (s *Server) assistantPrepare(r *http.Request, purpose types.AssistantPurpos
 // 403, anything else a server error.
 func (s *Server) assistantToolCtxRefusal(err error) *assistantRefusal {
 	if errors.Is(err, errAssistantRoleDenied) {
-		return assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "Your role no longer allows the assistant.") // PROPOSED
+		return assistantRefusalFor(http.StatusForbidden, reasonAssistantRoleDenied, "Your role no longer allows the assistant.")
 	}
-	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not check your role.") // PROPOSED
+	return assistantRefusalFor(http.StatusInternalServerError, "", "Could not check your role.")
 }
 
 // assistantAvailable is step one: availability must be ready, else 409 with the state's reason. It fills the
@@ -426,30 +426,30 @@ func (s *Server) assistantAvailable(r *http.Request, purpose types.AssistantPurp
 	ctx := r.Context()
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the settings.") // PROPOSED
+		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read the settings.")
 	}
 	prep.sc = sc
 	if sc.Assistant == nil || !sc.Assistant.On(purpose) {
-		return assistantRefusalFor(http.StatusConflict, reasonAssistantOff, "The assistant is off for your organisation.") // PROPOSED: the board's words
+		return assistantRefusalFor(http.StatusConflict, reasonAssistantOff, "The assistant is off for your organisation.")
 	}
 	lim, err := s.assistantLimitsFor(ctx, sc, prep.snap.Principal)
 	if err != nil {
-		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read your limits.") // PROPOSED
+		return assistantRefusalFor(http.StatusInternalServerError, "", "Could not read your limits.")
 	}
 	prep.lim = lim
 	ans := assistantAvailability(sc.Assistant, purpose, siteProviders(sc), inspectionDeferredFor, lim.deny, lim.allowed, lim.connected)
 	if ans.State == types.AssistantReady {
 		full, err := s.assistantAtRunLimit(ctx, lim.ceiling, prep.snap.Principal, purpose)
 		if err != nil {
-			return assistantRefusalFor(http.StatusInternalServerError, "", "Could not count your runs.") // PROPOSED
+			return assistantRefusalFor(http.StatusInternalServerError, "", "Could not count your runs.")
 		}
 		if full {
-			return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You're at your run limit. End a run to start the assistant.") // PROPOSED: the settings card's words
+			return assistantRefusalFor(http.StatusConflict, reasonAssistantAtRunLimit, "You're at your run limit. End a run to start the assistant.")
 		}
 	}
 	p, b, ok := assistantServing(ans, sc)
 	if !ok {
-		return assistantRefusalFor(http.StatusConflict, ans.Reason, "The assistant is not available to you.") // PROPOSED
+		return assistantRefusalFor(http.StatusConflict, ans.Reason, "The assistant is not available to you.")
 	}
 	prep.provider, prep.binding = p, b
 	return nil

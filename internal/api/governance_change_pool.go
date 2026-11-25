@@ -83,8 +83,8 @@ const (
 type recordInputs struct {
 	// base is the context a rebuilt identity is layered on. It carries no caller: it starts from the
 	// background (with the request's deadline), so none of the request's identity, token, delegation or
-	// device markers reach a predicate. A decision's base reads the unit scope on the decision's own
-	// transaction; a pool's carries the one shared scope memo.
+	// device markers reach a predicate. It reads the unit scope on the transaction the inputs were read
+	// on, never on a second connection.
 	base      context.Context
 	mappings  []oidc.RoleMapping
 	userTypes []types.UserType
@@ -175,7 +175,9 @@ func (s *Server) loadRecordInputs(ctx context.Context, q store.Querier) (*record
 
 // loadPoolInputs reads, once per request, what every pool of the request is built from: the bounded sign-in
 // records with the directory's inactive rule and email, the role mappings, the user types and every
-// unit-admin grant, and creates the one unit-scope memo the request's predicates share. That is four reads.
+// unit-admin grant. That is four reads. Its predicates read the unit scope on q, as a decision's do, each answer
+// memoized for q's life (withUnitScopeReadTx): a caller on a decision's transaction sets base back to
+// withUnitScopeTx so every check there reads afresh (recheckRaised).
 func (s *Server) loadPoolInputs(ctx context.Context, q store.Querier) (*poolInputs, error) {
 	mappings, userTypes, err := s.derivationInputs(ctx, q)
 	if err != nil {
@@ -193,11 +195,7 @@ func (s *Server) loadPoolInputs(ctx context.Context, q store.Querier) (*poolInpu
 	if len(records) > poolCandidateCap {
 		in.records, in.tooMany = records[:poolCandidateCap], true
 	}
-	memo := &unitScopeMemo{in: map[unitScopeKey]bool{}, grants: map[string][]types.GovernanceUnitAdmin{}}
-	in.recordInputs = recordInputs{
-		base:     context.WithValue(detachedContext(ctx), unitScopeMemoKey{}, memo),
-		mappings: mappings, userTypes: userTypes,
-	}
+	in.recordInputs = recordInputs{base: withUnitScopeReadTx(detachedContext(ctx), q), mappings: mappings, userTypes: userTypes}
 	return in, nil
 }
 

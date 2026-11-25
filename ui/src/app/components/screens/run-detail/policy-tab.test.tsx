@@ -19,6 +19,12 @@ vi.mock("../../../lib/api/runs", () => ({
   runs: { getPolicy: (...a: unknown[]) => getPolicyMock(...a) },
 }));
 
+// The shell's setup status names the agents; null (the default) is a console that has not read it, so the chip says the id.
+const shell = vi.hoisted(() => ({ harnesses: null as { id: string; display: string }[] | null }));
+vi.mock("../../wardyn/model-access-context", () => ({
+  useShellSetupStatus: () => ({ status: shell.harnesses ? { harnesses: shell.harnesses } : null, refresh: () => undefined }),
+}));
+
 import { aheadByHours } from "../../../lib/test-clock";
 import { toYaml } from "../../wardyn/yaml-block";
 import { OperatorProvider } from "../../wardyn/operator-context";
@@ -814,6 +820,38 @@ describe("PolicyTab: P-63 chips, P-62b and the group label", () => {
     await ready();
     const chips = screen.getAllByText("Wall preset: Sealed").filter((e) => e.closest("[data-testid=policy-summary]"));
     expect(chips).toHaveLength(2);
+  });
+
+  it("puts Agent rules: {harness} on the rows an agent's rules decided, one chip per agent", async () => {
+    const rules = policy({
+      provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" }, push_rules: { layer: "agent_rules", name: "codex-cli" }, first_use_approval: { layer: "deployment" } },
+      wall_preset: undefined,
+    });
+    show(rules);
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Agent rules: claude-code")).toHaveLength(1);
+    expect(inSummary("Agent rules: codex-cli")).toHaveLength(1);
+  });
+
+  it("names the agent by its display name when the shell's setup status has it", async () => {
+    shell.harnesses = [{ id: "claude-code", display: "Claude Code" }];
+    try {
+      show(policy({ provenance: { allowed_domains: { layer: "agent_rules", name: "claude-code" } }, wall_preset: undefined }));
+      await ready();
+      expect(screen.getAllByText("Agent rules: Claude Code").some((e) => e.closest("[data-testid=policy-summary]"))).toBe(true);
+    } finally {
+      shell.harnesses = null;
+    }
+  });
+
+  it("keeps the wall preset's chip beside an agent's on a row both decided", async () => {
+    const both = policy({ provenance: { allowed_domains: { layer: "wall_preset" }, push_rules: { layer: "agent_rules", name: "claude-code" } } });
+    show(both, { run: withPreset(sealed) });
+    await ready();
+    const inSummary = (label: string) => screen.getAllByText(label).filter((e) => e.closest("[data-testid=policy-summary]"));
+    expect(inSummary("Wall preset: Sealed").length).toBeGreaterThan(0);
+    expect(inSummary("Agent rules: claude-code").length).toBeGreaterThan(0);
   });
 
   it("draws no chip for a personal preset a non-owner reads, which carries its scope alone", async () => {

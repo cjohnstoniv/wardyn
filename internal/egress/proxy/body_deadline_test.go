@@ -24,7 +24,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -123,7 +122,7 @@ func viaOrgRunProxy(t *testing.T, org *httptest.Server, host string, rules ...ty
 	t.Helper()
 	orgAddr := upstreamAddr(org)
 	return newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{},
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		ViaOrgRoutes:    []ViaOrgRoute{{GrantID: uuid.New(), Host: host}},
 		ControlPlaneURL: "http://" + orgAddr, RunToken: newTokenSource("RUNTOK"),
 		Dial:   redirectDial(orgAddr),

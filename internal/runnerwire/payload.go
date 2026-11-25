@@ -90,10 +90,13 @@ const (
 	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
 	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
 	EventMacWindowUnexpected = "mac_window_unexpected"
+	// EventDeviceCert carries a DeviceCertReport: the MDM device certificates a Mac presents, each with a
+	// signature by its key over a message that names this runner's key. Only a Mac runner sends it.
+	EventDeviceCert = "device_cert"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected, EventDeviceCert}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that
@@ -235,6 +238,9 @@ const (
 	// decodes the policy without it, and its proxy then forwards what the rules deny with no row, so
 	// such a runner is refused a run that has rules.
 	ProxySettingHostRules = "host_rules"
+	// ProxySettingPushHoldRemovals is push_hold_removals. Dropped, the run's proxy would forward a push
+	// that removes a review path, so such a runner is refused a run that sets it.
+	ProxySettingPushHoldRemovals = "push_hold_removals"
 )
 
 // ProxySettingLocalModelRelay is no proxy.Config field: a Docker runner names it when it relays a
@@ -261,7 +267,7 @@ var ProxySettings = []string{
 	ProxySettingKubeAPI, ProxySettingCanonicalRepos, ProxySettingGatewayIdentity, ProxySettingGitPushWithheld,
 	ProxySettingForgeHosts, ProxySettingAllowedModels, ProxySettingAWSSigV4Gateways, ProxySettingMCPApproveEach,
 	ProxySettingMCPSendOnce, ProxySettingLLMHeaders, ProxySettingNoNetwork, ProxySettingRefuseIPLiterals,
-	ProxySettingHostRules,
+	ProxySettingHostRules, ProxySettingPushHoldRemovals,
 }
 
 // ProxySettingsSet names each of ProxySettings that pc sets, in that order; none for an unset config.
@@ -275,7 +281,8 @@ func ProxySettingsSet(pc runner.ProxyConfig) []string {
 		len(pc.LLMHeaders) != 0,
 		pc.NoNetwork,
 		pc.Policy.RefuseIPLiterals && pc.Policy.AllowAllEgress,
-		len(pc.Policy.HostRules) != 0} {
+		len(pc.Policy.HostRules) != 0,
+		pc.PushHoldRemovals} {
 		if on {
 			out = append(out, ProxySettings[i])
 		}

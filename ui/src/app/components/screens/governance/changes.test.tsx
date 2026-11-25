@@ -125,6 +125,12 @@ describe("the Changes tab", () => {
     expect(screen.queryByText("A super admin decides this.")).not.toBeInTheDocument();
   });
 
+  it("lists an agent rules write as Agent rules, under its harness", () => {
+    renderTab([change({ target_kind: "agent_rules", op: "update", target_key: "claude-code", diff: { changed: [] } })]);
+    expect(screen.getByRole("button", { name: `Agent rules · ${CHANGES.OP.update}` })).toBeInTheDocument();
+    expect(screen.getByText("claude-code")).toBeInTheDocument();
+  });
+
   it("lists a credential delivery write as Runner credentials, under its natural key", () => {
     renderTab([change({ target_kind: "local_credential_delivery", op: "replace", target_key: "local_credential_delivery", diff: { changed: [] } })]);
     expect(screen.getByRole("button", { name: `${DELIVERY.CHANGE_KIND} · ${CHANGES.OP.replace}` })).toBeInTheDocument();

@@ -285,7 +285,7 @@ export function TemplatesScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>{T.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={busyId !== null}
               onClick={(e) => {
                 e.preventDefault();
