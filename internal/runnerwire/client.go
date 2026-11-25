@@ -281,13 +281,14 @@ func (c *Client) Connect(ctx context.Context) error {
 	defer conn.Close()
 	cfg, resume := c.resume(ctx)
 	c.link.setPhase(phaseAuthenticate)
-	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock)
+	ok, err := authenticateOrg(ctx, conn, c.cfg.RunnerID, c.cfg.OrgURL, c.cfg.PrivateKey, resume, c.cfg.Hooks.Clock, StreamWindowLarge)
 	if err != nil {
 		return err
 	}
 	if !ok.Resumed {
 		cfg = PeerConfig{}
 	}
+	cfg.StreamWindow = int64(ok.StreamWindow) // the window agreed on THIS connection, resumed or not
 	if ok.ProxyImage != "" && c.cfg.Hooks.ProxyImage != nil {
 		c.cfg.Hooks.ProxyImage(ok.ProxyImage)
 	}

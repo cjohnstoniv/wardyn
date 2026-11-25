@@ -69,7 +69,7 @@ type Stream struct {
 
 func (p *Peer) newStream(id uint32, kind string) *Stream {
 	ctx, cancel := context.WithCancel(p.ctx)
-	s := &Stream{p: p, id: id, kind: kind, send: NewStreamCredit(p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{}), done: make(chan struct{})}
+	s := &Stream{p: p, id: id, kind: kind, send: newCredit(p.streamWin, p.connSend), ctx: ctx, cancel: cancel, opened: make(chan struct{}), done: make(chan struct{})}
 	s.cond = sync.NewCond(&s.mu)
 	return s
 }
@@ -150,7 +150,7 @@ func (s *Stream) Read(b []byte) (int, error) {
 		s.p.held.Add(-int64(n))
 		consumed = int64(n)
 		s.unacked += int64(n)
-		if s.unacked >= StreamWindow/4 {
+		if s.unacked >= s.p.streamWin/4 {
 			grant, s.unacked = s.unacked, 0
 		}
 	}
@@ -328,10 +328,10 @@ func (s *Stream) deliver(b []byte) error {
 		return nil
 	}
 	defer s.mu.Unlock()
-	if int64(len(s.buf)+len(b)) > StreamWindow {
+	if int64(len(s.buf)+len(b)) > s.p.streamWin {
 		return errStreamOverflow
 	}
-	if s.p.held.Add(int64(len(b))) > ConnWindow {
+	if s.p.held.Add(int64(len(b))) > s.p.connWin {
 		s.p.held.Add(-int64(len(b)))
 		return fmt.Errorf("%w: peer sent past the connection window", ErrBadFrame)
 	}
