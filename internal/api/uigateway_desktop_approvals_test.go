@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -51,10 +52,18 @@ func (f *desktopApprovalsFake) ListPendingApprovalsForRuns(_ context.Context, ru
 	return out, nil
 }
 
-// CountPendingApprovals completes the per-run pending read's interface; the desktop viewer never asks it.
+// CountPendingApprovals and CountPendingApprovalsByRunCreator complete the per-run pending read's interface; the
+// desktop viewer never asks either.
 func (f *desktopApprovalsFake) CountPendingApprovals(context.Context) (int, error) {
 	return 0, errors.New("the desktop viewer counted every pending approval")
 }
+
+func (f *desktopApprovalsFake) CountPendingApprovalsByRunCreator(context.Context, string) (int, error) {
+	return 0, errors.New("the desktop viewer counted a creator's pending approvals")
+}
+
+// The fake must stay the per-run pending read, or every list in these tests is the no-capability 503.
+var _ store.ApprovalsForRunsPager = (*desktopApprovalsFake)(nil)
 
 func (f *desktopApprovalsFake) Decide(context.Context, uuid.UUID, types.ActorType, types.ApprovalDecision) (types.ApprovalRequest, error) {
 	f.decides++
