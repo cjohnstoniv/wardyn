@@ -102,3 +102,13 @@ What an admin controls on a component row, and what a launch leaves behind on th
 - A run launched with a shared secret has a policy export that is a record, not a policy to reuse; see [The policy a run got](../OPERATIONS.md#the-policy-a-run-got).
 
 **Erasing a person.** The `components` scope is in [Erasing a person](../OPERATIONS.md#erasing-a-person). Wardyn does not revoke a person's secret at its issuer when a component or a person is erased.
+
+**Request rules.**
+
+- A component's `request_rules` ([POLICIES.md](../POLICIES.md#custom-components)) are off by default. Turn them on with `features.component_request_rules.enabled` in the site configuration (`PUT /site-config`).
+- While it is off, a component that carries rules is refused rather than attached without them:
+  - a run, a preflight or a policy preview that attaches one is refused `component_request_rules_off`;
+  - a save that adds or changes rules is refused with the same reason, also when the site configuration cannot be read;
+  - a save that sends back the stored rules, or none, is accepted, so rules can always be removed.
+- The Azure DevOps and GitHub request checks behave exactly as before, with or without component rules.
+- Before going back to an older version, remove request rules from your components: an older version ignores them and attaches the component without them.

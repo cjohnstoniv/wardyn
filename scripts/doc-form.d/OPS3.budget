@@ -164,7 +164,7 @@ docs/operations/capabilities.md=5576 share=35 # 5576 measured (+6: a failed crea
 # docs/operations/custom-components.md 1283 adds 14 over 1269, measured: a line links the brokered operations recipes.
 # docs/operations/custom-components.md 1464 adds 181 over 1283, measured: the pinned-to-a-unit block and the revive sentence for component_unit_pinned.
 # docs/operations/custom-components.md 1496 adds 32 over 1464, measured: expected_version on a component PUT.
-docs/operations/custom-components.md=1594 share=35 # 1594 measured (+45: the corrections from the release review)
+docs/operations/custom-components.md=1724 share=35 # 1724 measured (+130: request rules on custom components: the switch, while it is off, the downgrade); earlier: 1594 measured (+45: the corrections from the release review)
 # G-1423: docs/operations/api-tokens.md 4002 adds 11 over 3991 for GET /runs/{id}/output on the delegated-token list.
 # docs/operations/api-tokens.md 5466 adds 1464 over 4002 (0.9 F-1508-M3): invitations, dispositions and service identities.
 # docs/operations/api-tokens.md 5475 adds 9 over 5466 (G-090-cleanup slice F, docs rows that contradict the code): measured; the lead re-measures at merge.
