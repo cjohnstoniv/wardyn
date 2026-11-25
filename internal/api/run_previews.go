@@ -42,7 +42,7 @@ const (
 	previewConsoleOnlyMsg    = "Only a person signed in to the console can create a preview."
 	previewVisibilityMsg     = "A preview's visibility is private, org or public; %q is none of them."
 	previewTTLMsg            = "A preview lives from 1 hour to 7 days (ttl_seconds 3600 to 604800); %d is outside that."
-	previewAboveCeilingMsg   = "This deployment allows previews no wider than %s, so a %s preview can't be created or opened."
+	previewAboveCeilingMsg   = "This deployment allows previews no wider than %s, so a preview set to %s can't be created or opened."
 	previewNotRunningMsg     = "This run is not running, so its previews can't be created or opened."
 	previewProfileMsg        = "Previews are not allowed under the governance profile %q this run was launched under."
 	previewPortReservedMsg   = "A preview needs a port from 1024 to 65535, other than 3128, which the run's proxy uses."
@@ -106,6 +106,19 @@ func previewPort(raw string) (int, bool) {
 // previewApp is the name the UI gateway presents a preview of port under.
 func previewApp(port int) string { return types.PreviewAppPrefix + strconv.Itoa(port) }
 
+// previewLabel is how a sentence names a visibility: Private, Organisation or Public, and any other value as it is.
+func previewLabel(v types.PreviewVisibility) string {
+	switch v {
+	case types.PreviewPrivate:
+		return "Private"
+	case types.PreviewOrg:
+		return "Organisation"
+	case types.PreviewPublic:
+		return "Public"
+	}
+	return string(v)
+}
+
 // previewConsolePerson reports whether the request's caller is a person signed in to the console: a human actor
 // with a name, not acting through a portal's delegated token, and neither an issuer portal's person nor a public
 // link's visitor. A service identity, an agent, a device and the admin token are not human actors.
@@ -159,7 +172,7 @@ func (s *Server) runPreviewCheck(ctx context.Context, run types.AgentRun, ask *p
 		}
 	}
 	if ceiling := previewCeiling(sc); !ask.vis.AtMost(ceiling) {
-		return runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, ceiling, ask.vis))
+		return runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewLabel(ceiling), previewLabel(ask.vis)))
 	}
 	if run.State != types.RunRunning || runIsKept(run) {
 		return runError(http.StatusConflict, reasonPreviewNotRunning, previewNotRunningMsg)
@@ -374,7 +387,7 @@ func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p type
 	case !previewURLsOn(sc):
 		rf = runError(http.StatusForbidden, reasonPreviewURLsOff, previewURLsOffMsg)
 	case !p.Visibility.AtMost(previewCeiling(sc)):
-		rf = runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewCeiling(sc), p.Visibility))
+		rf = runError(http.StatusForbidden, reasonPreviewAboveCeiling, fmt.Sprintf(previewAboveCeilingMsg, previewLabel(previewCeiling(sc)), previewLabel(p.Visibility)))
 	default:
 		return nil
 	}

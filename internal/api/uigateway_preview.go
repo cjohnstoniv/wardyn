@@ -41,12 +41,25 @@ const previewCallerPublic = "preview:public"
 const (
 	previewRunPausedMsg    = "This preview's run is paused. It opens again when the run is resumed."
 	previewNotListeningMsg = "Nothing is listening on port %d in this run yet."
+	previewRevokedMsg      = "This preview has ended or was revoked. Ask the person who shared it for a new link."
+	previewNoSessionMsg    = "This preview needs you to sign in again. Open it from the link you were given."
 )
 
 // uiPreviewSession reports whether sess is a preview's session, by its app's name: declared names start
 // alphanumeric (policy.go), so no declared app has the prefix.
-func uiPreviewSession(sess uiSession) bool {
-	return strings.HasPrefix(sess.App, types.PreviewAppPrefix)
+func uiPreviewSession(sess uiSession) bool { return uiPreviewApp(sess.App) }
+
+// uiNoSessionSentence is the no-session refusal's sentence for app: a preview's own, or the declared apps'.
+func uiNoSessionSentence(app string) string {
+	if uiPreviewApp(app) {
+		return previewNoSessionMsg
+	}
+	return uiNoSessionMsg
+}
+
+// uiPreviewApp is whether app names a preview.
+func uiPreviewApp(app string) bool {
+	return strings.HasPrefix(app, types.PreviewAppPrefix)
 }
 
 // withPreviewApps is apps with runID's live previews added, one app each. It adds nothing while previews are
@@ -133,13 +146,13 @@ func (s *Server) uiPreviewDenies(ctx context.Context, sess uiSession, run types.
 	p, err := ps.LiveRunPreview(ctx, sess.Run, sess.Port)
 	switch {
 	case errors.Is(err, store.ErrNotFound): // revoked or expired
-		return s.uiDenyReassert(sess, uiDeniedReasonRevoked, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		return s.uiDenyReassert(sess, uiDeniedReasonRevoked, http.StatusForbidden, previewRevokedMsg)
 	case err != nil:
 		slog.ErrorContext(ctx, "wardynd: ui gateway could not read a preview", "run_id", sess.Run, "port", sess.Port, "err", err)
 		return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
 	if !previewAdmits(p.Visibility, sess.Caller) {
-		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized, http.StatusForbidden, previewRevokedMsg)
 	}
 	if rf := s.previewProfileRefusal(ctx, run); rf != nil {
 		if d := rf.decision; d != nil { // a composed profile nothing satisfies
@@ -148,7 +161,7 @@ func (s *Server) uiPreviewDenies(ctx context.Context, sess uiSession, run types.
 		return s.uiDenyReassert(sess, rf.body.Reason, rf.status, rf.body.Error)
 	}
 	if ceiling := previewCeiling(sc); !p.Visibility.AtMost(ceiling) {
-		return s.uiDenyReassert(sess, reasonPreviewAboveCeiling, http.StatusForbidden, fmt.Sprintf(previewAboveCeilingMsg, ceiling, p.Visibility))
+		return s.uiDenyReassert(sess, reasonPreviewAboveCeiling, http.StatusForbidden, fmt.Sprintf(previewAboveCeilingMsg, previewLabel(ceiling), previewLabel(p.Visibility)))
 	}
 	if p.Visibility != types.PreviewPrivate && s.uiRunOrigin(run.ID) == "" {
 		return s.uiDenyReassert(sess, reasonPreviewNeedsHostMode, http.StatusForbidden, previewNeedsHostModeMsg)

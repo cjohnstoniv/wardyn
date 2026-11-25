@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -569,4 +570,50 @@ func TestPreviewProfileEditEndsAnOpenPreview(t *testing.T) {
 		g.h.clock.advance(time.Minute) // past the session's re-check debounce
 		wantRelay(t, c.what+": after the edit", g.relayPreview(3000, "/", cookie, nil), http.StatusForbidden, reasonPreviewProfile)
 	}
+}
+
+// TestPreviewRefusalSentences: a preview's refusals speak to whoever opened the link. A revoked row, and a row
+// that no longer admits the session's caller, say the preview ended; a request with no session says to open the
+// link again, while a declared app keeps its own sentence; the ceiling sentence names visibilities by label.
+func TestPreviewRefusalSentences(t *testing.T) {
+	g := newPreviewRig(t)
+	ctx := context.Background()
+	sentence := func(what string, rec *httptest.ResponseRecorder, status int, reason, want string) {
+		t.Helper()
+		var body errorBody
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != status || body.Reason != reason || body.Error != want {
+			t.Fatalf("%s: %d %s, want %d %s %q", what, rec.Code, rec.Body.String(), status, reason, want)
+		}
+	}
+	recheck := func() { g.h.clock.advance(time.Minute) } // past the session's re-check debounce
+
+	g.st.putPreview(g.h.run.ID, 3000, types.PreviewPrivate)
+	owner := g.previewCookie(3000, "alice", "")
+	wantRelay(t, "the owner's private preview", g.relayPreview(3000, "/", owner, nil), http.StatusOK, "")
+	_, _ = g.st.RevokeRunPreview(ctx, g.h.run.ID, 3000, "alice")
+	recheck()
+	sentence("revoked", g.relayPreview(3000, "/", owner, nil), http.StatusForbidden, uiDeniedReasonRevoked,
+		"This preview has ended or was revoked. Ask the person who shared it for a new link.")
+
+	g.st.putPreview(g.h.run.ID, 3001, types.PreviewOrg)
+	org := g.previewCookie(3001, "bob", previewCallerOrg)
+	wantRelay(t, "an org caller's org preview", g.relayPreview(3001, "/", org, nil), http.StatusOK, "")
+	g.st.setSite(previewSite(true, "private"), nil)
+	recheck()
+	sentence("above the ceiling", g.relayPreview(3001, "/", org, nil), http.StatusForbidden, reasonPreviewAboveCeiling,
+		"This deployment allows previews no wider than Private, so a preview set to Organisation can't be created or opened.")
+	g.st.setSite(previewSite(true, "org"), nil)
+	_, _, _, _ = g.st.UpsertRunPreview(ctx, g.h.run.ID, 3001, types.PreviewPrivate, time.Hour, "alice", nil)
+	recheck()
+	sentence("org lowered to private", g.relayPreview(3001, "/", org, nil), http.StatusForbidden, uiDeniedReasonNotAuthorized,
+		"This preview has ended or was revoked. Ask the person who shared it for a new link.")
+
+	sentence("no session", g.relayPreview(3001, "/", nil, nil), http.StatusForbidden, reasonUIGatewayNoSession,
+		"This preview needs you to sign in again. Open it from the link you were given.")
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(g.h.run.ID, "code")+"/ide", nil)
+	req.Host = g.runHost()
+	rec := httptest.NewRecorder()
+	g.h.gateway.ServeHTTP(rec, req)
+	sentence("a declared app with no session", rec, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
 }

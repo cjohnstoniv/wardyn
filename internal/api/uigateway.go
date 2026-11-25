@@ -478,7 +478,7 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.decodeUISession(r, s.cfg.Now())
 	if !ok || sess.Run != runID || sess.App != app || sess.Desktop {
-		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionMsg)
+		writeErrorReason(w, http.StatusForbidden, reasonUIGatewayNoSession, uiNoSessionSentence(app))
 		return
 	}
 	s.relayUISession(w, r, sess)
