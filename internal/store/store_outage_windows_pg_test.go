@@ -246,8 +246,7 @@ func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hold.Rollback(ctx) //nolint:errcheck // released below
-	var pid int
-	if err := hold.QueryRow(ctx, `SELECT pg_backend_pid() FROM cp_heartbeat WHERE singleton FOR UPDATE`).Scan(&pid); err != nil {
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM cp_heartbeat WHERE singleton FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -262,8 +261,10 @@ func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
+		// Only the first beat waits on the holder itself; the second queues behind the first beat's tuple lock, so
+		// both are counted as blocked backends of this test's own database.
 		var waiting int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting == 2 {
@@ -357,7 +358,13 @@ func TestBeatControlPlane_HeldRowFailsFast_PG(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE cp_heartbeat SET beat_at = now() - interval '45 seconds'`); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := pool.Begin(ctx)
+	// The holder runs on its own pool, since the beat below asks the test's pool for a connection while it holds the row.
+	holdPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	hold, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
