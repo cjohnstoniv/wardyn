@@ -627,7 +627,7 @@ func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 	var scopeReads, grantListReads atomic.Int64
 	e := newApEnv(t, 2)
 	for i := range 50 {
-		sub := "sub-ap-cand-" + strings.Repeat("x", 1) + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		sub := "sub-ap-cand-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		e.record(sub, sub+"@corp.example", []string{apGroupUsers}, nil, false)
 	}
 	holderUser := "sub-ap-cand-aa"
@@ -646,7 +646,7 @@ func TestPG_Approvals_ScopeReadsCountHoldersNotCandidates(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if names := principalsOf(got.Eligible); !slices.Equal(names, []string{holderGroup, holderUser}) {
+		if names := principalsOf(got.Eligible); !slices.Equal(names, []string{holderUser, holderGroup}) {
 			t.Errorf("eligible = %v, want the two holders", names)
 		}
 		return nil
@@ -922,7 +922,17 @@ func TestPG_Approvals_PortalKindsRecordThenApply(t *testing.T) {
 		e := newRegPG(t)
 		e.h.srv.cfg.GovernanceMinApprovals = 2
 		third := accessSession(t, "root3", "root3@corp.example", oidc.RoleAdmin, []string{})
-		recordsFor(t, e.st, "root2", "root3")
+		// The harness's role map names root@ and sec@ alone (newDelegationPG), so root2 and root3 are super
+		// admins on their sign-in records through a group the store maps to admin: an approval re-derives the
+		// approver's role from that record, whatever the session says.
+		if _, err := e.st.UpsertRoleMapping(context.Background(), types.RoleMapping{Value: apGroupRoot, Role: oidc.RoleAdmin, CreatedBy: "seed"}); err != nil {
+			t.Fatal(err)
+		}
+		for _, sub := range []string{"root2", "root3"} {
+			if err := e.st.PutPrincipalSignIn(context.Background(), sub, sub+"@corp.example", []string{apGroupRoot}, nil, false); err != nil {
+				t.Fatal(err)
+			}
+		}
 		change, _, w := e.proposeHeld(t, map[string]any{"issuer": "https://approvals-two.example.com"})
 		if change == "" {
 			t.Fatalf("proposal = %d %s", w.Code, w.Body.String())
