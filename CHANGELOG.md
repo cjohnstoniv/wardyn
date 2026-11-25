@@ -11,6 +11,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
+
+### Before you upgrade
+
+- The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
+- A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
