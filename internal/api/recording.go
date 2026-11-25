@@ -529,7 +529,7 @@ func (r *recordingMaskReader) refresh(arrived time.Time) error {
 		if r.guard != nil && !r.guard() {
 			return errMaskUncovered
 		}
-		if r.reg.Generation() != gen {
+		if r.reg.RunGeneration(r.runID) != gen {
 			continue
 		}
 		if gen != r.gen {

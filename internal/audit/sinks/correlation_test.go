@@ -185,7 +185,35 @@ func TestFanoutWithoutEnrichRuns_PassesTheEventThrough(t *testing.T) {
 // registryMasker is the mask the daemon hands EnrichRuns (cmd/wardynd runValueMasker).
 func registryMasker(reg *secretmask.Registry) sinks.RunValueMasker {
 	return sinks.Witnessed(func(runID uuid.UUID, b []byte) []byte { return reg.JSONVariantMasker(runID).Mask(b) },
-		func(uuid.UUID) bool { return true }, reg.Generation)
+		func(uuid.UUID) bool { return true }, reg.RunGeneration)
+}
+
+// TestWitnessed_VouchesOnlyWhileTheRunsGenerationHolds: a value registered for the same run while mask runs
+// leaves the masking short of it, so Witnessed must not vouch; one registered for another run changes nothing
+// this run's masking was built from, so it still vouches.
+func TestWitnessed_VouchesOnlyWhileTheRunsGenerationHolds(t *testing.T) {
+	reg := secretmask.NewRegistry()
+	run, other := uuid.New(), uuid.New()
+	reg.AddLocal(run, []byte("first-run-secret"))
+	var during func()
+	w := sinks.Witnessed(func(id uuid.UUID, b []byte) []byte {
+		out := reg.JSONVariantMasker(id).Mask(b)
+		during()
+		return out
+	}, func(uuid.UUID) bool { return true }, reg.RunGeneration)
+
+	during = func() { reg.AddLocal(other, []byte("another-runs-secret")) }
+	if _, ok := w(run, []byte("x")); !ok {
+		t.Error("a value registered for another run during the masking made Witnessed refuse")
+	}
+	during = func() { reg.AddLocal(run, []byte("second-run-secret")) }
+	if _, ok := w(run, []byte("x")); ok {
+		t.Error("a value registered for the same run during the masking was vouched for")
+	}
+	during = func() {}
+	if _, ok := w(run, []byte("x")); !ok {
+		t.Error("an unchanged run was not vouched for")
+	}
 }
 
 // TestFanoutEnrichRuns_MasksTheIDWithTheRunsRegistryOnEveryEmit: the id comes from the run row after the
