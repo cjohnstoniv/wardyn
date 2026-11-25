@@ -38,6 +38,7 @@
 | **v0.10.3** | Issuer portals: a portal's people run in its pinned unit without a membership and read their own command output recovered from the run's recording; refused reads are audited. | **Shipped (pre-alpha)** — `v0.10.3`, 2026-11-23 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.10.4** | Outages: a lost Kubernetes run's owner can copy its work out, and the orphan sweep holds. Security fixes for sponsor changes, runner revives, relay sources, push removals and the Kubernetes API door. | **Shipped (pre-alpha)** — `v0.10.4`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.11.0-rc.1** | rc.1, the first 0.11.0 candidate: the 0.10.4 fixes, `wardyn run forward` with the SSH gateway off, assistant settings and sessions. Multi-approver governance, single-use SSH tickets, startup while the identity provider is down, Walls server routes, and off-by-default 0.11 `features`. | **Shipped (pre-alpha)** — `v0.11.0-rc.1`, 2026-11-24 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.11.0-rc.2** | rc.2: agent rules per harness, approval counts per kind of governance change, machine kinds by runner trust class, an optional MDM device certificate for macOS sandboxes, desktop watermarks, outage records, and batched proxy decisions. | **Shipped (pre-alpha)** — `v0.11.0-rc.2`, 2026-11-25 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ## Planned
 
