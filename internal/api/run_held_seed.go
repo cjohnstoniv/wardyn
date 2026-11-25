@@ -32,6 +32,10 @@ var heldSeedReleaseArgv = []string{"sh", "-c",
 // heldSeedUnsupportedHint fails a held run whose image cannot hold its task until the readback.
 const heldSeedUnsupportedHint = "This deployment starts an agent only after the run's proxy confirms its policy (WARDYN_START_AFTER_READBACK=on), and this run's image cannot hold its task until then. Rebuild the image on a current Wardyn agent image, start the run without a task, or ask an admin to turn the setting off"
 
+// heldSeedAWSSSOHint fails a held run on the aws-sso image: that image never adopts the held seed, and a rebuild
+// on a current image does not change that.
+const heldSeedAWSSSOHint = "This deployment starts an agent only after the run's proxy confirms its policy (WARDYN_START_AFTER_READBACK=on), and the aws-sso image cannot hold its task until that readback, so the run was stopped. Start the run without a task, or ask an admin to turn the setting off"
+
 // heldSeedReleaseFailedHint fails a held run whose task could not be released after the readback.
 const heldSeedReleaseFailedHint = "The run's proxy confirmed its policy, but the run's task could not be started in the sandbox, so the run was stopped. Start the run again"
 
@@ -53,6 +57,9 @@ func (s *Server) releaseHeldSeed(ctx context.Context, run types.AgentRun, ref st
 	hint := heldSeedReleaseFailedHint
 	if exit == 3 || errors.Is(err, runner.ErrExecStreamUnsupported) {
 		hint = heldSeedUnsupportedHint
+		if run.Agent == awsSSOAgent {
+			hint = heldSeedAWSSSOHint
+		}
 	}
 	fields := map[string]any{"argv": heldSeedReleaseArgv, "exit_code": exit, "reason": "seed_release"}
 	if err != nil {
