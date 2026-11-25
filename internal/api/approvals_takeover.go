@@ -163,7 +163,7 @@ func (s *Server) takeoverSurface(ctx context.Context, run types.AgentRun) string
 			}
 		}
 	}
-	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.macOSDesktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
+	if run.MachineKind.IsVM() && !run.BackgroundOnly() && !s.desktopViewOnly(run) && !s.macOSDesktopSignInsOff(ctx, run) {
 		return "desktop"
 	}
 	return "terminal"

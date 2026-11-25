@@ -28,8 +28,9 @@ import (
 // window lives exactly as long as that call's session: wardynd ends it by closing the session, the runner ends it
 // by ending it, and every end writes one takeover.close row.
 //
-// localWindowCheck is the one question the open and the re-check ask, in the order below. Unlike the Mac's window
-// it is no exception to the background contract: a background-only run's desktop stays closed (run_mode_doors.go).
+// localWindowCheck and then localWindowHere are the one question the open and the re-check ask, in the order below;
+// GET /runs/{id} asks localWindowCheck alone. Unlike the Mac's window it is no exception to the background contract:
+// a background-only run's desktop stays closed (run_mode_doors.go).
 // An open window is the person's presence: each re-check that keeps it stamps the run, so the run does not idle
 // out from under them, and a re-check that finds the run paused closes the window rather than thawing it.
 //
@@ -205,14 +206,14 @@ func (g *localWindowRegistry) open(runID uuid.UUID) *localWindow {
 	return g.byRun[runID]
 }
 
-// localWindowAsk says which rows localWindowCheck skips: reopen is the re-check of a window that is itself the one
+// localWindowAsk says which rows localWindowHere skips: reopen is the re-check of a window that is itself the one
 // open (row 11 would refuse it).
 type localWindowAsk struct {
 	reopen bool
 }
 
-// localWindowCheck is nil only when a local window may open on run for a right now, and returns the run's runner
-// row, the caller's own when the answer is nil. The rows, in order:
+// localWindowCheck is nil only when what the store holds lets a local window open on run for a right now, and
+// returns the run's runner row, the caller's own when the answer is nil. The rows, in order:
 //
 //	1  the site switch features.local_window is on (an unreadable site config is a server error)
 //	2  a Linux VM run
@@ -221,13 +222,12 @@ type localWindowAsk struct {
 //	5  the caller's own runner, strictly (macWindowOwnRunner): no delegate, service identity or operator's run
 //	6  the run's profile allows an interactive desktop (runs.desktop_window)
 //	7  the run's recording level is not Screen and actions
-//	8  the runner is connected to this replica and its caps serve local windows
 //	9  not paused
 //	10 not still being prepared
-//	11 no window already open on this run (this replica's local registry or the Mac's)
 //
-// The rows write nothing, so a read may ask them.
-func (s *Server) localWindowCheck(ctx context.Context, run types.AgentRun, a macWindowAuthority, ask localWindowAsk) (types.Runner, *runRefusal) {
+// Rows 8 and 11 are this replica's own state and come after, in localWindowHere. These rows read the store and
+// write nothing, so GET /runs/{id} asks them too (localWindowViewFor).
+func (s *Server) localWindowCheck(ctx context.Context, run types.AgentRun, a macWindowAuthority) (types.Runner, *runRefusal) {
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
 		return types.Runner{}, runServerError("read site config", err)
@@ -260,6 +260,20 @@ func (s *Server) localWindowCheck(ctx context.Context, run types.AgentRun, a mac
 	if run.RecordingLevel == types.RecordingScreenActions {
 		return rn, runError(http.StatusForbidden, reasonLocalWindowRecording, localWindowRecordingMsg)
 	}
+	if run.PausedAt != nil {
+		return rn, runError(http.StatusConflict, reasonLocalWindowPaused, localWindowPausedMsg)
+	}
+	if macRunPreparing(run) {
+		return rn, runError(http.StatusConflict, reasonLocalWindowPreparing, localWindowPreparingMsg)
+	}
+	return rn, nil
+}
+
+// localWindowHere is the rest of the question, asked after localWindowCheck on the runner it returned:
+//
+//	8  the runner is connected to this replica and its caps serve local windows
+//	11 no window already open on this run (this replica's local registry or the Mac's)
+func (s *Server) localWindowHere(run types.AgentRun, rn types.Runner, ask localWindowAsk) *runRefusal {
 	sub, connected := s.localWindowSubFor(rn.ID)
 	supported, reported := false, false
 	if connected {
@@ -267,20 +281,21 @@ func (s *Server) localWindowCheck(ctx context.Context, run types.AgentRun, a mac
 	}
 	switch {
 	case !connected || !reported:
-		return rn, runError(http.StatusConflict, reasonLocalWindowOffline, localWindowOfflineMsg)
+		return runError(http.StatusConflict, reasonLocalWindowOffline, localWindowOfflineMsg)
 	case !supported:
-		return rn, runError(http.StatusConflict, reasonLocalWindowRunnerTooOld, localWindowRunnerTooOldMsg)
-	}
-	if run.PausedAt != nil {
-		return rn, runError(http.StatusConflict, reasonLocalWindowPaused, localWindowPausedMsg)
-	}
-	if macRunPreparing(run) {
-		return rn, runError(http.StatusConflict, reasonLocalWindowPreparing, localWindowPreparingMsg)
+		return runError(http.StatusConflict, reasonLocalWindowRunnerTooOld, localWindowRunnerTooOldMsg)
 	}
 	if !ask.reopen && (s.localWindows.open(run.ID) != nil || s.macWindows.open(run.ID) != nil) {
-		return rn, runError(http.StatusConflict, reasonLocalWindowOpen, localWindowOpenMsg)
+		return runError(http.StatusConflict, reasonLocalWindowOpen, localWindowOpenMsg)
 	}
-	return rn, nil
+	return nil
+}
+
+// desktopViewOnly is whether run's browser desktop only watches: a macOS VM's that the Mac keeps view only
+// (macOSDesktopViewOnly), or any run while a window onto it is open on the person's own computer. One keyboard at
+// a time.
+func (s *Server) desktopViewOnly(run types.AgentRun) bool {
+	return s.macOSDesktopViewOnly(run) || s.localWindows.open(run.ID) != nil
 }
 
 // localWindowGovernanceRefusal is row 6: the run's profile, as the Mac's window asks it (runs.desktop_window).
@@ -351,7 +366,10 @@ func (s *Server) openLocalWindow(ctx context.Context, run types.AgentRun, a macW
 		s.auditLocalWindowDenied(ctx, run, a, rf)
 		return nil, rf
 	}
-	rn, rf := s.localWindowCheck(ctx, run, a, localWindowAsk{})
+	rn, rf := s.localWindowCheck(ctx, run, a)
+	if rf == nil {
+		rf = s.localWindowHere(run, rn, localWindowAsk{})
+	}
 	if rf != nil {
 		return refuse(rf)
 	}
@@ -474,10 +492,10 @@ func (s *Server) watchLocalWindow(ctx context.Context, w *localWindow) {
 }
 
 // localWindowRecheck asks again what the open asked: the run as it stands now, the person's credential, the same
-// runner, and rows 1-10 of localWindowCheck. It returns the close reason, "" while the window may stay, and the
-// check that refused. Anything it cannot read ends the window (fail closed). A paused run refuses at row 9 before
-// any stamp, so the window closes and nothing is stamped or touched. A window that stays stamps the run's presence
-// and touches the run; a stamp that fails closes it as paused.
+// runner, and rows 1-10 (localWindowCheck, then localWindowHere). It returns the close reason, "" while the window
+// may stay, and the check that refused. Anything it cannot read ends the window (fail closed). A paused run refuses
+// at row 9 before any stamp, so the window closes and nothing is stamped or touched. A window that stays stamps the
+// run's presence and touches the run; a stamp that fails closes it as paused.
 func (s *Server) localWindowRecheck(ctx context.Context, w *localWindow) (reason, by string) {
 	run, err := s.cfg.Store.GetRun(ctx, w.runID)
 	if err != nil {
@@ -498,7 +516,10 @@ func (s *Server) localWindowRecheck(ctx context.Context, w *localWindow) (reason
 	if run.RunnerID == nil || *run.RunnerID != w.runnerID {
 		return macWindowRefusedRecheck, reasonLocalWindowNotYourComputer
 	}
-	_, rf := s.localWindowCheck(ctx, run, w.auth, localWindowAsk{reopen: true})
+	rn, rf := s.localWindowCheck(ctx, run, w.auth)
+	if rf == nil {
+		rf = s.localWindowHere(run, rn, localWindowAsk{reopen: true})
+	}
 	switch {
 	case rf == nil:
 		if _, err := s.stampPresence(ctx, w.runID, types.ActorHuman, w.auth.Principal, localWindowSurface); err != nil {
@@ -518,21 +539,39 @@ type localWindowView struct {
 	Open bool `json:"open"`
 	// OpenedAt is when it opened; absent when none is open.
 	OpenedAt *time.Time `json:"opened_at,omitempty"`
+	// Message is the sentence an open would be refused with now, by the rows the store answers
+	// (localWindowCheck). Absent while a window is open, when those rows allow one, when they could not be read,
+	// and on a background-only run or with the site switch off, where the run page shows no window at all.
+	Message string `json:"message,omitempty"`
 }
 
-// localWindowViewFor is GET /runs/{id}'s local_window for principal: nil on any run but a live Linux VM run, and
-// for a caller who may not enter it.
-func (s *Server) localWindowViewFor(run types.AgentRun, principal string) *localWindowView {
+// localWindowViewFor is GET /runs/{id}'s local_window for the caller a: nil on any run but a live Linux VM run,
+// and for a caller who may not enter it.
+func (s *Server) localWindowViewFor(ctx context.Context, run types.AgentRun, a macWindowAuthority) *localWindowView {
 	if run.MachineKind != types.MachineLinuxVM || (run.State != types.RunRunning && run.State != types.RunStarting) ||
-		runIsKept(run) || !mayEnterRun(run, principal, false) {
+		runIsKept(run) || !mayEnterRun(run, a.Principal, false) {
 		return nil
 	}
-	w := s.localWindows.open(run.ID)
-	if w == nil {
-		return &localWindowView{}
+	if w := s.localWindows.open(run.ID); w != nil {
+		at := w.opened
+		return &localWindowView{Open: true, OpenedAt: &at}
 	}
-	at := w.opened
-	return &localWindowView{Open: true, OpenedAt: &at}
+	_, rf := s.localWindowCheck(ctx, run, a)
+	return &localWindowView{Message: localWindowMessageOf(rf)}
+}
+
+// localWindowMessageOf is a refusal's sentence for the run page, as macWindowStateOf words the Mac's: a profile's
+// refusal is the Mac's profile sentence, every other is the open's own.
+func localWindowMessageOf(rf *runRefusal) string {
+	switch {
+	case rf == nil || rf.err != nil:
+		return ""
+	case rf.decision != nil:
+		return macWindowProfileMsg
+	case rf.body.Reason == reasonLocalWindowSiteOff || rf.body.Reason == reasonRunBackgroundOnly:
+		return ""
+	}
+	return rf.body.Error
 }
 
 // mountLocalWindowRoutes registers the local window's route on the authenticated group.

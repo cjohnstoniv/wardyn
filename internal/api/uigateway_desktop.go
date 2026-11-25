@@ -244,7 +244,7 @@ func (s *Server) uiEnterDesktop(w http.ResponseWriter, r *http.Request, run type
 	// A background run reaches here only through the watch door; interactive sessions stay unpinned.
 	sess.ViewOnly = run.BackgroundOnly() && ticketOpensBackgroundWatch(ta, uiDesktopAppName)
 	data := withBackgroundWatch(sess.backgroundWatch(), map[string]any{"app": uiDesktopAppName, "machine_kind": string(run.MachineKind)})
-	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.macOSDesktopViewOnly(run), data), "/", redirectStatus)
+	s.startUISession(w, r, run, ta, sess, withViewOnly(sess.ViewOnly || s.desktopViewOnly(run), data), "/", redirectStatus)
 }
 
 // handleDesktopRelay serves /r/<run>/__desktop/...: the viewer's own files (no session: they are the
@@ -294,7 +294,7 @@ func (s *Server) handleDesktopRelay(w http.ResponseWriter, r *http.Request, runI
 		if run, err := s.cfg.Store.GetRun(r.Context(), runID); err == nil {
 			if run.MachineKind != "" {
 				boot["machine_kind"] = string(run.MachineKind)
-				if s.macOSDesktopViewOnly(run) {
+				if s.desktopViewOnly(run) {
 					boot["view_only"] = true
 				}
 			}
@@ -489,7 +489,7 @@ func (s *Server) serveDesktopRFB(w http.ResponseWriter, r *http.Request, sess ui
 	}
 	opened := s.cfg.Now()
 	// One keyboard at a time: while a window is open on the Mac or on the person's own computer, this stream only watches.
-	viewOnly := sess.ViewOnly || s.macOSDesktopViewOnly(run) || s.localWindows.open(sess.Run) != nil
+	viewOnly := sess.ViewOnly || s.desktopViewOnly(run)
 	yielded := func() {} // forgets this stream's control; a window waits for it, never for the close frame
 	if !viewOnly && run.MachineKind.IsVM() {
 		// A stream with control is known to a window that opens (macWindowYieldControl), a Mac's or a local one.
