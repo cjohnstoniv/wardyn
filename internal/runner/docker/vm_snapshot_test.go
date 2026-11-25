@@ -322,8 +322,8 @@ func TestSnapshot_NeverSavesMemoryOrChangesALiveChain(t *testing.T) {
 	}
 }
 
-// TestSnapshot_LayerStaysOnRunner: no snapshot frame carries bytes, and a committed layer is 0400 and the VM
-// user's.
+// TestSnapshot_LayerStaysOnRunner: no snapshot frame carries bytes, and a committed layer is 0400 and, when the
+// runner runs as root (the only case it changes owners), the VM user's.
 func TestSnapshot_LayerStaysOnRunner(t *testing.T) {
 	var walk func(rt reflect.Type, path string, seen map[reflect.Type]bool)
 	walk = func(rt reflect.Type, path string, seen map[reflect.Type]bool) {
@@ -356,13 +356,20 @@ func TestSnapshot_LayerStaysOnRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := fi.Sys().(*syscall.Stat_t)
-	if fi.Mode().Perm() != 0o400 || int(st.Uid) != r.vc.UID {
-		t.Fatalf("layer mode %v owner %d, want 0400 and the VM user %d", fi.Mode().Perm(), st.Uid, r.vc.UID)
+	if fi.Mode().Perm() != 0o400 {
+		t.Fatalf("layer mode %v, want 0400", fi.Mode().Perm())
+	}
+	if os.Getuid() != 0 {
+		t.Log("not root: the layer's owner is not checked, as the runner changes owners only as root")
+		return
+	}
+	if st := fi.Sys().(*syscall.Stat_t); int(st.Uid) != r.vc.UID {
+		t.Fatalf("layer owner %d, want the VM user %d", st.Uid, r.vc.UID)
 	}
 }
 
-// TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt: L-1's runner half.
+// TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt: the runner refuses to delete a layer while a fork on
+// it still has its disk there, and deletes it once that fork has ended.
 func TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt(t *testing.T) {
 	r := newSnapRig(t)
 	ctx := context.Background()
@@ -417,7 +424,7 @@ func (r *snapRig) chainOf(t *testing.T, path string, layers map[string]string) [
 	return chain
 }
 
-// TestSnapshot_LayerBacksOnlyOnBase: L-4. A plain snapshot's layer and a fork's snapshot's layer each back onto
+// TestSnapshot_LayerBacksOnlyOnBase: a plain snapshot's layer and a fork's snapshot's layer each back onto
 // the image's base and nothing else: the fork's copy, cut onto its parent layer, is flattened before it is kept.
 // The chain is read from the backing each step names; the live-vm ticket reads it with qemu-img.
 func TestSnapshot_LayerBacksOnlyOnBase(t *testing.T) {
@@ -487,9 +494,10 @@ func TestSnapshotLayer_ForkRefusesAnotherBase(t *testing.T) {
 	}
 }
 
-// TestSnapshotLayer_SourceEndCancelsJob: X-8's runner half. The source's teardown cancels the running copy
-// before the VM's followers stop and before the run directory goes; a QMP that never answers delays the
-// teardown by the cancel bound at most.
+// TestSnapshotLayer_SourceEndCancelsJob: the source's teardown asks for the running copy's cancel before the VM's
+// followers stop and before the run directory goes; a QMP that never answers delays the teardown by the cancel
+// bound at most. In production the teardown removes the QEMU container first, so the cancel normally finds
+// that QEMU gone; the fake keeps its socket open, and this test pins the call order only.
 func TestSnapshotLayer_SourceEndCancelsJob(t *testing.T) {
 	if snapshotCancelWait != 5*time.Second {
 		t.Fatalf("the cancel bound is %s, want 5s", snapshotCancelWait)
@@ -573,7 +581,7 @@ func TestSnapshot_FreeDiskCountsParentLayer(t *testing.T) {
 	}
 }
 
-// TestSnapshotLayer_NoCommitNoRename: X-9's runner half. No layer is kept without a Commit for its id, and an
+// TestSnapshotLayer_NoCommitNoRename: no layer is kept without a Commit for its id, and an
 // aborted, timed-out or deleted id is never committed later.
 func TestSnapshotLayer_NoCommitNoRename(t *testing.T) {
 	fastSnapshots(t, 300*time.Millisecond, 9*time.Minute, 2*time.Second)
@@ -614,7 +622,9 @@ func TestSnapshotLayer_NoCommitNoRename(t *testing.T) {
 	waitFor(t, func() bool { return !exists(r.target(spec.RunID, id)) })
 	noLayer("no commit", id)
 
-	// An Abort while the copy runs cancels the job before the target goes.
+	// An Abort while the copy runs cancels the job before the target goes. From here on the self-abort is far
+	// beyond each case's run time, so only the case above can abort by itself.
+	fastSnapshots(t, time.Hour, 9*time.Minute, 2*time.Second)
 	id = cut()
 	var targetAtCancel bool
 	r.qmp.set(func(q *snapQMP) {
@@ -660,7 +670,7 @@ func TestSnapshotLayer_NoCommitNoRename(t *testing.T) {
 	}
 
 	// A Commit still copying at the commit bound is cancelled, deleted and tombstoned.
-	fastSnapshots(t, time.Minute, 400*time.Millisecond, 2*time.Second)
+	fastSnapshots(t, time.Hour, 400*time.Millisecond, 2*time.Second)
 	r.qmp.set(func(q *snapQMP) { q.runFor = 1 << 30 })
 	id = cut()
 	if _, err := r.d.CommitSnapshot(ctx, sb.Ref, id); !errors.Is(err, runner.ErrSnapshotNotPending) {
@@ -669,7 +679,7 @@ func TestSnapshotLayer_NoCommitNoRename(t *testing.T) {
 	noLayer("commit past its bound", id)
 
 	// A delete of a pending id, with no Commit running: success only once the target is gone.
-	fastSnapshots(t, time.Minute, time.Minute, 2*time.Second)
+	fastSnapshots(t, time.Hour, time.Minute, 2*time.Second)
 	id = cut()
 	if err := r.d.DeleteSnapshot(ctx, id); err != nil || exists(r.target(spec.RunID, id)) {
 		t.Fatalf("delete of a pending id = %v, target left %v", err, exists(r.target(spec.RunID, id)))
@@ -714,7 +724,8 @@ func TestSnapshotLayer_NoCommitNoRename(t *testing.T) {
 // TestSnapshotLayer_LeftoverJobCancelledBeforeUnlink: a copy an earlier runner process left in a live VM is
 // cancelled and its node closed before its file goes; a QMP that never answers, or a job that does not end,
 // leaves the file until that QEMU exits, and the QEMU is never stopped for it. The same runs before the next
-// snapshot of the run; at its teardown the QEMU is already gone, so the file goes with no wait.
+// snapshot of the run; at its teardown the QEMU is already gone, so the file is cleared as a leftover with no
+// wait, before the run directory goes.
 func TestSnapshotLayer_LeftoverJobCancelledBeforeUnlink(t *testing.T) {
 	fastSnapshots(t, time.Minute, time.Minute, 300*time.Millisecond)
 	r := newSnapRig(t)
@@ -798,11 +809,72 @@ func TestSnapshotLayer_LeftoverJobCancelledBeforeUnlink(t *testing.T) {
 	}
 	spec3, sb3 := r.boot(t, nil)
 	_, f3 := leftover(spec3.RunID)
+	var cleared, dirThere bool
+	old3 := snapshotUnlinked
+	snapshotUnlinked = func(f string) {
+		if f == f3 {
+			cleared, dirThere = true, exists(r.vc.runDir(spec3.RunID))
+		}
+	}
+	t.Cleanup(func() { snapshotUnlinked = old3 })
 	start := time.Now()
 	if err := r.d.KillSandbox(ctx, sb3.Ref); err != nil {
 		t.Fatal(err)
 	}
-	if exists(f3) || time.Since(start) > snapshotCancelWait+2*time.Second {
-		t.Fatalf("teardown left the copy %v, took %s", exists(f3), time.Since(start))
+	if !cleared || !dirThere {
+		t.Fatalf("teardown cleared the copy as a leftover %v, with the run directory still there %v", cleared, dirThere)
+	}
+	if took := time.Since(start); took > snapshotCancelWait+2*time.Second {
+		t.Fatalf("teardown took %s", took)
+	}
+}
+
+// TestSnapshotLayer_DeleteOrAbortAfterCommitWinsDropsTheLayer: a Delete or an Abort that read the id as pending,
+// then lost the race to its Commit, deletes the layer the Commit kept: it answers success only once the layer's
+// directory is gone, and no later Commit answers the layer.
+func TestSnapshotLayer_DeleteOrAbortAfterCommitWinsDropsTheLayer(t *testing.T) {
+	r := newSnapRig(t)
+	ctx := context.Background()
+	_, sb := r.boot(t, nil)
+	r.qmp.set(func(q *snapQMP) { q.runFor = 0 })
+	old := snapshotBeforeAbort
+	t.Cleanup(func() { snapshotBeforeAbort = old })
+	for _, how := range []string{"delete", "abort"} {
+		id := uuid.New()
+		if _, err := r.d.SnapshotSandbox(ctx, sb.Ref, runner.SnapshotRequest{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+		var won runner.SnapshotLayer
+		var wonErr error
+		ran := false
+		// The Commit runs to its end between the call's read of the pending id and its abort.
+		snapshotBeforeAbort = func(got uuid.UUID) {
+			if got == id && !ran {
+				ran = true
+				won, wonErr = r.d.CommitSnapshot(ctx, sb.Ref, id)
+			}
+		}
+		var err error
+		if how == "delete" {
+			err = r.d.DeleteSnapshot(ctx, id)
+		} else {
+			err = r.d.AbortSnapshot(ctx, sb.Ref, id)
+		}
+		snapshotBeforeAbort = old
+		if !ran || wonErr != nil || won.ID != id {
+			t.Fatalf("%s: the racing commit ran %v and answered %+v, %v", how, ran, won, wonErr)
+		}
+		if err != nil {
+			t.Fatalf("%s after the commit won = %v", how, err)
+		}
+		if exists(r.d.layerDir(id)) {
+			t.Fatalf("%s: the layer the commit kept is still there", how)
+		}
+		if l, err := r.d.CommitSnapshot(ctx, sb.Ref, id); !errors.Is(err, runner.ErrSnapshotNotPending) {
+			t.Fatalf("%s: a later commit = %+v, %v, want snapshot_not_pending", how, l, err)
+		}
+		if ls, _ := r.d.ListSnapshots(ctx); slices.ContainsFunc(ls, func(l runner.SnapshotLayer) bool { return l.ID == id }) {
+			t.Fatalf("%s: list still names %s", how, id)
+		}
 	}
 }

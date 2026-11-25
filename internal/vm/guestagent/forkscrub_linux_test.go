@@ -22,7 +22,7 @@ func rigOn(t *testing.T, out string) *rig {
 
 // TestForkBootScrub: a fork's first Init removes every file its source's last Init wrote, by the record that
 // Init kept on the disk, before writing its own; a fork with no record is refused before it writes anything;
-// and a recorded path through a link the guest's root does not own is never followed.
+// and a link on a recorded path is never followed.
 func TestForkBootScrub(t *testing.T) {
 	disk := t.TempDir() // the source's disk, which the fork's copy carries
 	out := filepath.Join(disk, "out")
@@ -96,13 +96,45 @@ func TestForkBootScrub(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(out, initFilesRecord), planted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getuid() == 0 {
-		t.Skip("as root the planted link is root's own")
-	}
 	if _, err := rigOn(t, out).client(t).Init(ctxT(t), Init{Fork: true}); err == nil || !strings.Contains(err.Error(), "link") {
 		t.Fatalf("fork init through a planted link = %v, want refused", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(victim, "passwd")); string(b) != "keep" {
 		t.Errorf("the file behind the planted link = %q, want it kept", b)
+	}
+
+	// A link two folders up the recorded path is refused the same way, and the file behind it stays.
+	deep := filepath.Join(disk, "home", "agent", "deep")
+	if err := os.Symlink(filepath.Dir(victim), deep); err != nil {
+		t.Fatal(err)
+	}
+	planted, _ = json.Marshal(initFiles{Files: []string{filepath.Join(deep, filepath.Base(victim), "passwd")}})
+	if err := os.WriteFile(filepath.Join(out, initFilesRecord), planted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rigOn(t, out).client(t).Init(ctxT(t), Init{Fork: true}); err == nil || !strings.Contains(err.Error(), "link") {
+		t.Fatalf("fork init through a link further up = %v, want refused", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(victim, "passwd")); string(b) != "keep" {
+		t.Errorf("the file behind the link further up = %q, want it kept", b)
+	}
+
+	// A recorded file that is itself a link is removed as the link; the file it names stays.
+	fileLink := filepath.Join(disk, "home", "agent", "passwd-link")
+	if err := os.Symlink(filepath.Join(victim, "passwd"), fileLink); err != nil {
+		t.Fatal(err)
+	}
+	planted, _ = json.Marshal(initFiles{Files: []string{fileLink}})
+	if err := os.WriteFile(filepath.Join(out, initFilesRecord), planted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rigOn(t, out).client(t).Init(ctxT(t), Init{Fork: true}); err != nil {
+		t.Fatalf("fork init with a recorded link = %v", err)
+	}
+	if _, err := os.Lstat(fileLink); !os.IsNotExist(err) {
+		t.Errorf("the recorded link is still there: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(victim, "passwd")); string(b) != "keep" {
+		t.Errorf("the file a recorded link named = %q, want it kept", b)
 	}
 }

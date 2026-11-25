@@ -48,7 +48,15 @@ var (
 	snapshotPoll = time.Second
 	// snapshotFreeMiB is the space free to the runner under a path.
 	snapshotFreeMiB = FreeDiskMiB
+	// snapshotBeforeAbort runs between an Abort's or a Delete's read of a pending id and its abort; a test seam.
+	snapshotBeforeAbort = func(uuid.UUID) {}
+	// snapshotUnlinked runs after a copy target an earlier process left is deleted; a test seam.
+	snapshotUnlinked = func(string) {}
 )
+
+// forkRecordGrace is how long a fork's record counts as a run backing onto its layer before the fork's run
+// directory exists: vmBase records the fork just before createVM makes that directory.
+const forkRecordGrace = time.Minute
 
 // snapshotHeadroom is the free disk a snapshot leaves beyond what its copy and a fork's flatten may take.
 const snapshotHeadroom = 1 << 30
@@ -168,6 +176,7 @@ func (d *Driver) cutSnapshot(ctx context.Context, ref string, v *vmRun, id uuid.
 	if err := d.runOneShot(ctx, v.runID, "snap", qemu.SnapshotTargetArgs(id, layer != ""), p.mounts()); err != nil {
 		return nil, err
 	}
+	// Before the backup is asked for, no job can write to the target.
 	fail := func(err error) (*pendingSnap, error) {
 		_ = os.Remove(p.target())
 		return nil, err
@@ -181,11 +190,13 @@ func (d *Driver) cutSnapshot(ctx context.Context, ref string, v *vmRun, id uuid.
 	if err != nil {
 		return fail(err)
 	}
-	thaw := d.freezeGuest(ctx, v.dir)
+	thaw := d.freezeGuest(ctx, v.runID, v.dir)
 	err = q.StartBackup(ctx, dev, id)
 	thaw()
 	if err != nil {
-		return fail(err)
+		// A backup that timed out on this side may have started: the target goes only once its job is seen ended.
+		d.dropCopy(v.dir, id)
+		return nil, err
 	}
 	p.cutEnd = time.Now()
 	return p, nil
@@ -284,7 +295,7 @@ func (d *Driver) vmQMP(ctx context.Context, dir string) (*qemu.QMP, error) {
 
 // freezeGuest freezes the guest's filesystems through qemu-ga and returns the thaw. A guest that cannot freeze
 // still gets its copy, crash-consistent as a power cut would leave the disk.
-func (d *Driver) freezeGuest(ctx context.Context, dir string) func() {
+func (d *Driver) freezeGuest(ctx context.Context, runID uuid.UUID, dir string) func() {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	conn, err := d.dialUnix(ctx, filepath.Join(dir, "ctl", qemu.QGASocket))
 	if err != nil {
@@ -302,12 +313,39 @@ func (d *Driver) freezeGuest(ctx context.Context, dir string) func() {
 	}
 	return func() {
 		defer cancel()
-		// The thaw gets its own bound: a guest left frozen hangs every write in it.
+		// The thaw gets its own bound: a guest left frozen hangs every write in it. A failed thaw is tried once
+		// more on a new connection; the snapshot answers either way, and the log names the run.
 		tctx, tcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer tcancel()
-		_ = g.Execute(tctx, "guest-fsfreeze-thaw", nil, nil)
+		err := g.Execute(tctx, "guest-fsfreeze-thaw", nil, nil)
+		tcancel()
 		_ = g.Close()
+		if err == nil {
+			return
+		}
+		slog.Warn("docker: the VM's filesystems did not thaw after its snapshot; trying once more",
+			slog.String("run_id", runID.String()), slog.String("err", err.Error()))
+		if err := d.thawGuest(dir); err != nil {
+			slog.Error("docker: the VM's filesystems may still be frozen after its snapshot",
+				slog.String("run_id", runID.String()), slog.String("err", err.Error()))
+		}
 	}
+}
+
+// thawGuest thaws the guest's filesystems over a new qemu-ga connection, bounded at 10 seconds.
+func (d *Driver) thawGuest(dir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := d.dialUnix(ctx, filepath.Join(dir, "ctl", qemu.QGASocket))
+	if err != nil {
+		return err
+	}
+	g, err := qemu.NewQGA(ctx, conn)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer g.Close()
+	return g.Execute(ctx, "guest-fsfreeze-thaw", nil, nil)
 }
 
 // CommitSnapshot finishes the pending copy id and keeps it as the snapshot's layer.
@@ -463,29 +501,35 @@ func (d *Driver) keepLayer(target string, l runner.SnapshotLayer) error {
 	return err
 }
 
-// AbortSnapshot cancels and deletes the pending copy id.
+// AbortSnapshot cancels and deletes the pending copy id. A Commit that won the race has kept the layer, which
+// the abort then deletes, as the caller no longer wants it.
 func (d *Driver) AbortSnapshot(ctx context.Context, ref string, id uuid.UUID) error {
 	t := d.snaps()
 	t.mu.Lock()
 	p := t.pending[id]
 	t.mu.Unlock()
-	if p != nil && p.ref != ref {
-		return runner.ErrSnapshotNotPending
+	if p != nil {
+		if p.ref != ref {
+			return runner.ErrSnapshotNotPending
+		}
+		snapshotBeforeAbort(id)
+		if d.abortPending(id) {
+			return nil
+		}
 	}
-	d.abortPending(id)
-	return nil
+	return d.dropLayer(id, false)
 }
 
 // abortPending tombstones the pending copy id, then cancels it: a running Commit is stopped and waited for,
-// which deletes the copy; otherwise the job is cancelled and the target deleted here. It returns once the
-// target is gone.
-func (d *Driver) abortPending(id uuid.UUID) {
+// which drops the copy; otherwise the copy is dropped here (dropCopy). It reports false when id is not pending,
+// a Commit having kept it or an abort having dropped it already.
+func (d *Driver) abortPending(id uuid.UUID) bool {
 	t := d.snaps()
 	t.mu.Lock()
 	p := t.pending[id]
 	if p == nil {
 		t.mu.Unlock()
-		return
+		return false
 	}
 	t.tombs[id] = true
 	if p.done != nil {
@@ -493,7 +537,7 @@ func (d *Driver) abortPending(id uuid.UUID) {
 		t.mu.Unlock()
 		cancel()
 		<-done
-		return
+		return true
 	}
 	delete(t.pending, id)
 	p.timer.Stop()
@@ -502,15 +546,20 @@ func (d *Driver) abortPending(id uuid.UUID) {
 	t.mu.Lock()
 	delete(t.runs, p.runID)
 	t.mu.Unlock()
+	return true
 }
 
 // dropCopy cancels the copy id (job-cancel, a bounded wait for the job, then its node closed) and deletes its
-// target. The VM is never stopped for it.
+// target only once the job is seen ended. A target deleted while its job may still run is written to by QEMU
+// after it is gone, and its space is held until that QEMU exits, out of every sweep's sight. A target whose
+// job did not end in the bound is left for clearLeftovers (the run's next snapshot and its teardown) and the
+// start sweep, which delete it only after the job has ended or its QEMU has exited. The VM is never stopped.
 func (d *Driver) dropCopy(dir string, id uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), snapshotCancelWait)
 	defer cancel()
-	d.cancelCopy(ctx, dir, id)
-	_ = os.Remove(filepath.Join(dir, "disk", qemu.SnapshotTarget(id)))
+	if d.cancelCopy(ctx, dir, id) {
+		_ = os.Remove(filepath.Join(dir, "disk", qemu.SnapshotTarget(id)))
+	}
 }
 
 // cancelCopy cancels the copy id and reports whether its job has ended. Every failure answers false.
@@ -538,26 +587,47 @@ func (d *Driver) cancelCopy(ctx context.Context, dir string, id uuid.UUID) bool 
 	}
 }
 
-// DeleteSnapshot deletes the layer id, or aborts it while it is pending.
+// DeleteSnapshot deletes the layer id, or aborts it while it is pending. A Commit that won the race has kept
+// the layer, which is then deleted as any other.
 func (d *Driver) DeleteSnapshot(ctx context.Context, id uuid.UUID) error {
 	t := d.snaps()
 	t.mu.Lock()
 	pending := t.pending[id] != nil
 	t.mu.Unlock()
 	if pending {
-		d.abortPending(id)
+		snapshotBeforeAbort(id)
+		if d.abortPending(id) {
+			return nil
+		}
+	}
+	if d.vmConfig() == nil {
+		return runner.ErrSnapshotUnsupported
+	}
+	return d.dropLayer(id, true)
+}
+
+// dropLayer deletes the layer id under the table's lock, and tombstones id so no later Commit answers it. With
+// anyLayer false (an abort), only a layer this process committed is deleted. It answers success only once the
+// layer's directory is gone, and refuses while a fork on this runner backs onto it.
+func (d *Driver) dropLayer(id uuid.UUID, anyLayer bool) error {
+	t := d.snaps()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.tombs[id] = true
+	if _, ok := t.committed[id]; !ok && !anyLayer {
 		return nil
 	}
 	if d.vmConfig() == nil {
 		return runner.ErrSnapshotUnsupported
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	if used, err := d.layerInUse(id); err != nil || used {
 		return errors.Join(runner.ErrSnapshotInUse, err)
 	}
+	if err := os.RemoveAll(d.layerDir(id)); err != nil {
+		return err
+	}
 	delete(t.committed, id)
-	return os.RemoveAll(d.layerDir(id))
+	return nil
 }
 
 // layerInUse reports whether a fork of the layer id still has its run directory on this runner, its overlay
@@ -579,6 +649,9 @@ func (d *Driver) layerInUse(id uuid.UUID) (bool, error) {
 			return true, nil
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return false, err
+		}
+		if fi, err := f.Info(); err == nil && time.Since(fi.ModTime()) < forkRecordGrace {
+			return true, nil // recorded just now; its run directory comes next
 		}
 	}
 	return false, nil
@@ -604,19 +677,36 @@ func (d *Driver) ListSnapshots(ctx context.Context) ([]runner.SnapshotLayer, err
 		if err != nil || id.String() != e.Name() {
 			continue
 		}
-		var l runner.SnapshotLayer
-		b, err := os.ReadFile(filepath.Join(root, e.Name(), layerMeta))
-		if err != nil || json.Unmarshal(b, &l) != nil || l.ID != id {
-			return nil, fmt.Errorf("docker: snapshot %s has no readable record", id)
+		l, err := readLayerMeta(filepath.Join(root, e.Name()), id)
+		if err != nil {
+			slog.Warn("docker: a snapshot directory with no readable record is left out of the list", slog.String("snapshot_id", id.String()), slog.String("err", err.Error()))
+			continue
 		}
 		out = append(out, l)
 	}
 	return out, nil
 }
 
+// readLayerMeta is the SnapshotLayer kept in dir for the layer id.
+func readLayerMeta(dir string, id uuid.UUID) (runner.SnapshotLayer, error) {
+	var l runner.SnapshotLayer
+	b, err := os.ReadFile(filepath.Join(dir, layerMeta))
+	if err != nil {
+		return l, err
+	}
+	if err := json.Unmarshal(b, &l); err != nil {
+		return l, err
+	}
+	if l.ID != id {
+		return l, fmt.Errorf("the record names snapshot %s", l.ID)
+	}
+	return l, nil
+}
+
 // vmBase is the base a Linux VM run's overlay backs onto: the image's, converted on first use, or for a fork
 // the cache entry its snapshot was cut on, never converted again. A fork whose image now resolves to another
-// id, whose cache entry is gone or whose base file is another is refused runner.ErrForkBaseChanged.
+// id, whose cache entry is gone, whose base file is another, or whose spec disagrees with the layer's own
+// record is refused runner.ErrForkBaseChanged.
 func (d *Driver) vmBase(ctx context.Context, spec runner.SandboxSpec, guestID string) (string, error) {
 	src := spec.Snapshot
 	if src == nil {
@@ -634,11 +724,21 @@ func (d *Driver) vmBase(ctx context.Context, spec runner.SandboxSpec, guestID st
 	if stamp != src.BaseStamp {
 		return "", fmt.Errorf("%w: the image's base was converted again since the snapshot", runner.ErrForkBaseChanged)
 	}
+	// Under the table's lock, so a delete either removed the layer first or finds the fork's record.
+	t := d.snaps()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if _, err := os.Stat(filepath.Join(d.layerDir(src.ID), qemu.SnapLayer)); err != nil {
 		return "", fmt.Errorf("docker: the snapshot's layer is not on this runner: %w", err)
 	}
-	// The fork is recorded beside the layer before its run directory exists, so layerInUse sees it as soon
-	// as it has a disk.
+	l, err := readLayerMeta(d.layerDir(src.ID), src.ID)
+	if err != nil {
+		return "", fmt.Errorf("docker: the snapshot's record: %w", err)
+	}
+	if l.ImageID != src.ImageID || l.BaseStamp != src.BaseStamp {
+		return "", fmt.Errorf("%w: the fork names another image or base than its snapshot's record", runner.ErrForkBaseChanged)
+	}
+	// The fork is recorded beside the layer just before its run directory is made (forkRecordGrace).
 	forks := filepath.Join(d.layerDir(src.ID), forksDir)
 	if err := os.MkdirAll(forks, 0o700); err != nil {
 		return "", fmt.Errorf("docker: record the fork: %w", err)
@@ -672,8 +772,9 @@ func (d *Driver) vmSnapMounts(spec runner.SandboxSpec) []mount.Mount {
 }
 
 // cancelRunSnapshots aborts every pending copy of runID and clears any copy an earlier runner process left in
-// its run directory, each bounded by snapshotCancelWait. Teardown calls it before it stops anything, ignoring
-// every failure, since the run directory goes next.
+// its run directory, each bounded by snapshotCancelWait. teardownVM calls it first, ignoring every failure,
+// since the run directory goes next. The teardown removes the QEMU container before teardownVM runs, so the
+// job-cancel normally finds that QEMU gone, and its removal is what ended the job.
 func (d *Driver) cancelRunSnapshots(ctx context.Context, runID uuid.UUID) {
 	t := d.snaps()
 	t.mu.Lock()
@@ -688,6 +789,15 @@ func (d *Driver) cancelRunSnapshots(ctx context.Context, runID uuid.UUID) {
 		d.abortPending(id)
 	}
 	_ = d.clearLeftovers(ctx, runID, false)
+	// A fork's record goes with its run: its QEMU is gone by now, so the layer no longer backs a disk here.
+	if vc := d.vmConfig(); vc != nil {
+		recs, _ := filepath.Glob(filepath.Join(vc.StateDir, "snapshots", "*", forksDir, runID.String()))
+		t.mu.Lock()
+		for _, r := range recs {
+			_ = os.Remove(r)
+		}
+		t.mu.Unlock()
+	}
 }
 
 // clearLeftovers clears every copy target in runID's disk part that this process does not hold pending. With
@@ -701,9 +811,23 @@ func (d *Driver) clearLeftovers(ctx context.Context, runID uuid.UUID, wait bool)
 	files, _ := filepath.Glob(filepath.Join(dir, "disk", "snap-*.qcow2"))
 	var errs []error
 	for _, f := range files {
-		errs = append(errs, d.clearLeftover(ctx, runID, dir, f, wait))
+		if !d.heldPending(f) {
+			errs = append(errs, d.clearLeftover(ctx, runID, dir, f, wait))
+		}
 	}
 	return errors.Join(errs...)
+}
+
+// heldPending reports whether the copy target file is one this process holds pending.
+func (d *Driver) heldPending(file string) bool {
+	id, err := uuid.Parse(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(file), "snap-"), ".qcow2"))
+	if err != nil {
+		return false
+	}
+	t := d.snaps()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.pending[id] != nil
 }
 
 // clearLeftover deletes one copy target only once no QEMU can write to it: its run's QEMU is not running, or
@@ -732,6 +856,7 @@ func (d *Driver) clearLeftover(ctx context.Context, runID uuid.UUID, dir, file s
 	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	snapshotUnlinked(file)
 	return nil
 }
 
@@ -762,7 +887,7 @@ func (d *Driver) SweepSnapshotTargets(ctx context.Context) {
 	for _, f := range files {
 		dir := filepath.Dir(filepath.Dir(f))
 		runID, err := uuid.Parse(filepath.Base(dir))
-		if err != nil {
+		if err != nil || d.heldPending(f) {
 			continue
 		}
 		wg.Add(1)
