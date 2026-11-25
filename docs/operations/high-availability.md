@@ -76,7 +76,7 @@
 - `/readyz` does not cover the sandbox runner. A runner fault shows on `wardyn_runner_up` and the `substrate_health` row of `/setup/status` instead ([Monitoring](monitoring.md#substrate-and-sweep-health)).
 - A Postgres that refuses connections or stops answering does not restart the pod, because `/healthz` still answers.
 - `/healthz` gives up each of its Postgres reads after half a second. Against a Postgres that stops answering, it answers in about 1.5 seconds at worst, inside the 3-second limit. That is longer than the startup probe's 1 second, so a Postgres that stops answering before startup passes still fails startup.
-- A read given up leaves out the sign-in help text, and the sensor's health reads as unreadable.
+- A sensor read given up reads as unreadable. A site-settings read given up drops the help text.
 - The connections those reads gave up are dropped, and the pool opens new ones when Postgres answers again, so the server carries on without a restart.
 - With the chart's default readiness, a Postgres that refuses connections or stops answering leaves the pod Ready, so the console stays reachable and shows its database banner.
 - With two or more replicas and the default readiness, a replica that alone loses Postgres stays in the Service, and its requests that need the database fail.
