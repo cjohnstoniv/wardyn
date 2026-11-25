@@ -917,7 +917,7 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 		// Claims first, then LIVENESS (refuseTerminalRun), then the relay binding on the run that read.
 		r = r.WithContext(contextWithClaims(r.Context(), claims))
 		run, ok := s.refuseTerminalRun(s.decisionGate(w, r, claims), r, claims)
-		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) {
+		if !ok || s.refuseRelayBinding(s.decisionGate(w, r, claims), r, claims, run) || s.refuseUnverifiedPeer(s.decisionGate(w, r, claims), r, claims) {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(contextWithLiveRun(r.Context(), run)))
