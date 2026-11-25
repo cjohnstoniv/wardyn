@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -80,7 +79,7 @@ func TestRunnerLimitsRowCountsConfiguredRemoteRunners(t *testing.T) {
 // A read the substrate could not make is not a warning each time usage is built: usage is built on every
 // runner read, and the boot path is where the operator is told.
 func TestMeasureRemoteDoesNotWarnOnEveryRead(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

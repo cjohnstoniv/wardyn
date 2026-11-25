@@ -34,6 +34,32 @@ func (s PG) UpdateRunStateIf(ctx context.Context, id uuid.UUID, fromState, toSta
 	return tag.RowsAffected() > 0, nil
 }
 
+// EndUnstartedRun is UpdateRunStateIf for the end of a run that never started: the same conditional statement, and
+// in it the claim on the drive the run kept (keptDriveHoldSQL), so the run reads as ended and its drive is hidden
+// from every other run in one commit and the cleanup that follows finishes that claim. Only the two callers that end
+// a run before any sandbox was asked for use it (the pending abort, and a macOS VM dispatch's returns); every other
+// end of a run, a RUNNING failure and a kill included, goes through UpdateRunStateIf and takes no claim. From
+// QUEUED it is LeaveRunQueue, which claims already.
+func (s PG) EndUnstartedRun(ctx context.Context, id uuid.UUID, fromState, toState types.RunState) (bool, error) {
+	if fromState == types.RunQueued {
+		return s.LeaveRunQueue(ctx, id, toState, nil)
+	}
+	var moved int
+	err := s.inRunWriteTx(ctx, func(q Querier) error {
+		return q.QueryRow(ctx, `
+		WITH moved AS (
+			UPDATE agent_runs SET state=$1, updated_at=now(), ended_at=CASE WHEN $4 THEN COALESCE(ended_at, now()) ELSE ended_at END
+			WHERE id=$2 AND state=$3 RETURNING id),
+		held AS (`+keptDriveHoldSQL+` AND $4)
+		SELECT count(*) FROM moved`,
+			string(toState), id, string(fromState), toState.IsTerminal()).Scan(&moved)
+	})
+	if err != nil {
+		return false, fmt.Errorf("store: end unstarted run: %w", err)
+	}
+	return moved > 0, nil
+}
+
 // UpdateRunStateIfIdle is UpdateRunStateIf plus an idleness guard: it transitions
 // a run only when still in fromState, updated_at has not advanced past notAfter
 // (the caller's snapshot), it has no lost/end mark, and it has no open hold-aware

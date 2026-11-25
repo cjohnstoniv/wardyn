@@ -337,7 +337,7 @@ func (s readFaultStore) ListRuns(ctx context.Context) ([]types.AgentRun, error) 
 	return []types.AgentRun{r}, err
 }
 
-func (s readFaultStore) ListRunsPageByCreator(ctx context.Context, by string, _ store.Page) ([]types.AgentRun, error) {
+func (s readFaultStore) ListRunsPageByCreator(ctx context.Context, by string, _ store.Page, _ *store.RunUnitScope) ([]types.AgentRun, error) {
 	runs, err := s.ListRuns(ctx)
 	return slices.DeleteFunc(runs, func(r types.AgentRun) bool { return r.CreatedBy != by }), err
 }
@@ -346,7 +346,7 @@ func (s readFaultStore) ListRunsFiltered(ctx context.Context, f store.RunFilter,
 	if f.Owner == "" {
 		return s.ListRuns(ctx)
 	}
-	return s.ListRunsPageByCreator(ctx, f.Owner, p)
+	return s.ListRunsPageByCreator(ctx, f.Owner, p, nil)
 }
 
 func (readFaultStore) CountHiddenRuns(context.Context, store.RunFilter) (int, int, error) {

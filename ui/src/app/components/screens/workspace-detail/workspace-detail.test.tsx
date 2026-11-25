@@ -888,3 +888,60 @@ describe("WorkspaceDetailScreen — a stale load can't clobber a newer one", () 
     expect(screen.queryByRole("heading", { name: "alpha" })).not.toBeInTheDocument();
   });
 });
+
+describe("WorkspaceDetailScreen — an egress approval belongs to the workspace it was asked on", () => {
+  const rr = {
+    run_id: "r1",
+    label: "build & test",
+    mode: "interactive",
+    status: "recorded",
+    observations: { domains: [{ host: "evil.example.com", allow_count: 1, deny_count: 0, pending_count: 0 }], minted_grant_ids: [] },
+  } as unknown as RecordResult;
+  const alpha = () => ws({ id: "ws-a", name: "alpha", record_results: { "build-test": rr } });
+  const mountOnAlpha = () => {
+    getWorkspaceMock.mockImplementation((id: string) => Promise.resolve(id === "ws-a" ? alpha() : ws({ id: "ws-b", name: "beta" })));
+    render(
+      <MemoryRouter initialEntries={["/workspaces/ws-a"]}>
+        <OperatorProvider operator securityOperator>
+          <NavButton to="/workspaces/ws-b" />
+          <Routes>
+            <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  };
+  const askOnAlpha = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByRole("button", { name: /approve 1 observed host/i }));
+    expect(await screen.findByText(/approve egress to evil\.example\.com/i)).toBeInTheDocument();
+  };
+
+  it("names the workspace in the question, and closes it when the operator moves to another", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    mountOnAlpha();
+    await askOnAlpha(user);
+    expect(screen.getByText(/approved for "alpha" yet/)).toBeInTheDocument();
+    // The open modal hides the rest of the page from the tree, as browser back or a link from elsewhere would bypass it.
+    await user.click(screen.getByText(/go to \/workspaces\/ws-b/i));
+    expect(await screen.findByRole("heading", { name: "beta" })).toBeInTheDocument();
+    expect(screen.queryByText(/approve egress to evil\.example\.com/i)).not.toBeInTheDocument();
+    expect(promoteRecordEgressMock).not.toHaveBeenCalled();
+  });
+
+  it("a write still out for the first workspace neither repaints the second nor starts a replay", async () => {
+    let landA: (w: Workspace) => void = () => {};
+    promoteRecordEgressMock.mockReturnValue(new Promise<Workspace>((res) => (landA = res)));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    mountOnAlpha();
+    await askOnAlpha(user);
+    await user.click(screen.getByRole("button", { name: /approve host/i }));
+    await waitFor(() => expect(promoteRecordEgressMock).toHaveBeenCalledWith("ws-a", "build-test", ["evil.example.com"]));
+    // The open modal hides the rest of the page from the tree, as browser back or a link from elsewhere would bypass it.
+    await user.click(screen.getByText(/go to \/workspaces\/ws-b/i));
+    expect(await screen.findByRole("heading", { name: "beta" })).toBeInTheDocument();
+    landA(alpha());
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Approved observed egress on "alpha"'));
+    expect(screen.getByRole("heading", { name: "beta" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "alpha" })).not.toBeInTheDocument();
+  });
+});

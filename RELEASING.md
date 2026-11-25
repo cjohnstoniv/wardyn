@@ -14,7 +14,8 @@
   - `macos` (not required) and `macos-xcode-27` (not required),
   - `helm`, `helm-install-test`, `compose`, `runner-units`, `conformance`, `conformance-k8s`,
   - `conformance-k8s-agent-sandbox` (not required),
-  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `staticcheck`, `licenses`, `license-headers`, `gitleaks`), `dco`, `ci-ran`, `train-suites`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
+  - `envbuild-integration`, `vm-conformance` (not required), `vm` (not required), `test-pg-shard` (a matrix job: `api-1`, `api-2`, `store`, `race`), `test-pg`, `gates` (a matrix job: `govulncheck`, `licenses`, `license-headers`, `gitleaks`),
+  - `staticcheck` (a matrix job: `staticcheck-tagless`, `staticcheck-docker`, `staticcheck-k8s`), `gates-staticcheck` (the required `gates (staticcheck)`), `dco`, `ci-ran`, `train-suites`, `mixed-version`, `train-gate`, `main-red`, `notify-flaky`, `go-modules`, `go-gate-tools`, `go-cache-prune`,
   - the six `stop-early-<gate>` jobs (`stop-early-go-lint`, `stop-early-compose`, `stop-early-gates`, `stop-early-notices`, `stop-early-diagrams`, `stop-early-dco`), which cancel a red pull request run,
   - the ten image scans (`trivy-wardynd`, `trivy-wardynd-fips`, `trivy-wardyn-proxy`, `trivy-wardyn-runnerd`, `trivy-agent-base`, `trivy-agent-codex-cli`, `trivy-agent-aws-sso`, `trivy-agent-vscode`, `trivy-agent-novnc`, `trivy-agent-novnc-signin`, each reporting as `trivy (<image>)`),
   - and **`notices`** — the copyleft / unreviewed-dependency gate.
@@ -45,7 +46,7 @@
     - with every required status check green in it;
     - plus the newest dispatched `nightly.yml` run on that tree (cancelled runs skipped) with every watched job green.
   - A newer red nightly is not rescued by an older green one: re-dispatching the nightly is the deliberate recovery.
-  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
+  - On `release/**` pushes, `release-branch-checks.yml` (DCO, gitleaks, and the Go cache warm when `WARDYN_RELEASE_GO_CACHE` is set) replaces `ci.yml`; a branch fast-forwards to a tree its own pull request tested, and that run is the evidence.
   - If no run qualifies, `preflight-green` fails loudly naming what is missing.
   - When the only CI run on the tree is a release PR whose merge tree differs from its head,
     - rebase the PR head onto the base tip so the merge adds nothing,
@@ -414,6 +415,9 @@ crash or a usage limit resumes with the same command:
 6. **Publish the GitHub Release** for the tag, with that version's CHANGELOG section as the body. `release-assets` already made a draft, so edit it.
    - A final: `gh release edit vX.Y.Z --draft=false --prerelease=false --latest --notes-file <body>`. `make release-patch` runs this; `PRERELEASE=auto|true|false` picks (default `auto`). Keep `auto`: from 0.10.0 on, `verify-release` fails a wrong pick.
    - An `X.Y.Z-rc.N` gets `--prerelease`; a final with a newer final tag gets `--latest=false`.
+   - `:latest` on the agent images is not yours to move. The float-latest job in release.yml points it at the highest published final across every line, so a patch to an older line leaves it on the newer line's final. `verify-release` fails when it, or the Latest label, names anything else.
+
+   A failed or cancelled float-latest job stops release-patch.sh at its run watch; rerun only that job. Run verify-release for an older line only after the newer line's Release is published. Never rerun or dispatch release.yml on a tag before v0.10.4: its images and promote jobs still move `:latest` to that tag.
 7. **Publish the demo videos as release assets** (after step 6 — upload needs the
    Release to exist).
    - Release assets live outside git history, so clones stay small.

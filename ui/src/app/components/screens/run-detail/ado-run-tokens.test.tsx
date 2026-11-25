@@ -81,7 +81,7 @@ describe("AdoRunTokens", () => {
     await draw([tok({ revoke_failed: true, revoked_at: at(9, 41), revoke_reason: "run_end" })]);
     expect(await screen.findByText(ADO_PAT.RUN_REVOKE_FAILED(hm("17:02")))).toBeInTheDocument();
     // The closed record is not a revoke: the line never says revoked beside the warning.
-    expect(screen.getByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (not revoked)`)).toBeInTheDocument();
+    expect(screen.getByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (revoke failed)`)).toBeInTheDocument();
     expect(screen.queryByText(/· revoked /)).not.toBeInTheDocument();
   });
 
@@ -90,7 +90,7 @@ describe("AdoRunTokens", () => {
     const line = await screen.findByText(`Azure DevOps token: created ${hm("09:02")} · expires ${hm("17:02")} (expired)`);
     expect(line).toHaveClass("text-muted-foreground");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.queryByText(/not revoked/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/revoke failed/)).not.toBeInTheDocument();
   });
 
   it("7: a token a wider one replaced reads (access added), with no separate 'Access added' line", async () => {

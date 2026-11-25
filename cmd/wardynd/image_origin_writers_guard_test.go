@@ -49,6 +49,8 @@ func TestImageOriginWardynHasOneWriter(t *testing.T) {
 		// Every run newStepRun makes carries the origin, so each door to it is a Wardyn-launched step whose image
 		// no request chooses.
 		"newStepRun": {
+			// An assistant session's run: its image is the configured claude-code agent image, never a request's.
+			"internal/api/assistant_run.go:assistantNewRun",
 			"internal/api/harnesscred.go:launchHarnessLoginRun",
 			"internal/api/site_config_probe_capacity.go:newProbeRun",
 			"internal/api/source_scan.go:launchSourceScanRun",

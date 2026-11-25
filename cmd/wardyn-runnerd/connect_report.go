@@ -83,7 +83,7 @@ type offlineLog struct {
 // status.json holds it until a connect succeeds.
 func (l *offlineLog) reportTo(w *statusWriter) {
 	l.status = w
-	if s := l.pending(); s != nil {
+	if s := l.pending(); s != nil && !w.holdsStartRefusal() {
 		w.failed(s.Stage, s.Reason, s.LastFailureAt, true)
 	}
 }

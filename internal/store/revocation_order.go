@@ -52,7 +52,8 @@ func LockRevocationOrder(ctx context.Context, tx Querier) error {
 
 // ExecRevocationCut runs one cut write (an upsert into oidc_session_revocations or oidc_session_cuts,
 // whose $1 is sub) under the exclusive revocation-order lock, as a single pipelined transaction that
-// also ends the CLI sessions the cut reaches (endCLISessionsSQL), stamped cliReason.
+// also ends the CLI sessions the cut reaches (endCLISessionsSQL), stamped cliReason. Once the transaction
+// has committed, the sessions this cut itself ended are added to the CLIEnded on ctx, if any.
 func ExecRevocationCut(ctx context.Context, q batcher, sql, sub, cliReason string) error {
 	b := &pgx.Batch{}
 	b.Queue(`SELECT pg_advisory_xact_lock($1, 0)`, db.RevocationOrderLockClass)
@@ -66,8 +67,13 @@ func ExecRevocationCut(ctx context.Context, q batcher, sql, sub, cliReason strin
 	if _, err := br.Exec(); err != nil {
 		return err
 	}
-	if _, err := br.Exec(); err != nil {
+	var ended int64
+	if err := br.QueryRow().Scan(&ended); err != nil {
 		return fmt.Errorf("store: end cli sessions: %w", err)
 	}
+	if err := br.Close(); err != nil {
+		return fmt.Errorf("store: end cli sessions: %w", err)
+	}
+	noteCLIEnded(ctx, ended)
 	return nil
 }

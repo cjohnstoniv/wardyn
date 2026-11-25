@@ -10,6 +10,7 @@
 // accepts {name, sources[], base_image?}), so this page no longer surfaces
 // scan/build machinery at all — Stage 2 stops calling those endpoints.
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Laptop, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +21,7 @@ import { setup as setupApi } from "../../../lib/api/setup";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { EGRESS } from "../../wardyn/copy";
+import { queryClient } from "../../../lib/query-client";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
 import { FOLDER_RUNNER, WORKSPACE_DETAIL_EXTRA as WORKSPACE_COPY_EXTRA } from "../../../lib/workspace-copy";
@@ -77,11 +79,53 @@ function imageRow(ws: Workspace): { mono: string; blurb: string; rebuildable: bo
   return { mono: "standard sandbox image", blurb: "Wardyn's baseline container — no project-specific build.", rebuildable: false };
 }
 
+// The screen's whole lifetime (an open confirmation, a write still outstanding, the loaded row) belongs to one
+// workspace: the router reuses this element when only the :id changes, so the key remounts it per workspace.
 export function WorkspaceDetailScreen() {
   const { id = "" } = useParams();
-  const navigate = useNavigate();
+  return <WorkspaceDetail key={id} id={id} />;
+}
 
-  const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
+function WorkspaceDetail({ id }: { id: string }) {
+  const navigate = useNavigate();
+  // False once this workspace's screen is gone, so a write that was already out reports where it landed and
+  // starts nothing further (the confirmed replay) against a workspace the operator has left.
+  const onScreen = React.useRef(true);
+  React.useEffect(() => {
+    onScreen.current = true;
+    return () => {
+      onScreen.current = false;
+    };
+  }, []);
+
+  // One key per workspace: a new id is a new read, so the screen shows loading and never the previous workspace.
+  const queryKey = ["workspace", id];
+  const key = JSON.stringify(queryKey);
+  const q = useQuery({ queryKey, queryFn: async () => (await workspacesApi.getWorkspace(id)) ?? null, enabled: !!id }, queryClient);
+  const ws = q.data;
+  // A mutation's answer is the workspace as it is now: it replaces the cached read with no second request.
+  const setWs = React.useCallback((w: Workspace | null) => queryClient.setQueryData(["workspace", id], w), [id]);
+  // The last failure stays on screen while a re-read of the same workspace is in flight; only an answer replaces it.
+  const [held, setHeld] = React.useState<{ key: string; error: unknown } | null>(null);
+  const [heldFor, setHeldFor] = React.useState(key);
+  if (heldFor !== key) {
+    setHeldFor(key);
+    setHeld(null);
+  }
+  React.useEffect(() => {
+    if (q.isSuccess) setHeld(null);
+    else if (q.isError) setHeld({ key, error: q.error });
+  }, [q.isSuccess, q.isError, q.error, key]);
+  const err = q.isError ? q.error : held?.key === key ? held.error : null;
+  const [retrying, setRetrying] = React.useState<string | null>(null);
+  const { refetch } = q;
+  const retry = React.useCallback(() => {
+    setRetrying(key);
+    void queryClient
+      .cancelQueries({ queryKey: ["workspace", id], exact: true })
+      .then(() => refetch())
+      .finally(() => setRetrying(null));
+  }, [key, id, refetch]);
   // X3-F2 / F5-F1: Delete (DELETE /workspaces/{id}) and Rebuild (POST
   // /workspaces/{id}/build) are classOwner server-side — a member may act on a
   // workspace THEY created. The predicate is the row's owner, not the caller's
@@ -95,8 +139,8 @@ export function WorkspaceDetailScreen() {
   const operator = useOperator();
   const caps = useMyCapabilities(!operator);
   const { status: shellStatus } = useShellSetupStatus();
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
+  const status: "loading" | "error" | "ready" = retrying === key ? "loading" : q.data !== undefined ? "ready" : err !== null ? "error" : "loading";
+  const loadMessage = err !== null ? failureSentence(err) : undefined;
   // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
   // distinct from a REAL false — the member-getting-started.tsx idiom.
   const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
@@ -108,42 +152,6 @@ export function WorkspaceDetailScreen() {
   const [rebuilding, setRebuilding] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [changingProvider, setChangingProvider] = React.useState(false);
-
-  // F5-F7: this component is REUSED across a workspace-to-workspace
-  // navigation (react-router keeps the same element mounted, only `id`
-  // changes) — the audit.tsx `drillRequestId` idiom, so a slow response for
-  // the OLD id that resolves after the NEW id's own load can never clobber it.
-  const loadRequestId = React.useRef(0);
-  const load = React.useCallback(
-    (foreground: boolean) => {
-      if (!id) return;
-      const requestId = ++loadRequestId.current;
-      if (foreground) setStatus("loading");
-      // Returned so the poll waits for it: each read discards the one before, so reads that overlap because the
-      // server answers slower than the interval would all be discarded and the page would never update.
-      return workspacesApi
-        .getWorkspace(id)
-        .then((w) => {
-          if (loadRequestId.current !== requestId) return;
-          setWs(w ?? null);
-          setStatus("ready");
-        })
-        .catch((e) => {
-          if (loadRequestId.current !== requestId) return;
-          if (foreground) {
-            setLoadMessage(failureSentence(e));
-            setStatus("error");
-          }
-        });
-    },
-    [id],
-  );
-
-  React.useEffect(() => {
-    setWs(undefined);
-    setStatus("loading");
-    void load(true);
-  }, [id, load]);
 
   React.useEffect(() => {
     setupApi
@@ -181,7 +189,7 @@ export function WorkspaceDetailScreen() {
   // take back (cleanVerdictMayMove) — paused otherwise so a settled workspace
   // isn't polled forever.
   const inFlight = !!ws && (isRecording(ws) || cleanVerdictMayMove(ws, Date.now()));
-  usePoll(() => load(false), POLL_MS, !(id && inFlight));
+  usePoll(() => q.refetch({ cancelRefetch: false }), POLL_MS, !(id && inFlight));
 
   const rebuild = async () => {
     if (!ws) return;
@@ -194,7 +202,7 @@ export function WorkspaceDetailScreen() {
       else if (res.state === "done" || res.state === "nothing_to_build") toast.info(`Nothing to rebuild for "${ws.name}".`, { description: res.detail });
       else if (res.state === "none") toast.warning(`"${ws.name}" was not rebuilt.`, { description: res.detail });
       else toast.error("Failed to start the rebuild", { description: res.detail });
-      void load(false);
+      void q.refetch();
     } catch (e) {
       toast.error("Failed to start the rebuild", { description: getErrorMessage(e) });
     } finally {
@@ -232,7 +240,7 @@ export function WorkspaceDetailScreen() {
       } else {
         setRecordLaunch({ warnings: r.warnings, confinementClass: r.confinement_class });
       }
-      void load(false);
+      void q.refetch();
     } catch (e) {
       toast.error(confined ? "Confined replay failed to start" : "Recording failed to start", {
         description: getErrorMessage(e),
@@ -249,7 +257,7 @@ export function WorkspaceDetailScreen() {
   const doneRecording = async (runId: string) => {
     try {
       await runsApi.killRun(runId);
-      void load(false);
+      void q.refetch();
     } catch (e) {
       toast.error("Failed to stop the session", { description: getErrorMessage(e) });
     }
@@ -267,7 +275,8 @@ export function WorkspaceDetailScreen() {
     try {
       const { skipped_hosts: skipped, ...updated } = await workspacesApi.promoteRecordEgress(ws.id, taskKey, hosts);
       setWs(updated as Workspace);
-      toast.success(skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress");
+      const said = skipped?.length ? EGRESS.PROMOTED_SKIPPED(hosts.length - skipped.length, skipped) : "Approved observed egress";
+      toast.success(onScreen.current ? said : `${said} on "${ws.name}"`);
     } catch (e) {
       toast.error("Failed to promote egress", { description: getErrorMessage(e) });
     }
@@ -298,7 +307,8 @@ export function WorkspaceDetailScreen() {
       const next = { ...(fresh.requirements ?? {}) };
       for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };
       setWs(await workspacesApi.setRequirements(ws.id, next, person));
-      toast.success(hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`);
+      const said = hosts.length === 1 ? `Approved egress to ${hosts[0]}` : `Approved egress to ${hosts.length} hosts`;
+      toast.success(onScreen.current ? said : `${said} on "${ws.name}"`);
       return true;
     } catch (e) {
       toast.error("Failed to approve host", { description: getErrorMessage(e) });
@@ -315,7 +325,7 @@ export function WorkspaceDetailScreen() {
       hosts,
       run: (approved) =>
         void approveHosts(approved).then((ok) => {
-          if (ok && replayName) void doRecord(replayName, true);
+          if (ok && replayName && onScreen.current) void doRecord(replayName, true);
         }),
     });
   const requestPromoteEgress = (taskKey: string) => {
@@ -349,7 +359,7 @@ export function WorkspaceDetailScreen() {
     return (
       <PageContainer width="form">
         <div className="rounded-xl border border-border bg-card">
-          <ErrorState message={loadMessage} onRetry={() => load(true)} />
+          <ErrorState message={loadMessage} onRetry={retry} />
         </div>
       </PageContainer>
     );
@@ -573,6 +583,7 @@ export function WorkspaceDetailScreen() {
       <ProfileReview runId={profileRunId} suggestedName={profileName} onClose={() => setProfileRunId(null)} />
 
       <ConfirmEgressDialog
+        workspaceName={ws.name}
         hosts={pendingConfirm?.hosts?.length ? pendingConfirm.hosts : null}
         selectable={pendingConfirm?.selectable}
         onOpenChange={(o) => !o && setPendingConfirm(null)}

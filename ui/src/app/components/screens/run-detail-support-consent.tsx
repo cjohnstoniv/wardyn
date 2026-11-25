@@ -46,7 +46,8 @@ export function SupportConsentDialog({
   /** The doors this run records (GET status's recorded_doors), so the recording answer is shown before Accept. */
   recordedDoors: SupportDoor[];
   onClose: () => void;
-  onAnswered: () => void;
+  /** The grant the accept or decline returned; none when the request had lapsed. */
+  onAnswered: (answered?: SupportGrantView) => void;
 }) {
   const [doors, setDoors] = React.useState<SupportDoor[]>([]);
   const [minutes, setMinutes] = React.useState<number | null>(null);
@@ -61,9 +62,10 @@ export function SupportConsentDialog({
     setBusy(true);
     setError("");
     try {
-      if (accept) await support.accept(run.id, grant.grant, SUPPORT_DOORS.filter((d) => doors.includes(d)), minutes as number);
-      else await support.decline(run.id, grant.grant);
-      onAnswered();
+      const answered = accept
+        ? await support.accept(run.id, grant.grant, SUPPORT_DOORS.filter((d) => doors.includes(d)), minutes as number)
+        : await support.decline(run.id, grant.grant);
+      onAnswered(answered);
     } catch (e) {
       // The request is gone (answered, ended or lapsed): the one thing left to say is that it lapsed.
       if (e instanceof HttpError && e.reason === "support_grant_not_found") setLapsed(true);
@@ -81,7 +83,7 @@ export function SupportConsentDialog({
             <DialogDescription>{SUPPORT_CONSENT.LAPSED}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={onAnswered}>
+            <Button variant="outline" onClick={() => onAnswered()}>
               {SUPPORT_CONSENT.CLOSE}
             </Button>
           </DialogFooter>

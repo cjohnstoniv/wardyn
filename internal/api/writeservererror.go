@@ -55,6 +55,11 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		writeErrorReason(w, http.StatusServiceUnavailable, reasonOrgRevoked, orgRevokedMsg)
 		return
 	}
+	// A person list that names a portal person it may not (a role it cannot hold, or an issuer no portal is
+	// registered for) is a refusal about the write, whichever store write or held change reached it.
+	if writePortalRulingError(w, err) {
+		return
+	}
 	// A write for a deactivated or stale-epoch owner (the owner guard) is a refusal about the
 	// caller, not a fault, and gives no sentence that tells a suspension apart from a cut session.
 	if errors.Is(err, store.ErrIdentityDeactivated) {

@@ -107,6 +107,11 @@ var isOperatorCensus = map[string]int{
 	"user_drives.go:handleGetUserDrives":            1, // a security admin reads the allow-listed projection
 	"user_drives_preview.go:handlePreviewUserDrive": 1,
 	"user_drives_tier.go:upsertUserDriveGrantAs":    1,
+	// A drive's allocation to an issuer portal is the super admin's write; a security admin is refused.
+	"user_drives_portal.go:upsertPortalDriveGrant": 1,
+	// A suspend that sets a purge deadline schedules the permanent act, so it is the super admin's, as the
+	// purge route is; a security admin is refused before anything is written.
+	"person_suspend.go:handleSuspendPortalPerson": 1,
 	// Which runner a drive's second place is bound to is named to an operator and that runner's owner only.
 	"user_drives_second_place.go:boundRunnerName": 1,
 	// Audit rows: host detail stays the super admin's on the feed reads and the partition export.
@@ -118,6 +123,7 @@ var isOperatorCensus = map[string]int{
 	"policies.go:specReadTierFor":                  1,
 	"governance_unit_write.go:writeGovernanceUnit": 1,
 	"governance_change_kinds.go:applyUnitChange":   1,
+	"governance_change_pool.go:tierOf":             1,
 	"governance_dry_run.go:applyUnitWriteQ":        1,
 	// The measured reason can carry a substrate's own error text, so only an operator reads it.
 	"runner_usage.go:remoteUsage": 1,
@@ -132,6 +138,11 @@ var isOperatorCensus = map[string]int{
 	// admin gets (support_not_allowed rather than the run_not_found shape). Neither admits a run policy.
 	"support_entry.go:supportCaller":         1,
 	"support_grant.go:refuseNotSupportParty": 1,
+	// The Walls view, display only, it grants nothing: a gate's addr (an upstream proxy's host:port) and an inner
+	// node's suffix are host detail, the super admin's as on the audit reads (auditRowsFor). Every caller who
+	// reaches the route gets the same gates and inner nodes without them; neither call admits or refuses a run.
+	"walls_run.go:handleRunWalls":          1,
+	"walls_topology_org.go:wallsTopoGates": 1,
 }
 
 // TestIsOperatorCensus scans every production file in internal/api for calls to

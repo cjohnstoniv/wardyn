@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // MaxCalls bounds concurrent RPC handlers and retained reply tombstones. Byte
@@ -21,6 +24,7 @@ type pendingCall struct {
 	reply     chan Reply
 	notify    chan struct{}
 	onEvent   func(Event)
+	admitBy   time.Time // AdmitBy's cutoff; zero is none
 
 	mu         sync.Mutex
 	stopped    bool // the caller returned: nobody drains events any more
@@ -78,6 +82,15 @@ type CallOption func(*pendingCall)
 // caller's goroutine and always before Call returns.
 func WithEvents(fn func(Event)) CallOption { return func(c *pendingCall) { c.onEvent = fn } }
 
+// AdmitBy refuses the call if it reaches the link's writer at or after by: nothing is written or kept for
+// replay, so the runner never sees it, and Call answers an error for which errors.Is(err,
+// runner.ErrStartCutoff) holds. The time does not cut a CALL's wait for the writer; it is read once the
+// CALL has the writer. A zero by sets no cutoff.
+func AdmitBy(by time.Time) CallOption { return func(c *pendingCall) { c.admitBy = by } }
+
+// errAdmitExpired is Call's answer for a CALL that reached the writer at or after its AdmitBy time.
+var errAdmitExpired = fmt.Errorf("runnerwire: the call reached the link's writer after its cutoff: %w", runner.ErrStartCutoff)
+
 // Call sends one CALL and waits for its REPLY, decoding the result into result
 // (nil to ignore it). A typed REPLY error comes back as *Error, so errors.Is
 // works on the sentinels; a link that drops mid-call is runner.ErrRunnerOffline.
@@ -124,7 +137,7 @@ func (p *Peer) Call(ctx context.Context, method string, args, result any, opts .
 			p.resetParked(orphans)
 		}
 	}()
-	if seq, err := p.sendFrame(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}); err != nil {
+	if seq, err := p.sendFrameBy(ctx, Frame{Type: TypeCall, Stream: id, Payload: body}, pc.admitBy); err != nil {
 		p.mu.Lock()
 		if seq == 0 {
 			// Never sequenced, so never in the replay buffer: nothing can answer it.

@@ -18,10 +18,14 @@ const isAgentCast = (e: AuditEvent): boolean => e.data?.session === "agent" || e
 
 export function sessionOptionLabel(e: AuditEvent): string {
   const incomplete = e.data?.incomplete === true ? " · incomplete" : "";
-  const ended = clockTime(e.time);
-  if (e.data?.session === "agent") return `Agent output · ended ${ended}${incomplete}`;
-  if (e.data?.session === "agent-recovered") return `Agent output, re-read after a restart · ended ${ended}${incomplete}`;
-  return `Session ended ${ended} · ${e.actor}${incomplete}`;
+  const at = clockTime(e.time);
+  // A row written by a sweep or by a re-read after a restart is stamped when that happened, which can be hours
+  // after the capture ended; no capture end is recorded for it, so it is labelled by the recovery, never as an end.
+  const recovered = e.data?.swept === true || e.data?.session === "agent-recovered";
+  const when = recovered ? `recovered ${at}` : `ended ${at}`;
+  if (e.data?.session === "agent") return `Agent output · ${when}${incomplete}`;
+  if (e.data?.session === "agent-recovered") return `Agent output, re-read after a restart · ${when}${incomplete}`;
+  return recovered ? `Session ${when} · ${e.actor}${incomplete}` : `Session ended ${at} · ${e.actor}${incomplete}`;
 }
 
 // The cast's cap, as its row says it: whole MiB read as "8 MiB".

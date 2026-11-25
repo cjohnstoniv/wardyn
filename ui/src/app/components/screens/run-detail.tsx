@@ -473,6 +473,7 @@ function RunDetailPage({ id }: { id: string }) {
               }}
               onRetry={() => setRecState("idle")}
               onGoAudit={() => setTab("audit")}
+              watermark={run.desktop_watermark}
             />
           </TabsContent>
 

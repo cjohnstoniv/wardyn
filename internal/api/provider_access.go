@@ -302,7 +302,9 @@ func (s *Server) providerAccessFor(ctx context.Context, p types.ModelProvider, o
 	case types.ModelProviderAzureFoundry:
 		s.gradeProviderAzureFoundry(ctx, &row, p, owner)
 	case types.ModelProviderCustomEndpoint:
-		if p.OIDC != nil {
+		if serviceGrantAppliesTo(p, owner) && serviceGrantListed(p.OIDC.ServiceGrant, owner) {
+			s.gradeProviderServiceGrant(ctx, &row, p)
+		} else if p.OIDC != nil {
 			s.gradeProviderEndpointOIDC(ctx, &row, p, owner)
 		} else {
 			s.gradeProviderKey(ctx, &row, p, owner)

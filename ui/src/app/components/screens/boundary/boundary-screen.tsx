@@ -36,7 +36,7 @@ import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "..
 import { Note } from "../governance/display";
 import { SubmittedNote } from "../governance/submitted-note";
 import { DataOutCard } from "./data-out-card";
-import type { DataOutLevel } from "../../wardyn/copy/data-out";
+import { DATA_OUT, type DataOutLevel } from "../../wardyn/copy/data-out";
 import { DesktopGroupCard, desktopLocksNow, desktopNow } from "./desktop-group-card";
 
 const CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
@@ -87,6 +87,9 @@ const bodyFrom = (d: Draft, stored: BoundaryWrite): BoundaryWrite => {
     ...(sameLocks(d.locks, stored.locked_knobs ?? []) ? {} : { locked_knobs: d.locks }),
   };
 };
+
+const dataOutLockNow = (locks: readonly string[] | undefined) =>
+  (locks ?? []).includes("data_out") ? BOUNDARY_DRY_RUN.DATA_OUT_LOCKED : BOUNDARY_DRY_RUN.DATA_OUT_UNLOCKED;
 
 const modeLabel = (m: BoundaryMode) => (m === "hard_limits" ? BOUNDARY.MODE_HARD : BOUNDARY.MODE_ORG);
 const floorLabel = (c: ConfinementClass | undefined) => CC_META[c ?? "CC1"].label;
@@ -490,6 +493,8 @@ function DryRunReport({
     [BOUNDARY.FLOOR_LABEL, floorLabel(stored.spec.min_confinement_class), floorLabel(body.spec.min_confinement_class)],
     [BOUNDARY_DESKTOP.TITLE, desktopNow(stored.spec.desktop), desktopNow(body.spec.desktop)],
     [BOUNDARY_DESKTOP.LOCKS, desktopLocksNow(stored.locked_knobs), desktopLocksNow(body.locked_knobs ?? stored.locked_knobs)],
+    [DATA_OUT.LABEL, DATA_OUT.label(stored.spec.data_out), DATA_OUT.label(body.spec.data_out)],
+    [BOUNDARY_DRY_RUN.DATA_OUT_LOCK, dataOutLockNow(stored.locked_knobs), dataOutLockNow(body.locked_knobs ?? stored.locked_knobs)],
   ];
 
   return (
@@ -589,7 +594,7 @@ function ReportBody({ report }: { report: BoundaryReport }) {
       </div>
       {none ? (
         <div className="mt-4">
-          <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_CHANGE}</Chip>
+          <Chip tone="neutral">{BOUNDARY_DRY_RUN.NO_POLICY_CHANGE}</Chip>
         </div>
       ) : (
         <>

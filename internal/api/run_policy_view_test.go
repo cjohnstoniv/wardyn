@@ -1058,16 +1058,22 @@ func TestRunPolicyView_HostMarksAfterManyRefusedRestarts(t *testing.T) {
 // (a restart rebuilds the proxy from a config that can drop hosts and writes no envelope).
 func TestRunPolicyView_HostMarks(t *testing.T) {
 	spec := types.RunPolicySpec{AllowedDomains: []string{"api.anthropic.com", "pypi.org"}}
-	marked := pvRow{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}}}}
+	marked := pvRow{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{Inspected: []string{"api.anthropic.com"}, Terminated: []string{"api.anthropic.com"}}}}
 	for _, tc := range []struct {
 		name string
 		rows []pvRow
 		want *hostMarks
 	}{
-		{"recorded", []pvRow{marked}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+		{"recorded", []pvRow{marked}, &hostMarks{Inspected: []string{"api.anthropic.com"}, Terminated: []string{"api.anthropic.com"}}},
 		{"an envelope from before marks", []pvRow{pvResolve(spec, false)}, nil},
 		{"a restarted run", []pvRow{marked, {action: "run.revive", data: map[string]any{}}}, nil},
-		{"a refused restart", []pvRow{marked, {action: "run.revive", outcome: "denied", data: map[string]any{}}}, &hostMarks{Inspected: []string{"api.anthropic.com"}}},
+		{"a refused restart", []pvRow{marked, {action: "run.revive", outcome: "denied", data: map[string]any{}}}, &hostMarks{Inspected: []string{"api.anthropic.com"}, Terminated: []string{"api.anthropic.com"}}},
+		// An envelope recorded before partial existed marked a wildcard and a host with no port Inspected on any overlap.
+		{"an envelope from before partial", []pvRow{{action: "run.policy.resolve", data: effectivePolicyDatum{RunPolicySpec: spec, HostMarks: &hostMarks{
+			Inspected:  []string{"api.anthropic.com", "*.anthropic.com", "pypi.org", "api.github.com:443"},
+			Terminated: []string{"api.anthropic.com", "pypi.org:8443", "api.github.com:443"}}}}},
+			&hostMarks{Inspected: []string{"api.anthropic.com", "api.github.com:443"}, Partial: map[string][]string{"*.anthropic.com": {"api.anthropic.com"}, "pypi.org": {"pypi.org:8443"}},
+				Terminated: []string{"api.anthropic.com", "pypi.org:8443", "api.github.com:443"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st := pvFixture(t, &capStore{})

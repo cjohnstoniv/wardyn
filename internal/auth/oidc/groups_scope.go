@@ -41,7 +41,7 @@ func claimKeyedRoleMapValues(roleMap map[string]string) []string {
 // `groups` claim is indistinguishable from "this human is in no groups", so
 // failing closed here would lock out every human on an IdP that sends none.
 func (a *Authenticator) warnMergedMapNeedsGroupsScope(roleMap map[string]string, rolesClaim, groupsClaim []string) {
-	if !a.groupsScopeUnrequested {
+	if st, _ := a.state(); !st.groupsScopeUnrequested {
 		return
 	}
 	if len(rolesClaim) > 0 || len(groupsClaim) > 0 {

@@ -21,6 +21,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/cjohnstoniv/wardyn/internal/macvm"
@@ -68,6 +69,12 @@ func (m *macOSVMs) openKept(setting string) {
 	}
 }
 
+// keptExpiredDeleter is a kept driver that runs the expiry-driven delete (kept_machine's delete_expired), which
+// rechecks the machine's own deadline under its lock; the caps say so (KeptConditionalDelete).
+type keptExpiredDeleter interface {
+	DeleteExpiredKeptMachine(ctx context.Context, id uuid.UUID, by string) (string, error)
+}
+
 // keptCaps sets the caps' kept_machines (this runner's driver keeps machines) and kept (the Mac's limit and
 // its machines), from the driver. A Mac whose limit is 0 reports a limit of 0 and no machines, which says
 // it keeps none; a count that fails keeps the last one.
@@ -76,6 +83,7 @@ func (m *macOSVMs) keptCaps(c, last *runnerwire.MacVMCaps) {
 		return
 	}
 	c.KeptMachines = true
+	_, c.KeptConditionalDelete = m.kept.driver.(keptExpiredDeleter)
 	k, err := m.kept.driver.KeptMachines()
 	switch {
 	case err != nil:
@@ -104,7 +112,7 @@ func (m *macOSVMs) keptFromFolder() *runnerwire.MacVMKept {
 		out.WorstBytes += r.worst
 		out.AllocatedBytes += r.written
 		out.Machines = append(out.Machines, runnerwire.MacVMKeptMachine{ID: r.rec.ID, Bytes: r.written, InUse: r.inUse, RunID: r.run,
-			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt})
+			Scrubbed: r.rec.Scrubbed, ExpiresAt: r.rec.ExpiresAt, StopRunID: r.rec.LastStopRun})
 	}
 	return out
 }
@@ -452,7 +460,7 @@ func deleteKept(out io.Writer, r keptRow) error {
 		fmt.Fprintf(out, "machine %s was already gone\n", r.label())
 		return nil
 	}
-	fmt.Fprintf(out, "deleted kept machine %s (%s); the organisation's record goes on the next report\n", r.label(), r.key)
+	fmt.Fprintf(out, "deleted kept machine %s (%s) from this Mac. Its organisation record still counts towards your kept-machine limit. Find it with 'wardyn machines' and request removal with 'wardyn machines delete <name or id>'.\n", r.label(), r.key)
 	return nil
 }
 

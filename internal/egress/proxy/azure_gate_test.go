@@ -95,7 +95,7 @@ func newAzureHarness(t *testing.T, cap int64) *azureHarness {
 		RunID:      uuid.New(),
 		Policy:     CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{azHost + ":443"}}),
 		Injector:   inj,
-		Sink:       &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:       &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:   publicResolver{},
 		Dial:       redirectDial(strings.TrimPrefix(upstream.URL, "http://")),
 		RunToken:   newTokenSource("RUNTOK"),
@@ -261,6 +261,20 @@ func TestAzureDeploymentOutside(t *testing.T) {
 }
 
 // countingBody reports how many bytes the gate pulled from it.
+// firstReadBody closes started on its first Read.
+type firstReadBody struct {
+	r       io.ReadCloser
+	once    sync.Once
+	started chan struct{}
+}
+
+func (f *firstReadBody) Read(p []byte) (int, error) {
+	f.once.Do(func() { close(f.started) })
+	return f.r.Read(p)
+}
+
+func (f *firstReadBody) Close() error { return f.r.Close() }
+
 type countingBody struct {
 	r io.Reader
 	n atomic.Int64
@@ -316,23 +330,25 @@ func TestAzureGate_InflightBudgetIsChargedBeforeTheRead(t *testing.T) {
 	h := newAzureHarness(t, cap)
 
 	pr, pw := io.Pipe()
+	reading := &firstReadBody{r: pr, started: make(chan struct{})}
 	first := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
-		h.p.serveMITMRequest(rec, chunkedAzureRequest(t, pr), azHost, 443)
+		h.p.serveMITMRequest(rec, chunkedAzureRequest(t, reading), azHost, 443)
 		first <- rec
 	}()
-	// The first request holds `cap` once it has been charged; wait for that, without taking budget.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if !h.p.azure.budget.TryAcquire(azureInflightBudget - cap + 1) {
-			break
-		}
+	// The gate charges before it reads, so the first read means `cap` is held. Waiting on the read, not on a
+	// probe of the budget, keeps the probe from taking units at the moment the first request charges.
+	select {
+	case <-reading.started:
+	case rec := <-first:
+		t.Fatalf("the first request ended before reading its body: status %d body %s", rec.Code, rec.Body.String())
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first request never began reading its body")
+	}
+	if h.p.azure.budget.TryAcquire(azureInflightBudget - cap + 1) {
 		h.p.azure.budget.Release(azureInflightBudget - cap + 1)
-		if time.Now().After(deadline) {
-			t.Fatal("the first request was never charged")
-		}
-		time.Sleep(time.Millisecond)
+		t.Fatal("the first request was reading its body without its charge held")
 	}
 
 	second := &countingBody{r: strings.NewReader(azBody(azMain))}

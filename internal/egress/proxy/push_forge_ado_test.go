@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/gitpack"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/test/adofake"
@@ -593,7 +592,7 @@ func TestADORepoAPIBase(t *testing.T) {
 // TestPATForgeReadsAzureDevOps: the git_pat lane's reader for Azure DevOps
 // Services names the same repository; a forge with no reader still has none.
 func TestPATForgeReadsAzureDevOps(t *testing.T) {
-	p := newProxy(Options{Policy: CompilePolicy(types.RunPolicySpec{}), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 1)}})
+	p := newProxy(Options{Policy: CompilePolicy(types.RunPolicySpec{}), Sink: &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 1)}})
 	f := p.patForge("dev.azure.com", "/acme/proj/_git/app/git-receive-pack", PATGrant{})
 	if f == nil || f.ado == nil || f.ado.base != adoAPIPrefix {
 		t.Fatalf("patForge = %+v, want the Azure DevOps reader at %s", f, adoAPIPrefix)

@@ -58,7 +58,8 @@ func (f *fakeDelegateStore) CreateDelegate(_ context.Context, d types.Delegate, 
 	if _, dup := f.byCred[h]; dup {
 		return types.Delegate{}, store.ErrConflict
 	}
-	d.CredentialSHA256, d.CreatedAt = h, time.Now().UTC()
+	// admission_rev's column default, which the database applies to every row, a console portal's too.
+	d.CredentialSHA256, d.CreatedAt, d.AdmissionRev = h, time.Now().UTC(), 1
 	f.delegates[d.ID], f.byCred[h] = d, d.ID
 	return d, nil
 }
@@ -68,6 +69,19 @@ func (f *fakeDelegateStore) GetDelegateByRaw(_ context.Context, raw string) (typ
 	defer f.mu.Unlock()
 	d, ok := f.delegates[f.byCred[memHash(raw)]]
 	if !ok || d.RevokedAt != nil {
+		return types.Delegate{}, store.ErrNotFound
+	}
+	return d, nil
+}
+
+// GetDelegateByID makes every store that embeds the fake a store.DelegateReader, as the Postgres store is: each
+// delegated run request reads its portal's row for the unit pin (portalPinOf), and a store that cannot read it
+// answers 503 portal_unit_unavailable. A revoked row is still read, as the Postgres read returns it.
+func (f *fakeDelegateStore) GetDelegateByID(_ context.Context, id uuid.UUID) (types.Delegate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	d, ok := f.delegates[id]
+	if !ok {
 		return types.Delegate{}, store.ErrNotFound
 	}
 	return d, nil
@@ -245,10 +259,12 @@ func TestDelegation_AllowListRouteWalk(t *testing.T) {
 
 // delegatedOutputStore keeps memRunOutputs' rows while still offering the
 // portal capability: memRunOutputs embeds only store.Store, so on its own it
-// would hide store.DelegateStore from the delegated lane.
+// would hide store.DelegateStore from the delegated lane, and the portal read
+// by id (store.DelegateReader) the unit pin check makes.
 type delegatedOutputStore struct {
 	*memRunOutputs
 	store.DelegateStore
+	store.DelegateReader
 	store.RunsByCreatorPager
 }
 
@@ -259,7 +275,8 @@ func newDelegatedOutputServer(t *testing.T, person string, shape ...func(*Config
 	srv, ast, _, _ := newAuthzMatrixServer(t, func(c *Config) {
 		ast = c.Store.(*authzStore)
 		mem = newMemRunOutputs(c.Store)
-		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, RunsByCreatorPager: ast}
+		c.Store = delegatedOutputStore{memRunOutputs: mem, DelegateStore: ast.fakeDelegateStore, DelegateReader: ast.fakeDelegateStore,
+			RunsByCreatorPager: ast}
 		for _, f := range shape {
 			f(c)
 		}
@@ -303,10 +320,11 @@ func TestDelegation_RunOutputReadsTheOwnersTail(t *testing.T) {
 	}
 }
 
-// Option A of #1423: a portal reads command output only. A row recovered from
-// the recording, or an interactive run's pane snapshot, stays the person's own:
-// the delegated read is refused with delegation_scope naming the portal, and the
-// person's own session reads the same row.
+// Option A of #1423: a console portal reads command output only. A row recovered
+// from the recording, or an interactive run's pane snapshot, stays the person's
+// own: the delegated read answers as a run with no such row, writes no refusal
+// row and one run.output.refuse row naming the portal, and the person's own
+// session reads the same row.
 func TestDelegation_RunOutputRecordingDerived(t *testing.T) {
 	const person = "sub-person"
 	// With the row withheld the read falls through to the run's own answer: an
@@ -321,17 +339,10 @@ func TestDelegation_RunOutputRecordingDerived(t *testing.T) {
 			if w.Code != http.StatusConflict || errorReason(w) != wantReason || strings.Contains(w.Body.String(), "from the recording") {
 				t.Fatalf("delegated read: %d %s, want 409 %s and none of the row", w.Code, w.Body, wantReason)
 			}
-			rec := srv.cfg.Audit.(*recRecorder)
-			var rows []types.AuditEvent
-			for _, ev := range rec.snapshot() {
-				if ev.Action == authz.AuditAction {
-					rows = append(rows, ev)
-				}
+			if reasons := auditReasons(t, srv, authz.AuditAction); len(reasons) != 0 {
+				t.Fatalf("a withheld row wrote refusal rows: %v", reasons)
 			}
-			if len(rows) != 1 || !strings.Contains(string(rows[0].Data), `"reason":"delegation_scope"`) ||
-				!strings.Contains(string(rows[0].Data), `"delegate":"`+via.Delegate.String()+`"`) {
-				t.Fatalf("refusal rows = %+v, want one delegation_scope row naming the portal", rows)
-			}
+			wantRefuseRow(t, srv, id, wantReason, http.StatusConflict, via)
 
 			own := doSSO(t, srv, http.MethodGet, path, ssoSession(t, person, "person@corp.example", oidc.RoleUser), "")
 			if own.Code != http.StatusOK || !strings.Contains(own.Body.String(), `"source":"`+source+`"`) {

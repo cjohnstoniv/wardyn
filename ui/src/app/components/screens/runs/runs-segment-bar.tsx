@@ -20,10 +20,13 @@ const OPTIONS: { value: RunsSegmentFilter; label: string }[] = [
 export function RunsSegmentBar({
   value,
   counts,
+  atLeast,
   onChange,
 }: {
   value: RunsSegmentFilter;
   counts: Record<RunsSegmentFilter, number>;
+  /** Segments whose count is only what the pages read so far held: shown "N+", as "Your runs" is. */
+  atLeast?: readonly RunsSegmentFilter[];
   onChange: (next: RunsSegmentFilter) => void;
 }) {
   return (
@@ -44,7 +47,7 @@ export function RunsSegmentBar({
           )}
         >
           {o.label}{" "}
-          <span className={cn("rounded-full px-2 text-meta tabular-nums", value === o.value ? "bg-primary/15" : "bg-muted")}>{counts[o.value]}</span>
+          <span className={cn("rounded-full px-2 text-meta tabular-nums", value === o.value ? "bg-primary/15" : "bg-muted")}>{counts[o.value]}{atLeast?.includes(o.value) ? "+" : ""}</span>
         </button>
       ))}
     </div>

@@ -403,6 +403,9 @@ func (s *Server) leaseDeliverCreate(ctx, createCtx context.Context, run types.Ag
 	if !s.deliverResident(createCtx, run, spec.ProxyConfig.Policy, values) {
 		return execution, runner.Sandbox{}, true, nil
 	}
+	if u := unstartedEndOf(createCtx); u != nil {
+		u.asked.Store(true) // the runner is asked from here: a failure no longer says nothing was created
+	}
 	sb, err := s.createSandboxAtTarget(createCtx, run, spec)
 	return execution, sb, false, err
 }

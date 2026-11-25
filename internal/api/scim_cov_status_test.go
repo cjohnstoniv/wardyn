@@ -152,6 +152,24 @@ func TestSCIMCovStatusListsDeactivatedAndPending(t *testing.T) {
 	}
 }
 
+// GET /scim/status lists the identities and failures of the SCIM issuer and tenant it serves, as the sweeps
+// and the SCIM user routes compare rows, never every issuer's.
+func TestSCIMStatus_ScopedToSCIMIssuer(t *testing.T) {
+	st := newSCIMCovStore()
+	e := newSCIMCovEnv(t, st)
+	if w, _ := e.status(); w.Code != http.StatusOK {
+		t.Fatalf("status = %d %s, want 200", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	want := [2]string{scimCovIssuer, scimCovTenant}
+	for _, m := range []string{"ListDeactivatedIdentities", "ListDeprovisionFailures"} {
+		if got, ok := st.scoped[m]; !ok || got != want {
+			t.Errorf("%s was scoped to %v (called %v), want issuer and tenant %v", m, got, ok, want)
+		}
+	}
+}
+
 func TestSCIMCovStatusStoreFailures(t *testing.T) {
 	for _, c := range []struct {
 		name, method string
@@ -199,13 +217,84 @@ func TestSCIMCovStatusLastTokenSlotIsTheNewestWriteThatNamesOne(t *testing.T) {
 		t.Fatalf("status = %d %s, want last_token_slot next", w.Code, w.Body.String())
 	}
 	first := paged.filters[0]
-	if first.ActionPrefix != "scim.user." || first.Actor != scimActor || first.ActorType != types.ActorSystem || first.Origin != store.AuditOriginOrganisation {
-		t.Errorf("slot filter = %+v, want the SCIM caller's own organisation rows of scim.user.*", first)
+	if first.ActionPrefix != "scim." || first.Actor != scimActor || first.ActorType != types.ActorSystem || first.Origin != store.AuditOriginOrganisation {
+		t.Errorf("slot filter = %+v, want the SCIM caller's own organisation rows of scim.*", first)
 	}
 
 	paged.audit = rows[:2]
 	if _, body := e.status(); body.LastTokenSlot != "" {
 		t.Errorf("last_token_slot = %q, want empty when no row names a bearer", body.LastTokenSlot)
+	}
+}
+
+// A group member removal records the bearer slot as a user write does, so the newest of the two decides, in
+// either order and for either slot; a removal row that names no slot, or another scim.* row, decides nothing.
+func TestSCIMCovStatusLastTokenSlotCountsGroupRemovalsToo(t *testing.T) {
+	t0 := scimCovNow
+	user := func(ago time.Duration, slot string) types.AuditEvent {
+		return scimCovAudit("scim.user.write", "x", t0.Add(-ago), `{"slot":"`+slot+`"}`)
+	}
+	group := func(ago time.Duration, slot string) types.AuditEvent {
+		return scimCovAudit("scim.group.member_remove", "x", t0.Add(-ago), `{"slot":"`+slot+`","group":"g"}`)
+	}
+	for _, c := range []struct {
+		name string
+		rows []types.AuditEvent // newest first
+		want string
+	}{
+		{"a group removal on primary after a user write on next", []types.AuditEvent{group(time.Minute, "primary"), user(2*time.Minute, "next")}, "primary"},
+		{"a user write on next after a group removal on primary", []types.AuditEvent{user(time.Minute, "next"), group(2*time.Minute, "primary")}, "next"},
+		{"a group removal on next after a user write on primary", []types.AuditEvent{group(time.Minute, "next"), user(2*time.Minute, "primary")}, "next"},
+		{"a user write on primary after a group removal on next", []types.AuditEvent{user(time.Minute, "primary"), group(2*time.Minute, "next")}, "primary"},
+		{"a group removal naming no slot, then a user write", []types.AuditEvent{scimCovAudit("scim.group.member_remove", "x", t0, `{"group":"g"}`), user(time.Minute, "next")}, "next"},
+		{"another scim row, then a group removal", []types.AuditEvent{scimCovAudit("scim.group.purge", "x", t0, `{"slot":"next"}`), group(time.Minute, "primary")}, "primary"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := scimCovPagedEnv(t, newSCIMCovStore(), c.rows)
+			if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != c.want {
+				t.Errorf("status = %d, last_token_slot %q, want %q", w.Code, body.LastTokenSlot, c.want)
+			}
+		})
+	}
+}
+
+// The scan limit applies to rows that name a bearer: a backlog of the sweeper's own rows, newer than the
+// last request a token made, does not push that request out of the read and leave the card saying no token
+// was used. Catches a read that takes the newest 200 scim.* rows and filters by slot afterwards.
+func TestSCIMCovStatusLastTokenSlotSurvivesASweeperBacklog(t *testing.T) {
+	t0 := scimCovNow
+	var rows []types.AuditEvent // newest first
+	for i := 0; i < scimStatusAuditScan+50; i++ {
+		rows = append(rows, scimCovAudit("scim.user.deactivate", "x", t0.Add(-time.Duration(i)*time.Second), `{"slot":"sweeper"}`))
+		rows = append(rows, scimCovAudit("scim.group.member_remove", "x", t0.Add(-time.Duration(i)*time.Second), `{"slot":"sweeper","group":"g"}`))
+	}
+	rows = append(rows, scimCovAudit("scim.user.write", "x", t0.Add(-time.Hour), `{"slot":"next"}`))
+	e, _ := scimCovPagedEnv(t, newSCIMCovStore(), rows)
+	if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != "next" {
+		t.Errorf("status = %d, last_token_slot %q, want next: %d sweeper rows are newer than it", w.Code, body.LastTokenSlot, len(rows)-1)
+	}
+}
+
+// Two rows written in the same instant are told apart by the order they were written in: the audit read is
+// newest first by sequence, so the first row of either order is the newest, whichever slot it names.
+func TestSCIMCovStatusLastTokenSlotTiedTimestampsFollowAuditOrder(t *testing.T) {
+	at := scimCovNow
+	primary := scimCovAudit("scim.user.write", "x", at, `{"slot":"primary"}`)
+	next := scimCovAudit("scim.user.write", "x", at, `{"slot":"next"}`)
+	for _, c := range []struct {
+		name string
+		rows []types.AuditEvent // newest first
+		want string
+	}{
+		{"the next-slot row written last", []types.AuditEvent{next, primary}, "next"},
+		{"the primary-slot row written last", []types.AuditEvent{primary, next}, "primary"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, _ := scimCovPagedEnv(t, newSCIMCovStore(), c.rows)
+			if w, body := e.status(); w.Code != http.StatusOK || body.LastTokenSlot != c.want {
+				t.Errorf("status = %d, last_token_slot %q, want %q", w.Code, body.LastTokenSlot, c.want)
+			}
+		})
 	}
 }
 

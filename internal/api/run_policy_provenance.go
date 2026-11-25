@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -87,7 +88,8 @@ func (k knobProvenance) resetUnchanged(rec policyref.Provenance, before, after t
 
 // canonicalKnobs is a clone of s in the form composer's merges leave it: host
 // and method lists case-folded, trimmed, sorted and deduped (composer.union),
-// push_rules paths sorted and deduped by exact bytes (composer.unionPaths), an
+// push_rules paths sorted and deduped by exact bytes (composer.unionPaths), a set
+// push_rules' zero pack cap as the default the meet spells out, an
 // empty list absent, first_use_approval normalized, and desktop as its effective
 // rules (an unset desktop and its defaults spelled out are the same rules).
 func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
@@ -104,6 +106,9 @@ func canonicalKnobs(s types.RunPolicySpec) types.RunPolicySpec {
 		slices.Sort(s.PushRules.DenyPaths)
 		slices.Sort(s.PushRules.RequireReviewPaths)
 		s.PushRules.DenyPaths, s.PushRules.RequireReviewPaths = slices.Compact(s.PushRules.DenyPaths), slices.Compact(s.PushRules.RequireReviewPaths)
+		if s.PushRules.IsSet() && s.PushRules.MaxInspectPackMiB <= 0 {
+			s.PushRules.MaxInspectPackMiB = composer.DefaultInspectPackMiB
+		}
 	}
 	s.FirstUseApproval = s.FirstUseApproval.Normalize()
 	d := s.Desktop.Effective()

@@ -3,39 +3,23 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Changes tab and its drawer (0.8.6 four-eyes, mock packet M3). Expected strings come from CHANGES, so
-// these fail the moment a rendered string stops coming from the approved canon. Pinned here because they are
-// decisions: the diff is the server's, Approve is disabled on the viewer's own proposal, the server's own
-// refusal sentence is shown verbatim, and a 202 at a write site is "submitted", never "saved".
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+// The Changes tab. Expected strings come from CHANGES, so these fail the moment a
+// rendered string stops coming from the approved canon. Pinned here because they are decisions: a row opens the
+// change on its own page, and a 202 at a write site is "submitted", never "saved". The page itself is pinned in
+// change-review-page.test.tsx.
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { toast } from "sonner";
 
 const poolGetMock = vi.fn();
 const poolMembersMock = vi.fn();
 vi.mock("../../../lib/api/runner-pools", () => ({
   runnerPools: { get: (...a: unknown[]) => poolGetMock(...a), members: (...a: unknown[]) => poolMembersMock(...a) },
 }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
-const approveMock = vi.fn();
-const rejectMock = vi.fn();
-vi.mock("../../../lib/api/governance", async () => {
-  const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
-  return {
-    ...actual,
-    governance: {
-      ...actual.governance,
-      approveChange: (...a: unknown[]) => approveMock(...a),
-      rejectChange: (...a: unknown[]) => rejectMock(...a),
-    },
-  };
-});
-
-import { HttpError } from "../../../lib/api/core";
-import { CHANGES, DELIVERY, GOVERNANCE } from "../../../lib/governance-copy";
+import { CHANGE_REVIEW } from "../../../lib/change-review-copy";
+import { CHANGES, DELIVERY } from "../../../lib/governance-copy";
 import type { GovernanceChange } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -62,7 +46,8 @@ function change(over: Partial<GovernanceChange> = {}): GovernanceChange {
 }
 
 function Where() {
-  return <p data-testid="where">{useLocation().pathname}</p>;
+  const l = useLocation();
+  return <p data-testid="where">{l.pathname + l.search}</p>;
 }
 
 function renderTab(changes: GovernanceChange[], principal = "bo@example.com", onChanged = vi.fn()) {
@@ -77,13 +62,6 @@ function renderTab(changes: GovernanceChange[], principal = "bo@example.com", on
   return { onChanged };
 }
 
-beforeEach(() => {
-  approveMock.mockReset();
-  rejectMock.mockReset();
-  vi.mocked(toast.success).mockClear();
-  vi.mocked(toast.warning).mockClear();
-});
-
 describe("the Changes tab", () => {
   it("lists a pending change as Kind · Op over its target, proposer and times", () => {
     renderTab([change()]);
@@ -93,6 +71,42 @@ describe("the Changes tab", () => {
     expect(screen.getByText("ana@example.com")).toBeInTheDocument();
     expect(screen.getByText("2h ago")).toBeInTheDocument();
     expect(screen.getByText("in 20h")).toBeInTheDocument();
+  });
+
+  it("adds an Effect column after Change with the verdict and risk, and nothing on a request", () => {
+    const widening = change({
+      id: "w1",
+      diff: {
+        ...change().diff,
+        review: {
+          verdict: "widens",
+          widens: [{ field: "allowed_domains", entries: ["settle.partner-a.example"] }],
+          risk: { before: { overall: "low", items: [] }, after: { overall: "medium", items: [] } },
+        },
+      },
+    });
+    const held = change({
+      id: "h1",
+      target_key: "team-h",
+      diff: { ...change().diff, review: { verdict: "narrows_held", held_because: ["lock_removed", "contact"] } },
+    });
+    const request = change({
+      id: "r1",
+      target_kind: "governance_elevation",
+      op: "request",
+      target_key: "el1",
+      diff: { after: { unit_name: "Payments", subject: "kai", duration: "1h0m0s" }, changed: [] },
+    });
+    renderTab([widening, held, change({ id: "u1" }), request]);
+    const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
+    expect(heads.indexOf(CHANGE_REVIEW.COL_EFFECT)).toBe(heads.indexOf(CHANGES.COL_CHANGE) + 1);
+    const rows = screen.getAllByRole("row").slice(1);
+    const effect = (i: number) => within(rows[i]).getAllByRole("cell")[1];
+    expect(within(effect(0)).getByText(CHANGE_REVIEW.VERDICT.widens)).toBeInTheDocument();
+    expect(within(effect(0)).getByText("Risk Low → Medium")).toBeInTheDocument();
+    expect(within(effect(1)).getByText(CHANGE_REVIEW.VERDICT.narrows_held(CHANGE_REVIEW.HELD_BECAUSE.lock_removed))).toBeInTheDocument();
+    expect(within(effect(2)).getByText(CHANGE_REVIEW.VERDICT.not_checked)).toBeInTheDocument();
+    expect(effect(3).textContent).toBe("");
   });
 
   it("reads a held organization runner removal as a sentence, with who decides it", async () => {
@@ -109,6 +123,12 @@ describe("the Changes tab", () => {
     renderTab([change({ target_kind: "runner_pool_use_policy", op: "set", target_key: "p1", diff: { before: state, after: state, changed: [] } })]);
     expect(screen.getByRole("button", { name: "Runner pool use policy · Set" })).toBeInTheDocument();
     expect(screen.queryByText("A super admin decides this.")).not.toBeInTheDocument();
+  });
+
+  it("lists an agent rules write as Agent rules, under its harness", () => {
+    renderTab([change({ target_kind: "agent_rules", op: "update", target_key: "claude-code", diff: { changed: [] } })]);
+    expect(screen.getByRole("button", { name: `Agent rules · ${CHANGES.OP.update}` })).toBeInTheDocument();
+    expect(screen.getByText("claude-code")).toBeInTheDocument();
   });
 
   it("lists a credential delivery write as Runner credentials, under its natural key", () => {
@@ -129,7 +149,7 @@ describe("the Changes tab", () => {
   });
 
   // Q6: a runner trust change's key is the runner's id; the server's diff carries its name on both sides.
-  it("lists a runner trust change as Runner trust class · Edit over the runner's name, not its id", async () => {
+  it("lists a runner trust change as Runner trust class · Edit over the runner's name, not its id", () => {
     const id = "3f9c1c2e-7a41-4d0b-9e6a-5b2f0d8c1a77";
     renderTab([
       change({
@@ -141,11 +161,6 @@ describe("the Changes tab", () => {
     expect(screen.getByRole("button", { name: "Runner trust class · Edit" })).toBeInTheDocument();
     expect(screen.getByText("dana-laptop")).toBeInTheDocument();
     expect(screen.queryByText(id)).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Runner trust class · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("trust_class")).toBeInTheDocument();
-    expect(within(dialog).getByText("personal")).toBeInTheDocument();
-    expect(within(dialog).getByText("managed_device")).toBeInTheDocument();
   });
 
   it("falls back to the runner trust change's key when the diff carries no name", () => {
@@ -195,189 +210,26 @@ describe("the Changes tab", () => {
   });
 });
 
-describe("the change drawer", () => {
-  it("renders the server's diff as Field / Before / After, and the full before and after behind a disclosure", async () => {
+describe("opening a change", () => {
+  it("a click on a row opens the change on its own page, with no dialog", async () => {
+    renderTab([change({ id: "c1" }), change({ id: "c2", target_key: "team-b" })]);
+    await userEvent.click(screen.getAllByRole("row")[2]);
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/governance/changes/c2");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a click on the label opens the change too", async () => {
     renderTab([change()]);
     await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-
-    expect(within(dialog).getByText(CHANGES.META("ana@example.com", "2h ago", "in 20h"))).toBeInTheDocument();
-    expect(within(dialog).getByText("ceiling.allowed_domains")).toBeInTheDocument();
-    expect(within(dialog).getByText('["*.corp","git.x"]')).toBeInTheDocument();
-    expect(within(dialog).getByText('["*.corp"]')).toBeInTheDocument();
-    expect(within(dialog).getByText(CHANGES.DIFF_FULL)).toBeInTheDocument();
-    expect(within(dialog).getByText(CHANGES.REASON_LABEL)).toBeInTheDocument();
-    expect(within(dialog).getByText(CHANGES.REASON_HINT)).toBeInTheDocument();
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/governance/changes/c1");
   });
 
-  it("shows the notes the server kept with the change, for the person approving", async () => {
-    const note = "this profile omits 3 denied domain(s) the deployment default denies (a, b, c) — members under it are NOT walled from them";
-    renderTab([change({ diff: { ...change().diff, notes: [note] } })]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(GOVERNANCE.OMISSION_TITLE)).toBeInTheDocument();
-    expect(within(dialog).getByText(note)).toBeInTheDocument();
-  });
-
-  // The owner-approved mock (2026-10-17, 4a): the notes sit between the diff and the reason, one per line.
-  it("puts the notes between the diff and the reason, one per line", async () => {
-    const notes = ["first note", "second note"];
-    renderTab([change({ diff: { ...change().diff, notes } })]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const diffHeader = within(dialog).getByText(CHANGES.DIFF_FIELD);
-    const heading = within(dialog).getByText(GOVERNANCE.OMISSION_TITLE);
-    const reason = within(dialog).getByText(CHANGES.REASON_LABEL);
-    expect(follows(diffHeader, heading)).toBe(true);
-    expect(follows(heading, within(dialog).getByText(notes[0]))).toBe(true);
-    expect(follows(within(dialog).getByText(notes[1]), reason)).toBe(true);
-    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(notes[1]))).toBe(true);
-  });
-
-  it("on an assignment, puts the notes after the profile it assigns and before the reason", async () => {
-    const notes = ["first note"];
-    renderTab([
-      change({
-        target_kind: "governance_membership",
-        op: "upsert",
-        diff: {
-          after: { subject_type: "group", subject: "g", unit_id: "p9", priority: 0, unit: { id: "p9", name: "Embedded profile", ceiling: {}, limits: {} } },
-          changed: ["unit_id"],
-          notes,
-        },
-      }),
-    ]);
-    await userEvent.click(screen.getByRole("button", { name: "Assignment · Set" }));
-    const dialog = await screen.findByRole("dialog");
-    const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const assigned = within(dialog).getByText(CHANGES.ASSIGNED_PROFILE);
-    expect(follows(assigned, within(dialog).getByText(GOVERNANCE.OMISSION_TITLE))).toBe(true);
-    expect(follows(within(dialog).getByText(notes[0]), within(dialog).getByText(CHANGES.REASON_LABEL))).toBe(true);
-  });
-
-  it("shows no notes heading for a change that carries none", async () => {
+  it("Enter on a focused row opens it", async () => {
     renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByText(GOVERNANCE.OMISSION_TITLE)).toBeNull();
-  });
-
-  it("shows an absent side as Not set", async () => {
-    renderTab([
-      change({
-        op: "create",
-        diff: { after: { name: "team-a" }, changed: ["name"] },
-      }),
-    ]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · New" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getAllByText(CHANGES.DIFF_UNSET).length).toBeGreaterThan(0);
-  });
-
-  it("renders an assignment's embedded profile summary from the diff, and looks nothing up", async () => {
-    renderTab([
-      change({
-        target_kind: "governance_membership",
-        op: "upsert",
-        diff: {
-          after: {
-            subject_type: "group",
-            subject: "g",
-            unit_id: "p9",
-            priority: 0,
-            unit: { id: "p9", name: "Embedded profile", ceiling: { allowed_domains: ["a.example"] }, limits: {} },
-          },
-          changed: ["unit_id"],
-        },
-      }),
-    ]);
-    await userEvent.click(screen.getByRole("button", { name: "Assignment · Set" }));
-    const dialog = await screen.findByRole("dialog");
-    const section = within(dialog).getByTestId("change-assigned-profile");
-    expect(within(section).getByText(CHANGES.ASSIGNED_PROFILE)).toBeInTheDocument();
-    expect(within(section).getByText("Embedded profile")).toBeInTheDocument();
-    expect(section.textContent).toContain("a.example");
-  });
-
-  it("disables Approve on the viewer's own proposal, says why, and still lets them Reject", async () => {
-    renderTab([change()], "ana@example.com");
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("button", { name: CHANGES.APPROVE })).toBeDisabled();
-    expect(within(dialog).getByText(CHANGES.OWN_NOTE)).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: CHANGES.REJECT })).toBeEnabled();
-  });
-
-  it("approves another person's change, toasts, and asks for the list again", async () => {
-    approveMock.mockResolvedValue(change({ state: "applied" }));
-    const { onChanged } = renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).queryByText(CHANGES.OWN_NOTE)).toBeNull();
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
-    expect(approveMock).toHaveBeenCalledWith("c1");
-    expect(toast.success).toHaveBeenCalledWith(CHANGES.TOAST_APPROVED);
-    expect(onChanged).toHaveBeenCalled();
-  });
-
-  it("an approved change whose token revocation did not finish keeps the server's remedy until dismissed", async () => {
-    const detail = "The change is saved, but Wardyn could not revoke every API token that may still hold the old role.";
-    approveMock.mockResolvedValue({ ...change({ state: "applied" }), tokens_revocation_failed: true, detail });
-    const { onChanged } = renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
-    expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
-    expect(toast.success).not.toHaveBeenCalled();
-    expect(onChanged).toHaveBeenCalled();
-  });
-
-  it("an approved suspension that could not end every run keeps the server's remedy until dismissed", async () => {
-    const detail = "The suspension is applied, but Wardyn could not end every live run of the service identity.";
-    approveMock.mockResolvedValue({ ...change({ state: "applied" }), runs_end_failed: true, detail });
-    renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
-    expect(toast.warning).toHaveBeenCalledWith(detail, { duration: Infinity });
-    expect(toast.success).not.toHaveBeenCalled();
-  });
-
-  it("a decision still out keeps its drawer, so its answer cannot close the next one opened", async () => {
-    let answer: ((c: GovernanceChange) => void) | undefined;
-    approveMock.mockReturnValue(new Promise((done) => (answer = done)));
-    renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
-    await userEvent.keyboard("{Escape}");
-    expect(screen.getByRole("dialog")).toBe(dialog);
-    await act(async () => answer?.(change({ state: "applied" })));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-  });
-
-  it("rejects with the typed reason", async () => {
-    rejectMock.mockResolvedValue(change({ state: "rejected" }));
-    renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.type(within(dialog).getByLabelText(CHANGES.REASON_LABEL), "not now");
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.REJECT }));
-    expect(rejectMock).toHaveBeenCalledWith("c1", "not now");
-    expect(toast.success).toHaveBeenCalledWith(CHANGES.TOAST_REJECTED);
-  });
-
-  it.each([403, 409])("shows the server's own sentence on a %i, under the frozen heading", async (status) => {
-    approveMock.mockRejectedValue(new HttpError(status, "the change you reviewed is no longer current"));
-    renderTab([change()]);
-    await userEvent.click(screen.getByRole("button", { name: "Profile · Edit" }));
-    const dialog = await screen.findByRole("dialog");
-    await userEvent.click(within(dialog).getByRole("button", { name: CHANGES.APPROVE }));
-    const alert = await within(dialog).findByRole("alert");
-    expect(within(alert).getByText(CHANGES.DECIDE_REFUSED_TITLE)).toBeInTheDocument();
-    expect(within(alert).getByText("the change you reviewed is no longer current")).toBeInTheDocument();
-    expect(toast.success).not.toHaveBeenCalled();
+    const row = screen.getAllByRole("row")[1];
+    row.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByTestId("where")).toHaveTextContent("/admin/governance/changes/c1");
   });
 });
 

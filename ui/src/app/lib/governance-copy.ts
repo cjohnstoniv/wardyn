@@ -443,6 +443,9 @@ export const CHANGES = {
     capability_availability: "Capability availability",
     user_type_priority: "User type priority",
     role_mapping: "Role mapping",
+    delegate: "Portal registration",
+    delegate_admission: "Portal admission change",
+    portal_issuer_retire: "Portal issuer retirement",
     key_domain_assignment: "Key domain assignment",
     egress_baseline: "Egress baseline",
     runner_pool_use_policy: "Runner pool use policy",
@@ -462,6 +465,7 @@ export const CHANGES = {
     governance_image_request: "Image",
     governance_unit_admin: "Unit admin",
     approval_rule: "Approval rule",
+    agent_rules: "Agent rules",
   } as Record<string, string>,
   // By op. An op this console predates shows its raw name.
   OP: {

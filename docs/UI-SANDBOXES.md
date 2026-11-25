@@ -52,10 +52,12 @@
 - `POST .../desktop-signin/end` closes the display and resumes the agent. A
   sign-in ends by itself after 30 minutes.
   An end asked for right after a sign-in began can be refused while the sign-in is still starting, for up to 6 minutes; ask for it again.
+- An end that cannot stop the display still closes it within about 5 seconds, while the end is retried.
 - `deny_interactive` and `deny_ui_apps` refuse the begin and the share, and a
   refused begin leaves the agent running. End stays open.
-- A limit set during a sign-in stops new entry. An open display stays until it
-  ends, and the agent comes back at End or within 30 minutes. If the end cannot
+- A run that declares a desktop under a profile with `deny_interactive` is created with a warning, in Review too: its desktop does not open while the profile denies interactive sessions.
+- A limit set during a sign-in stops new entry. An open display stays until the
+  sign-in ends, and the agent comes back at End or within 30 minutes. If the end cannot
   finish, Wardyn ends the run after 3 failed retries.
 - The person's browser is a different uid in the same sandbox, not a
   sandbox of its own: [THREAT-MODEL §5.1a](../threatmodel/THREAT-MODEL.md)
@@ -76,10 +78,14 @@
 
 - The relay filters a desktop's clipboard by the run's [`desktop`](POLICIES.md#desktop--desktopcontrols) rules:
   paste in allowed and copy out blocked unless the policy says otherwise.
-- The desktop is the app declared as `"name": "novnc"`. Every WebSocket of that app is RFB or it closes. The relay
-  follows the RFB stream inside it and drops a blocked `ClientCutText` or `ServerCutText`.
-- Only that app and the sign-in display (`_signin`) are filtered. A member may declare the same desktop server under another name, so a ceiling that
-  blocks copy out should also pin `ui_apps` to the desktop app. An SSH port forward to the VNC port is outside the relay.
+- The desktop is the app declared as `"name": "novnc"`, and any app declared with `"kind": "desktop"` whatever its
+  name. Every WebSocket of such an app is RFB or it closes. The relay follows the RFB stream inside it and drops a
+  blocked `ClientCutText` or `ServerCutText`.
+- Only those apps and the sign-in display (`_signin`) are filtered. A desktop declared under another name without the
+  kind relays unfiltered, so declare the kind on it, or on the ceiling's entry for it (a policy under that ceiling
+  keeps the kind).
+- An SSH port forward to the VNC port is outside the relay. A ceiling that blocks copy out should list its `ui_apps`:
+  a policy under a ceiling with no list may declare any app.
 - The desktop page comes from the sandbox, so these rules stop ordinary copy and paste; they are not a boundary against
   a run built to get data out.
 - The server speaks first in RFB. Browser frames that arrive before the server's first frame are held, up to
@@ -93,6 +99,12 @@
 - Every other app's sockets relay unfiltered, as before.
 - It filters the clipboard, not the screen: a person can still read what the desktop shows, and a page the
   sandbox serves can still show text.
+
+## The desktop watermark
+
+- It shows the viewer's email, or their principal, and the run id over the picture only: in the live desktop, a background watch and the recording replay.
+- An admin can require it with `desktop_watermark.required` in site config (Settings → Desktop watermark). Otherwise each viewer may turn it on for one view; the choice is not stored.
+- It deters a casual screen capture. It does not stop one: anyone who can see the screen can still photograph it.
 
 ## The desktop of a Linux VM run
 
@@ -281,6 +293,7 @@ export WARDYN_AGENT_IMAGES='{"vscode":"wardyn/agent-vscode:local"}'
 - The command starts once, after the workspace is prepared, in the run's terminal session (attach shows its output); it stops with the run and is not restarted if it exits. A revive starts it again.
 - With no launcher, the gateway waits up to 20s for the port of a run whose startup is a command, before the 502 below. The wait counts from when the app is opened, so an open during a long workspace preparation can still show the error.
 - A harness prompt seed gets the 502 at once.
+- With `WARDYN_START_AFTER_READBACK=on`, this form is failed before the sandbox is created, with a hint: the startup command rides the interactive boot seed, and that setting refuses any interactive run that carries one. Turn the setting off to serve an application.
 
 ## 3. Open an app
 
@@ -678,6 +691,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
   - So is a support helper's: each new request is re-checked before it is relayed, and one already open, a WebSocket or a long response, is re-checked every 30 seconds and closed once the grant stops.
 - **A support helper.** A super admin whose [support request](ENV.md#wardyn_support_sessions) the run's owner accepted with the web apps or desktop door ticked opens the run's apps, governed.
   - Web apps opens a declared app that is not a desktop. Desktop opens the `novnc` app and a Linux VM's desktop. A door the owner left unticked is `403` `support_door_not_granted` when the ticket is asked for. A ticket used after its grant ended, ran out or lost that door is `403` `ui_gateway_ticket_run_mismatch` at the enter.
+  - An app of kind desktop under another name needs both doors.
   - It needs per-run hosts. On one shared host the ticket mint answers `403` `inbound_needs_host_mode`.
   - The profile's `deny_ui_apps` and `deny_interactive` and the run's `data_out` apply. The helper never has a super admin's exemption.
   - The cookie ends with the grant, and each re-check asks the grant again: a revoke or an expiry ends the session, and a grant that cannot be read fails closed (`503`).

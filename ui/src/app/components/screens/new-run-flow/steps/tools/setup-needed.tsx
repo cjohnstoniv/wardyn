@@ -51,25 +51,32 @@ export function AddTokenDialog({ item, onClose, onSaved }: { item: SetupItem; on
   // and the write keeps the route that places it by role on arrival.
   const operator = useOperator();
   const known: SecretScope | undefined = useOperatorResolved() ? (operator ? "shared" : "personal") : undefined;
-  // The name the server already held: the next save replaces it only once the person has seen the warning.
-  const [takenName, setTakenName] = React.useState("");
-  const taken = takenName === name;
+  // The secret the server already held, and the namespace it was found in: the next save replaces it only once the
+  // person has seen the warning for that name in that namespace. A change of namespace is another destination, so
+  // the confirmation does not carry over to it.
+  const [held, setHeld] = React.useState<{ name: string; scope: SecretScope | undefined } | null>(null);
+  const taken = held?.name === name;
+  React.useEffect(() => setHeld(null), [known]);
 
   const save = async () => {
     setBusy(true);
     setError("");
     // The save follows a /me read, so it names the person who clicked, not whoever is signed in by then.
     const person = getExpectedPrincipal() || undefined;
+    let scopeUsed: SecretScope | undefined;
     try {
       // The role read at load can be out of date: after a promotion the token would go to the person's own namespace
       // while their preflight, now an administrator's, reads the shared one. Ask /me again first; if that read
-      // fails, keep the namespace the tab knows.
+      // fails, keep the namespace the tab knows, and keep the write create-only: nothing says that namespace is the
+      // one the person confirmed replacing in.
       const me = await health.whoami();
       const scope = me ? (me.operator ? "shared" : "personal") : known;
-      await secrets.setSecret(name, value, { scope, createOnly: !taken, person });
+      scopeUsed = scope;
+      const confirmed = !!me && scope !== undefined && held?.name === name && held.scope === scope;
+      await secrets.setSecret(name, value, { scope, createOnly: !confirmed, person });
       onSaved();
     } catch (e) {
-      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) setTakenName(name);
+      if (e instanceof HttpError && e.status === 409 && e.reason === SECRET_EXISTS_REASON) setHeld({ name, scope: scopeUsed });
       else setError(getErrorMessage(e));
       setBusy(false);
     }

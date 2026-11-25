@@ -246,3 +246,34 @@ func (c *Config) InspectsEntry(entry string) bool {
 	}
 	return false
 }
+
+// InspectedSubset says how much of an Inspected allowed_domains entry the proxy opens. partial is true when
+// some destination the entry allows is tunneled unread: a wildcard, which allows hosts the proxy does not
+// open beside the ones it does, and a host with no port that the proxy opens on one port only. subset is
+// then the destinations that are opened, as TerminatedHosts lists them, sorted. An entry that is not
+// Inspected, or whose every destination is opened (a host and port named, a host opened on any port),
+// is not partial and has no subset.
+func (c *Config) InspectedSubset(entry string) (subset []string, partial bool) {
+	m := c.mitmSetOf()
+	exact, wild, port := domainmatch.Classify(entry)
+	if wild == "" {
+		h := hostKey(exact)
+		if port != 0 || !m.terminatesAnyPort(h) || m.viaOrg[h] || m.ports[h] == 0 {
+			return nil, false
+		}
+		return []string{terminatedHost{host: h, port: m.ports[h]}.String()}, true
+	}
+	for _, t := range m.terminated() {
+		if !domainmatch.MatchWild(t.host, []string{wild}) {
+			continue
+		}
+		if port != 0 && !m.terminates(t.host, port) {
+			continue
+		}
+		subset = append(subset, t.String())
+	}
+	if len(subset) == 0 {
+		return nil, false
+	}
+	return subset, true
+}

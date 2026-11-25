@@ -111,7 +111,7 @@ func queueIdentity(authority []byte) string {
 	}
 	auth.Epoch, auth.Seq, auth.Actor = nil, 0, nil
 	if auth.Grant != nil {
-		auth.Grant = &uuid.UUID{}
+		auth.Grant = &queueGrant{Portal: auth.Grant.Portal}
 	}
 	b, _ := json.Marshal(auth) //nolint:errcheck // plain fields only, so it cannot fail
 	return string(b)

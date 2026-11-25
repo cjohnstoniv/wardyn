@@ -10,14 +10,15 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, RotateCw } from "lucide-react";
-import { toast } from "sonner";
+import { accountToast, signInGeneration } from "../../../lib/account-toasts";
 import { people as peopleApi } from "../../../lib/api/people";
 import { getErrorMessage, relativeTime } from "../../../lib/format";
-import type { PersonSummary, PersonToken } from "../../../lib/types";
+import type { PersonSummary, PersonToken, PortalUsed } from "../../../lib/types";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { PEOPLE_PAGE as P } from "../../wardyn/copy/people";
+import { Chip } from "../../wardyn/primitives";
 import { answeredSentence, STATES } from "../../wardyn/states";
-import { roleLabel } from "./people-format";
+import { personState, roleLabel, STATE_LABEL, STATE_TONE } from "./people-format";
 import { Button } from "../../ui/button";
 import {
   AlertDialog,
@@ -69,6 +70,19 @@ export function PersonDrawer({
   // live guard), so there is one read path for the drawer.
   const [attempt, setAttempt] = React.useState(0);
   const principal = person?.principal;
+  // Only a portal person has portals. The read is for this one person, so another person on the same issuer
+  // never lists here.
+  const portalPrincipal = person?.issuer ? principal : undefined;
+  // The answer carries the person it is for: until this person's read answers, nothing of an earlier person's
+  // answer (or an empty list) is shown, not even for the render before the effect starts the read.
+  const [portalRead, setPortalRead] = React.useState<
+    { for: string; failed: false; portals: PortalUsed[] } | { for: string; failed: true; error: unknown } | null
+  >(null);
+  const thisPortalRead = portalRead?.for === portalPrincipal ? portalRead : null;
+  const portalState = !thisPortalRead ? "loading" : thisPortalRead.failed ? "error" : "ready";
+  const portals = thisPortalRead && !thisPortalRead.failed ? thisPortalRead.portals : [];
+  const portalError = thisPortalRead?.failed ? thisPortalRead.error : null;
+  const [portalAttempt, setPortalAttempt] = React.useState(0);
   const { showSpinner } = useDeferredBusy(tokenState === "loading");
 
   React.useEffect(() => {
@@ -95,6 +109,25 @@ export function PersonDrawer({
     };
   }, [principal, attempt]);
 
+  React.useEffect(() => {
+    setPortalRead(null);
+    if (!portalPrincipal) return;
+    let live = true;
+    peopleApi
+      .portals(portalPrincipal)
+      .then((v) => {
+        if (!live) return;
+        setPortalRead({ for: portalPrincipal, failed: false, portals: v.portals_used });
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        setPortalRead({ for: portalPrincipal, failed: true, error: e });
+      });
+    return () => {
+      live = false;
+    };
+  }, [portalPrincipal, portalAttempt]);
+
   if (!person) return null;
   const label = person.email || person.principal;
   const message: Record<Action, { title: string; confirm: string; run: () => Promise<unknown>; button: string; done: (result: unknown) => string }> = {
@@ -116,13 +149,14 @@ export function PersonDrawer({
 
   const run = async (action: Action) => {
     setBusy(true);
+    const startedUnder = signInGeneration();
     try {
       const result = await message[action].run();
-      toast.success(message[action].done(result));
+      accountToast("success", message[action].done(result), startedUnder);
       setConfirm(null);
       onChanged();
     } catch (e) {
-      toast.error(getErrorMessage(e));
+      accountToast("error", getErrorMessage(e), startedUnder);
     } finally {
       setBusy(false);
     }
@@ -136,9 +170,61 @@ export function PersonDrawer({
             <SheetTitle className="break-words">
               {label}
               {person.role ? ` · ${roleLabel(person.role)}` : ""}
+              {person.issuer && (
+                <>
+                  {" "}
+                  <Chip tone="neutral">{P.PORTAL_PERSON}</Chip>
+                </>
+              )}
             </SheetTitle>
           </SheetHeader>
           <div className="px-4">
+            <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 border-b border-border py-3 text-body">
+              <dt className="text-muted-foreground">{P.COL_STATE}</dt>
+              <dd>
+                <Chip tone={STATE_TONE[personState(person)]}>{STATE_LABEL[personState(person)]}</Chip>
+              </dd>
+            </dl>
+            {person.issuer && (
+              <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 gap-y-1 border-b border-border py-3 text-body">
+                <dt className="text-muted-foreground">{P.COL_ISSUER}</dt>
+                <dd className="select-text break-all font-mono text-xs">{person.issuer}</dd>
+                <dt className="text-muted-foreground">{P.COL_INTERNAL}</dt>
+                <dd className="select-text break-all font-mono text-xs">
+                  {person.internal_address || <span className="font-sans text-sm text-muted-foreground">{P.INTERNAL_UNSET}</span>}
+                </dd>
+              </dl>
+            )}
+            {person.issuer && (
+              <div className="border-b border-border py-3" aria-label={P.PORTALS} role="group">
+                <div className="text-body font-medium text-foreground">{P.PORTALS}</div>
+                {portalState === "loading" && <Loader2 className="mt-1 size-3.5 animate-spin text-muted-foreground" aria-hidden />}
+                {portalState === "error" && (
+                  <div role="status" className="flex flex-wrap items-center gap-2">
+                    <p className="text-meta text-muted-foreground">{answeredSentence(portalError, P.PORTALS_LOAD_FAILED) ?? STATES.ERROR_DEFAULT}</p>
+                    <Button size="sm" variant="outline" onClick={() => setPortalAttempt((n) => n + 1)}>
+                      <RotateCw className="size-3.5" />
+                      {STATES.RETRY}
+                    </Button>
+                  </div>
+                )}
+                {portalState === "ready" && portals.length === 0 && <div className="text-meta text-muted-foreground">{P.PORTALS_NONE}</div>}
+                {portalState === "ready" && portals.length > 0 && (
+                  <ul className="mt-1 space-y-1">
+                    {portals.map((u) => (
+                      <li key={u.delegate} className="text-meta">
+                        <span className={u.revoked_at ? "text-muted-foreground line-through" : "text-foreground"}>{u.name}</span>
+                        <span className="text-muted-foreground">
+                          {" · "}
+                          {u.run_in_under ? <span className="select-text break-all font-mono">{P.PORTAL_UNIT(u.run_in_under)}</span> : P.PORTAL_NO_UNIT}
+                        </span>
+                        {u.revoked_at && <span className="ml-2"><Chip tone="warning">{P.PORTAL_REVOKED(relativeTime(u.revoked_at))}</Chip></span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
             <Section label={P.SESSIONS} value={P.SESSIONS_ACTIVE(person.active_sessions)}>
               <Button size="sm" variant="outline" onClick={() => setConfirm("sign_out")}>
                 {P.SIGN_OUT}
@@ -171,9 +257,12 @@ export function PersonDrawer({
                 </ul>
               )}
             </Section>
-            <p className="border-b border-border py-2 text-meta text-muted-foreground">
-              {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
-            </p>
+            {/* A portal person cannot hold a personal API token: the invitation would be refused. */}
+            {!person.issuer && (
+              <p className="border-b border-border py-2 text-meta text-muted-foreground">
+                {P.INVITE_LEAD} <code className="font-mono text-foreground [overflow-wrap:anywhere]">{P.INVITE_CMD(person.principal)}</code>.
+              </p>
+            )}
             <Section label={P.SSH} value={person.ssh_keys}>
               <Button size="sm" variant="outline" disabled={person.ssh_keys === 0} onClick={() => setConfirm("ssh")}>
                 {P.SSH_REMOVE}

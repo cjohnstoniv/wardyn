@@ -214,10 +214,14 @@ export interface RunsListFilter {
   // "exclude" turns off only the addition of the runs of service identities the caller sponsors to their own
   // list (#2513); omitted keeps them.
   sponsored?: "exclude";
+  // Only service runs, applied by the server before it pages.
+  service?: boolean;
   workspace?: string;
   q?: string;
   limit?: number;
   offset?: number;
+  // Leave the two hidden-count headers out (counts=skip): a poll that already holds the counts.
+  skipCounts?: boolean;
 }
 
 export interface RunsListFilteredResult {
@@ -227,6 +231,8 @@ export interface RunsListFilteredResult {
   // branch by construction (server-side; that branch never hides anything).
   hiddenOlder: number;
   hiddenKilled: number;
+  // False when the read skipped the counts (skipCounts): hiddenOlder and hiddenKilled are then 0 and mean nothing.
+  countsRead: boolean;
 }
 
 async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFilteredResult> {
@@ -237,17 +243,21 @@ async function listRunsFiltered(filter: RunsListFilter): Promise<RunsListFiltere
   if (filter.endedWithin) q.set("ended_within", filter.endedWithin);
   if (filter.includeKilled) q.set("include_killed", "1");
   if (filter.sponsored) q.set("sponsored", filter.sponsored);
+  if (filter.service) q.set("service", "1");
   if (filter.workspace) q.set("workspace", filter.workspace);
   if (filter.q) q.set("q", filter.q);
+  if (filter.skipCounts) q.set("counts", "skip");
   q.set("limit", String(filter.limit ?? LIST_LIMIT));
   q.set("offset", String(filter.offset ?? 0));
   const res = await wfetch(`/runs?${q.toString()}`, { method: "GET" });
   const rows = unwrapList<AgentRun>(await asJson<unknown>(res));
+  const older = res.headers.get("X-Wardyn-Hidden-Older");
   return {
     runs: rows,
     truncated: res.headers.get("X-Wardyn-Truncated") === "true",
-    hiddenOlder: Number(res.headers.get("X-Wardyn-Hidden-Older") ?? "0") || 0,
+    hiddenOlder: Number(older ?? "0") || 0,
     hiddenKilled: Number(res.headers.get("X-Wardyn-Hidden-Killed") ?? "0") || 0,
+    countsRead: older !== null,
   };
 }
 

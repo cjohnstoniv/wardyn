@@ -49,6 +49,8 @@ const (
 	GovernanceTargetEnvelope               = "governance_envelope"
 	GovernanceTargetElevation              = "governance_elevation"
 	GovernanceTargetImageRequest           = "governance_image_request"
+	GovernanceTargetApprovalCounts         = "governance_approval_counts"
+	GovernanceTargetAgentRules             = "agent_rules"
 )
 
 // GovernanceChange is one governance write held for a second human (migration 0126). Payload is the
@@ -82,4 +84,9 @@ type GovernanceChange struct {
 	DeploymentHash  string          `json:"-"`
 	ProposedByEmail string          `json:"-"`
 	DecidedByEmail  string          `json:"-"`
+	// RequiredApprovals is how many distinct people must approve, fixed when the change was proposed, and
+	// RequireSecurity whether one of them must hold the security tier. The wire carries them only inside
+	// the read model's approvals block.
+	RequiredApprovals int  `json:"-"`
+	RequireSecurity   bool `json:"-"`
 }

@@ -109,10 +109,10 @@ const SECTION_OF_PATH: Record<string, FormSection | "name" | "description"> = {
 /**
  * The part a walls or wall preset refusal names: the section of the form its wire path belongs to, and the server's own
  * sentence under it. A sentence that names no path of the form maps to none, and shows above the buttons. The server
- * prefixes a write's sentence with "invalid wall preset: " (a preset) or "invalid walls: " (Your walls).
+ * prefixes a write's sentence with "invalid wall preset: " (a preset), "invalid walls: " (Your walls) or "Agent rules: " (agent rules).
  */
 export function sectionOfRefusal(message: string): { section: FormSection | "name" | "description" | null; text: string } {
-  const text = message.replace(/^invalid (?:wall preset|walls): /, "");
+  const text = message.replace(/^(?:invalid (?:wall preset|walls): |Agent rules: )/, "");
   // A path, then a colon ("denied_domains[1]: ...") or a space ("name is required"); indexes are dropped.
   const path = /^[a-z_]+(?:\[\d+\])?(?:\.[a-z_]+)?(?:\[\d+\])?(?=[: ])/.exec(text)?.[0].replace(/\[\d+\]/g, "") ?? "";
   return { section: SECTION_OF_PATH[path] ?? SECTION_OF_PATH[path.split(".")[0]] ?? null, text };

@@ -88,8 +88,8 @@ var declaredNonAuditTx = map[string]string{
 	"internal/store/auditchain_range.go:PG.VerifyRecordingAuditRange": "the recording range check: one READ ONLY " +
 		"repeatable-read snapshot, so the predecessor row, the range and the run's desktop rows are one instant. " +
 		"Postgres refuses any write in it, audit_events included, so there is no head for it to chain onto stale",
-	"internal/store/auditpartition.go:PG.ExportAuditPartition": "reads one closed partition and its manifest from one READ ONLY " +
-		"repeatable-read snapshot, so the header can never disagree with the rows. Postgres refuses any write in it",
+	"internal/store/auditpartition.go:PG.partitionManifest": "finds one closed partition and reads its manifest from one READ ONLY " +
+		"repeatable-read snapshot, so the partition's state and its manifest are one instant. Postgres refuses any write in it",
 	"internal/store/auditretention.go:PG.AuditRetentionStatus": "reads the retention policy, the partitions and their eligibility " +
 		"from one READ ONLY repeatable-read snapshot, so the three describe one instant. Postgres refuses any write in it",
 	"internal/store/auditcheckpoint.go:PG.AuditCheckpointRange": "reads the high-water mark and the rows a new checkpoint " +

@@ -281,11 +281,18 @@ export function AvailabilityDraft({
 // refusal; what landed before it stays. `person` is getExpectedPrincipal() as
 // read before the form's first request, so every write names the person who
 // saved, never whoever signed in while the resource was being created.
-export async function writeAvailability(kind: string, value: string, draft: AvailabilityDraftValue, person: string): Promise<void> {
+// createdRestricted: the create already restricted the value (?restricted=true), so only the list is written.
+export async function writeAvailability(
+  kind: string,
+  value: string,
+  draft: AvailabilityDraftValue,
+  person: string,
+  createdRestricted = false,
+): Promise<void> {
   for (const a of draft.audiences) {
     await api.upsertGrant({ subject_type: a.subject_type, subject: a.subject, capability: kind, value, effect: "allow" }, person);
   }
-  if (draft.restricted) await api.putAvailability(kind, value, true, person);
+  if (draft.restricted && !createdRestricted) await api.putAvailability(kind, value, true, person);
 }
 
 function AvailabilityFields({

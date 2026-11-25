@@ -136,7 +136,9 @@ func (s *Server) tryKillConfirm(ctx context.Context, run types.AgentRun) error {
 	kerr := s.cfg.Runner.KillSandbox(lctx, cur.SandboxRef)
 	if kerr == nil {
 		if c, ok := s.cfg.Store.(sandboxRefRetainingClearer); ok {
-			_ = c.ClearSandboxRefRetaining(lctx, run.ID)
+			if c.ClearSandboxRefRetaining(lctx, run.ID) == nil {
+				s.reclaimRunImageAfterTeardown(lctx, run.ID)
+			}
 		}
 	}
 	return kerr

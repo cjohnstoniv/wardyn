@@ -101,6 +101,20 @@ func (fx *adoAdHocPG) launch(t *testing.T, body string) uuid.UUID {
 	return fx.ended(t, doSSO(t, fx.srv, http.MethodPost, "/api/v1/runs", fx.member, body))
 }
 
+// adoWaitFor polls cond for up to 30 seconds, like run_queue_pg_test.go's eventually, for
+// a run's detached work: a loaded runner stretches a run's end past the 3
+// seconds waitFor allows, and the cleanup then cancels the commit in flight.
+func adoWaitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // ended reads a 201 and waits for its run to end.
 func (fx *adoAdHocPG) ended(t *testing.T, w *httptest.ResponseRecorder) uuid.UUID {
 	t.Helper()
@@ -111,7 +125,7 @@ func (fx *adoAdHocPG) ended(t *testing.T, w *httptest.ResponseRecorder) uuid.UUI
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the run to end", func() bool {
+	adoWaitFor(t, "the run to end", func() bool {
 		run, err := fx.srv.cfg.Store.GetRun(context.Background(), created.ID)
 		return err == nil && run.State.IsTerminal()
 	})
@@ -184,7 +198,7 @@ func TestPG_ADOAdHocRepoRunGetsItsToken(t *testing.T) {
 		t.Helper()
 		// The watcher ends the run, then revokes: wait for the revoke.
 		var toks []adoRunToken
-		waitFor(t, name+"'s token to be revoked", func() bool {
+		adoWaitFor(t, name+"'s token to be revoked", func() bool {
 			toks = fx.tokens(t, id)
 			return len(toks) != 1 || toks[0].RevokedAt != nil
 		})

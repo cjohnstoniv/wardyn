@@ -31,7 +31,7 @@ func TestDecisionSinkEmitCloseRace(t *testing.T) {
 	log := decisionLog(egress.Request{Host: "x.test"}, egress.Allow, "policy:allowed")
 	for iter := 0; iter < 50; iter++ {
 		// out=nil: mirror is a no-op. The client is for close's last summary, which fails fast here.
-		s := &decisionSink{ch: make(chan egress.DecisionLog, 4), endpoint: "http://127.0.0.1:0", client: &http.Client{Timeout: time.Second}}
+		s := &decisionSink{ch: make(chan queuedDecision, 4), endpoint: "http://127.0.0.1:0", client: &http.Client{Timeout: time.Second}}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()

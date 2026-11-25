@@ -231,3 +231,26 @@ func connectWithHost(t *testing.T, proxyURL, hostport, hostHeader string) (net.C
 	n, _ := conn.Read(buf)
 	return conn, string(buf[:n])
 }
+
+// A plain (absolute-form) request to a host with a character outside ASCII gets the refusal CONNECT gets:
+// a 403 with the same detail, and a deny row whose rule source is builtin:non-ascii-host, on every run and
+// whatever the policy says, and nothing is forwarded. Catches the plain lane answering 400 with no decision.
+func TestAPlainRequestToANonASCIIHostIsDeniedAsConnectIsDenied(t *testing.T) {
+	for name, spec := range spellingPolicies {
+		for _, a := range []string{"ｅｘａｍｐｌｅ.com", "bücher.de", "８.８.８.８", "8.8.8.8。"} {
+			cu := captureUpstream(t, false, "ok")
+			p, buf := newRuleTestProxy(t, spec, upstreamAddr(cu.srv), false, "", nil)
+			rec := httptest.NewRecorder()
+			p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://"+a+"/path"))
+			if rec.Code != http.StatusForbidden || rec.Header().Get(egressHeaderDetail) != nonASCIIHostDetail {
+				t.Errorf("%s: GET http://%s/ = %d, detail %q; want 403 and %q", name, a, rec.Code, rec.Header().Get(egressHeaderDetail), nonASCIIHostDetail)
+			}
+			if rows := decisionRows(t, &buf.b); !slices.Equal(rows, []string{"deny " + ruleSourceNonASCIIHost}) {
+				t.Errorf("%s: GET http://%s/ wrote rows %q, want one deny %s", name, a, rows, ruleSourceNonASCIIHost)
+			}
+			if cu.reached {
+				t.Errorf("%s: GET http://%s/ reached the upstream", name, a)
+			}
+		}
+	}
+}

@@ -37,8 +37,8 @@ Wardyn is up.
 ## What it renders
 
 - `helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION"` (plus the required auth flag from [Installation](#installation)) renders:
-- **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp; liveness and startup probes on `/healthz`, readiness on `/readyz` (which additionally pings Postgres).
-  - So a dead DB actually takes the pod out of the Service — `/readyz` is 0.6+, so an older image needs `readinessProbe.path` pinned back, see [Installation](#installation); `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from Secrets.
+- **Deployment** (`wardynd`) — non-root (uid 65532), read-only root FS, all capabilities dropped, `RuntimeDefault` seccomp; liveness, startup and readiness probes on `/healthz`; `readinessProbe.path: /readyz` moves readiness to a Postgres ping.
+  - A database outage that refuses connections leaves the pod in the Service, so the console can show its database banner; see [Installation](#installation). `WARDYN_PG_DSN` and `WARDYN_ADMIN_TOKEN` sourced from Secrets.
 - **Service** (ClusterIP) fronting the HTTP port (API + UI + `/healthz`) and the `internal` port (`service.internalPort`, 8443: the proxy-facing TLS listener — see [Control-plane to proxy TLS](#control-plane-to-proxy-tls)),
   - plus an SSH port when `ssh.enabled` (same Service, no second object — see [Split SSH exposure](#split-ssh-exposure) to expose it differently)
   - and a UI port when `uiSandbox.enabled` (which must reach a DIFFERENT hostname — see [UI sandbox gateway](#ui-sandbox-gateway)).
@@ -160,14 +160,11 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
 - The shipped `default.json` sets `auto_stop_after_sec` to `3600`, so a deployment that uses it as its default policy stops idle runs after an hour, and member runs are clamped to that ceiling. See [Run lifetime](../../../docs/operations/run-lifetime.md#the-clocks-that-end-or-freeze-a-run) for the clamp, the attach keepalive and the other clocks.
 
 > [!IMPORTANT]
-> **Upgrade note — `/readyz` is a 0.6-and-later endpoint.**
-> The readiness probe targets `/readyz`.
-> From 0.6.0 the chart's own default image serves it: an empty `image.tag` resolves to `.Chart.AppVersion`, so a stock install needs nothing here.
+> **Upgrade note — readiness reads `/healthz` by default.**
+> `/healthz` answers while Postgres refuses connections, so the pod stays in its Service and the console stays up to show its database banner.
+> To keep readiness on Postgres, set `readinessProbe.path: /readyz`. `helm upgrade --reuse-values` keeps the previous release's path.
 
-It still matters if you **pin an image at or below `0.5.0`**.
-Those predate `/readyz`, so the probe 404s forever, the pod never becomes Ready, and the `rollout status` below hangs with no other symptom (nothing crashes, nothing logs an error).
-
-On any such image, pin the probe back: `--set readinessProbe.path=/healthz`, accepting that version's ceiling — a dead Postgres reads healthy again, which is exactly what `/readyz` exists to fix.
+`/readyz` exists from 0.6.0 on. With an `image.tag` pinned at or below `0.5.0`, a probe set to it 404s forever, the pod never becomes Ready, and the `rollout status` below hangs with no other symptom.
 CI never sees this: `helm-install-test` and the kind quickstart both build `wardynd` from source, so their image always has `/readyz`.
 
 - The chart **refuses to render** without an admin token or an OIDC issuer: an install with neither brings up a pod that passes its `/healthz` probe and 401s every API route.
@@ -422,6 +419,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - `runner.sandbox.requestRatio` (`WARDYN_SANDBOX_REQUEST_RATIO`): agent pod requests as a fraction of limits, in (0, 1]; empty (default) keeps requests equal to limits.
   - Below 1 the pod is Burstable and a pod over its memory request is an eviction and OOM-kill candidate under node pressure.
   - The proxy pod stays Guaranteed.
+  - Sizing a node: with no ratio, a run whose policy sets no resources requests its limits. With the chart's defaults that is 1000m CPU and 2048 MiB for the agent pod, plus 500m and 256 MiB for the proxy pod.
+  - `requestRatio: "0.5"` makes that agent pod request 500m and 1024 MiB; its limits and the proxy pod's requests do not change. A run with an Azure route gate gives its proxy pod 400 MiB.
   - Placement is not under `runner.sandbox.*`: where a sandbox pod goes (`nodeSelector`, `tolerations`, `affinity`, `priorityClassName`, `podAnnotations`, `podLabels`) is `k8s.sandbox.*`, listed above.
 - `k8s.runtimeClasses.CC2` / `.CC3`: pins a Confinement Class to a RuntimeClass NAME already registered in the cluster (`WARDYN_CONFINEMENT_MAP`), e.g. `--set k8s.runtimeClasses.CC2=gvisor`.
   - Unlike Docker's well-known runtime family names, a RuntimeClass object name is operator-chosen and carries no platform convention Wardyn can guess;
@@ -433,12 +432,26 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - The value is the RuntimeClass NAME, which may be anything. CC3 is advertised only when that class exists in the cluster and its HANDLER is non-empty and does not start with `runc`, `crun`, `sysbox` or `runsc` (the list is in [`internal/runner/sandbox.go`](../../../internal/runner/sandbox.go); `kata`, `kata-qemu` and `krun` pass).
     - A missing class, an empty pin or a refused handler makes a CC3 run fail to start; it never falls back to the node's default runtime.
     - The RuntimeClass is set on the agent pod only. The `wardyn-proxy` pod runs on the node's default runtime, outside the guest.
+    - On a managed Kata pool, tolerate the pool's taint and prefer other nodes, and let the RuntimeClass's own `scheduling` pin the CC3 pods onto Kata nodes:
+      ```yaml
+      k8s:
+        runtimeClasses: {CC3: kata-vm-isolation}
+        sandbox:
+          tolerations: [{key: kata-vm-isolation, operator: Equal, value: "true", effect: NoSchedule}]
+          affinity: {nodeAffinity: {preferredDuringSchedulingIgnoredDuringExecution: [{weight: 100, preference: {matchExpressions: [{key: <pool label>, operator: NotIn, values: [kata]}]}}]}}
+      ```
+      - `k8s.sandbox.*` reaches every sandbox pod, so runs of other classes prefer other nodes and the CC3 pods land on Kata nodes.
+      - This relies on the RuntimeClass carrying `scheduling`; check that yours does, because a self-installed class may not.
+    - Offering CC3 changes runs that exist today. A run that holds a write-capable grant, or an `api_key` for a host outside the baseline, is raised to CC3. Before CC3 is offered such a run is refused; once it is offered, each one needs a Kata slot, so size the pool for them.
+    - Set an organisation default barrier before you offer CC3. A launch that names no barrier gets the organisation's default; with none set it gets the strongest class offered, so every such run moves to the Kata pool when CC3 appears.
     - Agent limits (`runner.sandbox.defaultResources`, or the policy's resources) become the pod's CPU and memory limits, and its requests equal them unless `runner.sandbox.requestRatio` is set.
+    - A Kata guest is sized from those limits (CPU and memory), not from the node. Size JVM heaps under `memory_mib`.
     - CC2 stays unadvertised on a cluster with no gVisor (`runsc*`) handler: leave `k8s.runtimeClasses.CC2` empty.
     - A Linux VM sandbox (`k8s.linuxVM=true` in the `wardyn-runnerd` chart, not this one) refuses drives and recording; see [Linux VM sandboxes](../../../docs/operations/linux-vm-sandboxes.md#on-a-kubernetes-runner).
     - Not proven: CI does not run Kata, because the conformance test skips where none is installed.
+    - A field report shows CC3 runs and `k8s_pvc` drives (a block-storage CSI disk, ReadWriteOnce) working on a managed Kata pool at 0.10.3.
     - The unit tests use a fake clientset with class `kata` and handler `kata-qemu`, plus a `kata-vm-isolation` / `kata` row, so this pairing has never run on a real cluster.
-    - Unknown: PVC drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
+    - Unknown: shared (ReadWriteMany) drives under Kata, NetworkPolicy behaviour inside a Kata guest on your CNI, and how a `requestRatio` below 1 interacts with a VM sized from limits.
     - Nothing here states what your cloud's node pools support (sizes, hardening modes, scanners); check your provider's documentation.
 - `k8s.apiServer.ports`: port(s) the control-plane NetworkPolicy opens so wardynd can reach the API server.
   - Defaults to `[443, 6443]` — `kubernetes.default.svc`'s Service port (443, what client-go's in-cluster config always targets) PLUS the typical kubeadm/kind apiserver backend port (6443):
@@ -1041,8 +1054,8 @@ uiSandbox:
   - Empty (default) => no ConfigMap, every principal key under the credential key.
 - `awsSSOProxyInject`: `"on"` or empty. `"off"`, `"false"`, `"0"` were removed in 0.10.0 and `wardynd` refuses to start on them — see [docs/OPERATIONS.md "Removed in 0.10.0"](../../../docs/OPERATIONS.md#removed-in-0100).
   - Empty (default) => no named env entry rendered, wardynd's own default (`on`) applies.
-- `readinessProbe.path`: readiness probe path, default `/readyz` (which pings Postgres — liveness and startup stay on `/healthz` regardless).
-  - The chart's own default image serves `/readyz` from 0.6.0 on, so leave this alone unless you **pin an `image.tag` at or below `0.5.0`**, which serves none: see [Installation](#installation) for what that failure looks like.
+- `readinessProbe.path`: readiness probe path, default `/healthz`. `/readyz` adds a 3-second Postgres ping, so the pod leaves the Service while Postgres does not answer; liveness and startup stay on `/healthz` regardless.
+  - `/readyz` is served from 0.6.0 on: do not set it with an `image.tag` pinned at or below `0.5.0`, which serves none. See [Installation](#installation) for what that failure looks like.
 - `basePath`: serve the console, API, sign-in and health endpoints under a sub-path behind a reverse proxy (`WARDYN_BASE_PATH`, e.g. `/wardyn`).
   - The three probes move under it (`readinessProbe.path` stays relative to it), and so must `WARDYN_OIDC_REDIRECT_URL`.
   - Empty (default) => the host root.
