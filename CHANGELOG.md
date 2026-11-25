@@ -14,7 +14,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Added
 
 - Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
-- Custom components can carry request rules (`request_rules`): rules on method and path that allow, hold for a person, or refuse what a run sends to the component's own hosts, on the run's own requests and on the MCP broker's. They only narrow what the run's policy allows. They are off until an admin turns on `features.component_request_rules.enabled` in site config, and both the organisation's component editor and a person's own show them.
+- Custom components can carry request rules (`request_rules`): rules on method and path that allow, hold for a person, or refuse what a run sends to the component's own hosts, on the run's own requests and on the MCP broker's. They only narrow what the run's policy allows. They are off until an admin turns on `features.component_request_rules.enabled` in site config. Once on, the organisation's component editor and a person's own component dialog both add, change and remove them; while off, each offers only to remove stored rules.
 
 ### Before you upgrade
 
