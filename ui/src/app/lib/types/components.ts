@@ -19,7 +19,7 @@
 
 import type { AutonomyLevel } from "../api/governance";
 import type { AgentFact, LocalDeliveryMode, RepoAccessFact, TokenScopeFact } from "./new-run-contract";
-import type { PushRulesSpec } from "./policy";
+import type { HostRule, PushRulesSpec } from "./policy";
 import type { SetupItem } from "./preflight";
 
 /** How one component secret reaches the run. */
@@ -59,6 +59,8 @@ export interface ComponentDefinition {
   cli?: ComponentCLI;
   // Makes the component an MCP server: a remote one, reached only through the proxy's broker route, or one its harness starts in the sandbox.
   mcp?: ComponentMCP;
+  // Host rules on the component's own exact hosts; a run carries them as one host rule set of their own.
+  request_rules?: HostRule[];
 }
 
 /**

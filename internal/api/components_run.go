@@ -215,6 +215,9 @@ func (s *Server) admitRunComponents(r *http.Request, refs []types.ComponentRef, 
 		}
 		comps.attached = append(comps.attached, c)
 	}
+	if refused := componentRuleSetLimit(spec, comps.attached); refused != nil {
+		return runComponents{}, refused
+	}
 	return comps, nil
 }
 
@@ -281,6 +284,9 @@ func (s *Server) admitComponent(r *http.Request, adm *componentAdmission, i int,
 	}
 	if problem := componentDefinitionProblem(c); problem != "" {
 		return attachedComponent{}, componentRefused(c, i, reasonComponentDefinitionInvalid, problem, "has a definition that is not valid here.")
+	}
+	if refused := componentRequestRulesAdmitted(adm, c, i); refused != nil {
+		return attachedComponent{}, refused
 	}
 	if refused := s.componentSecretsOwned(r, adm, &c, i); refused != nil {
 		return attachedComponent{}, refused
@@ -477,6 +483,9 @@ func (c *runComponents) expand(spec *types.RunPolicySpec) {
 			}
 			c.configEnv[k] = v
 		}
+	}
+	if sets := componentRequestRuleSets(c.attached); sets != nil {
+		spec.HostRules = types.AppendHostRuleSets(spec.HostRules, sets)
 	}
 }
 

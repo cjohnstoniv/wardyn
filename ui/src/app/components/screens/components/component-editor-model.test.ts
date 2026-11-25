@@ -107,3 +107,20 @@ describe("description", () => {
     expect(requestOf({ ...draftOf(withDesc), description: "   " }).definition).not.toHaveProperty("description");
   });
 });
+
+describe("request rules", () => {
+  it("draftOf and requestOf keep request_rules", () => {
+    const rules = [
+      { host: "api.pay.example", methods: ["GET"], paths: ["/v1"], effect: "allow" as const },
+      { host: "api.pay.example", methods: ["POST"], paths: ["/v1/refunds"], effect: "hold" as const },
+    ];
+    const withRules: Component = { ...stored, definition: { ...stored.definition, request_rules: rules } };
+    expect(draftOf(withRules).requestRules).toEqual(rules);
+    expect(requestOf(draftOf(withRules)).definition.request_rules).toEqual(rules);
+    // The save path sends the form's rules: withStored carries none of its own.
+    expect(withStored(requestOf(draftOf(withRules)), withRules, "").definition.request_rules).toEqual(rules);
+    // A draft with no rules, or one that never had the field, sends none.
+    expect(requestOf(draftOf(stored)).definition).not.toHaveProperty("request_rules");
+    expect(requestOf(draftOf(null)).definition).not.toHaveProperty("request_rules");
+  });
+});

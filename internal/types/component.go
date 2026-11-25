@@ -89,6 +89,9 @@ type ComponentDefinition struct {
 	// harnesses reach only through the proxy's broker route, or one its
 	// harness starts inside the sandbox (ComponentMCP).
 	MCP *ComponentMCP `json:"mcp,omitempty"`
+	// RequestRules are host rules on the component's own exact hosts. A run that attaches the component
+	// carries them as one host rule set of their own, beside its policy's sets (validateRequestRules).
+	RequestRules []HostRule `json:"request_rules,omitempty"`
 }
 
 // ComponentSecret is one secret a component carries.
@@ -251,6 +254,9 @@ func (d ComponentDefinition) Validate(validHost func(string) error, personDefine
 		return err
 	}
 	if err := d.validateMCP(personDefined); err != nil {
+		return err
+	}
+	if err := validateRequestRules(d); err != nil {
 		return err
 	}
 	if len(d.Secrets) > MaxComponentSecrets {

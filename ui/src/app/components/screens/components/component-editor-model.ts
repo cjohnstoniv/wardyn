@@ -6,7 +6,7 @@
 // The admin editor's draft and its conversion to the wire. The server refuses a
 // delivery that carries another mode's fields, so requestOf writes only the
 // fields the chosen mode uses, and `shared` only on a header delivery.
-import type { Component, ComponentDeliveryMode, ComponentMCP, ComponentRequest, ComponentSecret } from "../../../lib/types";
+import type { Component, ComponentDeliveryMode, ComponentMCP, ComponentRequest, ComponentSecret, HostRule } from "../../../lib/types";
 
 export interface SecretDraft {
   // Stable React key; never sent.
@@ -36,6 +36,8 @@ export interface ComponentDraft {
   hosts: string;
   secrets: SecretDraft[];
   settings: SettingDraft[];
+  // The definition's request rules, sent as they stand: the form's rules always win over the stored ones.
+  requestRules?: HostRule[];
 }
 
 let nextKey = 1;
@@ -74,6 +76,7 @@ export function draftOf(c: Component | null): ComponentDraft {
       file: s.delivery.file ?? "",
     })),
     settings: Object.entries(c.definition.config ?? {}).map(([name, value]) => ({ ...blankSetting(), name, value })),
+    requestRules: c.definition.request_rules ?? [],
   };
 }
 
@@ -116,6 +119,7 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
   const choices = headerHostChoices(hosts);
   const config = Object.fromEntries(d.settings.filter((s) => s.name.trim()).map((s) => [s.name.trim(), s.value]));
   const description = d.description?.trim() ?? "";
+  const requestRules = d.requestRules ?? [];
   return {
     name: d.name.trim(),
     definition: {
@@ -123,6 +127,7 @@ export function requestOf(d: ComponentDraft): ComponentRequest {
       hosts,
       ...(d.secrets.length > 0 && { secrets: d.secrets.map((s) => secretOf(s, choices)) }),
       ...(Object.keys(config).length > 0 && { config }),
+      ...(requestRules.length > 0 && { request_rules: requestRules }),
     },
   };
 }
