@@ -861,23 +861,23 @@ func TestPreviewPublicUnavailableUntilServed(t *testing.T) {
 	g.refused("public create under a stored public", g.put(previewOwner, "3000", `{"visibility":"public"}`), http.StatusForbidden, reasonPreviewAboveCeiling)
 }
 
-// TestPreviewUnavailableUntilServed (until previews are served end to end): the key registers with its
-// validate and afterWrite, but is unavailable, so a write that turns it on is refused feature_unavailable and a
-// stored true reads off: the create answers preview_urls_off.
+// TestPreviewUnavailableUntilServed (now that previews are served end to end): the key registers with its
+// validate and afterWrite and is available, so a write that turns it on reaches the validate (here refused, the UI
+// gateway being off) rather than feature_unavailable, and a stored true reads on: the create answers a row.
 func TestPreviewUnavailableUntilServed(t *testing.T) {
 	h, ok := siteFeatureHookFor(featurePreviewURLs)
 	if !ok || h.validate == nil || h.afterWrite == nil {
 		t.Fatal("preview_urls registers no hook with a validate and an afterWrite")
 	}
-	if siteFeatureAvailable(featurePreviewURLs) || previewURLsOn(previewSite(true, "org")) {
-		t.Fatal("preview_urls is available before this release serves previews")
+	if !siteFeatureAvailable(featurePreviewURLs) || !previewURLsOn(previewSite(true, "org")) {
+		t.Fatal("preview_urls is unavailable in a release that serves previews")
 	}
 	fake := &fakeSiteConfigStore{}
-	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"preview_urls":{"enabled":true}}}`), fake, reasonSiteFeatureUnavailable)
+	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"preview_urls":{"enabled":true}}}`), fake, reasonSiteConfigInvalid)
 
 	hs := newUIHarness(t, okBackend())
 	st := &previewTestStore{uiMemStore: hs.store, previewRows: &previewRows{}, site: previewSite(true, "org")}
 	hs.srv.cfg.Store = st
 	g := &previewRig{t: t, h: hs, st: st}
-	g.refused("create while unavailable", g.put(previewOwner, "3000", `{}`), http.StatusForbidden, reasonPreviewURLsOff)
+	g.preview("create once served", g.put(previewOwner, "3000", `{}`))
 }

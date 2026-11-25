@@ -58,6 +58,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Before you upgrade
 
+- Preview URLs for a run's ports are new and off by default. Turn them on with `features.preview_urls.enabled` in site config. `features.preview_urls.max_visibility` (`private`, the default, or `org`) is the widest any preview may be. Organisation previews need per-run hosts (`WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE`). Viewing a preview does not keep its run awake or wake a paused run; work the run does to answer it counts as the run's own activity. Migration `0400_run_previews` adds a table. On a split-role install, run it as the migrator: it grants the app role the new table the way the role already has `run_attach_leases`.
 - If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
 - Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.

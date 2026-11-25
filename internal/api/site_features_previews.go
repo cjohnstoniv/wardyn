@@ -17,7 +17,7 @@ import (
 // set, and reads off whatever is stored.
 
 // previewServed is whether this release serves preview URLs end to end.
-const previewServed = false
+const previewServed = true
 
 // previewPublicServed is whether this release serves public preview links. Until it does, max_visibility public
 // is refused, and a stored public reads private.
