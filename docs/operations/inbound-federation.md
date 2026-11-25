@@ -37,7 +37,7 @@ switch off and deleting a trust are never held: they only stop tokens. An approv
 
 ## The switch
 
-1. Turn it on from your signed-in console session: `PUT /api/v1/inbound-federation` with `{"enabled":true}`. An API token or the admin token is refused `403` `inbound_federation_needs_person`.
+1. Turn it on from your signed-in console session: `PUT /api/v1/inbound-federation` with `{"enabled":true}`. An API token or the admin token is refused `403` `inbound_federation_needs_person`, unless it is already on: that answers `200` and writes nothing.
 2. Under four-eyes the answer is `202` with the pending change's `Location`, and the switch turns on once a second admin approves it from a signed-in session.
 3. Read it: `GET /api/v1/inbound-federation` answers `enabled`, `updated_at` and `updated_by`.
 4. Turn it off with `{"enabled":false}`, with any admin credential, an API token included, even when it is already off. Every token exchanged under any trust is revoked at once, and `tokens_revoked` counts them. A pending turn-on is cancelled, and `changes_cancelled` names it. The trusts stay.
@@ -73,7 +73,7 @@ A trust matches one exact issuer, audience and subject, and names the one servic
 - an audience a provider gives many services: `sts.amazonaws.com`, `api://AzureADTokenExchange`, the Kubernetes API's own, or GitHub's default `https://github.com/<owner>`;
 - an audience equal to the issuer, the console sign-in client id, or a live portal's client id or audience.
 
-A `*` anywhere is refused `400` `inbound_trust_invalid`: there are no wildcards. One trust holds each name, and each issuer,
+A `*` in the audience, subject, required claim or its value is refused `400` `inbound_trust_invalid`: there are no wildcards. One trust holds each name, and each issuer,
 audience and subject, and a second is `409` `inbound_trust_exists`.
 
 From your signed-in console session, `POST /api/v1/inbound-trusts` with:

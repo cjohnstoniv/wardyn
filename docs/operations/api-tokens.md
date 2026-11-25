@@ -435,7 +435,7 @@ A service identity is automation that runs under its own name. It is not a perso
 |---|---|
 | The sponsor changes | Every live token of the identity is revoked in the same transaction. |
 | The sponsor changes (inbound federation) | Its [trusts](inbound-federation.md) are deleted with the tokens exchanged under them. |
-| The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. | Exchanges under the identity's [trusts](inbound-federation.md) stop too, as they do after a revoke of everyone's sessions, until the sponsor confirms each trust again.
+| The sponsor's sessions are revoked in full | Their sponsored tokens are marked revoked and stop at once, except that an inbound token still calls a UI-sandbox port for up to 30 seconds. Exchanges under the identity's [trusts](inbound-federation.md) stop too, as they do after a revoke of everyone's sessions, until the sponsor confirms each trust again. |
 | The sponsor is suspended through SCIM | State `sponsor_inactive`; tokens refused; its live runs end with the sponsor's. |
 | The sponsor's sign-in identity is unbound | Refused `409` `identity_principal_in_use` while they sponsor an identity or hold a pending invitation. |
 | An admin suspends it | Tokens refused; its live runs end. |
