@@ -125,7 +125,9 @@ func (s *Server) auditUncovered(ctx context.Context, runID uuid.UUID, actor type
 // holdMaskFence ends an in-flight consumer of runID when the run stops being
 // covered: it re-reads at each beat until ctx ends and calls end once on the
 // first miss. The returned func reports whether it ended the consumer; for a
-// deployment keeping no manifests it is always false.
+// deployment keeping no manifests it is always false. end must return at once:
+// it runs on the run's shared fence loop, which ends the run's other consumers
+// after it.
 func (s *Server) holdMaskFence(ctx context.Context, runID uuid.UUID, end func()) func() bool {
 	if s.cfg.MaskManifests == nil {
 		return func() bool { return false }

@@ -42,9 +42,11 @@ func (s *Server) joinMaskFence(runID uuid.UUID, sub *maskFenceSub) {
 	}
 	r := f.runs[runID]
 	if r == nil {
-		parent := s.cfg.BaseCtx
-		if parent == nil { // a Server literal in a test (maskDoorServer) has none; New sets it
-			parent = context.Background()
+		parent := context.Background() // a Server literal in a test (maskDoorServer) has no BaseCtx; New sets it
+		if s.cfg.BaseCtx != nil {
+			// Not cancelled with BaseCtx: at shutdown a consumer can stream until its own context ends, and it
+			// stays fenced until then. Only the run's last consumer leaving, or the first miss, stops the loop.
+			parent = context.WithoutCancel(s.cfg.BaseCtx)
 		}
 		ctx, stop := context.WithCancel(parent)
 		r = &runMaskFence{subs: map[*maskFenceSub]struct{}{}, stop: stop}
@@ -79,6 +81,9 @@ func (s *Server) runMaskFence(ctx context.Context, runID uuid.UUID, r *runMaskFe
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if ctx.Err() != nil { // stopped while this beat was due
+				return
+			}
 			if read(ctx, runID) || ctx.Err() != nil {
 				continue
 			}

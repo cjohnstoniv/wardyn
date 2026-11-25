@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +59,7 @@ func TestOneMaskFenceReadPerRunWhateverItsConsumers(t *testing.T) {
 
 	done := make(chan struct{})
 	defer close(done)
+	start := time.Now()
 	go func() {
 		for {
 			select {
@@ -68,21 +70,42 @@ func TestOneMaskFenceReadPerRunWhateverItsConsumers(t *testing.T) {
 		}
 	}()
 	time.Sleep(20 * fenceTestBeat)
-	n := reads.Load() - 1
-	if n < 1 || n > 30 { // one per beat, at most; 8 per beat would be about 160
-		t.Fatalf("%d fence reads in 20 beats with 8 consumers, want about one per beat", n)
+	n := int(reads.Load() - 1)
+	beats := int(time.Since(start) / fenceTestBeat)
+	if n < 1 || n > beats+2 { // one per beat, at most; one per consumer would be 8 per beat
+		t.Fatalf("%d fence reads in %d beats with 8 consumers, want at most one per beat", n, beats)
 	}
 	if ends.Load() != 0 {
 		t.Fatalf("%d consumers ended although the run is covered", ends.Load())
 	}
-	t.Logf("fence reads with 8 consumers: 1 while the first was in flight, %d over 20 beats after", n)
+	t.Logf("fence reads with 8 consumers: 1 while the first was in flight, %d over %d beats after", n, beats)
+}
+
+// endedFirstCtx is a consumer context that reports itself ended once ended is set, but whose Done never closes,
+// so the consumer's leave never runs and its sub is still on the run's loop when the miss is handled.
+type endedFirstCtx struct {
+	context.Context
+	ended atomic.Bool
+}
+
+func (c *endedFirstCtx) Done() <-chan struct{} { return nil }
+
+func (c *endedFirstCtx) Err() error {
+	if c.ended.Load() {
+		return context.Canceled
+	}
+	return nil
 }
 
 func TestMaskFenceMissEndsEveryLiveConsumer(t *testing.T) {
 	s, _, _ := maskDoorServer(t)
 	s.maskBeat = fenceTestBeat
-	gate := make(chan struct{})
+	inRead, gate := make(chan struct{}, 1), make(chan struct{})
 	s.maskFences.read = func(context.Context, uuid.UUID) bool {
+		select {
+		case inRead <- struct{}{}:
+		default:
+		}
 		<-gate
 		return false
 	}
@@ -93,9 +116,14 @@ func TestMaskFenceMissEndsEveryLiveConsumer(t *testing.T) {
 		fenced[i] = s.holdMaskFence(context.Background(), run, func() { ends[i].Add(1) })
 	}
 	var gone atomic.Int32
-	goneCtx, goneCancel := context.WithCancel(context.Background())
+	goneCtx := &endedFirstCtx{Context: context.Background()}
 	goneFenced := s.holdMaskFence(goneCtx, run, func() { gone.Add(1) })
-	goneCancel()
+	select {
+	case <-inRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no fence read arrived")
+	}
+	goneCtx.ended.Store(true) // ends while the loop is inside the read that misses
 	close(gate)
 
 	waitFor(t, "every live consumer to be ended", func() bool {
@@ -121,12 +149,58 @@ func TestMaskFenceMissEndsEveryLiveConsumer(t *testing.T) {
 	waitFor(t, "the run's loop to retire", func() bool { return fenceRuns(s) == 0 })
 }
 
-func TestMaskFenceStopsAfterTheLastConsumer(t *testing.T) {
+// The loop does not stop with the server's context: at shutdown a consumer may stream until its own context
+// ends, and it must stay fenced until then.
+func TestMaskFenceOutlivesTheServerContext(t *testing.T) {
 	s, _, _ := maskDoorServer(t)
 	s.maskBeat = fenceTestBeat
+	base, cancelBase := context.WithCancel(context.Background())
+	s.cfg.BaseCtx = base
+	var covered atomic.Bool
+	covered.Store(true)
 	var reads atomic.Int32
 	s.maskFences.read = func(context.Context, uuid.UUID) bool {
 		reads.Add(1)
+		return covered.Load()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ended := make(chan struct{})
+	fenced := s.holdMaskFence(ctx, uuid.New(), func() { close(ended) })
+	waitFor(t, "a fence read", func() bool { return reads.Load() > 0 })
+
+	cancelBase()
+	time.Sleep(3 * fenceTestBeat)
+	covered.Store(false)
+
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a consumer was not ended on a miss after the server's context ended")
+	}
+	if !fenced() {
+		t.Fatal("the consumer was ended but not reported fenced")
+	}
+}
+
+func TestMaskFenceStopsAfterTheLastConsumer(t *testing.T) {
+	s, _, _ := maskDoorServer(t)
+	s.maskBeat = fenceTestBeat
+	// A read is counted only while its loop is live, checked and counted under one lock: a count taken under
+	// that lock after the loop stopped is final, whatever beat was due.
+	var mu sync.Mutex
+	reads := 0
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return reads
+	}
+	s.maskFences.read = func(ctx context.Context, _ uuid.UUID) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if ctx.Err() == nil {
+			reads++
+		}
 		return true
 	}
 	run := uuid.New()
@@ -136,15 +210,14 @@ func TestMaskFenceStopsAfterTheLastConsumer(t *testing.T) {
 		ctx, cancels[i] = context.WithCancel(context.Background())
 		s.holdMaskFence(ctx, run, func() { t.Error("end called although the run is covered") })
 	}
-	waitFor(t, "a fence read", func() bool { return reads.Load() > 0 })
+	waitFor(t, "a fence read", func() bool { return count() > 0 })
 	for _, cancel := range cancels {
 		cancel()
 	}
 	waitFor(t, "the run's loop to be dropped", func() bool { return fenceRuns(s) == 0 })
-	time.Sleep(fenceTestBeat) // a beat already due when the loop stopped may still read once
-	n := reads.Load()
+	n := count()
 	time.Sleep(5 * fenceTestBeat)
-	if got := reads.Load(); got != n {
+	if got := count(); got != n {
 		t.Fatalf("%d fence reads after the last consumer left, want 0", got-n)
 	}
 
@@ -154,5 +227,5 @@ func TestMaskFenceStopsAfterTheLastConsumer(t *testing.T) {
 	if fenceRuns(s) != 1 {
 		t.Fatal("a new consumer did not start a loop for its run")
 	}
-	waitFor(t, "a read from the fresh loop", func() bool { return reads.Load() > n })
+	waitFor(t, "a read from the fresh loop", func() bool { return count() > n })
 }
