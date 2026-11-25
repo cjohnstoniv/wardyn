@@ -79,6 +79,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance_scope.go:requireUnitScope":                     {1, "authz-only: the unit-admin route tier"},
 	"governance_scope.go:unitScope":                            {1, "authz-only: unit-admin reach over a unit"},
 	"governance_scope.go:unitScopeQ":                           {1, "authz-only: unit-admin reach over a unit, on a write's transaction"},
+	"governance_scope.go:unitScopeMemoQ":                       {1, "authz-only: unit-admin reach over a unit, memoized on a pool's read transaction"},
 	"governance_unit_admin.go:auditUnitScope":                  {1, "authz-only: the scope an audit row names"},
 	"governance_policy_ref.go:meGovernanceContact":             {1, "authz-only: a display contact"},
 	"governance_run_doors.go:inboundAppsDenied":                {1, "authz-only: a door the boundary holds no knob for (boundInboundApps and the application refusal read it)"},
