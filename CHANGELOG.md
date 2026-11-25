@@ -11,6 +11,13 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+## [0.11.0-rc.3] — 2026-11-25
+
+### Fixed
+
+- This candidate carries every fix in 0.10.5 (see the 0.10.5 section below), which 0.11.0-rc.1 and 0.11.0-rc.2 did not include.
+- In container and Kubernetes runs, `git` now trusts the run's certificate bundle (`GIT_SSL_CAINFO`), so cloning from an HTTPS remote works behind a TLS-inspecting proxy. Repositories declared on the run were not affected.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
