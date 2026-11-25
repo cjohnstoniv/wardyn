@@ -3254,12 +3254,13 @@ jobs:
           key: go-gates-${{ matrix.gate }}-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.run_id }}
 
   # staticcheck's three whole-tree passes (tagless, -tags docker, -tags docker,k8s), one runner each: in one job they
-  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's.
+  # outgrew a hosted runner's memory, swapped and passed the time limit. The steps are the gates job's. A pass takes
+  # 23 to 30 minutes on a warm cache and has run past 40 on a cold one, so the limit is 60.
   staticcheck:
     needs: [changes, diagrams] # diagrams only for the start order: see `changes`
     if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
