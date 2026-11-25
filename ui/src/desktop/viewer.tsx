@@ -18,7 +18,8 @@ import { RfbClient, type RfbDisplay } from "./rfb";
 // `view_only`: the gateway keeps this session's input from the desktop.
 // `background`: this session is a watch of a background run's desktop; it always comes with view_only.
 // `run_title` and `run_href`: the run's name and its page, for the way back to it; both or neither.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string } | { state: "refused"; said: string };
+// `cause`: "denied" when a door refused the desktop (its governance profile), not a used link.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string } | { state: "refused"; said: string; cause?: "denied" };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -59,7 +60,7 @@ const WHEEL_NOTCH_PX = 50;
 type Phase = "starting" | "reconnecting" | "connected" | "failed" | "closed" | "expired" | "run_ended" | "watch_ended" | "window_open" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
-  if (boot.state === "refused") return <LinkRefused said={boot.said} />;
+  if (boot.state === "refused") return <LinkRefused said={boot.said} denied={boot.cause === "denied"} />;
   return <Desktop boot={boot} connect={connect} viewOnly={boot.view_only === true || (small ?? window.matchMedia?.("(max-width: 640px)").matches ?? false)} />;
 }
 
@@ -269,12 +270,12 @@ function Notice({ phase, macOS, said, onTryAgain }: { phase: Exclude<Phase, "con
   );
 }
 
-function LinkRefused({ said }: { said: string }) {
+function LinkRefused({ said, denied = false }: { said: string; denied?: boolean }) {
   const rows: [string, string][] = [
-    [DESKTOP.whyWall, DESKTOP.whyWallBody],
-    [DESKTOP.whySetBy, DESKTOP.whySetByBody],
+    [DESKTOP.whyWall, denied ? DESKTOP.deniedWallBody : DESKTOP.whyWallBody],
+    [DESKTOP.whySetBy, denied ? DESKTOP.deniedSetByBody : DESKTOP.whySetByBody],
     [DESKTOP.whyEnforced, DESKTOP.whyEnforcedBody],
-    [DESKTOP.whyCanChange, DESKTOP.whyCanChangeBody],
+    [DESKTOP.whyCanChange, denied ? DESKTOP.deniedCanChangeBody : DESKTOP.whyCanChangeBody],
   ];
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
@@ -283,7 +284,7 @@ function LinkRefused({ said }: { said: string }) {
           <h1 id="desktop-refused" className="text-base font-semibold">{DESKTOP.linkBlocked}</h1>
           <Chip tone="danger">{DESKTOP.linkRefused}</Chip>
         </div>
-        <p className="mt-2 text-muted-foreground">{DESKTOP.linkBody}</p>
+        <p className="mt-2 text-muted-foreground">{denied ? DESKTOP.deniedBody : DESKTOP.linkBody}</p>
         <dl className="mt-4 grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
           {rows.map(([k, v]) => (
             <React.Fragment key={k}>

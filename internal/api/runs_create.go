@@ -196,10 +196,18 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 		return workspaceSeed{}, seedErr(http.StatusBadRequest, reasonWorkspaceSeedNoBaseImage, fmt.Errorf(
 			"workspace %s has no base image to run a command in: pass --image or --agent", ids[0]))
 	}
-	// A folder seeded from a source bound to a runner is on that machine: only its text is checked.
+	// Where each folder is. A mount the seed added is held by the workspace that seeded it; a mount the
+	// policy names is held by the attached workspaces that carry its folder, the holders the run gate reads
+	// (validateWorkspaceSources). A folder its holders bind to one runner is on that machine, and only its
+	// text is checked. Every other mount, a policy folder no attached workspace holds included, is checked
+	// on this host.
 	onRunner := map[int]bool{}
-	for i, m := range newMounts {
-		if rid, ok := mountBinding(seed.mountOwners[i:i+1], m.Source); ok && rid != nil {
+	for i, m := range spec.WorkspaceMounts {
+		holders := localDirHolders(seed.attached, m.Source)
+		if i < len(newMounts) {
+			holders = seed.mountOwners[i : i+1]
+		}
+		if rid, ok := mountBinding(holders, m.Source); ok && rid != nil {
 			onRunner[i] = true
 		}
 	}
@@ -637,14 +645,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 	case req.Image != "": // validated up front: not XOR'd
 		// The wardyn-byoi/ output tag is also the discriminator dispatch keys the
 		// runtime selftest preflight off (a wrapped arbitrary image may still lack a
-		// shell or the harness binary).
+		// shell or the harness binary). A reused wrap keeps the prefix.
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"byoi_base": req.Image})
 		if !ok {
 			return "", nil, true
 		}
-		s.announceImageBuild(ctx, runID)()
-		built, berr := s.cfg.ImageBuilder.FinalizeBase(buildCtx, cmp.Or(imagePin(run), req.Image), outTag, nil, false)
+		built, reused, berr := s.wrapRunImage(ctx, buildCtx, run, cmp.Or(imagePin(run), req.Image), outTag)
 		endBuild()
 		if berr != nil {
 			buildFailed(map[string]any{"byoi_base": req.Image, "error": auditStep(ctx, auditStepBuildRunImage, berr, slog.String("run_id", runID.String()))}, berr.Error())
@@ -652,9 +659,9 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest
 		}
 		image, origin = built.Ref, imageOriginMember
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
-			runID.String(), "success", mustJSON(buildSuccessData(map[string]any{
+			runID.String(), "success", mustJSON(buildSuccessData(reusedFields(map[string]any{
 				"byoi_base": req.Image, "image": built.Ref,
-			}, built.ID))))
+			}, reused), built.ID))))
 	case req.DevcontainerRepo != "" && s.cfg.ImageBuilder != nil:
 		outTag := "wardyn-devcontainer/" + runID.String() + ":latest"
 		buildCtx, endBuild, ok := startBuild(map[string]any{"devcontainer_repo": req.DevcontainerRepo})

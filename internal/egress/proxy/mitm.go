@@ -338,17 +338,38 @@ func (p *Proxy) clientHandshakeCause(err error) string {
 	return "client tls handshake (sandbox to wardyn-proxy): " + p.dialFailureCause(err)
 }
 
-func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int, seen *egress.DecisionLog) {
+func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int, seen *egress.DecisionLog, relayed bool) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
 		return
+	}
+	// A terminated tunnel takes a slot as an opaque one does, before the CONNECT's allow is
+	// recorded, so a tunnel refused at the cap leaves only its deny row. A relayed flow takes
+	// none: the relay counted it before its ask.
+	if !relayed {
+		var req *egress.Request
+		if seen != nil {
+			req = &seen.Request
+		}
+		release, ok := p.takeTunnelSlot(w, req, host)
+		if !ok {
+			return
+		}
+		defer release()
+	}
+	if seen != nil {
+		p.sink.emit(*seen)
 	}
 	clientConn, brw, err := hj.Hijack()
 	if err != nil {
 		return
 	}
 	defer p.trackTunnel(clientConn)()
+	// Bounded until the handshake is in (a TLS client) or the first byte has arrived (a plaintext
+	// one); cleared below, before the inner server, whose own timeouts bound each request and leave
+	// a long model stream without a write deadline.
+	_ = clientConn.SetDeadline(time.Now().Add(mitmHandshakeTimeout))
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		_ = clientConn.Close()
 		return
@@ -391,6 +412,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		}
 		served = tlsConn
 	}
+	_ = clientConn.SetDeadline(time.Time{})
 	// Otherwise the client speaks plaintext and `served` stays raw; the same strip-inject-forward
 	// path runs below either way, via a real http.Server for correct framing/keep-alive/timeouts.
 	// Serve returns as soon as the one-conn listener's second Accept fails, while the conn is still
@@ -422,6 +444,12 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 // mitmReadTimeout is the inner server's per-request read bound. A var only so
 // a test can shorten it.
 var mitmReadTimeout = 5 * time.Minute
+
+// mitmHandshakeTimeout bounds a terminated tunnel from its hijack until the client's TLS
+// handshake is in (or, on a plaintext origin, its first byte has arrived): a client that opens a
+// tunnel and stalls holds its slot and goroutine only this long. A var only so a test can
+// shorten it.
+var mitmHandshakeTimeout = 30 * time.Second
 
 // rearmBodyDeadline gives the request body a fresh mitmReadTimeout from now.
 //

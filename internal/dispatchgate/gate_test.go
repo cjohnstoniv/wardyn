@@ -1056,3 +1056,106 @@ func TestDispatchGate_FirstWriteReply(t *testing.T) {
 		})
 	}
 }
+
+// A dispatch time at or before now fires the expiry timer at once, while New still stores the stop function.
+// Under -race the unlocked store and cleanup's read of it were a data race (and a nil call when cleanup won).
+func TestDispatchGate_ExpiryAtNewDoesNotRaceTheStopFunction(t *testing.T) {
+	for round := 0; round < 500; round++ {
+		ev := &events{}
+		m := &model{ev: ev, stop: func() {}, conn: newFakeConn(ev, func(p []byte) (int, error) { return len(p), nil }, func() {})}
+		var refusals atomic.Int32
+		outcome := make(chan Outcome, 1)
+		New(m.conn, Config{
+			By:        time.Now().Add(-time.Millisecond),
+			Now:       time.Now,
+			AfterFunc: func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop },
+			Stop:      m.stop,
+			Refuse:    func() { refusals.Add(1) },
+			Record:    func(o Outcome) { outcome <- o },
+		})
+		select {
+		case o := <-outcome:
+			if o.Kind != KindUnused || refusals.Load() != 1 {
+				t.Fatalf("round %d: kind %v with %d refusals, want unused with 1", round, o.Kind, refusals.Load())
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("round %d: no outcome", round)
+		}
+	}
+}
+
+// brokenFirstWrite is what the second Write, the driver and the gate reported after a first write that returned
+// (3, firstErr) for a 10-byte p.
+type brokenFirstWrite struct {
+	n        int
+	err      error
+	calls    int32
+	out      Outcome
+	refusals int32
+	start    time.Time
+}
+
+// writeAfterBrokenFirstWrite drives that first write, then a second write a second later, then Close.
+func writeAfterBrokenFirstWrite(t *testing.T, firstErr error) brokenFirstWrite {
+	t.Helper()
+	var count atomic.Int32
+	ev := &events{}
+	m := &model{ev: ev, stop: func() { ev.add("stop") }, conn: newFakeConn(ev, func(p []byte) (int, error) {
+		if count.Add(1) == 1 {
+			return 3, firstErr
+		}
+		return len(p), nil
+	}, func() {})}
+	h := newHarness(t, m)
+	g := h.gate()
+	p := make([]byte, 10)
+	if n1, err1 := g.Write(p); n1 != 3 || (err1 != nil) != (firstErr != nil) {
+		t.Fatalf("first Write = %d, %v; want 3 and error %v", n1, err1, firstErr)
+	}
+	var r brokenFirstWrite
+	g.mu.Lock()
+	r.start = g.out.StartedAt
+	g.mu.Unlock()
+	h.clock.set(h.clock.Now().Add(time.Second))
+	r.n, r.err = g.Write(p)
+	r.calls = count.Load()
+	_ = g.Close()
+	r.out = h.wait()
+	r.refusals = h.refusals.Load()
+	return r
+}
+
+// A write after a first write that failed is never a first write: it is refused without reaching the driver or
+// recording a refusal, and the outcome keeps the first write's start and bytes.
+func TestDispatchGate_WriteAfterAFailedFirstWriteIsRefused(t *testing.T) {
+	r := writeAfterBrokenFirstWrite(t, errors.New("broken pipe"))
+	if r.n != 0 || !errors.Is(r.err, ErrExpired) {
+		t.Errorf("second Write = %d, %v; want 0, ErrExpired", r.n, r.err)
+	}
+	if r.calls != 1 {
+		t.Errorf("driver writes = %d, want 1", r.calls)
+	}
+	if o := r.out; o.Kind != KindInterrupted || o.BytesDone != 3 || !o.Partial || !o.StartedAt.Equal(r.start) {
+		t.Errorf("outcome = %+v, want interrupted, 3 bytes, partial, started %v", o, r.start)
+	}
+	if r.refusals != 0 {
+		t.Errorf("refusals = %d, want 0", r.refusals)
+	}
+}
+
+// The same for a first write that came back short with no error.
+func TestDispatchGate_WriteAfterAShortFirstWriteIsRefused(t *testing.T) {
+	r := writeAfterBrokenFirstWrite(t, nil)
+	if r.n != 0 || !errors.Is(r.err, ErrExpired) {
+		t.Errorf("second Write = %d, %v; want 0, ErrExpired", r.n, r.err)
+	}
+	if r.calls != 1 {
+		t.Errorf("driver writes = %d, want 1", r.calls)
+	}
+	if o := r.out; o.Kind != KindInterrupted || o.BytesDone != 3 || o.Partial || !o.StartedAt.Equal(r.start) {
+		t.Errorf("outcome = %+v, want interrupted, 3 bytes, not partial, started %v", o, r.start)
+	}
+	if r.refusals != 0 {
+		t.Errorf("refusals = %d, want 0", r.refusals)
+	}
+}

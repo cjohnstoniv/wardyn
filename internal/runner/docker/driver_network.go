@@ -82,7 +82,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// (1) Per-run internal network and (2) the wardyn-proxy sidecar on it.
-	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion))
+	intNetID, proxyIP, proxySHA, undoNet, err := d.runNetworkAndProxy(ctx, spec, d.resolvConfMountSupported(info.ServerVersion), info.ServerVersion)
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
@@ -256,12 +256,12 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // config written to the proxy (startProxy), and the undo that removes both; on an error it has
 // already undone them. dnsListen has the proxy answer DNS on :53 (proxy.DNSListenEnv): only for a container
 // run whose agent resolver is mounted to point at it, since a proxy told to open the listener exits when it
-// cannot bind.
-func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
+// cannot bind. engineVersion is the engine's version, read once by the caller for this create.
+func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec, dnsListen bool, engineVersion string) (intNetID, proxyIP, proxySHA string, undo func(), err error) {
 	// (1) Per-run internal network. Internal=true takes away its route off the host, and the isolated
 	// gateway mode leaves no address on the host's side (run_network_shape.go): together these uphold
 	// L0 even though the agent is *connected* to it.
-	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels))
+	intNetID, err = d.createRunNetwork(ctx, spec.RunID, d.labels(spec.RunID, componentNetwork, spec.Labels), engineVersion)
 	if err != nil {
 		return "", "", "", nil, err
 	}
@@ -335,8 +335,8 @@ func (d *Driver) runNetworkAndProxy(ctx context.Context, spec runner.SandboxSpec
 //
 // Both ways of picking the subnet create the same shape (runNetworkOptions), and the created network is
 // read back and checked (checkRunNetwork) before anything joins it.
-func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string) (string, error) {
-	isolated, err := d.runNetworkIsolation(ctx)
+func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels map[string]string, engineVersion string) (string, error) {
+	isolated, err := d.runNetworkIsolation(engineVersion)
 	if err != nil {
 		return "", err
 	}
@@ -360,6 +360,11 @@ func (d *Driver) createRunNetwork(ctx context.Context, runID uuid.UUID, labels m
 
 // createDaemonRunNetwork creates network name as base asks, on a subnet the daemon picks.
 func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base client.NetworkCreateOptions) (string, error) {
+	// The subnet the probe reads back is free only until another create takes it. The lock keeps this driver's own
+	// creates out of that window; a create another process makes on the daemon can still take it, and the pick is
+	// then retried below.
+	d.subnetMu.Lock()
+	defer d.subnetMu.Unlock()
 	var err error
 	for range 3 {
 		opts := base
@@ -382,6 +387,9 @@ func (d *Driver) createDaemonRunNetwork(ctx context.Context, name string, base c
 	return "", fmt.Errorf("docker: create internal network: %w", err)
 }
 
+// probeRemoveBound bounds the removal of a subnet probe network.
+const probeRemoveBound = 30 * time.Second
+
 // daemonSubnet creates network name as opts asks, with no subnet, reads back
 // the IPv4 subnet the daemon gave it and removes it again.
 func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.NetworkCreateOptions) (netip.Prefix, error) {
@@ -390,9 +398,12 @@ func (d *Driver) daemonSubnet(ctx context.Context, name string, opts client.Netw
 		return netip.Prefix{}, err
 	}
 	insp, ierr := d.cli.NetworkInspect(ctx, res.ID, client.NetworkInspectOptions{})
-	// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand the probe
-	// network holding a pool subnet.
-	if _, err := d.cli.NetworkRemove(context.Background(), res.ID, client.NetworkRemoveOptions{}); err != nil {
+	// Background, like CreateSandbox's rollback: a cancelled dispatch must not strand the probe network holding a
+	// pool subnet. Bounded, because the caller holds subnetMu: a removal the daemon never answers must not hold
+	// every other start.
+	rmCtx, cancel := context.WithTimeout(context.Background(), probeRemoveBound)
+	defer cancel()
+	if _, err := d.cli.NetworkRemove(rmCtx, res.ID, client.NetworkRemoveOptions{}); err != nil {
 		return netip.Prefix{}, fmt.Errorf("remove the subnet probe: %w", err)
 	}
 	if ierr != nil {
@@ -771,23 +782,32 @@ var _ containerListerAPI = (*client.Client)(nil)
 // after the proxy started and before the agent existed (or a rollback whose proxy removal the daemon
 // refused) leaves a proxy holding the run's config, an exec-less sandbox has no agent until its
 // first Exec, and a teardown cut short after the proxy went leaves only the hold. A crash between network-create and proxy-start leaves a network with no container to
-// key on; with Config.RunSubnetPool set, sweepRunNetworks removes it, otherwise that edge is left
-// to `docker network prune`.
+// key on; sweepRunNetworks removes it, with or without Config.RunSubnetPool.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	n, _, err := d.sweepOrphans(ctx, minAge, isOrphan, nil)
+	return n, err
+}
+
+// sweepOrphans is SweepOrphanedSandboxes with an optional hold: an orphan held(runID) names is stopped and kept
+// (holdOrphan) instead of torn down, and counted in heldN. A nil held is the plain sweep. A held run's VM residue
+// and per-run network are left alone; a hold that cannot be confirmed falls through to the teardown.
+func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrphan, held func(runID uuid.UUID) bool) (swept, heldN int, err error) {
 	lister, ok := d.cli.(containerListerAPI)
 	if !ok {
-		return 0, nil
+		return 0, 0, nil
 	}
+	keep := func(id uuid.UUID) bool { return held != nil && held(id) }
+	sweepable := func(id uuid.UUID) bool { return isOrphan(id) && !keep(id) }
 	seeds, seedErr := d.sweepDriveSeeds(ctx, lister, minAge)
 	cutoff := time.Now().Add(-minAge)
-	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, isOrphan)
+	vms, vmErr := d.sweepVMOrphans(ctx, lister, cutoff, sweepable)
 	res, err := lister.ContainerList(ctx, client.ContainerListOptions{
 		All: true, // a crashed sandbox's agent may be exited, not running
 		// Values of one label key are ANDed, so the component is matched below.
 		Filters: client.Filters{}.Add("label", labelComponent),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
+		return 0, 0, fmt.Errorf("docker: list containers for orphan sweep: %w", err)
 	}
 	swept, errs := seeds+vms, []error{seedErr, vmErr}
 	seen := map[uuid.UUID]bool{}
@@ -809,18 +829,20 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 			continue // a live run legitimately owns it
 		}
 		seen[runID] = true
+		if keep(runID) && d.holdOrphan(ctx, runID) {
+			heldN++
+			continue
+		}
 		if terr := d.teardown(ctx, agentContainerName(runID)); terr != nil {
 			errs = append(errs, fmt.Errorf("docker: teardown orphaned run %s: %w", runID, terr))
 			continue
 		}
 		swept++
 	}
-	if d.cfg.RunSubnetPool.IsValid() {
-		nets, nerr := d.sweepRunNetworks(ctx, cutoff, isOrphan)
-		swept += nets
-		errs = append(errs, nerr)
-	}
-	return swept, errors.Join(errs...)
+	nets, nerr := d.sweepRunNetworks(ctx, cutoff, sweepable)
+	swept += nets
+	errs = append(errs, nerr)
+	return swept, heldN, errors.Join(errs...)
 }
 
 // withRunnerTrustedCA adds this runner's own roots to a sandbox's CA trust after whatever the

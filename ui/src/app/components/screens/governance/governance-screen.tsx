@@ -536,7 +536,7 @@ export function GovernanceScreen() {
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
               disabled={deleteCount > 0 || deleteChildren.length > 0 || busy}
               onClick={(e) => {
                 e.preventDefault();

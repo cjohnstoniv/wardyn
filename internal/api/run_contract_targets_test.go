@@ -257,12 +257,17 @@ func TestTargetOverlapSharedChainIsBounded(t *testing.T) {
 		set = append(set, "common")
 		targets = append(targets, shared(set[0], set, "acme/web", "/home/agent"+strings.Repeat("/c", d)))
 	}
-	start := time.Now()
-	if got := targetOverlapRefusal(targets); got != nil {
-		t.Fatalf("refused: %+v", got.body)
+	// The best of three runs: one run's wall time also counts the package's parallel tests on a busy runner
+	// (a 5.3 s run on hosted CI where the check alone takes under 0.25 s with the race detector).
+	elapsed := time.Hour
+	for range 3 {
+		start := time.Now()
+		if got := targetOverlapRefusal(targets); got != nil {
+			t.Fatalf("refused: %+v", got.body)
+		}
+		elapsed = min(elapsed, time.Since(start))
 	}
-	elapsed := time.Since(start)
-	t.Logf("a chain of %d shared targets took %v", depth, elapsed)
+	t.Logf("a chain of %d shared targets took %v at best", depth, elapsed)
 	if elapsed > raceSlowdown*time.Second {
 		t.Fatalf("a chain of %d shared targets took %v", depth, elapsed)
 	}
