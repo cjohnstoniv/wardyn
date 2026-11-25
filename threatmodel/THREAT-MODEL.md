@@ -241,6 +241,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 | **B13 — Organisation runner vs. its Kubernetes cluster** | 🟡 partial **[0.9.3]** | An organisation's runner in a cluster: outbound-only, ServiceAccount and NetworkPolicy isolation, and the cluster's admins trusted: [detail](#b13--organisation-runner-vs-its-kubernetes-cluster). |
 | **B14 — macOS VM guest vs. the Mac that runs it** | 🟡 partial **[0.10]** | A macOS guest under Apple's hypervisor on a company-managed Mac: one NIC to the run's own proxy, a managed-Mac gate that is two assertions, and a ledger any local account can starve: [detail](#b14--macos-vm-guest-vs-the-mac-that-runs-it). |
 | **B15 — Linux VM guest vs. the runner host** | 🟡 partial **[0.10]** | A Linux guest under QEMU/KVM in the run's unprivileged agent container (Docker), or the run's pod under the `CC3` RuntimeClass (Kubernetes): [detail](#b15--linux-vm-guest-vs-the-runner-host). |
+| **B16 — An organization's identity provider vs. a service identity** | 🟡 partial | Off by default. A signed-in admin's trust, held for a second admin under four-eyes, maps one exact issuer, audience and subject to one service identity. RS256 only; a swapped token lives at most an hour: [detail](../docs/operations/inbound-federation.md). Residual #100. |
 
 A sandbox can at most reach what the operating user can, and Wardyn never adds power beyond it. Each limit layer then only narrows: the Wardyn boundary, the deployment and unit ceilings, restrictions, the run's policy, the person's walls and the run's wall preset.
 
@@ -794,6 +795,7 @@ By default an agent starts before its proxy confirms the policy it loaded. With 
     (`handleAppTicket` in [`internal/api/inbound_ticket.go`](../internal/api/inbound_ticket.go));
   - or that caller's inbound token as `Authorization: Bearer wdn_…`, the only bearer the gateway
     takes, stripped before the sandbox ([`internal/api/uigateway_inbound.go`](../internal/api/uigateway_inbound.go)).
+  - That inbound token can also come from [inbound federation](../docs/operations/inbound-federation.md): an organization's own provider token swapped for a service identity's inbound token, of the same kind and checked the same way.
   - No role reaches an inbound app (residual #98).
   - The attach ticket RE-CHECKS against fresh state what it cannot prove:
     - owner-or-admin for THIS run,
@@ -1607,7 +1609,7 @@ These risks are **not closed by v1 Wardyn**.
 |---|---|
 | Model channel and egress | 1, 2, 3, 42, 43, 46, 54, 66, 93, 99 |
 | Isolation and confinement | 4, 5, 6, 10, 12, 47, 53, 74 |
-| Identity, tokens and approvals | 7, 8, 11, 17, 38, 39, 44, 60, 61, 78 |
+| Identity, tokens and approvals | 7, 8, 11, 17, 38, 39, 44, 60, 61, 78, 100 |
 | Admin reach and authorization | 9, 14, 15, 16, 20, 23, 24, 27, 30, 31, 55, 92 |
 | Images and install | 13, 32, 56 |
 | UI-sandbox gateway and apps | 18, 19, 21, 22, 98 |
@@ -3329,6 +3331,19 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
+100. **An inbound federation trust is only as safe as the provider and the workload it names.**
+    <details><summary>Details</summary>
+
+    - Whoever controls the trusted provider, or the workload the trust's subject names, gets inbound tokens of that service identity until the trust is deleted or the switch turned off. Each token reaches what the identity reaches, for at most an hour.
+    - A provider token can be exchanged again until its age limit, and each swap counts against the trust's `max_live`. So a captured token can also fill that limit, refusing the real workload until those tokens expire.
+    - A revoke of all the sponsor's sessions, or of everyone's, stops the trust until the sponsor confirms it again. A sign-out does not, and a revoke deletes no trust.
+    - With `WARDYN_GOVERNANCE_SECOND_HUMAN` unset, one signed-in admin turns the switch on and adds a trust alone. With it set, both need a second signed-in admin; turning it off and deleting a trust stay single-person, and turning it off cancels a pending turn-on.
+    - The exchange answers every refused provider token with one `401`. While a trusted provider cannot be reached it answers `503` instead, only for a token whose unverified issuer, audience and subject match a trust. At any time, a matching token also takes longer to answer, since its signature is checked. A caller who can write those three values can learn the trust exists, and gets no token.
+    - A trust may not name an issuer on one of this Wardyn's own hosts, a run's own UI-sandbox host included, where the run's app answers.
+    - The per-address rate limit bounds the attempts, and the denied rows record each one with the caller's address.
+
+    </details>
+
 ### The injected call is pinned on the wire [shipped]
 
 - Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto.
@@ -3790,6 +3805,7 @@ has four-eyes.**
 - A service identity carries any existing user type directly, so its create and any change of its sponsor
   are covered (governance change kind `service_identity`), held for a second security-tier human and
   applied only against the reviewed state.
+- Turning inbound federation on and adding a trust are covered too (governance change kind `inbound_federation`), and need a signed-in person to propose and to approve. Turning it off and deleting a trust apply directly: they only stop tokens, and turning it off cancels a pending turn-on. With the switch unset, one admin does both alone (residual 100).
 - It is published here because of what it leaves open.
 
 **What it guarantees**, with SSO configured and the admin token held out of band:
