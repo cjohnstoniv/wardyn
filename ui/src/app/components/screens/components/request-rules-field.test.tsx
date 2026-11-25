@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The request-rules field in each state the approved frames draw (R1 to R8, R14): empty, several rules, adding,
+// The request-rules field in each state the approved frames draw: empty, several rules, adding,
 // a refused rule, the limit, no host to put a rule on, and the remove-only row while the switch is off.
 import * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { aheadByHours } from "../../../lib/test-clock";
@@ -17,11 +17,11 @@ import { setField } from "../../../../test/set-field";
 import { ComponentEditor } from "./component-editor";
 import { REQUEST_RULES as T, RequestRulesField } from "./request-rules-field";
 
-const h = vi.hoisted(() => ({ on: false, put: vi.fn() }));
+const h = vi.hoisted(() => ({ on: false as boolean | null, put: vi.fn() }));
 vi.mock("../../../lib/api/components", () => ({ components: { put: (...a: unknown[]) => h.put(...a) } }));
 vi.mock("../../../lib/api/model-providers", () => ({ modelProviders: { getModelProviders: vi.fn(async () => ({ providers: { providers: [] }, connected: {}, etag: null })) } }));
 vi.mock("../../wardyn/model-access-context", () => ({
-  useShellSetupStatus: () => ({ status: { features: h.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
+  useShellSetupStatus: () => ({ status: h.on === null ? null : { features: h.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
 }));
 
 beforeEach(() => {
@@ -61,7 +61,7 @@ const user = userEvent.setup({ pointerEventsCheck: 0 });
 const card = (n: number) => screen.getByRole("group", { name: T.RULE(n) });
 
 describe("RequestRulesField: switch on", () => {
-  it("R1: with no rules it says so, offers Add a rule and counts 0 of 64", () => {
+  it("With no rules it says so, offers Add a rule and counts 0 of 64", () => {
     render(<Harness />);
     expect(screen.getByRole("group", { name: T.LABEL })).toBeTruthy();
     expect(screen.getByText(T.HINT)).toBeTruthy();
@@ -72,7 +72,7 @@ describe("RequestRulesField: switch on", () => {
     expect(screen.queryByTestId("request-rule")).toBeNull();
   });
 
-  it("R2: shows each rule under a numbered heading, with its effect pressed and Hold explained on the Hold rule alone", () => {
+  it("Shows each rule under a numbered heading, with its effect pressed and Hold explained on the Hold rule alone", () => {
     render(<Harness initial={THREE} />);
     expect(screen.getAllByTestId("request-rule")).toHaveLength(3);
     const one = within(card(1));
@@ -110,7 +110,7 @@ describe("RequestRulesField: switch on", () => {
     expect(latest).toEqual([{ host: "api.example.com", effect: "allow" }]);
   });
 
-  it("R3: Add a rule appends a rule with Allow chosen and no host yet, and the menu lists only the hosts it was given", async () => {
+  it("Add a rule appends a rule with Allow chosen and no host yet, and the menu lists only the hosts it was given", async () => {
     render(<Harness initial={[THREE[0]]} />);
     await user.click(screen.getByRole("button", { name: T.ADD }));
     expect(screen.getAllByTestId("request-rule")).toHaveLength(2);
@@ -140,7 +140,7 @@ describe("RequestRulesField: switch on", () => {
     expect(screen.getByText("2 of 64 rules")).toBeTruthy();
   });
 
-  it("R4: marks the rule a sentence names with an icon and text, and sets only its named input invalid, tied to the sentence", () => {
+  it("Marks the rule a sentence names with an icon and text, and sets only its named input invalid, tied to the sentence", () => {
     const sentence = 'invalid component: definition.request_rules[1].paths[0]: path "/v1/../admin" is not in normal form';
     render(<Harness initial={THREE} refusal={sentence} failing={{ index: 1, part: "paths" }} />);
     expect(within(card(2)).getByText(T.REFUSED)).toBeTruthy();
@@ -154,13 +154,23 @@ describe("RequestRulesField: switch on", () => {
     expect(within(card(1)).getByLabelText(T.PATHS_OF(1)).getAttribute("aria-invalid")).toBeNull();
   });
 
-  it("R6: a refused host marks the Host menu, which still shows the host that was taken out of Hosts", () => {
+  it("A refused host marks the Host menu, which still shows the host that was taken out of Hosts", () => {
     const rules: HostRule[] = [THREE[0], { host: "uploads.example.com", methods: ["PUT"], paths: ["/v1/files"], effect: "allow" }];
     render(<Harness initial={rules} hosts={["api.example.com"]} refusal="request_rules[1].host: not one of the hosts" failing={{ index: 1, part: "host" }} />);
     const host = within(card(2)).getByRole("combobox", { name: T.HOST_OF(2) });
     expect(host.textContent).toContain("uploads.example.com");
     expect(host.getAttribute("aria-invalid")).toBe("true");
     expect(host.getAttribute("aria-describedby")).toBe(screen.getByRole("alert").id);
+  });
+
+  it("an edit takes the refused mark off the rules, and the sentence stays until the next save", async () => {
+    const sentence = "request_rules[1].paths[0]: bad";
+    render(<Harness initial={THREE} refusal={sentence} failing={{ index: 1, part: "paths" }} />);
+    expect(screen.getByText(T.REFUSED)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: T.DOWN(2) }));
+    expect(screen.queryByText(T.REFUSED)).toBeNull();
+    expect(document.querySelectorAll("[aria-invalid]")).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toBe(sentence);
   });
 
   it("a sentence about the rules as a whole shows under the field and marks no rule", () => {
@@ -170,7 +180,7 @@ describe("RequestRulesField: switch on", () => {
     expect(document.querySelectorAll("[aria-invalid]")).toHaveLength(0);
   });
 
-  it("R5: at 64 rules Add a rule is disabled and says to remove one; one removed re-enables it", async () => {
+  it("At 64 rules Add a rule is disabled and says to remove one; one removed re-enables it", async () => {
     const many: HostRule[] = Array.from({ length: 64 }, (_, i) => ({ host: "api.example.com", paths: [`/p${i}`], effect: "allow" as const }));
     render(<Harness initial={many} />);
     expect((screen.getByRole("button", { name: T.ADD }) as HTMLButtonElement).disabled).toBe(true);
@@ -181,7 +191,7 @@ describe("RequestRulesField: switch on", () => {
     expect(screen.getByText("63 of 64 rules")).toBeTruthy();
   });
 
-  it("R6: with no host to put a rule on, Add a rule is disabled and says why, and no empty line is shown", () => {
+  it("With no host to put a rule on, Add a rule is disabled and says why, and no empty line is shown", () => {
     render(<Harness hosts={[]} />);
     expect((screen.getByRole("button", { name: T.ADD }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(T.NO_HOST)).toBeTruthy();
@@ -196,7 +206,7 @@ describe("RequestRulesField: switch on", () => {
 });
 
 describe("RequestRulesField: switch off", () => {
-  it("R7: a component with rules shows the count, the Off chip, the sentence and Remove rules, and no add or edit control", () => {
+  it("A component with rules shows the count, the Off chip, the sentence and Remove rules, and no add or edit control", () => {
     render(<Harness on={false} initial={THREE} />);
     expect(screen.getByRole("group", { name: T.LABEL })).toBeTruthy();
     expect(screen.getByText("3 rules")).toBeTruthy();
@@ -215,7 +225,7 @@ describe("RequestRulesField: switch off", () => {
     expect(screen.getByText("1 rule")).toBeTruthy();
   });
 
-  it("R8: Remove rules empties the rules and says to save", async () => {
+  it("Remove rules empties the rules and says to save", async () => {
     render(<Harness on={false} initial={THREE} />);
     await user.click(screen.getByRole("button", { name: T.REMOVE_ALL }));
     expect(latest).toEqual([]);
@@ -224,7 +234,7 @@ describe("RequestRulesField: switch off", () => {
     expect(screen.queryByText(T.OFF_SENTENCE)).toBeNull();
   });
 
-  it("R7: with no rules, stored or drafted, the field is not shown at all", () => {
+  it("With no rules, stored or drafted, the field is not shown at all", () => {
     const { container } = render(<Harness on={false} />);
     expect(container.textContent).toBe("");
   });
@@ -246,7 +256,7 @@ function renderEditor(component: Component | null) {
 const save = () => user.click(screen.getByRole("button", { name: A.SAVE }));
 
 describe("ComponentEditor: request rules", () => {
-  it("R1: the field sits directly after Hosts and before Secrets, and the Host menu offers the exact hosts only", async () => {
+  it("The field sits directly after Hosts and before Secrets, and the Host menu offers the exact hosts only", async () => {
     h.on = true;
     renderEditor(BARE);
     const hosts = screen.getByLabelText(A.HOSTS);
@@ -260,9 +270,10 @@ describe("ComponentEditor: request rules", () => {
     expect((await screen.findAllByRole("option")).map((o) => o.textContent)).toEqual(["api.example.com", "uploads.example.com"]);
   });
 
-  it("the field sits before the token audience of a remote tool server", () => {
+  it("the field sits before the token audience of a remote tool server", async () => {
     h.on = true;
     renderEditor({ ...BARE, definition: { hosts: ["mcp.example.com"], mcp: { transport: "http", url: "https://mcp.example.com/mcp" } } });
+    await act(async () => {}); // the audience field reads the providers once
     const rules = screen.getByRole("group", { name: T.LABEL });
     expect(rules.compareDocumentPosition(screen.getByLabelText(A.AUDIENCE)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -309,7 +320,7 @@ describe("ComponentEditor: request rules", () => {
     expect(h.put.mock.calls[0][1].definition).not.toHaveProperty("request_rules");
   });
 
-  it("R4: a refusal naming a rule shows under the field, marks that rule, and leaves the alert line empty and everything typed", async () => {
+  it("A refusal naming a rule shows under the field, marks that rule, and leaves the alert line empty and everything typed", async () => {
     h.on = true;
     const sentence = 'invalid component: definition.request_rules[1].paths[0]: path "/v1/../admin" is not in normal form: it has an empty, "." or ".." segment';
     h.put.mockRejectedValue(new HttpError(422, sentence));
@@ -327,7 +338,7 @@ describe("ComponentEditor: request rules", () => {
     expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 
-  it("R6: a rule left on a host taken out of Hosts is marked on its Host menu", async () => {
+  it("A rule left on a host taken out of Hosts is marked on its Host menu", async () => {
     h.on = true;
     h.put.mockRejectedValue(new HttpError(422, 'invalid component: definition.request_rules[2].host: "uploads.example.com" is not one of the component\'s hosts named exactly, with no port or port 443'));
     renderEditor(STORED);
@@ -338,7 +349,7 @@ describe("ComponentEditor: request rules", () => {
     expect(screen.getByRole("combobox", { name: T.HOST_OF(3) }).getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("R12: a version conflict stays in the existing alert line at the foot, outside the field", async () => {
+  it("A version conflict stays in the existing alert line at the foot, outside the field", async () => {
     h.on = true;
     const stale = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
     h.put.mockRejectedValue(new HttpError(409, stale));
@@ -350,7 +361,7 @@ describe("ComponentEditor: request rules", () => {
     expect(screen.queryByText(T.REFUSED)).toBeNull();
   });
 
-  it("R8 right: the switch turned off after the page loaded refuses a changed rule under the field, keeping every edit", async () => {
+  it("The switch turned off after the page loaded refuses a changed rule under the field, keeping every edit", async () => {
     h.on = true;
     const off = "This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.";
     h.put.mockRejectedValue(new HttpError(422, off));
@@ -364,7 +375,7 @@ describe("ComponentEditor: request rules", () => {
     expect(screen.getAllByTestId("request-rule")).toHaveLength(3);
   });
 
-  it("R7 right and R8 left: off, a component with rules shows the remove-only row, and Remove rules then Save sends none", async () => {
+  it("Off, a component with rules shows the remove-only row, and Remove rules then Save sends none", async () => {
     h.put.mockResolvedValue({});
     renderEditor(STORED);
     expect(screen.getByText("3 rules")).toBeTruthy();
@@ -386,7 +397,32 @@ describe("ComponentEditor: request rules", () => {
     expect(h.put.mock.calls[0][1].definition.request_rules).toEqual(THREE);
   });
 
-  it("R7 left: off, a component with no rules shows no rules field and the shipped editor", () => {
+  it("off, a refusal about a rule that was stored shows under the remove-only row, since no rule input exists to carry it", async () => {
+    const sentence = 'invalid component: definition.request_rules[0].host: "api.example.com" is not one of the component\'s hosts named exactly, with no port or port 443';
+    h.put.mockRejectedValue(new HttpError(422, sentence));
+    renderEditor(STORED);
+    setField(screen.getByLabelText(A.HOSTS), "uploads.example.com");
+    await save();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(sentence);
+    expect(screen.getByRole("group", { name: T.LABEL }).contains(alert)).toBe(true);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText("3 rules")).toBeTruthy();
+    expect(screen.getByRole("button", { name: T.REMOVE_ALL })).toBeTruthy();
+  });
+
+  it("until the setup status has answered the field is not shown, and a save sends the stored rules unchanged", async () => {
+    h.on = null;
+    h.put.mockResolvedValue({});
+    renderEditor(STORED);
+    expect(screen.queryByRole("group", { name: T.LABEL })).toBeNull();
+    expect(screen.queryByText(T.OFF_SENTENCE)).toBeNull();
+    await save();
+    await waitFor(() => expect(h.put).toHaveBeenCalledTimes(1));
+    expect(h.put.mock.calls[0][1].definition.request_rules).toEqual(THREE);
+  });
+
+  it("off, a component with no rules shows no rules field and the shipped editor", () => {
     renderEditor(BARE);
     expect(screen.queryByRole("group", { name: T.LABEL })).toBeNull();
     expect(screen.getByRole("group", { name: A.CONFIG_LABEL })).toBeTruthy();

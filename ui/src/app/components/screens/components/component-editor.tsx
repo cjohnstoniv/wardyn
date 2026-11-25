@@ -289,7 +289,8 @@ export function ComponentEditor({
   // A refusal about the rules is shown under the rules field, and one about the audience under that field.
   const rulesRefusal = error ? requestRulesRefusal(error) : null;
   const audienceRefused = audienceEditable(component) && !!error && !rulesRefusal && AUDIENCE_REFUSAL.test(error);
-  const rulesOn = useShellSetupStatus().status?.features?.component_request_rules === true;
+  const setup = useShellSetupStatus().status;
+  const rulesOn = setup ? setup.features?.component_request_rules === true : null;
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const canSave = draft.name.trim() !== "" && !saving;
 

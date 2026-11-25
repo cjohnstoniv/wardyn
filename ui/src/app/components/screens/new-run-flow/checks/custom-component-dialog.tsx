@@ -75,12 +75,13 @@ const settingId = (s: { key: number }, field: "name" | "value") => `ccd-set-${s.
 const RULES_ID = "ccd-rules";
 
 /** The control a field path stands for, so a refusal can move focus to it. */
-function domIdOf(field: string, d: ComponentDraft, errors: FormErrors): string | undefined {
+function domIdOf(field: string, d: ComponentDraft, errors: FormErrors, rulesOn: boolean | null): string | undefined {
   if (field === "name") return "ccd-name";
   if (field === "hosts") return "ccd-hosts";
   if (field === "request_rules") {
     const named = requestRulesRefusal(errors.request_rules ?? "");
-    return named?.index !== undefined && named.part ? ruleDomId(RULES_ID, named.index, named.part) : undefined;
+    // A rule input exists only while the rules are on; otherwise the sentence itself takes focus.
+    return rulesOn && named?.index !== undefined && named.part ? ruleDomId(RULES_ID, named.index, named.part) : `${RULES_ID}-error`;
   }
   const secret = /^secrets\.(\d+)\.(.+)$/.exec(field);
   if (secret) {
@@ -115,13 +116,14 @@ export function CustomComponentDialog({
   const summaryRef = React.useRef<HTMLDivElement>(null);
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const refused = Object.keys(errors).length > 0;
-  const rulesOn = useShellSetupStatus().status?.features?.component_request_rules === true;
+  const setup = useShellSetupStatus().status;
+  const rulesOn = setup ? setup.features?.component_request_rules === true : null;
   const rulesRefusal = errors.request_rules ? requestRulesRefusal(errors.request_rules) : null;
 
   // Focus the first control that owns a sentence, or the sentence block when none does.
   const focusFirst = (found: FormErrors, d: ComponentDraft) => {
     const field = firstErrorField(found, d);
-    const target = field ? domIdOf(field, d, found) : undefined;
+    const target = field ? domIdOf(field, d, found, rulesOn) : undefined;
     window.requestAnimationFrame(() => {
       const el = target ? document.getElementById(target) : null;
       (el ?? summaryRef.current)?.focus();

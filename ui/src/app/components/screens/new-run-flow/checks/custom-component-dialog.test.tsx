@@ -13,9 +13,9 @@ import { setField } from "../../../../../test/set-field";
 import { CustomComponentDialog, type CustomComponentDialogProps } from "./custom-component-dialog";
 import { aheadByHours } from "../../../../lib/test-clock";
 
-const rulesOn = vi.hoisted(() => ({ on: false }));
+const rulesOn = vi.hoisted(() => ({ on: false as boolean | null }));
 vi.mock("../../../wardyn/model-access-context", () => ({
-  useShellSetupStatus: () => ({ status: { features: rulesOn.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
+  useShellSetupStatus: () => ({ status: rulesOn.on === null ? null : { features: rulesOn.on ? { scheduled_runs: false, component_request_rules: true } : undefined }, refresh: () => {} }),
 }));
 
 // The real components client over a stubbed fetch: the routes, verbs and bodies
@@ -317,14 +317,14 @@ describe("CustomComponentDialog: editing a saved component", () => {
   });
 });
 
-// The member case of the request rules (R9 to R12): the same field as the organisation's editor, in the person's dialog.
+// The member case of the request rules: the same field as the organisation's editor, in the person's dialog.
 const RULES: HostRule[] = [{ host: "api.acme.test", methods: ["GET", "HEAD"], paths: ["/v1/invoices"], effect: "allow" }];
 const WITH_RULES: ComponentSaved = { ...SAVED, definition: { hosts: ["api.acme.test", "cdn.acme.test"], request_rules: RULES } };
 const ruleGroup = () => screen.getByRole("group", { name: R.LABEL });
 const refuse = (status: number, error: string, reason: string) => json(status, { error, reason });
 
 describe("CustomComponentDialog: request rules", () => {
-  it("R9 left: a new component for this run has the field after the hosts and before the secrets, and the rule goes inline", async () => {
+  it("A new component for this run has the field after the hosts and before the secrets, and the rule goes inline", async () => {
     rulesOn.on = true;
     const { props, user } = open();
     const hosts = screen.getByLabelText(/^Hosts it reaches/);
@@ -347,7 +347,7 @@ describe("CustomComponentDialog: request rules", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("R9 right: a saved component's refusal names the rule, shows the server's sentence under the field, focuses the input and keeps everything typed", async () => {
+  it("A saved component's refusal names the rule, shows the server's sentence under the field, focuses the input and keeps everything typed", async () => {
     rulesOn.on = true;
     fetchMock.mockResolvedValue(refuse(422, 'invalid component: definition.request_rules[0].paths[0]: "v1/invoices" must start with /', "component_definition_invalid"));
     const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
@@ -367,7 +367,7 @@ describe("CustomComponentDialog: request rules", () => {
     expect(props.onClose).not.toHaveBeenCalled();
   });
 
-  it("R11: the off and unread sentences show under the field, nothing typed is lost, and the summary still says the save was refused", async () => {
+  it("The off and unread sentences show under the field, nothing typed is lost, and the summary still says the save was refused", async () => {
     rulesOn.on = true;
     const off = "This component carries request rules, and request rules are off on this deployment. An admin turns them on with features.component_request_rules.enabled.";
     const unread = "This component carries request rules, and whether request rules are on could not be read. Try again in a moment.";
@@ -386,18 +386,43 @@ describe("CustomComponentDialog: request rules", () => {
     }
   });
 
-  it("R12: a version conflict stays in the summary, not under the field", async () => {
+  it("A version conflict stays in the summary, not under the field", async () => {
     rulesOn.on = true;
     const msg = "Someone saved this component since you opened it. Open it again to see their change, then make your edit again.";
     fetchMock.mockResolvedValue(refuse(409, msg, "component_version_conflict"));
-    open({ context: "saved", component: WITH_RULES, onAttach: undefined });
-    await screen.getByRole("button", { name: "Save" }).click();
+    const { user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    await user.click(screen.getByRole("button", { name: "Save" }));
     const shown = await screen.findByText(msg);
     expect(ruleGroup().contains(shown)).toBe(false);
     expect(screen.queryByText(R.REFUSED)).not.toBeInTheDocument();
   });
 
-  it("R10 left: off, a saved component with rules shows the remove-only row, and Remove rules then Save sends no rules", async () => {
+  it("off, a refusal about a stored rule shows under the remove-only row, takes focus, and keeps everything typed", async () => {
+    const sentence = 'request_rules[0].host: "api.acme.test" is not one of the component\'s hosts named exactly, with no port or port 443';
+    fetchMock.mockResolvedValue(refuse(422, `invalid component: definition.${sentence}`, "component_definition_invalid"));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    await type(user, /^Hosts it reaches/, "cdn.acme.test");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const shown = await screen.findByText(sentence);
+    expect(ruleGroup().contains(shown)).toBe(true);
+    expect(screen.getAllByText(sentence)).toHaveLength(1);
+    await waitFor(() => expect(shown).toHaveFocus());
+    expect(screen.getByLabelText(/^Hosts it reaches/)).toHaveValue("cdn.acme.test");
+    expect(screen.getByRole("button", { name: R.REMOVE_ALL })).toBeInTheDocument();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("until the setup status has answered the field is not shown, and a save sends the stored rules unchanged", async () => {
+    rulesOn.on = null;
+    fetchMock.mockResolvedValue(json(200, { ...WITH_RULES, version: 2 }));
+    const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
+    expect(screen.queryByRole("group", { name: R.LABEL })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(props.onClose).toHaveBeenCalled());
+    expect(calls()[0].body.definition.request_rules).toEqual(RULES);
+  });
+
+  it("Off, a saved component with rules shows the remove-only row, and Remove rules then Save sends no rules", async () => {
     fetchMock.mockResolvedValue(json(200, { ...WITH_RULES, version: 2 }));
     const { props, user } = open({ context: "saved", component: WITH_RULES, onAttach: undefined });
     expect(screen.getByText("1 rule")).toBeInTheDocument();
@@ -421,7 +446,7 @@ describe("CustomComponentDialog: request rules", () => {
     expect(calls()[0].body.definition.request_rules).toEqual(RULES);
   });
 
-  it("R10 right: off, a component with no rules shows no field, and a new one for this run has none", () => {
+  it("Off, a component with no rules shows no field, and a new one for this run has none", () => {
     open({ context: "saved", component: SAVED, onAttach: undefined });
     expect(screen.queryByRole("group", { name: R.LABEL })).not.toBeInTheDocument();
     cleanup();

@@ -192,6 +192,15 @@ function RuleCard({
   );
 }
 
+function Refusal({ id, text }: { id: string; text: string | null }) {
+  if (!text) return null;
+  return (
+    <p id={id} role="alert" tabIndex={-1} className="text-xs leading-snug text-danger outline-none">
+      {text}
+    </p>
+  );
+}
+
 function RuleEditor({
   rules,
   hosts,
@@ -211,7 +220,14 @@ function RuleEditor({
 }) {
   const [rows, setRows] = React.useState<Row[]>(() => rules.map(rowOf));
   const errorId = `${idPrefix}-error`;
+  // An edit moves or changes the rule a sentence named, so its mark goes; the sentence stays until the next save.
+  const [cleared, setCleared] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    if (!refusal) setCleared(null);
+  }, [refusal]);
+  const marked = cleared === refusal ? null : failing;
   const emit = (next: Row[]) => {
+    setCleared(refusal);
     setRows(next);
     onChange(next.map(ruleOf));
   };
@@ -237,7 +253,7 @@ function RuleEditor({
           hosts={hosts}
           count={rows.length}
           idPrefix={idPrefix}
-          failing={failing?.index === i ? failing : null}
+          failing={marked?.index === i ? marked : null}
           errorId={errorId}
           onChange={(p) => patch(row.key, p)}
           onMove={(by) => move(i, by)}
@@ -258,11 +274,7 @@ function RuleEditor({
         </Button>
         <span className="text-xs text-muted-foreground">{addNote}</span>
       </div>
-      {refusal && (
-        <p id={errorId} role="alert" className="text-xs leading-snug text-danger">
-          {refusal}
-        </p>
-      )}
+      <Refusal id={errorId} text={refusal} />
     </fieldset>
   );
 }
@@ -278,8 +290,8 @@ export function RequestRulesField({
   failing = null,
   disabled,
 }: {
-  /** The deployment has request rules on (the setup status's features.component_request_rules). */
-  on: boolean;
+  /** The deployment has request rules on (the setup status's features.component_request_rules); null until the status has answered. */
+  on: boolean | null;
   /** The draft's rules. */
   rules: HostRule[];
   /** The stored component carries rules: with the switch off, emptying them is still shown as done. */
@@ -296,8 +308,11 @@ export function RequestRulesField({
   /** A save is in flight. */
   disabled?: boolean;
 }) {
+  const errorId = `${idPrefix}-error`;
+  // The draft still carries the stored rules, so a save before the answer sends them unchanged.
+  if (on === null) return <Refusal id={errorId} text={refusal} />;
   if (on) return <RuleEditor rules={rules} hosts={hosts} onChange={onChange} idPrefix={idPrefix} refusal={refusal} failing={failing} disabled={disabled} />;
-  if (rules.length === 0 && !hadRules) return null;
+  if (rules.length === 0 && !hadRules) return <Refusal id={errorId} text={refusal} />;
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-2">
       <legend className="text-sm font-medium text-foreground">{REQUEST_RULES.LABEL}</legend>
@@ -315,6 +330,7 @@ export function RequestRulesField({
           </Button>
         </div>
       )}
+      <Refusal id={errorId} text={refusal} />
     </fieldset>
   );
 }
