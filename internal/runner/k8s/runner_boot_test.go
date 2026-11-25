@@ -241,3 +241,32 @@ func TestRunnerRelayProbeWaitIsBounded(t *testing.T) {
 		t.Fatalf("verdict %v after %s, want inconclusive soon after the cancel", err, took)
 	}
 }
+
+// TestDriveAccess_OnlyWithDrives: Config.Drives adds exactly one check per runs namespace,
+// persistentvolumeclaims get, and with it off the review never asks about a claim.
+func TestDriveAccess_OnlyWithDrives(t *testing.T) {
+	for _, drives := range []bool{false, true} {
+		h := newRunnerHarness(t, testNamespace, otherNamespace)
+		h.d.cfg.Drives = drives
+		var asked []string
+		h.cs.PrependReactor("create", "selfsubjectaccessreviews", func(a clienttesting.Action) (bool, runtime.Object, error) {
+			sar := a.(clienttesting.CreateAction).GetObject().(*authorizationv1.SelfSubjectAccessReview)
+			ra := sar.Spec.ResourceAttributes
+			if ra.Resource == "persistentvolumeclaims" {
+				asked = append(asked, ra.Namespace+"/"+ra.Resource+":"+ra.Verb)
+			}
+			sar.Status.Allowed = true
+			return true, sar, nil
+		})
+		if err := h.d.CheckRunnerAccess(context.Background(), "wardyn-runner"); err != nil {
+			t.Fatalf("drives=%v: CheckRunnerAccess: %v", drives, err)
+		}
+		want := []string(nil)
+		if drives {
+			want = []string{testNamespace + "/persistentvolumeclaims:get", otherNamespace + "/persistentvolumeclaims:get"}
+		}
+		if !slices.Equal(asked, want) {
+			t.Errorf("drives=%v: asked %v, want %v", drives, asked, want)
+		}
+	}
+}

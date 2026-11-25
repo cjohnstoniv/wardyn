@@ -87,12 +87,26 @@ func runnerAccess(runsNSs []string, ownNS string, workloadNSs []string) []access
 	return out
 }
 
+// driveAccess is the one verb Config.Drives adds in each runs namespace: persistentvolumeclaims get, which
+// ensureDrivePVC and recheckDriveClaims issue on a claim kept on this runner. No create, list or delete.
+func driveAccess(runsNSs []string) []accessCheck {
+	out := make([]accessCheck, 0, len(runsNSs))
+	for _, ns := range runsNSs {
+		out = append(out, accessCheck{ns, "", "persistentvolumeclaims", "get"})
+	}
+	return out
+}
+
 // CheckRunnerAccess asks a SelfSubjectAccessReview for every verb the runner needs and refuses boot
 // naming each one not granted (§3.4 item 2). workloadNSs are the namespaces the runner watches for
 // WardynWorkload resources; none adds no check.
 func (d *Driver) CheckRunnerAccess(ctx context.Context, ownNS string, workloadNSs ...string) error {
 	var missing []string
-	for _, c := range runnerAccess(d.cfg.Namespaces, ownNS, workloadNSs) {
+	checks := runnerAccess(d.cfg.Namespaces, ownNS, workloadNSs)
+	if d.cfg.Drives {
+		checks = append(checks, driveAccess(d.cfg.Namespaces)...)
+	}
+	for _, c := range checks {
 		sar := &authorizationv1.SelfSubjectAccessReview{Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 			ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: c.ns, Group: c.group, Resource: c.resource, Verb: c.verb},
 		}}

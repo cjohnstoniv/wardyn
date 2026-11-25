@@ -71,6 +71,26 @@ func TestReadK8sEnv(t *testing.T) {
 	}
 }
 
+// TestReadK8sEnv_Drives: drives are off unless the chart says WARDYN_RUNNERD_DRIVES=1; any other value
+// refuses startup naming the variable.
+func TestReadK8sEnv_Drives(t *testing.T) {
+	for _, tc := range []struct {
+		kv   string
+		want bool
+	}{{"", false}, {"WARDYN_RUNNERD_DRIVES=", false}, {"WARDYN_RUNNERD_DRIVES=1", true}} {
+		var extra []string
+		if tc.kv != "" {
+			extra = append(extra, tc.kv)
+		}
+		if e, err := readK8sEnv(k8sEnvFixture(extra...)); err != nil || e.drives != tc.want {
+			t.Errorf("%q: drives=%v err=%v, want %v", tc.kv, e.drives, err, tc.want)
+		}
+	}
+	if _, err := readK8sEnv(k8sEnvFixture("WARDYN_RUNNERD_DRIVES=true")); err == nil || !strings.Contains(err.Error(), "WARDYN_RUNNERD_DRIVES") {
+		t.Fatalf("readK8sEnv = %v, want an error naming WARDYN_RUNNERD_DRIVES", err)
+	}
+}
+
 func TestReadK8sEnvWorkloadNamespaces(t *testing.T) {
 	off, err := readK8sEnv(k8sEnvFixture())
 	if err != nil || len(off.workloadNamespaces) != 0 {

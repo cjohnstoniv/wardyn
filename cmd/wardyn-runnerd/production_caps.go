@@ -120,6 +120,7 @@ func (c *capsReporter) send(ctx context.Context, peer *runnerwire.Peer, reprobe,
 	}
 	caps.BoundFolders = c.extra.boundFolders
 	caps.RunsNamespaces = c.extra.runsNamespaces
+	caps.Drives = c.extra.drives
 	if !c.extra.report.fill(ctx, &caps, reprobe) && !always {
 		return nil
 	}

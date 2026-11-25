@@ -205,6 +205,10 @@ type Caps struct {
 	// pool member pinned to a namespace is eligible only on such a runner. Absent (an older runner,
 	// or a runner on another substrate) says nothing: the runner serves its one namespace as before.
 	RunsNamespaces []string `json:"runs_namespaces,omitempty"`
+	// Drives says a Kubernetes runner mounts a drive an administrator keeps on it: a pre-provisioned claim in one of
+	// its runs namespaces (0.11 on, its operator's drives.enabled). Absent (an older runner, or drives off), the org
+	// sends it no such drive.
+	Drives bool `json:"drives,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.

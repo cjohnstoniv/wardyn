@@ -75,6 +75,15 @@ var errDriveClaimVanished = errors.New("your drive's volume claim was deleted wh
 // The frozen member sentence for this refusal.
 var errDriveClaimForeign = errors.New("drive: your drive's volume is not the one allocated to you — ask an admin")
 
+// errRunnerDrivesOff refuses a drive on a runner whose operator has not turned drives on (the chart's drives.enabled).
+var errRunnerDrivesOff = errors.New("drive: this runner does not mount drives; its operator has not turned them on")
+
+// errRunnerDriveNotKept refuses a drive this runner was sent that is not kept on it, in this run's namespace.
+var errRunnerDriveNotKept = errors.New("drive: this drive is not kept on this runner — ask an admin")
+
+// errDriveKeptOnRunner refuses, on the server's own cluster, a drive kept on an organisation runner.
+var errDriveKeptOnRunner = errors.New("drive: this drive is kept on an organisation runner and mounts only there — ask an admin")
+
 var errDriveBackendUnsupported = errors.New("k8s: this drive's backend is not a Kubernetes one and cannot be mounted on this substrate") // ensureDrivePVC's refusal of a drive whose backend belongs to another substrate; reaching here is a bug
 
 // errSecondExec: Kubernetes ephemeral containers are ADD-ONLY, so a second

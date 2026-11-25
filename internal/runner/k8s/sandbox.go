@@ -176,6 +176,9 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err != nil {
 		return runner.Sandbox{}, err
 	}
+	if err := d.refuseRunnerDrives(spec, ns); err != nil { // a drive kept on a runner mounts there alone
+		return runner.Sandbox{}, err
+	}
 	if err := d.netPolRefusal(ns); err != nil { // the canary's live verdict; running sandboxes are untouched
 		return runner.Sandbox{}, err
 	}

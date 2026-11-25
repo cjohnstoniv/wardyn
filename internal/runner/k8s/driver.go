@@ -137,6 +137,9 @@ type Config struct {
 	//
 	// RunnerID labels every object runner.LabelRunnerID; the sweep and label teardown select by it.
 	RunnerID string
+	// Drives lets a runner (RunnerID set) mount a drive an administrator keeps on it: a pre-provisioned claim
+	// (k8s_pvc_static) in the namespace the run is created in (refuseRunnerDrives). Off, a runner refuses every drive.
+	Drives bool
 	// ControlPlaneRelay returns the relay Service ClusterIP for a run's control-plane URL; the proxy
 	// pod's hostAliases map the URL's host to it. It refuses a URL whose port is not the relay's.
 	ControlPlaneRelay func(*url.URL) (string, error)

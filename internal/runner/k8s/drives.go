@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -100,6 +101,33 @@ func validateDriveSet(drives []types.DriveMount) error {
 	}
 	if managed && hasShareDrive(drives) {
 		return fmt.Errorf("k8s: %w", errDriveShareBesideManaged)
+	}
+	return nil
+}
+
+// refuseRunnerDrives holds a run's drives to where they are kept, before anything is created. A runner mounts only an
+// administrator's pre-provisioned claim (k8s_pvc_static) kept on it in ns, the namespace the run is created in, under a
+// name Wardyn derives, and only when its operator turned drives on: it never creates a claim. The name check narrows
+// what a control-plane fault could reach among the claims in ns. The server's own cluster never mounts a drive kept on
+// a runner.
+func (d *Driver) refuseRunnerDrives(spec runner.SandboxSpec, ns string) error {
+	if len(spec.Drives) == 0 {
+		return nil
+	}
+	self, err := uuid.Parse(d.cfg.RunnerID)
+	for i := range spec.Drives {
+		drive := &spec.Drives[i]
+		switch {
+		case !d.runnerMode():
+			if drive.Namespace != "" {
+				return errDriveKeptOnRunner
+			}
+		case !d.cfg.Drives:
+			return errRunnerDrivesOff
+		case drive.Backend != types.DriveBackendK8sPVCStatic, drive.Namespace != ns, drive.RunnerID == nil,
+			err != nil, *drive.RunnerID != self, !types.DriveClaimNamedByWardyn(drive.ObjectName):
+			return errRunnerDriveNotKept
+		}
 	}
 	return nil
 }

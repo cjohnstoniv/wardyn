@@ -430,6 +430,8 @@ type runtimeExtras struct {
 	boundFolders bool
 	// runsNamespaces are a k8s runner's --runs-namespace, advertised as its runs_namespaces.
 	runsNamespaces []string
+	// drives: a k8s runner's WARDYN_RUNNERD_DRIVES, advertised as its drives.
+	drives bool
 	// workloadStatus is the k8s runner's workload_status adapter (workloads_k8s.go); nil refuses the call.
 	workloadStatus func(context.Context, runnerwire.WorkloadStatusArgs) error
 	// netPolWatch, set by the k8s runner (the driver's OnNetPolChange), takes the hook a canary re-check
