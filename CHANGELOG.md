@@ -47,6 +47,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   same on the table as soon as the migration has run.
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
 - A Linux VM run can open in a native window on the computer its runner is on (`wardyn window <run>`), with no clipboard. While the window is open the run's browser desktop only watches, and a pause closes the window. Off until `features.local_window.enabled` is on ([Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#a-window-on-your-own-computer)).
+- A Linux VM run's Desktop tile on the run page has a "Window on your computer" section while `features.local_window` is on: the `wardyn window <run>` command to copy, or the sentence the window would be refused with; while a window is open, since when and on which runner, and that the browser desktop only watches.
 
 ### Changed
 
