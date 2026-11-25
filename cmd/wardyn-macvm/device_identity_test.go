@@ -182,7 +182,7 @@ func TestDeviceIdentity_AKeyOfAnotherTypeIsSkippedAndARefusalIsSkippedOrFailsWhe
 		strings.Count(errb.String(), "\n") != 1 || !strings.Contains(errb.String(), hex.EncodeToString(sum[:])) || !strings.Contains(errb.String(), "denied") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errb)
 	}
-	d, out, errb = deviceDeps(fakeSource{err: errors.New("no keychain")})
+	d, _, errb = deviceDeps(fakeSource{err: errors.New("no keychain")})
 	if code := run(context.Background(), args, d); code != 2 || !strings.Contains(errb.String(), "no keychain") {
 		t.Fatalf("exit %d, stderr %q", code, errb)
 	}

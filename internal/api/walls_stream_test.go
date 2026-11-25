@@ -60,19 +60,6 @@ func wallsSSENext(br *bufio.Reader) (wallsSSEEvent, bool) {
 	}
 }
 
-// wallsSSEAll is every event in b.
-func wallsSSEAll(b []byte) []wallsSSEEvent {
-	var out []wallsSSEEvent
-	br := bufio.NewReader(bytes.NewReader(b))
-	for {
-		ev, ok := wallsSSENext(br)
-		if !ok {
-			return out
-		}
-		out = append(out, ev)
-	}
-}
-
 // wallsStreamEnv is a server whose two live streams run through their real handlers, behind a middleware that
 // signs the caller in from the X-Test-Sub and X-Test-Role headers (none: the admin token). Its sampler is beaten by
 // hand. /view serves wallsServe with whatever view the test set last, so a test can name any caller's view.
