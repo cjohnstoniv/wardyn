@@ -34,6 +34,13 @@ func moveWorkDriveID(runID, moveID uuid.UUID) uuid.UUID {
 	return uuid.NewSHA1(moveWorkDriveNS, append(runID[:], moveID[:]...))
 }
 
+// moveWorkDriveName names that drive "Moved <run> <move> <title>", the ids' first blocks leading: a drive's
+// object name carries only the first 40 characters of its name's slug (types.DriveSlug), so both ids stay in it
+// and two moves of one run, or a move and the run's kept drive, never fold to one slug.
+func moveWorkDriveName(run types.AgentRun, moveID uuid.UUID) string {
+	return keptDriveName(run, "Moved "+run.ID.String()[:8]+" "+moveID.String()[:8]+" ", "")
+}
+
 // memberDriveByMoveFailed is the "by" of the drive.member.delete row of a failed move's work drive.
 const memberDriveByMoveFailed = "move_failed"
 
@@ -55,7 +62,7 @@ func moveWorkDriveRefused(status int, layer, msg string) *moveRefusal {
 // moveWorkDriveGates runs keep_work_folder's doors (moveWorkDriveDoors) for a destination that keeps the work folder
 // on a new drive (plan.WorkDrive), over the run's stored policy. It answers nil, nil, nil when the destination needs
 // no new drive, and an error for a read a door could not make.
-func (s *Server) moveWorkDriveGates(ctx context.Context, run types.AgentRun, d moveDest, plan moveDestPlan) (*keptWorkFolder, *moveRefusal, error) {
+func (s *Server) moveWorkDriveGates(ctx context.Context, run types.AgentRun, rec runSandboxSpecRecord, d moveDest, plan moveDestPlan) (*keptWorkFolder, *moveRefusal, error) {
 	if !plan.WorkDrive {
 		return nil, nil, nil
 	}
@@ -63,12 +70,13 @@ func (s *Server) moveWorkDriveGates(ctx context.Context, run types.AgentRun, d m
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.moveWorkDriveDoors(ctx, run, d, spec.ProxyConfig.Policy)
+	return s.moveWorkDriveDoors(ctx, run, d, spec.ProxyConfig.Policy, moveSourceWorkMiB(rec))
 }
 
 // moveWorkDriveDoors runs, in the mover's request ctx: the mover is the run's person, then every door
-// keepWorkFolderGates runs over policy, the drive is a cluster claim, and a runner destination can mount it.
-func (s *Server) moveWorkDriveDoors(ctx context.Context, run types.AgentRun, d moveDest, policy types.RunPolicySpec) (*keptWorkFolder, *moveRefusal, error) {
+// keepWorkFolderGates runs over policy, the drive is a cluster claim, the source's work drive (sourceMiB) fits
+// under the size ceilings the new drive is made under, and a runner destination can mount it.
+func (s *Server) moveWorkDriveDoors(ctx context.Context, run types.AgentRun, d moveDest, policy types.RunPolicySpec, sourceMiB int) (*keptWorkFolder, *moveRefusal, error) {
 	if human := types.CanonicalUserSubject(oidcHumanFromContext(ctx)); human == "" || human != types.CanonicalUserSubject(run.CreatedBy) {
 		return nil, moveWorkDriveRefused(http.StatusForbidden, reasonMemberDriveRequiresPerson, memberDriveRequiresPersonMsg()), nil
 	}
@@ -81,6 +89,15 @@ func (s *Server) moveWorkDriveDoors(ctx context.Context, run types.AgentRun, d m
 	if f == nil && k.row.Backend != types.DriveBackendK8sPVC {
 		return nil, moveWorkDriveRefused(http.StatusUnprocessableEntity, reasonMemberDriveUnsupported, moveWorkDriveNoClaimMsg()), nil
 	}
+	if f == nil {
+		bound, err := s.moveWorkDriveBound(ctx)
+		switch {
+		case err != nil:
+			return nil, nil, err
+		case bound > 0 && sourceMiB > bound:
+			return nil, moveWorkDriveRefused(http.StatusUnprocessableEntity, moveLayerWorkDriveSize, moveWorkDriveSizeMsg(sourceMiB, bound)), nil
+		}
+	}
 	if f == nil && d.local() {
 		if bf := s.driveBindFailureHere(ctx, types.ResolvedDrive{Drive: k.row}, drivePlace{runner: d.RunnerID}); bf != nil {
 			f = &runRefusal{drive: bf}
@@ -91,6 +108,30 @@ func (s *Server) moveWorkDriveDoors(ctx context.Context, run types.AgentRun, d m
 	}
 	ref, err := moveDoorRefusal(f)
 	return nil, ref, err
+}
+
+// moveLayerWorkDriveSize is the layer of a source work drive larger than a new drive may be made.
+const moveLayerWorkDriveSize = "drive_size"
+
+// moveWorkDriveBound is the size a new drive of the mover's is clamped to: the deployment's and the profile's
+// ceilings, as memberDriveCreateDoors reads them for memberDriveRow; 0 when neither binds.
+func (s *Server) moveWorkDriveBound(ctx context.Context) (int, error) {
+	provider, err := s.userDriveProvider(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("get site config: %w", err)
+	}
+	ceiling, err := s.effectiveCeiling(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("resolve ceiling: %w", err)
+	}
+	bound, _ := driveSizeCeiling{DeploymentMiB: provider.MaxSizeMiB, ProfileMiB: ceiling.Limits.MaxDriveSizeMiB}.bound()
+	return bound, nil
+}
+
+// moveWorkDriveSizeMsg refuses a source work drive larger than the ceiling: the move never makes a smaller drive
+// the run's files may not fit on, nor one above a ceiling.
+func moveWorkDriveSizeMsg(sourceMiB, bound int) string {
+	return fmt.Sprintf("the run's work drive is %d MiB, and a drive of yours may be at most %d MiB.", sourceMiB, bound)
 }
 
 // moveWorkDriveNoClaimMsg refuses a Kubernetes destination on a deployment whose own drives are not cluster claims.
@@ -150,7 +191,7 @@ func (x *moveExec) makeWorkDrive(ctx context.Context) *moveEnd {
 	}
 	d := x.work.row
 	d.ID, d.OwnerSubject, d.CreatedBy = moveWorkDriveID(x.run.ID, x.mv.ID), x.work.owner, x.principal
-	d.Name = keptDriveName(x.run, " "+x.run.ID.String()[:8]+" moved "+x.mv.ID.String()[:8])
+	d.Name = moveWorkDriveName(x.run, x.mv.ID)
 	runID := x.run.ID
 	d.KeptFromRun = &runID
 	d.SizeMiB = max(d.SizeMiB, moveSourceWorkMiB(x.rec))
@@ -181,6 +222,8 @@ func (x *moveExec) makeWorkDrive(ctx context.Context) *moveEnd {
 // dropMoveWorkDrive deletes the work drive a failed move made, through the delete a person's own drive takes: the
 // owner-starting check, the tombstone, then deleteMemberDrive. True once the drive is gone, or there is none; false
 // leaves it for the move sweep's next pass. A drive whose delete another caller holds is that caller's to finish.
+// Once the run has ended the drive is left, and true: it is then offered to the owner's other runs, which may have
+// attached it and written to it, so only the owner's request deletes it (finishQueuedKeptDrive's rule).
 func (s *Server) dropMoveWorkDrive(ctx context.Context, runID, moveID uuid.UUID) bool {
 	ms, ok := s.cfg.Store.(store.MemberDriveStore)
 	if !ok {
@@ -196,6 +239,15 @@ func (s *Server) dropMoveWorkDrive(ctx context.Context, runID, moveID uuid.UUID)
 		slog.WarnContext(ctx, "api: read a failed move's work drive", slog.String("move_id", moveID.String()), slog.Any("err", err))
 		return false
 	case d.KeptFromRun == nil || *d.KeptFromRun != runID:
+		return true
+	}
+	switch run, err := s.cfg.Store.GetRun(ctx, runID); {
+	case errors.Is(err, store.ErrNotFound):
+		return true
+	case err != nil:
+		slog.WarnContext(ctx, "api: read the run a failed move's work drive was made for", slog.String("move_id", moveID.String()), slog.Any("err", err))
+		return false
+	case run.State.IsTerminal():
 		return true
 	}
 	if refused, err := s.memberDriveOwnerStarting(ctx, ms, d, memberDriveByMoveFailed); err != nil || refused {

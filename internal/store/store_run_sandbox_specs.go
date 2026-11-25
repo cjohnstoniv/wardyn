@@ -18,7 +18,7 @@ import (
 // the clear. Optional for RunLeaser's reason: the api layer type-asserts, and production is always PG.
 type RunSandboxSpecs interface {
 	// PutRunSandboxSpec writes run id's sealed spec once. A second write for the run is an error: a run is
-	// dispatched once, and its record never changes.
+	// dispatched once, and only a move's commit rewrites its record (RunMoveCommit.SandboxSpec).
 	PutRunSandboxSpec(ctx context.Context, id uuid.UUID, sealed []byte) error
 	// GetRunSandboxSpec reads it; ErrNotFound when there is none.
 	GetRunSandboxSpec(ctx context.Context, id uuid.UUID) ([]byte, error)

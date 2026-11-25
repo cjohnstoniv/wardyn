@@ -71,6 +71,9 @@ type RunMoveCommit struct {
 	ManifestSHA256 string
 	Bytes          int64
 	Skipped        int
+	// SandboxSpec is the run's recorded sandbox spec sealed again with the destination's drives, written over the
+	// record in the commit's transaction; nil leaves the record as it is.
+	SandboxSpec []byte
 }
 
 // RunMoveDue is a row the move sweep has work on, and whether its holder's heartbeat is past RunMoveOrphanAfter.
@@ -383,7 +386,8 @@ const runMoveSourceUnsettledSQL = `SELECT (` + runnerActionUnsettledSQL + `)
 // must still be importing, the run RUNNING, not lost, and in the stopped pause at the move's generation, and the
 // source settled. It then records the run's origin placement on its first move and appends the destination's,
 // writes the destination's columns from the move row onto the run row (stamping token_renewed_at and opening
-// the lineage with the destination's create-time jti), records each grant's delivery at the destination, closes
+// the lineage with the destination's create-time jti), rewrites the run's recorded sandbox spec when c carries one,
+// records each grant's delivery at the destination, closes
 // the run's spool cursor and its pause settle record, and marks the move committed with the source revoke
 // pending. A refusal is one of the ErrRunMove* errors and changes nothing.
 func (s PG) CommitRunMove(ctx context.Context, c RunMoveCommit) error {
@@ -459,6 +463,19 @@ func commitRunMoveRows(ctx context.Context, tx pgx.Tx, c RunMoveCommit, mv types
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrRunMoveRunEnded
+	}
+	if c.SandboxSpec != nil {
+		// Replaced rather than updated: a split-role app role holds SELECT, INSERT and DELETE on the table (0400).
+		tag, err := tx.Exec(ctx, `DELETE FROM run_sandbox_specs WHERE run_id = $1`, c.RunID)
+		if err != nil {
+			return fmt.Errorf("store: commit run move: sandbox spec: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("store: commit run move: the run has no recorded sandbox spec")
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO run_sandbox_specs (run_id, sealed) VALUES ($1, $2)`, c.RunID, c.SandboxSpec); err != nil {
+			return fmt.Errorf("store: commit run move: sandbox spec: %w", err)
+		}
 	}
 	for grant, delivery := range c.Deliveries {
 		if _, err := tx.Exec(ctx, `UPDATE credential_grants SET delivery = $3 WHERE id = $1 AND run_id = $2`, grant, c.RunID, delivery); err != nil {

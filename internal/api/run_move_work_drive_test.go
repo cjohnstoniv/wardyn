@@ -25,6 +25,7 @@ func TestMoveDrives_ReattachOnlyTheSameStorage(t *testing.T) {
 	notes := types.DriveMount{DriveName: "notes", Backend: types.DriveBackendDockerVolume, Target: "/home/agent/drives/notes"}
 	share := types.DriveMount{DriveName: "share", Backend: types.DriveBackendHostPath, Target: "/home/agent/drives/share", RunnerID: &rid}
 	team := types.DriveMount{DriveName: "team-notes", Backend: types.DriveBackendDockerVolume, Target: "/home/agent/shared/team", Team: true}
+	ro := types.DriveMount{DriveName: "reference", Backend: types.DriveBackendDockerVolume, Target: "/home/agent/drives/ref", ReadOnly: true}
 	org := moveDest{Placement: types.PlacementRemote}
 	onRunner := moveDest{Placement: types.PlacementLocal, RunnerID: &rid}
 	onOther := moveDest{Placement: types.PlacementLocal, RunnerID: &other}
@@ -45,6 +46,9 @@ func TestMoveDrives_ReattachOnlyTheSameStorage(t *testing.T) {
 		{"a drive bound to the destination runner", []types.DriveMount{work, share}, runnerRun, onRunner, "docker", []string{"share"}, ""},
 		{"a drive bound to another runner", []types.DriveMount{share}, orgRun, onOther, "docker", nil, "same storage"},
 		{"a runner's bound drive to the organisation", []types.DriveMount{share}, runnerRun, org, "docker", nil, "same storage"},
+		{"a runner's unbound volume to the organisation", []types.DriveMount{notes}, runnerRun, org, "docker", nil, "same storage"},
+		{"a team drive org to org", []types.DriveMount{team}, orgRun, org, "docker", []string{"team-notes"}, ""},
+		{"a read-only drive org to org", []types.DriveMount{ro}, orgRun, org, "docker", []string{"reference"}, ""},
 		{"a team drive to a runner", []types.DriveMount{team}, orgRun, onRunner, "docker", nil, "shared or read-only"},
 		{"only the work drive", []types.DriveMount{work}, orgRun, onRunner, "docker", nil, ""},
 	} {
@@ -166,7 +170,7 @@ func TestMoveWorkDrive_DoorsAreKeepWorkFolders(t *testing.T) {
 	org := moveDest{Placement: types.PlacementRemote}
 	rid := uuid.New()
 	srv, _, _ := moveDriveServer(t, true, "k8s")
-	k, ref, err := srv.moveWorkDriveDoors(personCtx(aliceSub), run, org, types.RunPolicySpec{})
+	k, ref, err := srv.moveWorkDriveDoors(personCtx(aliceSub), run, org, types.RunPolicySpec{}, 0)
 	if err != nil || ref != nil || k == nil || k.row.Backend != types.DriveBackendK8sPVC || k.row.SizeMiB != 512 || k.owner != aliceSub {
 		t.Fatalf("doors = %+v, %+v, %v; want alice's cluster claim of 512 MiB", k, ref, err)
 	}
@@ -185,7 +189,7 @@ func TestMoveWorkDrive_DoorsAreKeepWorkFolders(t *testing.T) {
 		{"a person's runner", srv, personCtx(aliceSub), moveDest{Placement: types.PlacementLocal, RunnerID: &rid}, driveRefusalBackendElsewhere},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			k, ref, err := c.srv.moveWorkDriveDoors(c.ctx, run, c.d, types.RunPolicySpec{})
+			k, ref, err := c.srv.moveWorkDriveDoors(c.ctx, run, c.d, types.RunPolicySpec{}, 0)
 			if err != nil || k != nil || ref == nil || ref.reason != reasonMoveWorkDriveRefused || ref.layer != c.layer || ref.msg == "" {
 				t.Fatalf("doors = %+v, %+v, %v; want %s layer %s", k, ref, err, reasonMoveWorkDriveRefused, c.layer)
 			}
@@ -198,8 +202,9 @@ func TestMoveWorkDrive_DoorsAreKeepWorkFolders(t *testing.T) {
 // through a person's own delete, and a second cleanup finds nothing to do.
 func TestMoveWorkDrive_MadeThenDeletedWhenTheMoveFails(t *testing.T) {
 	srv, st, rec := moveDriveServer(t, true, "k8s")
-	run := types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, Title: "nightly tests"}
-	k, ref, err := srv.moveWorkDriveDoors(personCtx(aliceSub), run, moveDest{Placement: types.PlacementRemote}, types.RunPolicySpec{})
+	run := types.AgentRun{ID: uuid.New(), CreatedBy: aliceSub, Title: "nightly tests", State: types.RunRunning}
+	st.runs = map[uuid.UUID]types.AgentRun{run.ID: run}
+	k, ref, err := srv.moveWorkDriveDoors(personCtx(aliceSub), run, moveDest{Placement: types.PlacementRemote}, types.RunPolicySpec{}, 0)
 	if err != nil || ref != nil {
 		t.Fatalf("doors: %+v, %v", ref, err)
 	}

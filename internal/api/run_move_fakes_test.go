@@ -641,6 +641,9 @@ func (s *moveStore) CommitRunMove(_ context.Context, c store.RunMoveCommit) erro
 		TrustClass: m.ToTrustClass, MoveID: &m.ID})
 	s.run.Placement, s.run.RunnerID, s.run.RunnerPoolID, s.run.RunnerPoolExecutor = m.ToPlacement, m.ToRunnerID, m.ToPoolID, m.ToExecutor
 	s.run.SandboxRef, s.run.EvidenceSource, s.trust = m.ToSandboxRef, m.ToEvidenceSource, m.ToTrustClass
+	if c.SandboxSpec != nil {
+		s.specs[c.RunID] = c.SandboxSpec
+	}
 	now := s.now()
 	m.State, m.SourceRevoke, m.ManifestSHA256, m.Bytes, m.Skipped = types.MoveCommitted, types.MoveSourceRevokePending, c.ManifestSHA256, c.Bytes, c.Skipped
 	m.HeartbeatAt, m.CommittedAt = &now, &now

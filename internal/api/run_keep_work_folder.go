@@ -126,20 +126,20 @@ func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, 
 // keptWorkFolderName names the drive after the run: its title, else "Run",
 // then the run id's first block, so two runs of one title get two drives.
 func keptWorkFolderName(run types.AgentRun) string {
-	return keptDriveName(run, " "+run.ID.String()[:8])
+	return keptDriveName(run, "", " "+run.ID.String()[:8])
 }
 
-// keptDriveName is run's title, else "Run", shortened to leave room for suffix, then suffix.
-func keptDriveName(run types.AgentRun, suffix string) string {
+// keptDriveName is prefix, then run's title, else "Run", shortened to leave room for both, then suffix.
+func keptDriveName(run types.AgentRun, prefix, suffix string) string {
 	title := strings.TrimSpace(run.Title)
 	if types.ValidateDriveName(title) != nil {
 		title = "Run"
 	}
-	for len(title)+len(suffix) > 128 { // the drive name rule's byte limit
+	for len(prefix)+len(title)+len(suffix) > 128 { // the drive name rule's byte limit
 		_, size := utf8.DecodeLastRuneInString(title)
 		title = title[:len(title)-size]
 	}
-	return strings.TrimSpace(title) + suffix
+	return prefix + strings.TrimSpace(title) + suffix
 }
 
 // keptDrive is the row keep_work_folder makes for run: the fold's row, owned by

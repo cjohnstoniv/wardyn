@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -93,6 +94,8 @@ type moveExec struct {
 	work      *keptWorkFolder
 	workMade  bool
 	workMount *types.DriveMount
+	// destDrives are the destination spec's drives, which commit writes over the record's.
+	destDrives []types.DriveMount
 
 	jti      string
 	destRef  string
@@ -385,7 +388,7 @@ func (x *moveExec) carry(ctx context.Context) *moveEnd {
 	if end != nil {
 		return end
 	}
-	x.jti = b.jti
+	x.jti, x.destDrives = b.jti, b.spec.Drives
 	x.mv.ToTokenJTI, x.mv.ToExecutor = b.jti, b.executor
 	if ok, err := x.ms.SetRunMoveDestination(ctx, x.mv); err != nil || !ok {
 		return failMove(reasonMoveCreateFailed, "The destination could not be recorded on the move.")
@@ -618,9 +621,16 @@ func (x *moveExec) commit(ctx context.Context) *moveEnd {
 	case !x.drained:
 		return failMove(reasonMoveSourceSpoolPending, "The source runner has not delivered the run's spooled records.")
 	}
+	// The record says what the run's sandbox is now: the destination's drives, so a later move reads its work drive.
+	rec := x.rec
+	rec.Drives = slices.Clone(x.destDrives)
+	sealed, err := s.sealRunSandboxSpec(x.run.ID, rec)
+	if err != nil {
+		return failMove(reasonMoveCreateFailed, "The run's sandbox spec could not be recorded for the destination.")
+	}
 	err = x.ms.CommitRunMove(ctx, store.RunMoveCommit{MoveID: x.mv.ID, RunID: x.run.ID, PlacementFilled: x.dest.Filled,
 		PoolRevision: x.dest.PoolRevision, PoolSelection: x.dest.PoolSelection, Deliveries: x.plan.Deliveries,
-		ManifestSHA256: x.manifest.Digest, Bytes: x.manifest.Bytes, Skipped: len(x.manifest.Skipped)})
+		ManifestSHA256: x.manifest.Digest, Bytes: x.manifest.Bytes, Skipped: len(x.manifest.Skipped), SandboxSpec: sealed})
 	switch {
 	case err == nil:
 		return nil

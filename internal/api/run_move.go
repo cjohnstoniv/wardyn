@@ -234,7 +234,7 @@ func (s *Server) admitMove(ctx context.Context, ms store.RunMoveStore, req moveR
 // keeps the work folder on (moveWorkDriveGates), then the destination's judgement recorded on the row. nil when the
 // move goes on.
 func (x *moveExec) admitDestination(ctx context.Context) *moveRefusal {
-	work, ref, err := x.s.moveWorkDriveGates(ctx, x.run, x.dest, x.plan)
+	work, ref, err := x.s.moveWorkDriveGates(ctx, x.run, x.rec, x.dest, x.plan)
 	switch {
 	case err != nil:
 		return refuseMove(http.StatusServiceUnavailable, reasonMovePolicyUnreadable, "A read the destination's work drive needs failed; nothing was stopped.")
@@ -272,7 +272,7 @@ func moveHeldRefusal(ctx context.Context, ms store.RunMoveStore, runID uuid.UUID
 	}
 	for _, m := range moves {
 		if m.Cleanup == types.MoveCleanupPending {
-			return refuseMove(http.StatusConflict, reasonMoveBusy, "An earlier move of this run is still removing a sandbox it left; try again shortly."), nil
+			return refuseMove(http.StatusConflict, reasonMoveBusy, "An earlier move of this run is still removing a sandbox or a work drive it left; try again shortly."), nil
 		}
 	}
 	return nil, nil

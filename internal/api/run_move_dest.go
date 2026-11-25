@@ -59,6 +59,15 @@ func moveSandboxSpec(run types.AgentRun, rec runSandboxSpecRecord, d moveDest, p
 	return spec
 }
 
+// destSpec is the destination's spec: moveSandboxSpec, with the work drive the move made when it made one.
+func (x *moveExec) destSpec() runner.SandboxSpec {
+	spec := moveSandboxSpec(x.run, x.rec, x.dest, x.plan)
+	if x.workMount != nil {
+		spec.Drives = append(spec.Drives, *x.workMount)
+	}
+	return spec
+}
+
 // moveDestBuild is a destination made ready to import into: its spec on its target, its lease sent and its
 // create-time identity minted.
 type moveDestBuild struct {
@@ -75,10 +84,7 @@ type moveDestBuild struct {
 // destination's managed settings are.
 func (s *Server) buildMoveDestination(ctx context.Context, x *moveExec) (moveDestBuild, *moveEnd) {
 	destRun := moveDestRun(x.run, x.dest, "")
-	spec := moveSandboxSpec(x.run, x.rec, x.dest, x.plan)
-	if x.workMount != nil {
-		spec.Drives = append(spec.Drives, *x.workMount)
-	}
+	spec := x.destSpec()
 	executor, err := s.fillSandboxTarget(ctx, destRun, &spec)
 	if err != nil {
 		return moveDestBuild{}, failMove(reasonMoveCreateFailed, "The destination's sandbox could not be targeted: "+err.Error())
