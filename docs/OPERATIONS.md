@@ -2740,7 +2740,7 @@ Delivery per install path:
 - See [docs/adoption/corp-image-authoring.md](adoption/corp-image-authoring.md) and [docs/ENVBUILD.md](ENVBUILD.md#base-image-trust-byoi).
 - Not a `SiteConfig` field: boot-time operator posture, never a live API write, never agent-reachable — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) residual #28.
 
-- On a laptop runner the runner's bundle sets `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `AWS_CA_BUNDLE` only where nothing is set.
+- On a laptop runner the runner's bundle sets `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `AWS_CA_BUNDLE` and `GIT_SSL_CAINFO` only where nothing is set.
 - So a component's value for one of them wins there, and that toolchain never sees the runner's CA.
 - On the organisation's path the platform sets them first and a component's value is dropped (`run.component_config.drop`).
 - Either way the run only narrows its own sandbox's trust.

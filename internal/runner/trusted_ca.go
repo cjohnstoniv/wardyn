@@ -89,7 +89,9 @@ func TrustedCABundle(raw []byte) (string, []*x509.Certificate, error) {
 // per-run CA) that install_mitm_ca/agentIdleScript assemble — the bare CA
 // there would break verification of every non-MITM'd CONNECT-tunneled host.
 // AWS CLI v2 needs its own entry because it ships its own Python and its own
-// CA store and reads none of the other four. The JVM keystore and Deno's
+// CA store and reads none of the other four. git needs its own too: the
+// agent-base git is built on libcurl-gnutls, which reads none of the others,
+// so GIT_SSL_CAINFO takes the combined bundle. The JVM keystore and Deno's
 // DENO_CERT are covered by no variable at all and are documented as not
 // covered (deploy/images/README.md).
 func sandboxCATrustVars() map[string]string {
@@ -99,6 +101,7 @@ func sandboxCATrustVars() map[string]string {
 		"REQUESTS_CA_BUNDLE":  "/tmp/wardyn/ca-bundle.pem",
 		"CURL_CA_BUNDLE":      "/tmp/wardyn/ca-bundle.pem",
 		"AWS_CA_BUNDLE":       "/tmp/wardyn/ca-bundle.pem",
+		"GIT_SSL_CAINFO":      "/tmp/wardyn/ca-bundle.pem",
 	}
 }
 

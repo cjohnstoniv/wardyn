@@ -16,6 +16,7 @@
     "GIT_AUTHOR_NAME": "sub-admit-admin",
     "GIT_COMMITTER_EMAIL": "\u003cuuid\u003e@agent.wardyn.local",
     "GIT_COMMITTER_NAME": "wardyn-agent:claude-code",
+    "GIT_SSL_CAINFO": "/tmp/wardyn/ca-bundle.pem",
     "GIT_TERMINAL_PROMPT": "0",
     "GOCACHE": "/home/agent/.cache/go-build",
     "GOMODCACHE": "/home/agent/.cache/go/mod",

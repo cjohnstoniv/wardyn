@@ -2280,9 +2280,9 @@ grep -rhoE '"WARDYN_[A-Z0-9_]+"' --include='*.go' --exclude='*_test.go' . \
 - **The re-originating proxy needs this too:** the Phase B AWS-SSO MITM lane (`WARDYN_AWS_SSO_PROXY_INJECT`, above) terminates and re-originates `portal.sso.<region>` on that SAME sidecar forwarding transport.
 - So behind a TLS-intercepting corporate proxy this var is what lets the re-origination trust it.
 - Unset, the re-origination fails `x509: certificate signed by unknown authority`, filed as the same bare `builtin:dial-failed` as any other dial failure.
-- Installing a CA is one action PER TOOLCHAIN, so dispatch sets five vars.
+- Installing a CA is one action PER TOOLCHAIN, so dispatch sets six vars.
 - Grep for whichever yours reads: `NODE_EXTRA_CA_CERTS` (Node — ADDS to its bundled roots, so it gets the bare CA)
-- Plus `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `AWS_CA_BUNDLE` (OpenSSL-Python, `requests`, curl, AWS CLI v2 — each REPLACES its trust store, so all four get the combined bundle
+- Plus `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `AWS_CA_BUNDLE` / `GIT_SSL_CAINFO` (OpenSSL-Python, `requests`, curl, AWS CLI v2, git — each REPLACES its trust store, so all five get the combined bundle
 - AWS CLI v2 needs its own because it ships its own Python and CA store and reads none of the other four).
 - **Java is reached by none of them**: the JVM's `cacerts` keystore sits behind no environment variable, so a Java toolchain in a custom image needs its own build-time `keytool -importcert` step.
 - Wardyn does not do it for you (same for Deno's `DENO_CERT`).
