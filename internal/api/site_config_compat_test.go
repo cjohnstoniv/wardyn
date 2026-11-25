@@ -106,7 +106,8 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 		// all (handleGetSiteConfig; the write clears it).
 		// egress is refused when changed and carried forward from the store: its writer is
 		// PUT /governance/egress-baseline.
-		serverOwned := []string{"integrations", "onboarding_completed_at", "effective_scm_hosts", "withheld_scm_hosts", "egress", "runners"}
+		// assistant on the same terms: its writer is PUT /assistant/settings (carryAssistant).
+		serverOwned := []string{"integrations", "onboarding_completed_at", "effective_scm_hosts", "withheld_scm_hosts", "egress", "runners", "assistant"}
 		typ := reflect.TypeOf(types.SiteConfig{})
 		for i := range typ.NumField() {
 			key, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")

@@ -58,7 +58,7 @@ var ErrRunnerClaimMismatch = errors.New("store: runner claim does not match the 
 
 const runnerCols = `id, owner, name, public_key, key_fingerprint, state, version, created_at, claimed_at,
 	last_seen_at, revoked_at, posture, posture_reported_at, posture_source, org_url_sha256, minted_by, revoked_by, revoke_reason, max_runs, machine_name, arch,
-	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id,
+	owner_kind, trust_class, trust_set_by, trust_set_at, registration_token_id, device_cert, device_cert_reported_at,
 	` + runnerLimitCols
 
 // prefixedRunnerCols is runnerCols on a query that names the runners table r.
@@ -67,12 +67,12 @@ var prefixedRunnerCols = "r." + strings.ReplaceAll(strings.Join(strings.Fields(r
 func scanRunner(row pgx.Row) (types.Runner, error) {
 	var r types.Runner
 	var state string
-	var posture []byte
+	var posture, deviceCert []byte
 	var lim limitCols
 	err := row.Scan(append([]any{&r.ID, &r.Owner, &r.Name, &r.PublicKey, &r.KeyFingerprint, &state, &r.Version, &r.CreatedAt,
 		&r.ClaimedAt, &r.LastSeenAt, &r.RevokedAt, &posture, &r.PostureReportedAt, &r.PostureSource, &r.OrgURLSHA256,
 		&r.MintedBy, &r.RevokedBy, &r.RevokeReason, &r.MaxRuns, &r.MachineName, &r.Arch,
-		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID}, lim.targets()...)...)
+		&r.OwnerKind, &r.TrustClass, &r.TrustSetBy, &r.TrustSetAt, &r.RegistrationTokenID, &deviceCert, &r.DeviceCertReportedAt}, lim.targets()...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.Runner{}, ErrNotFound
 	}
@@ -84,6 +84,13 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 	if err := json.Unmarshal(posture, &r.Posture); err != nil {
 		return types.Runner{}, fmt.Errorf("store: unmarshal runner posture: %w", err)
 	}
+	if deviceCert != nil {
+		var dc types.RunnerDeviceCert
+		if err := json.Unmarshal(deviceCert, &dc); err != nil {
+			return types.Runner{}, fmt.Errorf("store: unmarshal runner device certificate: %w", err)
+		}
+		r.DeviceCert = &dc
+	}
 	return r, nil
 }
 
@@ -92,7 +99,9 @@ func scanRunner(row pgx.Row) (types.Runner, error) {
 // set, is the runner's limit set and its Runs at once; without it the runner declares no limits and
 // r.MaxRuns 0 is types.RunnerMaxRunsDefault. r.OwnerKind is the redeemed token's (empty is person); the
 // trust class on r is ignored: a person's runner starts personal and an org runner org_cluster, the only
-// class the coupling CHECK allows it.
+// class the coupling CHECK allows it. With an IdentityGuard on ctx the insert reads the owner's identity
+// rows FOR SHARE in its own transaction and is refused with ErrIdentityDeactivated for a deactivated,
+// purged or cut owner.
 func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, error) {
 	const q = `
 		INSERT INTO runners (id, owner, name, public_key, key_fingerprint, version, org_url_sha256, minted_by, max_runs, machine_name, arch,
@@ -107,8 +116,12 @@ func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, err
 	if r.OwnerKind == types.RunnerOwnerOrg {
 		kind, trust = types.RunnerOwnerOrg, types.RunnerTrustOrgCluster
 	}
-	out, err := scanRunner(s.Pool.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
-		r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+	var out types.Runner
+	err := s.guarded(ctx, func(qr queryRower) (e error) {
+		out, e = scanRunner(qr.QueryRow(ctx, q, append([]any{r.ID, r.Owner, r.Name, r.PublicKey, r.KeyFingerprint, r.Version, r.OrgURLSHA256,
+			r.MintedBy, maxRuns, r.MachineName, r.Arch, kind, trust, r.RegistrationTokenID}, limitArgs(r.Limits)...)...))
+		return e
+	})
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return types.Runner{}, ErrConflict
@@ -118,6 +131,22 @@ func (s PG) CreateRunner(ctx context.Context, r types.Runner) (types.Runner, err
 
 func (s PG) GetRunner(ctx context.Context, id uuid.UUID) (types.Runner, error) {
 	return scanRunner(s.Pool.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE id = $1`, id))
+}
+
+// RunnerBatchReader reads several runners in one statement: the runner hub's stored-row recheck of every live
+// session at once.
+type RunnerBatchReader interface {
+	GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error)
+}
+
+var _ RunnerBatchReader = PG{}
+
+// GetRunnersByID returns the rows of ids that exist, in no set order; an id with no row is left out.
+func (s PG) GetRunnersByID(ctx context.Context, ids []uuid.UUID) ([]types.Runner, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return collect(ctx, s.Pool, "list", "runners", `SELECT `+runnerCols+` FROM runners WHERE id = ANY($1)`, []any{ids}, scanRunner)
 }
 
 // ListRunners returns every runner, newest first, revoked included.
@@ -337,6 +366,48 @@ func (s PG) RecordRunnerPostureFrom(ctx context.Context, id uuid.UUID, session s
 	}
 	if err != nil {
 		return false, fmt.Errorf("store: record runner posture: %w", err)
+	}
+	return changed, nil
+}
+
+// recordDeviceCert replaces a claimed runner's device certificate chains and says whether they differ from
+// the ones held. The reported-at time moves on every write, so it says when the runner last presented.
+const recordDeviceCert = `
+		UPDATE runners r SET device_cert = $2::jsonb, device_cert_reported_at = $3
+		FROM (SELECT id, device_cert FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE) old
+		WHERE r.id = old.id
+		RETURNING old.device_cert IS DISTINCT FROM $2::jsonb`
+
+// RecordRunnerDeviceCertFrom stores the MDM device certificate chains a claimed runner presented on session
+// and says whether they differ from the ones held, so only a change writes runner.device_cert.record. Like
+// RecordRunnerPostureFrom it writes only while session is the runner's current inventory session: a
+// superseded session's late report writes nothing and reports no change. A runner that is not claimed is
+// ErrNotFound. Whether a chain is trusted, current or revoked is not stored or judged here.
+func (s PG) RecordRunnerDeviceCertFrom(ctx context.Context, id uuid.UUID, session string, chains [][][]byte, now time.Time) (bool, error) {
+	if chains == nil {
+		chains = [][][]byte{}
+	}
+	b, err := json.Marshal(types.RunnerDeviceCert{Chains: chains})
+	if err != nil {
+		return false, err
+	}
+	var changed bool
+	err = s.inTx(ctx, func(q Querier) error {
+		if err := q.QueryRow(ctx, `SELECT 1 FROM runners WHERE id = $1 AND state = 'claimed' FOR UPDATE`, id).Scan(new(int)); err != nil {
+			return err
+		}
+		var current bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM runner_inventories WHERE runner_id = $1 AND session_id::text = $2::text)`,
+			id, session).Scan(&current); err != nil || !current {
+			return err
+		}
+		return q.QueryRow(ctx, recordDeviceCert, id, b, now).Scan(&changed)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: record runner device certificate: %w", err)
 	}
 	return changed, nil
 }

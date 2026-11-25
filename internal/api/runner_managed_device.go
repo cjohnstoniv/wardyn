@@ -5,6 +5,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
@@ -20,7 +21,49 @@ func requiresManagedDevice(cfg types.SiteConfig) bool {
 
 // runnerSettingsOf is the stored runner settings as the settings routes answer them.
 func runnerSettingsOf(cfg types.SiteConfig) types.RunnerSettings {
-	return types.RunnerSettings{Enabled: runnersEnabled(cfg), RequireManagedDevice: requiresManagedDevice(cfg)}
+	st := types.RunnerSettings{Enabled: runnersEnabled(cfg), RequireManagedDevice: requiresManagedDevice(cfg), MachineKindDenials: machineKindDenialsOf(cfg)}
+	if cfg.Runners != nil {
+		st.MDMDeviceCAPEM, st.MDMDeviceCRLURL = cfg.Runners.MDMDeviceCAPEM, cfg.Runners.MDMDeviceCRLURL
+	}
+	return st
+}
+
+// applyRunnerSettingsRequest sets the fields req names on st and leaves the others as stored.
+func applyRunnerSettingsRequest(st *types.RunnerSettings, req types.RunnerSettingsRequest) {
+	if req.Enabled != nil {
+		st.Enabled = *req.Enabled
+	}
+	if req.RequireManagedDevice != nil {
+		st.RequireManagedDevice = *req.RequireManagedDevice
+	}
+	if req.MDMDeviceCAPEM != nil {
+		st.MDMDeviceCAPEM = *req.MDMDeviceCAPEM
+	}
+	if req.MDMDeviceCRLURL != nil {
+		st.MDMDeviceCRLURL = *req.MDMDeviceCRLURL
+	}
+	if req.MachineKindDenials != nil {
+		st.MachineKindDenials = slices.Clone(*req.MachineKindDenials)
+	}
+}
+
+// auditRunnersMDMDeviceSet is placement.ActionRunnersMDMDeviceSet as a literal in this package, which is where
+// TestAuditHostViewsMatchTheirEmits reads an emit's action from (TestMDMDeviceSetActionIsThePlacementOne pins them equal).
+const auditRunnersMDMDeviceSet = "runners.mdm_device.set"
+
+// auditMDMDeviceSettings records each MDM field req names. The CA is audited as the sorted SHA-256
+// fingerprints of its certificates, never the PEM; the URL as itself.
+func (s *Server) auditMDMDeviceSettings(r *http.Request, req types.RunnerSettingsRequest, before, after types.RunnerSettings) {
+	emit := func(target string, was, now any) {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			auditRunnersMDMDeviceSet, target, "success", mustJSON(map[string]any{"before": was, "after": now})))
+	}
+	if req.MDMDeviceCAPEM != nil {
+		emit("runners.mdm_device_ca_pem", mdmBundleFingerprints(before.MDMDeviceCAPEM), mdmBundleFingerprints(after.MDMDeviceCAPEM))
+	}
+	if req.MDMDeviceCRLURL != nil {
+		emit("runners.mdm_device_crl_url", before.MDMDeviceCRLURL, after.MDMDeviceCRLURL)
+	}
 }
 
 // storeRunnerSettings writes the fields req names under the site-config lock, leaves the others as
@@ -39,11 +82,10 @@ func (s *Server) storeRunnerSettings(w http.ResponseWriter, r *http.Request, req
 	}
 	before = runnerSettingsOf(cfg)
 	after = before
-	if req.Enabled != nil {
-		after.Enabled = *req.Enabled
-	}
-	if req.RequireManagedDevice != nil {
-		after.RequireManagedDevice = *req.RequireManagedDevice
+	applyRunnerSettingsRequest(&after, req)
+	if msg := validateMDMDeviceSettings(after); msg != "" {
+		writeErrorReason(w, http.StatusBadRequest, reasonRunnerMDMDeviceInvalid, msg)
+		return before, after, false
 	}
 	cfg.Runners = &after
 	if _, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg); err != nil {
@@ -59,6 +101,12 @@ func (s *Server) storeRunnerSettings(w http.ResponseWriter, r *http.Request, req
 	}
 	if req.RequireManagedDevice != nil {
 		auditSetting("runners.require_managed_device", before.RequireManagedDevice, after.RequireManagedDevice)
+	}
+	s.auditMDMDeviceSettings(r, req, before, after)
+	if req.MachineKindDenials != nil {
+		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			placement.ActionRunnersEnabledSet, "runners.machine_kind_denials", "success",
+			mustJSON(map[string]any{"before": before.MachineKindDenials, "after": after.MachineKindDenials})))
 	}
 	return before, after, true
 }

@@ -493,7 +493,7 @@ export function DriveEditor({
                 setRehome(null);
                 void save(true);
               }}
-              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              variant="destructive"
             >
               {DRIVES.SAVE_CTA}
             </AlertDialogAction>

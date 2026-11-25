@@ -118,6 +118,8 @@ type GovernanceChangeDiff struct {
 	Before  json.RawMessage `json:"before,omitempty"`
 	After   json.RawMessage `json:"after,omitempty"`
 	Changed []string        `json:"changed,omitempty"`
+	// Review is what the server read of the change when it was proposed; nil reads as not checked.
+	Review *GovernanceChangeReview `json:"review,omitempty"`
 }
 
 // GovernanceChange is one governance write held for a second approver: the
@@ -143,6 +145,9 @@ type GovernanceChange struct {
 	// Approvers is who could decide the change, the proposer left out (GET
 	// /governance/changes/{id} only).
 	Approvers []GovernanceChangeApprover `json:"approvers,omitempty"`
+	// Approvals is where the change stands when more than one approval is required; nil means one person
+	// decides.
+	Approvals *GovernanceChangeApprovals `json:"approvals,omitempty"`
 	// TokensRevocationFailed is set on an approval's answer only: the change is applied, but it could
 	// not revoke every API token that may still hold the role it took away. Detail is the server's remedy.
 	TokensRevocationFailed bool `json:"tokens_revocation_failed,omitempty"`

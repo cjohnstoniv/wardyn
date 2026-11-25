@@ -9,6 +9,7 @@
 import * as React from "react";
 import { Button } from "../app/components/ui/button";
 import { Chip } from "../app/components/wardyn/primitives";
+import { DesktopWatermark, WatermarkControl } from "../app/components/wardyn/desktop-watermark";
 import { originWS } from "../app/lib/base-path";
 import { DESKTOP } from "../app/components/wardyn/copy/desktop";
 import { isEscapeChord, keysymOf } from "./keysym";
@@ -18,7 +19,9 @@ import { RfbClient, type RfbDisplay } from "./rfb";
 // `view_only`: the gateway keeps this session's input from the desktop.
 // `background`: this session is a watch of a background run's desktop; it always comes with view_only.
 // `run_title` and `run_href`: the run's name and its page, for the way back to it; both or neither.
-export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string } | { state: "refused"; said: string };
+// `cause`: "denied" when a door refused the desktop (its governance profile), not a used link.
+// `watermark`: who is looking and at which run, and whether the organisation requires the mark; absent from an older gateway.
+export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string; watermark?: { who: string; run: string; required: boolean } } | { state: "refused"; said: string; cause?: "denied" };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */
 export function readBoot(el: HTMLElement = document.documentElement): Boot | null {
@@ -59,7 +62,7 @@ const WHEEL_NOTCH_PX = 50;
 type Phase = "starting" | "reconnecting" | "connected" | "failed" | "closed" | "expired" | "run_ended" | "watch_ended" | "window_open" | "refused";
 
 export function DesktopViewer({ boot, connect = openSocket, small }: { boot: Boot; connect?: (path: string) => DesktopSocket; small?: boolean }) {
-  if (boot.state === "refused") return <LinkRefused said={boot.said} />;
+  if (boot.state === "refused") return <LinkRefused said={boot.said} denied={boot.cause === "denied"} />;
   return <Desktop boot={boot} connect={connect} viewOnly={boot.view_only === true || (small ?? window.matchMedia?.("(max-width: 640px)").matches ?? false)} />;
 }
 
@@ -187,6 +190,10 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
 
   const input = viewOnly || phase !== "connected" ? {} : inputHandlers(canvas, client, pressed.current, wheel.current);
   const ended = phase === "closed" || phase === "expired" || phase === "run_ended" || phase === "refused";
+  // Optional means a per-view choice, off to start and not stored; required is always on.
+  const [markOn, setMarkOn] = React.useState(false);
+  const mark = boot.watermark;
+  const showMark = !!mark && (mark.required || markOn);
   return (
     <div className="flex h-dvh flex-col bg-background text-foreground">
       <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2 text-xs">
@@ -196,6 +203,7 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           <a href={boot.run_href} className="text-muted-foreground underline underline-offset-2">{DESKTOP.backToRun(boot.run_title)}</a>
         )}
         <span className="flex-1" />
+        {mark && <WatermarkControl required={mark.required} on={markOn} onToggle={() => setMarkOn((on) => !on)} />}
         <div className="inline-flex rounded-[9px] border border-border bg-surface-2 p-[3px]">
           {[[true, DESKTOP.fit], [false, DESKTOP.actualSize]].map(([value, label]) => (
             <button key={String(value)} type="button" aria-pressed={fit === value} onClick={() => setFit(value as boolean)}
@@ -221,24 +229,28 @@ function Desktop({ boot, connect, viewOnly }: { boot: Extract<Boot, { state: "op
           {focused && <span className="block">{DESKTOP.escapeHint}</span>}
         </p>
       )}
-      <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
-        <canvas
-          ref={canvas}
-          data-testid="desktop-canvas"
-          tabIndex={viewOnly ? -1 : 0}
-          aria-label={DESKTOP.canvasLabel}
-          className={fit ? "max-h-full max-w-full object-contain" : undefined}
-          hidden={phase !== "connected"}
-          onContextMenu={(e) => e.preventDefault()}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            setFocused(false);
-            releaseAll(client, pressed.current);
-          }}
-          {...input}
-        />
-        {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
-      </main>
+      {/* The picture area: it does not scroll, so the watermark beside <main> stays over what is visible in Actual size. */}
+      <div className="relative flex min-h-0 flex-1 flex-col" data-testid="desktop-picture">
+        <main className={fit ? "relative flex min-h-0 flex-1 items-center justify-center bg-black" : "relative min-h-0 flex-1 overflow-auto bg-black"}>
+          <canvas
+            ref={canvas}
+            data-testid="desktop-canvas"
+            tabIndex={viewOnly ? -1 : 0}
+            aria-label={DESKTOP.canvasLabel}
+            className={fit ? "max-h-full max-w-full object-contain" : undefined}
+            hidden={phase !== "connected"}
+            onContextMenu={(e) => e.preventDefault()}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false);
+              releaseAll(client, pressed.current);
+            }}
+            {...input}
+          />
+          {phase !== "connected" && <Notice phase={phase} macOS={boot.machine_kind === "macos_vm"} said={said} onTryAgain={tryAgain} />}
+        </main>
+        {showMark && phase === "connected" && <DesktopWatermark className="absolute inset-0" who={mark.who} run={mark.run} />}
+      </div>
     </div>
   );
 }
@@ -269,12 +281,12 @@ function Notice({ phase, macOS, said, onTryAgain }: { phase: Exclude<Phase, "con
   );
 }
 
-function LinkRefused({ said }: { said: string }) {
+function LinkRefused({ said, denied = false }: { said: string; denied?: boolean }) {
   const rows: [string, string][] = [
-    [DESKTOP.whyWall, DESKTOP.whyWallBody],
-    [DESKTOP.whySetBy, DESKTOP.whySetByBody],
+    [DESKTOP.whyWall, denied ? DESKTOP.deniedWallBody : DESKTOP.whyWallBody],
+    [DESKTOP.whySetBy, denied ? DESKTOP.deniedSetByBody : DESKTOP.whySetByBody],
     [DESKTOP.whyEnforced, DESKTOP.whyEnforcedBody],
-    [DESKTOP.whyCanChange, DESKTOP.whyCanChangeBody],
+    [DESKTOP.whyCanChange, denied ? DESKTOP.deniedCanChangeBody : DESKTOP.whyCanChangeBody],
   ];
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background p-4 text-foreground">
@@ -283,7 +295,7 @@ function LinkRefused({ said }: { said: string }) {
           <h1 id="desktop-refused" className="text-base font-semibold">{DESKTOP.linkBlocked}</h1>
           <Chip tone="danger">{DESKTOP.linkRefused}</Chip>
         </div>
-        <p className="mt-2 text-muted-foreground">{DESKTOP.linkBody}</p>
+        <p className="mt-2 text-muted-foreground">{denied ? DESKTOP.deniedBody : DESKTOP.linkBody}</p>
         <dl className="mt-4 grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
           {rows.map(([k, v]) => (
             <React.Fragment key={k}>

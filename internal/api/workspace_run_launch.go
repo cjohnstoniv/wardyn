@@ -605,6 +605,12 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		return types.AgentRun{}, false, fmt.Errorf("runner declares no confinement class")
 	}
 	weakCC := cc == types.CC1
+	// The session's policy, built one function over (recordSessionPolicy) and met with the agent rules BEFORE the
+	// claim: an org-policy refusal is returned bare, never through abort(), for the reason given above.
+	policy, merr := s.recordBoundPolicy(ctx, ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains), cc, caps)
+	if merr != nil {
+		return types.AgentRun{}, false, merr
+	}
 
 	runID := uuid.New()
 	_, release, err := s.claimImportStep(ctx, ws, runID)
@@ -636,11 +642,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	now := run.CreatedAt
 	run.Interactive = true
 	run.ModelProviderID = mp.provider.ID
-	// The session's policy, built one function over (recordSessionPolicy).
-	policy, merr := boundaryRecordPolicy(ceiling, s.recordSessionPolicy(ws, cc, confined, ceiling.Spec.AllowedDomains))
-	if merr != nil {
-		return types.AgentRun{}, false, abort(merr)
-	}
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {

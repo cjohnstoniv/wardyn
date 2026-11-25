@@ -11,13 +11,13 @@
 import { IMPOSSIBLE } from "../../../lib/integrations";
 import { LOCAL_MODEL_EDITOR } from "../../../lib/local-model-copy";
 import { MODEL_PROVIDERS, PROVIDER_EDITOR } from "../../../lib/model-providers-copy";
-import type { ModelProvider, ModelProviderKind, ProviderHarness } from "../../../lib/types/site";
+import type { AzureSettings, ModelProvider, ModelProviderKind, ProviderHarness } from "../../../lib/types/site";
 import { agentCapabilityFor } from "../providers/agents-tab";
 
-// The six kinds the editor draws, in the kind step's order (mp-packet-B.html
-// §"Case (a) first", and M9's one added row): Claude subscription, Amazon
+// The seven kinds the editor draws, in the kind step's order (mp-packet-B.html
+// "Case (a) first", M9's one added row, and the Azure Foundry row after it): Claude subscription, Amazon
 // Bedrock, Anthropic API key, OpenAI API key, Your own endpoint, Local model
-// server. "Amazon Bedrock" is ONE kind-step option
+// server, Azure Foundry. "Amazon Bedrock" is ONE kind-step option
 // that starts a bedrock_sso draft — the "How people sign in" toggle inside the
 // form (#538, E3) is what reaches bedrock_bearer; that kind is never a kind-
 // step option of its own; editing a stored bedrock_bearer provider reaches the
@@ -29,9 +29,24 @@ export const EDITOR_KINDS = [
   "openai_api_key",
   "custom_endpoint",
   "local_model",
+  "azure_foundry",
 ] as const;
 export type EditorKind = (typeof EDITOR_KINDS)[number];
 
+// A kind step row is offered when the server lists the kind. A server that sends no list is an older one: it
+// offers every kind but Azure Foundry, which it cannot save.
+export const kindOffered = (kind: EditorKind, available?: readonly ModelProviderKind[]) =>
+  available ? available.includes(kind) : kind !== "azure_foundry";
+
+export type AzureRoute = NonNullable<AzureSettings["route"]>;
+export const AZURE_DEFAULT_ROUTE: AzureRoute = "openai_v1";
+// The route each harness's API dialect needs (the server's mp400AzurePair), and each route's path as the admin reads it.
+export const AZURE_HARNESS_ROUTE: Record<string, AzureRoute | undefined> = { "claude-code": "anthropic", "codex-cli": "openai_v1" };
+export const AZURE_ROUTE_PATH: Record<AzureRoute, string> = { openai_v1: "/openai/v1", anthropic: "/anthropic" };
+// Only the Messages harness takes a fast deployment (mp400AzureFastModel).
+export const AZURE_FAST_HARNESS = "claude-code";
+
+export const isAzure = (kind: ModelProviderKind) => kind === "azure_foundry";
 export const isBedrock = (kind: ModelProviderKind) => kind === "bedrock_sso" || kind === "bedrock_bearer";
 
 // One catalog agent a provider can serve (SetupStatus.harnesses without the
@@ -45,6 +60,8 @@ export interface HarnessDraft {
   ticked: boolean;
   model: string;
   path: string;
+  // azure_foundry's claude-code row only: fast_model, the second deployment. Absent for every other row.
+  fastModel?: string;
 }
 
 // One extra header row (custom_endpoint only). `placeholder` is the row's own value placeholder, shown while
@@ -97,6 +114,9 @@ export interface ProviderDraft {
   oidcScopes: string[];
   // "Match the person to their console sign-in": on is identity_binding "console", off is "none".
   oidcBound: boolean;
+  // azure_foundry only: azure.endpoint and azure.route.
+  azureEndpoint: string;
+  azureRoute: AzureRoute;
   // custom_endpoint only: extra_headers, the non-secret headers a gateway routes on.
   headers: HeaderDraft[];
   harnesses: Record<string, HarnessDraft>;
@@ -128,6 +148,8 @@ export const directHost = (d: ProviderDraft) =>
 export function editorProvidesLine(kind: ModelProviderKind, signIn = false): string {
   if (signIn && isEndpoint(kind)) return PROVIDER_EDITOR.OIDC.PROVIDES;
   switch (kind) {
+    case "azure_foundry":
+      return PROVIDER_EDITOR.PROVIDES_ENTRA;
     case "bedrock_sso":
       return PROVIDER_EDITOR.PROVIDES_SSO;
     case "anthropic_subscription":
@@ -146,7 +168,15 @@ export function editorProvidesLine(kind: ModelProviderKind, signIn = false): str
 // row (lib/integrations.ts's AiType has no separate entry for either) — cast
 // as a loose Record rather than AiType so custom_endpoint (no IMPOSSIBLE row
 // at all) still falls through to undefined instead of a type error.
-export function incompatibleReason(kind: ModelProviderKind, harness: string): string | undefined {
+// azure_foundry serves each harness on one route only: the reason names the route that harness needs, read
+// with the draft's own route and the harness's display name.
+export function incompatibleReason(
+  kind: ModelProviderKind,
+  harness: string,
+  azure?: { route: AzureRoute; display: string },
+): string | undefined {
+  const need = AZURE_HARNESS_ROUTE[harness];
+  if (isAzure(kind)) return azure && need && need !== azure.route ? PROVIDER_EDITOR.ROUTE_INCOMPATIBLE(azure.display, AZURE_ROUTE_PATH[need]) : undefined;
   const cap = agentCapabilityFor(harness);
   const key = isBedrock(kind) ? "bedrock" : kind;
   return cap && (IMPOSSIBLE as Record<string, Partial<Record<string, string>>>)[key]?.[cap];
@@ -185,9 +215,12 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
     oidcSecret: "",
     oidcScopes: [],
     oidcBound: true,
+    azureEndpoint: "",
+    azureRoute: AZURE_DEFAULT_ROUTE,
     headers: [],
     harnesses: Object.fromEntries(
-      harnesses.map((h) => [h.id, { ticked: !incompatibleReason(kind, h.id), model: "", path: "" }]),
+      // Azure Foundry starts on its default route, so only the harness that route serves is ticked.
+      harnesses.map((h) => [h.id, { ticked: isAzure(kind) ? AZURE_HARNESS_ROUTE[h.id] === AZURE_DEFAULT_ROUTE : !incompatibleReason(kind, h.id), model: "", path: "" }]),
     ),
   };
 }
@@ -197,7 +230,8 @@ export function newDraft(kind: EditorKind, harnesses: HarnessRow[]): ProviderDra
 export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDraft {
   const rows: Record<string, HarnessDraft> = {};
   for (const h of harnesses) rows[h.id] = { ticked: false, model: "", path: "" };
-  for (const h of p.harnesses ?? []) rows[h.harness] = { ticked: true, model: h.model ?? "", path: h.path ?? "" };
+  for (const h of p.harnesses ?? [])
+    rows[h.harness] = { ticked: true, model: h.model ?? "", path: h.path ?? "", ...(h.fast_model ? { fastModel: h.fast_model } : {}) };
   return {
     kind: p.kind,
     name: p.name ?? "",
@@ -227,6 +261,8 @@ export function draftFrom(p: ModelProvider, harnesses: HarnessRow[]): ProviderDr
     oidcSecret: p.oidc?.client_secret_ref ?? "",
     oidcScopes: p.oidc?.scopes ?? [],
     oidcBound: p.oidc?.identity_binding !== "none",
+    azureEndpoint: p.azure?.endpoint ?? "",
+    azureRoute: p.azure?.route ?? AZURE_DEFAULT_ROUTE,
     headers: (p.extra_headers ?? []).map((h) => ({ name: h.name, value: h.value })),
     harnesses: rows,
   };
@@ -258,6 +294,7 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
   const endpoint = isEndpoint(draft.kind);
   const local = isLocal(draft.kind);
   const bedrock = isBedrock(draft.kind);
+  const azure = isAzure(draft.kind);
   const sso = draft.kind === "bedrock_sso";
   const name = draft.name.trim();
   // Trimmed as the server trims them; the UI-only placeholder never goes. None, or any other kind, is no key.
@@ -270,6 +307,8 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
       // A local model's agent asks for one of the listed models; the first when none was picked.
       model: h.model.trim() || (local ? draft.models[0] : undefined),
       path: endpoint ? h.path.trim() : undefined,
+      // The fast deployment is the Messages harness's only, on its own route; any other kind keeps what is stored.
+      ...(azure && { fast_model: id === AZURE_FAST_HARNESS && draft.azureRoute === "anthropic" ? h.fastModel?.trim() || undefined : undefined }),
     }));
   return {
     ...base,
@@ -321,6 +360,8 @@ export function providerFrom(draft: ProviderDraft, base: ModelProvider | null, t
           sso_role_name: sso ? draft.ssoRoleName.trim() || undefined : undefined,
         }
       : undefined,
+    // azure_foundry's address is azure.endpoint: no base_url, auth or bedrock goes with it (the server refuses them).
+    azure: azure ? { ...base?.azure, endpoint: draft.azureEndpoint.trim() || undefined, route: draft.azureRoute } : undefined,
     extra_headers: headers.length > 0 ? headers : undefined,
     harnesses,
   };
@@ -404,7 +445,9 @@ export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
     normURL(a.base_url) !== normURL(b.base_url) ||
     header(a) !== header(b) ||
     normURL(a.bedrock?.region) !== normURL(b.bedrock?.region) ||
-    normURL(a.bedrock?.base_url) !== normURL(b.bedrock?.base_url)
+    normURL(a.bedrock?.base_url) !== normURL(b.bedrock?.base_url) ||
+    normURL(a.azure?.endpoint) !== normURL(b.azure?.endpoint) ||
+    (a.azure?.route ?? "") !== (b.azure?.route ?? "")
   ) {
     return true;
   }
@@ -420,7 +463,15 @@ export function addressChanged(a: ModelProvider, b: ModelProvider): boolean {
 // Which field a refused save's own sentence is about (M9: the field it names is
 // outlined beside the red card). Read off the server's wording, so a refusal the
 // editor doesn't recognise outlines nothing and the card still says all of it.
-export type RefusedField = "base_url" | "gateway_audience" | "models" | "max_context" | "max_output" | "keep_alive_seconds";
+export type RefusedField =
+  | "base_url"
+  | "gateway_audience"
+  | "models"
+  | "max_context"
+  | "max_output"
+  | "keep_alive_seconds"
+  | "azure_endpoint"
+  | "azure_route";
 
 export function refusedField(message: string | null): RefusedField | null {
   if (!message) return null;
@@ -430,6 +481,8 @@ export function refusedField(message: string | null): RefusedField | null {
   if (rest.includes("model must be one of local.models")) return null; // a harness's, see refusedHarness
   // The audience's refusals, matched at their fixed opening: the duplicate one quotes what the admin typed.
   if (/^(gateway_identity[.:] ?audience|moved to a new address, so gateway_identity\.audience)/.test(rest)) return "gateway_audience";
+  if (rest.includes("azure.endpoint")) return "azure_endpoint";
+  if (rest.includes("azure.route")) return "azure_route";
   if (rest.includes("base_url")) return "base_url";
   if (rest.includes("local.models")) return "models";
   return (["max_context", "max_output", "keep_alive_seconds"] as const).find((f) => rest.includes(`local.${f}`)) ?? null;
@@ -445,3 +498,7 @@ export function refusedHarness(message: string | null): string | null {
 // Not anywhere in the sentence: the provider id is quoted at its start and may equal a chip's name.
 export const refusedModel = (message: string | null, name: string): boolean =>
   !!message && (message.includes(`local.models: "${name}" is not`) || message.includes(`local.models lists "${name}" twice`));
+
+// The Azure field a refused save is about: the server's own field name when it sent one, else the sentence's wording.
+export const azureRefusedField = (message: string | null, field: string | null): "azure_endpoint" | "azure_route" | null =>
+  field === "azure.endpoint" ? "azure_endpoint" : field === "azure.route" ? "azure_route" : (["azure_endpoint", "azure_route"] as const).find((f) => refusedField(message) === f) ?? null;

@@ -61,7 +61,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 				mint := newGitBrokerUpstream(t, "gh-inst-token")
 				return newProxy(Options{
 					RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-					Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+					Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 					Resolver: publicResolver{}, Dial: splitDial(upstreamAddr(mint.srv), forge),
 					ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
 					TLSClientConfig: testInsecureTLSConfig,
@@ -74,7 +74,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 				mint := newPATBrokerUpstream(t, "T", "oauth2")
 				return newProxy(Options{
 					RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-					Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+					Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 					Resolver: publicResolver{}, Dial: splitDial(upstreamAddr(mint.srv), forge),
 					ControlPlaneURL: "https://wardynd.test:8080", RunToken: newTokenSource("RUNTOK"),
 					TLSClientConfig: testInsecureTLSConfig,
@@ -90,7 +90,7 @@ func TestBrokerDecisionRows(t *testing.T) {
 					Injector: &injector{byHost: map[string]*injEntry{
 						"dev.azure.com": {grantID: uuid.New(), header: bearer, requireTLS: true},
 					}},
-					Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+					Sink:     &decisionSink{out: buf, ch: make(chan queuedDecision, 8)},
 					Resolver: publicResolver{}, Dial: splitDial(forge, forge),
 					RunToken: newTokenSource("RUNTOK"), TLSClientConfig: testInsecureTLSConfig, ControlTLS: testInsecureTLSConfig,
 					ADOGrants: adoGrantsByHost{"dev.azure.com": {Organization: "acme", Capabilities: []adoscope.Capability{adoscope.CapCodeRead}}},

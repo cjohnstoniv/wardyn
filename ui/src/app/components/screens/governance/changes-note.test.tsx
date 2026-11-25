@@ -4,12 +4,12 @@
  */
 
 // The change note on the Changes tab: the note line in the list, the "Why this change" block and the
-// proposer's Add/Edit note in the drawer, the security-only variant of the own-change note, and the
+// proposer's Add/Edit note on the change's page, the security-only variant of the own-change note, and the
 // "Only security can decide" filter. Strings are read by constant.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { toast } from "sonner";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -20,6 +20,7 @@ vi.mock("../../../lib/api/runner-pools", () => ({
 const getChangeMock = vi.fn();
 const listChangesMock = vi.fn();
 const noteMock = vi.fn();
+const impactMock = vi.fn();
 vi.mock("../../../lib/api/governance", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/governance")>("../../../lib/api/governance");
   return {
@@ -29,6 +30,7 @@ vi.mock("../../../lib/api/governance", async () => {
       getChange: (...a: unknown[]) => getChangeMock(...a),
       listChanges: (...a: unknown[]) => listChangesMock(...a),
       noteChange: (...a: unknown[]) => noteMock(...a),
+      getChangeImpact: (...a: unknown[]) => impactMock(...a),
     },
   };
 });
@@ -38,6 +40,7 @@ import { aheadByHours } from "../../../lib/test-clock";
 import type { GovernanceChange } from "../../../lib/types";
 import { CHANGE_NOTE } from "../../wardyn/copy/change-note";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { ChangeReviewPage } from "./change-review-page";
 import { ChangesTab } from "./changes";
 
 const NOTE = { reason: "Raise the build profile's memory cap", ticket: "CHG-4821" };
@@ -67,12 +70,27 @@ function ui(changes: GovernanceChange[], o: { principal?: string; security?: boo
   );
 }
 
-const openRow = (label = "Profile · Edit") => userEvent.click(screen.getAllByRole("button", { name: label })[0]);
+// The change on its own page, as the row opens it.
+function page(c: GovernanceChange, o: { principal?: string } = {}) {
+  getChangeMock.mockResolvedValue(c);
+  return (
+    <MemoryRouter initialEntries={[`/admin/governance/changes/${c.id}`]}>
+      <OperatorProvider operator={false} principal={o.principal ?? "bo@example.com"}>
+        <Routes>
+          <Route path="/admin/governance/changes/:id" element={<ChangeReviewPage />} />
+          <Route path="/admin/governance" element={<p>the queue</p>} />
+        </Routes>
+      </OperatorProvider>
+    </MemoryRouter>
+  );
+}
 
 beforeEach(() => {
   getChangeMock.mockReset();
   listChangesMock.mockReset();
   noteMock.mockReset();
+  impactMock.mockReset();
+  impactMock.mockResolvedValue({ computed: "none", not_computed: "kind", as_of: aheadByHours(0) });
   vi.mocked(toast.success).mockReset();
 });
 
@@ -94,14 +112,13 @@ describe("the note line in the list", () => {
   });
 });
 
-describe("the drawer's Why this change block", () => {
+describe("the page's Why this change block", () => {
   it("sits after the amber notes and before the decider's reason, as plain text", async () => {
     const c = change({
       note: { reason: "<b>not html</b> https://example.com", ticket: "https://example.com/t/1" },
       diff: { ...change().diff, notes: ["omits the egress list"] },
     });
-    render(ui([c]));
-    await openRow();
+    render(page(c));
     const block = await screen.findByTestId("change-note");
     expect(within(block).getByRole("heading", { name: CHANGE_NOTE.WHY_TITLE })).toBeInTheDocument();
     expect(block).toHaveTextContent("<b>not html</b> https://example.com");
@@ -114,8 +131,7 @@ describe("the drawer's Why this change block", () => {
   });
 
   it("draws no block without a note", async () => {
-    render(ui([change()]));
-    await openRow();
+    render(page(change()));
     await screen.findByLabelText(CHANGES.REASON_LABEL);
     expect(screen.queryByTestId("change-note")).toBeNull();
   });
@@ -123,31 +139,24 @@ describe("the drawer's Why this change block", () => {
 
 describe("Add a note and Edit note", () => {
   it("is offered only to the proposer", async () => {
-    getChangeMock.mockResolvedValue(change());
-    render(ui([change()]));
-    await openRow();
+    render(page(change()));
     await screen.findByLabelText(CHANGES.REASON_LABEL);
     expect(screen.queryByRole("button", { name: CHANGE_NOTE.ADD })).toBeNull();
     expect(screen.queryByRole("button", { name: CHANGE_NOTE.EDIT })).toBeNull();
   });
 
   it("reads Add a note with the hint when there is no note, and Edit note when there is one", async () => {
-    getChangeMock.mockResolvedValue(change());
-    const { unmount } = render(ui([change()], { principal: "ana@example.com" }));
-    await openRow();
+    const { unmount } = render(page(change(), { principal: "ana@example.com" }));
     expect(await screen.findByRole("button", { name: CHANGE_NOTE.ADD })).toBeInTheDocument();
     expect(screen.getByText(CHANGE_NOTE.NO_NOTE_HINT)).toBeInTheDocument();
     unmount();
-    render(ui([change({ note: NOTE })], { principal: "ana@example.com" }));
-    await openRow();
+    render(page(change({ note: NOTE }), { principal: "ana@example.com" }));
     expect(await screen.findByRole("button", { name: CHANGE_NOTE.EDIT })).toBeInTheDocument();
     expect(screen.queryByText(CHANGE_NOTE.NO_NOTE_HINT)).toBeNull();
   });
 
   it("opens the form in place and hides the decider's reason and the buttons while it is open", async () => {
-    getChangeMock.mockResolvedValue(change());
-    render(ui([change()], { principal: "ana@example.com" }));
-    await openRow();
+    render(page(change(), { principal: "ana@example.com" }));
     await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.ADD }));
     expect(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL)).toBeInTheDocument();
     expect(screen.queryByLabelText(CHANGES.REASON_LABEL)).toBeNull();
@@ -158,12 +167,9 @@ describe("Add a note and Edit note", () => {
     expect(screen.getByRole("button", { name: CHANGES.REJECT })).toBeInTheDocument();
   });
 
-  it("a save toasts, shows the returned note in the drawer and reloads the list", async () => {
-    getChangeMock.mockResolvedValue(change());
+  it("a save toasts and shows the returned note on the page", async () => {
     noteMock.mockResolvedValue(change({ note: NOTE }));
-    const onChanged = vi.fn();
-    render(ui([change()], { principal: "ana@example.com", onChanged }));
-    await openRow();
+    render(page(change(), { principal: "ana@example.com" }));
     await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.ADD }));
     await userEvent.type(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL), NOTE.reason);
     await userEvent.type(screen.getByLabelText(CHANGE_NOTE.TICKET_LABEL), NOTE.ticket);
@@ -173,24 +179,19 @@ describe("Add a note and Edit note", () => {
     const block = await screen.findByTestId("change-note");
     expect(block).toHaveTextContent(NOTE.reason);
     expect(screen.getByRole("button", { name: CHANGE_NOTE.EDIT })).toBeInTheDocument();
-    expect(onChanged).toHaveBeenCalled();
   });
 
-  it("a 404 on save reloads the list and closes the drawer; a 409 reloads and keeps the refusal", async () => {
+  it("a 404 on save returns to the queue; a 409 reads the change again and keeps the refusal", async () => {
     const { HttpError } = await import("../../../lib/api/core");
-    getChangeMock.mockResolvedValue(change());
     noteMock.mockRejectedValueOnce(new HttpError(409, "no longer pending")).mockRejectedValueOnce(new HttpError(404, "gone"));
-    const onChanged = vi.fn();
-    render(ui([change()], { principal: "ana@example.com", onChanged }));
-    await openRow();
+    render(page(change(), { principal: "ana@example.com" }));
     await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.ADD }));
     await userEvent.type(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL), "x");
     await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.SAVE }));
     expect(await screen.findByText("no longer pending")).toBeInTheDocument();
-    expect(onChanged).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(getChangeMock).toHaveBeenCalledTimes(2));
     await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.SAVE }));
-    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("the queue")).toBeInTheDocument();
   });
 });
 
@@ -198,37 +199,20 @@ describe("an own change that only security can decide", () => {
   const security = { kind: "security" } as const;
 
   it("shows the security-only note in place of OWN_NOTE when every approver is security", async () => {
-    getChangeMock.mockResolvedValue(change({ approvers: [security, security] }));
-    render(ui([change()], { principal: "ana@example.com" }));
-    await openRow();
+    render(page(change({ approvers: [security, security] }), { principal: "ana@example.com" }));
     expect(await screen.findByText(CHANGE_NOTE.OWN_SECURITY_TITLE)).toBeInTheDocument();
     expect(screen.getByText(CHANGE_NOTE.OWN_SECURITY_BODY)).toBeInTheDocument();
     expect(screen.queryByText(CHANGES.OWN_NOTE)).toBeNull();
     expect(getChangeMock).toHaveBeenCalledWith("c1");
   });
 
-  it("keeps OWN_NOTE when anyone but security can decide, when nobody is listed, and when the read fails", async () => {
-    for (const read of [
-      () => Promise.resolve(change({ approvers: [security, { kind: "unit_admin", unit_name: "Payments" }] })),
-      () => Promise.resolve(change({ approvers: [] })),
-      () => Promise.reject(new Error("offline")),
-    ]) {
-      getChangeMock.mockReset();
-      getChangeMock.mockImplementation(read);
-      const { unmount } = render(ui([change()], { principal: "ana@example.com" }));
-      await openRow();
-      await vi.waitFor(() => expect(getChangeMock).toHaveBeenCalled());
+  it("keeps OWN_NOTE when anyone but security can decide, and when nobody is listed", async () => {
+    for (const approvers of [[security, { kind: "unit_admin", unit_name: "Payments" } as const], []]) {
+      const { unmount } = render(page(change({ approvers }), { principal: "ana@example.com" }));
       expect(await screen.findByText(CHANGES.OWN_NOTE)).toBeInTheDocument();
       expect(screen.queryByText(CHANGE_NOTE.OWN_SECURITY_TITLE)).toBeNull();
       unmount();
     }
-  });
-
-  it("does not read the change for someone else's proposal", async () => {
-    render(ui([change()]));
-    await openRow();
-    await screen.findByLabelText(CHANGES.REASON_LABEL);
-    expect(getChangeMock).not.toHaveBeenCalled();
   });
 });
 
@@ -294,26 +278,5 @@ describe("the Only security can decide filter", () => {
     await userEvent.click(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY }));
     expect(await screen.findByRole("alert")).toHaveTextContent("the list is unavailable");
     expect(screen.getByRole("radio", { name: CHANGE_NOTE.FILTER_SECURITY })).toBeChecked();
-  });
-});
-
-describe("a note save that answers 404 after its drawer was closed", () => {
-  it("leaves the drawer opened since alone", async () => {
-    const { HttpError } = await import("../../../lib/api/core");
-    const B = change({ id: "c2", target_key: "team-b" });
-    getChangeMock.mockImplementation((id: string) => Promise.resolve(id === "c2" ? B : change()));
-    let fail: ((e: Error) => void) | undefined;
-    noteMock.mockReturnValue(new Promise((_, reject) => (fail = reject)));
-    render(ui([change(), B], { principal: "ana@example.com" }));
-    await userEvent.click(screen.getAllByRole("button", { name: "Profile · Edit" })[0]);
-    await userEvent.click(await screen.findByRole("button", { name: CHANGE_NOTE.ADD }));
-    await userEvent.type(screen.getByLabelText(CHANGE_NOTE.WHY_LABEL), "x");
-    await userEvent.click(screen.getByRole("button", { name: CHANGE_NOTE.SAVE }));
-    await userEvent.keyboard("{Escape}");
-    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await userEvent.click(screen.getAllByRole("button", { name: "Profile · Edit" })[1]);
-    const second = await screen.findByRole("dialog");
-    await act(async () => fail?.(new HttpError(404, "gone")));
-    expect(screen.queryByRole("dialog")).toBe(second);
   });
 });

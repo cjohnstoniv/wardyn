@@ -7,14 +7,20 @@
 // the DOM between tests.
 import "@testing-library/jest-dom/vitest";
 import { afterEach, vi } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
 import { cleanup } from "@testing-library/react";
 import { stopFocusWatches } from "../app/components/ui/opener-focus";
+import { queryClient } from "../app/lib/query-client";
+
+// TanStack notifies through setTimeout(0), which a test that fakes only setInterval never sees inside act().
+notifyManager.setScheduler((cb) => queueMicrotask(cb));
 
 afterEach(async () => {
   // A focus watch's settle timer must not fire after its page is gone: once the file's DOM is torn down it
   // reads `document` and throws an uncaught error that fails the whole run.
   stopFocusWatches();
   cleanup();
+  queryClient.clear();
   // cleanup() can unmount an open dialog, and Radix runs its focus restore in a setTimeout(0) after unmount,
   // which starts a new watch. Let that run, then stop it too.
   if (!vi.isFakeTimers()) await new Promise((resolve) => setTimeout(resolve, 0));

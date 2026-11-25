@@ -78,7 +78,10 @@ func (s *Server) handleRunnerRegister(w http.ResponseWriter, r *http.Request) {
 	// A valid token is the caller's proof: only failed attempts are charged to the address, which many
 	// callers share behind an ingress.
 	s.registerLimiter.refund(peerKey(r.RemoteAddr), now)
-	registered, err := rs.CreateRunner(r.Context(), types.Runner{ID: uuid.New(), Owner: token.Owner,
+	// The owner may be suspended between the spend and this insert, so the insert holds the owner's identity rows
+	// as the spend did and is refused once they are deactivated (an organisation's token names no person: no guard).
+	ctx := guardOwner(r.Context(), token.Owner)
+	registered, err := rs.CreateRunner(ctx, types.Runner{ID: uuid.New(), Owner: token.Owner,
 		Name: req.Name, PublicKey: req.PublicKey, KeyFingerprint: runnerwire.Fingerprint(req.PublicKey), OrgURLSHA256: orgHash, MintedBy: token.MintedBy,
 		Limits: req.Limits, MachineName: req.MachineName, Arch: req.Arch, OwnerKind: token.OwnerKind, RegistrationTokenID: &token.ID})
 	if errors.Is(err, store.ErrConflict) {

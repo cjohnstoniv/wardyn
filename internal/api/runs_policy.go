@@ -323,25 +323,32 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		// Machine is the kept machine the run kept or resumed, read now (run_kept_machine.go); absent on
 		// every other run.
 		Machine *runMachineView `json:"machine,omitempty"`
+		// KeptCopyOut is true when this caller may copy work out of this kept run now (run_kept_copy_out.go): its
+		// owner, on a Kubernetes runner that lost it to an outage, before its end. Absent on every other run.
+		KeptCopyOut bool `json:"kept_copy_out,omitempty"`
+		// DesktopWatermark is who is viewing and whether the organisation requires the watermark; a desktop run only.
+		DesktopWatermark *desktopWatermarkView `json:"desktop_watermark,omitempty"`
 	}{
 		AgentRun: run, UIApps: apps, UserTypeName: s.runUserTypeName(r, run.UserType),
 		ModelProviderName: providerName, ModelProviderDeleted: providerDeleted,
-		CreatedViaName:  s.runCreatedViaName(r.Context(), run),
-		RunnerPoolName:  s.runPoolName(r.Context(), run),
-		KeptUntil:       s.endedRunKeptUntil(run),
-		Policy:          s.runPolicyRef(r.Context(), run),
-		Sync:            s.runSyncOpenView(run.ID),
-		ComputerFolder:  s.computerFolderRunView(r.Context(), run.ID),
-		Agents:          s.runDetailAgents(r.Context(), run),
-		ModelAllowlists: s.runModelAllowlists(r.Context(), run.ID),
-		AllowedModels:   s.runAllowedModels(r.Context(), run.ID),
-		MacOS:           s.runMacOSView(run),
-		BackgroundWatch: s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
-		MacWindow:       s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
-		MacOSPreparing:  macOSPrepRunning(stored),
-		MacOSDisk:       s.runMacOSDiskView(r.Context(), run),
-		WallPreset:      s.runWallPresetViewLabelled(r, run),
-		Machine:         s.runMachineOf(r.Context(), run),
+		CreatedViaName:   s.runCreatedViaName(r.Context(), run),
+		RunnerPoolName:   s.runPoolName(r.Context(), run),
+		KeptUntil:        s.endedRunKeptUntil(run),
+		Policy:           s.runPolicyRef(r.Context(), run),
+		Sync:             s.runSyncOpenView(run.ID),
+		ComputerFolder:   s.computerFolderRunView(r.Context(), run.ID),
+		Agents:           s.runDetailAgents(r.Context(), run),
+		ModelAllowlists:  s.runModelAllowlists(r.Context(), run.ID),
+		AllowedModels:    s.runAllowedModels(r.Context(), run.ID),
+		MacOS:            s.runMacOSView(run),
+		BackgroundWatch:  s.backgroundWatchViewFor(r.Context(), run, principalFromRequest(r)),
+		MacWindow:        s.macWindowViewFor(r.Context(), stored, s.macWindowAuthorityOf(r)),
+		MacOSPreparing:   macOSPrepRunning(stored),
+		MacOSDisk:        s.runMacOSDiskView(r.Context(), run),
+		WallPreset:       s.runWallPresetViewLabelled(r, run),
+		Machine:          s.runMachineOf(r.Context(), run),
+		KeptCopyOut:      s.keptCopyOutOpen(r.Context(), run, principalFromRequest(r)),
+		DesktopWatermark: s.runDesktopWatermark(r, run),
 	})
 }
 

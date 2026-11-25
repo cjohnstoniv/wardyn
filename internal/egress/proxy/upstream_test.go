@@ -105,7 +105,7 @@ func newUpstreamProxy(t *testing.T, up *upstreamProxy) *Proxy {
 func newUpstreamProxyPolicy(t *testing.T, up *upstreamProxy, spec types.RunPolicySpec) *Proxy {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(spec),
@@ -317,7 +317,7 @@ func TestControlPlaneBypassesUpstream(t *testing.T) {
 		t.Fatalf("parse upstream: %v", err)
 	}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"tls.test"}}),
@@ -376,7 +376,7 @@ func TestGitBrokerDialsGithubByNameThroughUpstream(t *testing.T) {
 
 	grantID := uuid.New()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
@@ -414,7 +414,7 @@ func TestLLMRouteDialsByNameThroughUpstream(t *testing.T) {
 		t.Fatalf("parse upstream: %v", err)
 	}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}}),

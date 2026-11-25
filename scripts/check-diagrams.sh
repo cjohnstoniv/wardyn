@@ -221,10 +221,10 @@ policy:denied	internal/egress/proxy/connect_gate.go	egress-checks
 policy:port	internal/egress/proxy/port_rule.go	egress-checks
 policy:method	internal/egress/proxy/connect_gate.go	egress-checks
 brokered:git:push-deny-all-forge	internal/egress/proxy/push_deny_all_forge.go	egress-checks
-policy:default-deny	internal/egress/proxy/proxy.go	egress-checks
+policy:default-deny	internal/egress/egress.go	egress-checks
 approval:pending	internal/egress/proxy/approvals.go	egress-checks
 approval:denied	internal/egress/proxy/proxy.go	egress-checks
-policy:allowed	internal/egress/proxy/proxy.go	egress-checks
+policy:allowed	internal/egress/egress.go	egress-checks
 env_secret	internal/types/types.go	credential-shapes
 file_secret	internal/types/types.go	credential-shapes
 bedrock_sso	internal/types/model_provider.go	credential-shapes

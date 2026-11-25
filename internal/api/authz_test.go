@@ -421,6 +421,19 @@ var routeMatrix = map[string]classifiedRoute{
 	// which carries no start URL.
 	"GET /api/v1/agent-providers": {class: classAdmin},
 	"PUT /api/v1/agent-providers": {class: classAdmin},
+	// The assistant's settings (0.11.0): which model providers may serve the Compose and Review purposes,
+	// SUPER for the model providers' reason. The availability read is any signed-in person's.
+	"GET /api/v1/assistant/settings": {class: classAdmin},
+	"PUT /api/v1/assistant/settings": {class: classAdmin},
+	"GET /api/v1/me/assistant":       {class: classMember},
+	// The assistant's sessions: each is the signed-in person's own, and anyone else's {id} answers 404, as a
+	// missing one does, so a member reaches only their own.
+	"POST /api/v1/assistant/preview":                {class: classMember},
+	"POST /api/v1/assistant/sessions":               {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/messages": {class: classMember},
+	"POST /api/v1/assistant/sessions/{id}/edits":    {class: classMember},
+	"GET /api/v1/assistant/sessions/{id}/events":    {class: classMember},
+	"DELETE /api/v1/assistant/sessions/{id}":        {class: classMember},
 	// Model providers (0.8): gateway addresses, the AWS access portal and
 	// account pins. SUPER for the agent roster's reason; the member tier is
 	// served SetupStatus.model_providers instead, which carries none of them.
@@ -558,6 +571,8 @@ var routeMatrix = map[string]classifiedRoute{
 	"PUT /api/v1/governance/egress-baseline": {class: classSecurity},
 	"GET /api/v1/governance/boundary":        {class: classSecurity},
 	"PUT /api/v1/governance/boundary":        {class: classSecurity},
+	"GET /api/v1/governance/approval-counts": {class: classSecurity},
+	"PUT /api/v1/governance/approval-counts": {class: classSecurity},
 	"GET /api/v1/governance/recording":       {class: classSecurity},
 	"PUT /api/v1/governance/recording":       {class: classSecurity},
 	// A platform envelope names the groups a unit admin's group adds may apply for without a second
@@ -575,6 +590,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"POST /api/v1/governance/restrictions":            {class: classSecurity},
 	"PUT /api/v1/governance/restrictions/{id}":        {class: classSecurity},
 	"DELETE /api/v1/governance/restrictions/{id}":     {class: classSecurity},
+	"GET /api/v1/agent-rules":                         {class: classSecurity},
+	"PUT /api/v1/agent-rules/{harness}":               {class: classSecurity},
+	"DELETE /api/v1/agent-rules/{harness}":            {class: classSecurity},
 
 	"GET /api/v1/governance/credential-delivery": {class: classSecurity},
 	"PUT /api/v1/governance/credential-delivery": {class: classSecurity},
@@ -644,12 +662,16 @@ var routeMatrix = map[string]classifiedRoute{
 	// The four-eyes routes (gov4-b1): the queue, one change, and the two decisions. On the unit-admin
 	// tier at the door; which changes a caller may see or decide is the approver table's, inside
 	// the handler (governance_changes_pg_test.go).
-	"GET /api/v1/governance/changes":               {class: classUnit},
-	"GET /api/v1/governance/changes/{id}":          {class: classUnit},
-	"GET /api/v1/governance/changes/{id}/impact":   {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/approve": {class: classUnit},
-	"POST /api/v1/governance/changes/{id}/reject":  {class: classUnit},
-	"PUT /api/v1/governance/changes/{id}/note":     {class: classUnit},
+	"GET /api/v1/governance/changes":                  {class: classUnit},
+	"GET /api/v1/governance/changes/{id}":             {class: classUnit},
+	"GET /api/v1/governance/changes/{id}/impact":      {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/approve":    {class: classUnit},
+	"POST /api/v1/governance/changes/{id}/reject":     {class: classUnit},
+	"PUT /api/v1/governance/changes/{id}/note":        {class: classUnit},
+	"DELETE /api/v1/governance/changes/{id}/approval": {class: classUnit},
+	// The Walls view's routes.
+	"GET /api/v1/walls/topology": {class: classUnit},
+	"GET /api/v1/walls/stream":   {class: classUnit},
 	// Requests (elevation, image): the member router, so a group decider reaches them; who may see or decide a request is the approver table's, inside the handler.
 	"GET /api/v1/governance/requests":               {class: classMember},
 	"POST /api/v1/governance/requests":              {class: classMember},
@@ -941,6 +963,9 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/runs/{id}/grants":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/policy":            {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	"GET /api/v1/runs/{id}/ado-tokens":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	// The Walls view's routes.
+	"GET /api/v1/runs/{id}/walls":        {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
+	"GET /api/v1/runs/{id}/walls/stream": {class: classOwner, entity: entityRun, ownerTier: tierSecurity},
 	// A waiting sign-in's device code: approving it binds the approver's
 	// cloud identity to the owner's stored session, so the owner only.
 	"GET /api/v1/runs/{id}/sign-in": {class: classOwner, entity: entityRun, ownerTier: tierEntry},
@@ -1063,9 +1088,19 @@ var routeMatrix = map[string]classifiedRoute{
 	// SUPER classification is load-bearing here, not incidental, which is why
 	// TestSecurityAdminRouteTier 403s a security_admin on this route.
 	"GET /api/v1/runs/{id}/attach": {class: classAdmin},
+	// The ticket-less lane is admin only (requireOperator) and is then refused 400 run_forward_ticket_required in the
+	// handler; the ticket lane's owner rule is pinned by TestAttachForward_TicketLaneOwnerRule.
+	"GET /api/v1/runs/{id}/attach/forward": {class: classAdmin},
+	// GET /runs/{id}/ssh (sshgateway_ticket.go) is ticket-only: no session, bearer or key is consulted, the
+	// single-use SSH ticket in the Wardyn-Ticket header is the credential, and a missing header answers the bad-ticket
+	// 403 (a path id that does not parse, as this matrix sends, the 400). Its owner rule and run checks are pinned by
+	// the TestSSHTicketDoor tests.
+	"GET /api/v1/runs/{id}/ssh": {class: classAnonymous},
 
 	// internal (run-token / ground-truth-token bearer only)
 	"GET /api/v1/internal/approvals/{id}":                  {class: classInternal},
+	"GET /api/v1/internal/assistant/turns":                 {class: classInternal},
+	"POST /api/v1/internal/assistant/events":               {class: classInternal},
 	"GET /api/v1/internal/injection/{grantID}":             {class: classInternal},
 	"GET /api/v1/internal/via-org/{grantID}/*":             {class: classInternal},
 	"HEAD /api/v1/internal/via-org/{grantID}/*":            {class: classInternal},
@@ -1971,18 +2006,20 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		// added GET /runs/{id}/model-usage; 53 since 0.10 added POST
 		// /runs/{id}/desktop/files/{name}/review (tierEntry); 54 since 0.10 added
 		// POST /runs/{id}/exec (tierEntry); 55 since 0.10 added PATCH
-		// /runs/{id}/egress (tierSuper, as revive); 58 since 0.11 added GET
+		// /runs/{id}/egress (tierSuper, as revive); 57 since the Walls view added
+		// GET /runs/{id}/walls and its stream; 60 since 0.11 added GET
 		// /runs/{id}/previews and DELETE .../previews/{port} (tierSecurity) and
 		// PUT .../previews/{port} (tierEntry).
-		if probed != 58 {
-			t.Errorf("probed %d classOwner routes, want 58 — a route that left classOwner takes its tier "+
+		if probed != 60 {
+			t.Errorf("probed %d classOwner routes, want 60 — a route that left classOwner takes its tier "+
 				"assertion with it", probed)
 		}
 	})
 
 	// The unit-admin tier admits a security admin on every route (unitScope passes a security caller)
-	// and refuses a member at the door. 19 routes: GET /governance, the three unit writes, the two
-	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run and the six change routes.
+	// and refuses a member at the door. 22 routes: GET /governance, the three unit writes, the two
+	// grant routes, the deciders write, the model-usage read, the three membership writes, check, the dry run, the seven change routes,
+	// and the Walls topology and stream.
 	var unit int
 	for key, rc := range routeMatrix {
 		if rc.class != classUnit {
@@ -2001,8 +2038,8 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 		})
 		unit++
 	}
-	if unit != 19 {
-		t.Errorf("probed %d classUnit routes, want 19", unit)
+	if unit != 22 {
+		t.Errorf("probed %d classUnit routes, want 22", unit)
 	}
 
 	var sec, super int
@@ -2158,8 +2195,12 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// 0.10.2 portal people add the portal-person lookup, a person's portal list, the suspension and the portal
 	// lifecycle status on the security tier: a suspension is the fast cut the security admin owns (= 109 SEC). The
 	// reactivation and the purge, which undo or end a person for good, are SUPER (= 81 SUPER).
-	if sec != 109 || super != 81 {
-		t.Errorf("tier split = %d security / %d admin, want 109 / 81 (PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
+	// 0.11 adds port forwarding over the organisation, GET /runs/{id}/attach/forward, on the SUPER tier beside the terminal's ticket-less lane (= 82 SUPER).
+	// The assistant's settings add their read and write on the SUPER tier (= 84 SUPER, with the attach forward route above).
+	// The approval counts add their read and write on the security tier (= 111 SEC).
+	// Agent rules add GET /agent-rules and PUT and DELETE /agent-rules/{harness} on the security tier (= 114 SEC).
+	if sec != 114 || super != 84 {
+		t.Errorf("tier split = %d security / %d admin, want 114 / 84 (PLUS the 3 /agent-rules routes, PLUS the 2 /governance/approval-counts routes, PLUS the 2 /assistant/settings routes, PLUS the attach forward route, PLUS the 4 portal-person security routes and the portal reactivate and purge, PLUS the legacy Docker drive release, PLUS the 7 SUPER issuer-portal and service-grant routes, PLUS the 2 /governance/units/{id}/envelope writes, PLUS the 3 audit receipt, checkpoint and key reads, PLUS the 2 /machines/kept routes, PLUS the 3 /workload-bindings routes, PLUS final section 3's 4 /base-images routes, MINUS the 13 routes the unit-admin tier took, PLUS the 2 /governance/recording routes + the 3 /governance/restrictions routes and the workspace owning-unit pin + the component owning-unit pin + the membership move and promote + the 4 approval-rule routes + the 3 Wardyn boundary routes + the node record + the 2 organization pool runner routes + the 4 organization runner routes + the SUPER list and delete of people's drives + the 2 /remote-runners reads and the people-policy pair + the 2 /governance/credential-delivery routes + the token move + the 5 service-identity routes + the 4 invitation routes + the runner revoke + the runners list, detail, token list and revoke and switch read + the 2 /governance/egress-baseline routes + the 3 /key-domains routes + section B's 14 SEC + governance's 7 + section I's directory search + the device inventory and revoke + the enrolment-token list and revoke + the 4 /user-types routes + the credential erase + the SSH key removal + the 2 /permissions/availability routes + GET /permissions/explain + the credential inventory + #1157's 3 /people routes + #1142's portal list and revoke + the fleet capacity read + GET /people + the audit retention read and drop + the person erasure + the 4 /governance/changes routes + GET /approval-notify/status + the SCIM status read, MINUS record, PLUS #168's 3 moved /drives routes and the moved GET /drives; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers + the device enrolment-token mint + 0.8's GET/PUT /model-providers + #575's standing-runs pair + #166's POST /drives/{id}/reclaim + #1143's preset writes + #1125's branding writes + #1142's portal registration + #1428's org check + #1449's refusal read, MINUS the reclassified POST /setup/harness-login, MINUS #168's 3 moved /drives routes and the moved GET /drives, MINUS #548's retired paste and disconnect, PLUS the identity unbind, runner registration token mint, the runners switch write, 0.9's 6 runner-pool writes and the 3 template-group-admins routes and the 3 /shared-secrets routes and the remote-hosted runner rename)", sec, super)
 	}
 }
 
