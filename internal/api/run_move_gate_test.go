@@ -128,12 +128,13 @@ func TestMoveUnreachableInEveryConfiguration(t *testing.T) {
 	}
 
 	f, _ := newMoveGateFixture(t)
-	if err := f.srv.startMove(context.Background(), f.run); !errors.Is(err, errMoveUnavailable) {
+	req := moveRequest{Run: f.run, To: types.MoveDestination{Kind: types.MoveToOrg}, ActorType: types.ActorHuman, Principal: f.run.CreatedBy}
+	if _, err := f.srv.startMove(context.Background(), req); !errors.Is(err, errMoveUnavailable) {
 		t.Errorf("startMove = %v, want errMoveUnavailable", err)
 	}
 	withMoveGateOpen(t)
-	if err := f.srv.startMove(context.Background(), f.run); !errors.Is(err, errMoveUnavailable) {
-		t.Errorf("startMove with the gate open = %v, want errMoveUnavailable: this build has no executor", err)
+	if _, err := f.srv.startMove(context.Background(), req); !errors.Is(err, errMoveUnavailable) {
+		t.Errorf("startMove with the gate open = %v, want errMoveUnavailable: the fixture's store keeps no move rows", err)
 	}
 }
 

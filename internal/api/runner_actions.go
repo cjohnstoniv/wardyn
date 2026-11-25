@@ -228,6 +228,7 @@ func (s *Server) admitRunner(_ context.Context, rn types.Runner) (remote.Admissi
 			go s.sweepRunnerOrphansOnReady(s.cfg.BaseCtx, id, ep.sub, sameSession, readySweepRetries)
 			go s.releaseLegacyMacDrives(s.cfg.BaseCtx, id, ep.sub, sameSession)
 			go s.pushRunnerWorkloadStatuses(s.cfg.BaseCtx, id)
+			go s.resendMoveUnbound(s.cfg.BaseCtx, id)
 		},
 	}, nil
 }
