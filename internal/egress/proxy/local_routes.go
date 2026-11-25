@@ -128,6 +128,20 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// localRoutesRefused serves none of handleLocalRoute's routes: an MCP sandbox's
+// proxy wraps its forward listener with it, so the server behind it cannot raise
+// approvals or take-over requests, mint, or upload through it. Every other
+// request, CONNECT and absolute-URI forwards included, goes to next.
+func (p *Proxy) localRoutesRefused(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL != nil && r.URL.Host == "" && strings.HasPrefix(r.URL.Path, localRoutePrefix) {
+			http.Error(w, "unknown brokered route", http.StatusNotFound)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handleBrokerMint forwards POST /wardyn/v1/credentials/mint to the control
 // plane's internal mint endpoint with the run token injected. The response
 // (status + body) is passed through verbatim.

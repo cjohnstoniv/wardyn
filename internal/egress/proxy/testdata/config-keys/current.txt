@@ -42,6 +42,7 @@ azure_gates.route
 bedrock_routes
 brokered_pat_grant_ids
 canonical_push_repos
+control_plane_audience
 control_plane_ca_pem
 control_plane_url
 decision_buffer_size
@@ -124,10 +125,17 @@ mcp_bindings
 mcp_bindings.harness
 mcp_bindings.servers
 mcp_bindings.sha256
+mcp_relay_inbound
+mcp_relay_inbound.listen
+mcp_relay_inbound.token_sha256
+mcp_relay_inbound.upstream
 mcp_servers
 mcp_servers.grant_id
 mcp_servers.key
 mcp_servers.ordinal
+mcp_servers.relay
+mcp_servers.relay.addr
+mcp_servers.relay.token
 mcp_servers.url
 mitm_ca_cert_pem
 mitm_ca_key_pem
