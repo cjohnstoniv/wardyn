@@ -168,7 +168,7 @@ func TestMoveAudit_ShowsBothPlacements(t *testing.T) {
 	f.audit.mu.Lock()
 	defer f.audit.mu.Unlock()
 	var rows int
-	for _, ev := range f.audit.events {
+	for _, ev := range f.audit.snapshot() {
 		if ev.Action != "run.move" || ev.Outcome != "success" {
 			continue
 		}

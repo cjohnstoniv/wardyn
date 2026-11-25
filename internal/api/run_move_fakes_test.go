@@ -841,7 +841,7 @@ func (f *moveFixture) moveRows(outcome string) int {
 	f.audit.mu.Lock()
 	defer f.audit.mu.Unlock()
 	n := 0
-	for _, ev := range f.audit.events {
+	for _, ev := range f.audit.snapshot() {
 		if ev.Action == "run.move" && ev.Outcome == outcome {
 			n++
 		}
