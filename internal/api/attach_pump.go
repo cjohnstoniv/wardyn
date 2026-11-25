@@ -89,7 +89,15 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, runID uuid.U
 	go p.tellDropped()
 	// Open the exec now that the reader runs.
 	go func() {
-		if err := attach(); err != nil {
+		err := attach()
+		switch {
+		case err == nil:
+		case errors.Is(err, errAttachCancelled) && p.holder.evicted.Load():
+			// Displaced while the exec was opening: the displacement closes the socket with its own code and
+			// reason, and the reader ends the pump on the peer's answer, as for an open session. Cancelling here
+			// would tear the socket down before that frame, and the client would read a bare drop.
+			p.note("attach failed")
+		default:
 			p.end("attach failed")
 		}
 	}()
@@ -126,11 +134,16 @@ type attachPumpState struct {
 
 // end records why the pump ended and cancels it.
 func (p *attachPumpState) end(reason string) {
+	p.note(reason)
+	p.cancel()
+}
+
+// note records why the pump ended without cancelling it. attachPump returns the first reason recorded.
+func (p *attachPumpState) note(reason string) {
 	select {
 	case p.reasonC <- reason:
 	default:
 	}
-	p.cancel()
 }
 
 // ping is the liveness probe (attachPingInterval): a silent PTY produces no

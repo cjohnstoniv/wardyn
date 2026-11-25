@@ -210,6 +210,12 @@ func (la *localAttach) run(castTee io.Writer) string {
 			_ = sess.Close()
 		}
 		wa.audit("failure", map[string]any{"state": "attaching", "error": errAttachCancelled.Error()})
+		if h.evicted.Load() {
+			// Displaced while the grant was in flight: the displacement closes the socket with its own code and
+			// reason, then cancels ctx (end). Returning first would let the handler's normal close go out ahead
+			// of that frame.
+			<-ctx.Done()
+		}
 		return la.reason("attach cancelled")
 	}
 	if err != nil {
@@ -283,11 +289,10 @@ func (la *localAttach) resetTee() {
 }
 
 // displace is attachHolder.displace for a local socket: pty_tee is reset at once, so the runner
-// ends the PTY without waiting for the close handshake.
+// ends the PTY without waiting for the close handshake. ctx is cancelled only once the close frame
+// is out (end), which is what a grant cancelled by this displacement waits for (run).
 func (la *localAttach) displace(reason string) {
-	la.note(reason)
-	la.resetTee()
-	la.wa.displace(reason)
+	la.end(websocket.StatusPolicyViolation, reason)
 }
 
 // notify is attachHolder.notify for a local socket. A promotion is pushed to the runner (sync); a
