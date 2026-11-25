@@ -450,8 +450,8 @@ jobs:
           # freshly-installed daemon with no WARDYN_AGENT_IMAGES override
           # actually pulls — is ghcr.io/cjohnstoniv/agent-<key>:<version>, the
           # daemon's OWN version.Version (D19), which the semver `:${RELEASE_TAG}`
-          # tag every matrix row pushes below satisfies. The extra `:latest`
-          # here is the fallback for a build with no version string (agentImageTag
+          # tag every matrix row pushes below satisfies. The `:latest` the float-latest job keeps on these rows
+          # is the fallback for a build with no version string (agentImageTag
           # returns "latest" only then); pushing it keeps that last-resort tag
           # pullable too. wardynd/wardyn-proxy don't need it: the Helm chart pins
           # their tag to .Chart.AppVersion (the release semver).
@@ -527,31 +527,14 @@ jobs:
         run: |
           tag="${REF_NAME#v}"
           echo "tag=${tag//\//-}" >> "$GITHUB_OUTPUT"
-      # W30-S1-2: docker/build-push-action's `tags:` accepts a newline-
-      # separated list — push the semver tag always, plus `:latest` on the
-      # float-latest rows (see the matrix comment above for why), never for a
-      # prerelease tag (one holding `-`), as the promote path below. cosign
-      # still signs by DIGEST (build.outputs.digest), so floating `:latest`
-      # doesn't change what gets signed.
+      # The semver tag only. `:latest` on the float-latest rows is written by the float-latest job below, after
+      # every image is pushed, so a patch to an older line cannot move it back.
       - name: Compute the image tags
         id: tags
         env:
           IMAGE_NAME: ghcr.io/cjohnstoniv/${{ matrix.name }}
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-          FLOAT_LATEST: ${{ matrix.float-latest }}
-        run: |
-          latest=0
-          if [ "$FLOAT_LATEST" = "true" ]; then
-            case "$RELEASE_TAG" in *-*) ;; *) latest=1 ;; esac
-          fi
-          {
-            echo "tags<<EOF"
-            echo "${IMAGE_NAME}:${RELEASE_TAG}"
-            if [ "$latest" = 1 ]; then
-              echo "${IMAGE_NAME}:latest"
-            fi
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+        run: echo "tags=${IMAGE_NAME}:${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
       - name: Build and push
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -964,14 +947,13 @@ jobs:
       # A copy moves the manifest bytes as they are, so the digest cannot change;
       # the check after each copy is what proves it did not. --force is needed
       # because cosign copy refuses to move a tag that already holds a different
-      # digest, and :latest already exists on the three float-latest rows. It is
-      # safe: staging is unsigned (nightly.yml signs nothing there), so there is
-      # no release signature on the source for it to overwrite, and the equality
-      # check proves the tag ended up on $DIGEST. `:latest` moves only for a
-      # final release on a float-latest row: a prerelease (a tag holding `-`)
-      # never takes it. The SBOM scans the staged copy of the digest being
-      # promoted: the same bytes as the release tags, and readable in a dry run,
-      # where nothing is copied.
+      # digest (a re-run of this job finds its versioned tags there). It is safe:
+      # staging is unsigned (nightly.yml signs nothing there), so there is no
+      # release signature on the source for it to overwrite, and the equality
+      # check proves the tag ended up on $DIGEST. This job never writes :latest;
+      # the float-latest job does. The SBOM scans the staged copy of the digest
+      # being promoted: the same bytes as the release tags, and readable in a dry
+      # run, where nothing is copied.
       - name: Promote, sign and attest each image (no rebuild)
         env:
           # Copies, signs and attests only on a vX.Y.Z tag ref and not under dry_run (guard 29).
@@ -982,22 +964,15 @@ jobs:
           RELEASE_TAG="${RELEASE_TAG//\//-}"
           export RELEASE_TAG
           promote_one() {
-            local NAME="$1" DIGEST FLOAT IMAGE_REF tag got work sbom latest=0
+            local NAME="$1" DIGEST IMAGE_REF tag got work sbom
             local -a tags
             DIGEST="$(jq -r --arg n "$NAME" '.[$n] // ""' <<<"$DIGESTS")"
-            FLOAT="$(NAME="$NAME" yq -r '.[] | select(.name == strenv(NAME)) | .["float-latest"] // ""' <<<"$IMAGES")"
             echo "== ${NAME} ${DIGEST}"
             if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "preflight-green passed no valid staged digest for ${NAME} (got '${DIGEST}')"
               exit 1
             fi
-            if [ "$FLOAT" = "true" ]; then
-              case "$RELEASE_TAG" in *-*) ;; *) latest=1 ;; esac
-            fi
             tags=("ghcr.io/cjohnstoniv/${NAME}:${RELEASE_TAG}")
-            if [ "$latest" = 1 ]; then
-              tags+=("ghcr.io/cjohnstoniv/${NAME}:latest")
-            fi
             IMAGE_REF="ghcr.io/cjohnstoniv/${NAME}@${DIGEST}"
             sbom="sboms/sbom-${NAME}.cdx.json"
             if [ "$DRY_RUN" != true ]; then
@@ -1131,6 +1106,47 @@ jobs:
           name: sbom-promoted
           path: sboms/sbom-*.cdx.json
           if-no-files-found: error
+
+  # `:latest` on each float-latest row names the highest FINAL release across every line. Every
+  # :latest write is here, under one concurrency group that every tag's run shares, so two releases' writes
+  # never overlap. GitHub keeps one running and one pending job per group and a newer arrival replaces the
+  # pending one. A run points :latest at the highest published final it finds when it writes, never just at its own
+  # tag, so :latest never moves down. A replaced job (an RC or a dry run can replace one) leaves its run cancelled:
+  # rerun that job (RELEASING.md step 6).
+  # scripts/float-latest.sh holds the rule; scripts/test-release-image-tag.sh tests it.
+  float-latest:
+    name: Float latest to the highest final release
+    runs-on: ubuntu-26.04
+    needs: [preflight-green, images, images-ui-sandbox, images-ui-sandbox-signin, promote]
+    # !failure() lets this run when the path choice skipped images or promote; any job that FAILED stops it.
+    if: ${{ !cancelled() && !failure() }}
+    timeout-minutes: 15
+    concurrency:
+      group: release-floating-aliases
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: "v2.6.4"
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Point each floating alias at the highest published final
+        env:
+          # Writes only on a vX.Y.Z tag ref and not under dry_run (guard 29).
+          DRY_RUN: ${{ inputs.dry_run == true || !startsWith(github.ref, 'refs/tags/v') }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mapfile -t floats < <(yq -r '.jobs.promote.env.IMAGES' .github/workflows/release.yml | yq -r '.[] | select(.["float-latest"] == "true") | .name')
+          [ "${#floats[@]}" -gt 0 ] || { echo "::error::release.yml's promote IMAGES names no float-latest row"; exit 1; }
+          DRY_RUN="$DRY_RUN" scripts/float-latest.sh "$REF_NAME" "${floats[@]}"
 
   # Standalone CLI and runner binaries (Windows: the CLI only). The images and the chart cover the two install paths,
   # but neither gives you just `wardyn` — for CI, for an air-gapped host, or for

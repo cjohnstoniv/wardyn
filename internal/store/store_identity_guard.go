@@ -46,7 +46,7 @@ type IdentityGuard struct {
 type identityGuardKey struct{}
 
 // WithIdentityGuard makes the insert writers that honour it (CreateRun, CreateRunUnderCap,
-// CreateAPIToken, AddSSHKey) read the owner's identity rows FOR SHARE in their own transaction.
+// CreateAPIToken, AddSSHKey, MintRunnerRegistrationToken, CreateRunner) read the owner's identity rows FOR SHARE in their own transaction.
 // Suspension takes the same rows FOR UPDATE, so a write either commits before the suspension's
 // first step, where the sweep after it finds it, or reads the deactivation and is refused.
 func WithIdentityGuard(ctx context.Context, g IdentityGuard) context.Context {

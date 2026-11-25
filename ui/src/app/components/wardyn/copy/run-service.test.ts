@@ -65,6 +65,14 @@ describe("service canon strings", () => {
     expect(SERVICE_PANEL.NO_CAP).toBe(m![1]);
   });
 
+  // The no-end note is the Go sentence said before launch, byte for byte.
+  it("the no-end note equals the Go serviceNoEndWarning", () => {
+    const go = readFileSync(resolve(process.cwd(), "../internal/api/run_service.go"), "utf8");
+    const m = /const serviceNoEndWarning = "((?:[^"\\]|\\.)*)"/.exec(go);
+    expect(m).not.toBeNull();
+    expect(SERVICE_PANEL.NO_END).toBe(m![1]);
+  });
+
   it("the Review row", () => {
     const health = { path: "/healthz", interval_sec: 15, failure_threshold: 3 };
     expect(serviceReviewLine({ restart: "on_failure", port: 8080, health })).toBe("Service · restarts when it fails · checks port 8080 /healthz every 15 s");

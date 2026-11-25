@@ -477,8 +477,11 @@ func TestPushHoldUnattendedRefusesWithoutARow(t *testing.T) {
 	cp.wire(t, p)
 
 	rec := postPush(t, p, string(recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)))
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "unattended") {
-		t.Fatalf("status = %d body %q, want 403 naming the unattended run", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/x-git-receive-pack-result" ||
+		!strings.Contains(rec.Body.String(), "unpack refused by Wardyn") ||
+		!strings.Contains(rec.Body.String(), "ng refs/heads/") || !strings.Contains(rec.Body.String(), "unattended") {
+		t.Fatalf("status = %d type %q body %q, want a rejected ref naming the unattended run",
+			rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 	if !strings.Contains(buf.String(), `"rule_source":"`+ruleSourceGitPushHeldUnattended+`"`) {
 		t.Errorf("decision log = %q, want a %s row", buf.String(), ruleSourceGitPushHeldUnattended)
@@ -631,11 +634,15 @@ func TestPushHoldOnTheTokenLane(t *testing.T) {
 					t.Fatalf("status = %d body %q hits %d, want a 403 timeout and no forward", rec.Code, rec.Body.String(), up.gitHits)
 				}
 			})
-			t.Run("unattended refuses without a row", func(t *testing.T) {
+			t.Run("unattended refuses at once", func(t *testing.T) {
 				p, sink, _, cp, _ := lane(t, review, types.ApprovalApproved)
 				p.pushHolds.unattended = true
-				if rec := post(p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush)); rec.Code != http.StatusForbidden {
-					t.Fatalf("status = %d, want 403", rec.Code)
+				rec := post(p, recordedPush(t, BranchNSPrefix(p.runID)+"work", workflowPush))
+				if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/x-git-receive-pack-result" ||
+					!strings.Contains(rec.Body.String(), "unpack refused by Wardyn") ||
+					!strings.Contains(rec.Body.String(), "ng refs/heads/") || !strings.Contains(rec.Body.String(), "unattended") {
+					t.Fatalf("status = %d type %q body %q, want a rejected ref naming the unattended run",
+						rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 				}
 				if raises, _ := cp.counts(); raises != 0 || !strings.Contains(sink.String(), ruleSourceGitPushHeldUnattended) {
 					t.Errorf("raises = %d, log %q; want none and a %s row", raises, sink.String(), ruleSourceGitPushHeldUnattended)

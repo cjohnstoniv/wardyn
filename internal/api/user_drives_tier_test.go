@@ -490,6 +490,54 @@ func TestGetDrivesTierThroughTheRouter(t *testing.T) {
 	}
 }
 
+// TestGetDrivesWithholdsTheLaterDriveFieldsFromASecurityAdmin pins that the drive fields added after
+// the security admin's projection was written stay a super admin's. A security admin's GET /drives carries none of a
+// drive's second place, its Mac, whether and where it mounts across places, or a portal allocation's object. A super
+// admin's carries each one, so a needle that matched nothing fails the control instead of passing quietly.
+func TestGetDrivesWithholdsTheLaterDriveFieldsFromASecurityAdmin(t *testing.T) {
+	alt, mac := uuid.New(), uuid.New()
+	d := *driveFixture(func(d *types.UserDrive) {
+		d.Backend, d.HostRoot, d.CreatedBy = types.DriveBackendHostPath, "/srv/homes", "root@corp.example"
+		d.AltBackend, d.AltHostRoot, d.AltRunnerID, d.HomeRunnerID = types.DriveBackendDockerVolume, "/srv/alt-homes", &alt, &mac
+	})
+	g := *grantFixture(d.ID, func(g *types.UserDriveGrant) { g.ObjectName = "wardyn-portal-withheld" })
+	srv, _, _, _ := newAuthzMatrixServer(t, func(c *Config) {
+		c.RunnerTarget = "docker"
+		c.Store = &driveReadStore{
+			authzStore: c.Store.(*authzStore),
+			drives:     []types.UserDriveListItem{{UserDrive: d, GrantCount: 1}},
+			grants:     []types.UserDriveGrant{g},
+		}
+	})
+	withheld := []string{
+		`"alt_backend"`, `"alt_host_root"`, "/srv/alt-homes", `"alt_runner_id"`, alt.String(),
+		`"home_runner_id"`, mac.String(), `"placement_eligible":true`, `"mounts_from"`,
+		`"object_name"`, "wardyn-portal-withheld",
+	}
+
+	sec := ssoSession(t, secAdminSub, secAdminMail, oidc.RoleSecurityAdmin)
+	w := doSSO(t, srv, http.MethodGet, "/api/v1/drives", sec, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("security admin GET /drives = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, leak := range withheld {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("security admin body contains %s: %s", leak, w.Body.String())
+		}
+	}
+
+	super := ssoSession(t, "sub-super-drives", "super-drives@corp.example", oidc.RoleAdmin)
+	w = doSSO(t, srv, http.MethodGet, "/api/v1/drives", super, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("super admin GET /drives = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	for _, field := range withheld {
+		if !strings.Contains(w.Body.String(), field) {
+			t.Errorf("control: super admin body lacks %s, so the security admin check proves nothing: %s", field, w.Body.String())
+		}
+	}
+}
+
 // TestSecurityAdminPreviewRefusalNamesNoHostPath: a preview a security admin
 // runs against a host_path drive whose person directory is missing is refused
 // with the member sentence, and no part of the refusal names the share's host

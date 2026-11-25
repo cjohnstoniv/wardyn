@@ -189,7 +189,8 @@ func (s *Server) relayUISession(w http.ResponseWriter, r *http.Request, sess uiS
 //     answer included, at its known end (the earliest of the cookie's signed expiry, its issue time plus this
 //     process's session TTL, and the end the re-check read: the chain's for a renewable session, else the
 //     entry grant's), and re-checks it every uiReassertInterval from checkStart, each lookup bounded by
-//     supportWatchWait; a check that fails cuts it, a blocked write included. The end never moves.
+//     supportWatchWait; a check that refuses cuts it, a blocked write included, and one with no answer cuts it
+//     once the session budget runs out. The end never moves.
 //   - A support helper's session: supportWatchCtx.
 //   - Any other: ctx and w as they are, as today.
 func (s *Server) relayWatchCtx(ctx context.Context, w http.ResponseWriter, sess uiSession, checkStart, end time.Time) (context.Context, http.ResponseWriter, func()) {
@@ -201,7 +202,8 @@ func (s *Server) relayWatchCtx(ctx context.Context, w http.ResponseWriter, sess 
 	cut := newStreamCut(w, s.uiStreamEnd(sess, end), cancel)
 	every := time.Duration(cmp.Or(supportWatchEveryNS.Load(), int64(uiReassertInterval)))
 	bound := time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait)))
-	cut.watch(ctx, checkStart.Add(every), every, bound, func(lctx context.Context) error { return s.relayStillHolds(lctx, sess) })
+	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceUIApp))
+	cut.watch(ctx, checkStart.Add(every), every, bound, b, func(lctx context.Context) error { return s.relayStillHolds(lctx, sess) })
 	return ctx, cut.Writer(w), func() {
 		defer cancel()
 		cut.End()
@@ -288,10 +290,16 @@ var errRelayAuthorityEnded = errors.New("api: this UI session is no longer autho
 // pass cache. A later end the chain now reports changes nothing: the stream keeps the end it was admitted with.
 func (s *Server) relayStillHolds(ctx context.Context, sess uiSession) error {
 	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
-	if err != nil {
-		return err
+	if errors.Is(err, store.ErrNotFound) {
+		return errRelayAuthorityEnded
 	}
-	if s.uiSessionStillAuthorized(ctx, sess, run) != nil {
+	if err != nil {
+		return unconfirmed(err)
+	}
+	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		if de.status == http.StatusServiceUnavailable {
+			return unconfirmed(errRelayAuthorityEnded)
+		}
 		return errRelayAuthorityEnded
 	}
 	return nil
@@ -302,7 +310,8 @@ func (s *Server) relayStillHolds(ctx context.Context, sess uiSession) error {
 // checkStart, the opening check's start, before the start lock and the dial: the stream ends at its known end
 // (uiStreamEnd; a desktop never renews), and the run's full re-check (desktopRunCheck) runs every
 // uiDesktopRecheck, bounded by uiDesktopRecheckWait, on its own goroutine, apart from the Closed set's read. A
-// check that fails cuts the stream, so it ends within one re-check of the event (40 s).
+// check that refuses cuts the stream, so it ends within one re-check of the event (40 s); one with no answer
+// cuts it once the session budget runs out.
 func (s *Server) desktopIssuerCut(r *http.Request, w http.ResponseWriter, sess uiSession, checkStart, end time.Time) (context.Context, http.ResponseWriter, *streamCut, func()) {
 	if !issuerPortalPerson(sess.Via, sess.Principal) {
 		return r.Context(), w, nil, func() {}
@@ -310,8 +319,12 @@ func (s *Server) desktopIssuerCut(r *http.Request, w http.ResponseWriter, sess u
 	ctx, cancel := context.WithCancel(r.Context())
 	cut := newStreamCut(w, s.uiStreamEnd(sess, end), cancel)
 	every := cmp.Or(s.uiDesktop.recheckEvery, uiDesktopRecheck)
-	cut.watch(ctx, checkStart.Add(every), every, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait), func(lctx context.Context) error {
-		if _, code, _ := s.desktopRunCheck(lctx, sess); code != 0 {
+	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceDesktop))
+	cut.watch(ctx, checkStart.Add(every), every, cmp.Or(s.uiDesktop.recheckWait, uiDesktopRecheckWait), b, func(lctx context.Context) error {
+		if _, code, _, unread := s.desktopRunCheck(lctx, sess); code != 0 {
+			if unread {
+				return unconfirmed(errRelayAuthorityEnded)
+			}
 			return errRelayAuthorityEnded
 		}
 		return nil
