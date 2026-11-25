@@ -2601,7 +2601,7 @@ grep 'daemon egress proxy configured' <logs>
   - So a run token or the ground-truth bearer is only ever accepted over the pinned hop, and an Ingress or reverse proxy in front of the console exposes none of that surface.
   - A local install (loopback `http://` control plane) has no internal listener and keeps serving it on the console.
   - Every shipped caller dials `WARDYN_CONTROL_PLANE_URL`, the internal listener: each run's proxy (both runners hand it that URL in its sealed config, and brokered sidecar uploads go through the proxy) and the ingest.
-  - The proxy authenticates to `wardynd` with its run token (bearer, not mTLS — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) B6).
+  - The proxy authenticates to `wardynd` with its run token (bearer, plus its run's SPIFFE certificate when WARDYN_INTERNAL_MTLS is on — [`threatmodel/THREAT-MODEL.md`](../threatmodel/THREAT-MODEL.md) B6).
 
 ### Serving the console under a sub-path
 

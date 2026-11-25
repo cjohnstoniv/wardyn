@@ -223,7 +223,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The in-sandbox per-tool-call decision plane is cooperative; the proxy enforces `deny` and `approve_each` on remote MCP servers attached through it, and does not mediate other tools: [detail](#b3--sandbox-vs-mcptool-gateway). |
 | **B4 — Agent-run identity vs. token broker** | 🟢 shipped | A per-run JWT: wardynd's embedded issuer by default (SPIFFE-shaped; the runner asserts the attestation), or a SPIRE JWT-SVID under the experimental, Kubernetes-only `spire` provider. The broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
-| **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
+| **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer; the run's certificate too when WARDYN_INTERNAL_MTLS is on: [detail](#b6--runner-data-plane-vs-control-plane). |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (syslog, webhook, file, OTLP); no inbound trust. |
 | **B8 — Untrusted build container vs. host daemon + registry** | 🟢 shipped | The image build runs on the host daemon before any confinement tier: [detail](#b8--untrusted-build-container-vs-host-daemon--registry). |
 | **B9 — SSH gateway pre-auth listener vs. everything else** | 🟢 **[v0.5+ shipped]** | Off in the daemon by default, on in the one-line installer and the desktop envelope: [detail](#b9--ssh-gateway-pre-auth-listener-vs-everything-else). |
@@ -312,9 +312,15 @@ A run gets what every layer allows. The run's policy record names the layer that
       to each proxy in its sealed config; never the system roots, never `WARDYN_TRUSTED_CA_FILE`).
   - `http://` is refused at wardynd boot and at proxy start unless the URL's host is loopback
     (`hoptls.CheckURL`).
-- **Authentication: bearer, not mTLS.**
-  - A per-run token (minted by the embedded identity provider, verified via `internalAuth`)
-    authenticates the proxy; mTLS via X.509-SVID is **[planned, arrives with SPIRE]**.
+- **Authentication: bearer, plus the run's certificate when switched on.**
+  - A per-run token (minted by the identity provider, verified via `internalAuth`) authenticates the proxy on every
+    request; the bearer and the denylist are checked whatever certificate is shown.
+  - With `WARDYN_INTERNAL_MTLS=true` (off by default; the `spire` identity provider and the Kubernetes runner only),
+    the proxy also presents its run's X.509-SVID, and a request that did not come through a runner's relay is refused
+    unless that certificate verifies against the SPIRE bundle and names the same run as the token.
+  - A certificate is not revoked at the kill; it lasts until it expires, and the denied token is what stops the run.
+  - With the switch on, a run on an organization pool's remote-hosted runner is refused (`internal_peer_required`) at
+    its proxy's first control-plane call, because that proxy has no run certificate: leave the switch off there.
   - So the pinned CA authenticates the server to the proxy, and the bearer the proxy to the server.
 - `wardyn-tetragon-ingest` rides the same listener under the same rule [0.8]:
   - its audit-write-only bearer (`aud=wardyn-groundtruth`) goes to `https://wardynd:8443`, pinned to

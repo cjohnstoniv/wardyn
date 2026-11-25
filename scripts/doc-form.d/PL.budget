@@ -36,4 +36,4 @@ docs/operations/ai-gateway.md=5167 share=35 # 5167 measured (+54: the gateway ce
 
 # model-gateways.md 1090 adds 26, measured: corrects the gateway presets and the nightly status to match the code
 docs/operations/model-gateways.md=1103 share=35 # 1103 measured (+13: a link to the glossary); earlier: 1064 measured (+111: the Codex CLI on a Responses-style endpoint section); earlier: 953 measured (+14: pinned-versions wording, the two added Presidio low-severity groups); earlier: 939 measured (new page: LiteLLM, Portkey, OpenRouter and Presidio recipes)
-docs/operations/spire.md=1372 share=35 # 1372 measured (new: the SPIRE identity provider's operations page)
+docs/operations/spire.md=1590 share=35 # 1590 measured (+218: the mutual TLS on the proxy hop section); earlier: 1372 measured (new: the SPIRE identity provider's operations page)
