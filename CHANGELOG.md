@@ -31,6 +31,22 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
   grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
   run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
 
 ### Changed
