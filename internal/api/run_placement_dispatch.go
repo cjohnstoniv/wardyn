@@ -94,11 +94,29 @@ func (c dispatchCeiling) placementExempt() dispatchCeiling {
 // run, a retry or a revive. A pooled run whose row names no target fails; it is never handed to the
 // first substrate that can enforce its class.
 func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	executor, err := s.fillSandboxTarget(ctx, run, &spec)
+	if err != nil {
+		return runner.Sandbox{}, err
+	}
+	if exact, ok := s.cfg.Runner.(runner.ExactExecutor); ok && executor != "" {
+		return exact.CreateSandboxOn(ctx, executor, spec)
+	}
+	if run.RunnerID == nil && run.RunnerPoolID == nil {
+		s.stampServerRun(ctx, run, spec)
+	}
+	return s.cfg.Runner.CreateSandbox(ctx, spec)
+}
+
+// fillSandboxTarget applies create's target rules to spec for run: the architectures recorded on the run, the
+// provider sign-in that is never placed on a runner, the run's runner with its run limit, architecture and
+// organisation namespace, and the pool's executor. It answers the executor a pooled run is created on ("" for
+// any other run). A move's destination is targeted by the same rules (createMoveDestination).
+func (s *Server) fillSandboxTarget(ctx context.Context, run types.AgentRun, spec *runner.SandboxSpec) (string, error) {
 	// A prewrapped image is placed by the architectures recorded on the run when its image resolved, never
 	// by the catalog, which may have changed since (design final §3).
 	if run.ImageArches != nil {
 		if run.MachineKind == types.MachineMacOSVM {
-			return runner.Sandbox{}, &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, "a prewrapped image is a Linux image and never runs in a macOS VM."}
+			return "", &prewrappedPlatformError{reasonPrewrappedPlatformMismatch, "a prewrapped image is a Linux image and never runs in a macOS VM."}
 		}
 		spec.ImageArches = run.ImageArches
 	}
@@ -106,42 +124,38 @@ func (s *Server) createSandboxAtTarget(ctx context.Context, run types.AgentRun, 
 	case run.RunnerID != nil && run.Task == harnessLoginTask:
 		// A provider sign-in runs on the server's own substrate, never a person's computer: it holds the
 		// sign-in's credentials. No code path binds one to a runner, so a bound one is refused outright.
-		return runner.Sandbox{}, fmt.Errorf("%w: a provider sign-in is never placed on a runner", runner.ErrExecutorUnavailable)
+		return "", fmt.Errorf("%w: a provider sign-in is never placed on a runner", runner.ErrExecutorUnavailable)
 	case run.RunnerID != nil:
 		spec.RunnerID = run.RunnerID.String()
 		if rs, ok := s.cfg.Store.(store.RunnerStore); ok {
 			row, err := rs.GetRunner(ctx, *run.RunnerID)
 			if err != nil {
-				return runner.Sandbox{}, fmt.Errorf("read the run's runner: %w", err)
+				return "", fmt.Errorf("read the run's runner: %w", err)
 			}
 			spec.RunnerMaxRuns = row.MaxRuns
 			if err := prewrappedRunnerArch(spec.ImageArches, row.Arch); err != nil {
-				return runner.Sandbox{}, err
+				return "", err
 			}
 			if row.OwnerKind == types.RunnerOwnerOrg {
 				ns, err := s.orgRunnerNamespace(ctx, run)
 				if err != nil {
-					return runner.Sandbox{}, err
+					return "", err
 				}
 				spec.Namespace = ns
 			}
 		} else if len(spec.ImageArches) > 0 {
-			return runner.Sandbox{}, prewrappedRunnerArch(spec.ImageArches, "")
+			return "", prewrappedRunnerArch(spec.ImageArches, "")
 		}
 	case run.RunnerPoolID != nil:
 		if run.RunnerPoolExecutor == "" {
-			return runner.Sandbox{}, fmt.Errorf("%w: the run's pool binding names no executor", runner.ErrExecutorUnavailable)
+			return "", fmt.Errorf("%w: the run's pool binding names no executor", runner.ErrExecutorUnavailable)
 		}
-		if exact, ok := s.cfg.Runner.(runner.ExactExecutor); ok {
-			return exact.CreateSandboxOn(ctx, run.RunnerPoolExecutor, spec)
+		if _, ok := s.cfg.Runner.(runner.ExactExecutor); !ok && s.cfg.Runner.Name() != run.RunnerPoolExecutor {
+			return "", fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, run.RunnerPoolExecutor)
 		}
-		if s.cfg.Runner.Name() != run.RunnerPoolExecutor {
-			return runner.Sandbox{}, fmt.Errorf("%w: %q is not an executor of this deployment", runner.ErrExecutorUnavailable, run.RunnerPoolExecutor)
-		}
-	default:
-		s.stampServerRun(ctx, run, spec)
+		return run.RunnerPoolExecutor, nil
 	}
-	return s.cfg.Runner.CreateSandbox(ctx, spec)
+	return "", nil
 }
 
 // orgRunnerNamespace is the runs namespace the run's pool has its organization runner serve it in, read
