@@ -45,6 +45,25 @@ func newActivateEnv(t *testing.T) *activateEnv {
 		t.Fatal(err)
 	}
 	raw.Close()
+	// Close returns when the client has hung up, not when the server has retired the backends: under load a
+	// closed session lingers in pg_stat_activity and the first sample reports it as an unlabelled client.
+	// This database is the test's own, so nothing else can be the unlabelled session being waited out.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var n int
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND pid <> pg_backend_pid() AND application_name <> $1`,
+			cfg.ConnConfig.RuntimeParams["application_name"]).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d sessions of the throwaway database are still open after its pool closed", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	h := newHarness(t)
 	e := &activateEnv{t: t, pool: pool, st: store.NewPG(pool), audit: h.audit, now: time.Now().UTC().Truncate(24 * time.Hour).Add(9 * time.Hour)}
 	e.srv = New(baseTestConfig(h, e.st))
