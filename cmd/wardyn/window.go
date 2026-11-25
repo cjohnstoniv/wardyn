@@ -10,19 +10,22 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cjohnstoniv/wardyn/internal/types"
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
 // windowCmd is `wardyn window <run>`: it asks the server to open the attended window onto a macOS VM run on
-// your own Mac. The server decides and words every refusal; the CLI prints that sentence and exits non-zero.
+// your own Mac, or opens a Linux VM run's display in a window here (window_local.go). The server decides
+// and words every refusal; the CLI prints that sentence and exits non-zero.
 func windowCmd(client clientFn) *cobra.Command {
 	var status bool
 	cmd := &cobra.Command{
 		Use:   "window <run-id>",
-		Short: "Open a window on a macOS VM run, on your own Mac",
+		Short: "Open a window on a macOS or Linux VM run, on your own computer",
 		Long: "Opens a keyboard-and-pointer window onto a running macOS VM run, drawn on the Mac the run is on. " +
 			"Only the run's owner can, and only on a Mac whose runner you registered. Closing the window hands the screen back to the run; the run goes on. " +
-			"With --status, shows whether a window can open now and why your last one closed.",
+			"A Linux VM run opens in a window here instead, on the Linux computer its runner is on. " +
+			"With --status, shows whether a Mac window can open now and why your last one closed.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("run", args[0])
@@ -48,7 +51,15 @@ func windowCmd(client clientFn) *cobra.Command {
 				}
 				return nil
 			}
-			g, err := client().OpenMacWindow(cmd.Context(), id)
+			c := client()
+			run, err := c.GetRun(cmd.Context(), id)
+			if err != nil {
+				return sentenceError(err)
+			}
+			if run.MachineKind == types.MachineLinuxVM {
+				return runLocalWindow(cmd.Context(), c, run, out)
+			}
+			g, err := c.OpenMacWindow(cmd.Context(), id)
 			if err != nil {
 				return sentenceError(err)
 			}
