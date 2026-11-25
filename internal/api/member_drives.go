@@ -474,11 +474,6 @@ type memberDriveDeletion struct {
 	untouched bool
 }
 
-// deleteMemberDrive destroys a tombstoned member drive's substrate object and
-// then removes its row. The mount is built from the stored row and its owner
-// only, so the object is the one dispatch mounted. The row goes only when the
-// substrate said deleted or already_absent; every other outcome clears the
-// tombstone and keeps the drive. Every attempt is audited.
 // memberDriveOwnerStarting refuses a delete before its tombstone, writing no row, while the
 // drive's owner has a run in STARTING: that run may attach the drive, and would meet the tombstone
 // as drive_not_found. The refusal is audited as deleteMemberDrive audits its own. deleteMemberDrive
@@ -493,6 +488,10 @@ func (s *Server) memberDriveOwnerStarting(ctx context.Context, ms store.MemberDr
 	return true, nil
 }
 
+// deleteMemberDrive destroys a tombstoned member drive's substrate object and then removes its row. The mount is built
+// from the stored row and its owner only, so the object is the one dispatch mounted. The row goes only when the
+// substrate said deleted or already_absent, or a record-only delete; an unknown outcome leaves the drive deleting until
+// a later delete, or for a Mac disk the reconnect sweep (finishMacDiskDeletes), confirms it. Every attempt is audited.
 // The claim d carries (started, d.DeleteIssues) is settled by exactly one of: the row's removal (deleted, already
 // absent, record-only), the claim's clearing (a refusal before any call, or a definitive refusal after it that
 // touched nothing), the claim left for the Mac's sweep, or nothing, which leaves the drive deleting: a call was

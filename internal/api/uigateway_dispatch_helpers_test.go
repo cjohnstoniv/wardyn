@@ -43,6 +43,8 @@ type dispatchRunner struct {
 	mu     sync.Mutex
 	starts []dispatchStart
 	hs     []dispatchH
+	// writing counts the relay stdin writes begun and not yet recorded in hs (settle waits for them).
+	writing int
 	// hook, when set for a kind, runs before that start with its context; an error refuses the start.
 	hook   map[string]func(ctx context.Context) error
 	closes int
@@ -101,11 +103,29 @@ type dispatchStdin struct {
 }
 
 func (s dispatchStdin) Write(p []byte) (int, error) {
+	s.r.mu.Lock()
+	s.r.writing++
+	s.r.mu.Unlock()
 	n, err := s.WriteCloser.Write(p)
 	s.r.mu.Lock()
 	s.r.hs = append(s.r.hs, dispatchH{time.Now(), n, string(p[:min(n, 64)])})
+	s.r.writing--
 	s.r.mu.Unlock()
 	return n, err
+}
+
+// settle waits, up to bound, for every relay stdin write already begun to be recorded. A write is recorded after
+// it returns, on the relay's own goroutine, so the app's answer can reach the client first: a test reads the
+// writes (bytesAtOrAfter, firstWrite) only after this. A write still blocked at bound is left as it is.
+func (r *dispatchRunner) settle(bound time.Duration) {
+	for end := time.Now().Add(bound); ; time.Sleep(5 * time.Millisecond) {
+		r.mu.Lock()
+		n := r.writing
+		r.mu.Unlock()
+		if n == 0 || !time.Now().Before(end) {
+			return
+		}
+	}
 }
 
 func (r *dispatchRunner) FreezeSandbox(context.Context, string) error { return nil }

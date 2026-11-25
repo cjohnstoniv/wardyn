@@ -33,7 +33,8 @@ import (
 // A lost run is kept while its lease or its ended-run grace is live: until its
 // end plus the grace, or until someone kills it when it has no end. Everything
 // that cannot be kept fails closed and is torn down as before: a headless run
-// (the completion watcher that would finish it skips kept runs), a run past
+// (the completion watcher that would finish it skips kept runs; an outage pass
+// keeps one on the server's own Docker, run_lapse_class.go), a run past
 // its end and grace, or a substrate that cannot keep a sandbox (Kubernetes).
 // A proxy stop that fails any other way keeps the run with its containment
 // unresolved (containment_error) for the lease sweep to retry (#1060): a
@@ -59,7 +60,12 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var v lapseVerdict
+	computed, held := false, 0
 	for _, run := range runs {
+		if !computed {
+			v, computed = s.lapseVerdictNow(ctx), true // on the pass context, not the per-run one below
+		}
 		func() {
 			ctx, cancel := context.WithTimeout(ctx, reconcileFinalizeTimeout)
 			defer cancel()
@@ -67,12 +73,29 @@ func (s *Server) sweepLapsedRunTokens(ctx context.Context) error {
 			if err != nil {
 				return // no mark and no teardown: the next sweep reads the clock again
 			}
-			if s.loseRun(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at) != loseNotKeepable {
+			o, serr := s.loseRunAs(ctx, loser, leaser, run, types.LostOutage, types.RunFailed, runTokenLapseAfter, at, 0, v)
+			if o != loseNotKeepable {
+				// held counts runs kept with the cut confirmed: not a server Kubernetes run (it is ended), nor one
+				// whose cut failed (it stays kept, unresolved, for the lease sweep to retry).
+				if o == loseApplied && v.holdsUnattended(run) && (serr == nil || errors.Is(serr, errLostEndUnread)) {
+					held++
+				}
 				return
 			}
 			s.reconcileFinalize(ctx, run.ID, types.RunFailed, run.SandboxRef,
 				"run token lapsed: the control plane was unreachable past its renew window")
 		}()
+	}
+	// One run.lapse_sweep.hold row per episode: it opens on the first pass that keeps a server run under the
+	// outage verdict and closes on the first pass that is not outage-class, or has no lapsed run once recovered.
+	if v.outage && held > 0 && s.lapseHoldOpen.CompareAndSwap(false, true) {
+		s.recordLapseHold(ctx, v, held)
+	}
+	if computed && !v.outage {
+		s.lapseHoldOpen.Store(false)
+	}
+	if len(runs) == 0 && !s.cfg.StoreHealth.Recovering() {
+		s.lapseHoldOpen.Store(false)
 	}
 	return nil
 }
@@ -161,7 +184,14 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 }
 
 // loseRunStopped is loseRun, also answering, for loseApplied, the proxy stop's error: nil is a stop
-// confirmed, anything else containment still unresolved. fence, when above 0, is the policy generation
+// confirmed, anything else containment still unresolved. It applies no lapse verdict (loseRunAs).
+func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
+	return s.loseRunAs(ctx, loser, leaser, run, reason, terminal, tokenLife, at, fence, lapseVerdict{})
+}
+
+// loseRunAs is loseRunStopped under a lapse sweep's verdict v: a run kept in an outage whose cause is v's gets
+// that cause on its run.lost row, and an unattended run on the server's own Docker is kept as an interactive
+// one is (v.holdsUnattended). A zero v is loseRunStopped. fence, when above 0, is the policy generation
 // the caller acts for (a revive's, or a failed proxy start's): the lost mark then lands only while it is
 // still the run's newest (store.RunLoserAtGeneration), in the mark's own write, so a caller whose lock
 // was lost does not mark lost a run a newer revive took over. That miss is loseNotApplied and stops
@@ -171,8 +201,8 @@ func (s *Server) loseRun(ctx context.Context, loser store.RunLoser, leaser store
 // path, nor on a connected runner that revive refuses; a runner read as not connected at selection is not
 // refused, so it can hold one, and that stop, sent or queued for its reconnect, can stop it.
 // A mark that errors is loseWriteFailed, as unfenced: the caller's fail-closed stop still runs.
-func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int) (loseOutcome, error) {
-	if !s.lostRunKeepable(ctx, run) {
+func (s *Server) loseRunAs(ctx context.Context, loser store.RunLoser, leaser store.RunLeaser, run types.AgentRun, reason types.LostReason, terminal types.RunState, tokenLife time.Duration, at time.Time, fence int, v lapseVerdict) (loseOutcome, error) {
+	if !s.lostRunKeepableAs(ctx, run, v.holdsUnattended(run)) {
 		return loseNotKeepable, nil
 	}
 	applied, err := s.fenced(ctx, run.ID, func() (bool, error) {
@@ -194,6 +224,11 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 	s.revokeRunBroker(ctx, run.ID)
 	s.leaseEnded.Store(run.ID, struct{}{})
 	data, outcome := map[string]any{"reason": string(reason)}, "success"
+	if v.outage {
+		data["cause"] = lapseCauseOutage
+	} else if v.cause != "" {
+		data["cause"] = v.cause
+	}
 	stopErr := s.stopLostSandboxAt(ctx, run, fence)
 	if err := stopErr; errors.Is(err, runner.ErrPendingOnRunner) {
 		data["containment"] = "pending_runner"
@@ -229,7 +264,13 @@ func (s *Server) loseRunStopped(ctx context.Context, loser store.RunLoser, lease
 // it, or a read that fails, keeps the run: not keeping it ends the run on the spot, while a kept run has its
 // proxy stopped at once (stopLostSandbox) and the lease sweep ends it once its grace has passed.
 func (s *Server) lostRunKeepable(ctx context.Context, run types.AgentRun) bool {
-	if run.State != types.RunRunning || (!run.Interactive && run.Placement != types.PlacementLocal) || run.SandboxRef == "" || runIsKept(run) {
+	return s.lostRunKeepableAs(ctx, run, false)
+}
+
+// lostRunKeepableAs is lostRunKeepable where holdUnattended also keeps a headless run that is not on a
+// registered runner: the lapse sweep's outage verdict asks it for the server's own Docker runs.
+func (s *Server) lostRunKeepableAs(ctx context.Context, run types.AgentRun, holdUnattended bool) bool {
+	if run.State != types.RunRunning || (!run.Interactive && run.Placement != types.PlacementLocal && !holdUnattended) || run.SandboxRef == "" || runIsKept(run) {
 		return false
 	}
 	rd, ok := s.cfg.Store.(store.RunEndsReader)

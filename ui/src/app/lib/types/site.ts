@@ -144,6 +144,8 @@ export interface SiteConfig {
   // types.SiteConfig.FeatureSwitches: the features new in 0.11, each off until an admin turns it on. Absent reads
   // every one off.
   features?: SiteFeatureSwitches;
+  // types.SiteConfig.Sessions: how open sessions behave while Wardyn cannot check access.
+  sessions?: SiteSessions;
   // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
   // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
   // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
@@ -777,4 +779,10 @@ export interface ComponentRequestRulesFeature {
 export interface OrgRunnerDrivesFeature {
   /** Absent reads off; only true turns it on. */
   enabled?: boolean;
+}
+
+/** Go: types.SiteSessions (SiteConfig.sessions). */
+export interface SiteSessions {
+  /** Seconds an open session keeps going while no check of the person's access answers. 0 to 120; absent reads 30. */
+  unconfirmed_budget_s?: number;
 }

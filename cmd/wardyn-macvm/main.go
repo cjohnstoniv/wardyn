@@ -504,7 +504,7 @@ func cmdInstall(ctx context.Context, d deps) int {
 	}
 	if err := macvm.RunInstall(ctx, eng, d.stdin, d.stdout); err != nil {
 		fmt.Fprintln(d.stderr, err)
-		return 1
+		return macvm.InstallExit(err)
 	}
 	return 0
 }

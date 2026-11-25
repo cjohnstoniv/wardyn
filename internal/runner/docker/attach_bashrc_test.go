@@ -199,3 +199,34 @@ func TestAttachBashrc_SlowPrepStillStartsAgentInWorkspace(t *testing.T) {
 		t.Fatalf("agent started in %v, want exactly once in %s; output: %s", calls, workdir, out)
 	}
 }
+
+// TestPrepWaits_CheckFiveTimesASecond: the two loops that wait for workspace preparation (the attach shell's and the
+// agent runner's) look five times a second, falling back to a whole second where sleep takes whole seconds only.
+func TestPrepWaits_CheckFiveTimesASecond(t *testing.T) {
+	for _, path := range []string{attachBashrcPath, "../../../deploy/images/common/agent-run-lib.sh"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.Contains(line, `.wardyn/prep-done" ]`) || !strings.Contains(line, "kill -0") {
+				continue
+			}
+			found = true
+			if !strings.Contains(line, "do sleep 0.2 2>/dev/null || sleep 1; done") {
+				t.Errorf("%s: the prep wait is %q; want it to sleep 0.2 s, or 1 s where that is refused", path, strings.TrimSpace(line))
+			}
+		}
+		if !found {
+			t.Errorf("%s: no prep wait loop found", path)
+		}
+		if strings.Contains(string(raw), "kill -0") {
+			for _, line := range strings.Split(string(raw), "\n") {
+				if strings.Contains(line, "kill -0") && strings.Contains(line, "do sleep 1; done") {
+					t.Errorf("%s: a kill -0 loop still sleeps a whole second: %q", path, strings.TrimSpace(line))
+				}
+			}
+		}
+	}
+}

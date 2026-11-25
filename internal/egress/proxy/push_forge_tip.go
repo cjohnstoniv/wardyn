@@ -23,7 +23,11 @@ package proxy
 // that branch and is refused or held like a carried one, wherever it came
 // from: merging in a commit that changed such a path, from the default branch
 // or anywhere else, is held too. A ref the push creates has no tip to compare
-// with, and a removal is no match, as everywhere in these rules. A tag or any
+// with. A removal is no match, as everywhere in these rules, unless the review
+// rules ask for removals (Options.PushHoldRemovals): then each entry the tip
+// holds at a path a pattern claims must still be in the new tree
+// (removedFromTip). With no reader for the remote, where a removal could pass
+// unseen, the whole tree is left (noReaderFor). A tag or any
 // other ref outside refs/heads/ is judged as before: deleting it and creating
 // it again on any commit would pass anyway. A push that carries no object
 // moves a branch to a commit the forge already holds (forgeRepo.held), so that
@@ -37,6 +41,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"path"
@@ -53,6 +58,9 @@ const (
 	whyNoTip         = "this push moves a branch the forge does not show at the tip the push states, so nothing shows what that branch held at these paths"
 	whyTipUnread     = "the broker could not compare what this push leaves on a branch it updates with that branch's tip: "
 	whyBranchDeleted = "this push deletes a branch, and a branch created again under that name is not compared with what this one held"
+	// The reasons a push that may remove a claimed path is not compared when the broker has no reader for its remote.
+	whyNoReaderSpelling = "the broker cannot name this remote's repository to read what the branch holds, so what the push removes from it cannot be told"
+	whyNoReaderServer   = "the broker has no reader for an Azure DevOps Server, so what the push removes from a branch it updates cannot be told"
 )
 
 // packTips is gitpack.Result.Tips. A var so a test can make a walk run past its bounds.
@@ -69,6 +77,14 @@ func tipRemedy(why string) string {
 		return "fetch the branch and push again, or push to a new branch"
 	case why == whyBranchDeleted:
 		return "leave the branch in place, or delete it on the forge"
+	case why == whyNoReaderSpelling:
+		return "trying the same remote again will not help: push to the repository's standard remote, " +
+			"https://github.com/<owner>/<repository> or https://dev.azure.com/<org>/<project>/_git/<repository>, " +
+			"or ask an operator to turn off WARDYN_PUSH_HOLD_REMOVALS"
+	case why == whyNoReaderServer:
+		return "trying again will not help: ask an operator to give this run an Azure DevOps grant for this server, or to turn off WARDYN_PUSH_HOLD_REMOVALS"
+	case strings.HasPrefix(why, whyTipUnread) && strings.Contains(why, fmt.Sprintf("needs more than %d reads", maxForgeReads)):
+		return "trying the same push again will not help: split the push into smaller ones, or push to a new branch"
 	case strings.HasPrefix(why, whyTipUnread):
 		return "try the push again; if it keeps failing, ask an operator"
 	}
@@ -77,14 +93,19 @@ func tipRemedy(why string) string {
 
 // tipChanges runs forgeRepo.beyondTips for one pattern list inside its own
 // forgeReadWait, and records a forge read as claimedEntries does.
-func (p *Proxy) tipChanges(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo) ([]gitpack.Change, string, error) {
+func (p *Proxy) tipChanges(r *http.Request, pats [][]string, res gitpack.Result, forge *forgeRepo, removals bool) ([]gitpack.Change, string, error) {
 	if forge == nil {
+		if removals && movesBranch(res.Commands) {
+			if why := noReaderFor(r); why != "" {
+				return []gitpack.Change{{Mode: gitpack.ModeUncarried}}, why, nil
+			}
+		}
 		return nil, "", nil
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), forgeReadWait)
 	defer cancel()
 	reads := forge.reads
-	left, why, err := forge.beyondTips(ctx, pats, res)
+	left, why, err := forge.beyondTips(ctx, pats, res, removals)
 	if forge.reads > reads {
 		p.sink.emit(decisionLog(egress.Request{RunID: p.runID, Host: forge.apiHost(), Port: 443,
 			Method: http.MethodGet, Time: p.now(), Relayed: p.relayLane(r.Context())}, egress.Allow, ruleSourceGitForgeRead))
@@ -92,11 +113,39 @@ func (p *Proxy) tipChanges(r *http.Request, pats [][]string, res gitpack.Result,
 	return left, why, err
 }
 
+// movesBranch reports whether any command moves an existing branch, the pushes
+// beyondTips compares.
+func movesBranch(cmds []gitpack.Command) bool {
+	return slices.ContainsFunc(cmds, func(c gitpack.Command) bool {
+		return strings.Trim(c.Old, "0") != "" && c.New != c.Old && strings.HasPrefix(c.Ref, "refs/heads/")
+	})
+}
+
+// noReaderFor is why the git_pat lane has no reader for the remote r names,
+// where a removal could pass unseen: GitHub or Azure DevOps Services at a path
+// patForge cannot name a repository from (an Azure DevOps "_git/_full/" form
+// among them), or an Azure DevOps Server remote, which has none. "" for any
+// other remote: a host with no reader stays as the forward rules read it.
+func noReaderFor(r *http.Request) string {
+	host, rest, ok := parsePATBrokerPath(r.URL.Path)
+	switch {
+	case !ok:
+		return ""
+	case host == githubHost || adoHostedHost(host):
+		return whyNoReaderSpelling
+	case slices.ContainsFunc(strings.Split(rest, "/"), func(s string) bool { return patSegIs(s, "_git") }):
+		return whyNoReaderServer
+	}
+	return ""
+}
+
 // beyondTips returns every entry pats claim that a command moving an existing
 // branch leaves where the branch's tip holds something else, and why: every
 // such command is read, whatever an earlier one came to. A walk past gitpack's
-// ceilings reads as the whole tree ("/") left.
-func (f *forgeRepo) beyondTips(ctx context.Context, pats [][]string, res gitpack.Result) ([]gitpack.Change, string, error) {
+// ceilings reads as the whole tree ("/") left. With removals it also returns,
+// for each such branch it could compare, what its tip holds at a claimed path
+// that the new tree drops.
+func (f *forgeRepo) beyondTips(ctx context.Context, pats [][]string, res gitpack.Result, removals bool) ([]gitpack.Change, string, error) {
 	budget := maxGlobOps
 	tips, err := packTips(res, func(c gitpack.Change) (bool, error) { return claims(pats, c, &budget) })
 	if errors.Is(err, errGlobBudget) {
@@ -130,7 +179,7 @@ func (f *forgeRepo) beyondTips(ctx context.Context, pats [][]string, res gitpack
 			// The forge already holds the new commit, so its whole tree is the entry, read there.
 			entries = []gitpack.Change{{Mode: gitpack.ModeUncarried}}
 		}
-		if len(entries) == 0 {
+		if len(entries) == 0 && !removals {
 			continue
 		}
 		root, err := f.tipRoot(ctx, c, res.Commands)
@@ -139,14 +188,15 @@ func (f *forgeRepo) beyondTips(ctx context.Context, pats [][]string, res gitpack
 		}
 		switch {
 		case err != nil:
-			left = append(left, entries...)
+			left = append(left, wholeIfNone(entries)...)
 			because(f.unread(whyTipUnread, err))
 			continue
 		case root == "":
-			left = append(left, entries...)
+			left = append(left, wholeIfNone(entries)...)
 			because(whyNoTip)
 			continue
 		}
+		compared := true
 		for j, e := range entries {
 			more, err := f.beyondTip(ctx, root, e, pats, &budget)
 			if errors.Is(err, errGlobBudget) {
@@ -155,10 +205,24 @@ func (f *forgeRepo) beyondTips(ctx context.Context, pats [][]string, res gitpack
 			if err != nil {
 				left = append(left, entries[j:]...)
 				because(f.unread(whyTipUnread, err))
+				compared = false
 				break
 			}
 			left = append(left, more...)
 		}
+		if !removals || !compared {
+			continue
+		}
+		gone, err := f.removedFromTip(ctx, root, "", entries, pats, &budget)
+		if errors.Is(err, errGlobBudget) {
+			return nil, "", err
+		}
+		if err != nil {
+			left = append(left, gitpack.Change{Mode: gitpack.ModeUncarried})
+			because(f.unread(whyTipUnread, err))
+			continue
+		}
+		left = append(left, gone...)
 	}
 	return left, why, nil
 }
@@ -215,4 +279,93 @@ func (f *forgeRepo) beyondTip(ctx context.Context, root string, e gitpack.Change
 		}
 	}
 	return out, nil
+}
+
+// wholeIfNone is entries, or the whole tree when there are none: a branch
+// that cannot be compared is left whole for anything it could remove.
+func wholeIfNone(entries []gitpack.Change) []gitpack.Change {
+	if len(entries) == 0 {
+		return []gitpack.Change{{Mode: gitpack.ModeUncarried}}
+	}
+	return entries
+}
+
+// removedFromTip returns each entry the tip's tree holds under dir, at a path
+// pats could claim, that the new tree (now, the entries Tips kept for this
+// branch) does not hold as the same object or the same kind: a file deleted,
+// renamed out or replaced by a directory, or a directory replaced by a file.
+// A directory both hold with other contents is looked into, both listed from
+// the forge, as beyondTip does the other way round.
+func (f *forgeRepo) removedFromTip(ctx context.Context, tree, dir string, now []gitpack.Change, pats [][]string, budget *int) ([]gitpack.Change, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	was, err := f.listing(ctx, tree)
+	if err != nil {
+		return nil, err
+	}
+	var out []gitpack.Change
+	for _, name := range slices.Sorted(maps.Keys(was)) {
+		w := was[name]
+		e := gitpack.Change{Path: path.Join(dir, name), Mode: w.Mode, OID: w.SHA}
+		if w.Type == "tree" {
+			e.Mode = gitpack.ModeUncarried
+		}
+		ok, err := claims(pats, e, budget)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		n, held, err := f.pushedAt(ctx, now, e.Path)
+		switch {
+		case err != nil:
+			return nil, err
+		case held && n.OID == e.OID:
+		case w.Type == "tree" && (!held || n.Mode == gitpack.ModeUncarried):
+			more, err := f.removedFromTip(ctx, w.SHA, e.Path, now, pats, budget)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, more...)
+		case !held || (w.Type == "tree") != (n.Mode == gitpack.ModeUncarried):
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// pushedAt is what the new tree holds at p, read from now: an entry Tips kept
+// at p, or what a directory it kept whole (one the pack does not carry, read
+// from the forge) holds beneath it. Not held when neither has p; a directory
+// the pack carries is not an entry of now, so the caller looks into it.
+func (f *forgeRepo) pushedAt(ctx context.Context, now []gitpack.Change, p string) (gitpack.Change, bool, error) {
+	for _, n := range now {
+		if n.Path == p {
+			return n, true, nil
+		}
+	}
+	for _, n := range now {
+		if n.Mode != gitpack.ModeUncarried {
+			continue
+		}
+		rel, under := p, n.Path == ""
+		if !under {
+			rel, under = strings.CutPrefix(p, n.Path+"/")
+		}
+		if !under {
+			continue
+		}
+		e, ok, err := f.entryAt(ctx, n.OID, rel)
+		if err != nil || !ok {
+			return gitpack.Change{}, false, err
+		}
+		c := gitpack.Change{Path: p, Mode: e.Mode, OID: e.SHA}
+		if e.Type == "tree" {
+			c.Mode = gitpack.ModeUncarried
+		}
+		return c, true, nil
+	}
+	return gitpack.Change{}, false, nil
 }

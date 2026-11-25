@@ -26,7 +26,7 @@ const (
 	sshBoundPrincipal   = "principal"
 )
 
-// sshConnLimits is the gateway's connection bounds (maxSSHHandshakes, the
+// sshConnLimits is the gateway's connection bounds (Config.SSHMaxHandshakes, the
 // per-source share of it, Config.SSHMaxConnections) and the throttled warning
 // a refusal at any of them writes.
 type sshConnLimits struct {

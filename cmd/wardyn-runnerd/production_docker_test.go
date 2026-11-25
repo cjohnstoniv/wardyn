@@ -137,8 +137,8 @@ func TestLocalRuntimeRequiresLeaseAndPersistsCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.close()
-	if !sub.Called("stop_proxy", ref(run)) {
-		t.Fatal("daemon restart did not contain the durably bound proxy before connecting")
+	if sub.Called("stop_proxy", ref(run)) {
+		t.Fatal("daemon restart stopped a created run's proxy before its saved lapse time")
 	}
 	// The inventory is emitted only while execution admission is closed.
 	var state []runnerwire.RunState

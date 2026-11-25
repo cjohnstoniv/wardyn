@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,8 +81,10 @@ func TestPreflight_ExecTaskModeSkipsLLMAccess(t *testing.T) {
 // — dropping it would leave a member launching a silently-narrowed policy
 // with no explanation. The exfil pairing
 // (a real operator secret pinned to an allowlisted attacker host) is dropped by
-// filterUserGrants for the member and kept for the admin, so warnings are
-// present for one and absent for the other.
+// filterUserGrants for the member and kept for the admin, so clamp warnings are
+// present for one and absent for the other. The admin's kept api_key for a host
+// outside the baseline raises CC2 to CC3, so its one warning is the blast-radius
+// floor's.
 func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	h, _ := newSecretsHarness(t) // memSecrets seeded with "anthropic-api-key"
 	h.srv.cfg.OIDC = &oidc.Authenticator{}
@@ -107,7 +110,7 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 		t.Fatalf("member preflight: Warnings empty, want the dropped-grant clamp notice surfaced")
 	}
 
-	// Admin (ceiling authority) is unclamped, so there is nothing to warn about.
+	// Admin (ceiling authority) is unclamped: no clamp notice, only the floor's raise for the grant it kept.
 	w = do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
 	if w.Code != http.StatusOK {
 		t.Fatalf("admin preflight: code=%d, want 200; body=%s", w.Code, w.Body.String())
@@ -116,8 +119,9 @@ func TestPreflight_MemberInlineClampWarningsSurfaced(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &adminResp); err != nil {
 		t.Fatalf("decode admin response: %v; body=%s", err, w.Body.String())
 	}
-	if len(adminResp.Warnings) != 0 {
-		t.Fatalf("admin preflight: Warnings=%v, want none (unclamped)", adminResp.Warnings)
+	if want := blastRadiusRaiseWarning(true); !slices.Equal(adminResp.Warnings, want) || adminResp.ConfinementRaiseCause != "blast_radius_floor" {
+		t.Fatalf("admin preflight: Warnings=%v, confinement_raise_cause=%q; want only %v (unclamped, grant kept) and blast_radius_floor",
+			adminResp.Warnings, adminResp.ConfinementRaiseCause, want)
 	}
 }
 
@@ -289,6 +293,39 @@ func TestPreflight_BlastRadiusRaisesToCC3(t *testing.T) {
 	}
 	if resp.EnforcedConfinementClass != types.CC3 {
 		t.Errorf("enforced_confinement_class = %q, want CC3 (write-capable grant raise)", resp.EnforcedConfinementClass)
+	}
+}
+
+// TestPreflight_ConfinementRaiseCause pins confinement_raise_cause and its warning line to the floor
+// actually lifting the class: set when a write-capable grant raised CC2 to CC3, absent when the request
+// already named CC3 or the run holds no such grant.
+func TestPreflight_ConfinementRaiseCause(t *testing.T) {
+	const grant = `,"eligible_grants":[{"kind":"github_token","scope":{"repos":["octocat/Hello-World"],"permissions":{"contents":"write"}}}]`
+	const line = "Raised to CC3 by the blast-radius floor"
+	for _, c := range []struct {
+		name, cc, grants, cause string
+	}{
+		{"raised", "CC2", grant, "blast_radius_floor"},
+		{"requested CC3 already", "CC3", grant, ""},
+		{"no write grant", "CC2", "", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := newSecretsHarness(t)
+			body := `{"agent":"claude-code","repo":"octocat/Hello-World","confinement_class":"` + c.cc + `","inline_policy":{` +
+				`"min_confinement_class":"` + c.cc + `","allowed_domains":["api.anthropic.com"]` + c.grants + `}}`
+			w := do(t, h.srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+			if w.Code != http.StatusOK {
+				t.Fatalf("code=%d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			var resp preflightResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+			}
+			warned := slices.ContainsFunc(resp.Warnings, func(m string) bool { return strings.Contains(m, line) })
+			if resp.ConfinementRaiseCause != c.cause || warned != (c.cause != "") {
+				t.Errorf("confinement_raise_cause = %q, warned = %v; want %q, warned = %v", resp.ConfinementRaiseCause, warned, c.cause, c.cause != "")
+			}
+		})
 	}
 }
 

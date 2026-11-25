@@ -206,10 +206,16 @@ func withinHold(ctx context.Context, d time.Duration) (context.Context, context.
 // binding is snapshotted first, in the same transaction, so its retirement
 // can still bind the runner's kill and retire_run results to it.
 func (s *Server) clearSandboxRef(ctx context.Context, runID uuid.UUID) error {
+	var err error
 	if st, ok := s.cfg.Store.(store.PG); ok {
-		return st.ClearSandboxRefRetaining(ctx, runID)
+		err = st.ClearSandboxRefRetaining(ctx, runID)
+	} else {
+		err = s.cfg.Store.SetSandboxRef(ctx, runID, "")
 	}
-	return s.cfg.Store.SetSandboxRef(ctx, runID, "")
+	if err == nil {
+		s.reclaimRunImageAfterTeardown(ctx, runID)
+	}
+	return err
 }
 
 // recordRunnerOutputWatermark records, before a runner run's create, whether
