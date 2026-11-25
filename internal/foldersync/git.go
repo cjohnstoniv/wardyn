@@ -199,7 +199,7 @@ func SendGit(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, runID,
 	if err := sy.UploadFile(tmp.Name(), remote); err != nil {
 		return fmt.Errorf("send the git bundle: %w", err)
 	}
-	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch))
+	out, err := sandboxGit(c, sendGitScript(sy.Opts.Remote, remote, branch, len(head) == 64))
 	if err != nil {
 		return err
 	}
@@ -388,18 +388,23 @@ const sendGitIncomplete = ".git/wardyn-setup-incomplete"
 const (
 	gitDanglingLink = ".git in the synced directory is a link to something that does not exist; it is left as it is: remove it or point it at a repository"
 	gitUnfinished   = "this send did not finish setting up the repository in the synced directory; it is kept, and the next --git carries on with it if no other send has finished it"
+	gitTooOld       = "the sandbox's git is older than 2.29 and cannot hold SHA-256 history; update git in the sandbox image, or send from a SHA-1 repository"
 	gitPullNothing  = "the repository in the synced directory is not finished and has no commits to bring back; send with --git to finish it"
 )
 
 // sendGitScript is the sandbox side of SendGit: it fetches bundle's branch into
-// dir's repository, or sets one up. Setting up runs in an if condition, so a
+// dir's repository, or sets one up in the bundle's hash (sha256 for a 64-character
+// tip, SHA-1 otherwise). A repository git can open is never initialised again,
+// and one of the other hash ends the send with a reason before any fetch.
+// Setting up runs in an if condition, so a
 // failed step fails the send (set -e ignores a failure inside an AND-list).
 //
 // No send removes a .git or anything in one but the marker: another send, or
 // the sandbox's own git, may still be writing it. A send claims a .git it made
 // or found empty with the marker, and every send that finds the marker
 // repeats the steps, each safe to run again or beside another send: init
-// again, the bundle's objects, HEAD to the branch, the branch, the index.
+// (only for a .git git cannot open yet), the bundle's objects, HEAD to the
+// branch, the branch, the index.
 // The branch is written only by update-ref, forward and from the value just
 // read; the index step (idx) is git reset with a path, which moves no ref
 // (with no path, reset writes HEAD's branch back to the commit it read when
@@ -420,8 +425,25 @@ const (
 // no longer on the branch once the index is built.
 // GIT_DIR keeps git from walking up into a parent repository when .git is
 // not one.
-func sendGitScript(dir, bundle, branch string) string {
+func sendGitScript(dir, bundle, branch string, sha256 bool) string {
 	b, m := shellQuote(bundle), shellQuote(sendGitIncomplete)
+	hash, mk := "sha1", "GIT_DEFAULT_HASH=sha1 git init -q --template="
+	if sha256 {
+		// The sandbox's repository holds the bundle's own hash, as checkBundleAllowed's scanner does.
+		hash, mk = "sha256", "git init -q --template= --object-format=sha256"
+	}
+	// oh is the object format of a repository git can already open. A git older than 2.29 echoes the unknown flag
+	// and knows only SHA-1 (old is then set, so a SHA-256 send says that, not to remove .git). A repository of
+	// the other hash ends the send with a reason and nothing changed; the fetch never sees it.
+	read := "old=; oh=$(git rev-parse --show-object-format 2>/dev/null) && { case \"$oh\" in sha1|sha256) :;; *) oh=sha1; old=1;; esac; }"
+	refuse := "{ [ \"$oh\" = " + hash + " ] || { [ -z \"$old\" ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; echo \"the repository in the synced directory uses $oh object names and this send uses " + hash +
+		"; it is left as it is: to start the sandbox copy again, remove .git in the synced directory in the sandbox (the commits made there go with it)\" >&2; exit 1; }; }"
+	// A git older than 2.29 answers an unknown option with rc 129: a SHA-256 init that gets it is a git too old for SHA-256.
+	if sha256 {
+		mk += " || { r=$?; [ \"$r\" != 129 ] || { echo " + shellQuote(gitTooOld) + " >&2; exit 1; }; false; }"
+	}
+	init := "{ if " + read + "; then " + refuse + "; else " + mk + "; fi; }"
+	check := "if " + read + "; then " + refuse + "; fi; "
 	ref, laptop := shellQuote("refs/heads/"+branch), shellQuote("refs/remotes/laptop/"+branch)
 	return "set -eu; cd " + shellQuote(dir) + "; GIT_DIR=.git; export GIT_DIR; " +
 		"idx() { c=$(git rev-parse -q --verify HEAD) && git reset -q \"$c\" -- . && " +
@@ -429,7 +451,7 @@ func sendGitScript(dir, bundle, branch string) string {
 		"if [ -L .git ] && [ ! -e .git ]; then echo " + shellQuote(gitDanglingLink) + " >&2; exit 1; fi; " +
 		"mkdir .git 2>/dev/null || :; " +
 		"if [ ! -L .git ] && { [ -d " + m + " ] || { [ -z \"$(ls -A .git 2>/dev/null)\" ] && mkdir " + m + " 2>/dev/null; } || [ -d " + m + " ]; }; then " +
-		"if git init -q --template= && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
+		"if " + init + " && t=$(git bundle list-heads " + b + " " + ref + ") && t=${t%% *} && " +
 		"git fetch -q --no-tags " + b + " " + ref + " && git cat-file -e \"$t^{commit}\" && " +
 		"s= && if { h=$(git rev-parse -q --verify 'HEAD^{commit}') && { ! git merge-base --is-ancestor \"$h\" \"$t\" || ! git symbolic-ref -q HEAD >/dev/null; }; } || " +
 		"{ p=$(git symbolic-ref -q HEAD) && [ \"$p\" != " + ref + " ] && o=$(git rev-parse -q --verify " + ref + ") && ! git merge-base --is-ancestor \"$o\" \"$t\" && s=$p; }; then " +
@@ -441,7 +463,7 @@ func sendGitScript(dir, bundle, branch string) string {
 		"{ [ \"$o\" = \"$t\" ] || mkdir " + m + " 2>/dev/null || :; } && idx && [ \"$(git symbolic-ref -q HEAD)\" = " + ref + " ] && out=fresh; fi && " +
 		"{ rmdir " + m + " 2>/dev/null || [ ! -d " + m + " ]; }; then echo \"$out\"; " +
 		"else echo " + shellQuote(gitUnfinished) + " >&2; exit 1; fi; " +
-		"else git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
+		"else " + check + "git fetch -q --no-tags " + b + " " + shellQuote("+refs/heads/"+branch+":refs/remotes/laptop/"+branch) + "; echo existing; fi; rm -f " + b
 }
 
 // pullGitScript is the sandbox side of PullCommits: it bundles the commits on
@@ -486,6 +508,9 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 	if err != nil {
 		return fmt.Errorf("bring the git bundle back: %w", err)
 	}
+	if err := checkPullHash(ctx, root, tmp.Name()); err != nil {
+		return err
+	}
 	if _, err := laptopGit(ctx, root, "bundle", "verify", "-q", tmp.Name()); err != nil {
 		return err
 	}
@@ -494,6 +519,52 @@ func PullCommits(ctx context.Context, w io.Writer, sy *Syncer, c *ssh.Client, ru
 		return err
 	}
 	fmt.Fprintf(w, "git: fetched %s commit(s) from the sandbox into the branch %s; review it with 'git log %s'. Your working tree is unchanged\n", Shown(out), branch, branch)
+	return nil
+}
+
+// bundleHash is the object format a bundle's header names: sha256 when it has the object-format capability, SHA-1
+// otherwise. ok is false when the file does not start like a bundle or names another object format.
+func bundleHash(file string) (hash string, ok bool) {
+	f, err := os.Open(file)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	if !sc.Scan() || !strings.HasPrefix(sc.Text(), "# v") {
+		return "", false
+	}
+	hash = "sha1"
+	for sc.Scan() && strings.HasPrefix(sc.Text(), "@") {
+		if v, found := strings.CutPrefix(sc.Text(), "@object-format="); found {
+			// Only the two names git has. Anything else came from the sandbox and is left to git's own steps.
+			if v != "sha1" && v != "sha256" {
+				return "", false
+			}
+			hash = v
+		}
+	}
+	return hash, true
+}
+
+// checkPullHash refuses a bundle of the sandbox's repository when the laptop's repository holds the other hash,
+// before git verifies or fetches it: git's own errors for that are a corrupted pack and a bad header, and the
+// fetch leaves a tmp_pack file behind. A bundle or repository it cannot read is left to the git steps after it.
+func checkPullHash(ctx context.Context, root, bundle string) error {
+	theirs, ok := bundleHash(bundle)
+	if !ok {
+		return nil
+	}
+	ours, err := laptopGit(ctx, root, "rev-parse", "--show-object-format")
+	if err != nil {
+		return nil
+	}
+	if ours != "sha1" && ours != "sha256" {
+		ours = "sha1" // a git older than 2.29 echoes the flag and knows only SHA-1
+	}
+	if ours != theirs {
+		return fmt.Errorf("the sandbox's repository uses %s object names and the repository on this computer uses %s, so its commits cannot be brought back", Shown(theirs), Shown(ours))
+	}
 	return nil
 }
 
