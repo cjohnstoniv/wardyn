@@ -1271,17 +1271,6 @@ func authzMatrixSiteConfig() types.SiteConfig {
 	}
 }
 
-// authzMatrixFeatureHooks makes each key a lane registers unavailable read as it will once served, so the
-// matrix probes its handler. Each lane deletes its own line in its flip commit. Callers never t.Parallel().
-func authzMatrixFeatureHooks(t *testing.T) {
-	h := map[siteFeatureKey]siteFeatureHook{}
-	for k, v := range siteFeatureHooks {
-		h[k] = v
-	}
-	h[featureLocalWindow] = siteFeatureHook{available: func() bool { return true }}
-	withSiteFeatureHooks(t, h)
-}
-
 // TestAuthzMatrixMacWindowSiteSwitch pins both answers the run's owner gets from POST
 // /runs/{id}/desktop/window on the matrix server: with the site switch at its default (off) a 403
 // mac_window_site_off, and with it on, the handler's own answer (the matrix's switch-on rows). Entry
@@ -1333,7 +1322,6 @@ func matrixSCIMConfig() *SCIMConfig {
 
 func newAuthzMatrixServer(t *testing.T, shape ...func(*Config)) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
-	authzMatrixFeatureHooks(t)
 	ast := newAuthzStore()
 	aap := newAuthzApprovals(ast)
 	cfg := baseTestConfig(newHarness(t), ast)
@@ -1378,7 +1366,6 @@ func matrixServer(cfg Config) *Server {
 // ship.
 func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	t.Helper()
-	authzMatrixFeatureHooks(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<!doctype html>"), 0o600); err != nil {
 		t.Fatal(err)

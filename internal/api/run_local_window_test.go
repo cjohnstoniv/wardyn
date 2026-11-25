@@ -775,16 +775,19 @@ func TestLocalWindowClosesOnPause(t *testing.T) {
 	}
 }
 
-// Until the window is served end to end the key is unavailable: a write that turns it on is refused
-// feature_unavailable, and a stored switch reads off. Real registrations, no matrix server.
+// The window is served end to end, so the key is available: a write that turns it on is stored, and a stored
+// switch reads on. Real registrations, no matrix server.
 func TestLocalWindowUnavailableUntilServed(t *testing.T) {
-	if siteFeatureAvailable(featureLocalWindow) {
-		t.Fatal("local_window is available on this tree: only the commit that serves the window end to end may change this assertion")
+	if !siteFeatureAvailable(featureLocalWindow) {
+		t.Fatal("local_window is unavailable on this tree, but the browser desktop yields to a local window")
 	}
 	fake := &fakeSiteConfigStore{}
-	wantSiteFeatureRefusal(t, putSiteFeatures(t, fake, `{"features":{"local_window":{"enabled":true}}}`), fake, reasonSiteFeatureUnavailable)
-	if localWindowOn(localWindowOnConfig()) {
-		t.Fatal("a stored local_window switch reads on while the key is unavailable")
+	w := putSiteFeatures(t, fake, `{"features":{"local_window":{"enabled":true}}}`)
+	if w.Code != http.StatusOK || fake.putSeen == nil || !localWindowOn(*fake.putSeen) {
+		t.Fatalf("PUT local_window on = %d %s, want 200 and the switch stored on", w.Code, w.Body.String())
+	}
+	if !localWindowOn(localWindowOnConfig()) {
+		t.Fatal("a stored local_window switch reads off while the key is available")
 	}
 }
 

@@ -46,6 +46,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
+- A Linux VM run can open in a native window on the computer its runner is on (`wardyn window <run>`), with no clipboard. While the window is open the run's browser desktop only watches, and a pause closes the window. Off until `features.local_window.enabled` is on ([Linux VM sandboxes](docs/operations/linux-vm-sandboxes.md#a-window-on-your-own-computer)).
 
 ### Changed
 
@@ -58,6 +59,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
 - Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
+- Opening a Linux VM run in a window on your own computer (`wardyn window <run>`) is new and off by default. Turn it on with `features.local_window.enabled` in site config; a runner that is already connected picks the change up when it next connects. Update the runner on that computer and the `wardyn` CLI to 0.11.0 first: an older runner cannot open the window. The window needs a Linux computer.
 
 ## [0.11.0-rc.1] — 2026-11-24
 
