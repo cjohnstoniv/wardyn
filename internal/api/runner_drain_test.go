@@ -40,7 +40,15 @@ func TestRefusal_DrainingIsFirst(t *testing.T) {
 	free := func(id string) poolTarget {
 		return target(id, false, true, 4000, 8192, types.CC1, types.CC2, types.CC3)
 	}
-	atCapacity := func(id string) poolTarget { x := free(id); x.full = true; return x }
+	// A runner at capacity declares one run at once and already holds one, so Fits answers FitNoRoom for any run.
+	atCapacity := func(id string) poolTarget {
+		x := free(id)
+		f := testFits[id]
+		f.limits = &types.RunnerLimits{RunsAtOnce: 1, Total: f.limits.Total, PerRun: f.limits.PerRun}
+		f.used = types.RunnerTally{Runs: 1}
+		testFits[id] = f
+		return x
+	}
 	ok := demand(types.CC1, "", 0, 0)
 	ok.holdRunnerCapacity = true
 	for name, tc := range map[string]struct {
