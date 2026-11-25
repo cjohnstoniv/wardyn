@@ -268,7 +268,9 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		return nil, fmt.Errorf("embedded identity: revocation check failed (failing closed): %w", err)
 	}
 
+	w, _ := identity.WorkloadFromSPIFFEID(claims.Act.Sub, p.trustDomain.String())
 	out := &identity.Claims{
+		Workload:      w,
 		SPIFFEID:      claims.Act.Sub,
 		RunID:         runID,
 		Sub:           claims.Subject,

@@ -101,3 +101,22 @@ func apiserverHostPort(cfg *rest.Config) (string, error) {
 	}
 	return hostPort, nil
 }
+
+// spiffeWorkloadAPIDir is where a proxy pod mounts the SPIRE agent's Workload API socket, so the proxy dials
+// unix:///spiffe-workload-api/spire-agent.sock (identity.ProxyWorkloadAPIAddr).
+const spiffeWorkloadAPIDir = "/spiffe-workload-api"
+
+// spiffeVolumeName is the proxy pod's inline CSI volume that carries the socket.
+const spiffeVolumeName = "spiffe-workload-api"
+
+// SPIFFEMount is WARDYN_K8S_SPIFFE_CSI_DRIVER and WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT, set together or not at
+// all. When set, each proxy pod runs as ProxyServiceAccount and mounts the CSIDriver's volume read-only at
+// spiffeWorkloadAPIDir, so the SPIRE agent can attest it by namespace, account and labels. The agent pod gets
+// neither and stays on the namespace's default account.
+type SPIFFEMount struct {
+	CSIDriver           string
+	ProxyServiceAccount string
+}
+
+// enabled reports whether proxy pods get the mount.
+func (m SPIFFEMount) enabled() bool { return m.CSIDriver != "" }

@@ -59,6 +59,8 @@ var namespaceCensusColumns = []censusColumn{
 	{"governance_restrictions", "created_by", false, ""},
 	{"governance_unit_admins", "subject", false, "subject_type = 'user'"},
 	{"governance_units", "created_by", false, ""},
+	{"identity_token_bindings", "sponsor", false, ""},
+	{"identity_token_bindings", "sub", false, ""},
 	{"kept_machines", "owner_subject", false, ""},
 	{"key_domain_assignments", "subject", false, "subject_type = 'user'"},
 	{"key_domain_login_groups", "principal", false, ""},

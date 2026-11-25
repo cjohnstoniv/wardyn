@@ -221,7 +221,7 @@ This document states what Wardyn defends, what it does not, and for each load-be
 | **B1 — Sandbox vs. everything else** | 🟢 shipped | The hard boundary; the agent runs on the untrusted side. Enforced by isolation tier (runc-hardened / gVisor / Kata), the VM boundary of B14 and B15, and L0 structural network confinement. Every higher-layer control assumes the agent is hostile here. |
 | **B2 — Sandbox vs. egress proxy** | 🟢 shipped | Sole network path out is the wardyn-proxy sidecar, default-deny. `HTTP_PROXY`/`HTTPS_PROXY` are set for compatibility; the env-var-bypass class is defended structurally at L0 (no route off the host, so nothing to bypass to), not by omitting the var. |
 | **B3 — Sandbox vs. MCP/tool gateway** | 🟡 **partial (L3)** | The in-sandbox per-tool-call decision plane is cooperative; the proxy enforces `deny` and `approve_each` on remote MCP servers attached through it, and does not mediate other tools: [detail](#b3--sandbox-vs-mcptool-gateway). |
-| **B4 — Agent-run identity vs. token broker** | 🟢 shipped | Authenticated by a per-run JWT from wardynd's embedded issuer (SPIFFE-shaped; the runner asserts the attestation; SPIRE is planned). The broker is the only thing that can turn an identity and an approval into a credential. |
+| **B4 — Agent-run identity vs. token broker** | 🟢 shipped | A per-run JWT: wardynd's embedded issuer by default (SPIFFE-shaped; the runner asserts the attestation), or a SPIRE JWT-SVID under the experimental, Kubernetes-only `spire` provider. The broker is the only thing that can turn an identity and an approval into a credential. |
 | **B5 — Approval gate vs. credential issuance** | 🟢 shipped | Novel coupling: a high-risk action's approval is what mints the scoped token. No prior art; threat-modeled fresh in §4. |
 | **B6 — Runner data plane vs. control plane** | 🟡 partial | TLS with a pinned CA and a per-run bearer, not mTLS: [detail](#b6--runner-data-plane-vs-control-plane). |
 | **B7 — Control plane vs. SIEM/customer** | 🟢 shipped | Outbound-only export (syslog, webhook, file, OTLP); no inbound trust. |
@@ -1661,8 +1661,9 @@ These risks are **not closed by v1 Wardyn**.
    - A token used within its window before revocation reaches the upstream service.
 
 8. **Per-run SPIRE registration-entry churn at scale.**
-   - Entry churn, mint latency on the task-start hot path, and revocation-cascade timing (sandbox + SPIRE entry + minted tokens) are unprototyped anywhere.
-   - An explicit engineering risk, not a solved property.
+   - The experimental `spire` provider (off by default, Kubernetes only) writes one SPIRE entry per run at its first mint and deletes it in the stop cascade. The host sensor's token makes none.
+   - Its bounds are configured, not measured at scale: boot waits at most 10 s for SPIRE, a run's X.509-SVID lives at most 10 minutes after its entry goes, and a run token at most 1 hour.
+   - Entry churn, mint latency on the task-start path and cascade timing under load are not yet measured. An explicit engineering risk, not a solved property.
 
 9. **Compromised platform operator / admin (insider-admin).**
    - Out of scope for v1 — no separation-of-duty on the control plane yet.
@@ -4471,7 +4472,7 @@ injected script whatever the CSP says.
 | # | Risk | Where stated |
 |---|---|---|
 | 1 | **The model-API exit channel is the single most realistic exfiltration path for a prompt-injected agent.** Fully containing it is impossible; we mitigate by logging, not blocking. Wardyn does not prevent exfiltration over the model channel. | residual #1 |
-| 2 | **Per-run SPIRE identity at scale is unprototyped** — registration-entry churn, mint latency on the task-start hot path and kill-switch cascade timing could break the identity architecture under load. A load spike before commitment is an explicit pre-v0.5 requirement. | residual #8 |
+| 2 | **Per-run SPIRE identity at scale is unmeasured** — the experimental `spire` provider ships with configured bounds, but registration-entry churn, mint latency on the task-start path and kill-switch cascade timing under load are not yet measured. | residual #8 |
 | 3 | **The approval-gates-credential coupling (B5) is the thesis's most novel claim, with no prior art.** | residual #11 |
 | | Its security rests on chain integrity against delegation-chain-splicing (IETF, March 2026) and on a risk classifier whose accuracy is unmeasured. | |
 | 4 | **In-guest enforcement carries the documented `ld-linux`/`mmap` bypass class**: it is defense-in-depth detection, never the boundary. The real boundary is structural, enforced out-of-band. | residual #5 |
@@ -4736,7 +4737,7 @@ production deployments. Requires a registered KVM microVM runtime — `kata*` (p
 | Egress enforced outside the sandbox | L0/L1 🟢 **[shipped]** | Mandatory because gVisor's in-sandbox iptables is partial; correct on all tiers |
 | Two enforcement planes (network B2 + tool B3) | L2 🟢 **[shipped]** + L3 🟡 **[partial]** | The MCP-blind-firewall class. L2 is active. L3 enforces `deny` and `approve_each` at the proxy for remote MCP servers attached through it, and its `tool_rules` and `wardyn-toolgate` relay are cooperative for the rest, so this row is NOT "always active" for a tool that is not an attached remote MCP server |
 | Approval mints credential | B5 coupling, ID + AU 🟢 **[shipped]** | Scope-widening between approval and issuance |
-| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (embedded identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟡 **[planned]**. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
+| Kill-switch cascade (fires on EVERY run stop — kill, completion, failure, idle; BOTH paths win the state CAS FIRST (C002) before touching the runner or revoking anything, then teardown+revoke in opposite internal order — explicit-kill tears down before revoking, a non-kill stop revokes before tearing down — same steps, all fail-loud) | Sandbox teardown + run-token deny-list (identity revocation) + broker credential revoke 🟢 **[shipped]**; SPIRE entry deletion 🟢 **[shipped]** under the experimental `spire` provider. NOTE: the cascade does not revoke a GitHub installation token, which lasts until it expires; the proxy's stop hands its GitHub CLI tokens back — see residual #7. | Token hoarding past run end |
 | Attribution that distinguishes agent from human | ID, AU 🟢 **[shipped]** | Insider hiding behind agent identity |
 | Tamper-evident audit export | AU 🟢 **[shipped]**: Postgres log + PTY replay, eBPF/Tetragon ground-truth stream (detection-only; honestly degradable via `/healthz`; CC3/Kata host-blind gap surfaced as `kernel.sensor.bypass`) | In-sandbox log tampering; audit vendor lock-in |
 | Fail-closed fleet policy | Audited policy changes (`policy.create/update/delete`) 🟢 **[shipped]**; narrow-only managed settings (`disableBypassPermissionsMode`) 🟢 **[shipped]** for hold runs | Policy disablement before malicious action |
@@ -4803,7 +4804,8 @@ The **explicit kill** path (`handleKillRun`) runs this fixed order:
 - Any of steps 2-4 failing is audited loudly (one `run.kill` event carrying the aggregate outcome,
   plus a distinct `run.revoke` failure event) instead of reporting containment — NOT fully
   contained, retry the kill.
-- SPIRE entry deletion arrives with SPIRE 🟡 **[planned]**; the kill does not revoke a GitHub
+- Under the experimental `spire` provider, revocation also deletes the run's SPIRE entry 🟢 **[shipped]**. Its X.509-SVID
+  is not revoked and lives out its 10-minute life, so the bearer and the deny-list stay the authority. The kill does not revoke a GitHub
   installation token, which lasts until it expires (residual #7). The proxy's stop hands its GitHub CLI tokens back.
 - **A run on an offline runner [0.9].** Step 2 waits as a pending action that the runner applies on reconnect, before any relay (`runner_action_pending`). Steps 3–4 run at once, and the Azure DevOps PATs Wardyn created for the run are revoked then. The runner's proxy stops adding API keys and Git broker tokens within 30 minutes of its last contact with the server (residual #77). Wardyn's kill does not revoke a GitHub App token at GitHub, so one already minted stays valid there until it expires (residual #7). A person's kill records the waiting stop as `runner_error`; only the lifetime kill records `sandbox_stop: queued`.
 - Non-kill stops (completion, failure, idle auto-stop) also win the durable-state compare-and-swap

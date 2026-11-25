@@ -129,6 +129,8 @@ type Config struct {
 	// WarmPriorityClass is WARDYN_K8S_WARM_PRIORITY_CLASS: the PriorityClass placeholders take, so any run evicts
 	// them. Empty keeps the deployment placement's.
 	WarmPriorityClass string
+	// SPIFFE is the SPIRE Workload API mount for proxy pods (config.go); zero mounts nothing.
+	SPIFFE SPIFFEMount
 
 	// Runner mode (wardyn-runnerd, design K1 §3). Only runnerd sets these; with RunnerID empty every
 	// one is ignored and server mode is unchanged.

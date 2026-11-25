@@ -481,6 +481,21 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - and uninstalling either would take the other's RuntimeClass read permission with it (every CC2/CC3 run in the survivor then fails on a 403 nothing explains).
   - Upgrading a release installed before 0.7 renames both objects in place, which Helm handles as an ordinary create-then-prune.
 
+### SPIRE identity (`spire.enabled`)
+
+- **Experimental, off by default.** `spire.enabled=true` selects the spire identity provider (`WARDYN_IDENTITY=spire`): each run token is a SPIRE JWT-SVID, and each run's proxy pod is attested for its own X.509-SVID. See [SPIRE identity](../../../docs/operations/spire.md).
+- The chart installs no SPIRE. Install the server, the agents and the SPIFFE CSI driver from upstream first, with an entry for wardynd that carries `-admin`.
+- Values:
+  - `spire.csiDriver` (default `csi.spiffe.io`) and `spire.socketPath` (default `/spiffe-workload-api/spire-agent.sock`);
+  - `spire.server.address`, `spire.server.port` (default `443`) and `spire.server.namespace`, all required, and `spire.server.targetPort` (default `8081`, a number from 1 to 65535), the server pod's own port for the egress rule. The defaults are upstream's Service and pod ports;
+  - `spire.parentId`, required: the node alias that parents run entries, selecting this cluster's agents only;
+  - `spire.proxyServiceAccount` (default `wardyn-proxy`).
+- On, the chart sets the four `WARDYN_SPIRE_*` variables, `WARDYN_POD_SERVICE_ACCOUNT` from the pod's own spec, and `WARDYN_K8S_SPIFFE_CSI_DRIVER` and `WARDYN_K8S_SPIFFE_PROXY_SERVICE_ACCOUNT`.
+- `WARDYN_SPIRE_SELECTORS` is rendered from the same runs namespace as `WARDYN_K8S_NAMESPACE`, plus the proxy account and the proxy's two labels. wardynd refuses to boot if they disagree.
+- It mounts the CSI volume read-only into wardynd, creates the proxy account in the runs namespace with no token and no RoleBinding, and adds one egress rule to the server's namespace and port.
+- It refuses to render without `k8s.enabled`, with a proxy account that is empty, `default` or wardynd's own, or with wardynd on `default`.
+- Set `env.WARDYN_TRUST_DOMAIN` to SPIRE's trust domain. Docker and remote runners keep the bearer token only.
+
 ### User drives (`drives.enabled`)
 
 - Renamed from `userDrives.enabled` in 0.8 (issue #658), a clean break with no alias — a `--reuse-values` upgrade from an older release must set `drives` explicitly; see [docs/sdk.md](../../../docs/sdk.md)'s "Renamed in 0.8" table.

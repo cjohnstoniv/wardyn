@@ -299,11 +299,13 @@ func run() error {
 	}
 	// Identity provider (pluggable seam; default "embedded"). pgRevocations is the
 	// pg-backed kill-switch denylist, supplied to whichever provider is selected.
-	idp, err := identity.New(*f.identitySel, identity.Deps{
+	idp, err := newIdentityProvider(*f.identitySel, *f.runnerSel, identity.Deps{
 		SigningKey:  signKey,
 		TrustDomain: *f.trustDomain,
 		Revocations: &pgRevocations{pool: pool},
 		Audit:       maskedRec,
+		Bindings:    pgTokenBindings{pg: store.NewPG(pool)},
+		BootCtx:     bootCtx,
 	})
 	if err != nil {
 		return fmt.Errorf("identity provider: %w", err)

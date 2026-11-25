@@ -872,6 +872,7 @@ helm-lint: ## Lint + template-render both Helm charts (default + all-on values +
 	./scripts/test-helm-agent-sandbox.sh
 	./scripts/test-helm-warm-pools.sh
 	./scripts/test-helm-groundtruth.sh
+	./scripts/test-helm-spire.sh
 	./scripts/test-helm-env-once.sh
 	helm lint ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true); \
