@@ -143,6 +143,17 @@ describe("Review blockers", () => {
     }
   });
 
+  it("links each request-rule refusal to the Tools step, in the server's sentence", () => {
+    const sentences = {
+      component_request_rules_limit: "This run would carry more than 16 host rule sets. Attach fewer components with request rules.",
+      component_request_rules_off: "components[0]: this component carries request rules, which are off on this deployment. Ask your admin.",
+    };
+    for (const [reason, text] of Object.entries(sentences)) {
+      const [b] = buildBlockers({ ...NOTHING, refusal: { text, reason } });
+      expect(b, reason).toMatchObject({ id: "refusal", kind: "refusal", text, to: { screen: "step", step: "tools" } });
+    }
+  });
+
   it("does not block for a wall preset that is available", () => {
     expect(buildBlockers({ ...NOTHING, wallPreset: { name: "Sealed", unavailable: false } })).toEqual([]);
   });

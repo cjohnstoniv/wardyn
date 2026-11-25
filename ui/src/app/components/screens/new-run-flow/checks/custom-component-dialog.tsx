@@ -25,6 +25,7 @@ import { Input } from "../../../ui/input";
 import { Textarea } from "../../../ui/textarea";
 import { CUSTOM_COMPONENT as T } from "../../../wardyn/copy/components";
 import { Field } from "../../../wardyn/form-primitives";
+import { useShellSetupStatus } from "../../../wardyn/model-access-context";
 import { Segmented } from "../../../wardyn/segmented";
 import {
   blankSecret,
@@ -41,6 +42,8 @@ import {
   type ComponentDraft,
   type FormErrors,
 } from "./custom-component-form-model";
+import { requestRulesRefusal } from "../../components/component-editor-model";
+import { RequestRulesField, ruleDomId } from "../../components/request-rules-field";
 import { SecretRow, FieldError, errorProps, secretDomId } from "./custom-component-secret-row";
 
 export interface CustomComponentDialogProps {
@@ -69,11 +72,16 @@ export interface CustomComponentDialogProps {
 export type Keep = "run" | "save";
 
 const settingId = (s: { key: number }, field: "name" | "value") => `ccd-set-${s.key}-${field}`;
+const RULES_ID = "ccd-rules";
 
 /** The control a field path stands for, so a refusal can move focus to it. */
-function domIdOf(field: string, d: ComponentDraft): string | undefined {
+function domIdOf(field: string, d: ComponentDraft, errors: FormErrors): string | undefined {
   if (field === "name") return "ccd-name";
   if (field === "hosts") return "ccd-hosts";
+  if (field === "request_rules") {
+    const named = requestRulesRefusal(errors.request_rules ?? "");
+    return named?.index !== undefined && named.part ? ruleDomId(RULES_ID, named.index, named.part) : undefined;
+  }
   const secret = /^secrets\.(\d+)\.(.+)$/.exec(field);
   if (secret) {
     const row = d.secrets.find((s) => s.key === Number(secret[1]));
@@ -107,11 +115,13 @@ export function CustomComponentDialog({
   const summaryRef = React.useRef<HTMLDivElement>(null);
   const hostChoices = headerHostChoices(hostLines(draft.hosts));
   const refused = Object.keys(errors).length > 0;
+  const rulesOn = useShellSetupStatus().status?.features?.component_request_rules === true;
+  const rulesRefusal = errors.request_rules ? requestRulesRefusal(errors.request_rules) : null;
 
   // Focus the first control that owns a sentence, or the sentence block when none does.
   const focusFirst = (found: FormErrors, d: ComponentDraft) => {
     const field = firstErrorField(found, d);
-    const target = field ? domIdOf(field, d) : undefined;
+    const target = field ? domIdOf(field, d, found) : undefined;
     window.requestAnimationFrame(() => {
       const el = target ? document.getElementById(target) : null;
       (el ?? summaryRef.current)?.focus();
@@ -244,6 +254,18 @@ export function CustomComponentDialog({
           />
         </Field>
         <FieldError id="ccd-hosts" text={errors.hosts} />
+
+        <RequestRulesField
+          on={rulesOn}
+          rules={draft.requestRules ?? []}
+          hadRules={(component?.definition.request_rules ?? []).length > 0}
+          hosts={hostChoices}
+          onChange={(requestRules) => setDraft({ ...draft, requestRules })}
+          idPrefix={RULES_ID}
+          refusal={errors.request_rules ?? null}
+          failing={rulesRefusal}
+          disabled={saving}
+        />
 
         <fieldset disabled={saving} className="space-y-3">
           <legend className="text-sm font-medium text-foreground">{T.SECRETS}</legend>

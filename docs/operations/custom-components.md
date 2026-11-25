@@ -110,5 +110,6 @@ What an admin controls on a component row, and what a launch leaves behind on th
   - a run, a preflight or a policy preview that attaches one is refused `component_request_rules_off`;
   - a save that adds or changes rules is refused with the same reason, also when the site configuration cannot be read;
   - a save that sends back the stored rules, or none, is accepted, so rules can always be removed.
+  - the console's component editors, the organisation's and a person's own, then show the rule count and one Remove rules action in place of the rules, and show nothing when the component has no rules.
 - The Azure DevOps and GitHub request checks behave exactly as before, with or without component rules.
 - Before going back to an older version, remove request rules from your components: an older version ignores them and attaches the component without them.

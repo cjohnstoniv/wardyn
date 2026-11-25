@@ -80,6 +80,28 @@ export function draftOf(c: Component | null): ComponentDraft {
   };
 }
 
+/** The most rules one component may carry (types.MaxHostRulesPerSet). */
+export const MAX_REQUEST_RULES = 64;
+
+/** Which rule, and which of its parts, a server sentence names; neither for a sentence about the rules as a whole. */
+export interface RuleRefusal {
+  /** 0-based, as the server counts request_rules[i]. */
+  index?: number;
+  part?: "host" | "methods" | "paths" | "effect";
+}
+
+// The sentences of the off and unread refusals (internal/api/components_request_rules.go) start alike.
+const RULES_SWITCH_SENTENCE = /^This component carries request rules, and /;
+const RULE_PATH = /^request_rules(?:\[(\d+)\](?:\.(host|methods|paths|effect))?)?(?!\w)/;
+
+/** The rules a server refusal is about, or null when it is about something else (a conflict, the hosts, a secret). */
+export function requestRulesRefusal(message: string): RuleRefusal | null {
+  if (RULES_SWITCH_SENTENCE.test(message)) return {};
+  const m = RULE_PATH.exec(message.replace(/^invalid component:\s*/, "").replace(/^definition\./, ""));
+  if (!m) return null;
+  return { ...(m[1] !== undefined && { index: Number(m[1]) }), ...(m[2] && { part: m[2] as RuleRefusal["part"] }) };
+}
+
 export const hostLines = (text: string): string[] =>
   text
     .split("\n")

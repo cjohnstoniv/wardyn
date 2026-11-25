@@ -68,8 +68,12 @@ export const REVIEW_GROUP_OF_FIELD: Record<string, ReviewGroupId> = {
   ...groups("limits", "resources ends_after_sec no_end " + policy("resources auto_stop_after_sec")),
 };
 
+/** The request-rule refusals of a run (internal/api/reasons_component_request_rules.go): the person fixes each by removing a component on the Tools step. */
+export const COMPONENT_REQUEST_RULES_REASONS = ["component_request_rules_off", "component_request_rules_limit"] as const;
+export type ComponentRequestRulesReason = (typeof COMPONENT_REQUEST_RULES_REASONS)[number];
+
 /** Every reason a preflight or create refusal can carry that the console names. */
-export type KnownLaunchReason = ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
+export type KnownLaunchReason = ComponentRequestRulesReason | ImageAdmissionReason | KeptMachineReason | NewRunReason | PlacementReason | RunModeReason | RunnerPoolReason | ScheduleReason | TemplateReason | WorkspaceDoorReason;
 
 /** Written out key by key, so a new reason without a home fails typecheck. */
 export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
@@ -87,6 +91,7 @@ export const HOME_OF_REASON: Record<KnownLaunchReason, FieldHome> = {
   runner_recording_off: "run", recording_store_off: "run",
   runner_action_pending: "run", relay_runner_mismatch: "run", relay_required: "run", relay_route_refused: "run",
   placement_credential: "run", placement_component_self_defined: "tools", placement_capability: "tools",
+  component_request_rules_off: "tools", component_request_rules_limit: "tools",
   delivery_via_org: "tools", delivery_runner_resident: "tools", delivery_not_via_org: "tools",
   via_org_destination_refused: "tools", via_org_cap_exceeded: "tools",
   placement_local_path: "files",
