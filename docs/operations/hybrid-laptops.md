@@ -107,7 +107,7 @@ Not checked: an MDM device certificate, Apple Managed Device Attestation, or a T
 - A pool places the run on a class that admits it. Denied everywhere, the answer is `placement_denied`.
 - With a list set, a runner of no known trust class takes no new run.
 - A macOS VM needs `managed_device` whatever the list says.
-- The list covers local runs on registered runners only. The organisation's executor, which runs containers only, is not judged.
+- The list covers local runs on registered runners only. The server's Docker, which runs containers only, is not judged.
 
 The switch is only as strong as the mark: review marked runners against your MDM inventory, and unmark (`wardyn runner trust <runner-id> personal --reason "<why>"`) a laptop that leaves management.
 

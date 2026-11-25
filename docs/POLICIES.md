@@ -651,7 +651,7 @@ What the check does and does not settle:
 
 - Agent rules are an organisation's limits for one agent harness (`claude-code`, `codex-cli` or any catalogue harness). They are the same narrow-only walls a person sets for themselves ([Your walls](#your-walls)), plus an optional requirement on the harness's own sandbox and approvals.
 - Every run that includes the harness is narrowed by them, the same way a person's walls narrow it: they only ever remove what the run could do. A super admin's own run is bound too.
-- They bind the whole sandbox, wherever it is placed: the organisation's executor, an organisation cluster runner or a person's own laptop. A sandbox's network cannot tell which process sent a request, so anyone sharing the desktop with the agent is bound too.
+- They bind the whole sandbox, wherever it is placed: the server's Docker, an organisation cluster runner or a person's own laptop. A sandbox's network cannot tell which process sent a request, so anyone sharing the desktop with the agent is bound too.
 - A run launched without the harness ("Your own tools") is not bound. That is the one-click sandbox without the agent.
 - The run's effective policy names the layer: each value the rules decided has the provenance layer `agent_rules`, named by the harness id, and the `run.create` row's `policy_source.agent_rules` lists what each harness's rules narrowed.
 
