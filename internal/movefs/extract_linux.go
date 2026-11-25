@@ -278,14 +278,18 @@ func (x *extractor) makeLinks() error {
 }
 
 // setModes gives each directory its own mode, deepest first, so a directory without write access is changed
-// only after everything inside it is written.
+// only after everything inside it is written. A set-group-ID bit the directory already has stays: the volume's
+// group ownership set it, and new files below must keep that group.
 func (x *extractor) setModes() error {
 	for _, hm := range slices.Backward(x.modes) {
 		fd, err := x.walkTo(hm.mount, hm.rel)
 		if err != nil {
 			return err
 		}
-		err = unix.Fchmod(fd, hm.mode)
+		var st unix.Stat_t
+		if err = unix.Fstat(fd, &st); err == nil {
+			err = unix.Fchmod(fd, hm.mode|st.Mode&unix.S_ISGID)
+		}
 		_ = unix.Close(fd)
 		if err != nil {
 			return fmt.Errorf("movefs: import: set the mode of %q: %w", hm.mount+"/"+hm.rel, err)

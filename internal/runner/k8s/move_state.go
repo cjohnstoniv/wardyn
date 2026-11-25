@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -98,6 +99,9 @@ func (k *keepDriver) ExportState(ctx context.Context, ref string, set runner.Car
 	if len(claims) == 0 {
 		return runner.StateExport{}, fmt.Errorf("k8s: export %s: no kept claim is mounted at or under a carried root", ref)
 	}
+	if root, ok := rootWithoutClaim(claims, set.Roots); ok {
+		return runner.StateExport{}, fmt.Errorf("k8s: export %s: no kept claim is mounted at or under the carried root %s", ref, root)
+	}
 	setJSON, err := json.Marshal(set)
 	if err != nil {
 		return runner.StateExport{}, err
@@ -171,6 +175,17 @@ func carriedClaims(tmpl *corev1.Pod, roots []string) []helperClaim {
 		}
 	}
 	return out
+}
+
+// rootWithoutClaim answers the first root with no claim mounted at or under it: its files live only in the agent
+// pod's own filesystem, which the helper cannot read.
+func rootWithoutClaim(claims []helperClaim, roots []string) (string, bool) {
+	for _, r := range roots {
+		if !slices.ContainsFunc(claims, func(c helperClaim) bool { return atOrUnderAny(c.target, []string{r}) }) {
+			return r, true
+		}
+	}
+	return "", false
 }
 
 // atOrUnderAny reports whether p, an absolute path, is one of roots or beneath one.

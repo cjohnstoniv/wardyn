@@ -35,6 +35,7 @@ var (
 	errImportNoWorkDrive    = errors.New("k8s: the moved run's spec names no Kubernetes work drive at " + runner.ScratchWorkPath + " for the import to create")
 	errImportSecretEnv      = errors.New("k8s: a moved run carries no secret env")
 	errImportClaimExists    = errors.New("k8s: storage for a carried drive already exists at the destination; a move writes only into storage it creates")
+	errImportRootNoDrive    = errors.New("k8s: a carried root is on no drive the import creates")
 	errImportDriveReattach  = errors.New("k8s: re-attaching a person's drive to a moved run is not supported yet")
 	errImportRunInNamespace = errors.New("k8s: the run already has a sandbox in the destination namespace")
 )
@@ -117,7 +118,7 @@ func carryDrives(drives []types.DriveMount, set runner.CarriedSet) ([]types.Driv
 			}
 		}
 		if best < 0 {
-			return nil, fmt.Errorf("k8s: carried root %s is on no drive the import creates", root)
+			return nil, fmt.Errorf("%w: %s", errImportRootNoDrive, root)
 		}
 		carry[best] = true
 	}
@@ -152,7 +153,9 @@ func (k *keepDriver) importInto(ctx context.Context, spec runner.SandboxSpec, se
 	k.noteNamespace(runID, ns)
 	fail := func(kind, err error) (runner.Sandbox, runner.CarriedManifest, error) {
 		zero := int64(0)
-		if terr := k.teardownByRunID(context.Background(), runID, &zero); terr != nil {
+		tctx, cancel := context.WithTimeout(context.Background(), moveHelperCleanup)
+		defer cancel()
+		if terr := k.teardownByRunID(tctx, runID, &zero); terr != nil {
 			slog.Error("wardynd: k8s substrate: a failed move import could not tear down what it created",
 				slog.String("run_id", runID.String()), slog.String("import_err", err.Error()), slog.String("teardown_err", terr.Error()))
 		}

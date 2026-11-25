@@ -16,11 +16,13 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -144,7 +146,7 @@ func importRefused(t *testing.T, k *keepDriver, cs *fake.Clientset, dyn *dynamic
 	order := namedWrites(cs, dyn)
 	stream, _ := workStream(t)
 	_, _, err := k.ImportSandbox(context.Background(), spec, set, 1<<20, stream)
-	if !errors.Is(err, runner.ErrMoveCreate) || want != nil && !errors.Is(err, want) {
+	if !errors.Is(err, runner.ErrMoveCreate) || !errors.Is(err, want) {
 		t.Fatalf("ImportSandbox = %v, want ErrMoveCreate and %v", err, want)
 	}
 	if len(*order) != 0 {
@@ -178,7 +180,7 @@ func TestMoveImport_RefusesWithoutWorkDrive(t *testing.T) {
 func TestMoveImport_RefusesCarriedRootWithoutCarryDrive(t *testing.T) {
 	k, cs, dyn, _ := importRig(t)
 	set := runner.CarriedSet{Roots: []string{runner.ScratchWorkPath, "/home/agent/elsewhere"}}
-	importRefused(t, k, cs, dyn, importSpec(), set, nil)
+	importRefused(t, k, cs, dyn, importSpec(), set, errImportRootNoDrive)
 	// A drive that carries no root would be re-attached, which a move does not do yet.
 	spec := importSpec()
 	other := spec.Drives[0]
@@ -205,6 +207,84 @@ func TestMoveImport_RefusesRunAlreadyInNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	importRefused(t, k, cs, dyn, importSpec(), set, errImportRunInNamespace)
+}
+
+func TestMoveImport_RefusesSecretEnv(t *testing.T) {
+	k, cs, dyn, _ := importRig(t)
+	spec := importSpec()
+	spec.SecretEnv = map[string]string{"TOKEN": "x"}
+	_, set := workStream(t)
+	importRefused(t, k, cs, dyn, spec, set, errImportSecretEnv)
+}
+
+func TestMoveImport_RefusesUnkeptRun(t *testing.T) {
+	for name, edit := range map[string]func(*runner.SandboxSpec){
+		"not interactive":      func(s *runner.SandboxSpec) { s.Interactive = false },
+		"agent is not revived": func(s *runner.SandboxSpec) { s.Labels[labelAgent] = "aider" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			k, cs, dyn, _ := importRig(t)
+			spec := importSpec()
+			edit(&spec)
+			_, set := workStream(t)
+			importRefused(t, k, cs, dyn, spec, set, errImportNotKept)
+		})
+	}
+}
+
+// A failure after the first object tears the run down: its policies (the hold too), Secret, Service, address and pods
+// go, and the carry claim stays for the move's drive rows.
+func TestMoveImport_FailureRollsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rig  func(*helperExec, *fake.Clientset, *dynamicfake.FakeDynamicClient)
+		want error
+	}{
+		{"the helper fails", func(he *helperExec, _ *fake.Clientset, _ *dynamicfake.FakeDynamicClient) {
+			he.err = errors.New("test: the helper failed")
+		}, runner.ErrMoveFiles},
+		{"the Sandbox create fails", func(_ *helperExec, _ *fake.Clientset, dyn *dynamicfake.FakeDynamicClient) {
+			dyn.PrependReactor("create", "sandboxes", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, errors.New("test: Sandbox create refused")
+			})
+		}, runner.ErrMoveCreate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, cs, dyn, he := importRig(t)
+			tc.rig(he, cs, dyn)
+			order := namedWrites(cs, dyn)
+			stream, set := workStream(t)
+			spec := importSpec()
+			if _, _, err := k.ImportSandbox(context.Background(), spec, set, 1<<20, stream); !errors.Is(err, tc.want) {
+				t.Fatalf("ImportSandbox = %v, want %v", err, tc.want)
+			}
+			if !slices.ContainsFunc(*order, func(s string) bool { return strings.HasPrefix(s, "create networkpolicies") }) {
+				t.Fatalf("writes = %v, want the import to have created its policies first", *order)
+			}
+			sel := metav1.ListOptions{LabelSelector: labelRun + "=" + asRunID.String()}
+			ctx := context.Background()
+			pols, err := cs.NetworkingV1().NetworkPolicies(testNamespace).List(ctx, sel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pods, err := cs.CoreV1().Pods(testNamespace).List(ctx, sel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pols.Items)+len(pods.Items) != 0 {
+				t.Errorf("after the rollback: %d policies, %d pods of the run, want none", len(pols.Items), len(pods.Items))
+			}
+			if _, err := cs.Tracker().Get(secretsGVR, testNamespace, secretName(asRunID)); !isNotFound(err) {
+				t.Errorf("the run Secret is still there (%v)", err)
+			}
+			if _, err := cs.Tracker().Get(servicesGVR, testNamespace, keepServiceName(asRunID)); !isNotFound(err) {
+				t.Errorf("the run Service is still there (%v)", err)
+			}
+			if _, err := cs.Tracker().Get(pvcsGVR, testNamespace, spec.Drives[0].ObjectName); err != nil {
+				t.Errorf("the carry claim is gone (%v), want it kept", err)
+			}
+		})
+	}
 }
 
 // An import creates the agent's policy and the proxy's deny-all hold before the run Secret, the claim before the
@@ -285,7 +365,7 @@ func TestMoveHelperPod_Confined(t *testing.T) {
 	}
 	idx := func(w string) int { return slices.Index(*order, w) }
 	pol, pod := "networkpolicies "+moveHelperNetPolName(asRunID), "pods "+moveHelperName(asRunID)
-	if !(idx("create "+pol) >= 0 && idx("create "+pol) < idx("create "+pod) && idx("delete "+pod) < idx("delete "+pol)) {
+	if !(idx("create "+pol) >= 0 && idx("create "+pol) < idx("create "+pod) && idx("delete "+pod) >= 0 && idx("delete "+pod) < idx("delete "+pol)) {
 		t.Errorf("writes = %v, want the helper's policy created before its pod and deleted after it", *order)
 	}
 	ro := k.moveHelperPod(moveHelper{ns: testNamespace, runID: asRunID, claims: []helperClaim{{claim: "c", target: runner.ScratchWorkPath}}, readOnly: true})
@@ -322,5 +402,195 @@ func checkConfined(t *testing.T, pod *corev1.Pod, readOnly bool) {
 		if m.ReadOnly != readOnly {
 			t.Errorf("helper mount %+v, want read-only %v", m, readOnly)
 		}
+	}
+}
+
+// helperWatch records the helper pod's deletes. After each one it answers the deleted pod to the next Get, so a
+// cleanup that does not wait for the pod to go reaches its policy delete with the pod still there. policyAfter holds,
+// for each helper policy delete that follows a pod delete, how many pod reads came between them.
+type helperWatch struct {
+	deletes     []clienttesting.DeleteAction
+	gone        *corev1.Pod
+	deleted     bool
+	reads       int
+	policyAfter []int
+}
+
+func watchHelper(cs *fake.Clientset) *helperWatch {
+	w := &helperWatch{}
+	name, polName := moveHelperName(asRunID), moveHelperNetPolName(asRunID)
+	cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.(clienttesting.GetAction).GetName() != name || !w.deleted {
+			return false, nil, nil
+		}
+		w.reads++
+		if w.gone != nil {
+			pod := w.gone
+			w.gone = nil
+			return true, pod, nil
+		}
+		return false, nil, nil
+	})
+	cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		da := a.(clienttesting.DeleteAction)
+		if da.GetName() != name {
+			return false, nil, nil
+		}
+		w.deletes = append(w.deletes, da)
+		w.deleted, w.reads, w.gone = true, 0, nil
+		if obj, err := cs.Tracker().Get(podsGVR, da.GetNamespace(), name); err == nil {
+			w.gone = obj.(*corev1.Pod).DeepCopy()
+		}
+		return false, nil, nil
+	})
+	cs.PrependReactor("delete", "networkpolicies", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.(clienttesting.DeleteAction).GetName() == polName && w.deleted {
+			w.policyAfter = append(w.policyAfter, w.reads)
+			w.deleted = false
+		}
+		return false, nil, nil
+	})
+	return w
+}
+
+// stampHelperUID gives the helper pod uid as the API server would on its create.
+func stampHelperUID(cs *fake.Clientset, uid k8stypes.UID) {
+	cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if p, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod); ok && p.Name == moveHelperName(asRunID) {
+			p.UID = uid
+		}
+		return false, nil, nil
+	})
+}
+
+func deleteUID(a clienttesting.DeleteAction) k8stypes.UID {
+	if p := a.GetDeleteOptions().Preconditions; p != nil && p.UID != nil {
+		return *p.UID
+	}
+	return ""
+}
+
+// The helper pod is deleted under its UID, and its policy only after a read finds the pod gone.
+func TestMoveHelper_CleanupDeletesPodUnderItsUIDAndWaits(t *testing.T) {
+	k, cs, _, _ := importRig(t)
+	stampHelperUID(cs, "helper-uid")
+	w := watchHelper(cs)
+	stream, set := workStream(t)
+	if _, _, err := k.ImportSandbox(context.Background(), importSpec(), set, 1<<20, stream); err != nil {
+		t.Fatalf("ImportSandbox: %v", err)
+	}
+	if len(w.deletes) != 1 || deleteUID(w.deletes[0]) != "helper-uid" {
+		t.Fatalf("helper pod deletes = %d (first UID %q), want one under helper-uid", len(w.deletes), firstUID(w.deletes))
+	}
+	if !slices.Equal(w.policyAfter, []int{2}) {
+		t.Errorf("pod reads before the helper policy delete = %v, want [2]: the pod still there, then gone", w.policyAfter)
+	}
+}
+
+func firstUID(ds []clienttesting.DeleteAction) k8stypes.UID {
+	if len(ds) == 0 {
+		return ""
+	}
+	return deleteUID(ds[0])
+}
+
+// A pod create that fails may still have made the pod: the cleanup reads it by name, adopts and deletes it under its
+// UID, and deletes the policy only once the pod is known to be gone. A read that fails leaves the policy in place.
+func TestMoveHelper_PodCreateErrorAdoptsPod(t *testing.T) {
+	timeout := apierrors.NewServerTimeout(schema.GroupResource{Resource: "pods"}, "create", 1)
+	for _, tc := range []struct {
+		name       string
+		made       bool
+		readFails  bool
+		wantDelete k8stypes.UID
+		wantPolicy bool
+	}{
+		{name: "made, then refused", made: true, wantDelete: "adopted-uid"},
+		{name: "never made"},
+		{name: "unknown", readFails: true, wantPolicy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k, cs, _, _ := importRig(t)
+			w := watchHelper(cs)
+			tried := false
+			cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+				if tc.readFails && tried && a.(clienttesting.GetAction).GetName() == moveHelperName(asRunID) {
+					return true, nil, apierrors.NewServerTimeout(schema.GroupResource{Resource: "pods"}, "get", 1)
+				}
+				return false, nil, nil
+			})
+			cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+				p, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod)
+				if !ok || p.Name != moveHelperName(asRunID) {
+					return false, nil, nil
+				}
+				tried = true
+				if tc.made {
+					made := p.DeepCopy()
+					made.UID = "adopted-uid"
+					if err := cs.Tracker().Create(podsGVR, made, testNamespace); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return true, nil, timeout
+			})
+			h := moveHelper{ns: testNamespace, runID: asRunID, claims: []helperClaim{{claim: "c", target: runner.ScratchWorkPath}}}
+			err := k.runMoveHelper(context.Background(), h, []string{proxyBinary}, nil, io.Discard)
+			if !errors.Is(err, timeout) {
+				t.Fatalf("runMoveHelper = %v, want the create's error", err)
+			}
+			if firstUID(w.deletes) != tc.wantDelete || len(w.deletes) > 1 {
+				t.Errorf("helper pod deletes = %d (first UID %q), want UID %q", len(w.deletes), firstUID(w.deletes), tc.wantDelete)
+			}
+			if tc.made && !slices.Equal(w.policyAfter, []int{2}) {
+				t.Errorf("pod reads before the helper policy delete = %v, want [2]", w.policyAfter)
+			}
+			if _, err := cs.Tracker().Get(podsGVR, testNamespace, moveHelperName(asRunID)); !isNotFound(err) {
+				t.Errorf("the helper pod is still there (%v)", err)
+			}
+			_, perr := cs.Tracker().Get(netpolsGVR, testNamespace, moveHelperNetPolName(asRunID))
+			if kept := perr == nil; kept != tc.wantPolicy {
+				t.Errorf("helper policy kept = %v, want %v", kept, tc.wantPolicy)
+			}
+		})
+	}
+}
+
+// A helper an earlier move of this run left behind is deleted under its UID and waited for, then its policy, before
+// this move creates its own; the move then goes on.
+func TestMoveImport_ReclaimsStaleHelper(t *testing.T) {
+	k, cs, dyn, he := importRig(t)
+	h := moveHelper{ns: testNamespace, runID: asRunID, claims: []helperClaim{{claim: "c", target: runner.ScratchWorkPath}}}
+	stale := k.moveHelperPod(h)
+	stale.UID = "stale-uid"
+	if err := cs.Tracker().Create(podsGVR, stale, testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Tracker().Create(netpolsGVR, k.moveHelperNetPol(h), testNamespace); err != nil {
+		t.Fatal(err)
+	}
+	stampHelperUID(cs, "new-uid")
+	w := watchHelper(cs)
+	order := namedWrites(cs, dyn)
+	stream, set := workStream(t)
+	if _, _, err := k.ImportSandbox(context.Background(), importSpec(), set, 1<<20, stream); err != nil {
+		t.Fatalf("ImportSandbox with a stale helper = %v, want nil", err)
+	}
+	if len(w.deletes) != 2 || deleteUID(w.deletes[0]) != "stale-uid" || deleteUID(w.deletes[1]) != "new-uid" {
+		t.Fatalf("helper pod deletes = %d, want the stale one under stale-uid, then this move's under new-uid", len(w.deletes))
+	}
+	if !slices.Equal(w.policyAfter, []int{2, 2}) {
+		t.Errorf("pod reads before each helper policy delete = %v, want [2 2]", w.policyAfter)
+	}
+	pol, pod := "networkpolicies "+moveHelperNetPolName(asRunID), "pods "+moveHelperName(asRunID)
+	idx := func(w string) int { return slices.Index(*order, w) }
+	if !(idx("delete "+pod) >= 0 && idx("delete "+pod) < idx("delete "+pol) && idx("delete "+pol) < idx("create "+pol) && idx("create "+pol) < idx("create "+pod)) {
+		t.Errorf("writes = %v, want the stale pod, then its policy, deleted before the new policy and pod", *order)
+	}
+	if !slices.Contains(he.argv, "-move-import") {
+		t.Errorf("the helper ran %v, want the import to go on", he.argv)
+	}
+	if strings.Contains(strings.Join(*order, "\n"), "create pods "+proxyPodName(asRunID)) {
+		t.Errorf("the import created a proxy pod: %v", *order)
 	}
 }

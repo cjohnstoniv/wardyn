@@ -117,6 +117,15 @@ func TestReplaceProxy_ImportedRunWritesPolicyFromReviveConfig(t *testing.T) {
 			if proxyPolicy(t, cs, proxyHoldNetPolName(asRunID)) != nil {
 				t.Error("the hold is still there")
 			}
+			var holdDeletes []clienttesting.DeleteAction
+			for _, a := range cs.Actions() {
+				if da, ok := a.(clienttesting.DeleteAction); ok && da.GetResource().Resource == "networkpolicies" && da.GetName() == proxyHoldNetPolName(asRunID) {
+					holdDeletes = append(holdDeletes, da)
+				}
+			}
+			if len(holdDeletes) != 1 || deleteUID(holdDeletes[0]) != hold.UID {
+				t.Errorf("hold deletes = %d (first UID %q), want one under the hold's UID %q", len(holdDeletes), firstUID(holdDeletes), hold.UID)
+			}
 		})
 	}
 }

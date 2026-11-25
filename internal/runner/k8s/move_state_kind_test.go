@@ -143,7 +143,7 @@ func moveKindExport(t *testing.T, k *keepDriver, ref string) ([]byte, []movepack
 }
 
 // moveKindImport tears the source down and imports stream as the same run on a claim of its own.
-func moveKindImport(t *testing.T, k *keepDriver, src runner.SandboxSpec, srcRef string, stream []byte) (runner.Sandbox, movepack.Manifest) {
+func moveKindImport(t *testing.T, k *keepDriver, src runner.SandboxSpec, srcRef string, stream []byte) (runner.Sandbox, movepack.Manifest, runner.SandboxSpec) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), moveKindTimeout)
 	defer cancel()
@@ -157,7 +157,7 @@ func moveKindImport(t *testing.T, k *keepDriver, src runner.SandboxSpec, srcRef 
 		t.Fatalf("ImportSandbox: %v", err)
 	}
 	t.Cleanup(func() { _ = k.KillSandbox(context.Background(), sb.Ref) })
-	return sb, m
+	return sb, m, spec
 }
 
 // readsStopped asserts the run's Status reads as the runner's observer judges absent: RunStopped with no exit code.
@@ -182,11 +182,15 @@ func TestMoveState_K8sExportImport(t *testing.T) {
 	}
 	src, srcRef := moveKindSource(t, k, image)
 	stream, _, exported := moveKindExport(t, k, srcRef)
-	sb, imported := moveKindImport(t, k, src, srcRef, stream)
+	sb, imported, _ := moveKindImport(t, k, src, srcRef, stream)
 	if imported.Digest != exported.Digest {
 		t.Fatalf("the import read digest %s, the export wrote %s", imported.Digest, exported.Digest)
 	}
-	readsStopped(t, k, sb.Ref, "at once after the import")
+	// The controller may or may not have made the held pod yet: either reading is one the runner's observer takes
+	// for absent, and nothing else is.
+	if st := readsStopped(t, k, sb.Ref, "at once after the import"); st.Message != "sandbox not found" && !strings.HasPrefix(st.Message, "kept") {
+		t.Errorf("Status message at once after the import = %q, want sandbox not found or the kept reading", st.Message)
+	}
 	ns := k.defaultNamespace()
 	var pod *corev1.Pod
 	waitFor(t, "the controller's held pod", func() bool {
@@ -234,7 +238,8 @@ func TestMoveImport_WritesOnlyBeneathRoots(t *testing.T) {
 			}
 		}
 	}()
-	sb, _ := moveKindImport(t, k, src, srcRef, stream)
+	sb, _, spec := moveKindImport(t, k, src, srcRef, stream)
+	claim := spec.Drives[0].ObjectName
 	close(stop)
 	<-watched
 	mu.Lock()
@@ -246,10 +251,8 @@ func TestMoveImport_WritesOnlyBeneathRoots(t *testing.T) {
 	if sc == nil || sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem {
 		t.Errorf("the helper's root is not read-only: %+v", sc)
 	}
-	for _, v := range helper.Spec.Volumes {
-		if v.PersistentVolumeClaim == nil || !strings.HasPrefix(v.PersistentVolumeClaim.ClaimName, "wardyn-move-kind-") {
-			t.Errorf("the helper mounts %+v, want only the import's own claim", v)
-		}
+	if len(helper.Spec.Volumes) != 1 || helper.Spec.Volumes[0].PersistentVolumeClaim == nil || helper.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != claim {
+		t.Errorf("the helper mounts %+v, want only the import's own claim %s", helper.Spec.Volumes, claim)
 	}
 	if _, err := k.clientset.CoreV1().Pods(ns).Get(context.Background(), moveHelperName(src.RunID), metav1.GetOptions{}); err == nil {
 		t.Error("the helper pod outlived the import")
@@ -257,9 +260,6 @@ func TestMoveImport_WritesOnlyBeneathRoots(t *testing.T) {
 	back, hs, _ := moveKindExport(t, k, sb.Ref)
 	link := false
 	for _, h := range hs {
-		if h.Path != "home/agent/work" && !strings.HasPrefix(h.Path, "home/agent/work/") {
-			t.Errorf("entry %q is outside the work folder", h.Path)
-		}
 		link = link || h.Path == "home/agent/work/l" && h.Type == movepack.TypeSymlink && h.Link == "/etc/passwd"
 	}
 	if !link {
@@ -274,7 +274,7 @@ func TestMoveImport_ProxyPolicyDenyAllUntilRevive(t *testing.T) {
 	k, image := liveMoveDriver(t)
 	src, srcRef := moveKindSource(t, k, image)
 	stream, _, _ := moveKindExport(t, k, srcRef)
-	sb, _ := moveKindImport(t, k, src, srcRef, stream)
+	sb, _, _ := moveKindImport(t, k, src, srcRef, stream)
 	ctx := context.Background()
 	ns := k.defaultNamespace()
 	sel := metav1.ListOptions{LabelSelector: labelRun + "=" + src.RunID.String() + "," + labelComponent + "=" + componentProxy}

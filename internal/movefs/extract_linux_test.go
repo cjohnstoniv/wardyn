@@ -185,3 +185,34 @@ func TestMoveFS_ExtractReadOnlyDirModes(t *testing.T) {
 		}
 	}
 }
+
+// A directory keeps the set-group-ID bit it took from a set-group-ID mount root, so files written below it later keep
+// the volume's group; the stream's own mode bits still apply.
+func TestMoveFS_ExtractKeepsSetGroupIDOnDirs(t *testing.T) {
+	src := streamOf(t, workSet,
+		entry{path: "work", typ: movepack.TypeDir, mode: 0o755},
+		entry{path: "work/d", typ: movepack.TypeDir, mode: 0o750},
+		entry{path: "work/d/f", typ: movepack.TypeFile, mode: 0o640, body: "x"},
+	)
+	base := t.TempDir()
+	root := filepath.Join(base, "work")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o775|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(root); err != nil || fi.Mode()&os.ModeSetgid == 0 {
+		t.Skipf("this filesystem does not keep set-group-ID on a directory (err %v)", err)
+	}
+	if _, err := extractInto(t, base, src, workSet); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	fi, err := os.Lstat(filepath.Join(root, "d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSetgid == 0 || fi.Mode().Perm() != 0o750 {
+		t.Errorf("work/d mode = %v, want set-group-ID kept with 0750", fi.Mode())
+	}
+}
