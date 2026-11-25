@@ -235,7 +235,13 @@ func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 	}
 	// The barrier: a third transaction holds the heartbeat row until both beats wait on it, so the two beats
 	// overlap rather than happen to run one after the other. It is released well inside the beats' 5 s lock timeout.
-	hold, err := pool.Begin(ctx)
+	// It runs on its own pool, since the poll below reads from the test's pool while the barrier is held.
+	holdPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	hold, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +428,13 @@ func TestRunnerLinkWindow_LateTimerAfterFreshSessionOpensNothing_PG(t *testing.T
 		ctx := context.Background()
 		s1 := uuid.NewString()
 		rn := outageRunner(t, st, s1)
-		tx, err := pool.Begin(ctx)
+		// The fresh session's transaction runs on its own pool, since the poll below reads from the test's pool while it is open.
+		txPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer txPool.Close()
+		tx, err := txPool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
