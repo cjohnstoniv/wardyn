@@ -33,7 +33,7 @@ func wantZeroPortRefuses[A, T any](t *testing.T, name string, a A) {
 
 // portShapes is each port's declared type, the shape TestMovePorts_ZeroPortRefuses calls a zero port of.
 var portShapes = map[string]string{
-	"movePortStopRefusal":       "movePort[types.AgentRun, string]",
+	"movePortStopRefusal":       "movePort[moveKeepArgs, string]",
 	"movePortPauseGen":          "movePort[types.AgentRun, int64]",
 	"movePortPauseStop":         "movePort[moveStopArgs, movePauseReceipt]",
 	"movePortRevokeFor":         "movePort[moveGenArgs, moveRevokeState]",
@@ -51,7 +51,7 @@ var portShapes = map[string]string{
 // declared a movePort with no value.
 func TestMovePorts_ZeroPortRefuses(t *testing.T) {
 	run, id := types.AgentRun{ID: uuid.New()}, uuid.New()
-	wantZeroPortRefuses[types.AgentRun, string](t, "movePortStopRefusal", run)
+	wantZeroPortRefuses[moveKeepArgs, string](t, "movePortStopRefusal", moveKeepArgs{Run: run})
 	wantZeroPortRefuses[types.AgentRun, int64](t, "movePortPauseGen", run)
 	wantZeroPortRefuses[moveStopArgs, movePauseReceipt](t, "movePortPauseStop", moveStopArgs{Run: run})
 	wantZeroPortRefuses[moveGenArgs, moveRevokeState](t, "movePortRevokeFor", moveGenArgs{RunID: id, Gen: 1})

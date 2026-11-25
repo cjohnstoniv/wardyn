@@ -29,6 +29,7 @@ const (
 	reasonMoveDestinationUnknown     = "move_destination_unknown"      // 422: the destination names nothing the run's owner can use
 	reasonMoveToPersonalOff          = "move_to_personal_off"          // 403: moving onto a person's own runner is off in site config
 	reasonMoveDestinationRefused     = "move_destination_refused"      // 403: the destination's policy refuses the run; the message names the layer
+	reasonMoveWorkDriveRefused       = "move_work_drive_refused"       // 403 or 422, and a failure: the destination keeps the work folder on a new drive of the run's person, and it cannot be made; the layer names the door
 	reasonMoveResidentCredential     = "move_resident_credential"      // 403: the run holds a credential where it runs
 	reasonMoveMCPToken               = "move_mcp_token"                // 403: the run has a per-run MCP token
 	reasonMovePolicyChanged          = "move_policy_changed"           // failure: the destination's judgement changed before commit

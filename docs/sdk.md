@@ -1253,6 +1253,7 @@ sending `error` alone — completing the sweep this issue tracks:
 | `move_destination_unknown` | `422` on `POST /runs/{id}/move`: the destination names nothing the run's owner can use. |
 | `move_to_personal_off` | `403` on `POST /runs/{id}/move`: moving onto a person's own runner is off in site config. |
 | `move_destination_refused` | `403` on `POST /runs/{id}/move`: the destination's policy refuses the run; the message names the layer. |
+| `move_work_drive_refused` | `403` or `422` on `POST /runs/{id}/move`, and a failed move's reason: the destination keeps the work folder on a new drive of the run's person, and it cannot be made; the layer names the door. |
 | `move_resident_credential` | `403` on `POST /runs/{id}/move`: the run holds a credential where it runs. |
 | `move_mcp_token` | `403` on `POST /runs/{id}/move`: the run has a per-run MCP token. |
 | `move_policy_changed` | A failed move's reason, on `GET /runs/{id}/placements` and its `run.move` row: the destination's judgement changed before commit. |

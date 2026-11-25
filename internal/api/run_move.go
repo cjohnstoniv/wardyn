@@ -186,7 +186,7 @@ func (s *Server) admitMove(ctx context.Context, ms store.RunMoveStore, req moveR
 	if reason, layer := rec.moveRefusal(); reason != "" {
 		return nil, refuseMoveAt(reason, layer, "The run holds a value in its sandbox that a move cannot carry ("+layer+")."), nil
 	}
-	if why, err := movePortStopRefusal.call(ctx, run); err != nil || why != "" {
+	if why, err := movePortStopRefusal.call(ctx, moveKeepArgs{Run: run, Drives: rec.Drives}); err != nil || why != "" {
 		if err != nil {
 			why = "This server cannot record a person's pause."
 		}
@@ -227,11 +227,26 @@ func (s *Server) admitMove(ctx context.Context, ms store.RunMoveStore, req moveR
 		return x, ref, nil
 	}
 	x.plan = plan
-	x.mv.ToTrustClass, x.mv.Narrowed = plan.Trust, mustJSON(plan.Narrowed)
-	if ok, err := ms.SetRunMoveDestination(ctx, x.mv); err != nil || !ok {
-		return x, refuseMove(http.StatusServiceUnavailable, reasonMovePolicyUnreadable, "The destination's judgement could not be recorded; nothing was stopped."), nil
+	return x, x.admitDestination(ctx), nil
+}
+
+// admitDestination is an admitted move's last steps, in the request: the doors of the new work drive the destination
+// keeps the work folder on (moveWorkDriveGates), then the destination's judgement recorded on the row. nil when the
+// move goes on.
+func (x *moveExec) admitDestination(ctx context.Context) *moveRefusal {
+	work, ref, err := x.s.moveWorkDriveGates(ctx, x.run, x.dest, x.plan)
+	switch {
+	case err != nil:
+		return refuseMove(http.StatusServiceUnavailable, reasonMovePolicyUnreadable, "A read the destination's work drive needs failed; nothing was stopped.")
+	case ref != nil:
+		return ref
 	}
-	return x, nil, nil
+	x.work = work
+	x.mv.ToTrustClass, x.mv.Narrowed = x.plan.Trust, mustJSON(x.plan.Narrowed)
+	if ok, err := x.ms.SetRunMoveDestination(ctx, x.mv); err != nil || !ok {
+		return refuseMove(http.StatusServiceUnavailable, reasonMovePolicyUnreadable, "The destination's judgement could not be recorded; nothing was stopped.")
+	}
+	return nil
 }
 
 // moveSamePlace reports whether d is where the run runs now: the same runner for a run on a runner, else the same

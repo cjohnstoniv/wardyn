@@ -88,6 +88,12 @@ type moveExec struct {
 	stopped  bool
 	maxBytes int64
 
+	// work is the row a new work drive's doors admitted at admission (nil: the destination needs none), workMade says
+	// the move asked the store for it, and workMount is its mount once made.
+	work      *keptWorkFolder
+	workMade  bool
+	workMount *types.DriveMount
+
 	jti      string
 	destRef  string
 	drained  bool
@@ -309,7 +315,7 @@ func (x *moveExec) end(ctx context.Context, end *moveEnd) {
 	}
 	wctx := context.WithoutCancel(ctx)
 	cleanup := types.MoveCleanupNone
-	if x.destRef != "" || x.jti != "" {
+	if x.destRef != "" || x.jti != "" || x.workMade {
 		cleanup = types.MoveCleanupPending
 	}
 	ok, err := x.ms.EndRunMove(wctx, x.mv.ID, end.state, end.reason, cleanup)
@@ -320,7 +326,8 @@ func (x *moveExec) end(ctx context.Context, end *moveEnd) {
 	}
 	x.mv.State, x.mv.Failure = end.state, end.reason
 	x.s.auditMoveEnd(wctx, x.mv, x.actorType, x.principal, end)
-	if cleanup == types.MoveCleanupPending && x.s.moveTeardownDestination(wctx, x.run.ID, x.destRef, x.jti) {
+	if cleanup == types.MoveCleanupPending && x.s.moveTeardownDestination(wctx, x.run.ID, x.destRef, x.jti) &&
+		x.s.dropMoveWorkDrive(wctx, x.run.ID, x.mv.ID) {
 		if err := x.ms.SetRunMoveCleanup(wctx, x.mv.ID, types.MoveCleanupDone); err != nil {
 			slog.WarnContext(ctx, "wardynd: a move's torn-down destination could not be recorded", slog.String("move_id", x.mv.ID.String()), slog.Any("err", err))
 		}
@@ -371,6 +378,9 @@ func (x *moveExec) carry(ctx context.Context) *moveEnd {
 	if !x.stamp(ctx) {
 		return moveLapsed
 	}
+	if end := x.makeWorkDrive(ctx); end != nil {
+		return end
+	}
 	b, end := s.buildMoveDestination(ctx, x)
 	if end != nil {
 		return end
@@ -387,7 +397,7 @@ func (x *moveExec) carry(ctx context.Context) *moveEnd {
 		return failMove(reasonMoveExportFailed, "The move could not be recorded as exporting.")
 	}
 	cs, err := movePortCarriedSet.call(ctx, x.run)
-	set := runner.CarriedSet{Roots: cs.Roots, Exclude: cs.Exclude}
+	set := moveExcludeReattached(runner.CarriedSet{Roots: cs.Roots, Exclude: cs.Exclude}, x.plan.Drives)
 	if err != nil {
 		return failMove(reasonMoveExportFailed, "What the run carries could not be read.")
 	}
@@ -800,11 +810,12 @@ func (s *Server) sweepRunMove(ctx context.Context, ms store.RunMoveStore, d stor
 		case err != nil:
 			return
 		case live:
-			// The sandbox is the run's own, or another move's destination: only its token is this move's to revoke.
-			if s.moveTeardownDestination(ctx, mv.RunID, "", mv.ToTokenJTI) {
+			// The sandbox is the run's own, or another move's destination: only its token, and the work drive the
+			// move made, are this move's to remove.
+			if s.moveTeardownDestination(ctx, mv.RunID, "", mv.ToTokenJTI) && s.dropMoveWorkDrive(ctx, mv.RunID, mv.ID) {
 				s.moveCleanupDone(ctx, ms, mv)
 			}
-		case s.moveTeardownDestination(ctx, mv.RunID, mv.ToSandboxRef, mv.ToTokenJTI):
+		case s.moveTeardownDestination(ctx, mv.RunID, mv.ToSandboxRef, mv.ToTokenJTI) && s.dropMoveWorkDrive(ctx, mv.RunID, mv.ID):
 			s.moveCleanupDone(ctx, ms, mv)
 		}
 	case mv.State == types.MoveCommitted:

@@ -252,7 +252,7 @@ func TestMovePolicyNarrowsOrRefuses(t *testing.T) {
 	}{
 		{"keep", reasonMoveDestinationRefused, "keep", func(_ *testing.T, f *moveFixture) {
 			calls := 0
-			movePortStopRefusal = func(context.Context, types.AgentRun) (string, error) {
+			movePortStopRefusal = func(context.Context, moveKeepArgs) (string, error) {
 				calls++
 				if calls > 1 {
 					return "this executor ends a stopped sandbox", nil
@@ -307,11 +307,11 @@ func TestMovePolicyNarrowsOrRefuses(t *testing.T) {
 	rid := uuid.New()
 	local := moveDest{Placement: types.PlacementLocal, RunnerID: &rid, Runner: types.Runner{ID: rid, Arch: "arm64"}}
 	caps := runner.Capabilities{ConfinementClasses: []types.ConfinementClass{types.CC1}}
-	if ref := moveRecordRefusal(runSandboxSpecRecord{ImageArches: []string{"amd64"}}, types.AgentRun{}, local, caps); ref == nil || ref.layer != "image_arch" {
+	if ref := moveRecordRefusal(runSandboxSpecRecord{ImageArches: []string{"amd64"}}, types.AgentRun{}, local, caps, "docker"); ref == nil || ref.layer != "image_arch" {
 		t.Errorf("image built for another architecture: %+v, want layer image_arch", ref)
 	}
 	team := runSandboxSpecRecord{Drives: []types.DriveMount{{DriveName: "team-notes", Team: true}}}
-	if ref := moveRecordRefusal(team, types.AgentRun{}, local, caps); ref == nil || ref.layer != "drive" {
+	if ref := moveRecordRefusal(team, types.AgentRun{}, local, caps, "docker"); ref == nil || ref.layer != "drive" {
 		t.Errorf("team drive to a runner: %+v, want layer drive", ref)
 	}
 

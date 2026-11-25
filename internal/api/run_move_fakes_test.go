@@ -137,8 +137,8 @@ func withMovePortFakes(t *testing.T) *moveFakes {
 	return f
 }
 
-func fakeMoveStopRefusal(f *moveFakes) movePort[types.AgentRun, string] {
-	return func(context.Context, types.AgentRun) (string, error) {
+func fakeMoveStopRefusal(f *moveFakes) movePort[moveKeepArgs, string] {
+	return func(context.Context, moveKeepArgs) (string, error) {
 		n := f.note("stop_refusal")
 		f.mu.Lock()
 		defer f.mu.Unlock()

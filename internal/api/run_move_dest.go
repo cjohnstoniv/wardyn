@@ -32,14 +32,14 @@ func moveDestRun(run types.AgentRun, d moveDest, executor string) types.AgentRun
 	return out
 }
 
-// moveSandboxSpec is the destination's spec from the record: its agent half and nothing else. A runner destination
-// gets no organisation component config: the strip dispatch applies to every local plan. Claude Code's managed
-// settings are left out where the destination delivers no managed files and the run has no tool rules (dispatch's
-// fallback).
+// moveSandboxSpec is the destination's spec from the record: its agent half and nothing else, with the drives the
+// destination re-attaches (moveDestDrives) in place of the recorded ones. A runner destination gets no organisation
+// component config: the strip dispatch applies to every local plan. Claude Code's managed settings are left out where
+// the destination delivers no managed files and the run has no tool rules (dispatch's fallback).
 func moveSandboxSpec(run types.AgentRun, rec runSandboxSpecRecord, d moveDest, plan moveDestPlan) runner.SandboxSpec {
 	spec := runner.SandboxSpec{
 		RunID: run.ID, Image: rec.Image, ImageArches: slices.Clone(rec.ImageArches), ConfinementClass: rec.ConfinementClass,
-		MachineKind: rec.MachineKind, Env: maps.Clone(rec.Env), Mounts: slices.Clone(rec.Mounts), Drives: slices.Clone(rec.Drives),
+		MachineKind: rec.MachineKind, Env: maps.Clone(rec.Env), Mounts: slices.Clone(rec.Mounts), Drives: slices.Clone(plan.Drives),
 		UserMountRoots: slices.Clone(rec.UserMountRoots), UserWritable: rec.UserWritable, Interactive: rec.Interactive,
 		Resources: rec.Resources,
 		// The run's labels, as dispatch sets them: a Kubernetes destination finds its pod by them.
@@ -68,13 +68,17 @@ type moveDestBuild struct {
 	jti      string
 }
 
-// buildMoveDestination readies the destination (steps 5.2 to 5.5): the spec from the record on the destination's
-// target (fillSandboxTarget, create's own target rules), the lease the destination runner's create needs, and the
-// destination's identity, whose jti the move records for commit and for a failed move's revoke. The token itself goes
-// to no runner and no process. The agent policy row says what the destination's managed settings are.
+// buildMoveDestination readies the destination (steps 5.2 to 5.5): the spec from the record, with the move's new work
+// drive when it made one, on the destination's target (fillSandboxTarget, create's own target rules), the lease the
+// destination runner's create needs, and the destination's identity, whose jti the move records for commit and for a
+// failed move's revoke. The token itself goes to no runner and no process. The agent policy row says what the
+// destination's managed settings are.
 func (s *Server) buildMoveDestination(ctx context.Context, x *moveExec) (moveDestBuild, *moveEnd) {
 	destRun := moveDestRun(x.run, x.dest, "")
 	spec := moveSandboxSpec(x.run, x.rec, x.dest, x.plan)
+	if x.workMount != nil {
+		spec.Drives = append(spec.Drives, *x.workMount)
+	}
 	executor, err := s.fillSandboxTarget(ctx, destRun, &spec)
 	if err != nil {
 		return moveDestBuild{}, failMove(reasonMoveCreateFailed, "The destination's sandbox could not be targeted: "+err.Error())

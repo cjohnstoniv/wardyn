@@ -126,7 +126,11 @@ func (s *Server) keepWorkFolderGates(r *http.Request, spec types.RunPolicySpec, 
 // keptWorkFolderName names the drive after the run: its title, else "Run",
 // then the run id's first block, so two runs of one title get two drives.
 func keptWorkFolderName(run types.AgentRun) string {
-	suffix := " " + run.ID.String()[:8]
+	return keptDriveName(run, " "+run.ID.String()[:8])
+}
+
+// keptDriveName is run's title, else "Run", shortened to leave room for suffix, then suffix.
+func keptDriveName(run types.AgentRun, suffix string) string {
 	title := strings.TrimSpace(run.Title)
 	if types.ValidateDriveName(title) != nil {
 		title = "Run"

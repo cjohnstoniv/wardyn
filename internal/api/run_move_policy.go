@@ -340,6 +340,10 @@ type moveDestPlan struct {
 	// rules).
 	DropSettings     bool
 	SettingsWithheld string
+	// Drives are the recorded drives the destination re-attaches (moveDestDrives), and WorkDrive says the destination
+	// keeps the work folder on a new drive the move makes for it (a Kubernetes destination).
+	Drives    []types.DriveMount
+	WorkDrive bool
 }
 
 // moveNarrowed is the egress narrowing a destination applies, recorded as run_moves.narrowed and handed to the
@@ -451,17 +455,21 @@ func (s *Server) judgeMoveDestination(ctx context.Context, run types.AgentRun, r
 	if d.poolRefused {
 		return refused("pool_use_policy", "The destination pool's use policy does not admit the run's owner.")
 	}
-	keep, err := movePortStopRefusal.call(ctx, destRun)
+	// The keep is judged on the drives the destination's spec mounts: the re-attached ones and the new work drive. A
+	// drive that does not re-attach refuses below.
+	var plan moveDestPlan
+	plan.Drives, _ = moveDestDrives(rec, run, d, s.cfg.RunnerTarget)
+	plan.WorkDrive = s.moveDestKubernetes(d, caps)
+	keep, err := movePortStopRefusal.call(ctx, moveKeepArgs{Run: destRun, Drives: moveKeepDrives(plan)})
 	if err != nil {
 		return moveDestPlan{}, nil, err
 	}
 	if keep != "" {
 		return refused("keep", "The destination cannot keep a stopped run: "+keep)
 	}
-	if ref := moveRecordRefusal(rec, run, d, caps); ref != nil {
+	if ref := moveRecordRefusal(rec, run, d, caps, s.cfg.RunnerTarget); ref != nil {
 		return moveDestPlan{}, ref, nil
 	}
-	var plan moveDestPlan
 	plan.DropSettings, plan.SettingsWithheld, err = moveSettingsFallback(rec, caps)
 	if err != nil {
 		return refused("managed_files", err.Error())
@@ -512,9 +520,9 @@ func moveCeilingLayer(reason string) string {
 }
 
 // moveRecordRefusal is the destination judgement's terms on the recorded spec alone: a folder bound to another
-// runner, a prewrapped image's architectures, the run's class, and a team or read-only drive the destination does
-// not mount.
-func moveRecordRefusal(rec runSandboxSpecRecord, run types.AgentRun, d moveDest, caps runner.Capabilities) *moveRefusal {
+// runner, a prewrapped image's architectures, the run's class, and a drive the destination does not re-attach
+// (moveDestDrives). orgTarget is the substrate the organisation's runners dispatch to.
+func moveRecordRefusal(rec runSandboxSpecRecord, run types.AgentRun, d moveDest, caps runner.Capabilities, orgTarget string) *moveRefusal {
 	for _, m := range rec.Mounts {
 		if m.BoundRunner != "" && (!d.local() || m.BoundRunner != d.RunnerID.String()) {
 			return refuseMoveAt(reasonMoveDestinationRefused, "bound_folder", "A folder of this run is bound to its runner, so it moves nowhere else.")
@@ -528,17 +536,54 @@ func moveRecordRefusal(rec runSandboxSpecRecord, run types.AgentRun, d moveDest,
 	if !slices.Contains(caps.ConfinementClasses, moveClass(rec)) {
 		return refuseMoveAt(reasonMoveDestinationRefused, "confinement", fmt.Sprintf("The destination does not enforce the run's class %s.", moveClass(rec)))
 	}
+	_, ref := moveDestDrives(rec, run, d, orgTarget)
+	return ref
+}
+
+// moveDestDrives is the recorded drives the destination re-attaches. A move writes only into storage it creates: the
+// work folder's drive is never re-attached (it may hold an earlier placement's state, and stays the person's drive),
+// and every other drive is re-attached only where the destination mounts the same storage, never copied. That is a
+// drive bound to the destination runner, or, between the organisation's own executors, a drive of the substrate
+// orgTarget the organisation dispatches to. Any other drive refuses with layer drive.
+func moveDestDrives(rec runSandboxSpecRecord, run types.AgentRun, d moveDest, orgTarget string) ([]types.DriveMount, *moveRefusal) {
+	var out []types.DriveMount
 	for _, dr := range rec.Drives {
-		if !dr.Team && !dr.ReadOnly {
+		if dr.Target == runner.ScratchWorkPath {
 			continue
 		}
-		sameRunner := d.local() && run.RunnerID != nil && *run.RunnerID == *d.RunnerID
-		if !sameRunner && (d.local() || run.RunnerID != nil) {
-			return refuseMoveAt(reasonMoveDestinationRefused, "drive",
+		var same bool
+		if d.local() {
+			same = dr.RunnerID != nil && *dr.RunnerID == *d.RunnerID
+		} else {
+			same = run.RunnerID == nil && dr.RunnerID == nil && dr.Backend.RunnerTarget() == orgTarget
+		}
+		switch {
+		case same:
+			out = append(out, dr)
+		case dr.Team || dr.ReadOnly:
+			return nil, refuseMoveAt(reasonMoveDestinationRefused, "drive",
 				fmt.Sprintf("The run mounts the shared or read-only drive %q, which is not carried and does not mount at the destination.", dr.DriveName))
+		default:
+			return nil, refuseMoveAt(reasonMoveDestinationRefused, "drive", moveDriveElsewhereMsg(dr.DriveName))
 		}
 	}
-	return nil
+	return out, nil
+}
+
+// moveDriveElsewhereMsg refuses a move whose destination does not mount one of the run's own drives.
+func moveDriveElsewhereMsg(drive string) string {
+	return fmt.Sprintf("The run mounts the drive %q, which is not the same storage at the destination. A move re-attaches a drive and never copies one.", drive)
+}
+
+// moveKeepDrives is the drives the destination's spec mounts as the keep judges them: the re-attached drives, and the
+// new work drive at the work folder. The work drive's row is made only once the move runs (makeWorkDrive), so its
+// mount here is the place it takes.
+func moveKeepDrives(plan moveDestPlan) []types.DriveMount {
+	out := slices.Clone(plan.Drives)
+	if plan.WorkDrive {
+		out = append(out, types.DriveMount{Backend: types.DriveBackendK8sPVC, Target: runner.ScratchWorkPath})
+	}
+	return out
 }
 
 // moveSettingsFallback judges each recorded managed file at the destination's capabilities, under dispatch's two
