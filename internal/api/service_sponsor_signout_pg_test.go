@@ -47,8 +47,10 @@ func TestPG_SponsorFullRevokeStopsServiceTokenAndQueue(t *testing.T) {
 	before := time.Now()
 	time.Sleep(10 * time.Millisecond)
 
-	if w := doSSO(t, e.h.srv, http.MethodPost, "/api/v1/sessions/revoke", e.sec, `{"sub":"`+svcSponsor+`"}`); w.Code != http.StatusNoContent {
-		t.Fatalf("full revoke = %d %s", w.Code, w.Body.String())
+	// The sponsor's full cut is written directly: the revoke handler also sweeps the sponsored tokens, which
+	// would stop the token before the sponsor check this test pins (token_move_pg_test.go covers the sweep).
+	if err := e.rev.RevokeSub(t.Context(), svcSponsor); err != nil {
+		t.Fatal(err)
 	}
 
 	if got := e.as(t, tok.Token, http.MethodGet, "/api/v1/me", "").Code; got != http.StatusUnauthorized || e.lastAuthFail() != authFailedServiceSponsorInactive {
