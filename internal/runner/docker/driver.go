@@ -262,6 +262,8 @@ type Driver struct {
 	vmDial   func(ctx context.Context, path string) (net.Conn, error)
 	// heldOrphans holds the run ids whose row-less sandbox this process held cleanly (orphan_hold.go).
 	heldOrphans sync.Map
+	// mcpStarts holds each created MCP proxy's config, by container name, until StartMCPSandbox writes it.
+	mcpStarts sync.Map
 }
 
 // pendingAgent is the fully-built agent-container config CreateSandbox defers
@@ -366,7 +368,8 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// when it can't (warn-and-run-uncapped, or create-refused); see capabilitiesForWith.
 		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
 		// Per-class Freeze/Thaw support — see capabilitiesForWith.
-		Freeze: c.Freeze,
+		Freeze:          c.Freeze,
+		MCPSandboxKinds: []types.MachineKind{types.MachineContainer}, // mcp_sandbox.go
 	}, nil
 }
 

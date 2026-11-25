@@ -73,6 +73,9 @@ func (r fakePullResponse) Wait(context.Context) error {
 // container joined through NetworkConnect.
 const fakeJoinedNetIP = "172.30.0.9"
 
+// fakeMCPHost is the host program a fake MCP proxy's image carries at mcpHostImagePath.
+const fakeMCPHost = "\x7fELF fake wardyn-mcp-host"
+
 // fakeExec records one ExecCreate.
 type fakeExec struct {
 	cmd     []string
@@ -92,6 +95,8 @@ type createdContainer struct {
 	connectedTo []string
 	// cut lists networks NetworkDisconnect took the container off: an endpoint that is gone stays gone.
 	cut map[string]bool
+	// connectedIPs is the address a NetworkConnect pinned on each network it named one for.
+	connectedIPs map[string]netip.Addr
 	// id, when set, is the id inspect reports for the container (the name's other face, as a daemon has two).
 	id      string
 	state   *container.State
@@ -482,7 +487,8 @@ func (c *fakeStdinConn) Read(p []byte) (int, error) {
 	refuses := c.f.olderProxyRefuses != "" && bytes.Contains(c.f.stdin[c.id], []byte(`"`+c.f.olderProxyRefuses+`"`))
 	c.f.mu.Unlock()
 	delay, never := c.delay, c.never
-	if ct == nil || !strings.HasPrefix(ct.name, "wardyn-proxy-") || exits || refuses || c.legacy {
+	isProxy := ct != nil && (strings.HasPrefix(ct.name, "wardyn-proxy-") || strings.HasPrefix(ct.name, "wardyn-mcp-proxy-"))
+	if !isProxy || exits || refuses || c.legacy {
 		return 0, io.EOF
 	}
 	if !c.sent && !never {
@@ -663,6 +669,7 @@ func (f *fakeDocker) NetworkInspect(ctx context.Context, networkID string, _ cli
 	opts := f.networks[networkID]
 	var res client.NetworkInspectResult
 	res.Network.Name = networkID
+	res.Network.Labels = opts.Labels
 	res.Network.IPAM.Config = []network.IPAMConfig{{Subnet: f.subnets[networkID]}}
 	// What the create asked for, as a daemon reports it back.
 	res.Network.Internal, res.Network.Options = opts.Internal, opts.Options
@@ -698,6 +705,12 @@ func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts 
 		return client.NetworkConnectResult{}, fakeNotFound{msg: "no such container: " + opts.Container}
 	}
 	c.connectedTo = append(c.connectedTo, networkID)
+	if ep := opts.EndpointConfig; ep != nil && ep.IPAMConfig != nil && ep.IPAMConfig.IPv4Address.IsValid() {
+		if c.connectedIPs == nil {
+			c.connectedIPs = map[string]netip.Addr{}
+		}
+		c.connectedIPs[networkID] = ep.IPAMConfig.IPv4Address
+	}
 	return client.NetworkConnectResult{}, nil
 }
 
@@ -948,6 +961,9 @@ func (f *fakeDocker) CopyFromContainer(ctx context.Context, id string, opts clie
 		for _, h := range hdrs {
 			_ = tw.WriteHeader(h)
 		}
+	case opts.SourcePath == mcpHostImagePath && strings.HasPrefix(f.containers[id].name, "wardyn-mcp-proxy-"):
+		_ = tw.WriteHeader(&tar.Header{Name: "wardyn-mcp-host", Typeflag: tar.TypeReg, Mode: 0o755, Size: int64(len(fakeMCPHost))})
+		_, _ = tw.Write([]byte(fakeMCPHost))
 	case opts.SourcePath == "/etc/passwd" && f.passwd != "":
 		_ = tw.WriteHeader(&tar.Header{Name: "passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(f.passwd))})
 		_, _ = tw.Write([]byte(f.passwd))
@@ -1075,12 +1091,19 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 	if c.host != nil {
 		addNet(string(c.host.NetworkMode), "10.88.0.2")
 	}
+	// An endpoint pinned to an address gets it, as a daemon gives it.
 	if c.net != nil {
-		for name := range c.net.EndpointsConfig {
+		for name, ep := range c.net.EndpointsConfig {
+			if ep != nil && ep.IPAMConfig != nil && ep.IPAMConfig.IPv4Address.IsValid() {
+				addNet(name, ep.IPAMConfig.IPv4Address.String())
+			}
 			addNet(name, "10.88.0.2")
 		}
 	}
 	for _, n := range c.connectedTo {
+		if ip, ok := c.connectedIPs[n]; ok {
+			addNet(n, ip.String())
+		}
 		addNet(n, fakeJoinedNetIP)
 	}
 	// Mounts: an anonymous volume per declared volume, then the run's own

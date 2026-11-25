@@ -70,6 +70,9 @@ func (d *Driver) Attach(ctx context.Context, ref string, opts runner.AttachOptio
 	if ref == "" {
 		return nil, fmt.Errorf("docker: attach: empty sandbox ref")
 	}
+	if err := d.refuseMCPRef(ctx, ref); err != nil {
+		return nil, err
+	}
 	if v, err := d.vmLookup(ctx, ref); err != nil {
 		return nil, fmt.Errorf("docker: attach: %w", err)
 	} else if v != nil {
@@ -191,6 +194,9 @@ func (d *Driver) ExecStream(ctx context.Context, ref string, spec runner.ExecSpe
 func (d *Driver) execStream(ctx context.Context, ref, user string, spec runner.ExecSpec) (*runner.ExecSession, error) {
 	if len(spec.Argv) == 0 {
 		return nil, errors.New("docker: exec stream: empty argv")
+	}
+	if err := d.refuseMCPRef(ctx, ref); err != nil {
+		return nil, err
 	}
 	if v, err := d.vmLookup(ctx, ref); err != nil {
 		return nil, fmt.Errorf("docker: exec stream: %w", err)

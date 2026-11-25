@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -122,4 +123,64 @@ func TestProxy_ListensOnlyOnItsRunNetworkAddress(t *testing.T) {
 			t.Errorf("proxy listen = %q; want %q", listen, want)
 		}
 	})
+}
+
+// TestMCPProxyListensOnMCPNetOnly pins I3's listeners: started, an MCP proxy's forward listener binds its MCP
+// network address and its relay listener its relay-link address, each keeping its port, its DNS listener binds
+// the same MCP network address, and its upstream is the host program in its container. The proxy starts before
+// the container.
+func TestMCPProxyListensOnMCPNetOnly(t *testing.T) {
+	f, d := newMCPRig(t)
+	id := testSpec().RunID
+	sb := createMCP(t, d, 0)
+	if err := d.StartMCPSandbox(context.Background(), sb.ID); err != nil {
+		t.Fatalf("StartMCPSandbox: %v", err)
+	}
+	proxyIP := pinnedOn(t, f, mcpProxyName(id, 0), mcpNetName(id, 0))
+	relayIP := pinnedOn(t, f, mcpProxyName(id, 0), relayLinkName(id))
+	ctrIP := pinnedOn(t, f, mcpContainerName(id, 0), mcpNetName(id, 0))
+	var cfg struct {
+		Listen  string `json:"listen"`
+		Inbound struct {
+			Listen   string `json:"listen"`
+			Upstream string `json:"upstream"`
+		} `json:"mcp_relay_inbound"`
+	}
+	if err := json.Unmarshal(f.stdinOf(mcpProxyName(id, 0)), &cfg); err != nil {
+		t.Fatalf("decode the MCP proxy's config: %v", err)
+	}
+	if want := net.JoinHostPort(proxyIP.String(), "3128"); cfg.Listen != want {
+		t.Errorf("forward listen = %q, want %q", cfg.Listen, want)
+	}
+	if want := net.JoinHostPort(relayIP.String(), "9443"); cfg.Inbound.Listen != want || sb.RelayAddr != want {
+		t.Errorf("relay listen = %q, relay address %q; want both %q", cfg.Inbound.Listen, sb.RelayAddr, want)
+	}
+	if want := net.JoinHostPort(ctrIP.String(), mcpHostPort); cfg.Inbound.Upstream != want {
+		t.Errorf("upstream = %q, want %q", cfg.Inbound.Upstream, want)
+	}
+	if proxyIP == relayIP || proxyIP == ctrIP {
+		t.Errorf("addresses proxy %s relay %s container %s must differ", proxyIP, relayIP, ctrIP)
+	}
+	started := mcpStarted(f)
+	if want := []string{mcpProxyName(id, 0), mcpContainerName(id, 0)}; !slices.Equal(started, want) {
+		t.Errorf("started %v, want %v", started, want)
+	}
+}
+
+// TestAgentProxyListenerUnchangedWithRelayLink: on the relay link, the agent's proxy still listens only on its
+// run-network address, never on its relay-link one.
+func TestAgentProxyListenerUnchangedWithRelayLink(t *testing.T) {
+	f, d := newMCPRig(t)
+	id := testSpec().RunID
+	createMCP(t, d, 0)
+	if _, err := d.CreateSandbox(context.Background(), testSpec()); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if !onNet(f, proxyContainerName(id), relayLinkName(id)) {
+		t.Fatal("the agent's proxy is not on the relay link")
+	}
+	ip := proxyRunNetIP(t, d)
+	if got, want := deliveredListen(t, f, proxyContainerName(id)), net.JoinHostPort(ip, strconv.Itoa(runner.ProxyListenPort)); got != want {
+		t.Errorf("agent proxy listen = %q, want %q (its run-network address)", got, want)
+	}
 }
