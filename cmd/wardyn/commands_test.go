@@ -591,6 +591,8 @@ func waitServer(t *testing.T, runID uuid.UUID, states []types.RunState, audit []
 			_ = json.NewEncoder(w).Encode(types.AgentRun{ID: runID, State: states[i]})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/audit":
 			_ = json.NewEncoder(w).Encode(audit)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events"):
+			w.WriteHeader(http.StatusNotFound) // no event feed: run --wait keeps its poll
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -2751,6 +2753,8 @@ func cappedAuditServer(t *testing.T, runID uuid.UUID, states []types.RunState, t
 				w.Header().Set("X-Wardyn-Truncated", "true")
 			}
 			_ = json.NewEncoder(w).Encode(kept[off:end])
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/events"):
+			w.WriteHeader(http.StatusNotFound) // no event feed: run --wait keeps its poll
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

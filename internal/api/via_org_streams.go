@@ -65,6 +65,10 @@ type viaOrgRun struct {
 	slot   store.PolicySlot // the run's policy generation slot engine was built at (viaOrgEngine)
 	// upstreamRefused holds each build refused for the site's upstream proxy host, by the setting it read.
 	upstreamRefused map[viaOrgUpstreamSetting]error
+	// grants holds the run's grants viaOrgGrant has read and checked as this run's via_org grants, by id, under
+	// viaOrgState.mu. Grant rows are insert-only (TestCredentialGrantsStayInsertOnly), so a row read once answers
+	// this state's later requests; a grant not held is read. The set goes with the state.
+	grants map[uuid.UUID]types.CredentialGrant
 
 	smu       sync.Mutex
 	streams   map[*viaOrgStream]struct{}
@@ -133,6 +137,31 @@ func (s *Server) viaOrgRunFor(runID, runner uuid.UUID) (*viaOrgRun, bool) {
 	// Background work, so a stopping daemon waits for the watcher and the engine close it starts.
 	s.goBackground(func() { s.watchViaOrgRun(run) })
 	return run, true
+}
+
+// viaOrgHeldGrant is grantID as this replica's via_org state of runID holds it (viaOrgRun.grants).
+func (s *Server) viaOrgHeldGrant(runID, grantID uuid.UUID) (types.CredentialGrant, bool) {
+	s.viaOrg.mu.Lock()
+	defer s.viaOrg.mu.Unlock()
+	run := s.viaOrg.runs[runID]
+	if run == nil {
+		return types.CredentialGrant{}, false
+	}
+	g, ok := run.grants[grantID]
+	return g, ok
+}
+
+// holdViaOrgGrant keeps g, which viaOrgGrant read and checked, for run's later requests; one that is not this run's via_org grant is never held.
+func (s *Server) holdViaOrgGrant(run *viaOrgRun, g types.CredentialGrant) {
+	if g.RunID != run.id || g.Delivery != types.GrantDeliveryViaOrg {
+		return
+	}
+	s.viaOrg.mu.Lock()
+	defer s.viaOrg.mu.Unlock()
+	if run.grants == nil {
+		run.grants = map[uuid.UUID]types.CredentialGrant{}
+	}
+	run.grants[g.ID] = g
 }
 
 func (run *viaOrgRun) isClosed() bool {

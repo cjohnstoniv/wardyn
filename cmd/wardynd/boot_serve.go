@@ -29,6 +29,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	secretstorepg "github.com/cjohnstoniv/wardyn/internal/secretstore/pg"
 	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/storehealth"
 	"github.com/cjohnstoniv/wardyn/internal/sweephealth"
 	"github.com/cjohnstoniv/wardyn/internal/version"
 )
@@ -140,7 +141,7 @@ func resolveTLSPosture(dsn, tlsCert, tlsKey, listen string, tlsTerminated, allow
 //     non-terminal by a previous process (crash/restart) so it is not stranded
 //     RUNNING forever with a live sandbox and un-revoked credentials.
 //     Best-effort; a reconciliation error never blocks startup.
-func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, gtWrite gtTokenWriter) {
+func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Server, run runner.Runner, pool *pgxpool.Pool, st store.PG, idp identity.Provider, _ *broker.Broker, maskedRec audit.Recorder, recStore recording.Store, leader *db.SweeperLeader, ticks *sweephealth.Tracker, health *storehealth.Tracker, gtWrite gtTokenWriter) {
 	if leader != nil {
 		go goSafe("sweeper.leader", func() { leader.Run(rootCtx) })
 	}
@@ -183,7 +184,16 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 				holdPassed:            api.EndHoldPassed,
 			},
 			maskedRec,
-			lifecycle.Config{Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0), TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks},
+			lifecycle.Config{
+				Interval: *f.autoStopInterval, MaxAge: cliutil.EnvDuration("WARDYN_RUN_MAX_AGE", 0),
+				TickLock: reapTickLock(pool, orZero(f.sessionLife.frontchannelLogout)), Sweeps: ticks,
+				// An outage is not idleness: hold idle stops while the store recovers and for runs on a
+				// runner this replica cannot reach, and restart their idle clocks once after each.
+				StoreRecovering: health.Recovering,
+				StoreHealthyFor: health.HealthyFor,
+				RunnerOnline:    srv.RunnerOnline,
+				StampIdle:       lifecycleStore{pool: pool}.StampIdleClocks,
+			},
 		)
 		go goSafe("lifecycle.reaper", func() { reaper.Run(rootCtx) })
 		slog.Info("wardynd: lifecycle reaper started", slog.Duration("interval", *f.autoStopInterval))

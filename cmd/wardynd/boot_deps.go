@@ -410,11 +410,10 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if err := validateOIDCRedirectURL(*f.oidcRedirectURL); err != nil {
 			return of, err
 		}
-		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
-		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
-		// background ctx per its doc), so an unreachable/stalled IdP must fail
-		// boot loudly inside the boot budget instead of hanging wardynd forever.
-		authn, err := oidc.New(bootCtx, oidc.Config{
+		// consoleAuthenticator (oidc_pending.go): an issuer this deployment has booted with before whose
+		// provider does not answer boots with sign-in closed and retries under rootCtx; every other
+		// failure refuses boot on bootCtx (30s), so a stalled IdP never hangs wardynd forever.
+		authn, err := consoleAuthenticator(rootCtx, bootCtx, consoleIssuerKnown(pool), oidc.Config{
 			IssuerURL:            *f.oidcIssuer,
 			InternalIssuerURL:    *f.oidcInternalIss,
 			ClientID:             *f.oidcClientID,
@@ -482,7 +481,6 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return of, fmt.Errorf("oidc: %w", err)
 		}
 		of.authn = authn
-		slog.Info("wardynd: OIDC SSO enabled", slog.String("issuer", *f.oidcIssuer))
 		logOperatorAllowlistPosture(f)
 		warnRoleMapPosture(roleMap, f, defaultRole)
 		warnUnknownUserTypes(bootCtx, store.NewPG(pool), roleMap, defaultRole)

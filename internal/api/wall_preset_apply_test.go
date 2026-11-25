@@ -294,7 +294,7 @@ func TestWallPresetEditAfterLaunch(t *testing.T) {
 	if w := (withholding{layers: layers}); !w.credentialWithheld(wallsSSH) {
 		t.Error("the frozen copy's withheld ssh_key was not withheld")
 	}
-	if floor, err := e.srv.wallsRecordingFloor(context.Background(), run); err != nil || floor != types.RecordingTerminal {
+	if floor, err := e.srv.wallsRecordingFloor(context.Background(), run, nil); err != nil || floor != types.RecordingTerminal {
 		t.Errorf("recording floor = %q (%v), want the frozen copy's terminal", floor, err)
 	}
 

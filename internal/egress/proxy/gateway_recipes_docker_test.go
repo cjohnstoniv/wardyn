@@ -27,7 +27,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -291,7 +290,7 @@ func recipeProxy(t *testing.T, f *recipeFront, credential string, extra map[stri
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:        fakeResolver{m: map[string][]net.IP{recipeGatewayHost: ips("10.40.1.5")}},
 		Dial:            redirectDial(f.addr()),
 		Injector:        inj,

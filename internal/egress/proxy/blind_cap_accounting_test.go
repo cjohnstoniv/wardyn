@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -33,7 +32,7 @@ import (
 // dropped records". No new counter, no new audit string.
 func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 	const over = 3
-	sink := &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, maxBlindHosts+over+8)}
+	sink := &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, maxBlindHosts+over+8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
@@ -76,7 +75,7 @@ func TestBlindCapSuppressionIsAccountedNotSilent(t *testing.T) {
 // The coverage row carries the real port and method, and a second opaque destination on another port of the
 // same host is its own signal, not folded into the first by a host-only dedup.
 func TestBlindRowCarriesTheRealPortAndDedupsPerPort(t *testing.T) {
-	sink := &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
@@ -90,7 +89,7 @@ func TestBlindRowCarriesTheRealPortAndDedupsPerPort(t *testing.T) {
 	if len(sink.ch) != 2 {
 		t.Fatalf("blind rows = %d, want 2 (one per host:port)", len(sink.ch))
 	}
-	first, second := <-sink.ch, <-sink.ch
+	first, second := (<-sink.ch).log, (<-sink.ch).log
 	if first.Request.Port != 4000 || first.Request.Method != http.MethodConnect || second.Request.Port != 8443 || second.Request.Method != http.MethodPost {
 		t.Errorf("rows record %s:%d and %s:%d, want CONNECT :4000 and POST :8443", first.Request.Method, first.Request.Port, second.Request.Method, second.Request.Port)
 	}

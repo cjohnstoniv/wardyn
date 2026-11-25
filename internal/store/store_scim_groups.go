@@ -221,11 +221,12 @@ func startGroupRemoval(ctx context.Context, tx Querier, groupID, identityID uuid
 	// sign-in names its own groups. A blank one cannot be told from any group, so it takes them all, as
 	// the token step reads it, and marks the record partial: what is left cannot be told complete. Nothing
 	// is ever added, and a person with no record keeps none.
+	// A removal also clears roles, so no role is left that the narrowed groups no longer show.
 	if _, err = tx.Exec(ctx, `
 		UPDATE principal_groups p SET groups = COALESCE((
 			SELECT jsonb_agg(x) FROM jsonb_array_elements_text(p.groups) AS x
 			WHERE btrim(g.external_id) <> '' AND lower(btrim(x)) <> lower(btrim(g.external_id))), '[]'::jsonb),
-			truncated = p.truncated OR btrim(g.external_id) = ''
+			truncated = p.truncated OR btrim(g.external_id) = '', roles = NULL
 		FROM principal_identities i, scim_groups g
 		WHERE i.id = $2 AND g.id = $1 AND p.principal = i.principal AND jsonb_typeof(p.groups) = 'array'`, groupID, identityID); err != nil {
 		return fmt.Errorf("store: remove the group from the sign-in record: %w", err)

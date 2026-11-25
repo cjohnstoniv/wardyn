@@ -64,6 +64,8 @@ var relayedInternalRoutes = map[string]bool{
 	"POST /api/v1/internal/groundtruth":                    false, // no host sensor on a laptop
 	"POST /api/v1/internal/desktop-signin/check":           false, // sign-ins never run on a runner (signinTarget)
 	"POST /api/v1/internal/gateway-identity":               false, // placement refuses a gateway route on a person's runner
+	"GET /api/v1/internal/assistant/turns":                 false, // an assistant run is placed remote, never on a person's runner
+	"POST /api/v1/internal/assistant/events":               false,
 }
 
 type relayRunnerKey struct{}

@@ -50,7 +50,7 @@ func scanTestProxy(t *testing.T) *Proxy {
 	return newProxy(Options{
 		RunID:    uuid.New(),
 		Policy:   CompilePolicy(types.RunPolicySpec{AllowAllEgress: true}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Scanner:  forwardScanEngine(t, "alert"),
 		Resolver: publicResolver{},
 	})

@@ -664,7 +664,7 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 			t.Helper()
 			got := run(walls, org, spec)
 			owner := types.AgentRun{CreatedBy: "sub-walls-widen"}
-			floor, err := srv.wallsRecordingFloor(context.Background(), owner)
+			floor, err := srv.wallsRecordingFloor(context.Background(), owner, nil)
 			if err != nil {
 				t.Fatalf("read the floor: %v", err)
 			}
@@ -690,7 +690,7 @@ func TestPersonalWallsNeverWiden(t *testing.T) {
 		}
 		// Walls that cannot be read at dispatch refuse the run: no level, never a lower one.
 		st.prefs["sub-walls-bad|"+types.PersonalWallsPrefKey] = json.RawMessage(`{"spec":{"bogus":true}}`)
-		if floor, err := srv.wallsRecordingFloor(context.Background(), types.AgentRun{CreatedBy: "sub-walls-bad"}); err == nil || floor != "" {
+		if floor, err := srv.wallsRecordingFloor(context.Background(), types.AgentRun{CreatedBy: "sub-walls-bad"}, nil); err == nil || floor != "" {
 			t.Errorf("unreadable walls: floor %q err %v, want an error and no level", floor, err)
 		}
 	})

@@ -24,7 +24,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -91,7 +90,7 @@ func newSigninLaneRigFor(t *testing.T, vm bool, with ...func(*Options)) *signinL
 	opts := Options{
 		RunID:  uuid.New(),
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"site.test"}}),
-		Sink:   &decisionSink{out: rig.logs, ch: make(chan egress.DecisionLog, 64)},
+		Sink:   &decisionSink{out: rig.logs, ch: make(chan queuedDecision, 64)},
 		CA:     ca,
 		// The agent's listener terminates site.test: the lane must not borrow that.
 		MITMHosts:       []string{"site.test"},

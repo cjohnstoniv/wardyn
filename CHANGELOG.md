@@ -19,17 +19,177 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES`
   step in Operations, grant it the same on the table as soon as the migration has run. Until then no schedule can be made,
   and a person's run tasks or credentials erasure fails until the grant is given.
-- On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.
-- The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
-- WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+
+### Before you upgrade
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+
+## [0.11.0-rc.2] — 2026-11-25
+
+### Added
+
+- The control plane records when it could not be reached, when each runner's link was down and when its own proxies stopped renewing, so that a later release can tell an outage from a failed proxy (#4082).
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
+- A macOS sandbox can require the Mac's MDM device certificate: set the MDM CA and its CRL URL in the runner settings; a missing, expired or revoked certificate, or one whose revocation cannot be checked, refuses the sandbox. Off until set. The macOS runner presents the Mac's MDM device certificate. Not yet tried on a real Mac. Migration `0400_runner_device_cert` adds the columns `device_cert` and `device_cert_reported_at` to `runners`. (#2975)
+- Machine kinds by runner trust class (#2950): a super admin can deny a machine kind (container, Linux VM, macOS VM) on runners of one trust class (personal, company-managed, organisation cluster) with PUT /runners/settings. A new local run on a registered runner is never placed on a denied pair, and a pool places it on a class that admits it; the organisation's own executor is not judged. A macOS VM still runs only on a company-managed Mac.
+- Agent rules (#2949): an admin or security admin sets rules for an agent harness (sites it may reach or not, desktop directions, withheld credentials, tool rules, pushes, recording, idle stop, and the harness's own sandbox and approvals). Every run that includes that agent is narrowed by them on any runner, a person's own laptop included. A run without the agent is not. The run's policy names the layer. Writes are held for a second security admin when the second-person switch is on.
+- Migration `0405_agent_rules` creates `agent_rules`: one row per harness holding its walls and inner walls, with a version.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
 
 ### Changed
 
+- The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
+- Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows unless the proxy's clock is more than 10 minutes behind the control plane's or 5 minutes ahead, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
+
+### Before you upgrade
+
+- If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
+- Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
+
+## [0.11.0-rc.1] — 2026-11-24
+
+### Added
+
+- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+- The organisation's assistant settings. `GET` and `PUT /assistant/settings` (super admin) hold which purposes (Compose, Review) are on, which model providers may serve each and with which models, whether run history may be sent as host counts, and the record kinds that are never sent. A change that only narrows applies at once; one that widens is held for a second super admin whatever `WARDYN_GOVERNANCE_SECOND_HUMAN` says, and is refused in local mode. `GET /me/assistant?purpose=` tells any signed-in person whether they can use it, and why not. Each applied change writes an `assistant.settings.write` audit row.
+- A held governance change can need more than one approver. `WARDYN_GOVERNANCE_MIN_APPROVALS` (flag `-governance-min-approvals`, 0 to 9) sets the fewest approvals a change of a kind with more than one decider needs; the default `0` leaves every change to one approver. An approval counts only while its person is still eligible, and a person can take their own back with `DELETE /governance/changes/{id}/approval`.
+- Assistant sessions. A signed-in person can see the exact records a first message will carry (`POST /assistant/preview`), then start a session that composes a run, unit or template or reviews a held change (`POST /assistant/sessions`, with messages, edits, an event stream, and `DELETE` to end it). A session is its person's own: another person's answers 404. It starts only while the assistant is on in the assistant settings, its run counts against the person's `max_concurrent_runs`, and `assistant.session.start`, `assistant.session.end` and `assistant.suggestion.create` are audited.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- The Walls view's topology and run routes (`GET /api/v1/walls/topology`, `GET /api/v1/runs/{id}/walls`), for the 3D view. Its stream routes answer 501 until the live stream ships.
+- Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
+- An operator can let a person reach a run over the SSH gateway with no registered key: `GET /runs/{id}/ssh` takes a 30-second single-use ticket minted at `POST /runs/{id}/attach/ticket` (`WARDYN_SSH_TICKETS`, off by default). A ticket names what it opens, so one minted for a command opens no terminal (#3279).
+- An attach ticket minted for a port forward (`purpose=attach-forward`) opens only that forward and only its ports, and does not count against the run's terminal sessions.
+
+### Changed
+
+- With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
+- `PUT /site-config` carries the stored `assistant` block forward and answers `400 assistant_settings_via_own_route` when the document names a different one.
+- wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
+
+### Security
+
+- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and CVE-2026-97045 and can refuse to admit.
+
+### Before you upgrade
+
+- The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
+- A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
+- A migration adds two columns to attach tickets; older replicas ignore them. Turn on `WARDYN_SSH_TICKETS` only after every replica runs this release. An older replica does not read a ticket's purpose: while one is serving, a ticket minted for a port forward also opens a terminal there (its minter may open that terminal anyway). Turn on `WARDYN_ATTACH_FORWARD` only after every replica runs this release, or turn it off for the upgrade if it is already on.
+
+## [0.10.4] — 2026-11-24
+
+### Added
+
+- On a Kubernetes runner, the owner of a run lost to an outage can copy work out of it until the run's end. The run is kept with its agent running and no network. Its owner, and nobody else, can open the terminal, SSH or the Files panel's download, each where the run's policy allows it; nothing can be uploaded through the Files panel, the command route and UI apps stay closed, and the run still cannot be revived. GET /runs/{id} carries kept_copy_out: true while the door is open.
+- The run.lost audit row carries cause: control_plane_outage when the lapse sweep judged the lapse an outage, and cause: runner_link_lost when it was marked because a runner disconnected. A new run.lapse_sweep.hold row is written once per outage in which an unattended run was kept, per server process.
+- WARDYN_ORPHAN_SWEEP_HOLD (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it. Its proxy and agent are stopped and only its files are kept. Such a sandbox has no record, cannot be ended or opened from the console, and is copied out only with host access.
+- WARDYN_LOCK_POOL_MAX_CONNS (flag -lock-pool-max-conns, default 8, 1 to 64) sets how many connections each server holds for cross-replica locks at once, and how many guarded credential writes it dials at once. Each replica can use up to twice this number on top of its pool, so budget Postgres max_connections for it.
+- A UI app can be declared with `"kind": "desktop"`. The desktop's clipboard rules, its recording and `deny_interactive`
+  then bind that app whatever its name, as they bind the `novnc` app, and a support helper needs both the web apps and
+  the desktop door to open it. A ceiling whose entry for an app says `desktop` keeps the kind on every policy under it.
+  Any other kind is refused. `wardyn policy check` reports a policy that names such an app without the kind as wider
+  than its ceiling; its runs still start, with the kind added.
+- The high-availability page says what Wardyn needs from its Postgres: a session-mode connection and a synchronous standby, and what a failover to a standby that lost commits does to sandboxes.
+- The platform tenancy page describes one deployment per business unit as the hard isolation between units, and what it costs.
+- `POST /runs/preflight` says when the blast-radius floor raised a run's class to CC3: `confinement_raise_cause: blast_radius_floor`, with a warning line. `GET /setup/status` adds an info row, `default_barrier_unset`, shown to an operator while no organization default barrier is set and a runner offers CC2 or CC3, naming the strongest class offered, the most a launch that names no barrier can get. Neither changes what any run gets.
+
+### Changed
+
+- `WARDYN_ATTACH_LOCAL` is now `on` by default. A person's `wardyn attach` on their own runner's computer keeps the
+  terminal on that computer. The organisation still admits it exactly as an attach through the relay, holds the
+  writer lease and keeps the audit rows; the recording is made from the runner's copy of the output.
+- Connected runners, portal sign-ins and `via_org` requests read the database less. All of a server's runner sessions are re-checked together: one read of their runner records and one of the site settings per check, instead of one each per runner. A slow read for one runner no longer delays another runner's connection. A portal sign-in removes at most 500 ended grants and never waits for another sign-in's removal. A `via_org` request reads its run once, and its grant once for as long as the run stays on its runner. Revocations still end a runner's session within one check (15 seconds).
 - After the database or the server has been unreachable, the lapse sweep keeps the server's own Docker runs where it used to end the unattended ones. A run whose token lapsed while the server could not have renewed it is marked lost to an outage, its proxy is stopped, and its agent and files are kept, for unattended runs too; revive brings it back. This applies for 25 minutes after the database is reachable again or the server starts (WARDYN_LAPSE_RECOVERY_GRACE), and while none of the server's runs has renewed for 20 minutes or at least a quarter of them, and at least five, lapsed within 30 minutes (WARDYN_LAPSE_MASS_SHARE, WARDYN_LAPSE_MASS_MIN). Outside those, a proxy that dies on its own is ended as before.
 - Server Kubernetes runs are still ended after a long outage. Such an end is recorded on the run.lost audit row (kept: false) in place of run.reconcile, and sets no failure hint on the run.
+- Audit writes from the server's requests, its spool replay and runners' decision uploads hold the audit log's chain lock for less time: the lock and the append go to the database together, and a runner's decisions are masked and sealed before the lock is taken.
+- At most four of a server's own audit writes (those not made inside a larger transaction) wait for the audit log's chain lock at once (half the database pool when that is smaller). A write that cannot get a turn within the same 5 seconds goes to the local spool and is replayed later, as a write that times out on the lock already does, or, for a change that must be audited first (WARDYN_AUDIT_STRICT), is refused and can be retried. Writes made inside a larger transaction, such as a runner's decision upload or a credential mint, are not counted and wait as before.
+- On a Kubernetes runner, a run whose new proxy pod is given a network address still held for an earlier run is no longer failed at once. The runner stops that pod, waits until it can prove it stopped, and starts another, preferring another node, up to two more times. The run fails with `relay_ip_fenced` only when every try is given a held address or a pod cannot be proven stopped. This needs the runner (`wardyn-runnerd`) from this release.
+- Computer folders: at the end of a run on a Kubernetes runner, or on a runner older than 0.10.0, Wardyn now stops the sandbox's network proxy before it brings the folder's changes back, so the agent has no network while they come back. The agent is left running during that copy. If the proxy can't be stopped, or a runner can't cut its agent off, no copy back runs, the sandbox is stopped and the run records why.
+- An open terminal, desktop, window on a Mac, app session or SSH connection no longer ends at the first check of the person's access that gets no answer from the database. It asks again every 5 seconds and ends only when no check has answered for the session budget, then closes in a way the console reconnects on; a terminal takes no input meanwhile. A revoked person is still cut off at the next check. Set the budget with `sessions.unconfirmed_budget_s` in the site config or in Settings: 0 to 120 seconds, default 30, and 0 ends a session at the first check that gets no answer; an owner's SSH connection, which before 0.10.4 never closed on one, now does too. Each such wait writes a `session.unconfirmed` audit row, at a budget of 0 too. (#4057)
+- A terminal or desktop that ends because access could not be confirmed now closes in a way the console reconnects on. (#4057)
+- A request to a UI app whose run cannot be read is answered 503, not 404, and so is a UI session check whose sponsor cannot be read (403 before). A UI session check whose run's profile composition nothing satisfies is answered 403 `governance_overlay_unsatisfiable`, not 503. (#4057)
+- An inbound caller that keeps calling a run already at its request limit now uses up its own limit as well. (#3766)
+- On a run that attaches a workspace, an inline policy or policy overlay mount that the server refuses on its own files is now refused when the workspace is seeded (422 `workspace_seed_policy_conflict`), no longer with the policy (400 `inline_policy_invalid` or `policy_overlay_invalid`). A run that attaches no workspace is refused as before.
+- Helm chart: the readiness probe now reads `/healthz` by default instead of `/readyz`. A Postgres outage that
+  refuses connections no longer takes the `wardynd` pod out of its Service, so the console stays reachable and shows
+  its database banner. `/readyz` still pings Postgres.
+- On the GitHub App and personal-token git lanes, a push refused because it touches a review path on an unattended run, or because its paths could not be worked out, now reaches git as a rejected ref. Git prints the reason, the paths and what to do, as it already did on the Azure DevOps lane, instead of a bare HTTP 403. The audit row is unchanged.
 - Terminal writers' leases: a replica renews all the leases it holds in one database statement per tick, up to 500 a statement, and a lease found lapsed is taken back on its own, so many attached writers cost one round trip per 500, and one writer's recovery no longer holds up the other renewals.
 - Terminal input: concurrent checks of the same writer's lease share one database read, and a person's presence stamp no longer holds a keystroke. A session's first keystroke, and the first after 570 seconds without one, still wait for the stamp, so a run paused meanwhile is thawed before the keystroke reaches it.
 - SSH gateway defaults, per replica: 256 authenticated connections (was 64) and 8 channels per run, SSH channels and API commands together (was 4). `WARDYN_SSH_MAX_HANDSHAKES` (default 64) sets the number of connections handshaking at once, which was fixed at 64.
+- An outage no longer makes runs look idle. For 25 minutes after the database is reachable again, and after every start of the server (`WARDYN_LAPSE_RECOVERY_GRACE`), no run is idle-stopped, and each run's idle time starts again from that moment. A run on a registered runner that the server cannot reach is not idle-stopped either, and its idle time starts again when the runner reconnects. A run's end and `WARDYN_RUN_MAX_AGE` still apply.
+- When a Docker runner restarts, each run keeps its network until the lapse time the runner saved from that run's last lease, at most 65 minutes after the restart, instead of losing it until it is revived; the server's fresh lease then continues the run. A run past that time, one whose creation did not finish, one whose last change failed or whose last start or command lost its result, and one already being contained are cut off at once as before, and so is every run at the first restart after upgrading the runner. A runner restarting in a loop still cuts each run off at its saved time.
+- A run started with `--image` reuses the wrapped image an earlier run of the same creator built from the same base image, runner tools and wrap recipe, instead of wrapping it again, while the server keeps running. Runs started with the admin token share one creator. A `--devcontainer-repo` run still builds on every run. A reused build's `run.build` audit row carries `cache_hit`.
+- Starting a Docker sandbox reads the Docker Engine's details once instead of twice.
 - The Runs board reads ended runs through a new index on their end time, live and ended runs as two ordered reads, and a member's list that includes sponsored service runs through the creator index, so reading a page of the board no longer walks the caller's whole run history.
 - The attention badge and the "Needs you" filter read only runs that can need attention.
 - `/healthz` reuses its runner, network-policy and sensor reads for up to 2 seconds, one read at a time. A stalled database still fails it.
@@ -37,15 +197,85 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - The Runs board reads its hidden-run counts on load and once a minute instead of on every poll. `GET /api/v1/runs` takes `counts=skip` to leave the two hidden-count headers out.
 - The terminal-sandbox retry sweep pages by run creation time and id, so runs created between sweeps no longer hold it on its newest page.
 - Debounce and ready caches drop only expired entries when they grow large, instead of forgetting every entry.
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, run starts no longer race each other for one subnet, and the orphan sweep now removes a run network whose run has ended or is gone. Before, only a host with the pool set swept them.
+- When a run's sandbox is removed, Wardyn removes the image tag it built for that run alone (a custom image or a dev container image). After an idle stop that happens at the next server start. Tags left by earlier releases stay. A wrapped image a workspace keeps for its later runs stays.
+- `wardyn run --wait` reads the run again as soon as the server reports a state change on the run's event stream, and still polls every 2 seconds.
 
 ### Fixed
 
+- A connection the run's proxy terminates TLS for (an inspected model host, a token-injection host, or a host a request rule names) now counts toward the run's limit of 1,024 open tunnels, as an uninspected tunnel already did. It is also closed if the sandbox has not finished its TLS handshake within 30 seconds. Once the handshake is done, nothing changes for the connection: a long streamed answer is unaffected.
+- A HashiCorp Vault or OpenBao secret write whose answer was lost and retried is now recognised by an id stored beside its value, instead of by comparing the two servers' clocks. A correct write is no longer refused when Vault's clock is behind or reports no creation time, and another writer's value is no longer taken as this write's.
+- wardynd's 30-second limit for reading its boot keys now starts after the secret store is open. A slow first open, such as a one-time conversion of stored rows, no longer leaves the boot-key reads without time and fails the start.
+- The `git_credential` probe in `examples/workspaces/probes.sh` passes only on the helper's exact answers; other error text is now a failure, not a pass.
+- A rare crash of the server when an issuer portal's relayed request reached its dispatch time just as its connection to the run opened.
+- An SSH sign-in refused because its key could not be looked up is now recorded in its `ssh.authenticate` row with reason `key lookup failed`. It used to say `unregistered key`, as for a key nobody registered (#3508).
+- When a replayed audit event was already stored, the audit sinks received it with empty chain hashes. They now receive the stored row's hashes.
+- Docs: the threat model and the architecture guide now agree on what an audit row records: one actor and the run it
+  belongs to. The person behind an agent's row is that run's `created_by`, and the guide shows the lookup.
+- Docs: the audit actions reference now says that a field withheld below the super-admin tier can still be confirmed
+  by a reader who guesses its value, and that an interactive run of a BYOI image on a registered runner skips the image selftest.
+- Docs: the one-line installer's `claude-code` entry names the agent base image, which cannot sign in to Claude; the
+  image build guide says so and how to build one.
+- Docs: the credential erase reference no longer says a crypto-erased credential stays unreadable after any backup
+  restore. Restoring a full backup taken before the erase makes it readable again while the key-encryption-key
+  version that wrapped its key is available.
+- A run that attaches a workspace whose folder is on one of your runners is no longer refused because of what the server has at the same path when its policy (a stored policy, an inline policy or a policy overlay) also names that folder as a mount. That mount is now checked by its path text, as the workspace's own folder already was ([#3867](https://github.com/cjohnstoniv/wardyn/issues/3867)).
+- A `write:` requirement on a path inside a workspace folder that is on a person's runner is now checked by its text, like one on the folder itself. Before, the server checked a path inside such a folder against its own files ([#3913](https://github.com/cjohnstoniv/wardyn/issues/3913)).
+- In the light theme, the title bar of a live terminal is now dark like the terminal under it, so its text is readable.
+- A response the run's proxy relays from an upstream now reaches the sandbox as each part arrives, instead of when the proxy's write buffer fills. A model's streamed answer, on the brokered model route or on an inspected Anthropic or OpenAI connection, no longer reaches the agent late and in bursts.
+- A plain-log recording uploaded through the run's proxy now keeps the recorder's statement that it is a plain log, as a direct upload already did. The server applies the plain-log output cap and cut marker to it, instead of judging the format from the log's first bytes.
+- macOS VMs: on a Mac that also runs Docker Desktop, the slot of a finished base preparation, tools update or base edit is no longer held while Docker's Linux VM, started after the job ended, keeps running. The runner now notes when the job's helper exited, and a Virtualization process created after that is not counted as the job's VM. Not yet run on a real Mac ([#3871](https://github.com/cjohnstoniv/wardyn/issues/3871)).
+- macOS VMs: the runner package's ledger setup no longer stops at a ledger entry file that carries the user immutable flag (`uchg`) when it rebuilds the entries directory in place. It clears the flag and carries the entry across. An entry file with the system immutable flag (`schg`), or with another name, still stops setup, which now names the file and the `chflags` command that clears it. Not yet run on a real Mac ([#3695](https://github.com/cjohnstoniv/wardyn/issues/3695)).
+- macOS VMs: when Apple's framework refuses a base preparation's install VM because this Mac already runs the most macOS VMs it allows, the runner records the slot it cannot account for, as it already did for the preparation's other VM starts. Not yet run on a real Mac ([#3696](https://github.com/cjohnstoniv/wardyn/issues/3696)).
+- VM runs: a guest's repeat of a connection attempt Wardyn just refused (a retransmitted SYN) is refused again at once, without asking the proxy a second time. Before, it briefly held a tunnel slot, which at the run's tunnel limit could refuse a real connection with a false tunnel-limit report ([#3932](https://github.com/cjohnstoniv/wardyn/issues/3932)).
+- `wardyn-runnerd doctor` and `status.json`: a start refused with no stage stays the reported failure when the computer's clock moved back between starts. An older refusal at a stage no longer replaces it.
+- On a desktop install, the launcher's refusal of a symlinked envelope file now says which check failed: the link's directory is owned by another account, or other accounts can write to it, with or without the sticky bit.
 - SSH shell sessions write output to the session recording before the client gets it, and send nothing more once the session has ended, as the web terminal does, so a recording no longer misses a chunk the person saw.
+- Publishing a patch release for an older release line no longer moves the `:latest` tag of the agent images (`agent-base`, `agent-codex-cli`, `agent-aws-sso`) back to it: `:latest` always names the newest final release across all lines.
+- `scripts/verify-release.sh` checks an older release only for the images and files that release shipped, and fails when the Latest release, or `:latest` on the agent images, names anything but the newest final release.
+- A policy or model provider created with "Available to: Only these" is now restricted before it is saved, so it is never available to everyone, even for a moment. If the list then fails to save, it stays restricted with only the audiences saved before the refused one, and if the restriction cannot be saved, nothing is created. The API takes `?restricted=true` on `POST /api/v1/policies` and `PUT /api/v1/model-providers` for the same result.
+- With `WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL` on (the default), an allow granted to a person's email is now ignored in every check of an "Available to" list when sign-in does not vouch for the email, as it already was elsewhere.
+- The high-availability page no longer lists the completion-watcher blocker as open: since 0.10.1 only the replica holding a runner's session claims its runs. It also says when a hung database restarts the pod, and what readiness does with several replicas.
+- A run that declares a desktop under a governance profile that denies interactive sessions now gets a warning at create and in Review: its desktop will not open.
+- A desktop refused by the run's governance profile now shows a readable page in the browser, not the gateway's raw JSON.
+- An open desktop sign-in display now closes within about 5 seconds when its end could not stop it, while that end is retried. Before, it stayed open until the sign-in was over.
+- New Run no longer says a background run's ports open from the run page: only a port callable from outside the run can be reached.
+- The run page of a service with no end time and no lifetime limit now says it keeps running until someone stops it.
+
+### Security
+
+- A change of a service identity's sponsor now also ends the attach tickets its previous sponsor still held for the identity's runs, and the attach-ticket route no longer issues a sponsor's ticket once the sponsorship ends. Before, a ticket minted just before the sponsor was changed away and back could still open a terminal if the server's clock ran ahead of the database's.
+- A revive of a run on a registered runner is now refused when the runner's wardyn-runnerd no longer carries a proxy setting the run uses, such as host rules, no network or forge hosts, as a new run on that runner is refused. Before, only a model list was checked, so a runner that had been replaced by an older build could restart the run's proxy without the other settings.
+- `WARDYN_RELAY_ALLOWED_SOURCES` now reads an IPv4-mapped IPv6 prefix, such as `::ffff:10.1.0.0/112`, as the IPv4 prefix it maps, so the sources it names are admitted instead of none. A value that names no prefix or address, such as `,` or only spaces, now stops `wardyn-runnerd serve` at start instead of admitting every source.
+- A runner registration whose owner is suspended after the registration token is spent, and before the runner is created, is now refused (`403`, `identity_deactivated`) and creates no runner.
+- New switch `WARDYN_PUSH_HOLD_REMOVALS`, off by default. On, a push to GitHub or Azure DevOps that removes a file matching `require_review_paths` from a branch it updates, by deleting it, renaming it out or replacing a directory above it with a file, is held for review like one that changes it, or refused on an unattended run. On GitHub that includes a force-push that rewinds the branch. A push that may remove such a file through a `git_pat` remote the broker cannot read, an Azure DevOps remote in a `_git/_full/` spelling or any Azure DevOps Server remote, is held or refused as unreadable instead of forwarded.
+- The kubectl door now refuses a create or replace of a pod or workload that mounts a service account token, a Secret or the host, since a run with `write` could read it back through the pod's log. Such a pod must set `automountServiceAccountToken: false`, mount only plain volumes, fill its environment only from fields, resources, ConfigMaps and files, and use no host access. A path with a `secrets` segment is refused in any group. A patch to a pod or workload's pod spec is refused, and so is any JSON Patch to one: replace the whole object instead. A write of a ControllerRevision is refused, since a StatefulSet builds its pods from one. So `kubectl run`, `kubectl create deployment` and `kubectl set image` are refused; create and replace from a manifest ([details](docs/ENV.md#wardyn_kubectl_cli)).
+
+### Documentation
+
+- The Helm README now covers CC3 on a managed Kubernetes Kata pool: a values recipe that tolerates the pool's taint and prefers other nodes for other classes, with the RuntimeClass's own scheduling pinning Kata runs; that offering CC3 raises runs holding a write-capable grant or an `api_key` to a host outside the baseline, so they need Kata slots; to set an organisation default barrier first, because a launch naming no barrier otherwise gets the strongest class offered; that a Kata guest is sized from the run's limits, so JVM heaps belong under `memory_mib`; and a field report that CC3 runs and ReadWriteOnce `k8s_pvc` drives work on a managed Kata pool, leaving shared (ReadWriteMany) drives as unknown. [Dev sandboxes](docs/UI-SANDBOXES.md) now says the application-server form is failed before create while `WARDYN_START_AFTER_READBACK` is on.
 
 ### Before you upgrade
 
+- If every attach must go through the organisation's relay, set `WARDYN_ATTACH_LOCAL=off` on `wardynd` before
+  upgrading. An unset or empty value now takes the `on` default; an install that sets any other value keeps it.
+  On Compose, a value in `.env` reaches `wardynd` only through this release's `docker-compose.yaml`, which re-running the
+  installer fetches; a compose file kept from an earlier release needs `WARDYN_ATTACH_LOCAL` added to `wardynd`'s
+  `environment`.
+- Computer folders on Kubernetes in server mode: a **Both ways** folder no longer comes back from a run that ends while its agent is still running (a stop, an idle or maximum-age stop, a lease end). The run is stopped without its changes, and the run records that they were not brought back.
+- An owner's idle SSH connection now closes when the database stays unreachable for the session budget (30 seconds by default) after a check that got no answer; before, it stayed open. Raise `sessions.unconfirmed_budget_s` (up to 120) to give it longer.
+- A desktop declared under a name other than `novnc` is still relayed unfiltered until its `ui_apps` entry, or its
+  ceiling's, says `"kind": "desktop"`. Under a `data_out` rule of `review` or `blocked`, such an app is refused like
+  any other web app; only the `novnc` app is exempt.
+- Declare `kind: desktop` only once every wardynd runs this release.
+- Not breaking: no existing policy changes meaning, and an existing `novnc` app keeps its filter with no edit.
+- Helm chart: to keep readiness on Postgres, set `readinessProbe.path: /readyz`. A values file or `--set` that names a
+  path keeps it, and `helm upgrade --reuse-values` keeps the previous release's `/readyz`. To see the path in use:
+  `kubectl get deploy -l app.kubernetes.io/name=wardyn -o jsonpath='{..readinessProbe.httpGet.path}'`.
+- If `WARDYN_RELAY_ALLOWED_SOURCES` is set to a value with no prefix or address in it, such as `,` or only spaces, `wardyn-runnerd serve` now refuses to start. Unset it, or list the prefixes.
 - The SSH gateway now allows 256 authenticated connections per replica and 8 channels per run. To keep the old bounds, set `WARDYN_SSH_MAX_CONNECTIONS=64` and `WARDYN_SSH_MAX_SESSIONS_PER_RUN=4`. Without single sign-on every key is one person, so one key may hold up to 256 connections unless `WARDYN_SSH_MAX_CONNECTIONS_PER_PRINCIPAL` is set.
 - Migration `0300` builds an index on `agent_runs` and holds writes to that table while it builds. On a large install, build it first with `CREATE INDEX CONCURRENTLY` (the command is in docs/OPERATIONS.md under migration `0300`).
+- On a Docker host with no WARDYN_DOCKER_RUN_SUBNET_POOL, the first orphan sweep after the upgrade removes Wardyn's leftover run networks of runs that ended or are gone. A network another container still uses is kept, and the sweep logs it.
 
 ## [0.10.3] — 2026-11-23
 
@@ -105,7 +335,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Revoking an issuer portal, or suspending or purging a person, now reaches that person's open connections. A new request is checked afresh every time, with no cached pass. An open browser app or terminal is re-checked every 30 seconds, an event stream every 15 seconds and a desktop every 30 seconds, each check limited to 5, 5 and 10 seconds, and the connection is cut at the first check that fails or at the end it was admitted with: at most about 35, 20, 35 and 40 seconds after the event. Those are the design limits, not measured times. The person sees the connection drop with no clean close, and is refused when they reconnect. An event stream whose opening check fails answers 403 `revoked`, or 503 `revocation_unavailable` when it cannot check; an opening read that gets no answer within 5 seconds is a 503 too; and a ticket for a run that no longer exists is refused 403 `ui_gateway_ticket_invalid` where it answered 503.
 - On the link between wardynd and a runner, opening a stream while 256 are held is refused at once, and a stream that was aborted counts against the 256 until its reset is sent.
 - A model provider's service grant records each token request. A successful token request means the provider issued a token; a `model_provider.service_grant.mint` success row without `superseded` records a committed publication, and nothing says anything received it. A publication that does not commit is settled afterwards, or spooled when the database is down, so the database holds every mint row except one whose publication and settle both failed, or whose row could not be prepared (the token is then not published). Each server sends sink copies best effort from a queue of 64, in queue order and not commit order. A server sends at most 16 token requests, counting the rows not yet recorded, and a request past that sends nothing and is refused. The [operations guide](docs/OPERATIONS.md#a-service-grants-token-request-timing-recording-and-limits) has the timing, the logged outcomes and the limits.
-- A drive delete whose reply from the runner is empty or not one Wardyn knows is no longer taken as done: it answers 503 `member_drive_delete_failed`, "Wardyn could not confirm that deletion finished.", and the drive is kept and held until a later delete confirms it. Every server retries the release record of `POST /api/v1/admin/drives/legacy-docker/release` once a minute, and a repeated call answers `{released: 0, replayed: [...]}` once it has delivered the earlier call's record, on any runner target.
+- A person's drive delete that Wardyn cannot confirm is no longer given back: an empty or unknown reply from the runner, a daemon or API error or the 30-second time-out after the request, or a Kubernetes claim that is already terminating (which answered 409 `member_drive_in_use` before). It answers 503 `member_drive_delete_failed`, "Wardyn could not confirm that deletion finished.", and the drive is kept and held until a later delete confirms it. While it is held the drive is missing from its owner's drives and New Run, still counts toward `max_per_person`, and no run attaches it. A delete a minute later retries it, from the owner or from a super admin's member drives list; a disk drive on a Mac is retried when its Mac reconnects. The [operations guide](docs/OPERATIONS.md#member-drives) has the recovery steps. Every server retries the release record of `POST /api/v1/admin/drives/legacy-docker/release` once a minute, and a repeated call answers `{released: 0, replayed: [...]}` once it has delivered the earlier call's record, on any runner target.
 - `WARDYN_DAEMON_PROXY_ALWAYS` takes exact host names: boot refuses an IP address, a numeric name such as `127.1`, `localhost`, a host wardynd always reaches directly, a bad entry, or a list with no usable proxy, in every mode that installs the daemon's transport. A refused portal fetch through the proxy logs its `detail` as `name not resolved`, `request failed`, `address refused` or `host not comparable` as well as the proxy details listed in the issuer portal guide.
 - A discovery or key fetch that fails a rule is enforced before it is logged or reported, and the rule's cause stays the one reported through later failed retries and outages until a refresh passes. While a discovery or key address is refused, every unavailable answer names its cause.
 - An audit export that retention interrupts, because a partition was dropped while it ran, now ends as incomplete (503 before the first byte, an aborted transfer after) instead of looking finished; run it again.

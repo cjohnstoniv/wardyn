@@ -27,7 +27,7 @@ import (
 func gatewayProxy(t *testing.T, gatewayBase string, res resolver, upstreamAddr string, inj *injector) (*Proxy, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	return newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
@@ -110,7 +110,7 @@ func TestLLMGateway_SameHostOnConnectPath_StillBuiltinPrivateIP(t *testing.T) {
 	p2 := newProxy(Options{
 		RunID:        uuid.New(),
 		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:     res,
 		Dial:         redirectDial("127.0.0.1:1"),
 		LLMUpstreams: map[string]string{anthropicHost: "https://" + host + "/v1"},
@@ -136,7 +136,7 @@ func TestLLMGateway_GatewayHostnameOnConnectPath_StillBuiltinPrivateIP(t *testin
 	res := fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}}
 	spy := captureUpstream(t, true, "should-never-be-reached")
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	p := newProxy(Options{
 		RunID:        uuid.New(),
 		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
@@ -198,7 +198,7 @@ func TestLLMGateway_InternalHostsNotNeeded_LiftWidensOrdinaryConnect(t *testing.
 			p := newProxy(Options{
 				RunID:           uuid.New(),
 				Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{host}}),
-				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 				Resolver:        fakeResolver{m: map[string][]net.IP{host: ips("10.40.1.5")}},
 				Upstream:        up,
 				UpstreamNoProxy: route.noProxy,
@@ -235,7 +235,7 @@ func TestLLMGateway_ResolvesToOwnSubnet_Refused(t *testing.T) {
 	p := newProxy(Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{}),
-		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:            &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:        res,
 		LLMUpstreams:    map[string]string{anthropicHost: "https://" + host + "/v1"},
 		ControlPlaneIPs: []net.IP{cpIP},
@@ -259,7 +259,7 @@ func TestLLMGateway_ResolverAnswersMetadata_RefusedNeverDialled(t *testing.T) {
 			dialed := false
 			res := fakeResolver{m: map[string][]net.IP{"llm-gateway.corp.internal": ips(answer)}}
 			buf := &bytes.Buffer{}
-			sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+			sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 			p := newProxy(Options{
 				RunID:    uuid.New(),
 				Policy:   CompilePolicy(types.RunPolicySpec{}),
@@ -365,7 +365,7 @@ func TestLLMGateway_UpstreamFirst_CorpProxySeesCONNECT_DirectSeesZero(t *testing
 		t.Fatalf("parse upstream: %v", err)
 	}
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 8)}
 	p := newProxy(Options{
 		RunID:        uuid.New(),
 		Policy:       CompilePolicy(types.RunPolicySpec{}),

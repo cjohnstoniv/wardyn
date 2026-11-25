@@ -6,7 +6,6 @@ package api
 // The refresher and the clean-up worker, driven one pass at a time on the fixture's fake clock.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -190,7 +189,7 @@ func TestServiceGrant_SlowProviderDoesNotDelayRunWatcher(t *testing.T) {
 }
 
 func TestServiceGrantRefresher_StorelessPassIsQuiet(t *testing.T) {
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
 	t.Cleanup(func() { slog.SetDefault(prev) })

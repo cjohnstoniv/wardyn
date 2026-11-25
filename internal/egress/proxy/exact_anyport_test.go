@@ -102,7 +102,7 @@ func TestNoCleartextInjectionToTheTLSConventionalPorts(t *testing.T) {
 				// to re-admit the credential through AuthoredPortFor.
 				Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"vendor.example:" + port}}),
 				Injector: staticInj(map[string]injectedHeader{"vendor.example": {name: "X-Api-Key", value: "BROKERED-KEY"}}),
-				Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+				Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 				Resolver: publicResolver{},
 				Dial:     redirectDial(upstreamAddr(cu.srv)),
 			})
@@ -126,7 +126,7 @@ func TestNoCleartextInjectionToTheTLSConventionalPorts(t *testing.T) {
 			RunID:    uuid.New(),
 			Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"vendor.example:8080"}}),
 			Injector: staticInj(map[string]injectedHeader{"vendor.example": {name: "X-Api-Key", value: "BROKERED-KEY"}}),
-			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 			Resolver: publicResolver{},
 			Dial:     redirectDial(upstreamAddr(cu.srv)),
 		})

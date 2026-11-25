@@ -120,6 +120,7 @@ func newProxy(opts Options) *Proxy {
 		scrubResponses:       opts.ScrubResponses,
 		noNetwork:            opts.NoNetwork,
 		canonicalPushRepos:   opts.CanonicalPushRepos,
+		pushHoldRemovals:     opts.PushHoldRemovals,
 		attribution:          opts.Attribution,
 		gatewayVendor:        gatewayVendor,
 		channelHosts:         compileChannelHosts(opts.LLMChannelHosts),
@@ -408,7 +409,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 				return egress.Pending, "", &log
 			}
 		} else {
-			log := decisionLog(req, egress.Deny, "policy:default-deny")
+			log := decisionLog(req, egress.Deny, egress.RuleSourceDefaultDeny)
 			return egress.Deny, "", &log
 		}
 	case egress.VerdictAllow:
@@ -492,7 +493,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 // (approvalID == Nil, the common case) it is a standing policy allow.
 func (p *Proxy) allowLog(req egress.Request, approvalID uuid.UUID, givenBack bool) egress.DecisionLog {
 	if approvalID == uuid.Nil {
-		return decisionLog(req, egress.Allow, "policy:allowed")
+		return decisionLog(req, egress.Allow, egress.RuleSourcePolicyAllowed)
 	}
 	log := decisionLog(req, egress.Allow, "approval:"+approvalID.String())
 	log.ApprovalID = &approvalID
@@ -559,10 +560,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// A rule host is always opened here, so each request inside is judged (host_rules.go).
 	if p.ca != nil && (p.isCorpMITMHost(host) || p.policy.namesRuleHost(host)) {
 		if p.mitmPortAllowed(host, port) {
-			if log != nil {
-				p.sink.emit(*log)
-			}
-			p.mitmConnect(w, r, host, port, log)
+			p.mitmConnect(w, r, host, port, log, resumed)
 			return
 		}
 	}
@@ -582,11 +580,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// injection (inspectLLM no-ops with a nil scanner).
 		if p.mitmLLMHost(host, port) {
 			// The MITM path establishes its own TLS-terminated tunnel and emits
-			// per-request decisions inside; record the CONNECT allow here.
-			if log != nil {
-				p.sink.emit(*log)
-			}
-			p.mitmConnect(w, r, host, port, log)
+			// per-request decisions inside; mitmConnect records the CONNECT allow
+			// once it holds a tunnel slot.
+			p.mitmConnect(w, r, host, port, log, resumed)
 			return
 		}
 		// With allowed_models set, a model host is never an opaque tunnel: the gate cannot see into it.
@@ -616,20 +612,15 @@ func (p *Proxy) openTunnel(w http.ResponseWriter, r *http.Request, host string, 
 	// tunnel reaches once either leg ends (a shutdown that closes it included).
 	// A relayed flow takes none: the relay counted it before its ask.
 	if !relayed {
-		if p.openTunnels.Add(1) > p.maxTunnels {
-			p.openTunnels.Add(-1)
-			if log != nil {
-				p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceTunnelLimit))
-			}
-			// Temporary, so not X-Wardyn-Egress: denied: a retry succeeds once a tunnel closes.
-			w.Header().Set(egressHeaderReason, ruleSourceTunnelLimit)
-			w.Header().Set(egressHeaderHost, host)
-			w.Header().Set("Retry-After", "1")
-			w.Header().Set("X-Should-Retry", "true")
-			http.Error(w, "wardyn: the run holds the most open tunnels it may; retry once one closes", http.StatusServiceUnavailable)
+		var req *egress.Request
+		if log != nil {
+			req = &log.Request
+		}
+		release, ok := p.takeTunnelSlot(w, req, host)
+		if !ok {
 			return
 		}
-		defer p.openTunnels.Add(-1)
+		defer release()
 	}
 
 	// Dial the destination: through the corp proxy (CONNECT <real-host>) when an

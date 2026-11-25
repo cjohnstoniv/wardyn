@@ -710,6 +710,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		if presetLayer {
 			data["wall_preset"] = true
 		}
+		agentRulesReassertFlag(data, layers)
 		data["withheld_grants"] = nonNilStrings(droppedGrant)
 	}
 	if note := ceilingReassertNote(c.profile, unboundOnly, boundaryLayer, len(added)+len(droppedInjection)+len(droppedLane) > 0); note != "" {

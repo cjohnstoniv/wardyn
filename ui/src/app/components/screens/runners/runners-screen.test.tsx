@@ -332,12 +332,14 @@ describe("Admin -> Runners list", () => {
     expect(screen.queryByRole("heading", { name: "Add this computer" })).toBeNull();
   });
 
-  it("a failed read shows its own title and a Retry that reads again", async () => {
+  it("a failed read shows its own title in the shared error card and a Retry that reads again", async () => {
     listMock.mockRejectedValueOnce(new HttpError(500, "boom"));
     const user = userEvent.setup();
     renderScreen();
     expect(await screen.findByText("Couldn't load runners")).toBeInTheDocument();
     expect(screen.getByText(/Runners already claimed keep running their owners' runs under your policy/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: RUNNERS.FETCH_FAILED_TITLE, level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" }).querySelector(".lucide-rotate-cw")).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("button", { name: "laptop-7" })).toBeInTheDocument();
   });

@@ -34,6 +34,9 @@ func caseKeptCopyOut(t *testing.T, e *env) {
 	// (runner.ProxyConfig.Policy), so the control's one host is allowed here.
 	sp := e.spec(id)
 	sp.ProxyConfig.Policy = types.RunPolicySpec{AllowedDomains: []string{"example.com"}}
+	// Nor does it carry the proxy route dispatch gives every run (buildBaseSandboxEnv in internal/api), and
+	// agentprobe finds its proxy only in HTTPS_PROXY.
+	sp.Env = map[string]string{"HTTPS_PROXY": fmt.Sprintf("http://wardyn-proxy:%d", runner.ProxyListenPort)}
 	if _, err := d.CreateSandbox(bg, sp); err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
 	}

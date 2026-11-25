@@ -69,3 +69,15 @@ func (l *lockedBuffer) String() string {
 	defer l.mu.Unlock()
 	return l.b.String()
 }
+
+func (l *lockedBuffer) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Len()
+}
+
+func (l *lockedBuffer) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.Reset()
+}

@@ -407,9 +407,9 @@ func transferAudit(audit *recRecorder) int {
 	return n
 }
 
-func tailTestLogs(t *testing.T) *bytes.Buffer {
+func tailTestLogs(t *testing.T) *lockedBuffer {
 	t.Helper()
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	old := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(old) })

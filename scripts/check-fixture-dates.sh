@@ -259,6 +259,10 @@ declare -A ALLOWLIST=(
   ["internal/store/auditchain_range_pg_test.go"]=1
   ["ui/e2e/desktop-replay.spec.ts"]=1
   ["ui/src/app/lib/desktop-replay-timeline.test.ts"]=1
+  # 0.11 WATERMARK: the same recorded desktop started_at and audit row time, passthrough to the replay and its
+  # watermark; neither is compared to the wall clock.
+  ["ui/e2e/desktop-watermark.spec.ts"]=1
+  ["ui/src/app/components/screens/run-detail/desktop-replay-watermark.test.tsx"]=2
   # A macOS base's created_at and edited_at: the age and edit tests pass a fixed instant in as the clock (statusNow,
   # Now, macOSBaseLimit.Now) and compare only to it; the runnerwire tests only encode and decode them.
   ["cmd/wardyn-runnerd/macos_vm_age_test.go"]=9
@@ -275,6 +279,8 @@ declare -A ALLOWLIST=(
   # compares the printed date and time to those literals; the conformance self-test passes a fixed now in as the clock.
   ["cmd/wardyn-runnerd/macos_vm_machines_test.go"]=5
   ["test/conformance/macvm/kept_test.go"]=1
+  ["pkg/client/governance_review_test.go"]=10 # passthrough only: approval, impact and live-run times decoded as given, never compared to the clock
+  ["cmd/wardyn/governance_review_test.go"]=10 # passthrough only: proposal, expiry and approval times decoded and printed as given, never compared to the clock
 )
 
 fail=0

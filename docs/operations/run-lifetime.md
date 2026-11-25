@@ -113,6 +113,19 @@ When the database or the server is unreachable, a run's proxy cannot renew its t
 - A held sandbox has its proxy and agent stopped, and only its files are kept. It costs disk until the hold ends.
 - It has no record, so it cannot be ended or opened from the console, and is copied out only with host access.
 
+The server records outage windows on the database's clock, from its own observations only, and keeps them for 30 days:
+
+- `cp_outage`: no server beat for more than 30 seconds.
+- `runner_link`: a registered runner's link was down.
+- `server_outage`: the server's own proxies stopped renewing as a group. It needs at least two of the server's own runs; a single run whose proxy stops renewing is ended or kept as before.
+- A session the server ended itself because the runner may not come back (the runner was revoked, its owner deactivated, or runners switched off) records no runner outage.
+- A connection pool starved for more than 30 seconds records a `cp_outage` window while the server was up.
+- A database restored to an earlier point records one window, from the restored beat to the first beat after the restore. Both cases only widen what may recover, within a 24-hour bound.
+- A runner's link outage is recorded only by the server that held its session, two minutes after the link dropped.
+- A link that drops less than two minutes before that server stops (a restart, a deploy or a crash) is not recorded.
+- Nor is a runner that was still connected when the server stopped and cannot reach the new one: a deploy that breaks runner connectivity is not recorded as a runner outage.
+- A server that stops ends its runner sessions without recording a runner outage. Only the time during which no server was running is recorded, as a control-plane outage, when it is longer than 30 seconds. Runs on such a runner end as they did before this release.
+
 See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 
 ## Revive
@@ -264,6 +277,9 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - Every attached surface resets the clock when it opens and every 30 seconds while it is held. The surfaces are the browser terminal, an SSH shell, an SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
 - So a run someone is attached to is not idle-stopped, as long as those writes succeed. They are best effort and a failed one is dropped, so a database that refuses them for long enough lets an attached run look idle.
 - A run nobody is attached to is idle like any other, which is why a run can end an hour after its owner last looked at it.
+- An outage does not count as idleness. For 25 minutes after the database is reachable again, and after every start of the server ([`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace); `0` turns this off), no run is idle-stopped. Each run's idle time starts again at the start of that window (with several replicas, once for each).
+- A run on a registered runner that the server has no connection to is not idle-stopped, and its idle time starts again when the runner reconnects. With several replicas, only the replica that holds the runner's connection idle-stops its runs.
+- The run's end and `WARDYN_RUN_MAX_AGE` still apply in both cases.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
 - A pool's Interactive idle stop bounds it: its default applies when the policy sets none, and its maximum is never exceeded.
 - A member under a positive ceiling already holds that ceiling's maximum by then (next bullet), so for a member only the pool's maximum bites; an administrator gets the pool's default.

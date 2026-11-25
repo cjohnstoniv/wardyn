@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.3). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.11.0-rc.2). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -388,7 +388,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 - With the listener off, a run's owner still has an unmasked, unrecorded command door: REST exec
   (`POST /runs/{id}/exec`) is an API route, not part of this boundary, under SSH exec's per-run controls
   ([§4.1](#41-output-masking-and-the-paths-it-does-not-cover)).
-- Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes
+- Registered-public-key-only auth on the TCP listener; with `WARDYN_SSH_TICKETS` on, `GET /runs/{id}/ssh` also accepts a redeemed single-use ticket (B9 below). The trust root is the `ssh_public_keys` registry a human writes
   via self-service `/api/v1/me/ssh-keys`,
   - so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds
     ([§4](#4-in-scope-defenses)).
@@ -417,7 +417,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 | Delivery policy by runner | A security operator's trust class picks the per-class delivery mode; `via_org` is never trust-gated | #90 |
 | Laptop proxy → runnerd (decisions) | TLS pinned to runnerd's key; a key per proxy; runnerd the spool's only writer, sharing no directory with the proxy | #77 |
 | Link down | No new run; cached policy and a bounded, fail-closed spool until the lapse | #77 |
-| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, off by default) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
+| CLI ↔ runnerd (local attach, `WARDYN_ATTACH_LOCAL`, on by default; `off` turns it off) [0.10] | The organisation admits it exactly as a relay attach (same ticket, same checks), then grants it only for the ticket's owner, on that owner's own person runner, over the runner's stream; it keeps the writer lease, the recording and the audit rows, and every ender resets `pty_tee` | #95 |
 | A corporate root for the runner's own connection | `--org-ca-file` is trusted for that connection and registration only, never a sandbox mount or run proxy; a uid-and-mode hygiene rule for the trust store adds no reach | #70 |
 
 - B1–B11 are unchanged for a run placed `remote`.
@@ -594,7 +594,7 @@ is not the deployment described above.**
 | | GitHub's endpoint takes no audience or resource indicator, so this credential is not audience-bound (the RFC 8707 discipline in Wardyn is the per-run IDENTITY token's, `internal/identity`, which is a different credential). | |
 | | Kill-switch cascade on run end **[shipped]**; bot-branch-only push confinement **[shipped, default-on]** ([`internal/egress/proxy/git_broker.go`](../internal/egress/proxy/git_broker.go)). Endpoint deny, lane exclusivity and the `VerifyRefRuleset` gate: asset #4. Token-side confinement is read-verifiable and gateable, never created by Wardyn. | |
 | Confused-deputy against the token broker | Callers authenticated by their run's identity token; egress allowlist and injection-rule registration are separate capabilities. | B4 |
-| Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
+| Insider hiding behind agent identity | The run identity token carries `sub` (the person), `act` (the run's SPIFFE ID) and `sponsor`; the agent never replaces the human in the chain — it is added to it. An audit row names one actor and its run (`run_id`), so who is behind an agent's row is that run's `created_by` ([ARCHITECTURE.md](../ARCHITECTURE.md#security-invariants), item 4). A run's commits name that creator as author and the run as committer by default; code in the sandbox can change both. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. | B5, ID |
 | | PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. | |
 | | Above that line nothing separates duties — residual #14. | |
@@ -614,7 +614,7 @@ is not the deployment described above.**
 | | A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. | |
 | | These bounds are load-bearing rather than belt-and-braces: the DAEMON default is off (`WARDYN_SSH_LISTEN` unset), but the one-line installer and the desktop envelope both ship it ON at `:2222` (see B9). | |
 | | So the listener exists on those deployments and only the loopback host-port publish keeps it off the network. | |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of). | B9, AU |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** The TCP listener stays public-key only (no password or keyboard-interactive method); a second door, `GET /runs/{id}/ssh`, accepts the `none` method only on a per-connection configuration built after a redeemed single-use ticket, and only when the operator turns on `WARDYN_SSH_TICKETS`; the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of). | B9, AU |
 | | Authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, re-stamped bounded-stale on every OIDC login (`0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15). A member's key never satisfies the override. | |
 | | Every success and a bounded share of refusals are audited under `ssh.authenticate` with the source IP and, where a registered key was involved, the actual principal rather than "unknown"; refusals that name a registered key are recorded at a per-key bounded rate (burst 5, 1/s; per-key buckets are capped at 1024 live keys, and a key past the cap shares the `auth.fail` bound), and refusals with no attributable actor (unknown key, bad username, unknown run) share the `auth.fail` rate bound (burst 5, 1/s), with drops counted in `wardyn_auth_failed_suppressed_total`. Bounds: [`docs/SSH.md`](../docs/SSH.md). | |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A per-run cap on concurrent SSH channels, which `session` (shell/exec/sftp) and `direct-tcpip` (`-L`) share, independent of the connection-level cap. Since 0.9 `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets it; sync has its own cap. | B9 |
@@ -1777,6 +1777,8 @@ These risks are **not closed by v1 Wardyn**.
 
 - owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.**
 - The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`).
+- Attach tickets now carry a purpose, and a ticket minted for a purpose and spent at any other door is refused after it is burned; a terminal ticket with no purpose still opens the forward door.
+- SSH tickets ride a header, never a URL.
 - `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17).
 - And "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run.
 
@@ -2474,7 +2476,7 @@ These risks are **not closed by v1 Wardyn**.
       - (a) holds unchanged: a restored row opens until its wrapping-key version is disabled in Key Vault.
     - (e) **Crypto-erasure (`WARDYN_PRINCIPAL_KEYS=on`, envelope enc_version 3, 0.8.6)** narrows (b) for the rows it covers, and for no others.
       - A person's credential written with it on has its data key under that person's own `cred` principal key.
-      - And an erase destroys that key, so the row cannot be read on any replica at its next use, whatever a backup holds of the row.
+      - And an erase destroys that key, so this database cannot read the row on any replica at its next use, nor a copy of the row restored into it from a backup.
       - **The scope is exactly the v3 rows.**
         - A v1 row, a row written while the setting was off, an external-store pointer (the value lives in the organisation's store), the operator namespace and the boot keys are only deleted.
         - And `credential.erase` reports the two apart (`crypto_erased`, `deleted`).
@@ -3072,7 +3074,7 @@ These risks are **not closed by v1 Wardyn**.
     - After pending actions, retained audit history replays before READY, chained in arrival order with `data.observed_at` and `data.spooled`; its content is self-reported (#73).
     - A verified owning, claimed, non-revoked runner may replay a killed run's retained audit history (`IngestRunnerDecision`). This is audit only: it cannot revive the run or restore credentials.
     - A kill, end or stop issued offline waits as a pending action the runner applies first; token deny and broker revoke run at once.
-    - After a runner restarts, its runs stop reaching the network until each is revived. This is fail-closed.
+    - After a runner restarts, each run's proxy keeps its network only until the lapse time the runner saved from its last lease, never more than `runTokenLapseAfter` (`1h5m`) after the restart and with no grace, so a runner restarting in a loop still cuts each run off on time. The restart grants nothing else: no exec, start, proxy replacement or local attach until the organisation's fresh lease. A run with no saved lapse time or past it, whose creation did not finish, whose last change failed or whose last start or command lost its result, or already being contained, is cut off at once and stays so until it is revived. A restart in the middle of a proxy replacement keeps whichever proxy is there (the earlier one, the new one, or none) until the same saved time. The saved time is wall-clock: a host clock set back before a restart can lengthen one run's network by up to `1h5m` per restart, which needs root on the host.
     - Revoking a runner while it is offline ends its runs KILLED and denies their tokens at once. The runner keeps its sandboxes until it reconnects and is answered `REVOKED`, and the lapse stops their proxies.
     - This replaces #54's window for a local run: the same length, with decisions late rather than lost.
 
@@ -3271,7 +3273,7 @@ These risks are **not closed by v1 Wardyn**.
 
     </details>
 
-95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; off by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
+95. **A terminal attached on the runner's own computer is held by runnerd, and its recording is runnerd's copy [0.10; on by default].** ([`internal/api/attach_local.go`](../internal/api/attach_local.go).)
     - With `WARDYN_ATTACH_LOCAL` on, a person's `wardyn attach` on their own runner keeps the terminal bytes on that computer. The organisation admits it exactly as a relay attach and grants it only on that person's own person runner: never break-glass, a sponsor or an organisation's runner.
     - Read-only enforcement moves to runnerd: it drops an observer's input and resizes. The organisation pushes every change of write authority, the lease fence included, and ends the session when runnerd does not acknowledge it in 2 s. Anyone sharing that tmux session is the same person or already on that host's Docker (#69).
     - This departs from "recordings record the attach exactly as they do today" in one respect: the cast, masker, key, head cap and audit rows are the same, but the bytes recorded are runnerd's copy, not bytes the organisation forwarded. Both are `runner_asserted` (#73), and the developer already has unrecorded `docker exec` on that host (#69). Rows carry `transport` `local` and `runner_id`.

@@ -49,7 +49,7 @@ type hrOpts struct {
 func hrProxy(t *testing.T, o hrOpts, upstream *httptest.Server) (*Proxy, *bytes.Buffer, []byte) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	sink := &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	opts := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: hrSets()}),
@@ -482,7 +482,7 @@ func TestHostRulesRefusePrefixOverrideHeaders(t *testing.T) {
 			cu := captureUpstream(t, false, "ok")
 			buf := &bytes.Buffer{}
 			p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
-				Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+				Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 				Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: ruled(hrHost, "/public", "/admin")})})
 			srv := httptest.NewServer(p)
 			defer srv.Close()
@@ -522,7 +522,7 @@ func plainHostRuleRequest(t *testing.T, raw string) (int, *capturedUpstream, str
 	cu := captureUpstream(t, false, "ok")
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{}, Dial: redirectDial(upstreamAddr(cu.srv)),
-		Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{hrHost}, HostRules: []types.HostRuleSet{{Rules: []types.HostRule{
 			{Host: hrHost, Paths: []string{"/admin"}, Effect: types.HostRuleDeny},
 			{Host: hrHost, Paths: []string{"/public"}, Effect: types.HostRuleAllow},
@@ -622,7 +622,7 @@ func TestViaOrgRefusesDeclaredOverrideTrailers(t *testing.T) {
 		t.Cleanup(org.Close)
 		p := viaOrgRunProxy(t, org, viaOrgHost, types.HostRule{Host: viaOrgHost, Effect: types.HostRuleAllow})
 		rows := &lockedBuilder{b: &strings.Builder{}}
-		p.sink = &decisionSink{out: rows, ch: make(chan egress.DecisionLog, 64)}
+		p.sink = &decisionSink{out: rows, ch: make(chan queuedDecision, 64)}
 		k := newKeptAlive(t, p, viaOrgHost)
 		k.write(t, "POST /v1/messages HTTP/1.1\r\nHost: "+viaOrgHost+"\r\nTransfer-Encoding: chunked\r\nTrailer: "+trailer+"\r\n\r\n2\r\nhi\r\n0\r\n\r\n")
 		status, _, err := k.answer()
