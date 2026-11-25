@@ -520,7 +520,7 @@ func (s *Server) reviveSourceConfig(ctx context.Context, rv runner.ProxyReviver,
 	case err != nil:
 		return nil, nil, reviveRefused(http.StatusServiceUnavailable, reasonReviveConfigUnreadable, loggedMsg(ctx, "read the run's proxy config", err))
 	}
-	cfg, err := s.loadRenderedProxyConfig(old)
+	cfg, err := s.loadRenderedProxyConfig(old, run)
 	if err != nil {
 		return nil, nil, reviveRefused(http.StatusConflict, reasonReviveConfigDoesNotLoad, "the run's proxy config does not load: "+err.Error())
 	}

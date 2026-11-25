@@ -734,7 +734,7 @@ func (s *Server) extendRefusal(ctx context.Context, run types.AgentRun, callerIs
 		return &ownerRefusal{status: http.StatusServiceUnavailable, reason: reasonOwnerUnverifiable,
 			msg: loggedMsg(ctx, "read the run's proxy config to re-check its owner's authority", err)}
 	default:
-		if cfg, err = s.loadRenderedProxyConfig(raw); err != nil {
+		if cfg, err = s.loadRenderedProxyConfig(raw, run); err != nil {
 			return &ownerRefusal{status: http.StatusConflict, reason: reasonOwnerUnverifiable,
 				msg: "the run's proxy config does not load: " + err.Error()}
 		}

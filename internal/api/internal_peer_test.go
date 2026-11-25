@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -844,5 +845,47 @@ func TestProxyPeerID_OnlyOwnKubernetesProxies(t *testing.T) {
 	}
 	if n := strings.Count(string(src), "ControlPlanePeerID: s.proxyPeerID(run),"); n != 1 {
 		t.Fatalf("runs_dispatch.go sets the proxy's ControlPlanePeerID from proxyPeerID %d times, want 1", n)
+	}
+}
+
+// A revive follows the current switch, not the one at first start: with it on, this daemon's own Kubernetes
+// proxy is handed its run's SPIFFE ID whatever the stored config held; with it off, or on another runner
+// target, a stored peer ID is removed, so the revived proxy presents no run certificate.
+func TestReviveConfig_StampsPeerIDFromCurrentSwitch(t *testing.T) {
+	ca := newMTLSCA(t, "wardyn.local")
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw}))
+	run := types.AgentRun{ID: uuid.New()}
+	run.SPIFFEID = "spiffe://wardyn.local/agent-run/" + run.ID.String()
+	stale := "spiffe://wardyn.local/agent-run/" + uuid.New().String()
+	on := &InternalMTLS{TrustDomain: "wardyn.local"}
+	for _, tc := range []struct {
+		name   string
+		mtls   *InternalMTLS
+		target string
+		stored map[string]any // extra keys in the stored config
+		want   string
+	}{
+		{"on, k8s, none stored", on, "k8s", nil, run.SPIFFEID},
+		{"on, k8s, another stored", on, "k8s", map[string]any{"control_plane_peer_id": stale}, run.SPIFFEID},
+		{"off, k8s, one stored", nil, "k8s", map[string]any{"control_plane_peer_id": run.SPIFFEID}, ""},
+		{"on, docker, one stored", on, "docker", map[string]any{"control_plane_peer_id": run.SPIFFEID}, ""},
+	} {
+		srv := &Server{cfg: Config{InternalMTLS: tc.mtls, RunnerTarget: tc.target,
+			ControlPlaneURL: "https://wardynd:8443", ControlPlaneCAPEM: caPEM}}
+		m := map[string]any{"run_id": run.ID.String(), "control_plane_url": "http://wardynd:8080", "run_token": "tok"}
+		for k, v := range tc.stored {
+			m[k] = v
+		}
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := srv.loadRenderedProxyConfig(raw, run)
+		if err != nil {
+			t.Fatalf("%s: loadRenderedProxyConfig: %v", tc.name, err)
+		}
+		if cfg.ControlPlanePeerID != tc.want || cfg.ControlPlaneURL != "https://wardynd:8443" {
+			t.Errorf("%s: peer ID %q, URL %q; want %q and the current URL", tc.name, cfg.ControlPlanePeerID, cfg.ControlPlaneURL, tc.want)
+		}
 	}
 }
