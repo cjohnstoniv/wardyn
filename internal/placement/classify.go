@@ -127,6 +127,7 @@ var Table = []Entry{
 	// runner.ProxyConfig
 	{Struct: StructProxyConfig, Field: "RunToken", Class: ClassPlatform, Rule: RuleAllow, Variant: "bounded by the runner_id binding"},
 	{Struct: StructProxyConfig, Field: "ControlPlaneCAPEM", Class: ClassPlatform, Rule: RuleAllow, Variant: "public"},
+	{Struct: StructProxyConfig, Field: "ControlPlanePeerID", Class: ClassPlatform, Rule: RuleStrip, Variant: "a run's SPIFFE ID; only this daemon's own Kubernetes proxies get it"},
 	{Struct: StructProxyConfig, Field: "MITMCACertPEM", Class: ClassPlatform, Rule: RuleAllow},
 	// On a Mac with macos_vm_inspection_ca on, the runner re-issues this CA under
 	// the Mac's own, limited to the hosts the run's proxy terminates; see the macOS

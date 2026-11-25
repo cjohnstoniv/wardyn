@@ -219,6 +219,7 @@ func ProxyConfigOf(runID uuid.UUID, pc ProxyConfig, port int) proxy.Config {
 		RunID:                runID,
 		ControlPlaneURL:      pc.ControlPlaneURL,
 		ControlPlaneCAPEM:    pc.ControlPlaneCAPEM,
+		ControlPlanePeerID:   pc.ControlPlanePeerID,
 		RunToken:             pc.RunToken,
 		Policy:               pc.Policy,
 		Injection:            inj,

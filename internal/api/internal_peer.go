@@ -13,6 +13,7 @@ import (
 	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 
 	"github.com/cjohnstoniv/wardyn/internal/identity"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // InternalMTLS turns on the run-certificate check on the internal surface.
@@ -61,6 +62,16 @@ func (s *Server) refuseUnverifiedPeer(w http.ResponseWriter, r *http.Request, cl
 }
 
 // denyPeer audits and writes one refusal of refuseUnverifiedPeer.
+// proxyPeerID is the SPIFFE ID a run's proxy presents to the control plane as its client certificate: the
+// run's own, only with WARDYN_INTERNAL_MTLS on and only for a sandbox this daemon's own Kubernetes runner
+// creates (runOnKubernetes with no runner placing the run). Every other proxy gets "" and presents none.
+func (s *Server) proxyPeerID(run types.AgentRun) string {
+	if s.cfg.InternalMTLS == nil || run.RunnerID != nil || !s.runOnKubernetes(run) {
+		return ""
+	}
+	return run.SPIFFEID
+}
+
 func (s *Server) denyPeer(w http.ResponseWriter, r *http.Request, status int, reason, msg string) bool {
 	s.auditAuthFailedAs(r, internalAuthActor, reason)
 	writeErrorReason(w, status, reason, msg)

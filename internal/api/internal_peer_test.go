@@ -26,6 +26,7 @@ import (
 	"net/http/httptest"
 	"net/http/httptrace"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -39,6 +40,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
+	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -804,4 +806,43 @@ func TestInternalMTLS_RemoteUnrelayedRefused(t *testing.T) {
 	wantMTLSRefusal(t, on, mtlsDecision(t, on, on.tok, nil, nil), http.StatusUnauthorized, reasonInternalPeerRequired)
 	off := newMTLSFixture(t, remote(), false, nil)
 	wantServed(t, mtlsDecision(t, off, off.tok, nil, nil))
+}
+
+// A run's proxy is handed its SPIFFE ID as the client certificate to present only with the switch on and
+// only when this daemon's own Kubernetes runner creates its sandbox: off, on another runner target, or on a
+// runner (a Kubernetes one included, whose proxies hold no run certificate in this release) it gets none.
+// The dispatch literal takes the value from proxyPeerID, so this is what a run's proxy is sent.
+func TestProxyPeerID_OnlyOwnKubernetesProxies(t *testing.T) {
+	kubeRunner := uuid.New()
+	run := types.AgentRun{ID: uuid.New()}
+	run.SPIFFEID = "spiffe://wardyn.local/agent-run/" + run.ID.String()
+	onRunner := run
+	onRunner.RunnerID = &kubeRunner
+	on := &InternalMTLS{TrustDomain: "wardyn.local"}
+	for _, tc := range []struct {
+		name   string
+		mtls   *InternalMTLS
+		target string
+		run    types.AgentRun
+		want   string
+	}{
+		{"off, own Kubernetes runner", nil, "k8s", run, ""},
+		{"on, own Kubernetes runner", on, "k8s", run, run.SPIFFEID},
+		{"on, own docker runner", on, "docker", run, ""},
+		{"on, no runner target", on, "", run, ""},
+		{"on, a Kubernetes runner", on, "k8s", onRunner, ""},
+	} {
+		srv := &Server{cfg: Config{InternalMTLS: tc.mtls, RunnerTarget: tc.target}}
+		seedRunnerCaps(t, srv, kubeRunner, runnerwire.Caps{EndsUnkept: true})
+		if got := srv.proxyPeerID(tc.run); got != tc.want {
+			t.Errorf("%s: proxyPeerID = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	src, err := os.ReadFile("runs_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(src), "ControlPlanePeerID: s.proxyPeerID(run),"); n != 1 {
+		t.Fatalf("runs_dispatch.go sets the proxy's ControlPlanePeerID from proxyPeerID %d times, want 1", n)
+	}
 }
