@@ -796,6 +796,8 @@ func TestRecover_RefusalClasses(t *testing.T) {
 			mut: ruAfterStamp(func(s *ruStore, _ uuid.UUID) { s.runErr = errRuRead })},
 		{name: "the stamp loses and the run's row is gone at the re-read", status: 403, reason: "run_not_found", final: true, row: "denied:run_not_found", stamps: 1,
 			mut: ruAfterStamp(func(s *ruStore, _ uuid.UUID) { s.lineageErr = store.ErrNotFound })},
+		{name: "the stamp loses and the run is gone at the re-read", status: 403, reason: "run_not_found", final: true, row: "denied:run_not_found", stamps: 1,
+			mut: ruAfterStamp(func(s *ruStore, _ uuid.UUID) { s.runErr = store.ErrNotFound })},
 		{name: "the stamp loses to a loss mark", status: 403, reason: string(authz.ReasonRunKept), final: true, row: "denied:run_lost:outage", stamps: 1,
 			mut: ruAfterStamp(func(s *ruStore, id uuid.UUID) {
 				run := s.runs[id]

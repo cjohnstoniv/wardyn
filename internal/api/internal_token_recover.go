@@ -306,7 +306,11 @@ func recoverRunStateRefusal(run types.AgentRun, now time.Time) string {
 // changed back), the answer is retryable. No token is handed out on any of these.
 func (s *Server) refuseRecoverRaced(ctx context.Context, w http.ResponseWriter, r *http.Request, claims *identity.Claims, st recoveryStore, now time.Time) {
 	run, err := s.cfg.Store.GetRun(ctx, claims.RunID)
-	if err != nil {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		s.refuseRecover(w, r, claims, reasonRunNotFound)
+		return
+	case err != nil:
 		s.refuseRecover(w, r, claims, reasonRecoveryReadFailed)
 		return
 	}
