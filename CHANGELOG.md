@@ -18,18 +18,6 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - A trust's audience must be the origin of `WARDYN_OIDC_REDIRECT_URL` or `WARDYN_RUNNER_ORG_URL`, with the base path when one is set; the UI-sandbox address is never one. A swapped token lasts 15 minutes by default, an hour at most, and never past the provider token's own expiry.
 - The identity's sponsor sees and removes its trusts, and a sponsor change or a retire removes them. A revoke of all the sponsor's sessions, or of everyone's, stops the sponsor's trusts until the sponsor confirms each one again.
 - Migration `0400_inbound_federation` creates `inbound_federation` (one row, off), `inbound_trusts` and `inbound_trust_tokens`.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, UPDATE` on `inbound_federation` to every role
-  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
-  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
-  same on the table as soon as the migration has run.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `inbound_trust_tokens` to every role
-  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
-  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
-  same on the table as soon as the migration has run.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `inbound_trusts` to every role
-  that was granted `UPDATE` on `api_tokens`, other than that table's owner. If the app role is not one of those roles or a
-  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
-  same on the table as soon as the migration has run.
 
 ### Changed
 
@@ -39,7 +27,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 ### Before you upgrade
 
 - Inbound federation, which lets machines call sandbox ports with tokens from your own identity provider, is new and off. Nothing changes until an administrator turns it on, except that split-role installs must apply the new grants before upgrading.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants every role granted `UPDATE` on `api_tokens`, other than that table's owner, `SELECT, UPDATE` on `inbound_federation`, `SELECT, INSERT, UPDATE, DELETE` on `inbound_trusts` and `SELECT, INSERT` on `inbound_trust_tokens`. If your app role is not one of them and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, set that up before you upgrade, or grant it the same as soon as the migration has run. Until then service-token mints, sponsor changes and retires fail, and so does every inbound federation route.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): the migration grants `SELECT, UPDATE` on `inbound_federation`, `SELECT, INSERT` on `inbound_trust_tokens` and `SELECT, INSERT, UPDATE, DELETE` on `inbound_trusts` to every role granted `UPDATE` on `api_tokens`, other than that table's owner. If your app role is not one of them and does not pick up new tables through `ALTER DEFAULT PRIVILEGES`, set that up before you upgrade, or grant it the same as soon as the migration has run. Until then service-token mints, sponsor changes and retires fail, and so does every inbound federation route.
 - Stop every wardynd older than this release first. An older server counts exchanged tokens against a service identity's cap, and leaves an identity's trusts in place when its sponsor changes or it is retired.
 
 ## [0.10.4] — 2026-11-24

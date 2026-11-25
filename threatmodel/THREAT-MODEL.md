@@ -3805,7 +3805,7 @@ has four-eyes.**
 - A service identity carries any existing user type directly, so its create and any change of its sponsor
   are covered (governance change kind `service_identity`), held for a second security-tier human and
   applied only against the reviewed state.
-- Turning inbound federation on and adding a trust are covered too (governance change kind `inbound_federation`), and need a signed-in person to propose and to approve. Turning it off and deleting a trust apply directly: they only stop tokens, and turning it off cancels a pending turn-on. With the switch unset, one admin does both alone (residual 100).
+- Turning inbound federation on and adding a trust are covered too (governance change kind `inbound_federation`), and need a signed-in person to propose and to approve. Turning it off and deleting a trust apply directly: they only stop tokens, and turning it off cancels a pending turn-on. With `WARDYN_GOVERNANCE_SECOND_HUMAN` unset, one admin does both alone (residual 100).
 - It is published here because of what it leaves open.
 
 **What it guarantees**, with SSO configured and the admin token held out of band:

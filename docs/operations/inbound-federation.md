@@ -146,8 +146,8 @@ replica, within 30 seconds.
 
 On the trust and switch routes, `403` `inbound_federation_needs_person` answers an API token, the admin token or a
 delegated request that turns the switch on, adds a trust or confirms one. It also answers an approval by anyone who is
-not a signed-in person. `202` answers a write held for a second admin. A trust cannot be added or confirmed when its
-sponsor's revocation order reads below zero: that answers `503` `token_lookup_unavailable`, and nothing is clamped.
+not a signed-in person. `202` answers a write held for a second admin. A trust cannot be added or confirmed when the
+revocation sequence, one count for the whole deployment, reads below zero: that answers `503` `token_lookup_unavailable`, and nothing is clamped.
 
 ## Audit
 
