@@ -18,6 +18,7 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/movepack"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 var (
@@ -170,6 +171,10 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 	if err := runner.CheckCarriedLimit(maxBytes); err != nil {
 		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
 	}
+	if root, drive, ok := carriedRootOnDrive(set, spec.Drives); ok {
+		return runner.Sandbox{}, none, fmt.Errorf("%w: docker: the carried root %s is on the drive %q, and a move writes only into storage it creates",
+			runner.ErrMoveCreate, root, drive)
+	}
 	rd, err := movepack.NewReader(carried, movepack.Options{Set: set, Limits: movepack.Limits{MaxBytes: maxBytes}})
 	if err != nil {
 		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
@@ -195,6 +200,26 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 		return runner.Sandbox{}, none, fmt.Errorf("%w: docker: import into %s: %w", runner.ErrMoveFiles, sb.Ref, undo(err))
 	}
 	return sb, rd.Manifest(), nil
+}
+
+// carriedRootOnDrive finds a root of set, other than one set leaves out whole, at or under the target of one of
+// drives, and answers it and that drive's name. Every drive of a Docker destination's spec is a person's drive
+// that existed before the move (the work folder goes into the container's own layer), so an import never writes
+// one: the archive API would overwrite another run's newer writes on a shared volume.
+func carriedRootOnDrive(set runner.CarriedSet, drives []types.DriveMount) (string, string, bool) {
+	for _, root := range set.Roots {
+		if movepack.Excluded(strings.TrimPrefix(root, "/"), set.Exclude) {
+			continue
+		}
+		clean := path.Clean(root)
+		for _, dr := range drives {
+			t := path.Clean(dr.Target)
+			if clean == t || strings.HasPrefix(clean, strings.TrimSuffix(t, "/")+"/") {
+				return root, dr.DriveName, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 // reemit writes the entries rd reads as a tar for the daemon to extract at "/", then the booted marker. It
