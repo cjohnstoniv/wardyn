@@ -18,4 +18,23 @@ func TestDriverIsNoMoveImportPresenter(t *testing.T) {
 	if _, ok := any(&Driver{}).(runner.MoveImportPresenter); ok {
 		t.Fatal("the k8s Driver is a runner.MoveImportPresenter; runnerd would advertise a destination whose imported pod reads absent")
 	}
+	if _, ok := any(&keepDriver{}).(runner.MoveImportPresenter); ok {
+		t.Fatal("the k8s keep driver is a runner.MoveImportPresenter; its imported pod is held and reads stopped")
+	}
+}
+
+// Only the keep driver moves a run: the bare Driver keeps no run whose files outlive its pod.
+func TestDriverIsNoMoveStateSubstrate(t *testing.T) {
+	if _, ok := any(&Driver{}).(runner.StateExporter); ok {
+		t.Error("the bare k8s Driver is a runner.StateExporter")
+	}
+	if _, ok := any(&Driver{}).(runner.StateImporter); ok {
+		t.Error("the bare k8s Driver is a runner.StateImporter")
+	}
+	if _, ok := any(&keepDriver{}).(runner.StateExporter); !ok {
+		t.Error("the keep driver is not a runner.StateExporter")
+	}
+	if _, ok := any(&keepDriver{}).(runner.StateImporter); !ok {
+		t.Error("the keep driver is not a runner.StateImporter")
+	}
 }
