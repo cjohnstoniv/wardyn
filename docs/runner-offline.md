@@ -10,6 +10,7 @@ A local runner retains agents and their files after losing its organisation conn
 | Spool full, Docker-hosted Linux VM | Asks the guest to power down, keeps the stopped VM and removes its proxy; a Kubernetes VM is not covered | Receives the spooled decisions on reconnect |
 | Reconnect | Replays its decision spool; a deadline is not extended | Verifies the runner's claim, owner, revocation and run binding, then commits audit rows and receipts together |
 | Exit receipt refused 8 times in a row | Nothing | Parks the receipt and audits `runner.exit.park`; see [A parked exit receipt](#a-parked-exit-receipt) |
+| An operator runs `wardyn-runnerd contain` | Stops the run's proxy on its next pass and drops every later lease for it; see [Break-glass](#break-glass-contain-a-run-on-its-runner-host) | Records `runner.local_contain.record` from the next STATE page and refuses the run's revive |
 | Runner revoked | Latches the revocation and refuses further work | Settles the runner's open and deferred actions |
 
 Runner lifecycle state and decision spools live under the runner state directory with private permissions. Only the proxy receives its run's spool mount; the agent does not. A durable creation intent records the deterministic sandbox reference before provisioning so a failed create or restart can still contain a partially created proxy.
@@ -127,6 +128,32 @@ flight, is asked again by the next revive. A run that was killed or
 quarantined, a run held pending a node record, and a runner-side record kept only
 for containment are never recovered.
 
+## Break-glass: contain a run on its runner host
+
+Use it when a run must lose its network now and the organisation cannot be reached to kill it. On the runner host, as
+the user serve runs as:
+
+```sh
+wardyn-runnerd contain --run <run-id>      # repeat --run for more runs
+wardyn-runnerd contain --all               # every run on this runner
+```
+
+On a Kubernetes runner, run the same command in the runnerd pod (`kubectl exec`).
+
+- The running serve stops each run's proxy on its next pass, the same stop a lapsed lease gets, and drops every later
+  lease for the run without ending its session.
+- `contain` waits up to `--wait` (default 60 seconds) for serve's receipt. Exit 0 means every proxy is confirmed
+  stopped, 3 that one is not yet (each run is printed with why), 5 that no receipt came.
+- Exit 4 means serve is not running: the latch is applied when serve next starts, before it connects, and nothing is
+  stopped now. To stop the proxies now, run `docker stop wardyn-proxy-<run-id>` on Docker (the run's network is
+  internal with no gateway); on a Kubernetes runner whose runnerd pod is down, `kubectl delete pod
+  wardyn-proxy-<run-id>`, which also removes the agent pod it owns.
+- The runner reports the latch in the STATE page of its next fresh session, before READY. The organisation records
+  `runner.local_contain.record`, refuses the run's revive with `revive_local_contained` and its recovery, and the run
+  is lost when its token lapses.
+- `contain` does not end the run and does not refuse new runs; nothing clears it but ending the run. To stop new
+  work, stop serve or revoke the runner.
+
 ## Schema
 
 | Migration | Adds |
@@ -138,3 +165,4 @@ for containment are never recovered.
 | `0155_runner_asserted_subjects` | Queued actions that name a run the organisation has no row for |
 | `0175_runner_action_refused` | The `refused` action result |
 | `0232_runner_exit_parked` | `parked_at` on exit receipts |
+| `0403_revocation_outage` | `run_local_containment`, a run a local operator contained on its runner, as reported; and `run_github_token_seals` |

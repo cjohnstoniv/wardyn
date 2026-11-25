@@ -88,6 +88,17 @@ type RunnerInventoryResult struct {
 	GoneDue bool
 	// Containment lists the page's containment-pending transitions, audited after it commits.
 	Containment []RunContainmentEvent
+	// LocalContain lists the runs the page first reported a local operator contained, audited after it commits.
+	LocalContain []LocalContainEvent
+}
+
+// LocalContainEvent is one run a runner first reported contained by a local operator on its host
+// (runnerwire.LocalContain): runner-asserted.
+type LocalContainEvent struct {
+	RunID, RunnerID uuid.UUID
+	ContainedAt     time.Time
+	Scope           string
+	OperatorUID     int
 }
 
 // BeginRunnerInventory captures original candidates before fresh PENDING/STATE.
@@ -184,6 +195,14 @@ func (s PG) IntakeRunnerStatePage(ctx context.Context, runnerID uuid.UUID, sessi
 		return out, err
 	}
 	for _, row := range page.Runs {
+		// The latch is recorded first, on this transaction, so this row's STATE judge already reads it.
+		lc, err := intakeLocalContainTx(ctx, tx, runnerID, row)
+		if err != nil {
+			return out, err
+		}
+		if lc != nil {
+			out.LocalContain = append(out.LocalContain, *lc)
+		}
 		needs, capped, ev, err := s.intakeRunnerStateRow(ctx, tx, runnerID, row)
 		if err != nil {
 			return out, err
@@ -271,6 +290,38 @@ func (s PG) intakeRunnerStateRow(ctx context.Context, tx pgx.Tx, runnerID uuid.U
 	}
 	_, err = tx.Exec(ctx, `UPDATE runner_inventory_candidates SET seen=true WHERE runner_id=$1 AND run_id=$2`, runnerID, row.RunID)
 	return needsLoss || containment != nil, false, ev, err
+}
+
+// intakeLocalContainTx records row's local containment, once per run and only for a run placed on runnerID, and
+// answers the event when this row is the first report of it.
+func intakeLocalContainTx(ctx context.Context, tx pgx.Tx, runnerID uuid.UUID, row runnerwire.RunState) (*LocalContainEvent, error) {
+	lc := row.LocalContain
+	if lc == nil {
+		return nil, nil
+	}
+	if lc.Scope != "run" && lc.Scope != "all" {
+		return nil, ErrRunnerExecutionRefused
+	}
+	var id uuid.UUID
+	err := tx.QueryRow(ctx, `INSERT INTO run_local_containment (run_id, runner_id, contained_at, scope, operator_uid)
+		SELECT $1, $2, $3, $4, $5 WHERE EXISTS (SELECT 1 FROM agent_runs WHERE id = $1 AND runner_id = $2)
+		ON CONFLICT (run_id) DO NOTHING RETURNING run_id`, row.RunID, runnerID, lc.At, lc.Scope, lc.UID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: record local containment: %w", err)
+	}
+	return &LocalContainEvent{RunID: id, RunnerID: runnerID, ContainedAt: lc.At, Scope: lc.Scope, OperatorUID: lc.UID}, nil
+}
+
+// RunLocallyContained reports whether a local operator contained the run on its runner (run_local_containment).
+func (s PG) RunLocallyContained(ctx context.Context, runID uuid.UUID) (bool, error) {
+	var held bool
+	if err := s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_local_containment WHERE run_id = $1)`, runID).Scan(&held); err != nil {
+		return false, fmt.Errorf("store: check local containment: %w", err)
+	}
+	return held, nil
 }
 
 const inventoryOmissionsSQL = `SELECT EXISTS (

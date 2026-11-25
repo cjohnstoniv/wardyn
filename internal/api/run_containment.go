@@ -39,6 +39,8 @@ const (
 	// containment-pending transition.
 	auditRunNodeRecord         = "run.node.record"
 	auditRunContainmentPending = "run.containment.hold"
+	// auditRunnerLocalContain is a state page's first report that a local operator contained a run on its runner.
+	auditRunnerLocalContain = "runner.local_contain.record"
 
 	maxNodeRecordSourceID = 256
 
@@ -390,6 +392,17 @@ func (s *Server) recordRunContainmentEvents(ctx context.Context, events []store.
 		runID := ev.RunID
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "runner:"+ev.RunnerID.String(), auditRunContainmentPending, runID.String(), "success",
 			mustJSON(map[string]any{"state": ev.State, "kind": ev.Kind, "name_reused": ev.NameReused, "no_causal_association": ev.NoCause,
+				"evidence_source": types.RunEvidenceRunnerAsserted})))
+	}
+}
+
+// recordLocalContainEvents audits each run a state page first reported contained by a local operator on its runner
+// host, once per run (the store records the latch once). Runner-asserted.
+func (s *Server) recordLocalContainEvents(ctx context.Context, events []store.LocalContainEvent) {
+	for _, ev := range events {
+		runID := ev.RunID
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "runner:"+ev.RunnerID.String(), auditRunnerLocalContain, runID.String(), "success",
+			mustJSON(map[string]any{"contained_at": ev.ContainedAt, "scope": ev.Scope, "operator_uid": ev.OperatorUID,
 				"evidence_source": types.RunEvidenceRunnerAsserted})))
 	}
 }

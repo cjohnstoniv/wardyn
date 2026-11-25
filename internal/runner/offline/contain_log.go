@@ -121,6 +121,8 @@ func (m *Manager) selectedBy(id uuid.UUID, r localRun) string {
 		return "mutation_failure_open"
 	case r.ProxyExited != nil && r.ProxyStoppedAt == nil:
 		return "proxy_exited"
+	case r.LocalContain != nil:
+		return "local_contain"
 	}
 	if _, held := m.deadlines[id]; !held {
 		return "no_deadline_held"

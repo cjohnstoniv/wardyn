@@ -107,6 +107,11 @@ func (b *Broker) commitMint(ctx context.Context, caller *identity.Claims, grantI
 	if err := insertAuditEventTx(ctx, tx, mintEv); err != nil {
 		return Minted{}, err
 	}
+	// The github_token's sealed copy commits with the mint, or neither does (the deferred rollback discards the token).
+	if _, err := b.tokenSeal.sealTx(ctx, tx, caller.RunID, minted.JTI, minted.ExpiresAt, minted.seal); err != nil {
+		return Minted{}, err
+	}
+	minted.seal = nil
 
 	if err := tx.Commit(ctx); err != nil {
 		return Minted{}, fmt.Errorf("broker: commit mint tx: %w", err)

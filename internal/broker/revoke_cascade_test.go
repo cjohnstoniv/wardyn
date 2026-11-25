@@ -182,7 +182,7 @@ func TestRevokeRun_NotePerGrantKind(t *testing.T) {
 		revokeNoteFor(t, au, minted.JTI)
 	})
 
-	t.Run("github_token keeps its TTL-expiry note", func(t *testing.T) {
+	t.Run("github_token note tells the hand-back story", func(t *testing.T) {
 		b, db, au, _ := newTestBroker(t)
 		runID := uuid.New()
 		gid := seedGrant(db, runID, githubGrantSpec(t, false))
@@ -194,26 +194,27 @@ func TestRevokeRun_NotePerGrantKind(t *testing.T) {
 			t.Fatalf("RevokeRun: %v", err)
 		}
 		note := revokeNoteFor(t, au, minted.JTI)
-		if !strings.Contains(note, "github installation tokens expire") {
-			t.Fatalf("github_token revoke note = %q, want the TTL-expiry story preserved", note)
-		}
-		// B4/B5: GitHub's DELETE /installation/token endpoint is real (it
-		// revokes the token you authenticate with), so the note must not say
-		// the API is missing; and wardyn DOES hold in-memory copies of the
-		// value (the run's mask corpus, broker.go maskReg.Add; the proxy's
-		// per-grant re-use cache), so the note must not claim the value is not
-		// retained either. The true constraint: nothing here presents the
-		// token — RevokeRun holds only the jti.
+		// GitHub's DELETE /installation/token endpoint is real (it revokes the
+		// token you authenticate with), so the note must not say the API is
+		// missing. The broker now keeps a sealed copy and a worker presents it
+		// after RevokeRun queues it; a token with no sealed copy still lives to
+		// its TTL, which the note must keep saying.
 		if strings.Contains(note, "no per-token revocation") {
 			t.Fatalf("github_token revoke note = %q claims GitHub has no per-token revocation API; "+
 				"DELETE /installation/token exists (docs.github.com/en/rest/apps/installations)", note)
 		}
-		if strings.Contains(note, "does not retain the token value") || strings.Contains(note, "never retains") {
-			t.Fatalf("github_token revoke note = %q claims the value is not retained; the run's mask corpus "+
-				"(broker.go maskReg.Add) holds it until the RunSecretGrace sweep", note)
+		if strings.Contains(note, "does not retain the token value") || strings.Contains(note, "never retains") || strings.Contains(note, "holds only the jti") {
+			t.Fatalf("github_token revoke note = %q claims the value is not retained; the sealed copy and the run's "+
+				"mask corpus both hold it", note)
 		}
-		if !strings.Contains(note, "does not call GitHub's DELETE /installation/token") || !strings.Contains(note, "holds only the jti") {
-			t.Fatalf("github_token revoke note = %q, want the real constraint (wardyn does not call DELETE /installation/token; RevokeRun holds only the jti)", note)
+		for _, want := range []string{"handed back to GitHub (DELETE /installation/token", "background worker", "<=1h TTL", "identity denylist"} {
+			if !strings.Contains(note, want) {
+				t.Fatalf("github_token revoke note = %q, want it to say %q", note, want)
+			}
+		}
+		// This broker has no token seal, so the row says there is no sealed copy.
+		if got := revokeRowData(t, au, minted.JTI)["target_revoke"]; got != "none" {
+			t.Fatalf("target_revoke = %v, want none (no token seal attached)", got)
 		}
 	})
 }

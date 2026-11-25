@@ -20,7 +20,6 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/runner/substrate"
 	"github.com/cjohnstoniv/wardyn/internal/runnerwire"
 	"github.com/google/uuid"
-	"golang.org/x/sys/unix"
 )
 
 // Manager contains only local containment and evidence state. It cannot mint
@@ -78,6 +77,8 @@ type Manager struct {
 	replayTicks <-chan time.Time
 	replaySend  func(context.Context, []runnerwire.Event) error
 	replayTick  func()
+	// latch is the local containment latch's bookkeeping (contain.go); guarded by mu.
+	latch latchState
 }
 
 // Options are the manager's substrate-specific behaviours.
@@ -149,7 +150,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, errors.New("unsafe runner lifecycle lock")
 	}
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	if err := flockExclusive(lock); err != nil {
 		lock.Close()
 		root.Close()
 		return nil, errors.New("runner lifecycle directory is already active")
@@ -160,6 +161,7 @@ func New(stateDir string, runnerID uuid.UUID, sub substrate.Substrate, expectedR
 		root.Close()
 		return nil, err
 	}
+	m.applyContainRequests(context.Background())
 	return m, nil
 }
 
@@ -272,6 +274,9 @@ func (m *Manager) Lease(ctx context.Context, l runnerwire.Lease) error {
 	}
 	if l.RunID == uuid.Nil {
 		return errors.New("runner lease lacks run identity")
+	}
+	if m.dropLatchedLease(ctx, l) {
+		return nil // dropped: no deadline is extended and the session stays up (a refusal would end it)
 	}
 	if r := m.state.Runs[l.RunID]; r.ContainmentOnly || r.Quarantine != nil || r.Containment != nil || (!r.LeaseAfter.IsZero() && !l.TokenRenewedAt.After(r.LeaseAfter)) {
 		return errors.New("containment-only identity cannot receive a lease")
@@ -469,7 +474,7 @@ func (m *Manager) CheckLapses(ctx context.Context) error {
 	for _, id := range ids {
 		m.mu.Lock()
 		r := m.state.Runs[id]
-		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || m.lapsed(id)
+		expired := m.state.Revoked || r.FailedCreation || (r.Containment != nil && !r.Containment.Contained) || (r.Quarantine != nil && r.ProxyStoppedAt == nil) || (r.MutationFailure != nil && !r.MutationFailure.Contained) || (r.ProxyExited != nil && r.ProxyStoppedAt == nil) || r.LocalContain != nil || m.lapsed(id)
 		selectedBy := ""
 		if expired {
 			selectedBy = m.selectedBy(id, r)
@@ -562,7 +567,11 @@ func (m *Manager) Run(ctx context.Context) error {
 		if tick != nil {
 			tick(safety)
 		}
-		err := errors.Join(m.observeProxiesDue(safety), m.CheckLapses(safety), m.eraseAssertedEvidence())
+		m.applyContainRequests(safety)
+		observed := m.observeProxiesDue(safety)
+		lapses := m.CheckLapses(safety)
+		m.writeContainReceipts(lapses)
+		err := errors.Join(observed, lapses, m.eraseAssertedEvidence())
 		done()
 		if err != nil {
 			m.logContainmentErrors(ctx, err)

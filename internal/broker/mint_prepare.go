@@ -49,6 +49,13 @@ func (b *Broker) prepareMint(ctx context.Context, caller *identity.Claims, grant
 			b.discardMinted(ctx, caller.RunID, grantID, minted)
 		}
 	}
+	// The sealed copy the hand-back worker presents to GitHub after a revoke is made here too, before the mint
+	// transaction, for the same reason: the key service reads on its own pool connection.
+	if err == nil && minted.Kind == types.GrantGitHubToken && b.tokenSeal != nil {
+		if minted.seal, err = b.tokenSeal.prepare(ctx, caller.RunID, minted.JTI, minted.Token, minted.ExpiresAt); err != nil {
+			b.discardMinted(ctx, caller.RunID, grantID, minted)
+		}
+	}
 	if err != nil {
 		b.auditMint(ctx, caller, grantID, before.approvalID, "", before.grantSpec.Scope, "failure")
 		return Minted{}, err

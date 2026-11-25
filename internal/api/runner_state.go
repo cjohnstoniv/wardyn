@@ -34,6 +34,7 @@ func (s *Server) StatePageFromRunner(ctx context.Context, runnerID uuid.UUID, se
 	}
 	if err == nil {
 		s.recordRunContainmentEvents(ctx, result.Containment)
+		s.recordLocalContainEvents(ctx, result.LocalContain)
 	}
 	if err != nil || !result.Complete {
 		return err
