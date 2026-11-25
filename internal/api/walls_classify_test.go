@@ -282,7 +282,7 @@ func classifySorted(m map[string]bool) []string {
 var classifyWriterPairs = classifyJoin(
 	classifyPairs("egress.allow", wallsControl,
 		"brokered:mint", "brokered:approvals", "brokered:recording", "brokered:scan-result",
-		"brokered:sso-token", "brokered:mcp:list-filtered"),
+		"brokered:sso-token", "brokered:mcp:list-filtered", "brokered:assistant"),
 	classifyPairs("egress.allow", wallsConfig, "builtin:upstream-proxy"),
 	classifyPairs("egress.allow", wallsToolRule, "policy:tool-allow", "policy:tool-approve-each"),
 	classifyPairs("egress.allow", wallsAllowed,
@@ -302,7 +302,8 @@ var classifyWriterPairs = classifyJoin(
 	classifyPairs("egress.hold", wallsRefused, "approval:expired", "approval:refused", "approval:host-cap"),
 
 	classifyPairs("egress.deny", wallsControl,
-		"brokered:mint", "brokered:approvals", "brokered:recording", "brokered:scan-result", "brokered:sso-token"),
+		"brokered:mint", "brokered:approvals", "brokered:recording", "brokered:scan-result", "brokered:sso-token",
+		"brokered:assistant"),
 	classifyPairs("egress.deny", wallsFidelity,
 		"egress:dropped-decisions-<n>", "builtin:spool-lost", "builtin:spool-full"),
 	classifyPairs("egress.deny", wallsFault,

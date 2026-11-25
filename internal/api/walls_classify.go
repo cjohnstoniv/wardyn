@@ -51,7 +51,7 @@ func (v wallsVerdict) controlPlaneHost() bool {
 // whatever the action.
 var wallsClassifyControl = wallsClassifySet(
 	"brokered:approvals", "brokered:mint", "brokered:recording", "brokered:scan-result",
-	"brokered:sso-token", "brokered:mcp:list-filtered",
+	"brokered:sso-token", "brokered:mcp:list-filtered", "brokered:assistant",
 )
 
 // wallsClassifyToolAllow are the allow sources whose host is the control plane.
