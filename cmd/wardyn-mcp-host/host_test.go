@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -40,11 +41,24 @@ func TestMain(m *testing.M) {
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	case "orphan":
-		// A process it started keeps its stdout open after it exits.
-		gc := exec.Command("sleep", "20")
+		// A process it started (this binary again, asleep) keeps its stdout open after it exits.
+		exe, _ := os.Executable()
+		gc := exec.Command(exe, "-test.run=^$")
+		gc.Env = append(os.Environ(), childModeEnv+"=sleeper")
 		gc.Stdout = os.Stdout
-		if gc.Start() != nil {
+		if gc.Start() != nil || os.WriteFile(os.Getenv("TEST_PID_FILE"), []byte(strconv.Itoa(gc.Process.Pid)), 0o644) != nil {
 			os.Exit(98)
+		}
+		os.Exit(0)
+	case "sleeper":
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "answer-exit":
+		// Answers one request and exits at once. A long stray line first (it fits the pipe, so the
+		// write does not wait for the host) leaves the host reading after the exit.
+		if bufio.NewScanner(os.Stdin).Scan() {
+			fmt.Println(strings.Repeat("x", 60000))
+			fmt.Println(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`)
 		}
 		os.Exit(0)
 	}
@@ -288,6 +302,15 @@ func TestMCPHostExitsWithServerCode(t *testing.T) {
 // started still holds the server's stdout open.
 func TestMCPHostExitsOnServerExit(t *testing.T) {
 	t.Setenv(childModeEnv, "orphan")
+	pidFile := filepath.Join(t.TempDir(), "orphan.pid")
+	t.Setenv("TEST_PID_FILE", pidFile)
+	t.Cleanup(func() { // the leftover process is this test's to end
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(string(b)); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 	start := time.Now()
 	code, err := run(context.Background(), options{caDir: t.TempDir(), listen: "127.0.0.1:0", stderr: io.Discard,
 		env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
@@ -303,15 +326,12 @@ func TestMCPHostExitsOnServerExit(t *testing.T) {
 // once killAfter passes, so a server that ignores SIGTERM still ends.
 func TestMCPHostKillsServerThatIgnoresTerm(t *testing.T) {
 	t.Setenv(childModeEnv, "ignore-term")
-	prev := killAfter
-	killAfter = 300 * time.Millisecond
-	t.Cleanup(func() { killAfter = prev })
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan string, 1)
 	done := make(chan int, 1)
 	go func() {
 		code, _ := run(ctx, options{caDir: t.TempDir(), listen: "127.0.0.1:0", stderr: io.Discard, ready: func(a string) { ready <- a },
-			env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
+			killAfter: 300 * time.Millisecond, env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
 		done <- code
 	}()
 	<-ready
@@ -324,5 +344,37 @@ func TestMCPHostKillsServerThatIgnoresTerm(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("the host did not end a server that ignores SIGTERM")
+	}
+}
+
+// TestMCPHostKeepsLastAnswer: a server that answers and exits at once still has its answer reach
+// the POST that asked, every time: the host reads what the server wrote before it ends.
+func TestMCPHostKeepsLastAnswer(t *testing.T) {
+	t.Setenv(childModeEnv, "answer-exit")
+	t.Setenv("GORACE", "atexit_sleep_ms=0") // under -race a child would sleep 1 s before it exits, hiding the race
+	const n = 40
+	lost := 0
+	for range n {
+		ready := make(chan string, 1)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = run(context.Background(), options{caDir: t.TempDir(), listen: "127.0.0.1:0", stderr: io.Discard, ready: func(a string) { ready <- a },
+				env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
+		}()
+		resp, err := http.Post("http://"+<-ready+mcpPath, "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x"}}`))
+		if err != nil {
+			lost++
+		} else {
+			b, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"ok":true`) {
+				lost++
+			}
+		}
+		<-done
+	}
+	if lost > 0 {
+		t.Fatalf("lost %d of %d answers the server wrote before it exited", lost, n)
 	}
 }

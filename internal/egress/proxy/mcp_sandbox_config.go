@@ -117,7 +117,7 @@ func (in *MCPRelayInboundConfig) validate() error {
 	if err != nil || !validPort(port) {
 		return fmt.Errorf("config: mcp_relay_inbound.listen %q is not an address and port", in.Listen)
 	}
-	if a, err := netip.ParseAddr(host); err != nil || a.IsUnspecified() {
+	if a, err := netip.ParseAddr(host); err != nil || a.Unmap().IsUnspecified() {
 		return fmt.Errorf("config: mcp_relay_inbound.listen %q: the host is not a literal address that names one interface", in.Listen)
 	}
 	if b, err := hex.DecodeString(in.TokenSHA256); err != nil || len(b) != 32 || strings.ToLower(in.TokenSHA256) != in.TokenSHA256 {

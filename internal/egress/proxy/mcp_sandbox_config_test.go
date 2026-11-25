@@ -110,6 +110,7 @@ func TestMCPSandboxConfigAudience(t *testing.T) {
 		{"with its scrub list", inbound("10.77.0.5:3130", mcpRelayDigest, "10.88.0.3:8765") + `,"relay_scrub_values":["s3cret-value"]`, ""},
 		{"listen host left empty", inbound(":3130", mcpRelayDigest, "10.88.0.3:8765"), "mcp_relay_inbound.listen"},
 		{"listen unspecified", inbound("0.0.0.0:3130", mcpRelayDigest, "10.88.0.3:8765"), "mcp_relay_inbound.listen"},
+		{"listen mapped unspecified", inbound("[::ffff:0.0.0.0]:3130", mcpRelayDigest, "10.88.0.3:8765"), "mcp_relay_inbound.listen"},
 		{"scrub list on a run's own proxy", `,"relay_scrub_values":["s3cret-value"]`, "relay_scrub_values are set only"},
 		{"another audience", `,"control_plane_audience":"wardyn-internal"`, "control_plane_audience"},
 		{"relay listener on a run's own proxy", `,"mcp_relay_inbound":{"listen":":3130","token_sha256":"` + mcpRelayDigest + `","upstream":"10.88.0.3:8765"}`, "mcp_relay_inbound and relay_scrub_values are set only"},

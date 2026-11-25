@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -37,8 +38,13 @@ const (
 	caPEMEnv      = "WARDYN_MITM_CA_PEM"
 )
 
-// killAfter is how long a server has to stop after SIGTERM before SIGKILL.
-var killAfter = 5 * time.Second
+const (
+	// killAfter is how long a server has to stop after SIGTERM before SIGKILL.
+	killAfter = 5 * time.Second
+	// drainWait bounds the read of what the server wrote before it exited, for
+	// a process it started that still holds its stdout open.
+	drainWait = 2 * time.Second
+)
 
 // systemBundles are the system CA bundles, in the order the first present one is taken.
 var systemBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/ca-bundle.crt"}
@@ -51,6 +57,8 @@ type options struct {
 	stderr  io.Writer
 	// ready, when set, is told the bound address once the server is listening.
 	ready func(addr string)
+	// killAfter is the SIGTERM-to-SIGKILL wait; zero is the package's killAfter.
+	killAfter time.Duration
 }
 
 // launch is the server's command and arguments, run with no shell.
@@ -164,7 +172,9 @@ func run(ctx context.Context, o options) (int, error) {
 	if o.ready != nil {
 		o.ready(ln.Addr().String())
 	}
-	go h.readServer(stdout)
+	readDone := make(chan struct{})
+	go func() { defer close(readDone); h.readServer(stdout) }()
+	kill := cmp.Or(o.killAfter, killAfter)
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -172,13 +182,19 @@ func run(ctx context.Context, o options) (int, error) {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			select {
 			case <-h.done:
-			case <-time.After(killAfter):
+			case <-time.After(kill):
 				_ = cmd.Process.Kill()
 			}
 		case <-h.done:
 		}
 	}()
 	werr := cmd.Wait() // the server's exit, not its stdout's close, ends the host
+	// Answers the server wrote before it exited still reach their POSTs: read
+	// its stdout to the end, but not past drainWait for a holder that lives on.
+	select {
+	case <-readDone:
+	case <-time.After(drainWait):
+	}
 	close(h.done)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -297,6 +313,12 @@ func (h *host) post(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-h.done:
+			select {
+			case a := <-ch: // answered before it exited: both were ready, and the answer wins
+				answers = append(answers, a)
+				continue
+			default:
+			}
 			http.Error(w, "the MCP server exited", http.StatusBadGateway)
 			return
 		}

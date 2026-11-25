@@ -129,9 +129,10 @@ func (x *mcpExchange) forwardRelay(w http.ResponseWriter, body []byte) {
 	}
 	resp, err := p.controlTransport.RoundTrip(out)
 	if err == nil && resp.StatusCode == http.StatusBadGateway {
-		// The MCP proxy is up but its host did not answer: the server is down all the same.
+		// The MCP proxy is up but its host did not answer, or the server exited before answering:
+		// the server is down all the same.
 		_ = resp.Body.Close()
-		err = errors.New("the MCP proxy answered 502: its host did not answer")
+		err = errors.New("the MCP proxy answered 502: its host did not answer, or the server exited before answering")
 	}
 	if err != nil {
 		x.relayDown(w, body, callID, scan, err)
@@ -166,8 +167,9 @@ func (x *mcpExchange) forwardRelay(w http.ResponseWriter, body []byte) {
 	p.relayStreaming(w, resp)
 }
 
-// relayDown answers a call the server's MCP proxy could not take, or took with
-// no host behind it: each request of the body gets the JSON-RPC error, and a
+// relayDown answers a call the server's MCP proxy could not take, or answered
+// 502 for (its host did not answer, or the server exited before answering):
+// each request of the body gets the JSON-RPC error, and a
 // body with no request (notifications only, or none) a 502. The error
 // is logged without its URL, which holds the relay token.
 func (x *mcpExchange) relayDown(w http.ResponseWriter, body []byte, callID string, scan *egress.ScanSummary, err error) {
