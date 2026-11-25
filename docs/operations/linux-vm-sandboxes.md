@@ -164,7 +164,7 @@
 ## A window on your own computer
 
 - A person can open their own Linux VM run in a native window on the computer its runner is on, with `wardyn window <run>`. It is off by default.
-- An admin turns it on with `features.local_window.enabled` in site config. A runner that is already connected picks the change up when it next connects.
+- An admin turns it on with `features.local_window.enabled` in site config. A runner that is already connected picks the change up when it next connects; until then, `wardyn window` says the runner handed out no window nonce.
 - The window needs a Linux computer with an X11 display. It has not yet been tried under WSL2.
 - Update the runner on that computer and the `wardyn` CLI to 0.11.0 first. An older runner, or one started with `--local-attach=off`, cannot open the window.
 - Only the run's creator can open it, on a runner they registered as their own, and not through a delegated token.
