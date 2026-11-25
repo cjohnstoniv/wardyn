@@ -100,7 +100,8 @@ func previewAdmits(vis types.PreviewVisibility, caller string) bool {
 
 // uiPreviewDenies is uiSessionArms' preview arm, nil for any other session. A preview's session holds while no
 // support grant rides it (a helper never enters a preview), the run's UI apps are not gone, previews are on, the
-// port's row is live and admits the session's caller, the row is within the ceiling, host mode serves a row
+// port's row is live and admits the session's caller, the run's profile allows previews (previewProfileRefusal,
+// for an admin the door exempts too), the row is within the ceiling, host mode serves a row
 // wider than private, data_out is allowed, and the run is not background-only, for an inbound session too, so a
 // preview is never the background door's exception. The row and the site config are read fresh, and one that
 // cannot be read fails closed with the arms' 503.
@@ -139,6 +140,12 @@ func (s *Server) uiPreviewDenies(ctx context.Context, sess uiSession, run types.
 	}
 	if !previewAdmits(p.Visibility, sess.Caller) {
 		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+	}
+	if rf := s.previewProfileRefusal(ctx, run); rf != nil {
+		if d := rf.decision; d != nil { // a composed profile nothing satisfies
+			return s.uiDenyReassert(sess, string(d.Reason), d.Status, d.Sentence)
+		}
+		return s.uiDenyReassert(sess, rf.body.Reason, rf.status, rf.body.Error)
 	}
 	if ceiling := previewCeiling(sc); !p.Visibility.AtMost(ceiling) {
 		return s.uiDenyReassert(sess, reasonPreviewAboveCeiling, http.StatusForbidden, fmt.Sprintf(previewAboveCeilingMsg, ceiling, p.Visibility))

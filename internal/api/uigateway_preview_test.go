@@ -227,18 +227,15 @@ func TestPreviewRefusesSupportSession(t *testing.T) {
 		t.Fatalf("the helper on the declared app: %d %s, want 200", rec.Code, rec.Body.String())
 	}
 	rec := rig.enterApp(rig.helperTicket(), previewApp(3000))
-	switch rec.Code {
-	case http.StatusFound:
-		cookies := setUICookies(rec)
-		if len(cookies) == 0 {
-			t.Fatal("an admitted enter set no cookie")
-		}
-		if got := rig.get(previewApp(3000), "/", cookies[0]); got.Code != http.StatusForbidden || respondedReason(t, got) != uiDeniedReasonNotAuthorized {
-			t.Fatalf("the helper's request to the preview: %d %s, want 403 %s", got.Code, got.Body.String(), uiDeniedReasonNotAuthorized)
-		}
-	case http.StatusForbidden, http.StatusNotFound:
-	default:
-		t.Fatalf("the helper's enter of the preview: %d %s, want it refused", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusFound {
+		t.Fatalf("the helper's enter of the preview: %d %s, want 302 (the enter runs no arm; the first request is refused)", rec.Code, rec.Body.String())
+	}
+	cookies := setUICookies(rec)
+	if len(cookies) == 0 {
+		t.Fatal("an admitted enter set no cookie")
+	}
+	if got := rig.get(previewApp(3000), "/", cookies[0]); got.Code != http.StatusForbidden || respondedReason(t, got) != uiDeniedReasonNotAuthorized {
+		t.Fatalf("the helper's request to the preview: %d %s, want 403 %s", got.Code, got.Body.String(), uiDeniedReasonNotAuthorized)
 	}
 }
 
@@ -548,5 +545,28 @@ func TestPreviewRecheckEnds(t *testing.T) {
 				cutBy(t, name, at, waitEnded(t, ended, 10*time.Second, name), relaySlack)
 			})
 		}
+	}
+}
+
+// TestPreviewProfileEditEndsAnOpenPreview: the re-check asks the run's profile as it stands now, so an edit that
+// denies interactive sessions or UI apps refuses an open private preview at its next request with
+// preview_profile, as its ticket is refused, and a profile that denies neither leaves a new one open.
+func TestPreviewProfileEditEndsAnOpenPreview(t *testing.T) {
+	g := newPreviewRig(t)
+	g.st.putPreview(g.h.run.ID, 3000, types.PreviewPrivate)
+	set := walledRun(g.h)
+	for _, c := range []struct {
+		what  string
+		limit types.GovernanceLimits
+	}{
+		{"denies interactive sessions", types.GovernanceLimits{DenyInteractive: true}},
+		{"denies UI apps", types.GovernanceLimits{DenyUIApps: true}},
+	} {
+		set(types.GovernanceLimits{})
+		cookie := g.openPreview(previewOwner, 3000)
+		wantRelay(t, c.what+": before the edit", g.relayPreview(3000, "/", cookie, nil), http.StatusOK, "")
+		set(c.limit)
+		g.h.clock.advance(time.Minute) // past the session's re-check debounce
+		wantRelay(t, c.what+": after the edit", g.relayPreview(3000, "/", cookie, nil), http.StatusForbidden, reasonPreviewProfile)
 	}
 }
