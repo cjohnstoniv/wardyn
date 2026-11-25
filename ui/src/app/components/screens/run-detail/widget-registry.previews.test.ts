@@ -29,6 +29,7 @@ function ctx(over: Partial<Omit<WidgetContext, "run">> & { run?: Record<string, 
     finished: false,
     principal: OWNER,
     operator: false,
+    operatorResolved: true,
     view: "user",
     previewsOn: true,
     ...rest,
@@ -105,14 +106,22 @@ describe("the Preview URLs tile's gate", () => {
     expect(available(ctx({ principal: "carol@example.com", securityOperator: true }))).toBe(true);
   });
 
-  it("is drawn for an admin on a run no person owns, by the run's entry rule", () => {
+  it("is not drawn for an admin who is not a security admin on a run no person owns", () => {
     const owned = { created_by: "", operator_owned: true };
-    expect(available(ctx({ principal: "root@example.com", operator: true, run: owned }))).toBe(true);
-    expect(available(ctx({ principal: "root@example.com", operator: false, run: owned }))).toBe(false);
+    expect(available(ctx({ principal: "root@example.com", operator: true, securityOperator: false, run: owned }))).toBe(false);
+    expect(available(ctx({ principal: "root@example.com", operator: true, securityOperator: true, run: owned }))).toBe(true);
   });
 
-  it("defers to the server while who is looking is not known", () => {
-    expect(available(ctx({ principal: "someone@example.com", operatorResolved: false }))).toBe(true);
+  it("is not drawn for a service identity's sponsor, and is for a security admin on its run", () => {
+    const service = { created_by: "service:ci-bot", operator_owned: false };
+    expect(available(ctx({ principal: "sam@example.com", securityOperator: false, run: service }))).toBe(false);
+    expect(available(ctx({ principal: "service:ci-bot", securityOperator: false, run: service }))).toBe(false);
+    expect(available(ctx({ principal: "sam@example.com", securityOperator: true, run: service }))).toBe(true);
+  });
+
+  it("is not drawn while who is looking is not known, for the run's person or a security admin", () => {
+    expect(available(ctx({ operatorResolved: false }))).toBe(false);
+    expect(available(ctx({ principal: "carol@example.com", securityOperator: true, operatorResolved: false }))).toBe(false);
   });
 
   it("is drawn in the admin view too: the gate does not read the view", () => {

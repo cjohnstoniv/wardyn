@@ -17,7 +17,7 @@ import { health as healthApi } from "../../../lib/api/health";
 import { previews as previewsApi } from "../../../lib/api/previews";
 import { basePath } from "../../../lib/base-path";
 import { relativeTime } from "../../../lib/format";
-import { isBackgroundRun, mayEnterRunOrUnknown } from "../../../lib/run-entry";
+import { isBackgroundRun, isServiceRun } from "../../../lib/run-entry";
 import { RUN_MODE_REFUSAL } from "../../../lib/run-mode-refusals";
 import { PREVIEW_ENDED_REASON, type PreviewVisibility, type RunPreview } from "../../../lib/types/previews";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
@@ -30,7 +30,7 @@ import { PREVIEW_TTL_DEFAULT, PREVIEW_TTL_OPTIONS, PREVIEW_VISIBILITY_LABEL, RUN
 import { DANGER_OUTLINE } from "../../wardyn/form-actions";
 import { Field } from "../../wardyn/form-primitives";
 import { useShellSetupStatus } from "../../wardyn/model-access-context";
-import { useOperator, useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
+import { useOperatorResolved, usePrincipal } from "../../wardyn/operator-context";
 import { Chip, WidgetCard } from "../../wardyn/primitives";
 import { RadioCard, RadioCardGroup } from "../../wardyn/radio-card";
 import { enterUIApp, openEnterTab } from "../run-detail-ssh";
@@ -46,10 +46,28 @@ const PORT_REASONS = new Set(["preview_port_reserved", "preview_port_declared"])
 
 type Failure = { port: number; message: string };
 
-/** What an Open or a copy says when it fails: the server's sentence, except a 404 run_not_found (the preview has ended). */
+/** A refusal as the server worded it: the list, a create and a revoke show this and never a rewording. */
+export function serverText(e: unknown): string {
+  return e instanceof Error && e.message.trim() ? e.message : String(e);
+}
+
+/** What an Open says when it fails: the server's sentence, except the ticket route's 404 run_not_found (the preview has ended). */
 export function openFailureText(e: unknown): string {
   if (e instanceof HttpError && e.status === 404 && e.reason === PREVIEW_ENDED_REASON) return T.ENDED;
-  return e instanceof Error && e.message.trim() ? e.message : String(e);
+  return serverText(e);
+}
+
+/**
+ * Who creates previews: the run's own person, never a service identity's run and never before /me has answered (the
+ * principal is a placeholder until then). The server's create asks the entry rule and then refuses a service identity,
+ * so a sponsor and an admin on a run no person owns are refused there and get no form here.
+ */
+export function isPreviewCreator(
+  run: { created_by?: string },
+  principal: string | null | undefined,
+  resolved: boolean,
+): boolean {
+  return resolved && !!principal && !isServiceRun(run) && run.created_by === principal;
 }
 
 const VisibilityChip = ({ visibility }: { visibility: PreviewVisibility }) => (
@@ -154,12 +172,11 @@ function PreviewRow({
 
 export function PreviewsPanel({ run }: { run: RunDetail }) {
   const principal = usePrincipal();
-  const operator = useOperator();
   const operatorResolved = useOperatorResolved();
   const { status: setup } = useShellSetupStatus();
   const background = isBackgroundRun(run);
-  // The run's person, or one who may enter it, creates; any other viewer here is a security admin, who lists and revokes.
-  const canCreate = mayEnterRunOrUnknown(run, principal, operator, operatorResolved);
+  // The run's person creates; any other viewer here is a security admin, who lists and revokes.
+  const canCreate = isPreviewCreator(run, principal, operatorResolved);
   const admin = !canCreate;
   // The site ceiling the page loaded with. Public is never offered: a ceiling of public reads as Organisation here.
   const maxVisibility = setup?.features?.preview_max_visibility;
@@ -186,7 +203,7 @@ export function PreviewsPanel({ run }: { run: RunDetail }) {
     previewsApi
       .list(runId)
       .then((list) => alive && setRows(list))
-      .catch((e: unknown) => alive && setLoadError(openFailureText(e)));
+      .catch((e: unknown) => alive && setLoadError(serverText(e)));
     return () => {
       alive = false;
     };
@@ -207,7 +224,7 @@ export function PreviewsPanel({ run }: { run: RunDetail }) {
       setPort("");
       setFormOpen(false);
     } catch (err) {
-      setCreateError({ message: openFailureText(err), reason: err instanceof HttpError ? err.reason : "" });
+      setCreateError({ message: serverText(err), reason: err instanceof HttpError ? err.reason : "" });
     } finally {
       setCreating(false);
     }
@@ -240,7 +257,7 @@ export function PreviewsPanel({ run }: { run: RunDetail }) {
       await previewsApi.revoke(runId, p.port);
       setRevoked((prev) => new Set(prev).add(p.port));
     } catch (err) {
-      setFailure({ port: p.port, message: openFailureText(err) });
+      setFailure({ port: p.port, message: serverText(err) });
     }
   }
 

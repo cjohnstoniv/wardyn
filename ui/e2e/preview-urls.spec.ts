@@ -3,12 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, sql, consoleAPI, expandCard, asRealMember, asRealSecurityAdmin } from "./fixtures";
+import { test, expect, sql, consoleAPI, expandCard, asRealMember, asRealOpenEgressMember, asRealSecurityAdmin, ADMIN_TOKEN, MEMBER_PRINCIPAL } from "./fixtures";
+import { SERVER_OWNED_SITE_CONFIG_KEYS } from "../src/app/lib/types/site";
+import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 
 // ============================================================================
 // Preview URLs (docs/UI-SANDBOXES.md, "Preview URLs") against the SEEDED backend: an admin turns them on in
-// Settings; the run's owner creates a private preview of a port and opens it, which leaves the console for the
+// Settings; the run's own person creates a private preview of a port and opens it, which leaves the console for the
 // gateway; a second signed-in person is told it has ended, and the ticket route answers them 404.
 //
 // The `none` runner behind this backend has no sandbox, so nothing listens on the port. The cases here are the
@@ -19,14 +21,16 @@ import type { Page } from "@playwright/test";
 
 test.describe.configure({ mode: "serial" });
 
-const RUN_TASK = "e2e fixture 2";
+// A run of its own, owned by a signed-in person: the seeded fixtures belong to the admin token, which is no console
+// person and creates no preview, and the other specs share them.
+const RUN_TASK = `preview owner ${randomUUID().slice(0, 8)}`;
 const PORT = 3000;
 const REVOKED_LINE = "This preview has ended or was revoked. Ask the person who shared it for a new link.";
 const ADMIN_LINE = "You can see and revoke the previews on this run. Only the run's owner creates them.";
 
 function runId(): string {
   const id = sql(`SELECT id FROM agent_runs WHERE task = '${RUN_TASK}' LIMIT 1`);
-  expect(id, `no seeded run with task ${RUN_TASK}`).toMatch(/^[0-9a-f-]{36}$/);
+  expect(id, `no run with task ${RUN_TASK}`).toMatch(/^[0-9a-f-]{36}$/);
   return id;
 }
 
@@ -35,7 +39,37 @@ async function openRun(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: RUN_TASK, level: 1 })).toBeVisible();
 }
 
+const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+let priorPreviewURLs: unknown;
+
 test.describe("Preview URLs", () => {
+  // The first case turns the switch on; whatever happens after it, the stored value goes back to what it was.
+  test.beforeAll(async ({ request }) => {
+    const created = await request.post("/api/v1/runs", { headers: auth, data: { agent: "claude-code", repo: "acme/widgets", task: RUN_TASK } });
+    expect(created.status(), await created.text()).toBe(201);
+    sql(`UPDATE agent_runs SET state = 'RUNNING', created_by = '${MEMBER_PRINCIPAL}' WHERE task = '${RUN_TASK}'`);
+    const got = await request.get("/api/v1/site-config", { headers: auth });
+    expect(got.status(), await got.text()).toBe(200);
+    priorPreviewURLs = ((await got.json()) as { features?: Record<string, unknown> }).features?.preview_urls;
+  });
+
+  test.afterAll(async ({ request }) => {
+    try {
+      sql(`DELETE FROM run_previews WHERE run_id = (SELECT id FROM agent_runs WHERE task = '${RUN_TASK}')`);
+      sql(`DELETE FROM agent_runs WHERE task = '${RUN_TASK}'`);
+    } catch {
+      // The run is this spec's own; a row that will not go leaves the next backend start to clear it.
+    }
+    const got = await request.get("/api/v1/site-config", { headers: auth });
+    if (!got.ok()) return;
+    const body = (await got.json()) as Record<string, unknown>;
+    for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
+    const features = { ...((body.features as Record<string, unknown> | undefined) ?? {}) };
+    if (priorPreviewURLs === undefined) delete features.preview_urls;
+    else features.preview_urls = priorPreviewURLs;
+    await request.put("/api/v1/site-config", { headers: auth, data: { ...body, features } });
+  });
+
   test("an admin turns previews on in Settings, and the card keeps what it saved", async ({ page }) => {
     await page.goto("/admin/settings");
     await expandCard(page, "Preview URLs");
@@ -57,6 +91,7 @@ test.describe("Preview URLs", () => {
   });
 
   test("the owner creates a private preview of a port and opens it, which leaves the console for the gateway", async ({ page, context }) => {
+    await asRealMember(page);
     await openRun(page);
     const tile = page.getByTestId("previews-panel");
     await tile.scrollIntoViewIfNeeded();
@@ -96,7 +131,7 @@ test.describe("Preview URLs", () => {
   });
 
   test("a second signed-in person gets 404 for the preview's ticket, and the console route says it has ended", async ({ page }) => {
-    await asRealMember(page);
+    await asRealOpenEgressMember(page);
     const ticket = await consoleAPI(page, "POST", `/api/v1/runs/${runId()}/previews/${PORT}/ticket`);
     expect(ticket.status, ticket.text).toBe(404);
     expect(JSON.parse(ticket.text).reason).toBe("run_not_found");

@@ -27,7 +27,8 @@ const VIEWPORT = { width: 1280, height: 744 };
 // collapsed row) is a ninth card: 70px more, an estimate to be re-measured on the hosted runner. Runners (rc.17) is a
 // tenth: 70px more, an estimate to be re-measured on the hosted runner.
 // Desktop watermark is an eleventh: 70px more, an estimate to be re-measured on the hosted runner.
-const ADMIN_VIEWPORT = { width: 1280, height: 1070 };
+// Preview URLs is a twelfth: 70px more, an estimate to be re-measured on the hosted runner.
+const ADMIN_VIEWPORT = { width: 1280, height: 1140 };
 
 // runs.spec.ts's own "the page itself does not scroll" check notes the same
 // class of issue ("CI-flake: measured 300.28px ... sub-pixel layout jitter,

@@ -64,9 +64,14 @@ const row = (port: number, visibility: RunPreview["visibility"], hours = 23): Ru
 });
 const refusal = (status: number, reason: string, message = "server words") => Object.assign(new HttpError(status, message), { reason });
 
-function show(over: Partial<RunDetail> = {}, who: { principal?: string; security?: boolean; operator?: boolean } = {}) {
+function show(over: Partial<RunDetail> = {}, who: { principal?: string; security?: boolean; operator?: boolean; resolved?: boolean } = {}) {
   return render(
-    <OperatorProvider operator={who.operator ?? false} securityOperator={who.security ?? false} principal={who.principal ?? OWNER}>
+    <OperatorProvider
+      operator={who.operator ?? false}
+      operatorResolved={who.resolved ?? true}
+      securityOperator={who.security ?? false}
+      principal={who.principal ?? OWNER}
+    >
       <PreviewsPanel run={{ ...run, ...over }} />
     </OperatorProvider>,
   );
@@ -302,5 +307,62 @@ describe("PreviewsPanel: who sees what", () => {
     show();
     const p = await panel();
     expect(await within(p).findByRole("alert")).toHaveTextContent("The list could not be read.");
+  });
+
+  it("shows a 404 run_not_found from the list as the server worded it, never as the ended sentence", async () => {
+    listMock.mockRejectedValue(refusal(404, "run_not_found", "run not found"));
+    show();
+    const p = await panel();
+    expect(await within(p).findByRole("alert")).toHaveTextContent("run not found");
+    expect(within(p).queryByText(T.ENDED)).toBeNull();
+  });
+
+  it("shows a 404 run_not_found from a create or a revoke as the server worded it", async () => {
+    listMock.mockResolvedValue([row(3000, "private")]);
+    putMock.mockRejectedValue(refusal(404, "run_not_found", "create words"));
+    revokeMock.mockRejectedValue(refusal(404, "run_not_found", "revoke words"));
+    show();
+    const p = await panel();
+    const r = await within(p).findByTestId("preview-3000");
+    await userEvent.click(within(r).getByRole("button", { name: T.REVOKE }));
+    expect(await within(r).findByText("revoke words")).toBeInTheDocument();
+    await userEvent.click(within(p).getByRole("button", { name: T.NEW }));
+    await userEvent.type(within(p).getByLabelText(T.PORT_LABEL), "4000");
+    await userEvent.click(within(p).getByRole("button", { name: T.CREATE }));
+    expect(await within(p).findByText("create words")).toBeInTheDocument();
+    expect(within(p).queryByText(T.ENDED)).toBeNull();
+  });
+});
+
+describe("PreviewsPanel: who creates", () => {
+  const service = { created_by: "service:ci-bot" };
+
+  it("gives a service identity's run no form and no New preview, even to its sponsor or the identity itself", async () => {
+    for (const principal of ["sam@example.com", "service:ci-bot"]) {
+      cleanup();
+      show(service, { principal, security: true });
+      const p = await panel();
+      expect(await within(p).findByText(T.EMPTY)).toBeInTheDocument();
+      expect(within(p).queryByRole("button", { name: T.CREATE })).toBeNull();
+      expect(within(p).queryByRole("button", { name: T.NEW })).toBeNull();
+    }
+  });
+
+  it("gives an admin on a run no person owns the list and Revoke but no form", async () => {
+    listMock.mockResolvedValue([row(8080, "org")]);
+    show({ created_by: "", operator_owned: true }, { principal: "root@example.com", operator: true, security: true });
+    const p = await panel();
+    expect(await within(p).findByTestId("preview-8080")).toBeInTheDocument();
+    expect(within(p).getByText(T.ADMIN_INTRO)).toBeInTheDocument();
+    expect(within(p).queryByRole("button", { name: T.NEW })).toBeNull();
+    expect(within(p).queryByRole("button", { name: T.CREATE })).toBeNull();
+  });
+
+  it("gives no form while /me has not answered, even when the principal reads as the run's", async () => {
+    show({}, { resolved: false });
+    const p = await panel();
+    expect(await within(p).findByText(T.EMPTY)).toBeInTheDocument();
+    expect(within(p).queryByRole("button", { name: T.CREATE })).toBeNull();
+    expect(within(p).queryByRole("button", { name: T.NEW })).toBeNull();
   });
 });

@@ -42,7 +42,7 @@ import { ConnectSSHCard } from "../run-detail-ssh";
 import { MachineWidget } from "./widgets/machine-card";
 import { withheldCredentialHosts } from "./widgets/effective-policy";
 import { ServicePanel } from "./service-panel";
-import { PreviewsPanel } from "./previews-panel";
+import { PreviewsPanel, isPreviewCreator } from "./previews-panel";
 import {
   CredentialsWidget,
   EffectivePolicyWidget,
@@ -365,13 +365,14 @@ export const RUN_WIDGETS: Record<WidgetId, WidgetDef> = {
     component: (ctx) => React.createElement(PreviewsPanel, { run: ctx.run }),
     defaultLayout: { w: 4, h: 5, minW: 3, minH: 3 },
     presets: { live: { x: 8, y: 37, w: 4, h: 5 } },
-    // The site switch is on, the run has not ended, and the viewer is the run's person or one who may enter it (the run's
-    // creator, an admin on a run no person owns, or a sponsor the server decides for) or a security admin, who lists and
-    // revokes. Not gated on the view or the run's mode: a background run keeps the tile and says why it has no previews.
+    // The site switch is on, the run has not ended, /me has answered, and the viewer is the run's own person (who creates
+    // and opens) or a security admin (who lists and revokes). A service identity's sponsor is neither. Not gated on the view
+    // or the run's mode: a background run keeps the tile and says why it has no previews.
     available: (ctx) =>
       ctx.previewsOn === true &&
       !ctx.finished &&
-      (mayEnterRunOrUnknown(ctx.run, ctx.principal, ctx.operator, ctx.operatorResolved ?? true) || ctx.securityOperator === true),
+      ctx.operatorResolved === true &&
+      (isPreviewCreator(ctx.run, ctx.principal, true) || ctx.securityOperator === true),
   },
 };
 

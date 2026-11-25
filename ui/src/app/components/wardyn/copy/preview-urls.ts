@@ -14,6 +14,6 @@ export const PREVIEW_URLS = {
   CEILING_LABEL: "Widest a preview can be",
   CEILING_PRIVATE: "Only the run's owner can open a preview.",
   CEILING_ORG: "Anyone signed in to this console can open it. Needs per-run hosts.",
-  HONEST: "Turning previews off revokes them all; lowering the ceiling revokes the previews above it. Open connections end within 30 seconds.",
+  HONEST: "Turning previews off revokes them all; lowering the ceiling revokes the previews above it. Open connections end within a minute.",
   SAVED_TOAST: "Preview URLs setting saved.",
 } as const;
