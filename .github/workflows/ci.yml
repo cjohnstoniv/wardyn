@@ -2612,8 +2612,8 @@ jobs:
     permissions:
       contents: read
       packages: read
-    # 45: the shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e.
-    timeout-minutes: 45
+    # 60: a shard's go test has a 40m -timeout (scripts/test-report.sh), so the job must outlast it plus the Postgres service start, checkout and report upload; internal/api alone runs about 10m, then test/apie2e. The race shard runs its passes one after another (make test-race-pg) and has taken 40 to 45 minutes.
+    timeout-minutes: 60
     # fail-fast: one red shard cancels the others, so a red run stops spending
     # about 48 runner-minutes on a result that is already a failure. test-pg
     # still reports: legs cancelled by fail-fast do not cancel the run, so its
