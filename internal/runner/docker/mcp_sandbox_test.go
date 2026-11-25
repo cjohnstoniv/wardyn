@@ -615,3 +615,20 @@ func TestCreateMCPSandboxRefusesWithoutItsContract(t *testing.T) {
 		t.Errorf("a refused create made objects: networks %v", f.networks)
 	}
 }
+
+// TestSweepHoldingKillsOrphanMCPSandboxes: a held orphan keeps its stopped agent but none of its MCP sandboxes;
+// its relay link stays with the held machine until its teardown.
+func TestSweepHoldingKillsOrphanMCPSandboxes(t *testing.T) {
+	h := newHoldFixture(t, false)
+	h.f.images["wardyn-proxy:dev"] = true
+	createMCP(t, h.d, 0)
+	if _, heldN := h.sweep(t, holdAll); heldN != 1 {
+		t.Fatalf("held %d; want 1", heldN)
+	}
+	if !gone(h.f, mcpProxyName(h.runID, 0)) || !gone(h.f, mcpContainerName(h.runID, 0)) || hasNet(h.f, mcpNetName(h.runID, 0)) {
+		t.Error("a held orphan kept an MCP sandbox")
+	}
+	if !hasNet(h.f, relayLinkName(h.runID)) || h.removed(h.ref) {
+		t.Error("the hold removed the relay link or the agent container")
+	}
+}

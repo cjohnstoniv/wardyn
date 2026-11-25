@@ -842,6 +842,10 @@ func (d *Driver) sweepOrphans(ctx context.Context, minAge time.Duration, isOrpha
 		}
 		seen[runID] = true
 		if keep(runID) && d.holdOrphan(ctx, runID) {
+			// A held machine keeps its agent's files, never a running MCP server: no row is left to end it.
+			if err := d.KillRunMCPSandboxes(ctx, runID); err != nil {
+				errs = append(errs, fmt.Errorf("docker: kill held run %s's MCP sandboxes: %w", runID, err))
+			}
 			heldN++
 			continue
 		}

@@ -714,6 +714,14 @@ func (f *fakeDocker) NetworkConnect(ctx context.Context, networkID string, opts 
 	return client.NetworkConnectResult{}, nil
 }
 
+// endpoint is the container's create-time endpoint settings on the network, nil when it has none.
+func (c *createdContainer) endpoint(name string) *network.EndpointSettings {
+	if c.net == nil {
+		return nil
+	}
+	return c.net.EndpointsConfig[name]
+}
+
 // onNet says whether the container has an endpoint on the network now: its primary NetworkMode, an
 // explicit endpoint, or one NetworkConnect added, less what NetworkDisconnect took away.
 func (c *createdContainer) onNet(name string) bool {
@@ -1085,25 +1093,24 @@ func (f *fakeDocker) ContainerInspect(ctx context.Context, id string, _ client.C
 			return
 		}
 		if _, ok := nets[name]; !ok {
+			// An endpoint pinned to an address, at create or at a connect, gets it, as a daemon gives it.
+			if pin, ok := c.connectedIPs[name]; ok {
+				ip = pin.String()
+			} else if ep := c.endpoint(name); ep != nil && ep.IPAMConfig != nil && ep.IPAMConfig.IPv4Address.IsValid() {
+				ip = ep.IPAMConfig.IPv4Address.String()
+			}
 			nets[name] = &network.EndpointSettings{IPAddress: netip.MustParseAddr(ip), NetworkID: name}
 		}
 	}
 	if c.host != nil {
 		addNet(string(c.host.NetworkMode), "10.88.0.2")
 	}
-	// An endpoint pinned to an address gets it, as a daemon gives it.
 	if c.net != nil {
-		for name, ep := range c.net.EndpointsConfig {
-			if ep != nil && ep.IPAMConfig != nil && ep.IPAMConfig.IPv4Address.IsValid() {
-				addNet(name, ep.IPAMConfig.IPv4Address.String())
-			}
+		for name := range c.net.EndpointsConfig {
 			addNet(name, "10.88.0.2")
 		}
 	}
 	for _, n := range c.connectedTo {
-		if ip, ok := c.connectedIPs[n]; ok {
-			addNet(n, ip.String())
-		}
 		addNet(n, fakeJoinedNetIP)
 	}
 	// Mounts: an anonymous volume per declared volume, then the run's own
