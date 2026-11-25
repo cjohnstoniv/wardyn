@@ -46,6 +46,10 @@ const (
 	MaxLocalFrame = 64 << 10
 )
 
+// LocalKindWindow is LocalHelloMsg.Kind for a window onto a Linux VM run's display (local_window); an
+// empty Kind asks for a terminal (local_attach). A nonce grants only its own kind.
+const LocalKindWindow = "window"
+
 // The reasons LocalRefuse and LocalEnd carry.
 const (
 	LocalReasonProtocol   = "protocol"
@@ -63,12 +67,16 @@ const (
 	// LocalReasonUnavailable: the org granted another run than the one this connection named; the
 	// CLI goes through the organisation instead.
 	LocalReasonUnavailable = "attach_local_unavailable"
+	// LocalReasonWrongKind: the org granted a terminal to a window's nonce, or a window to a terminal's.
+	LocalReasonWrongKind = "nonce_kind_mismatch"
 )
 
 type (
 	LocalHelloMsg struct {
 		V     int       `json:"v"`
 		RunID uuid.UUID `json:"run_id"`
+		// Kind is "" (a terminal) or LocalKindWindow; any other value is a protocol error.
+		Kind string `json:"kind,omitempty"`
 	}
 	LocalHelloOKMsg struct {
 		RunnerID string `json:"runner_id"`
@@ -150,6 +158,7 @@ type localClient struct {
 	conn  net.Conn
 	ref   string          // the local sandbox ref the hello resolved
 	runID uuid.UUID       // the run the hello named, resolved again at the grant
+	kind  string          // the hello's Kind: what the nonce may be granted for
 	in    chan localFrame // frames the CLI sent after LocalHelloOK
 	gone  chan struct{}   // closed when the CLI stops sending
 	taken chan struct{}   // closed once local_attach claimed the nonce
@@ -248,9 +257,11 @@ func (s *Server) helloLocal(c *localClient) (string, string) {
 	typ, b, err := ReadLocalFrame(c.conn)
 	_ = c.conn.SetReadDeadline(time.Time{})
 	var hello LocalHelloMsg
-	if err != nil || typ != LocalHello || json.Unmarshal(b, &hello) != nil || hello.V != LocalProtocol || hello.RunID == uuid.Nil {
+	if err != nil || typ != LocalHello || json.Unmarshal(b, &hello) != nil || hello.V != LocalProtocol || hello.RunID == uuid.Nil ||
+		(hello.Kind != "" && hello.Kind != LocalKindWindow) {
 		return "", LocalReasonProtocol
 	}
+	c.kind = hello.Kind
 	s.mu.Lock()
 	resolve := s.attachRef
 	s.mu.Unlock()
@@ -292,6 +303,10 @@ func (s *Server) localAttach(ctx context.Context, peer *runnerwire.Peer, id uint
 		return nil, runnerwire.Refuse("unknown or expired local attach nonce")
 	}
 	close(c.taken)
+	if c.kind != "" { // a window's nonce never opens a terminal
+		c.close(LocalReasonWrongKind)
+		return nil, runnerwire.Refuse("the local attach nonce is a window's, not a terminal's")
+	}
 	if c.ref != ref { // the run named on the socket must be the run the org's ticket is for
 		c.close(LocalReasonUnavailable)
 		return nil, runnerwire.Refuse("attach_local_unavailable: the run on the local socket is not the run the organisation granted")

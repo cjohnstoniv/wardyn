@@ -73,6 +73,10 @@ const (
 	MethodLocalAttach       = "local_attach"
 	MethodLocalAttachMode   = "local_attach_mode"
 	MethodLocalAttachTeeAck = "local_attach_tee_ack"
+	// MethodLocalWindow opens a local_window stream that splices the CLI holding a window nonce on the
+	// runner's local socket to a Linux VM run's display (LocalWindowArgs). It is sent only to a runner
+	// advertising Caps.LocalWindow.
+	MethodLocalWindow = "local_window"
 	// MethodWorkloadStatus patches the status of one WardynWorkload custom resource from the org's
 	// answer (WorkloadStatusArgs). It is sent only to a runner that reported a workload.
 	MethodWorkloadStatus = "workload_status"
@@ -485,6 +489,16 @@ type LocalAttachArgs struct {
 	Nonce   string               `json:"nonce"`
 	Options runner.AttachOptions `json:"options"`
 	Tee     bool                 `json:"tee,omitempty"`
+}
+
+// LocalWindowArgs asks the runner to show ref's display to the CLI that holds Nonce (a window nonce
+// granted on the runner's local socket). GrantID names the organisation's grant for this one open, and
+// Title is the window's title. It carries no clipboard rules: the runner passes no cut text either way.
+type LocalWindowArgs struct {
+	Ref     string    `json:"ref"`
+	Nonce   string    `json:"nonce"`
+	GrantID uuid.UUID `json:"grant_id"`
+	Title   string    `json:"title,omitempty"`
 }
 
 // LocalAttachModeArgs sets the writer or observer mode of the session whose pty_tee stream is Stream.
