@@ -232,9 +232,9 @@ func runTokenRenewerGated(ctx context.Context, ts *tokenSource, base string, cli
 		case <-ts.nudged():
 		default:
 		}
-		recovering = recovering || (!renewNext && g.paused())
+		paused, pause := g.pauseState() // before the try, so a pause during the try ends its wait too
+		recovering = recovering || (!renewNext && paused)
 		renewNext = false
-		pause := g.pausing() // taken before the try, so a pause during the try ends its wait too
 		lastTry := time.Now()
 		var sent time.Duration
 		if g != nil {

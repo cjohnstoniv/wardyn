@@ -177,20 +177,24 @@ func (g *lapseGate) paused() bool {
 	return g.state == lapsePaused
 }
 
-// pausing is a channel that closes when an open pausable gate pauses, so a renew loop that takes it before a try ends
-// that try's wait at the pause and asks the recover door from then on. It is nil, never closing, for a nil gate or one
-// that is not open and pausable (a paused gate's loop already asks at the recover cadence).
-func (g *lapseGate) pausing() <-chan struct{} {
+// pauseState reads, under one lock, whether g has paused and the channel that closes when an open pausable g pauses.
+// A renew loop takes both before a try: a paused g asks the recover door now, and an open one's pause ends that try's
+// wait, with no deadline crossing between the two reads to miss. pause is nil, never closing, for a nil gate or one
+// that is not open and pausable.
+func (g *lapseGate) pauseState() (paused bool, pause <-chan struct{}) {
 	if g == nil {
-		return nil
+		return false, nil
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.expireLocked()
-	if g.state != lapseOpen || !g.pausable {
-		return nil
+	switch {
+	case g.state == lapsePaused:
+		return true, nil
+	case g.state == lapseOpen && g.pausable:
+		return false, g.pause
 	}
-	return g.pause
+	return false, nil
 }
 
 // track registers a hijacked tunnel's client conn, so a pause closes it; the returned func forgets it. A gate that
