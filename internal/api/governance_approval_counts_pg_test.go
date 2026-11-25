@@ -212,11 +212,13 @@ func TestPG_ApprovalCounts_UnitKindNamesItsSmallestPool(t *testing.T) {
 	e := newApEnv(t, 2)
 	e.seedPeople()
 	smallest, unitName := -1, ""
+	// The units are read before the pool's transaction opens: a pool read inside it would take a second
+	// connection while the transaction holds one.
+	units, err := e.pg.ListGovernanceUnits(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	poolOn(t, e.srv, func(in *poolInputs) {
-		units, err := e.pg.ListGovernanceUnits(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
 		for _, u := range units {
 			res, err := e.srv.poolForKind(in, govKindMembership, u.ID)
 			if err != nil {
