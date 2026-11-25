@@ -51,6 +51,11 @@ func (f *desktopApprovalsFake) ListPendingApprovalsForRuns(_ context.Context, ru
 	return out, nil
 }
 
+// CountPendingApprovals completes the per-run pending read's interface; the desktop viewer never asks it.
+func (f *desktopApprovalsFake) CountPendingApprovals(context.Context) (int, error) {
+	return 0, errors.New("the desktop viewer counted every pending approval")
+}
+
 func (f *desktopApprovalsFake) Decide(context.Context, uuid.UUID, types.ActorType, types.ApprovalDecision) (types.ApprovalRequest, error) {
 	f.decides++
 	return types.ApprovalRequest{}, errors.New("a gateway route decided an approval")
