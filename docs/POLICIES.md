@@ -1097,7 +1097,7 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - A `hold` waits for a person as any [host rule hold](#a-host-rule-hold-effect-hold) does; while nobody decides, the request is not sent.
 - A remote MCP server's host may carry rules. The MCP broker's requests to it are judged by them too.
 - A template keeps a component's `request_rules` as written. A run from it meets the same checks at create.
-- A run carries at most 16 host rule sets: its policy's, those other layers add, and one per component with rules. A run past that is refused `component_request_rules_limit`; nothing is trimmed.
+- A run carries at most 16 host rule sets: its policy's, those other layers add, and one per component with rules. A run past that is refused `component_request_rules_limit` at create; nothing is trimmed.
 
 ## `workspace_mounts[]` — `WorkspaceMount`
 

@@ -20,21 +20,34 @@ import (
 )
 
 // A custom component's request rules reach the proxy as one host rule set of their own, appended beside the
-// policy's sets when a run attaches the component, with the component's hosts among the run's allowed hosts.
+// policy's sets when a run attaches the component, with the component's egress hosts among the run's allowed
+// hosts.
 // Nothing marks the set as a component's, so the proxy judges it as it judges any other. These tests build
 // that run policy from a definition a save accepts, then check the outcomes on the sandbox's HTTPS calls and
 // on the MCP broker's forward.
 
 // componentRunSpec is the policy of a run that attaches the custom component def beside the policy's own
-// sets: def is checked as a person's save checks it (ComponentDefinition.Validate), its hosts are allowed,
-// and its request rules are one more set (types.AppendHostRuleSets).
+// sets: def is checked as a person's save checks it (ComponentDefinition.Validate), its hosts are allowed as
+// run create allows them (a remote MCP server's own host left out, since the broker reaches it), and its
+// request rules are one more set (types.AppendHostRuleSets).
 func componentRunSpec(t *testing.T, def types.ComponentDefinition, policy ...types.HostRuleSet) types.RunPolicySpec {
 	t.Helper()
 	if err := def.Validate(ValidDomainEntry, true); err != nil {
 		t.Fatalf("the component's definition is refused at save: %v", err)
 	}
+	var allowed []string
+	for _, h := range def.Hosts {
+		if def.RemoteMCP() {
+			server, err := types.MCPURLDestination(def.MCP.URL)
+			d, perr := types.ParseDestination(h)
+			if err != nil || perr != nil || d.Host == server.Host {
+				continue
+			}
+		}
+		allowed = append(allowed, h)
+	}
 	return types.RunPolicySpec{
-		AllowedDomains: append([]string(nil), def.Hosts...),
+		AllowedDomains: allowed,
 		HostRules:      types.AppendHostRuleSets(policy, []types.HostRuleSet{{Rules: def.RequestRules}}),
 	}
 }
@@ -143,6 +156,7 @@ func TestComponentRuleHold(t *testing.T) {
 		t.Fatalf("wait rows naming %s: %+v, want one:\n%s", asked.id, waits, buf)
 	}
 
+	hostCallSecond = time.Second // the approved call need not rejoin within a 90 ms window; newHCCP restores it
 	cp.decideAll(types.ApprovalApproved)
 	if resp, reached := send(http.MethodPost, "/a"); resp.StatusCode != http.StatusOK || !reached {
 		t.Fatalf("approved POST /a = %d reached=%v, want 200 at the host", resp.StatusCode, reached)
