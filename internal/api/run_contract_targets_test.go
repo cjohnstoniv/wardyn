@@ -150,23 +150,32 @@ func TestTargetOverlapRefusalAgreesWithPairwise(t *testing.T) {
 }
 
 // TestTargetOverlapRefusalLargeListIsFast pins the cost of a long target list
-// (a policy may carry many mounts). The pairwise check needs seconds for it and
-// this one a few milliseconds, so the bound leaves two orders of magnitude.
+// (a policy may carry many mounts). It times a list and one four times as long
+// in the same process: linear growth costs about 4x, the pairwise check 16x.
+// The best of several runs is compared against a 10x bound, so runner load
+// shifts both sides and does not trip it, and only a quadratic regression does.
 func TestTargetOverlapRefusalLargeListIsFast(t *testing.T) {
-	const n = 19000
-	var targets []runTarget
-	for i := 0; i < n; i++ {
-		targets = append(targets, folders(fmt.Sprint(i), fmt.Sprintf("/home/agent/%d", i))...)
+	const n = 4750
+	timeList := func(size int) time.Duration {
+		var targets []runTarget
+		for i := 0; i < size; i++ {
+			targets = append(targets, folders(fmt.Sprint(i), fmt.Sprintf("/home/agent/%d", i))...)
+		}
+		targets = append(targets, folders("last", "/home/agent/7/inner")...)
+		best := time.Duration(1<<63 - 1)
+		for run := 0; run < 5; run++ {
+			start := time.Now()
+			got := targetOverlapRefusal(targets)
+			best = min(best, time.Since(start))
+			if got == nil || got.body.Reason != reasonWorkspaceTargetOverlap {
+				t.Fatalf("%d targets: refusal = %+v, want %s", size, got, reasonWorkspaceTargetOverlap)
+			}
+		}
+		return best
 	}
-	targets = append(targets, folders("last", "/home/agent/7/inner")...)
-	start := time.Now()
-	got := targetOverlapRefusal(targets)
-	elapsed := time.Since(start)
-	if got == nil || got.body.Reason != reasonWorkspaceTargetOverlap {
-		t.Fatalf("refusal = %+v, want %s", got, reasonWorkspaceTargetOverlap)
-	}
-	if elapsed > time.Second {
-		t.Fatalf("%d targets took %v", n, elapsed)
+	small, large := timeList(n), timeList(4*n)
+	if large > 10*small {
+		t.Fatalf("%d targets took %v but %d took %v: grows faster than linearly", 4*n, large, n, small)
 	}
 }
 
