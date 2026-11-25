@@ -15,7 +15,7 @@
 #
 # Build from the REPO ROOT:
 #   docker build -f test/adofake/cmd/Dockerfile -t wardyn/test-adofake:local .
-FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS builder
+FROM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS builder
 ENV GOTOOLCHAIN=local
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -25,7 +25,7 @@ RUN for i in 1 2 3; do go mod download && break; [ "$i" -lt 3 ] || exit 1; sleep
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/adofake ./test/adofake/cmd
 
-FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache git git-daemon && adduser -D -u 65532 adofake
 COPY --from=builder /out/adofake /usr/local/bin/adofake
 USER 65532
