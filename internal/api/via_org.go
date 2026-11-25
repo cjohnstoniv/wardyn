@@ -91,6 +91,7 @@ func (s *Server) handleViaOrg(w http.ResponseWriter, r *http.Request) {
 		s.denyViaOrg(w, r, claims, placement.ReasonRelayRunnerMismatch, "the run's via_org egress belongs to another runner")
 		return
 	}
+	s.holdViaOrgGrant(run, grant)
 	token, _ := bearerToken(r)
 	run.token.Store(&token)
 	gen, st, refused, ok := s.admitViaOrg(w, r, run, claims, grant.ID)
@@ -180,9 +181,17 @@ func (s *Server) admitViaOrg(w http.ResponseWriter, r *http.Request, run *viaOrg
 // refuseViaOrgEndedRun is this route's own liveness check, beside internalAuth's: the request path
 // after the grant id is the sandbox's, so the route never relies on a gate that reads the path. A
 // terminal or kept run is refused as refuseTerminalRun refuses it, with no grace. A paused run is refused for every
-// via_org grant (409 run_paused) until it is resumed.
+// via_org grant (409 run_paused) until it is resumed. It reads the run only when internalAuth's gate carried none.
 func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
-	run, err := s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	// internalAuth's liveness gate read this request's run a moment ago and carried it (contextWithLiveRun): its
+	// row is judged here, not a second read. On this route the gate never lets a terminal run through (pathHasAny
+	// cuts the path at the door), so this switch refuses what it refused when it read the run itself. A request
+	// that reached the handler without the gate reads the run.
+	run, live := liveRunFromContext(r.Context())
+	var err error
+	if !live || run.ID != claims.RunID {
+		run, err = s.cfg.Store.GetRun(r.Context(), claims.RunID)
+	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		s.auditInternalDenied(r, claims, authz.ReasonRunNotFound, "", "")
@@ -206,19 +215,22 @@ func (s *Server) refuseViaOrgEndedRun(w http.ResponseWriter, r *http.Request, cl
 }
 
 // viaOrgGrant reads the run's grant and its destination: the grant must be this run's and recorded
-// via_org, else delivery_not_via_org.
+// via_org, else delivery_not_via_org. A grant this run's via_org state already checked is not read again (viaOrgHeldGrant).
 func (s *Server) viaOrgGrant(w http.ResponseWriter, r *http.Request, claims *identity.Claims, grantID uuid.UUID) (types.CredentialGrant, viaOrgDestination, bool) {
-	grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), claims.RunID)
-	if err != nil {
-		writeServerError(w, r, "list grants for via_org", err)
-		return types.CredentialGrant{}, viaOrgDestination{}, false
+	g, held := s.viaOrgHeldGrant(claims.RunID, grantID)
+	if !held {
+		grants, err := s.cfg.Store.ListGrantsByRun(r.Context(), claims.RunID)
+		if err != nil {
+			writeServerError(w, r, "list grants for via_org", err)
+			return types.CredentialGrant{}, viaOrgDestination{}, false
+		}
+		i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
+		if i < 0 || grants[i].RunID != claims.RunID || grants[i].Delivery != types.GrantDeliveryViaOrg {
+			s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "not a via_org grant of this run")
+			return types.CredentialGrant{}, viaOrgDestination{}, false
+		}
+		g = grants[i]
 	}
-	i := slices.IndexFunc(grants, func(g types.CredentialGrant) bool { return g.ID == grantID })
-	if i < 0 || grants[i].RunID != claims.RunID || grants[i].Delivery != types.GrantDeliveryViaOrg {
-		s.denyViaOrg(w, r, claims, placement.ReasonDeliveryNotViaOrg, "not a via_org grant of this run")
-		return types.CredentialGrant{}, viaOrgDestination{}, false
-	}
-	g := grants[i]
 	switch g.Spec.Kind {
 	case types.GrantAPIKey:
 		rule, err := injectionRuleFromScope(g.Spec.Scope)
@@ -325,9 +337,9 @@ func (s *Server) denyViaOrg(w http.ResponseWriter, r *http.Request, claims *iden
 // the run was dispatched with. The engine is kept while the run's policy generation slot stays the one it was
 // built at: every revive, on any replica, moves the slot in the write that stores its config, so a newer slot
 // retires the engine (viaOrgRun.retireStale) and the next one is built from the config as it stands now. A
-// build refused for the site's upstream proxy host is remembered for the setting it read, so the run's later
-// requests neither build it again nor audit its resolve again; a rewrite of the setting is read on the next
-// request. Any other build failure is tried again each time.
+// build refused for the site's upstream proxy host is remembered for the setting that build used, when that
+// setting can be proved, so the run's later requests at that setting neither build it again nor audit its resolve
+// again; a request at any other setting builds. Any other build failure is tried again each time.
 func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UUID) (*viaOrgGen, []proxy.ViaOrgRoute, error) {
 	// Read outside run.mu, so the run's requests do not queue on it, and before the config: an advance stores its
 	// config in the same write as its slot, so a config read after this slot is at least as new as it.
@@ -347,7 +359,7 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	if refused, ok := run.upstreamRefused[setting]; named && ok {
 		return nil, nil, viaOrgRefusalRemembered{refused}
 	}
-	cfg, err := s.viaOrgEngineConfig(ctx, runID)
+	cfg, used, usedNamed, err := s.viaOrgEngineConfigUsing(ctx, runID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,15 +367,13 @@ func (s *Server) viaOrgEngine(ctx context.Context, run *viaOrgRun, runID uuid.UU
 	cfg.ViaOrgRoutes = nil
 	engine, err := proxy.NewViaOrgEngine(s.cfg.BaseCtx, cfg, s.viaOrgEngineOptions(run))
 	if err != nil {
-		if named && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
-			// The build read the setting itself, after this one: a refusal is remembered only when both
-			// reads agree, so none is held for a setting that was rewritten while it was built.
-			if after, ok := s.viaOrgUpstreamSetting(ctx); ok && after == setting {
-				if run.upstreamRefused == nil {
-					run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
-				}
-				run.upstreamRefused[setting] = err
+		if usedNamed && errors.Is(err, proxy.ErrUpstreamProxyHostRefused) {
+			// Kept under the setting the build used, not the one read before it: the setting may have been
+			// rewritten, even back, between the two reads.
+			if run.upstreamRefused == nil {
+				run.upstreamRefused = map[viaOrgUpstreamSetting]error{}
 			}
+			run.upstreamRefused[used] = err
 		}
 		return nil, nil, err
 	}
@@ -432,6 +442,12 @@ func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstr
 	if err != nil {
 		return setting, false
 	}
+	return s.viaOrgUpstreamSettingOf(ctx, sc)
+}
+
+// viaOrgUpstreamSettingOf names the upstream proxy setting of a site config already read, reading only the
+// secret's revision.
+func (s *Server) viaOrgUpstreamSettingOf(ctx context.Context, sc types.SiteConfig) (setting viaOrgUpstreamSetting, named bool) {
 	setting.url, setting.secretRef = sc.UpstreamProxyURL, sc.UpstreamProxySecretRef
 	if setting.secretRef != "" && s.cfg.Secrets != nil {
 		rev, ok, err := secretstore.RevisionOf(ctx, s.cfg.Secrets.For(""), setting.secretRef)
@@ -448,17 +464,24 @@ func (s *Server) viaOrgUpstreamSetting(ctx context.Context) (setting viaOrgUpstr
 // broker keeps only via_org grants' repositories. Nothing else that holds a credential is kept. The
 // org network applies, but its internal hosts lift only for a via_org destination.
 func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*proxy.Config, error) {
+	cfg, _, _, err := s.viaOrgEngineConfigUsing(ctx, runID)
+	return cfg, err
+}
+
+// viaOrgEngineConfigUsing is viaOrgEngineConfig and the upstream proxy setting its build used (named as
+// viaOrgUpstreamSettingOf does). named is false when that setting cannot be proved.
+func (s *Server) viaOrgEngineConfigUsing(ctx context.Context, runID uuid.UUID) (*proxy.Config, viaOrgUpstreamSetting, bool, error) {
 	raw, err := s.loadRunProxyConfig(ctx, runID)
 	if err != nil {
-		return nil, fmt.Errorf("read the run's stored proxy config: %w", err)
+		return nil, viaOrgUpstreamSetting{}, false, fmt.Errorf("read the run's stored proxy config: %w", err)
 	}
 	cfg, err := proxy.LoadConfigBytes(raw)
 	if err != nil {
-		return nil, err
+		return nil, viaOrgUpstreamSetting{}, false, err
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, runID)
 	if err != nil {
-		return nil, err
+		return nil, viaOrgUpstreamSetting{}, false, err
 	}
 	viaOrg := map[uuid.UUID]types.CredentialGrant{}
 	for _, g := range grants {
@@ -504,7 +527,7 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	}
 	sc, scErr := s.siteConfigForDispatch(ctx)
 	if scErr != nil {
-		return nil, scErr
+		return nil, viaOrgUpstreamSetting{}, false, scErr
 	}
 	cfg.GitGrants, cfg.ViaOrgRoutes = git, routes
 	cfg.PATGrants, cfg.BrokeredPATGrantIDs, cfg.AzureGates, cfg.GitHubAPI, cfg.AzureARM, cfg.AWSSigV4 = nil, nil, nil, nil, nil, nil
@@ -525,9 +548,16 @@ func (s *Server) viaOrgEngineConfig(ctx context.Context, runID uuid.UUID) (*prox
 	if cfg.NoNetwork {
 		noHop = upstreamNoHopNoNetwork
 	}
+	// The setting this build used is the site config read just above (sc), never a read of its own: a refusal is
+	// remembered for the setting that was refused. A secret's revision stands for the value the resolve read only
+	// when it is the same before and after it; otherwise the build's setting cannot be named.
+	setting, named := s.viaOrgUpstreamSettingOf(ctx, sc)
 	cfg.UpstreamProxyURL = s.resolveRunUpstreamProxy(ctx, runID, sc, nil, noHop)
 	cfg.UpstreamProxyNoProxy = sc.UpstreamProxyNoProxy
-	return cfg, nil
+	if after, ok := s.viaOrgUpstreamSettingOf(ctx, sc); !ok || after != setting {
+		named = false
+	}
+	return cfg, setting, named, nil
 }
 
 // viaOrgADOGateCovers reports whether the sealed row's Azure DevOps gate names host.

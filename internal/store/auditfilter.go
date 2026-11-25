@@ -59,6 +59,10 @@ type AuditFilter struct {
 	// `data @> $n::jsonb`): every key present with an equal value, objects
 	// recursively. A string, not a map, so the filter stays comparable (IsZero).
 	DataContains string
+	// DataContainsAny is a JSON array of objects, each as DataContains reads one: the row's data must contain
+	// at least one of them. A string for the same reason. A value that is not an array of objects matches no
+	// row, and so does an empty array.
+	DataContainsAny string
 }
 
 // The two AuditFilter.Origin values: rows a device forwarded, and rows the
@@ -94,8 +98,36 @@ func (f AuditFilter) Matches(ev types.AuditEvent) bool {
 		return false
 	case f.DataContains != "" && !dataContains(ev.Data, f.DataContains):
 		return false
+	case f.DataContainsAny != "" && !dataContainsAny(ev.Data, f.DataContainsAny):
+		return false
 	}
 	return true
+}
+
+// dataContainsAny is `data @> w1 OR data @> w2 ...` in Go for the objects of the JSON array want.
+func dataContainsAny(data []byte, want string) bool {
+	for _, w := range jsonObjects(want) {
+		if dataContains(data, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonObjects is the elements of the JSON array want that are objects, each as its own JSON text; nothing when
+// want is not an array.
+func jsonObjects(want string) []string {
+	var raw []json.RawMessage
+	if json.Unmarshal([]byte(want), &raw) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, r := range raw {
+		if t := strings.TrimSpace(string(r)); strings.HasPrefix(t, "{") {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // dataContains is `data @> want` in Go: want and data are JSON; an unparseable
@@ -208,6 +240,17 @@ func (f AuditFilter) where(args []any) ([]string, []any) {
 	}
 	if f.DataContains != "" {
 		add("data @> $%d::jsonb", f.DataContains)
+	}
+	if f.DataContainsAny != "" {
+		var alts []string
+		for _, w := range jsonObjects(f.DataContainsAny) {
+			args = append(args, w)
+			alts = append(alts, fmt.Sprintf("data @> $%d::jsonb", len(args)))
+		}
+		if len(alts) == 0 {
+			alts = []string{"false"}
+		}
+		clauses = append(clauses, "("+strings.Join(alts, " OR ")+")")
 	}
 	switch f.Origin {
 	case AuditOriginDevice:

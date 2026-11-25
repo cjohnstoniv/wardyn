@@ -78,7 +78,7 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 	"LLMInspection": {validated: true, clamped: true,
 		why: "mode/marker/sidecar-URL shape; replaced wholesale by the operator's configured mode, or cleared when the operator configures none"},
 	"UIApps": {validated: true, clamped: true,
-		why: "name/port/path shape plus a count cap; intersected down to the ceiling's (name, port) allowlist"},
+		why: "name/port/path/kind shape plus a count cap; intersected down to the ceiling's (name, port) allowlist, keeping the ceiling's desktop kind"},
 	"Resources": {validated: true, clamped: true,
 		why: "each set field capped at the ceiling's, with the deployment's default size standing in for an unset ceiling; a negative size is refused (validateResources)"},
 	"ToolRules": {validated: true, clamped: true,

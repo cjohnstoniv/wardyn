@@ -24,6 +24,11 @@
 // lifetime cap (RunSummary.HasLifetimeCap) is not stopped here: the lease
 // sweep KILLS it at that cap, which already includes this age.
 //
+// Outages (Config.StoreRecovering, RunnerOnline, StampIdle): no run is idle-stopped while the store
+// recovers, nor a run on a registered runner this process holds no session for, and each run's idle
+// clock restarts once after either, so time an outage cut people off is not counted as idleness. The
+// max age is not held.
+//
 // AutoStopAfterSec (policy auto_stop_after_sec): >0 idle timeout in seconds;
 // 0 DISABLED/never reaped (default, matches docs/POLICIES.md); <0 also never
 // reaped but kept distinct so an operator can express intent loudly.
@@ -35,6 +40,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +82,9 @@ type RunSummary struct {
 	// limits that cap is measured from), so the max-age stop skips it. A run
 	// from before that column keeps this reaper's max-age stop.
 	HasLifetimeCap bool
+	// RunnerID is the registered runner the run is on; nil for a run on the server's own substrate (and
+	// for a run whose runner row was deleted, which is reaped as one).
+	RunnerID *uuid.UUID
 }
 
 // aged is the instant the max age counts from: admission when the run waited, else creation.
@@ -157,6 +166,24 @@ type Config struct {
 	// won TickLock) as the idle_reaper sweep: an attempt when it starts and a
 	// success only when it finishes without error. Nil records nothing.
 	Sweeps *sweephealth.Tracker
+	// StoreRecovering, when non-nil, holds every idle stop while it answers true: wardynd wires the store
+	// health tracker's Recovering, true for WARDYN_LAPSE_RECOVERY_GRACE after the database is reachable
+	// again and after every start. The max-age stop is not held. Nil holds nothing.
+	StoreRecovering func() bool
+	// StoreHealthyFor, when non-nil, is how long the store has been healthy without a gap (the store health
+	// tracker's HealthyFor). The reaper reads it only while StoreRecovering is true, to tell one recovery
+	// from the next: a store that goes away again inside the grace starts a new healthy span, and that
+	// recovery stamps again. Nil sees a new recovery only after StoreRecovering answered false in between.
+	StoreHealthyFor func() time.Duration
+	// RunnerOnline, when non-nil, reports whether this process holds a registered runner's live session.
+	// A run on a runner it answers false for is not idle-stopped: the cut that took the runner may have
+	// taken its person too. Nil reads every runner as online, which is the behaviour before outages
+	// were considered.
+	RunnerOnline func(uuid.UUID) bool
+	// StampIdle restarts the idle clock (updated_at) of every run the reaper could idle-stop: every such
+	// run when runner is nil, else that runner's. It is called once per store recovery and once per
+	// runner that comes back. Nil stamps nothing.
+	StampIdle func(ctx context.Context, runner *uuid.UUID) (int64, error)
 }
 
 // Reaper is the idle-workspace garbage collector: a periodic loop that finds
@@ -173,6 +200,20 @@ type Reaper struct {
 	tickLock func(ctx context.Context) (func(), bool)
 	sweeps   *sweephealth.Tracker
 	logger   *slog.Logger
+
+	storeRecovering func() bool
+	storeHealthyFor func() time.Duration
+	runnerOnline    func(uuid.UUID) bool
+	stampIdle       func(context.Context, *uuid.UUID) (int64, error)
+	// mu guards the outage state below across ticks.
+	mu sync.Mutex
+	// recoveryStamped is set once the current recovery's stamp landed, and cleared when the store stops
+	// recovering, so the next recovery stamps again.
+	recoveryStamped bool
+	// stampedSpan is when the healthy span of the last recovery stamp began, on this process's clock.
+	stampedSpan time.Time
+	// offlineRunners are the runners a run was skipped for on the last pass, plus any whose stamp failed.
+	offlineRunners map[uuid.UUID]bool
 }
 
 // New constructs a Reaper. store, stopper, and recorder must be non-nil.
@@ -187,6 +228,11 @@ func New(store Store, stopper Stopper, recorder Recorder, cfg Config) *Reaper {
 		tickLock: cfg.TickLock,
 		sweeps:   cfg.Sweeps,
 		logger:   slog.Default().With("component", "lifecycle.reaper"),
+
+		storeRecovering: cfg.StoreRecovering,
+		storeHealthyFor: cfg.StoreHealthyFor,
+		runnerOnline:    cfg.RunnerOnline,
+		stampIdle:       cfg.StampIdle,
 	}
 	if r.now == nil {
 		r.now = time.Now
@@ -256,7 +302,36 @@ func (r *Reaper) reap(ctx context.Context) error {
 		now = r.now()
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var stopErrs []error
+	// While the store recovers no run is idle-stopped, and the first such pass restarts the idle clocks
+	// once: a run that looks idle only because the outage cut its person off gets a full idle window.
+	recovering := r.storeRecovering != nil && r.storeRecovering()
+	if !recovering {
+		r.recoveryStamped = false
+	} else if span := r.healthySpan(); !r.recoveryStamped || span.Sub(r.stampedSpan) >= spanSlack {
+		if err := r.stamp(ctx, nil); err != nil {
+			stopErrs = append(stopErrs, err)
+		} else {
+			r.recoveryStamped, r.stampedSpan = true, span
+		}
+	}
+	// A runner skipped as offline on an earlier pass that is online now has its runs' idle clocks
+	// restarted once, and its runs are skipped on this pass, whose snapshot predates the stamp. A failed
+	// stamp stays owed and is retried on the next pass.
+	back, offline := map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
+	for id := range r.offlineRunners {
+		if !r.runnerOnline(id) {
+			offline[id] = true
+			continue
+		}
+		back[id] = true
+		if err := r.stamp(ctx, &id); err != nil {
+			stopErrs = append(stopErrs, err)
+			offline[id] = true
+		}
+	}
 	for _, run := range runs {
 		if r.maxAge > 0 && !run.HasLifetimeCap && now.Sub(run.aged()) >= r.maxAge {
 			if err := r.stopMaxAge(ctx, run, now); err != nil {
@@ -270,6 +345,20 @@ func (r *Reaper) reap(ctx context.Context) error {
 		// AutoStopAfterSec <= 0 means never reap regardless of idle time (0 =
 		// disabled default; negative = explicit unbounded-attach escape hatch).
 		if run.PolicyAutoStopAfterSec <= 0 {
+			continue
+		}
+		// A run on a registered runner this process holds no session for is not idle-stopped.
+		if run.RunnerID != nil && r.runnerOnline != nil {
+			id := *run.RunnerID
+			if back[id] {
+				continue
+			}
+			if !r.runnerOnline(id) {
+				offline[id] = true
+				continue
+			}
+		}
+		if recovering {
 			continue
 		}
 		threshold := r.thresholdFor(run)
@@ -314,7 +403,43 @@ func (r *Reaper) reap(ctx context.Context) error {
 			r.emitRevokeFailure(ctx, runID, out.Errors)
 		}
 	}
+	r.offlineRunners = offline
 	return errors.Join(stopErrs...)
+}
+
+// spanSlack is how far apart two readings of one healthy span's start may be; two spans are at least the
+// store health tracker's reset gap (30 s) apart.
+const spanSlack = 5 * time.Second
+
+// healthySpan is when the store's current healthy span began, the zero time without Config.StoreHealthyFor.
+func (r *Reaper) healthySpan() time.Time {
+	if r.storeHealthyFor == nil {
+		return time.Time{}
+	}
+	return r.now().Add(-r.storeHealthyFor())
+}
+
+// stamp restarts the idle clocks Config.StampIdle covers: every such run when runner is nil, else that
+// runner's. A nil StampIdle stamps nothing and reports success.
+func (r *Reaper) stamp(ctx context.Context, runner *uuid.UUID) error {
+	if r.stampIdle == nil {
+		return nil
+	}
+	n, err := r.stampIdle(ctx, runner)
+	if runner == nil {
+		if err != nil {
+			r.logger.ErrorContext(ctx, "lifecycle: restarting idle clocks after a start or a database recovery failed", "err", err)
+			return fmt.Errorf("lifecycle: restart idle clocks: %w", err)
+		}
+		r.logger.InfoContext(ctx, "lifecycle: idle clocks restarted after a start or a database recovery; idle stops wait for the recovery grace", "runs", n)
+		return nil
+	}
+	if err != nil {
+		r.logger.ErrorContext(ctx, "lifecycle: restarting a returning runner's idle clocks failed", "runner_id", runner.String(), "err", err)
+		return fmt.Errorf("lifecycle: restart idle clocks of runner %s: %w", runner, err)
+	}
+	r.logger.InfoContext(ctx, "lifecycle: a runner is reachable again; its runs' idle clocks restarted", "runner_id", runner.String(), "runs", n)
+	return nil
 }
 
 // stopMaxAge ends one run past Config.MaxAge and audits it. Same per-stop

@@ -35,7 +35,7 @@
 //     SetSharedSecret, DeleteSharedSecret
 //   - site-config (/api/v1/site-config): GetSiteConfig, PutSiteConfig, PutSiteConfigResult, PutSiteConfigClearing
 //   - model-providers (/api/v1/model-providers): GetModelProviders — the read only (admin); the PUT and the per-provider
-//     sign-in and credential doors are NOT wrapped
+//     sign-in, credential and service-grant doors are NOT wrapped
 //   - drives (/api/v1/drives):           GetDrives, ApplyDrives, ApplyDrivesResult, and people's own
 //     drives: ListMemberDrives, DeleteMemberDrive (/api/v1/drives/member, super admin) and the caller's
 //     CreateMyDrive, DeleteMyDrive, DeleteMyDriveResult (/api/v1/me/drives)
@@ -53,7 +53,9 @@
 //     GovernanceDryRun, SetEnvelope, ClearEnvelope, GetGovernanceUnder, PlanGovernanceUnder, ApplyGovernanceResultUnder,
 //     UnitModelUsage
 //   - governance changes (/api/v1/governance/changes): ListGovernanceChanges, GetGovernanceChange,
-//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange
+//     ApproveGovernanceChange, RejectGovernanceChange, NoteGovernanceChange, GetGovernanceChangeImpact,
+//     ApproveGovernanceChangeWithReason, TakeBackGovernanceApproval
+//   - approval counts (/api/v1/governance/approval-counts): GetApprovalCounts, PutApprovalCounts
 //   - governance requests (/api/v1/governance/requests): ListGovernanceRequests, RequestElevation,
 //     RequestImage, ApproveGovernanceRequest, RejectGovernanceRequest
 //   - setup (/api/v1/setup):             SetupStatus, ConnectManagedSubscription, DisconnectManagedSubscription
@@ -106,6 +108,8 @@
 //     self-service half, wrapped only for CreateAPIToken and RevokeAPIToken (listing stays unwrapped)
 //   - /api/v1/token          — the portal token exchange (POST, 0.9): a portal presents its client credential and a person's
 //     identity-provider token for a delegated token. Unwrapped: it is a portal's door, not an operator's
+//   - /api/v1/service-grant-cleanups — POST /{uid}/retry (admin): one more try at deleting the secret of a service
+//     grant removed from a model provider. Admin maintenance, like the service-grant routes under /api/v1/model-providers
 //   - /api/v1/people         — the writes: creating a person, erasing their stored credentials (0.8, offboarding); its invitations are wrapped above
 //   - /api/v1/scim           — the Settings SCIM card's read-only status (0.8.6); the SCIM server itself is /scim/v2
 //   - /api/v1/workspace-providers — the org's git-provider policy (allowed base
@@ -140,8 +144,12 @@
 //     identity provider's SCIM connector (0.8.6): suspend and reactivate a person, and
 //     remove one from a group. Authenticated by its own bearer
 //     (WARDYN_SCIM_TOKEN), never by an operator's credential, so no SDK caller holds it.
+//   - /api/v1/assistant      — the assistant: its settings (super admin) and a person's
+//     sessions (preview, start, messages, edits, the event stream, end). A console
+//     surface whose session streams to the person's browser
 //   - /api/v1/branding       — console branding (#1125): the sign-in page's anonymous
 //     read and logo, and the Admin view Branding card's save; a console surface
+//   - /api/v1/walls          — the Walls view's topology and live stream, and /api/v1/runs/{id}/walls: the 3D view's reads, a console surface rather than tooling
 //   - /metrics, /readyz      — the operator's scrape and readiness probes
 //   - /.well-known/wardyn-experimental/gateway-jwks.json — the public keys an AI
 //     gateway fetches; a gateway reads it, not an SDK caller
@@ -380,6 +388,9 @@ type AuditFilter struct {
 	Actor        string // exact principal, e.g. "alice@corp.example" — "everything X did"
 	ActorType    string // "human" | "agent" | "system"
 	Outcome      string // "success" | "denied" | "failure"
+	// Order "desc" reads a run's trail newest window first, newest event first, as ?order=desc does; empty keeps
+	// the default, oldest first. It narrows nothing.
+	Order string
 }
 
 // queryValues renders f as the query params the server's parseAuditFilter
@@ -403,6 +414,9 @@ func (f AuditFilter) queryValues() url.Values {
 	}
 	if f.Outcome != "" {
 		q.Set("outcome", f.Outcome)
+	}
+	if f.Order != "" {
+		q.Set("order", f.Order)
 	}
 	return q
 }

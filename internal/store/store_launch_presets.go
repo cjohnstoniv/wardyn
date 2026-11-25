@@ -71,6 +71,9 @@ func (s PG) PutLaunchPreset(ctx context.Context, p types.LaunchPreset) (types.La
 		if err := lockScope(ctx, tx, db.LaunchPresetLockClass, p.Name); err != nil {
 			return err
 		}
+		if err := ruleUIAppCallersQ(ctx, tx, []byte(p.Request)); err != nil {
+			return err
+		}
 		var created bool
 		err := tx.QueryRow(ctx, q, p.Name, p.Description, userTypes, []byte(p.Request), p.CreatedBy).Scan(
 			&out.Name, &out.Version, &out.Description, &out.UserTypes, &out.Request,

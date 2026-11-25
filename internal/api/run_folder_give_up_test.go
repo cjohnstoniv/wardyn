@@ -166,7 +166,7 @@ func TestGiveUp_RowMarkedAudited(t *testing.T) {
 		s, cs, _, run := giveUpFixture(t)
 		cs.giveUpApplies = true
 		c.setup(s, cs)
-		var logs bytes.Buffer
+		var logs lockedBuffer
 		old := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 		final, err := s.giveUpFolder(ctx, run, false, cs.folderStatus())

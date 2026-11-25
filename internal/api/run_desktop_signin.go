@@ -721,7 +721,7 @@ func (s *Server) heldSignin(w http.ResponseWriter, ctx context.Context, st store
 
 // handleEndDesktopSignin closes the person's display and resumes the agent.
 // When the display cannot be proven closed, or the agent cannot be resumed
-// after it, the agent stays stopped and the sweep retries.
+// after it, the agent's state is unconfirmed and the sweep retries.
 // Another end of the same sign-in still running answers 409, as one whose end was asked for does.
 // So does a sign-in whose begin has not yet recorded what it stopped, which it does
 // once the person's display is up: an end before then would close the row, and the
@@ -750,12 +750,12 @@ func (s *Server) handleEndDesktopSignin(w http.ResponseWriter, r *http.Request) 
 			writeErrorReason(w, http.StatusServiceUnavailable, reasonDesktopSigninUnavailable, "the sign-in's end could not be recorded, so nothing was sent; end the sign-in again")
 			return
 		}
-		msg := "the sign-in display could not be proven closed; the agent stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+		msg := "the sign-in display could not be proven closed; the agent's state is unconfirmed while Wardyn retries, and it tries to end the run after 3 failed retries"
 		switch {
 		case errors.Is(err, errSigninEndUnrecorded):
 			msg = "the sign-in display closed, but its end could not be recorded; end the sign-in again"
 		case errors.Is(err, errSigninResumeStage):
-			msg = "the sign-in display closed, but the agent could not be resumed; it stays stopped while Wardyn retries, and the run ends after 3 failed tries"
+			msg = "the sign-in display closed, but the agent's resume is unconfirmed; Wardyn retries, and tries to end the run after 3 failed retries"
 		}
 		writeErrorReason(w, http.StatusBadGateway, reasonDesktopSigninEndFailed, msg)
 		return

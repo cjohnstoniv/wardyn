@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -275,23 +276,30 @@ func (s *Server) runAllowedModels(ctx context.Context, id uuid.UUID) *client.Run
 	return &rec
 }
 
-// reviveModelListRunnerRefusal refuses, before the revive's claim, a revive whose stored config limits
-// the run's models on a runner whose wardyn-runnerd does not carry the list: it would start the run's
-// new proxy without it. A runner not connected is left to the replace call, which refuses it again
-// (remote.Substrate.ReplaceProxy).
-func (s *Server) reviveModelListRunnerRefusal(run types.AgentRun, cfg *proxy.Config) *reviveError {
-	if cfg.AllowedModels == nil || run.RunnerID == nil {
+// reviveProxySettingRunnerRefusal refuses, before the revive's claim, a revive whose stored config sets a run
+// proxy setting its connected runner's wardyn-runnerd does not carry, or a laptop local model on a port the
+// runner's person has not allowed: the runner would start the run's new proxy without it. A runner not connected
+// is left to the replace call, which runs the same check (remote.Substrate.ReplaceProxy).
+func (s *Server) reviveProxySettingRunnerRefusal(run types.AgentRun, cfg *proxy.Config) *reviveError {
+	if run.RunnerID == nil {
 		return nil
 	}
 	caps, connected := s.runnerLastCaps(*run.RunnerID)
-	return modelListRunnerRefusal(caps, connected)
+	return proxySettingRunnerRefusal(caps, connected, runner.ProxySettingsOf(*cfg))
 }
 
-// modelListRunnerRefusal is that refusal for a runner's last caps.
-func modelListRunnerRefusal(caps runnerwire.Caps, connected bool) *reviveError {
-	if !connected || slices.Contains(caps.ProxySettings, runnerwire.ProxySettingAllowedModels) {
+// proxySettingRunnerRefusal is that refusal for a runner's last caps, with the reason a create gets
+// (sandboxCreateFailure).
+func proxySettingRunnerRefusal(caps runnerwire.Caps, connected bool, pc runner.ProxyConfig) *reviveError {
+	if !connected {
 		return nil
 	}
-	return reviveRefused(http.StatusConflict, reasonRunnerProxySetting,
-		(&remote.ProxySettingError{Setting: runnerwire.ProxySettingAllowedModels}).Error())
+	err := remote.CheckProxySettings(caps, pc)
+	if err == nil {
+		return nil
+	}
+	if pe := (*remote.LocalModelPortError)(nil); errors.As(err, &pe) {
+		return reviveRefused(http.StatusConflict, reasonRunnerLocalModelPort, err.Error())
+	}
+	return reviveRefused(http.StatusConflict, reasonRunnerProxySetting, err.Error())
 }

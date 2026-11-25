@@ -123,7 +123,7 @@ func TestSSHGateway_DefaultCeilingRefusesTheNextEstablishedConnection(t *testing
 	st.putRun(types.AgentRun{ID: runID, CreatedBy: "alice@example.com", State: types.RunRunning, SandboxRef: "sbx-1"})
 	priv, pub := mustSSHKeypair(t)
 	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: "alice@example.com", PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	// No SSO is configured, so the one principal's share is the whole ceiling: all 64 are served.
+	// No SSO is configured, so the one principal's share is the whole ceiling: all of them are served.
 	h := newSSHTestHarness(t, st, &sshFakeRunner{})
 
 	served := sshServed
@@ -528,6 +528,27 @@ func rejectRows(a *sshTestRecorder) int {
 	return n
 }
 
+// sshGoroutines counts the goroutines running ssh code: the gateway's own and the ssh library's. Other
+// tests' leftover goroutines start and end on their own clock, so a process-wide count is noise here.
+func sshGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	n := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "golang.org/x/crypto/ssh") || strings.Contains(g, "/internal/api/sshgateway") {
+			n++
+		}
+	}
+	return n
+}
+
 // waitUntil polls cond until it holds or the deadline passes.
 func waitUntil(d time.Duration, cond func() bool) bool {
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
@@ -659,18 +680,18 @@ func TestSSHGateway_RefusedConnectionPipeliningDoesNotLeakGoroutines(t *testing.
 	if !sshServed(held) {
 		t.Fatal("connection was not served")
 	}
-	baseline := runtime.NumGoroutine()
+	baseline := sshGoroutines()
 	for i := range 4 {
 		over, err := sshDial(t, h, runID.String(), priv)
 		if err != nil {
 			t.Fatalf("refused dial %d: %v", i+1, err)
 		}
 		sshFlood(over)
-		// A supplement only: the count is process-wide and the harness cleanup does not join its
-		// gateway goroutine, so it has modest slack. The regression proof is
+		// A supplement only: the harness cleanup does not join its gateway goroutine, so the count
+		// has modest slack. The regression proof is
 		// TestSSHRefuseChannels_ServicesWhatTheMuxQueues.
-		if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
-			t.Fatalf("goroutines = %d after flooded refused connection %d closed, baseline %d", runtime.NumGoroutine(), i+1, baseline)
+		if !waitUntil(8*time.Second, func() bool { return sshGoroutines() <= baseline+2 }) {
+			t.Fatalf("goroutines = %d after flooded refused connection %d closed, baseline %d", sshGoroutines(), i+1, baseline)
 		}
 	}
 	if !sshServed(held) {
@@ -703,7 +724,7 @@ func TestSSHGateway_CeilingRefusedConnectionPipeliningDoesNotLeakGoroutines(t *t
 	if !sshServed(alice) {
 		t.Fatal("alice was not served")
 	}
-	baseline := runtime.NumGoroutine()
+	baseline := sshGoroutines()
 	for i := range 4 {
 		bob, err := sshDial(t, h, bobRun.String(), bobPriv)
 		if err != nil {
@@ -713,8 +734,8 @@ func TestSSHGateway_CeilingRefusedConnectionPipeliningDoesNotLeakGoroutines(t *t
 			t.Fatalf("bob dial %d was served over a full ceiling", i+1)
 		}
 		sshFlood(bob)
-		if !waitUntil(8*time.Second, func() bool { return runtime.NumGoroutine() <= baseline+2 }) {
-			t.Fatalf("goroutines = %d after ceiling-refused connection %d closed, baseline %d", runtime.NumGoroutine(), i+1, baseline)
+		if !waitUntil(8*time.Second, func() bool { return sshGoroutines() <= baseline+2 }) {
+			t.Fatalf("goroutines = %d after ceiling-refused connection %d closed, baseline %d", sshGoroutines(), i+1, baseline)
 		}
 	}
 }

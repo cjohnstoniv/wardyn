@@ -143,6 +143,14 @@ func recoveryItems(f *bootFlags, dep string) []recoveryItem {
 			Note:    "one object per drive and home, named by types.DriveObjectName; a host_path drive is a subtree of its share",
 		},
 		{
+			Item: "mac_disk_images", Source: "user_drives (backend mac_disk) and its home_runner_id, in the database",
+			Location: "only when a drive has the mac_disk backend: the Mac named by home_runner_id, in macos-vm.noindex/drives/ " +
+				"under the runner login's Application Support/Wardyn; one image, the drive object name with .img, per drive and home",
+			SetPath: "drives/<drive id>/<home>/",
+			Note: "the image is the drive's bytes and is on that Mac only, outside the database and every volume above; " +
+				"quiesce its writers and keep it sparse; a rehearsal keeps the image in the scratch set, and only a real recovery restores it, on the Mac that was its home",
+		},
+		{
 			Item: "keys", Location: where["keys"], Source: keySources(f),
 			Note: "never in the set; the manifest holds fingerprints and row counts only",
 		},

@@ -288,6 +288,22 @@ func snapshot(t *testing.T, dsn string) string {
 	return s
 }
 
+func TestRehearse_AWrongPlatformFileReportsTheFingerprintFirst(t *testing.T) {
+	rg := newRehearseRig(t)
+	recorded, other := mustAgeIdentity(t), mustAgeIdentity(t)
+	rg.set.PlatformRecipient = recorded.Recipient().String()
+	path := filepath.Join(t.TempDir(), "platform.key")
+	if err := os.WriteFile(path, []byte(other.String()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARDYN_PLATFORM_KEY_FILE", path)
+	r := rg.run(rg.id.String())
+	if len(r.report.Checks) == 0 || r.report.Checks[0].Name != "key fingerprint" || r.report.Checks[0].Result != resultFail ||
+		!strings.Contains(r.report.Checks[0].Detail, "WARDYN_PLATFORM_KEY_FILE") {
+		t.Errorf("the platform file mismatch must be reported first: %+v", r.report.Checks)
+	}
+}
+
 func TestRehearse_AWrongAgeKeyFailsNamingTheClass(t *testing.T) {
 	rg := newRehearseRig(t)
 	r := rg.run(mustAgeIdentity(t).String())

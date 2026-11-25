@@ -39,6 +39,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"approvals_list_view.go:approvalsViewScope":                {1, "authz-only: which approvals a reader lists"},
 	"approvals_reauth.go:canSeeApproval":                       {1, "authz-only: approval read reach"},
 	"approvals_takeover.go:loadTakeover":                       {1, "authz-only: a takeover's reach and the deny_interactive door, as refuseAttachEntry's ticket lane"},
+	"assistant_actor.go:assistantEffectiveRole":                {2, "authz-only: the tier an assistant tool call acts at, the security tier only when the snapshot and the fresh role both hold it; the tool context is the person's, never the operator"},
+	"assistant_context.go:assistantResolveTarget":              {1, "authz-only: whether the person may read a run they did not start as the assistant's target, as the run read door does; it admits no run policy"},
 	"attach.go:refuseAttachEntry":                              {1, "authz-only: a session door; traffic in the session is the dispatched proxy config"},
 	"attach_authority.go:attachAuthority":                      {1, "authz-only: an open terminal's deny_interactive re-check, with refuseNoTicketAttach's exemption; it admits no run policy"},
 	"attach_ticket.go:handleAttachTicket":                      {1, "authz-only: the ticket's reach stamp; its reach is admitRunEntry's"},
@@ -68,6 +70,8 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance.go:resolveChainCeiling":                        {1, "R: the operator arm; boundaryCeiling meets whatever it returns"},
 	"governance_dry_run.go:applyUnitWriteQ":                    {1, "authz-only: the writer's mount-source tier; the profile meets the boundary at resolve"},
 	"governance_change_kinds.go:applyUnitChange":               {1, "authz-only: the approver's mount-source tier; the profile meets the boundary at resolve"},
+	"governance_change_pool.go:tierOf":                         {2, "authz-only: the tier an approval of a held change is given at; it admits no run policy"},
+	"governance_change_pool.go:judgeRecord":                    {1, "authz-only: whether a candidate approver is security-tier, so a scoped predicate is asked only of grant holders"},
 	"governance_envelope_gates.go:envelopeRootApprover":        {1, "authz-only: who decides a held change of an envelope's unit"},
 	"governance_requests.go:requestApprover":                   {1, "authz-only: who decides a held request; the security tier decides it as it decides every held change (securityApprover), the rule's deciders are the other arm"},
 	"governance_unit_write.go:writeGovernanceUnit":             {1, "authz-only: the writer's mount-source tier; the profile meets the boundary at resolve"},
@@ -78,6 +82,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"governance_unit_admin.go:auditUnitScope":                  {1, "authz-only: the scope an audit row names"},
 	"governance_policy_ref.go:meGovernanceContact":             {1, "authz-only: a display contact"},
 	"governance_run_doors.go:inboundAppsDenied":                {1, "authz-only: a door the boundary holds no knob for (boundInboundApps and the application refusal read it)"},
+	"governance_run_doors.go:desktopAppsDeniedWarnings":        {1, "authz-only: a warning that drops nothing, so the boundary holds no knob for it (boundUIApps adds it for whoever the ceiling binds)"},
 	"governance_run_doors.go:uiAppsDenied":                     {1, "authz-only: a door the boundary holds no knob for (boundUIApps and the application refusal read it)"},
 	"grants.go:handleListGrants":                               {1, "authz-only: grant read reach"},
 	"helpers.go:ownsRunOrAdmin":                                {1, "authz-only: run reach"},
@@ -92,6 +97,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"me.go:handleMe":                                           {5, "authz-only: what GET /me shows"},
 	"member_drives.go:memberDriveDoorRefusal":                  {1, "authz-only: a drive door the boundary holds no knob for"},
 	"membermode.go:refuseAdminViewLaunch":                      {1, "authz-only: the User view launch door"},
+	"person_suspend.go:handleSuspendPortalPerson":              {1, "authz-only: a suspend that sets a purge deadline is the super admin's, as the purge route is; a security admin is refused before anything is written, and it admits no run policy"},
 	"policies.go:handleGetDefaultPolicy":                       {1, "authz-only: the unit_path of the default policy is a security admin's; a member reads the leaf's name alone"},
 	"policies.go:handleGetPolicy":                              {1, "authz-only: a policy read"},
 	"policies.go:specReadTierFor":                              {2, "authz-only: the spec read tier, what a reader is shown of a policy"},
@@ -158,6 +164,7 @@ var ungovernedCallerCensus = map[string]struct {
 	"template_list.go:templateCallerOf":                        {1, "authz-only: template reach"},
 	"user_drives.go:handleGetUserDrives":                       {1, "authz-only: drive storage layout; a security admin reads the allow-listed projection"},
 	"user_drives_me.go:userDriveDeniedByUnit":                  {1, "authz-only: a display flag"},
+	"user_drives_portal.go:upsertPortalDriveGrant":             {1, "authz-only: a portal allocation is a super admin's write; a run reaches the drive only through that portal's own launch (portalDriveDenied refuses every other drive) and meets the boundary at resolve"},
 	"user_drives_preview.go:handlePreviewUserDrive":            {1, "authz-only: drive storage layout"},
 	"user_drives_run.go:driveDoorProfile":                      {1, "R: a drive door the boundary holds no knob for; the run it admits meets the boundary at resolve"},
 	"user_drives_second_place.go:boundRunnerName":              {1, "authz-only: a display (the bound runner's name)"},
@@ -174,6 +181,10 @@ var ungovernedCallerCensus = map[string]struct {
 	"workloads.go:mayReachWorkloadsOf":                         {2, "authz-only: workload reach, for workloadOwnerOf and for canRestartWorkload's display flag on every read; the flag grants nothing, as the restart route checks workloadOwnerOf itself, and a restart's launch is a run create, which meets the boundary at resolve"},
 	"workloads.go:workloadListOwners":                          {1, "authz-only: a list scope"},
 	"workloads.go:workloadReadTier":                            {2, "authz-only: the workload read tier, what a reader is shown of another owner's workload"},
+	// The Walls view's projection, scope and detail checks.
+	"walls_run.go:handleRunWalls":          {2, "authz-only: the owner or operator projection, and exit detail for a super admin; admits no run policy"},
+	"walls_topology.go:wallsTopoScopeFor":  {1, "authz-only: the organisation or unit-subtree scope; admits no run policy"},
+	"walls_topology_org.go:wallsTopoGates": {1, "authz-only: gate address detail for a super admin; admits no run policy"},
 }
 
 // ungovernedCensusTags are the classifications a census entry may name.

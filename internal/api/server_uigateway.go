@@ -31,12 +31,17 @@ type uiGatewayState struct {
 	uiDesktopSink func(uiSession) rfbfilter.Sink
 	uiReadyMu     sync.Mutex
 	uiReady       map[string]time.Time
+	uiReadySwept  time.Time
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
-	uiReassertMu sync.Mutex
-	uiReassert   map[string]time.Time
-	uiProxyOnce  sync.Once
-	uiProxy      *httputil.ReverseProxy
+	uiReassertMu    sync.Mutex
+	uiReassert      map[string]time.Time
+	uiReassertSwept time.Time
+	uiProxyOnce     sync.Once
+	uiProxy         *httputil.ReverseProxy
+	// uiDispatch is the dispatch gate's state: issuer portals' single-use proxy and the slot wait
+	// (uigateway_dispatch.go).
+	uiDispatch uiDispatchState
 	// uiInbound is the inbound arm's token sessions and per-run request buckets (uigateway_inbound.go).
 	uiInbound uiInboundState
 	// uiDesktop caches the desktop sessions their person closed and holds this process's live desktop

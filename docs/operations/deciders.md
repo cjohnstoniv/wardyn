@@ -87,7 +87,8 @@
 3. Anyone else decides through the first `who` entry that matches. Otherwise they get the `404` they get without rules, so no one learns of a hold they cannot decide.
 4. The run's owner, when `who` leaves them out of an egress, Azure DevOps or MCP hold, gets `403` `not_a_decider`, which names who decides.
 
-- Nothing is stored on the hold. Rules, grants and groups are read again when the decision arrives, so a revoked grant, a group left or an edited rule applies at once.
+- Nothing is stored on the hold. Rules and unit-admin grants are read again when a decision arrives, so a revoked grant or an edited rule applies at once.
+- Group membership comes from the caller's session snapshot. Leaving a group at the identity provider takes effect at the next sign-in, or when the person is removed through SCIM; an API token's groups are bounded as in [Group deciders and sign-in age](#group-deciders-and-sign-in-age).
 - A run with no unit, or a deleted unit, is decided as without rules.
 - Rules or the unit tree that cannot be read answer the run's owner `503` `deciders_unreadable`, and anyone else the usual `404`. A security admin still decides, with no rule applied: see [the residual](../../threatmodel/THREAT-MODEL.md#unit-deciders-who-may-decide-a-hold-and-five-residuals).
 - The widest scope under any rule is `run`. A decision sent with no scope keeps the kind's default, except an egress decision under a cap below `run`, which is stored as `once`. A wider scope answers `403` `decision_scope_above_rule`.

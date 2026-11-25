@@ -23,15 +23,18 @@ import (
 // and name ("Server.sshAuth"), with the door it guards. Every mention of the arm is a call: the arm is called
 // where it is named, so a method value (the arm passed or stored as a value) is refused in any unit.
 var supportCallList = map[string]string{
-	"Server.handleAttachTicket":       "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
-	"Server.refuseAttachEntry":        "the terminal's WebSocket entry, its ticket branch only",
-	"Server.attachAuthority":          "the open terminal's re-check, its ticket branch only",
-	"Server.handleRunExec":            "POST /exec, and the open command's re-check",
-	"Server.uiTicketMayEnter":         "the UI gateway's ticket entry, inside ta.caller == \"\"",
-	"Server.uiSessionStillAuthorized": "the UI session's re-check",
-	"Server.desktopRun":               "the Files panel",
-	"Server.sshAuth":                  "the SSH gateway's authentication, inside the operator-owned rule's branch",
-	"Server.sshCurrentKey":            "the SSH gateway's re-check of an open connection",
+	"Server.handleAttachTicket": "the ticket mint: purpose \"\" is the terminal, \"ui\" the UI doors",
+	"Server.refuseAttachEntry":  "the terminal's WebSocket entry, its ticket branch only",
+	"Server.attachAuthority":    "the open terminal's re-check, its ticket branch only",
+	"Server.handleRunExec":      "POST /exec, and the open command's re-check",
+	"Server.uiTicketMayEnter":   "the UI gateway's ticket entry, inside ta.caller == \"\"",
+	// refuseDesktopKindApp is a second ask at an existing door, not a new door: the UI gateway's entry asks it
+	// after uiTicketMayEnter, for a declared app of kind desktop only.
+	"Server.refuseDesktopKindApp": "the UI gateway's entry for a declared app of kind desktop: the desktop door, on top of uiTicketMayEnter's web_apps door",
+	"Server.uiSessionArms":        "the UI session's re-check, after the portal's arm (uiSessionAuthority)",
+	"Server.desktopRun":           "the Files panel",
+	"Server.sshAuth":              "the SSH gateway's authentication, inside the operator-owned rule's branch",
+	"Server.sshCurrentKey":        "the SSH gateway's re-check of an open connection",
 }
 
 // supportNeverList is every function that must never call supportMayEnter, nor any function of the call list,
@@ -312,7 +315,7 @@ func recheckLiteral(body *ast.BlockStmt, expr ast.Expr) *ast.FuncLit {
 
 // TestSupportCensus_RunExecKeepsItsRecheck: handleRunExec asks the arm twice, once at the door and once in the
 // func literal its open command hands to holdAttachAuthority, which ends the command when the grant does. The
-// re-check is the check argument of that call (holdAttachAuthority(ctx, check, end)): a func literal that calls
+// re-check is the check argument of that call (holdAttachAuthority(ctx, b, check, end)): a func literal that calls
 // the arm, or an identifier assigned once from one. A literal that calls the arm and is never handed over is no
 // re-check, and the door's call alone must not satisfy the census.
 func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
@@ -327,11 +330,11 @@ func TestSupportCensus_RunExecKeepsItsRecheck(t *testing.T) {
 	var handed []*ast.FuncLit
 	for _, site := range holds {
 		call := site.(*ast.CallExpr)
-		if len(call.Args) != 3 {
-			t.Errorf("handleRunExec calls holdAttachAuthority with %d arguments, want (ctx, check, end). %s", len(call.Args), supportCensusEdit)
+		if len(call.Args) != 4 {
+			t.Errorf("handleRunExec calls holdAttachAuthority with %d arguments, want (ctx, b, check, end). %s", len(call.Args), supportCensusEdit)
 			continue
 		}
-		lit := recheckLiteral(body, call.Args[1])
+		lit := recheckLiteral(body, call.Args[2])
 		if lit == nil {
 			t.Errorf("handleRunExec hands holdAttachAuthority a check that is not a func literal calling supportMayEnter, nor a name assigned once from one: the open command's re-check is gone. %s", supportCensusEdit)
 			continue
@@ -520,14 +523,14 @@ func TestSupportCensus_TheArmSitsInsideTheTicketLane(t *testing.T) {
 	}
 }
 
-// TestSupportCensus_ListsAreDisjoint: no name is on both lists, and the call list holds the design's nine.
+// TestSupportCensus_ListsAreDisjoint: no name is on both lists, and the call list holds the design's ten.
 func TestSupportCensus_ListsAreDisjoint(t *testing.T) {
 	for name := range supportNeverList {
 		if _, both := supportCallList[name]; both {
 			t.Errorf("%s is on supportCallList and supportNeverList. %s", name, supportCensusEdit)
 		}
 	}
-	if len(supportCallList) != 9 {
-		t.Errorf("supportCallList holds %d names, want the design's nine: %s", len(supportCallList), strings.Join(sortedKeys(supportCallList), ", "))
+	if len(supportCallList) != 10 {
+		t.Errorf("supportCallList holds %d names, want the design's ten: %s", len(supportCallList), strings.Join(sortedKeys(supportCallList), ", "))
 	}
 }

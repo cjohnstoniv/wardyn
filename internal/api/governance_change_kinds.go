@@ -21,7 +21,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/policyref"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -89,6 +88,8 @@ type heldUnitWrite struct {
 	row  types.GovernanceUnit
 	res  *ResolvedUnit
 	keep mountKeep
+	// review is what the exemption found (unitWriteVerdict), stored with the held change.
+	review *changeReview
 }
 
 // unitWriteExempt reports whether a human's profile update applies without a second human. Only an
@@ -109,36 +110,8 @@ type heldUnitWrite struct {
 // profile a person is given (renameMaySelect), whichever proof would otherwise admit it. Nothing else
 // is exempt.
 func (s *Server) unitWriteExempt(ctx context.Context, all []types.GovernanceUnit, p types.GovernanceUnit, res *ResolvedUnit) bool {
-	byID := unitsByID(all)
-	cur, exists := byID[p.ID]
-	if !exists || res == nil || locksRemoved(cur.LockedKnobs, p.LockedKnobs) || s.reparentDropsLocks(all, cur, p) {
-		return false
-	}
-	if !sameJSON(nonZeroContact(cur.Contact), nonZeroContact(unitContactAfter(cur, p))) {
-		return false
-	}
-	if cur.Name != p.Name && s.renameMaySelect(ctx, p.ID) {
-		return false
-	}
-	if sameJSON(cur.Ceiling, p.Ceiling) && sameJSON(cur.Limits, p.Limits) && sameJSON(cur.ParentID, p.ParentID) &&
-		sameJSON(cur.Overlay, p.Overlay) && sameJSON(cur.OverlayLimits, p.OverlayLimits) {
-		return true
-	}
-	if s.envelopeExempt(ctx, all, p, res) {
-		return true
-	}
-	chain, err := chainFromRows(byID, p.ID, store.MaxUnitDepthCap)
-	if err != nil {
-		return false
-	}
-	curRes, err := s.composeChain(chain)
-	if err != nil {
-		return false
-	}
-	// Leq reads a maximum set where none was as tighter; the member cap reads it as the size, so the
-	// cap is compared too.
-	return composer.Leq(res.Ceiling, curRes.Ceiling, res.Limits, curRes.Limits) &&
-		len(memberCapRaises(s.resolvedMemberCap(res), s.resolvedMemberCap(curRes))) == 0
+	exempt, _ := s.unitWriteVerdict(ctx, all, p, res)
+	return exempt
 }
 
 // renameMaySelect reports whether renaming profile id could change which profile a person resolves
@@ -327,7 +300,7 @@ func (s *Server) holdUnitWrite(w http.ResponseWriter, r *http.Request, id uuid.U
 	after := newUnitDiffView(row, h.res, tier)
 	p := govProposal{
 		kind: govKindUnit, op: op, key: id.String(), payload: heldProfilePayload(req, h.keep),
-		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID),
+		after: after, baseState: unitBaseState(h.all, id, h.row.ParentID), review: s.unitReviewRisk(r.Context(), h.all, id, h.review, h.res),
 	}
 	if exists && cur.Name != row.Name {
 		shift, err := s.renameShift(r.Context(), id, row.Name)

@@ -362,7 +362,7 @@ func TestSCIMSweeperSkipsAReactivatedCandidate(t *testing.T) {
 	e.ageSuspension(f.id)
 
 	ctx := context.Background()
-	due, err := e.st.PurgeDueIdentities(ctx, 10)
+	due, err := e.st.PurgeDueIdentities(ctx, e.issuer, e.tenant, 10)
 	if err != nil || len(due) != 1 || due[0].ID.String() != f.id || !due[0].Suspended {
 		t.Fatalf("candidates = %v, %v", due, err)
 	}

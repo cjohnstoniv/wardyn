@@ -501,6 +501,7 @@ func TestStoreCreateRunCallerCensus(t *testing.T) {
 	// createQueuedRun is createRun for a launch that waits in a queue, and inserts a run row as
 	// surely; a census that matched only s.createRun( would miss it.
 	want := []string{
+		"assistant_run.go",        // clones nothing — an assistant session's run: no workspace, repository or source (assistantRunPolicy)
 		"harnesscred.go",          // clones nothing — the login capture
 		"run_queue.go",            // POST /runs into a pool's queue, answered after the same admission sites
 		"runs.go",                 // POST /runs (three admission sites above it)

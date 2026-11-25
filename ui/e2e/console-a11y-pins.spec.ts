@@ -30,7 +30,16 @@ async function seedPerson(request: APIRequestContext) {
 async function openPersonDrawerByKeyboard(page: import("@playwright/test").Page, email: string) {
   await gotoConsole(page, "admin");
   await navTo(page, "People");
-  await page.getByRole("textbox", { name: "Search people" }).fill(email.slice(0, 14));
+  // The box debounces into a new search that swaps the rows. Opening a row before that answer lands lets the
+  // swap unmount the opener while the drawer is open, so focus has nowhere to go back to.
+  const prefix = email.slice(0, 14);
+  const searched = page.waitForResponse((r) => {
+    const u = new URL(r.url());
+    return u.pathname.endsWith("/api/v1/people") && u.searchParams.get("q") === prefix;
+  });
+  await page.getByRole("textbox", { name: "Search people" }).fill(prefix);
+  await searched;
+  await expect(page.getByRole("row").filter({ hasNotText: email })).toHaveCount(1); // the header row only
   const opener = page.getByRole("row").filter({ hasText: email }).getByRole("button", { name: email });
   await expect(opener).toBeVisible();
   await opener.focus();

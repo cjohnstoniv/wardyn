@@ -191,6 +191,11 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 		if err != nil {
 			return types.GovernanceUnit{}, err
 		}
+		overlayDoc, _ := overlayJSON.([]byte)
+		limitsDoc, _ := overlayLimitsJSON.([]byte)
+		if err := ruleUIAppCallersQ(ctx, tx, overlayDoc, limitsDoc); err != nil {
+			return types.GovernanceUnit{}, err
+		}
 		const composed = `
 		INSERT INTO governance_units (id, name, ceiling, limits, created_by, contact, parent_id, overlay, overlay_limits, mode, locked_knobs)
 		VALUES ($1,$2,'{}'::jsonb,'{}'::jsonb,$3,$4,$5,$6,$7,$9,$10)
@@ -216,6 +221,9 @@ func upsertGovernanceUnitTx(ctx context.Context, tx Querier, p types.GovernanceU
 		limitsJSON, err := json.Marshal(p.Limits)
 		if err != nil {
 			return types.GovernanceUnit{}, fmt.Errorf("store: marshal governance limits: %w", err)
+		}
+		if err := ruleUIAppCallersQ(ctx, tx, ceilingJSON, limitsJSON); err != nil {
+			return types.GovernanceUnit{}, err
 		}
 		// ceiling and limits each keep the keys this binary's types don't
 		// declare, so a field a newer wardynd set survives this binary's edit.
@@ -459,6 +467,11 @@ func LockGovernanceMembershipKey(ctx context.Context, q Querier, subjectType, su
 // UpsertGovernanceMembershipQ is UpsertGovernanceMembership's statement on q. A write over an elevation
 // makes it permanent: an admin who writes the membership means it to stay.
 func UpsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) (types.GovernanceMembership, error) {
+	if a.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_memberships.subject", a.Subject); err != nil {
+			return types.GovernanceMembership{}, err
+		}
+	}
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
 	}
@@ -503,6 +516,11 @@ func (s PG) DeleteGovernanceMembership(ctx context.Context, id uuid.UUID) (types
 // included: how a rolled-back read puts back a row a committed delete removed, to read the precedence
 // as it stood before, and how an approved elevation is written.
 func InsertGovernanceMembershipQ(ctx context.Context, q Querier, a types.GovernanceMembership) error {
+	if a.SubjectType == types.CapabilitySubjectUser {
+		if err := ruleDelegatePersonSubject(ctx, q, "governance_memberships.subject", a.Subject); err != nil {
+			return err
+		}
+	}
 	if _, err := q.Exec(ctx, `INSERT INTO governance_memberships (`+governanceMembershipCols+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		a.ID, a.SubjectType, a.Subject, a.UnitID, a.Priority, a.CreatedAt, a.CreatedBy, a.Home, a.Legacy, a.ExpiresAt); err != nil {
 		return fmt.Errorf("store: put back governance assignment: %w", err)

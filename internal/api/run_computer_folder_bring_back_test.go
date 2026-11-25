@@ -436,6 +436,32 @@ func TestQuiesceKeptSandbox_AVMOrRunnerBackedRunIsNotQuiescableBeforeAnyExec(t *
 	}
 }
 
+// Where nothing cuts a sandbox's egress (Kubernetes in server mode), the person's bring-back has stopped the
+// agent before the pass, and the pass runs only if that agent then reads as ended.
+func TestBringComputerFolderBack_WhereNothingCutsTheEgressThePassWaitsForTheAgentToReadEnded(t *testing.T) {
+	for name, ended := range map[string]bool{"its agent still reads running": false, "its agent reads ended": true} {
+		t.Run(name, func(t *testing.T) {
+			s, cs, _, run, sb, _ := bringBackFixture(t)
+			withoutRunner(cs)
+			sb.folderSandboxRunner.proxyErr = runner.ErrEndUnsupported
+			sb.folderSandboxRunner.agentKilled.Store(ended)
+			bringBack(t, s, bringBackOwnerSession(t), run)
+			sb.mu.Lock()
+			calls := slices.Clone(sb.calls)
+			sb.mu.Unlock()
+			if !ended {
+				if !slices.Equal(calls, []string{"stop"}) || cs.status.Back == nil || cs.status.Back.Error != bringBackAgentRunningMsg {
+					t.Errorf("calls = %v, back = %+v; want the stop alone and %q", calls, cs.status.Back, bringBackAgentRunningMsg)
+				}
+				return
+			}
+			if !slices.Equal(calls, []string{"stop", "pass"}) || cs.status.Back != nil && cs.status.Back.Error == bringBackAgentRunningMsg {
+				t.Errorf("calls = %v, back = %+v; want the stop and the pass", calls, cs.status.Back)
+			}
+		})
+	}
+}
+
 // A paused run is refused, not resumed: resuming it would wake its agent before it could be stopped.
 func TestBringComputerFolderBack_APausedRunIsNotResumed(t *testing.T) {
 	s, cs, _, run, sb, app := bringBackFixture(t)

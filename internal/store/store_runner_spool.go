@@ -65,15 +65,13 @@ func (s PG) IngestRunnerDecisionUsage(ctx context.Context, runnerID uuid.UUID, r
 	if err != nil {
 		return false, false, err
 	}
-	for i, ev := range events {
-		ev, err = prepare(ctx, ev)
+	// Every event is prepared (sealed, masked) before the chain lock is asked for, so the lock is held only across
+	// the inserts and the commit. A failed prepare fails before any write.
+	for i := range events {
+		events[i], err = prepare(ctx, events[i])
 		if err != nil {
 			return false, false, err
 		}
-		if err := InsertAuditEventTx(ctx, tx, &ev); err != nil {
-			return false, false, err
-		}
-		events[i] = ev
 	}
 	hashes, err := json.Marshal(cursor.hashes)
 	if err != nil {
@@ -81,6 +79,11 @@ func (s PG) IngestRunnerDecisionUsage(ctx context.Context, runnerID uuid.UUID, r
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runner_spool_cursors SET last_seq=$2,recent_hashes=$3,overflow_end=$4::text::numeric,overflow_hash=$5 WHERE run_id=$1`, run.ID, cursor.last, hashes, strconv.FormatUint(cursor.overflow, 10), cursor.overflowHash); err != nil {
 		return false, false, err
+	}
+	for i := range events {
+		if err := InsertAuditEventTx(ctx, tx, &events[i]); err != nil {
+			return false, false, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, false, err

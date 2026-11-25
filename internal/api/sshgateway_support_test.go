@@ -451,43 +451,136 @@ func TestSSHSupport_RevokeAndExpiryCutTheConnection(t *testing.T) {
 	}
 }
 
-// (h) A failed grant read closes an idle helper's connection on the tick; a failed key read does too (the
-// strict mapping). The same failed key read on an owner's idle connection keeps it, unchanged.
-func TestSSHSupport_FailedReadClosesAHelperButNotAnOwner(t *testing.T) {
+// (h) A failed grant read on an idle helper's connection, and a failed key read on an owner's, ride the session
+// budget: both connections stay at an hour's budget, and both close on the tick at a budget of 0.
+func TestSSHSupport_FailedReadRidesTheBudgetForHelperAndOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		budget time.Duration
+		closes bool
+	}{{"an hour's budget", time.Hour, false}, {"no budget", 0, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			setKeepaliveForTest(t, 50*time.Millisecond)
+			r := newSSHSupportRig(t, sshAllSupportDoors)
+			r.h.srv.sessionBudgets.test = ptr(tc.budget)
+			client, err := r.dial(t)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			time.Sleep(200 * time.Millisecond)
+			r.st.failOn("SupportGrantLive", errors.New("grants unavailable"))
+			if got := closedWithin(client, time.Second); got != tc.closes {
+				t.Fatalf("a failed grant read closed the helper's idle connection = %v, want %v", got, tc.closes)
+			}
+
+			mem, run, principal := sshOwnedRunningRun(t)
+			st := &sshKeyReadFailureStore{sshMemStore: mem}
+			priv, pub := mustSSHKeypair(t)
+			st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+			h := newSSHTestHarness(t, st, &sshFakeRunner{})
+			h.srv.sessionBudgets.test = ptr(tc.budget)
+			owner, err := sshDial(t, h, run.ID.String(), priv)
+			if err != nil {
+				t.Fatalf("owner dial: %v", err)
+			}
+			defer owner.Close()
+			st.failed.Store(true)
+			if got := closedWithin(owner, time.Second); got != tc.closes {
+				t.Fatalf("a failed key read closed the owner's idle connection = %v, want %v", got, tc.closes)
+			}
+		})
+	}
+}
+
+// An owner's connection whose key lookup fails on every tick closes once the budget runs out, and stays under an
+// hour's budget: the owner's SSH follows the same budget as every other open session.
+func TestSSHProbe_OwnerConnectionEndsWhenTheBudgetRunsOut(t *testing.T) {
+	for _, tc := range []struct {
+		budget time.Duration
+		closes bool
+	}{{50 * time.Millisecond, true}, {time.Hour, false}} {
+		t.Run(tc.budget.String(), func(t *testing.T) {
+			setKeepaliveForTest(t, 50*time.Millisecond)
+			mem, run, principal := sshOwnedRunningRun(t)
+			st := &sshKeyReadFailureStore{sshMemStore: mem}
+			priv, pub := mustSSHKeypair(t)
+			st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
+			h := newSSHTestHarness(t, st, &sshFakeRunner{})
+			h.srv.sessionBudgets.test = ptr(tc.budget)
+			h.srv.sessionBudgets.retry = 10 * time.Millisecond
+			owner, err := sshDial(t, h, run.ID.String(), priv)
+			if err != nil {
+				t.Fatalf("owner dial: %v", err)
+			}
+			defer owner.Close()
+			st.failed.Store(true)
+			if got := closedWithin(owner, time.Second); got != tc.closes {
+				t.Fatalf("the owner's connection closed = %v, want %v", got, tc.closes)
+			}
+		})
+	}
+}
+
+// A helper's grant read that fails once rides the budget: the connection stays (it closed on the tick before).
+func TestSSHProbe_HelperRidesTheBudget(t *testing.T) {
 	setKeepaliveForTest(t, 50*time.Millisecond)
 	r := newSSHSupportRig(t, sshAllSupportDoors)
+	r.h.srv.sessionBudgets.test = ptr(time.Hour)
+	r.h.srv.sessionBudgets.retry = 10 * time.Millisecond
 	client, err := r.dial(t)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
 	defer client.Close()
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	r.st.failOn("SupportGrantLive", errors.New("grants unavailable"))
-	if !closedWithin(client, 3*time.Second) {
-		t.Fatal("a failed grant read left a helper's idle connection open")
+	time.Sleep(150 * time.Millisecond)
+	r.st.failOn("SupportGrantLive", nil)
+	if closedWithin(client, 300*time.Millisecond) {
+		t.Fatal("a grant read that failed once closed the helper's connection")
 	}
-
-	mem, run, principal := sshOwnedRunningRun(t)
-	st := &sshKeyReadFailureStore{sshMemStore: mem}
-	priv, pub := mustSSHKeypair(t)
-	st.putKey(types.SSHPublicKey{Fingerprint: ssh.FingerprintSHA256(pub), Principal: principal, PublicKey: string(ssh.MarshalAuthorizedKey(pub))})
-	h := newSSHTestHarness(t, st, &sshFakeRunner{})
-	owner, err := sshDial(t, h, run.ID.String(), priv)
-	if err != nil {
-		t.Fatalf("owner dial: %v", err)
-	}
-	defer owner.Close()
-	st.failed.Store(true)
-	if closedWithin(owner, 500*time.Millisecond) {
-		t.Fatal("a failed key read closed an owner's idle connection, which is unchanged behaviour")
+	_, data := wantUnconfirmedRows(t, r.h.audit, 1)
+	if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceSSH {
+		t.Fatalf("row %v, want rode_through on ssh", data[0])
 	}
 }
 
-// A failed run read on a helper's idle connection closes it on the tick (sshSupportStrict through the probe), as
-// the grant read does.
+// A helper's connection whose run is gone, or whose run_id does not parse, closes on the next tick even under an
+// hour's budget (sshReasonRunGone); a run read that fails some other way still rides.
+func TestSSHProbe_HelperOnADeletedRunClosesAtOnce(t *testing.T) {
+	setKeepaliveForTest(t, 50*time.Millisecond)
+	r := newSSHSupportRig(t, sshAllSupportDoors)
+	r.h.srv.sessionBudgets.test = ptr(time.Hour)
+	r.h.srv.sessionBudgets.retry = 10 * time.Millisecond
+	client, err := r.dial(t)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+	r.st.failRun.Store(true)
+	if closedWithin(client, 300*time.Millisecond) {
+		t.Fatal("a run read that failed closed the helper's connection under an hour's budget")
+	}
+	r.st.failRun.Store(false)
+	r.st.sshMemStore.mu.Lock()
+	delete(r.st.sshMemStore.runs, r.run.ID)
+	r.st.sshMemStore.mu.Unlock()
+	if !closedWithin(client, 3*time.Second) {
+		t.Fatal("a helper's connection to a deleted run stayed open")
+	}
+	perms := &ssh.Permissions{Extensions: map[string]string{"run_id": "not-a-uuid", sshExtOverride: "true", "key_fingerprint": r.key.Fingerprint,
+		"principal": r.key.Principal, "key_created_at": r.key.CreatedAt.Format(time.RFC3339Nano)}}
+	if got := r.h.srv.sshCurrentKey(context.Background(), perms); got != sshReasonRunGone {
+		t.Fatalf("sshCurrentKey with a run_id that does not parse = %q, want %q", got, sshReasonRunGone)
+	}
+}
+
+// A failed run read on a helper's idle connection closes it on the tick at a budget of 0, as the grant read does.
 func TestSSHSupport_FailedRunReadClosesAHelper(t *testing.T) {
 	setKeepaliveForTest(t, 50*time.Millisecond)
 	r := newSSHSupportRig(t, sshAllSupportDoors)
+	r.h.srv.sessionBudgets.test = ptr(time.Duration(0))
 	client, err := r.dial(t)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -631,28 +724,36 @@ func TestSSHSupport_PromotedHelperRowNamesTheEntry(t *testing.T) {
 	}
 }
 
-// sshSupportStrict maps a store-read failure to a closing reason for a helper only.
-func TestSSHSupportStrictValueList(t *testing.T) {
+// sshRecheckUnread: a failed store read rides the session budget, for an owner and a helper alike; a gone key, an
+// ended grant or a run that no longer exists does not, and a grant id that cannot be parsed is no grant.
+func TestSSHRecheckUnread(t *testing.T) {
 	grant := &ssh.Permissions{Extensions: map[string]string{sshExtSupportGrant: uuid.NewString()}}
+	badGrant := &ssh.Permissions{Extensions: map[string]string{sshExtSupportGrant: "not-a-uuid"}}
 	override := &ssh.Permissions{Extensions: map[string]string{sshExtOverride: "true"}}
 	owner := &ssh.Permissions{Extensions: map[string]string{}}
 	for _, tc := range []struct {
 		name   string
 		perms  *ssh.Permissions
 		reason string
-		want   string
+		want   bool
 	}{
-		{"helper, key lookup failed", grant, sshReasonKeyLookup, sshSupportUnverified},
-		{"helper, run lookup failed", grant, sshReasonRunLookup, sshSupportUnverified},
-		{"helper, cutoff lookup failed", grant, sshReasonCutoffLookup, sshSupportUnverified},
-		{"helper, key deleted", grant, "SSH key registration changed", "SSH key registration changed"},
-		{"helper, grant ended", grant, sshSupportEnded, sshSupportEnded},
-		{"helper, fine", grant, "", ""},
-		{"override, key lookup failed", override, sshReasonKeyLookup, sshReasonKeyLookup},
-		{"owner, run lookup failed", owner, sshReasonRunLookup, sshReasonRunLookup},
+		{"helper, key lookup failed", grant, sshReasonKeyLookup, true},
+		{"helper, run lookup failed", grant, sshReasonRunLookup, true},
+		{"helper, cutoff lookup failed", grant, sshReasonCutoffLookup, true},
+		{"owner, key lookup failed", owner, sshReasonKeyLookup, true},
+		{"owner, run lookup failed", owner, sshReasonRunLookup, true},
+		{"owner, cutoff lookup failed", owner, sshReasonCutoffLookup, true},
+		{"override, key lookup failed", override, sshReasonKeyLookup, true},
+		{"helper, grant could not be verified", grant, sshSupportUnverified, true},
+		{"a grant id that cannot be parsed", badGrant, sshSupportUnverified, false},
+		{"helper, key deleted", grant, "SSH key registration changed", false},
+		{"helper, grant ended", grant, sshSupportEnded, false},
+		{"helper, run gone", grant, sshReasonRunGone, false},
+		{"owner, run gone", owner, sshReasonRunGone, false},
+		{"helper, fine", grant, "", false},
 	} {
-		if got := sshSupportStrict(tc.perms, tc.reason); got != tc.want {
-			t.Errorf("%s: sshSupportStrict = %q, want %q", tc.name, got, tc.want)
+		if got := sshRecheckUnread(tc.perms, tc.reason); got != tc.want {
+			t.Errorf("%s: sshRecheckUnread = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {

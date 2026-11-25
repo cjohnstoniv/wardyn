@@ -202,7 +202,8 @@ func (s *Server) handleSetRunEndAndWait(w http.ResponseWriter, r *http.Request) 
 
 // endWaitRunRefusal answers a PATCH on a run whose state no longer lets its end
 // or wait move, and reports whether it did: a finished run; a run at or past
-// its lifetime cap, which the lease sweep is ending; a run kept by its end whose
+// its lifetime cap, which the lease sweep is ending (or, kept by its own end before the cap, holds only its files
+// until the retention deadline); a run kept by its end whose
 // files are gone, all at now, the database's time. A run waiting in a pool's queue has no end yet: it is set
 // when the run starts.
 func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun, now time.Time) bool {
@@ -211,6 +212,11 @@ func (s *Server) endWaitRunRefusal(w http.ResponseWriter, run types.AgentRun, no
 		writeErrorReason(w, http.StatusConflict, reasonRunQueued, "this run is waiting for a slot in its pool; its end is set when it starts")
 	case isTerminalRunState(run.State):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitAlreadyFinished, "run has already finished (state="+string(run.State)+")")
+	case run.LifetimeCapAt != nil && !now.Before(*run.LifetimeCapAt) && s.endedFilesKept(run, now):
+		// Its own end kept it before the cap came, so the sweep leaves it to the files grace; nothing is ending it now.
+		until, _ := s.keptUntil(run)
+		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitMaxLifetime,
+			"run is past its maximum lifetime and is kept for its files until the retention deadline, "+until.UTC().Format(time.RFC3339)+"; it cannot be revived and its end and wait cannot be changed")
 	case run.LifetimeCapAt != nil && !now.Before(*run.LifetimeCapAt):
 		writeErrorReason(w, http.StatusConflict, reasonRunEndWaitMaxLifetime, "run has reached its maximum lifetime and is being ended; its end and wait cannot be changed")
 	case run.LostReason == types.LostEnded && !s.endedFilesKept(run, now):

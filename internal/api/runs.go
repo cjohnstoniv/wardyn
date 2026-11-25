@@ -172,6 +172,11 @@ func (s *Server) refuseCreatedRun(w http.ResponseWriter, r *http.Request, runID 
 		writePoolRefusal(w, runnerpool.Refusal{Reason: runnerpool.ReasonStale, Name: pool.Name})
 		return
 	}
+	// The portal was revoked between the drive check and the insert: as every request of a revoked portal is answered.
+	if errors.Is(err, store.ErrPortalRevoked) {
+		writePortalRevoked(w)
+		return
+	}
 	if refusal := insertRoomRefusal(err, pool); refusal != nil {
 		refusal.write(s, w, r)
 		return
@@ -504,6 +509,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		BreakGlass:      breakGlassReason(ctx) != "",
 		CreatedVia:      createdVia(ctx),
 		CreatedViaActor: createdViaActor(ctx),
+		PortalDrives:    runMountsPortalDrive(f.drives),
 		// The pool binding is the run's own admission record: dispatch routes to exactly this target.
 		Placement: placed.Placement, PlacementFilled: placed.PlacementFilled, RunnerID: placed.RunnerID, EvidenceSource: placed.EvidenceSource,
 		RunnerPoolID: placed.RunnerPoolID, RunnerPoolRevision: placed.RunnerPoolRevision,

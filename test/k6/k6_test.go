@@ -193,6 +193,7 @@ func TestK6(t *testing.T) {
 	kase("finalizer-api-semantics", caseFinalizerAPI)
 	kase("normal-stop", caseNormalStop)
 	kase("pod-ip-reuse-after-stop", casePodIPReuse)
+	kase("kept-copy-out", caseKeptCopyOut)
 	kase("h1-create-window", caseH1Window)
 	kase("bind-delete-serial", caseBindDeleteSerial)
 	kase("bind-delete-overlap", caseBindDeleteOverlap)
@@ -326,6 +327,9 @@ type evDoc struct {
 	Fence *struct {
 		ProxyIP string `json:"proxy_ip"`
 	} `json:"fence"`
+	Redrawn []struct {
+		UID string `json:"uid"`
+	} `json:"redrawn"`
 	Reuse        []json.RawMessage `json:"reuse"`
 	Hold         bool              `json:"hold"`
 	ProducerGone bool              `json:"producer_gone"`

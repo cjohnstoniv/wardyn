@@ -42,7 +42,7 @@ an operator follows to turn one on and run the queue.
   - A security admin's unit-admin grant follows `WARDYN_GOVERNANCE_SECOND_HUMAN`, so a single-admin install can create unit admins.
   - A unit admin's widening, a grant of a unit admin below included, is always held, whatever the switch says. A held change to a unit itself is decided by a security admin or an admin of a unit above it ([unit admins](unit-admins.md#four-eyes)).
 - `GET /governance` gives units `kind` (`default` for Default), `mode` and `depth`, memberships `home` and `legacy` (only a person's first by precedence is a context), and `max_depth`. `ApplyGovernance` and `PlanGovernance` match memberships by unit name and never write Default or `legacy`.
-- A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`).
+- A revive, admin restart or run-end extension (`run.end.set`) is refused `409` `unit_membership_gone` once the owner holds no membership of the run's unit or one above it. The owner's own checks their memberships (audit `arm` `owner_session`). Anyone else's passes while such a unit has a membership the owner could hold: their sub, user type, `all` or any group, never an email row (`arm` `row_can_match`). A run an issuer portal started for its own person also passes while that portal is registered and its pin covers the run's unit, unless the run carries a strict workspace or an organisation component with a unit pin, or one that has since been deleted ([where a portal's person runs](api-tokens.md#where-a-portals-person-runs)).
 - The Default unit is read-only (`PUT` and `DELETE` are `409` `governance_unit_default_readonly`; its walls are `WARDYN_DEFAULT_POLICY`) and memberless: adding or moving a membership into it is `409` `governance_membership_default_unit`.
 - `PUT /governance/memberships/{id}` `{"unit_id"}` moves a membership, keeping its id, `priority`, `home` and `legacy` (audit `governance.membership.write`, with `from_unit_id`). An unknown unit is `404` `governance_unit_not_found`; one the subject is in, `409` `governance_membership_invalid`.
 - `POST /governance/memberships/{id}/promote` makes a legacy membership a context (already one: `409` `governance_membership_invalid`); audit `governance.membership.promote`. Both follow the switch below, held as ops `move`/`promote`.
@@ -68,7 +68,8 @@ an operator follows to turn one on and run the queue.
   - the target's current row and the proposed one (every ceiling passes the same read-redaction as a read of it) plus the changed field paths;
   - for an assignment, `diff.after` embeds the profile it points at as it stood at the proposal.
 - A second human approves it with `POST /governance/changes/{id}/approve`, or any authorised human rejects it with `POST /governance/changes/{id}/reject` (an optional `reason`, at most 512 characters, no control characters, recorded on the change and its audit row only).
-- `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default) and `GET /governance/changes/{id}` reads one.
+- `GET /governance/changes` lists the queue (`?state=` narrows it; pending by default), `GET /governance/changes/{id}` reads one, and `GET /governance/changes/{id}/impact` replays a pending one through the dry run: the assignments whose walls change (each a person, a group or Everyone) and the live runs it reaches, or `not_computed` with `kind` (also a membership added, removed or promoted, or a unit deleted), `stale` or `refused`.
+- `diff.review` says why a change was held: `verdict` is `widens`, `narrows_held` or `not_checked`; `widens` names each field that widens and its entries; `held_because` names why a change that widens nothing is held; `risk` grades a profile or move before and after. A request has none.
 - `GET /governance/changes?approver=security` lists only the changes a security admin alone may decide: no unit admin governs every unit they touch.
 - The proposer may write why the change is wanted, and a ticket reference, with `PUT /governance/changes/{id}/note` (`{"reason","ticket"}`, both optional).
   - Only the proposer may, and only while the change is pending. A second write replaces the first.
@@ -107,6 +108,7 @@ an operator follows to turn one on and run the queue.
     - A stale `If-Match` is refused `412` at proposal as for a direct write; the approval then compares the map's ETag and is serialized by its transaction, not the in-process lock a direct write takes.
   - *Availability* (`PUT /permissions/availability/{kind}/*`): held whenever the stored restricted bit changes, in either direction.
     - Staleness covers the bit and the allow rows naming the value, so a restriction accepted at proposal is applied only while its list is what it was.
+    - A create that restricts its own new value is written directly, never held: an organisation component's create, and `POST /policies` or `PUT /model-providers` with `restricted=true`. Nobody could use the value before, so it narrows nothing.
   - *User-type priority* (`PUT /user-types/{id}`): held when the priority changes, whole (a name and a priority edit together are one held change).
     - A name or description edit alone applies directly.
   - *Role mapping* (`POST`/`DELETE /access/mappings`): the posture-flip acknowledgement is judged at proposal and carried in the payload with the before and after it acknowledged, and judged again when the change is applied.
@@ -185,6 +187,7 @@ Then set `WARDYN_GOVERNANCE_SECOND_HUMAN` (and, if `72h` is wrong, `WARDYN_GOVER
 | Remote-hosted or organization runner removed from an organization pool | the pool carries a use policy | **super admin only** |
 | Runner trust class change (`PUT /runners/{id}/trust`) | the class changes | security admin or super admin |
 | Run node record (`POST /runs/{id}/node-record`) | the held run shows a reused node name or no causal association, or four-eyes is on | security admin or super admin |
+| The assistant's settings (`PUT /assistant/settings`, see [admin-only-writes.md](admin-only-writes.md)) | the change lets the assistant do more, whatever the switch says: a purpose or the run-history switch turned on, a provider marked, a purpose or a model added to a mark, a model list emptied, or a never-sent kind removed. A change that only turns things off applies at once | **super admin only** |
 
 Exempt, so applied directly:
 
@@ -249,7 +252,7 @@ wardyn governance set governance.json --prune    # the same apply, once the plan
 - That row's actor is the approver and it carries `change_id` and `proposed_by`: two named humans for one change.
 - Also look for:
   - `governance.change.bypass`: the admin token wrote or approved. Alert on it.
-  - `governance.change.approve` with outcome `failure`: the approval did not apply (`error` is `stale`, `not_pending` or `error`).
+  - `governance.change.approve` with outcome `failure`: not applied (`error` is `stale`, `not_pending`, `refused` (unit removed) or `error`).
   - `authz.denied` with reason `second_human_required` or `admin_surface` and target `governance.change`: a self-approval, or a security admin at a role-mapping change.
   - A target row with **no** `propose`/`approve` pair beside it, switch on: a write that did not come through the API. See the threat model's "database is not four-eyed" residual.
 

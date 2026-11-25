@@ -48,7 +48,7 @@ func TestPass_AFailedCopyRewrittenInPlaceToItsLengthIsKept(t *testing.T) {
 			t.Errorf("aside %q, laptop %s %q (%v), refusal %q: want the rewritten copy kept at the aside the refusal names", got, name, atName, nameErr, reason)
 		}
 	case len(temps) == 0:
-		if nameErr != nil || string(atName) != "edited in place!" || !strings.Contains(reason, "its partial copy is left at "+name) {
+		if nameErr != nil || string(atName) != "edited in place!" || !strings.Contains(reason, "the file is kept at "+name) {
 			t.Errorf("laptop %s %q (%v), refusal %q: want the rewritten copy kept at its name and the refusal naming it", name, atName, nameErr, reason)
 		}
 	default:
@@ -67,7 +67,7 @@ func TestPass_AFailedEmptyCopyIsNamedNotRemoved(t *testing.T) {
 	reason := refusedFor(pass(t, sy), "new.txt")
 	temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
 	if got := getSyncFile(t, filepath.Join(root, "new.txt")); got != "" || len(temps) != 0 ||
-		!strings.Contains(reason, "its partial copy is left at new.txt") {
+		!strings.Contains(reason, "the file is kept at new.txt") {
 		t.Errorf("laptop new.txt = %q, temps %v, refusal %q: want the empty copy kept at its name, no temp and the refusal naming it", got, temps, reason)
 	}
 }
@@ -118,7 +118,7 @@ func TestPass_AFailedCopyBeforeItsNumberSettlesIsNamed(t *testing.T) {
 	idSettlesOnSync(t, name, nil)
 	failCopyStamp(t, name)
 	reason := refusedFor(pass(t, sy), name)
-	if _, err := os.Lstat(filepath.Join(root, name)); err != nil || !strings.Contains(reason, "its partial copy is left at "+name) {
+	if _, err := os.Lstat(filepath.Join(root, name)); err != nil || !strings.Contains(reason, "the file is kept at "+name) {
 		t.Errorf("laptop %s: %v, refusal %q: want the partial copy kept and named", name, err, reason)
 	}
 }
@@ -131,7 +131,7 @@ func TestPass_AFailedCopyBeforeItsSyncLeavesNoUnnamedPartial(t *testing.T) {
 	reason := refusedFor(pass(t, sy), name)
 	temps, _ := filepath.Glob(filepath.Join(root, ".wardyn-sync-*"))
 	_, err := os.Lstat(filepath.Join(root, name))
-	if reason == "" || len(temps) != 0 || (!errors.Is(err, os.ErrNotExist) && !strings.Contains(reason, "its partial copy is left at "+name)) {
+	if reason == "" || len(temps) != 0 || (!errors.Is(err, os.ErrNotExist) && !strings.Contains(reason, "the file is kept at "+name)) {
 		t.Errorf("laptop %s: %v, temps %v, refusal %q: want the partial copy removed, or kept and named, and no temp", name, err, temps, reason)
 	}
 }
@@ -169,7 +169,7 @@ func TestPass_AnEditorsBackupRenameWhereTheCopysNumberChangedIsNamed(t *testing.
 	}
 	reason := refusedFor(pass(t, sy), name)
 	if got, backup := getSyncFile(t, filepath.Join(root, name)), getSyncFile(t, filepath.Join(root, name+"~")); got != "editor save" ||
-		backup != "from the sandbox" || !strings.Contains(reason, "its partial copy is left at "+name) {
+		backup != "from the sandbox" || !strings.Contains(reason, "the file is kept at "+name) {
 		t.Errorf("laptop %s = %q, backup %q, refusal %q: want both kept and the name named, since the number did not hold", name, got, backup, reason)
 	}
 }

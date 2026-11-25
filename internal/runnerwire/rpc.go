@@ -97,8 +97,20 @@ const (
 	MethodNarrowProxy = "narrow_proxy"
 )
 
-// KeptMachineOpDelete is kept_machine's one op.
-const KeptMachineOpDelete = "delete"
+// kept_machine's ops. KeptMachineOpDelete removes a machine whatever its deadline says: a person's or an
+// operator's decision. KeptMachineOpDeleteExpired is the organisation's expiry-driven delete: under the machine's
+// lock the Mac reads its own record and removes the folder only if the deadline there has passed with no
+// session holding the machine, else it refuses and removes nothing. A runner that predates it refuses the
+// op as unknown, which is why the organisation sends it only to a runner whose caps carry
+// MacVMCaps.KeptConditionalDelete.
+const (
+	KeptMachineOpDelete        = "delete"
+	KeptMachineOpDeleteExpired = "delete_expired"
+)
+
+// KeptMachineByExpiry is the By of a delete the organisation starts because the machine's deadline has
+// passed; it is sent with KeptMachineOpDeleteExpired. Every other By is a person's or an operator's decision.
+const KeptMachineByExpiry = "expiry"
 
 // KeptMachineArgs is kept_machine's input. By says who asked, for the runner's log: the owner, an admin,
 // erasure, expiry or a revoked runner.

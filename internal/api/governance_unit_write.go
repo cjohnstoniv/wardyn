@@ -298,20 +298,22 @@ func (s *Server) writeUnit(ctx context.Context, id uuid.UUID, build func(store.Q
 // admin's write, whose transaction q is handed in, no rename that changes whose legacy row wins
 // (unitRenameShiftQ, H3), since the unit it hands a person may be outside their units. A security
 // caller's write (q nil) is judged by the exemption alone. A unit admin's exemption reads the envelopes
-// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one.
+// (envelopeExempt) on q, the connection this goroutine already holds, not on a second one. A write it
+// holds comes with its review (unitWriteVerdict), a rename's shift named as one.
 func (s *Server) unitWriteApplies(ctx context.Context, q store.Querier, all []types.GovernanceUnit, assignments []types.GovernanceMembership,
-	p types.GovernanceUnit, res *ResolvedUnit) (bool, error) {
+	p types.GovernanceUnit, res *ResolvedUnit) (bool, *changeReview, error) {
 	if q != nil {
 		ctx = withUnitScopeTx(ctx, q)
 	}
-	if !s.unitWriteExempt(withGovernanceMemberships(ctx, assignments), all, p, res) {
-		return false, nil
-	}
-	if q == nil {
-		return true, nil
+	exempt, review := s.unitWriteVerdict(withGovernanceMemberships(ctx, assignments), all, p, res)
+	if !exempt || q == nil {
+		return exempt, review, nil
 	}
 	shift, err := unitRenameShiftQ(ctx, q, all, p.ID, p.Name)
-	return len(shift.activates)+len(shift.vacates) == 0, err
+	if applies := len(shift.activates)+len(shift.vacates) == 0; applies || err != nil {
+		return applies, nil, err
+	}
+	return false, s.unitWriteReview(withGovernanceMemberships(ctx, assignments), all, p, res, heldRename), nil
 }
 
 // writeGovernanceUnit is the shared body of POST and PUT: build the row under the graph lock,
@@ -335,12 +337,7 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceOverlayInvalid, msg)
 		return
 	}
-	// required_image_signers names must be signers the site defines: on the profile's own limits and on its overlay.
-	msg = s.requiredImageSignersRefusal(r.Context(), "limits.required_image_signers", req.Limits.RequiredImageSigners)
-	if ol := req.comp.overlayLimits; msg == "" && ol != nil && ol.RequiredImageSigners != nil {
-		msg = s.requiredImageSignersRefusal(r.Context(), "overlay_limits.required_image_signers", *ol.RequiredImageSigners)
-	}
-	if msg != "" {
+	if msg := s.unitRequiredSignersRefusal(r.Context(), req); msg != "" {
 		writeErrorReason(w, http.StatusBadRequest, reasonGovernanceUnitRequestInvalid, msg)
 		return
 	}
@@ -389,6 +386,9 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			heldReq = kept
 			p, res, keep, err := s.buildGovernanceUnit(createdBy, s.isOperator(r.Context()), id, kept, all, b, limit)
 			err = s.checkDeciderLockWrite(r.Context(), q, err, p, all)
+			if err == nil {
+				err = ruleUnitUIAppCallers(r.Context(), q, p)
+			}
 			effective = res
 			// A unit admin's new unit is empty, so it binds nobody and applies directly (DESIGN-TREE §5.2).
 			newUnit := !slices.ContainsFunc(all, func(x types.GovernanceUnit) bool { return x.ID == id })
@@ -399,9 +399,9 @@ func (s *Server) writeGovernanceUnit(w http.ResponseWriter, r *http.Request, id 
 			if !unitAdmin {
 				appliesQ = nil
 			}
-			applies, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
+			applies, review, err := s.unitWriteApplies(r.Context(), appliesQ, all, assignments, p, res)
 			if err == nil && !applies {
-				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep}
+				held = &heldUnitWrite{all: all, row: p, res: res, keep: keep, review: review}
 				return p, errHoldForApproval
 			}
 			return p, err

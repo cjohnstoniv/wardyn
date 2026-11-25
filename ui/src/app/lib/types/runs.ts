@@ -42,6 +42,9 @@ export interface UIApp {
   // Callable from outside the run through the gateway, by the callers listed.
   inbound?: boolean;
   callers?: string[];
+  // "desktop": the app serves a desktop, so the gateway filters its clipboard and puts it behind the desktop door,
+  // whatever its name (Go's UIAppKindDesktop). The "novnc" app is a desktop without it.
+  kind?: "desktop";
 }
 
 // Canonical weakest -> strongest ladder — the single place the Fence < Wall <
@@ -585,6 +588,7 @@ export interface RunDetail extends AgentRun {
   macos_disk?: RunMacOSDisk;
   wall_preset?: RunWallPreset; // the preset the run was launched with, never its spec (GET /runs/{id} only)
   machine?: RunMachine; // the kept machine the run keeps or resumed (GET /runs/{id} only); absent for a run that keeps none
+  kept_copy_out?: boolean; // whether this caller may copy work out of this kept run now (GET /runs/{id} only)
 }
 
 // GET /runs/{id}'s macos (runMacOSView, internal/api/run_macos_view.go): whether the Mac's Screen Sharing
@@ -712,7 +716,11 @@ export interface RunPolicyView {
 
 // internal/api/run_host_marks.go hostMarks: the allowed_domains entries marked Inspected.
 export interface RunPolicyHostMarks {
+  // Entries whose every destination the proxy opens.
   inspected: string[];
+  // An entry the proxy opens only some destinations of (a wildcard, or a host with no port opened on one
+  // port), with those destinations as terminated lists them. The rest it allows passes through unread.
+  partial?: Record<string, string[]>;
   // Every host the proxy terminates: "host" on any port, "host:port" scoped to one.
   terminated: string[];
   // The terminated hosts the proxy opens on a port no allowed_domains entry names (under allow-all,
