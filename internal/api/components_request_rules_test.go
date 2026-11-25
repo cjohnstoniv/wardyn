@@ -141,7 +141,7 @@ func saveRoutes() []saveRoute {
 	}
 }
 
-// TestRequestRulesSaveDoors (I-8, save half): at each save route, while the switch is off, new or changed rules are
+// TestRequestRulesSaveDoors: the switch at the save routes. At each save route, while the switch is off, new or changed rules are
 // refused with component_request_rules_off, and only the stored rules sent back (also spelled with empty methods and
 // paths lists), or no rules, are accepted. An unreadable site config refuses a change and lets an unchanged save
 // through. With the switch on, rules save.
@@ -210,7 +210,7 @@ func TestRequestRulesSaveDoors(t *testing.T) {
 	}
 }
 
-// TestRequestRulesCreateDoors (I-8, create half; I-13): while the switch is off, a component that carries rules is
+// TestRequestRulesCreateDoors: the switch at the run doors, for every source a definition comes from. While the switch is off, a component that carries rules is
 // refused at every run door, whichever source it comes from (inline, the person's saved row, the organisation's row,
 // and so a template's run, which arrives as a create request), never attached without them. A component tool
 // (tools[]) is never attached at this release at all. With the switch on, each source is admitted.
@@ -258,11 +258,28 @@ func TestRequestRulesCreateDoors(t *testing.T) {
 		t.Run(src.name+"/on", func(t *testing.T) {
 			f := newComponentFixture(t)
 			requestRulesOn(t, &f.st.siteConfig)
-			for _, door := range componentDoors[1:] {
-				if w := f.ask(t, door, componentBody(src.ref(f))); w.Code >= 300 {
+			for _, door := range componentDoors {
+				w := f.ask(t, door, componentBody(src.ref(f)))
+				if w.Code >= 300 {
 					t.Fatalf("%s = %d %s, want success", door, w.Code, w.Body.String())
 				}
 				f.st.components = nil // the next door's ref stores its row again
+				if door != componentDoors[0] {
+					continue
+				}
+				// Launch attaches the component with its rules: the run's snapshot holds them.
+				var created struct {
+					ID uuid.UUID `json:"id"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+					t.Fatal(err)
+				}
+				f.st.cmu.Lock()
+				snap := f.st.snapshots[created.ID]
+				f.st.cmu.Unlock()
+				if len(snap) != 1 || !reflect.DeepEqual(snap[0].Definition.RequestRules, rulesDefinition(rulesHost).RequestRules) {
+					t.Errorf("launch snapshot = %+v, want the one component with its rules", snap)
+				}
 			}
 		})
 	}
@@ -314,7 +331,7 @@ func rulesLimitSetup(t *testing.T, f *componentFixture) map[string]any {
 	return componentBody(refs...)
 }
 
-// TestRequestRulesSetLimit (I-9): a run whose host rule sets, its policy's (the ceiling's among them) with one per
+// TestRequestRulesSetLimit: the host rule set limit at run create. A run whose host rule sets, its policy's (the ceiling's among them) with one per
 // component that carries rules, would number more than 16 is refused before anything is expanded, audited at launch,
 // and never trimmed; at 16 it is admitted.
 func TestRequestRulesSetLimit(t *testing.T) {
@@ -424,7 +441,7 @@ func fillEvery(v reflect.Value, depth int) {
 	}
 }
 
-// TestRequestRulesSetLimitCountsSealLayers (I-9): the set count is made at create because the seal adds no host rule
+// TestRequestRulesSetLimitCountsSealLayers: no seal layer adds a host rule set, so a sealed run never meets past the limit. The set count is made at create because the seal adds no host rule
 // set. Each seal layer is built the way the seal builds it, from a document with every field set, and carries no host
 // rules; and the seal over a run that already holds 16 sets leaves its sets and its allowlist as they were. A layer
 // that gains host rules reddens this test, and the count must then cover the seal.
@@ -561,7 +578,7 @@ func TestRequestRulesSurviveRevive(t *testing.T) {
 	}
 }
 
-// TestRequestRulesNeverCarrySecretValues (I-11): a component with an operator's secret, a member's own secret and
+// TestRequestRulesNeverCarrySecretValues: no secret value enters a refusal or an audit row. A component with an operator's secret, a member's own secret and
 // rules is refused at save, at each create door and at the limit, and neither secret value is in any answer or any
 // audit row written for it.
 func TestRequestRulesNeverCarrySecretValues(t *testing.T) {

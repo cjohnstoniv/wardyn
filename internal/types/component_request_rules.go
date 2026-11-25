@@ -3,7 +3,11 @@
 
 package types
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // validateRequestRules is request_rules' shape: one host rule set in the host-rule grammar (at most
 // MaxHostRulesPerSet rules, each in normal form), and every rule on a host the definition itself names
@@ -21,6 +25,10 @@ func validateRequestRules(d ComponentDefinition) error {
 		if err := validHostRule(r); err != nil {
 			return fmt.Errorf("request_rules[%d].%w", i, err)
 		}
+	}
+	// The one set also meets every per-set check of host_rules, so a check added there reaches component saves too.
+	if err := ValidateHostRuleSets([]HostRuleSet{{Rules: d.RequestRules}}); err != nil {
+		return errors.New(strings.Replace(err.Error(), "host_rules[0].rules", "request_rules", 1))
 	}
 	exact := map[string]bool{}
 	for _, h := range d.Hosts {
