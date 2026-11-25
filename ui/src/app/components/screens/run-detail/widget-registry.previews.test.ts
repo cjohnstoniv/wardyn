@@ -119,6 +119,12 @@ describe("the Preview URLs tile's gate", () => {
     expect(available(ctx({ principal: "sam@example.com", securityOperator: true, run: service }))).toBe(true);
   });
 
+  it("is drawn for the admin token on a run it created only by the security admin arm", () => {
+    const own = { created_by: "admin-token", operator_owned: true };
+    expect(available(ctx({ principal: "admin-token", operator: true, securityOperator: true, run: own }))).toBe(true);
+    expect(available(ctx({ principal: "admin-token", operator: true, securityOperator: false, run: own }))).toBe(false);
+  });
+
   it("is not drawn while who is looking is not known, for the run's person or a security admin", () => {
     expect(available(ctx({ operatorResolved: false }))).toBe(false);
     expect(available(ctx({ principal: "carol@example.com", securityOperator: true, operatorResolved: false }))).toBe(false);

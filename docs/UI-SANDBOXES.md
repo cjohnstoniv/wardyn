@@ -543,7 +543,7 @@ A preview opens a port a run is already listening on, in its own browser tab, wi
 
 #### Who can open one
 
-- A private preview admits whoever the run's entry rule admits at the ticket route: its creator and, on a service identity's run, the sponsor of that identity. A role alone never admits anyone, a super admin included.
+- A private preview admits whoever the run's entry rule admits at the ticket route: its creator. A role alone never admits anyone, a super admin included.
 - An Organisation preview also admits any other person signed in to the console, a security admin included. The ticket records `caller` as `owner` or `preview:org` in `preview.open`.
 - A person a preview does not admit, a preview that has ended and a missing run all get the foreign-run `404` `run_not_found` from the ticket route.
 - A preview on the gateway's own address refuses a visitor it does not admit with `403` `not_authorized`, and one that has ended or been revoked with `403` `revoked`.

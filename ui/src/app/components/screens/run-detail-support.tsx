@@ -42,7 +42,7 @@ const RESERVED_RUN_TASKS: readonly string[] = [HARNESS_LOGIN_TASK, "workspace re
 
 // The principal of the deployment's admin token (adminTokenPrincipal, internal/api/runs_policy.go): no person,
 // so the server refuses its request (supportPerson, internal/api/support_entry.go).
-const ADMIN_TOKEN_PRINCIPAL = "admin-token";
+export const ADMIN_TOKEN_PRINCIPAL = "admin-token";
 
 const closedKey = (grant: string) => `wardyn.support.closed.${grant}`;
 const wasClosed = (grant: string): boolean => {

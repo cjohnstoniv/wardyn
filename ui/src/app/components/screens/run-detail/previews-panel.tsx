@@ -5,7 +5,7 @@
 
 // The run page's Preview URLs tile (internal/api/run_previews.go): the previews of the run's ports, a form that
 // creates one, and a one-click revoke. A preview opens in its own tab through a single-use ticket, the way a UI app
-// does. The tile shows for the run's person or one who may enter it, and for a security admin, who lists and revokes.
+// does. The tile shows for the run's creator, who creates and opens, and for a security admin, who lists and revokes.
 // A background run has no web application gateway, so there the tile says that and nothing else.
 //
 // Every refusal under a form or an Open is the server's sentence, shown as it came. Only a 404 with reason
@@ -18,6 +18,7 @@ import { previews as previewsApi } from "../../../lib/api/previews";
 import { basePath } from "../../../lib/base-path";
 import { relativeTime } from "../../../lib/format";
 import { isBackgroundRun, isServiceRun } from "../../../lib/run-entry";
+import { ADMIN_TOKEN_PRINCIPAL } from "../run-detail-support";
 import { RUN_MODE_REFUSAL } from "../../../lib/run-mode-refusals";
 import { PREVIEW_ENDED_REASON, type PreviewVisibility, type RunPreview } from "../../../lib/types/previews";
 import { useCopyToClipboard } from "../../../lib/use-copy-to-clipboard";
@@ -58,16 +59,20 @@ export function openFailureText(e: unknown): string {
 }
 
 /**
- * Who creates previews: the run's own person, never a service identity's run and never before /me has answered (the
- * principal is a placeholder until then). The server's create asks the entry rule and then refuses a service identity,
- * so a sponsor and an admin on a run no person owns are refused there and get no form here.
+ * Who is offered the form: the run's own person, never a service identity's run, never the admin token and never
+ * before /me has answered (the principal is a placeholder until then).
+ * - The server's create also admits a super admin on a run no person owns (run_entry.go mayEnterRun). The form is not
+ *   offered to them: the console route cannot open a private row for them, so a preview they made would be one they
+ *   cannot open.
+ * - A service identity's run is refused for its sponsor (404) and for a super admin (403 run_owner_only).
+ * - The admin token is no console person: the server refuses its create with 403 preview_console_only.
  */
 export function isPreviewCreator(
   run: { created_by?: string },
   principal: string | null | undefined,
   resolved: boolean,
 ): boolean {
-  return resolved && !!principal && !isServiceRun(run) && run.created_by === principal;
+  return resolved && !!principal && principal !== ADMIN_TOKEN_PRINCIPAL && !isServiceRun(run) && run.created_by === principal;
 }
 
 const VisibilityChip = ({ visibility }: { visibility: PreviewVisibility }) => (

@@ -358,6 +358,18 @@ describe("PreviewsPanel: who creates", () => {
     expect(within(p).queryByRole("button", { name: T.CREATE })).toBeNull();
   });
 
+  it("gives the admin token no form on a run it created, and lists and revokes as a security admin", async () => {
+    listMock.mockResolvedValue([row(3000, "private"), row(8080, "org")]);
+    show({ created_by: "admin-token" }, { principal: "admin-token", operator: true, security: true });
+    const p = await panel();
+    expect(await within(p).findByTestId("preview-3000")).toBeInTheDocument();
+    expect(within(p).getByText(T.ADMIN_INTRO)).toBeInTheDocument();
+    expect(within(p).queryByRole("button", { name: T.NEW })).toBeNull();
+    expect(within(p).queryByRole("button", { name: T.CREATE })).toBeNull();
+    expect(within(within(p).getByTestId("preview-3000")).queryByRole("button", { name: T.OPEN })).toBeNull();
+    expect(within(within(p).getByTestId("preview-8080")).getByRole("button", { name: T.OPEN })).toBeInTheDocument();
+  });
+
   it("gives no form while /me has not answered, even when the principal reads as the run's", async () => {
     show({}, { resolved: false });
     const p = await panel();
