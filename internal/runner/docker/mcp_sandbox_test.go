@@ -876,8 +876,8 @@ func TestMCPRelayAddrByRank(t *testing.T) {
 	}
 }
 
-// TestAgentProxyPinnedOnRelayLink: the agent's proxy joins the relay link at relayAgentProxyHost.
-func TestAgentProxyPinnedOnRelayLink(t *testing.T) {
+// TestAgentProxyPinnedOnMCPRelayLink: the agent's proxy joins the relay link at relayAgentProxyHost.
+func TestAgentProxyPinnedOnMCPRelayLink(t *testing.T) {
 	f, d := newMCPRig(t)
 	id := testSpec().RunID
 	createMCP(t, d, 0)
