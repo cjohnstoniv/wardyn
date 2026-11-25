@@ -1174,20 +1174,22 @@ A `host_rules` rule with `effect: hold` makes the proxy hold a matching request 
 - A run's terms are fixed when it is dispatched. A later change to the site or the policy does not change a running run.
 - A member's policy under a ceiling that sets `outage` never gets a longer allowance than the ceiling's, and keeps the
   ceiling's `strict` and `end`.
-- A run's network pauses at its allowance, unless the terms are strict, and comes back by itself within about two
-  minutes of Wardyn checking the run again.
-- A strict run's network stops at its allowance, and the run is ended when its token lapses, about 65 minutes after its
-  last renew, or when its allowance runs out if that is later.
-- On a runner, a strict run that is ended is marked lost, its proxy is stopped and its sandbox is ended on the runner. A
-  strict run lost to an outage cannot be revived once its allowance has run out.
-- A strict run whose allowance runs out is ended, or on a runner marked lost, stopped and ended there, whether or not
-  Wardyn recorded an outage, and with every identity provider, SPIRE included. So is an unattended server run under
-  `unattended: end` after an outage.
+- A run's network pauses at its allowance, unless the terms are strict, and comes back by itself within about two and
+  a half minutes of Wardyn checking the run again.
+- A strict run's network stops at its allowance. If its allowance has run out when its token lapses, about 65 minutes
+  after its last renew, the run is ended then. That holds whether or not Wardyn recorded an outage, and with every
+  identity provider, SPIRE included.
+- A strict run with a longer allowance is held while a recorded outage covers it, and ended when its allowance runs
+  out. With no recorded outage, or under SPIRE, it is marked lost when its token lapses, or torn down where it cannot
+  be kept, as any run is.
+- On a runner, a strict run that is ended is marked lost, its proxy is stopped and its sandbox is ended there. A strict
+  run lost to an outage cannot be revived once its allowance has run out.
+- An unattended server run under `unattended: end` is ended after an outage, with every identity provider.
 - A token is recovered only if it expired less than 24 hours ago. A run already lost to an outage comes back only when
   its owner revives it.
 - Until a run's proxy has reported that it can pause, which it does once it starts, the run is treated as before: its
-  network stops when its token lapses. On a runner this lasts until the run's first renew lease, 10 to 15 minutes after
-  its start.
+  network stops when its token lapses. On a runner this lasts until the run's first renew lease, about 9 to 15 minutes
+  after its start.
 - A runner agent older than this release ignores the lease's pause flag and stops a pausing proxy at the usual 65
   minutes, so upgrade runner agents with the server.
 - Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail
