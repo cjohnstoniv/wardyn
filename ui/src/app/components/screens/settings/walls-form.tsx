@@ -31,12 +31,24 @@ export const DIRECTIONS: { id: Direction; label: string }[] = [
   { id: "upload", label: T.UPLOAD },
   { id: "download", label: T.DOWNLOAD },
 ];
-const UNLISTED: { value: FirstUseMode | ""; label: string }[] = [
-  { value: "", label: T.UNLISTED_ORG },
+const unlistedOptions = (policyChoice: string): { value: FirstUseMode | ""; label: string }[] => [
+  { value: "", label: policyChoice },
   { value: "always_deny", label: T.UNLISTED_BLOCK },
   { value: "deny_with_review", label: T.UNLISTED_ASK },
   { value: "wait_for_review", label: T.UNLISTED_HOLD },
 ];
+
+/**
+ * A caller that speaks for the organisation, not for one person (the agent rules editor), says four of the form's
+ * sentences in its own words and may leave out the two forge capability lists. Left unset, the form is the person's.
+ */
+export interface WallsFormVoice {
+  sitesAny?: string;
+  sitesOnlyHint?: string;
+  unlistedPolicy?: string;
+  toolsNone?: string;
+  hideCapabilities?: boolean;
+}
 
 export type IdleUnit = "seconds" | "minutes";
 export type WallToolEffect = "hold" | "approve_each" | "deny";
@@ -361,7 +373,7 @@ const RULE_ROW = "grid grid-cols-[minmax(0,1fr)_9rem_2rem] items-center gap-2 ma
 const EFFECT_TONE: Record<WallToolEffect, string> = { hold: "text-warning", approve_each: "text-warning", deny: "text-danger" };
 
 /** Tool rules: a tool and what to do with it: hold, approve each call, or deny. No default row: `*` is a rule like any other. */
-function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems> }) {
+function ToolRules({ form, edit, serverError, problem, noneText = T.TOOLS_NONE }: { form: Form; edit: (patch: Partial<Form>) => void; serverError?: string; problem: ReturnType<typeof formProblems>; noneText?: string }) {
   const uid = React.useId();
   const patch = (id: number, p: Partial<ToolRow>) => edit({ tools: form.tools.map((r) => (r.id === id ? { ...r, ...p } : r)) });
   return (
@@ -370,7 +382,7 @@ function ToolRules({ form, edit, serverError, problem }: { form: Form; edit: (pa
       {serverError && <SectionError id={`${uid}-server`} text={serverError} />}
       <p className="text-xs text-muted-foreground">{T.TOOLS_HELP}</p>
       {form.tools.length === 0 ? (
-        <p className="text-xs italic text-muted-foreground">{T.TOOLS_NONE}</p>
+        <p className="text-xs italic text-muted-foreground">{noneText}</p>
       ) : (
         <div className="flex flex-col">
           <div className={cn(RULE_ROW, "border-b border-border pb-1.5 text-xs font-semibold uppercase text-muted-foreground max-[399px]:hidden")}>
@@ -566,7 +578,7 @@ function IdleStop({ form, edit, serverError, problem }: { form: Form; edit: (pat
  * The controlled form. `onEdit` merges a patch into the caller's Form. `errors` puts a server sentence under the
  * section it names; the checks the form can make itself (formProblems) show under theirs and keep Save off.
  */
-export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: (patch: Partial<Form>) => void; errors?: Partial<Record<FormSection, string>> }) {
+export function WallsForm({ form, onEdit: edit, errors, voice }: { form: Form; onEdit: (patch: Partial<Form>) => void; errors?: Partial<Record<FormSection, string>>; voice?: WallsFormVoice }) {
   const problem = formProblems(form);
   // Two forms can be on the page at once (Your walls and a preset dialog): the error ids are this form's own.
   const uid = React.useId();
@@ -598,7 +610,7 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
         >
           <label className="flex items-center gap-2 text-sm">
             <RadioGroupItem value="any" />
-            {T.SITES_ANY}
+            {voice?.sitesAny ?? T.SITES_ANY}
           </label>
           <label className="flex items-center gap-2 text-sm">
             <RadioGroupItem value="only" />
@@ -608,7 +620,7 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
         {form.only && (
           <div className="flex flex-col gap-1.5 pl-6">
             <SiteList errorId={errors?.sites ? eid("sites") : undefined} label={T.SITES_ONLY} sites={form.allowed} text={form.allowedText} onSites={(allowed) => edit({ allowed })} onText={(allowedText) => edit({ allowedText })} />
-            <p className="text-xs text-muted-foreground">{T.SITES_ONLY_HINT}</p>
+            <p className="text-xs text-muted-foreground">{voice?.sitesOnlyHint ?? T.SITES_ONLY_HINT}</p>
           </div>
         )}
       </div>
@@ -625,7 +637,7 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
           <Segmented<FirstUseMode | "">
             stackOnPhone
             value={form.firstUse ?? ""}
-            options={UNLISTED}
+            options={unlistedOptions(voice?.unlistedPolicy ?? T.UNLISTED_ORG)}
             onChange={(v) => {
               setAutoFirstUse(false);
               edit({ firstUse: v || undefined });
@@ -691,31 +703,35 @@ export function WallsForm({ form, onEdit: edit, errors }: { form: Form; onEdit: 
           )}
         </div>
       </div>
-      <CapabilityList
-        id="walls-github"
-        title={T.GITHUB_CAPS}
-        forge="GitHub"
-        pushName={GITHUB_PUSH_NAME}
-        groups={GITHUB_GROUPS}
-        only={form.githubOnly}
-        picked={form.github}
-        onChange={(githubOnly, github) => edit({ githubOnly, github })}
-        serverError={errors?.github}
-        problem={problem.github}
-      />
-      <CapabilityList
-        id="walls-ado"
-        title={T.ADO_CAPS}
-        forge="Azure DevOps"
-        pushName={adoCapName("code_write")}
-        groups={ADO_GROUPS}
-        only={form.adoOnly}
-        picked={form.ado}
-        onChange={(adoOnly, ado) => edit({ adoOnly, ado })}
-        serverError={errors?.ado}
-        problem={problem.ado}
-      />
-      <ToolRules form={form} edit={edit} serverError={errors?.tools} problem={problem} />
+      {!voice?.hideCapabilities && (
+        <>
+        <CapabilityList
+          id="walls-github"
+          title={T.GITHUB_CAPS}
+          forge="GitHub"
+          pushName={GITHUB_PUSH_NAME}
+          groups={GITHUB_GROUPS}
+          only={form.githubOnly}
+          picked={form.github}
+          onChange={(githubOnly, github) => edit({ githubOnly, github })}
+          serverError={errors?.github}
+          problem={problem.github}
+        />
+        <CapabilityList
+          id="walls-ado"
+          title={T.ADO_CAPS}
+          forge="Azure DevOps"
+          pushName={adoCapName("code_write")}
+          groups={ADO_GROUPS}
+          only={form.adoOnly}
+          picked={form.ado}
+          onChange={(adoOnly, ado) => edit({ adoOnly, ado })}
+          serverError={errors?.ado}
+          problem={problem.ado}
+        />
+        </>
+      )}
+      <ToolRules form={form} edit={edit} serverError={errors?.tools} problem={problem} noneText={voice?.toolsNone} />
       <PushRules form={form} edit={edit} serverError={errors?.pushes} problem={problem} />
       <RecordingFloor form={form} edit={edit} serverError={errors?.recording} />
       <IdleStop form={form} edit={edit} serverError={errors?.idle} problem={problem.idle} />

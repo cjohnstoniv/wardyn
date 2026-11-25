@@ -37,6 +37,10 @@ const envGovernanceSecondHuman = "WARDYN_GOVERNANCE_SECOND_HUMAN"
 // cmd/wardynd's boot checks, so the env name and the truthiness rule keep one definition.
 func GovernanceSecondHumanEnabled() bool { return envEnabled(envGovernanceSecondHuman) }
 
+// GovernanceMinApprovals is WARDYN_GOVERNANCE_MIN_APPROVALS: the fewest approvals a held change of a kind with
+// more than one decider needs. Zero (unset) leaves every held change to one approver, as before.
+func (s *Server) GovernanceMinApprovals() int { return s.cfg.GovernanceMinApprovals }
+
 // defaultGovernanceChangeTTL is how long a pending change waits when the deployment sets none.
 const defaultGovernanceChangeTTL = 72 * time.Hour
 
@@ -58,6 +62,8 @@ const (
 	govKindUserType     = types.GovernanceTargetUserTypePriority
 	govKindRoleMapping  = types.GovernanceTargetRoleMapping
 	govKindKeyDomain    = types.GovernanceTargetKeyDomainAssignment
+	// govKindApprovalCounts is an edit of how many approvals each kind needs (governance_approval_counts.go).
+	govKindApprovalCounts = types.GovernanceTargetApprovalCounts
 )
 
 // govChangeTarget is the authz.denied target of every refusal a change decision gives.
@@ -187,12 +193,15 @@ type govApplied struct {
 	// afterCommit, when set, runs once the decision has committed and returns more audit data (a
 	// role mapping's revocation of the tokens it demoted runs here, as it runs after the write today).
 	afterCommit func() map[string]any
+	// approvalData, when set, is the keys the governance.change.approve row gains from the approval rules.
+	approvalData map[string]any
 }
 
 // governanceChangeKinds is the single table of covered targets and who may approve each. A role
 // mapping is written on the operatorOnly tier, so only a super admin approves it; every other kind is
 // written on securityOps.
 var governanceChangeKinds = map[string]govKind{
+	govKindAssistantSettings:   {approver: operatorApprover, apply: applyAssistantSettingsChange},
 	govKindUnit:                {approver: securityApprover, apply: applyUnitChange},
 	govKindMembership:          {approver: securityApprover, apply: applyMembershipChange},
 	govKindGrant:               {approver: securityApprover, apply: applyGrantChange},
@@ -219,6 +228,8 @@ var governanceChangeKinds = map[string]govKind{
 	govKindRecording:           {approver: securityApprover, apply: applyRecordingChange},
 	govKindUnitDeciders:        {approver: securityApprover, apply: applyUnitDecidersChange},
 	govKindEnvelope:            {approver: securityApprover, apply: applyEnvelopeChange},
+	govKindApprovalCounts:      {approver: securityApprover, apply: applyApprovalCountsChange},
+	govKindAgentRules:          {approver: securityApprover, apply: applyAgentRulesChange},
 	// An elevation's approver is its unit's rule (forChange, requestApprover).
 	types.GovernanceTargetElevation: {apply: applyElevationChange, rejectAction: "governance.elevation.reject"},
 	// An image request's approver is the met image rule at its unit (forChange, requestApprover).
@@ -333,6 +344,10 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 		ProposedByEmail: oidcEmailFromContext(r.Context()),
 		Note:            p.note,
 	}
+	if ch.RequiredApprovals, ch.RequireSecurity, err = s.requiredApprovals(r.Context(), p.kind, p.key); err != nil {
+		writeServerError(w, r, "read governance approval counts", err)
+		return
+	}
 	saved, expired, err := s.cfg.Store.ProposeGovernanceChange(r.Context(), ch, s.governanceChangeTTL())
 	var pending *store.ErrGovernanceChangePending
 	switch {
@@ -365,6 +380,9 @@ func (s *Server) proposeGovernanceChange(w http.ResponseWriter, r *http.Request,
 	proposed := map[string]any{"target_kind": p.kind, "op": p.op, "target_key": p.key, "expires_at": saved.ExpiresAt, "changed": changed}
 	if units, _, scoped := unitChangeScope(saved); scoped {
 		proposed["units"] = unitIDStrings(units)
+	}
+	if s.GovernanceMinApprovals() > 0 && !singleDecider(p.kind) {
+		proposed["required"], proposed["require_security"] = saved.RequiredApprovals, saved.RequireSecurity
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor, "governance.change.propose", saved.ID.String(), "success", mustJSON(proposed)))
 	if p.answer != nil {

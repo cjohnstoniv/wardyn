@@ -3,7 +3,12 @@
 
 package api
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+)
 
 // setup_checks_sso.go holds the two OIDC-role-derivation /setup/status rows —
 // split out of setup_checks.go (#491) to keep it under the file-size gate.
@@ -112,4 +117,40 @@ func tlsCookiePostureCheck(oidcConfigured bool, redirectURL string, secureCookie
 		Detail: "The OIDC redirect URL is https but WARDYN_TLS_TERMINATED is not set, so wardynd still thinks it is serving plain HTTP: the session cookie is issued WITHOUT the Secure attribute.",
 		Fix:    "Set WARDYN_TLS_TERMINATED=true (helm: env.WARDYN_TLS_TERMINATED) when TLS terminates at an upstream reverse proxy/ingress.",
 	}, true
+}
+
+// ssoDiscoveryCheck is the /setup/status row for an identity provider this server has not reached since it
+// started. It warns while the authenticator is pending (sign-in is closed and logouts are held), and after
+// discovery when any held logout was not applied for a reason the person at the provider must be checked for:
+// it failed verification, the queue was full, or the route was rate limited. A logout refused as malformed or
+// as a reserved principal is refused by a discovered server too, so it does not count. Never Blocking.
+func ssoDiscoveryCheck(pending bool, st oidc.LogoutQueueStats) (SetupCheck, bool) {
+	lost := st.Unverifiable + st.RefusedQueueFull + st.RateLimited
+	switch {
+	case pending:
+		return SetupCheck{
+			ID: "sso_discovery", Label: "Identity provider", Status: "warn",
+			Detail: fmt.Sprintf("This server has not reached the identity provider since it started: sign-in is closed, and %d logouts are held.", st.Held),
+			Fix:    "Check that the identity provider is reachable from this server; sign-in opens by itself once it answers.",
+		}, true
+	case lost > 0:
+		return SetupCheck{
+			ID: "sso_discovery", Label: "Identity provider", Status: "warn",
+			Detail: fmt.Sprintf("%d identity-provider logouts received before discovery were not applied.", lost),
+			Fix:    "The sub in these rows is not verified: check each person at the identity provider first, then revoke their sessions; the audit action session.revoke.hold names them.",
+		}, true
+	}
+	return SetupCheck{}, false
+}
+
+// appendSSODiscoveryCheck adds the sso_discovery row when there is one. A nil authenticator and the zero value
+// add nothing.
+func appendSSODiscoveryCheck(checks []SetupCheck, a *oidc.Authenticator) []SetupCheck {
+	if a == nil {
+		return checks
+	}
+	if chk, ok := ssoDiscoveryCheck(a.Pending(), a.LogoutQueueStats()); ok {
+		checks = append(checks, chk)
+	}
+	return checks
 }

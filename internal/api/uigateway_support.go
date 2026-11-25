@@ -6,11 +6,15 @@ package api
 import (
 	"cmp"
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // The UI gateway's side of a support grant (support_entry.go holds the arm). A helper's ticket carries the grant
@@ -35,9 +39,10 @@ func uiSupportDoor(app string) supportDoor {
 }
 
 // supportWatchCtx is the context a helper's relayed request runs under: ctx and a no-op unless sess carries a
-// grant, else a cancellable child that a watch cancels at the first re-check that does not pass, so the reverse
-// proxy closes a 101's back connection or aborts a streaming body (net/http/httputil closes a switched
-// connection when the request's context ends). stop ends the watch and must be called when the request is done.
+// grant, else a cancellable child that a watch cancels at the first re-check that refuses (or, for one with no
+// answer, once the session budget runs out), so the reverse proxy closes a 101's back connection or aborts a
+// streaming body (net/http/httputil closes a switched connection when the request's context ends). stop ends
+// the watch and must be called when the request is done.
 // An owner's request is never watched, as the check would only repeat the ownership rule.
 func (s *Server) supportWatchCtx(ctx context.Context, sess uiSession) (context.Context, func()) {
 	if sess.SupportGrant == uuid.Nil {
@@ -48,45 +53,66 @@ func (s *Server) supportWatchCtx(ctx context.Context, sess uiSession) (context.C
 	return ctx, cancel
 }
 
-// supportWatch re-checks sess every uiReassertInterval until ctx ends, and cancels it when a check does not pass.
-// Nothing is checked as the stream starts: the request's own re-assert has just run, as a helper's is never
-// debounced (uiReassertDue), so a stream opened after a revoke was refused before it was relayed.
+// supportWatch re-checks sess every uiReassertInterval until ctx ends, and cancels it when a check refuses it or
+// no check has answered for the session budget. Nothing is checked as the stream starts: the request's own
+// re-assert has just run, as a helper's is never debounced (uiReassertDue), so a stream opened after a revoke was
+// refused before it was relayed.
 func (s *Server) supportWatch(ctx context.Context, cancel context.CancelFunc, sess uiSession) {
 	tick := time.NewTicker(time.Duration(cmp.Or(supportWatchEveryNS.Load(), int64(uiReassertInterval))))
 	defer tick.Stop()
+	b := s.newSessionBudget(ctx, uiWatchID(sess, sessionSurfaceUIApp))
+	defer b.leave()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-tick.C:
+		case <-tickOrRetry(tick.C, b):
 		}
-		if !s.supportWatchHolds(ctx, sess) {
+		err := s.supportWatchCheck(ctx, sess)
+		if ctx.Err() != nil {
+			return // the stream ended on its own meanwhile
+		}
+		if v := b.observe("authority", err); v.ends() {
+			if v == budgetSpent {
+				b.end()
+			}
 			cancel()
 			return
 		}
 	}
 }
 
-// supportWatchHolds loads sess's run and asks uiSessionStillAuthorized, which asks the arm. A denial, a failed
-// read and a check still running when its bound ends all answer false (fail closed); ctx ending does too, and
-// the caller then cancels what is already cancelled.
-func (s *Server) supportWatchHolds(ctx context.Context, sess uiSession) bool {
+// supportWatchCheck loads sess's run and asks uiSessionStillAuthorized, which asks the arm. A denial answers
+// errRelayAuthorityEnded; a run that is gone does too. A failed read, a denial that is itself a read that failed
+// (503) and a check still running when its bound ends answer an unconfirmed error, which rides the session budget.
+func (s *Server) supportWatchCheck(ctx context.Context, sess uiSession) error {
 	ctx, stop := context.WithTimeout(ctx, time.Duration(cmp.Or(supportWatchWaitNS.Load(), int64(supportWatchWait))))
 	defer stop()
-	held := make(chan bool, 1) // buffered: a check that outlives its bound still has somewhere to answer
+	held := make(chan error, 1) // buffered: a check that outlives its bound still has somewhere to answer
 	go func() {
 		run, err := s.cfg.Store.GetRun(ctx, sess.Run)
-		if err != nil {
-			slog.WarnContext(ctx, "wardynd: support watch could not read the run; closing the stream", "run_id", sess.Run, "err", err)
-			held <- false
+		if errors.Is(err, store.ErrNotFound) {
+			held <- errRelayAuthorityEnded
 			return
 		}
-		held <- s.uiSessionStillAuthorized(ctx, sess, run) == nil
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: support watch could not read the run", "run_id", sess.Run, "err", err)
+			held <- unconfirmed(err)
+			return
+		}
+		switch de := s.uiSessionStillAuthorized(ctx, sess, run); {
+		case de == nil:
+			held <- nil
+		case de.status == http.StatusServiceUnavailable:
+			held <- unconfirmed(errRelayAuthorityEnded)
+		default:
+			held <- errRelayAuthorityEnded
+		}
 	}()
 	select {
-	case ok := <-held:
-		return ok
+	case err := <-held:
+		return err
 	case <-ctx.Done():
-		return false
+		return unconfirmed(ctx.Err())
 	}
 }

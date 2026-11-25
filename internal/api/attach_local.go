@@ -27,7 +27,7 @@ import (
 // is refused exactly where a relay one is (C1). The organisation keeps the holder registry and the
 // writer lease, the recording (the runner copies the output on pty_tee and the recorder here masks
 // it), the audit rows and the ending: every ender closes this socket and resets pty_tee, and the
-// runner then ends the PTY. Off unless WARDYN_ATTACH_LOCAL is on.
+// runner then ends the PTY. On unless WARDYN_ATTACH_LOCAL is set to a value other than on.
 const (
 	attachTransportLocal = "local"
 	// attachLocalGrantFailedCode closes a local socket whose runner did not take the grant (the CLI's

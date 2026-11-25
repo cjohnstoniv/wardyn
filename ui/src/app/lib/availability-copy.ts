@@ -68,6 +68,8 @@ export const AVAILABILITY = {
   CREATE_PARTIAL_TITLE: "Saved, but not who it's available to",
   CREATE_PARTIAL_EVERYONE: "It is available to everyone until you set it again below.",
   CREATE_PARTIAL_IMAGE: "It stays admins-only until you set it again below.",
+  // A policy or model provider created "Only these" whose list was refused: it is restricted and some audiences may be saved.
+  CREATE_PARTIAL_RESTRICTED: "It was created restricted. The audiences listed before the refused one were saved; the rest were not. Set them again below.",
   // The org workspace detail page's card around the control.
   WORKSPACE_CARD_TITLE: "Availability",
   WORKSPACE_CARD_SUBTITLE: "Who may launch a run against this workspace.",

@@ -18,9 +18,10 @@ import (
 // person's authority moves with it: the user type comes from the portal row (the exchange copies it into the
 // grant in portalExchange, and the helper's grant models that copy), the person enters a unit through a
 // membership naming that user type, and the pin bounds the pick. The type's top-priority membership is a unit
-// outside the pin, so the default pick leaves the pin and is refused; only the named unit under the pin
-// launches. A portal pinned to that other unit, on the same type, lands there by default: the control that the
-// default pick really is the other unit, so the refusal above is the pin's doing.
+// outside the pin, which is never a default pick for an issuer portal's person: with no run_in the run lands in
+// the pin unit itself, and naming the outside unit is refused. The named unit under the pin launches. A portal
+// pinned to that other unit, on the same type, lands there by default: the control that the type's own default
+// pick really is the other unit, so landing in the pin above is the pin's doing.
 func TestPortalAdmission_PinUserTypeAndMembershipHoldWithoutGroup_PG(t *testing.T) {
 	e := newAuthorityEnv(t)
 	ctx := context.Background()
@@ -61,12 +62,14 @@ func TestPortalAdmission_PinUserTypeAndMembershipHoldWithoutGroup_PG(t *testing.
 		t.Fatalf("grant the agent to the user type: %v", err)
 	}
 
-	// The grant keyed on the portal row's user type now applies. The default pick is the unit outside the pin,
-	// so the pin refuses it, named or not; the team under the pin launches when named.
-	for _, runIn := range []string{"", e.other.Name} {
-		if w := e.post(t, "/api/v1/runs", tok, pinRun(runIn)); !portalScopeRefused(w) {
-			t.Errorf("launch with run_in %q (the default pick is outside the pin) = %d %s, want 403 portal_unit_scope", runIn, w.Code, w.Body.String())
-		}
+	// The grant keyed on the portal row's user type now applies. The membership outside the pin is not picked
+	// by default, so no run_in lands in the pin unit; naming the outside unit is refused, and the team under the
+	// pin launches when named.
+	if got := e.launchUnit(t, tok, ""); got != e.plat.ID {
+		t.Errorf("launch with no run_in landed in unit %s, want the pin unit %s", got, e.plat.ID)
+	}
+	if w := e.post(t, "/api/v1/runs", tok, pinRun(e.other.Name)); !portalScopeRefused(w) {
+		t.Errorf("launch with run_in %q (outside the pin) = %d %s, want 403 portal_unit_scope", e.other.Name, w.Code, w.Body.String())
 	}
 	if got := e.launchUnit(t, tok, e.team.Name); got != e.team.ID {
 		t.Errorf("the pinned portal's run landed in unit %s, want the team %s under the pin", got, e.team.ID)
@@ -88,8 +91,8 @@ func TestPortalAdmission_PinUserTypeAndMembershipHoldWithoutGroup_PG(t *testing.
 	if w := e.post(t, "/api/v1/runs", plainTok, pinRun("")); w.Code != http.StatusForbidden || errorReason(w) != "capability_agent" {
 		t.Errorf("a standard-type portal's launch = %d %s, want 403 capability_agent", w.Code, w.Body.String())
 	}
-	if rows := e.rows("run.create"); len(rows) != 2 {
-		t.Errorf("run.create rows = %d, want 2 (the pinned portal's team run and the control's other-unit run)", len(rows))
+	if rows := e.rows("run.create"); len(rows) != 3 {
+		t.Errorf("run.create rows = %d, want 3 (the pinned portal's team run, its pin-default run and the control's other-unit run)", len(rows))
 	}
 }
 

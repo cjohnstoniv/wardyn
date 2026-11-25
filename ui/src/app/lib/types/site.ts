@@ -10,6 +10,7 @@
 // dispatch/injection time.
 
 import type { RecordingLevel } from "./policy";
+import type { RunnerTrustClass } from "./runners";
 
 // One outbound redirect: requests to `from` are substituted to `to` (from's
 // host dropped from egress, to's host allowed), with an optional token
@@ -37,11 +38,44 @@ export interface RunnerSettings {
   // A new local run is refused on a personal-trust runner. Off by default, and always on the wire
   // (false included); set only by PUT /runners/settings.
   require_managed_device: boolean;
+  // The MDM device CA bundle (PEM) and the URL of its full CRL: a macOS sandbox then needs a device
+  // certificate that chains to it. Both or neither; set only by PUT /runners/settings. Omitted when unset.
+  mdm_device_ca_pem?: string;
+  mdm_device_crl_url?: string;
+  // Machine kinds a new local run may not take on a runner of a trust class (deny-only; a macOS VM still needs a
+  // managed_device runner). Always on the wire, [] when none; set only by PUT /runners/settings.
+  machine_kind_denials?: readonly MachineKindDenial[];
+}
+
+export interface MachineKindDenial {
+  trust_class: RunnerTrustClass;
+  machine_kind: "container" | "linux_vm" | "macos_vm";
+}
+
+// types.AssistantProviderMark (internal/types/assistant.go), the json tags verbatim. No models means the
+// provider's own harness model.
+export interface AssistantProviderMark {
+  readonly provider_id: string;
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly models: readonly string[];
+}
+
+// types.AssistantSettings (SiteConfig.assistant), the json tags verbatim. Absent is every purpose off.
+export interface AssistantSettings {
+  readonly compose: boolean;
+  readonly review: boolean;
+  readonly run_history_counts: boolean;
+  readonly never_sent_kinds: readonly string[];
+  readonly providers: readonly AssistantProviderMark[];
 }
 
 export interface SiteConfig {
   // Dedicated runner administration owns changes; generic PUT retains this block.
   readonly runners?: RunnerSettings;
+  // types.SiteConfig.Assistant: the organisation's assistant settings. PUT /assistant/settings owns changes;
+  // the generic PUT carries the block forward and refuses a changed one.
+  readonly assistant?: AssistantSettings;
   upstream_proxy_secret_ref?: string;
   // The corporate upstream proxy URL written IN THE CLEAR — topology, not a
   // credential. Must not embed a userinfo (user:pass@); the server 400s that
@@ -139,8 +173,12 @@ export interface SiteConfig {
   recording?: SiteRecording;
   // types.SiteConfig.MacOSVM: the organisation's macOS VM sandbox settings.
   macos_vm?: SiteMacOSVM;
+  // types.SiteConfig.DesktopWatermark: whether every desktop view must show the viewer's name and the run id.
+  desktop_watermark?: SiteDesktopWatermark;
   // types.SiteConfig.Images: the organisation's image rules.
   images?: SiteImages;
+  // types.SiteConfig.Sessions: how open sessions behave while Wardyn cannot check access.
+  sessions?: SiteSessions;
   // types.SiteConfig.FeatureSwitches: the features new in 0.11, each off until an admin turns it on. Absent reads
   // every one off.
   features?: SiteFeatureSwitches;
@@ -319,7 +357,8 @@ export type ModelProviderKind =
   | "openai_api_key"
   | "bedrock_bearer"
   | "custom_endpoint"
-  | "local_model";
+  | "local_model"
+  | "azure_foundry";
 
 // A provider's opt-in to run identity. audience is the token's aud: what this
 // provider's gateway looks for, and no other address's.
@@ -400,6 +439,8 @@ export interface ModelProvider {
   extra_headers?: ProviderHeader[];
   // bedrock_sso / bedrock_bearer only.
   bedrock?: BedrockSettings;
+  // azure_foundry only: the data-plane endpoint and the one route it serves.
+  azure?: AzureSettings;
   // local_model only: the model allowlist and the caps on each request.
   local?: LocalModelSettings;
   // The agents this provider may serve, with the settings for each.
@@ -435,6 +476,12 @@ export interface BedrockSettings {
   sso_start_url?: string;
   sso_account_id?: string;
   sso_role_name?: string;
+}
+
+/** Go: types.AzureSettings (ModelProvider.azure). */
+export interface AzureSettings {
+  endpoint?: string;
+  route?: "anthropic" | "openai_v1";
 }
 
 // Go's types.ProviderHeader (internal/types/model_provider.go).
@@ -697,6 +744,17 @@ export interface SiteMacOSVM {
   kept_machine_idle_days?: number;
   /** Kept machines one person may have. 1 to 4; absent reads 1. */
   max_kept_machines_per_person?: number;
+}
+
+/** Go: types.SiteSessions (SiteConfig.sessions). */
+export interface SiteSessions {
+  /** Seconds an open session keeps going while no check of the person's access answers. 0 to 120; absent reads 30. */
+  unconfirmed_budget_s?: number;
+}
+
+/** Go: types.SiteDesktopWatermark (SiteConfig.desktop_watermark). */
+export interface SiteDesktopWatermark {
+  required?: boolean;
 }
 
 /** Go: types.SiteFeatureSwitches (SiteConfig.features): one key per feature new in 0.11. Absent reads every one off. */

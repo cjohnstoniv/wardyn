@@ -31,8 +31,8 @@ Hardening (defense in depth alongside the per-run sandbox envelope):
   - read-only root FS, all Linux capabilities dropped, no privilege escalation
   - liveness/startup probes on /healthz (wardynd serves it even when the admin
     token is unset — it is one of two always-on endpoints); readiness on
-    /readyz, which additionally pings Postgres so a dead DB actually takes
-    the pod out of the Service's endpoints
+    /healthz too by default, or /readyz (a Postgres ping) when
+    readinessProbe.path names it
 */}}
 {{- /*
 `default dict` on the 0.6-only blocks: `helm upgrade --reuse-values` replaces
@@ -798,19 +798,18 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           readinessProbe:
-            # /readyz, NOT /healthz: it pings Postgres, so a dead DB actually
-            # takes the pod out of the Service's endpoints instead of reading
-            # healthy forever (/healthz reports process-liveness only — a
-            # readiness check that shares its path with liveness/startup would
-            # restart-loop a pod on a transient DB blip instead of just
-            # marking it not-ready).
+            # /healthz by default: it answers while Postgres refuses connections,
+            # so a DB outage leaves the pod in the Service and the console up to
+            # show its database banner (the console polls /readyz itself).
+            # readinessProbe.path=/readyz pings Postgres and takes the pod out
+            # while the ping fails; that endpoint exists from the 0.6 images on,
+            # so an older image's probe would 404 forever.
             #
-            # Overridable because /readyz only EXISTS from the 0.6 images
-            # onward: point an older image at it and every probe 404s, so the
-            # pod never becomes Ready and a rollout to it stalls forever
-            # (readinessProbe.path=/healthz pins it back — see values.yaml).
+            # The fallback below serves a values map with no readinessProbe
+            # block (a --reuse-values upgrade from 0.5: the default dict note
+            # at the top of this file).
             httpGet:
-              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/readyz") | quote }}
+              path: {{ printf "%s%s" $basePath ((.Values.readinessProbe | default dict).path | default "/healthz") | quote }}
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10

@@ -4,7 +4,6 @@
 package api
 
 import (
-	"bytes"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ import (
 // The operator log line for a home name that could not be derived says which
 // kind of failure it was and never the principal's claim (#2314).
 func TestResolveUserDrive_HomeFailureLogCarriesNoClaim(t *testing.T) {
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })

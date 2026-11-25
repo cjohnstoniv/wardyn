@@ -277,10 +277,17 @@ fmt.Println(out.Output, out.Truncated, out.Complete, out.Source)
   The runner that served the run decides between `stdout` and `recording`:
   only a recorded run on a Kubernetes runner under the session recorder reads `recording`
   (OPERATIONS.md "Run output").
-  The latter two retain the recording's owner-or-operator privacy
-  gate, even after recording is disabled.
-  A portal's delegated token reads `stdout` output only; for the other two
-  it gets the 409 a run with no such row gives, audited `delegation_scope`.
+  `pane_snapshot` and `recording` keep the recording's owner-or-operator privacy gate,
+  even after recording is disabled. A portal never reads `pane_snapshot`. An issuer
+  portal's grant reads `stdout` and a successful `recording` recovery of its person's
+  own non-interactive runs; a recording that is missing, failed or erased answers it as a run with no
+  recording. A console portal's delegated token reads `stdout` only. A withheld source
+  falls through to the run's stdout tail or shared chunks when there are any (200,
+  `source: stdout`), and otherwise to the answer a run with no such row gives (409).
+  A portal's withheld source writes no refusal row. When a portal's read answers
+  `run_output_not_captured`, `run_output_not_kept`, `run_output_interactive` or the
+  retention window's `run_output_expired`, it writes `run.output.refuse` with the same
+  reason, once per read.
 - `incomplete` on `stdout` says bytes may be missing.
   On `recording` it is always true and says the output cannot be vouched byte-complete.
 - `capture_gap` says capture or recovery
@@ -338,6 +345,38 @@ fmt.Println(res.ExitCode, res.Stdout, res.Stderr, res.Truncated, res.TimedOut)
 - A command holds one of the run's SSH channels while it runs (`WARDYN_SSH_MAX_SESSIONS_PER_RUN`, shared with SSH); with all in use the answer is `429 run_exec_busy`.
   While it runs, the run does not count as idle; a background run has no idle stop.
 - The call waits for the command, so an `http.Client` with a `Timeout` needs a longer one.
+
+## Forwarding a port through the organisation
+
+- The route is `GET /api/v1/runs/{id}/attach/forward?port=<n>&ticket=<t>`, a WebSocket of binary frames carrying one TCP connection to the sandbox's `127.0.0.1:<n>`.
+- Every forward needs a ticket from `POST /runs/{id}/attach/ticket`, one per connection. A request with no ticket answers `400 run_forward_ticket_required`.
+- A service identity's run takes no forward from anyone, its sponsor included, as the SSH gateway takes no entry to it: `403 run_owner_only`.
+- A ticket minted with `purpose=attach-forward&ports=<list>` forwards only those ports and skips the run's terminal-session count (see [SSH over an attach ticket](#ssh-over-an-attach-ticket)). A terminal ticket still counts it, so a run with 8 open terminals refuses that mint with `503 attach_session_cap_reached`.
+- A helper's, a portal's or an issuer portal's ticket is refused with `403 attach_ticket_not_your_run`.
+- The route is off unless the operator turns it on (`WARDYN_ATTACH_FORWARD`); `WARDYN_SSH_CHANNELS` without `forward` also turns it off (`409 run_forward_off`).
+- Its other refusals: `data_out_blocked`, `run_background_only`, `run_forward_invalid`, `run_forward_port_refused`, `run_forward_unavailable`, `run_forward_busy` (the run's SSH channel cap) and `run_forward_failed`, plus `run_inspect_exec_stream_unsupported`.
+- `&check=1` runs the entry, switch, port, `data_out` and run-state checks and answers `204` without opening anything. It skips the thaw and the channel cap, so a full run can still answer `429` to the forward itself.
+- An open forward is checked again every 30 s: its credential, the entry rule, `deny_interactive`, the run's state and its `data_out` rule. A check that answers no ends it at once. A check that gets no answer (the database unreachable or slow) holds what the client sends and asks again every 5 s; the forward ends if no check answers for the session budget (`sessions.unconfirmed_budget_s`). Each such wait writes a `session.unconfirmed` row with `surface` `forward`.
+- A client that answers no ping is ended (`Ping timeout.`): within 90 s of the last byte either way, or 60 s when none moved. A window in which a write into the sandbox, or to the client, was waiting does not count, so a stalled transfer is not cut. A client that reads nothing while the run has nothing more to send looks the same as one that is gone.
+- There is no half-close: a client that sends and then half-closes may lose the reply.
+- The bytes are neither masked nor recorded; each connection writes one `run.port.forward` row.
+
+## SSH over an attach ticket
+
+- `POST /runs/{id}/attach/ticket` takes `purpose` and, for a forward, `ports`. With no purpose, or `ui`, it mints a terminal or UI ticket as before.
+- `ssh-exec`, `ssh-forward` and `ssh-editor` mint a ticket for `GET /runs/{id}/ssh` while `WARDYN_SSH_TICKETS` is on. `ssh-forward` needs `ports`, a comma list of 1 to 16 distinct ports.
+- `attach-forward` with `ports` mints a ticket for `GET /runs/{id}/attach/forward` that forwards only those ports.
+- The answer echoes `purpose`. An older server ignores it and mints a terminal ticket, so a client dials a purpose only when the echo matches.
+- A ticket with a purpose does not count against the run's terminal sessions; a forward holds one of the run's SSH channels instead.
+- An `ssh-*` mint asks the `ssh_key` capability: a person denied it gets `403` `capability_feature` and no ticket.
+- A ticket minted for a purpose and spent at any other door is refused as invalid, and it is burned. A terminal ticket, minted with no purpose, still opens the forward door.
+
+`GET /api/v1/runs/{id}/ssh` takes an SSH ticket in the `Wardyn-Ticket` header, never in the URL, and upgrades to a WebSocket of binary frames carrying one SSH connection.
+The SSH username is the run id and the `none` method signs in, so no key is registered.
+The run checks are the key path's: the owner rule, a background task, `deny_interactive`, `data_out`, `WARDYN_SSH_CHANNELS` and the gateway's caps.
+A ticket opens only the channel kinds its purpose names: `ssh-exec` runs one command, and `ssh-forward` reaches only its ports.
+While tickets are on, `/healthz` reports `tickets` and the gateway's public `host_key` in its `ssh` object.
+A ticket connection is re-checked at keepalive cadence. It closes when the sign-in that minted it ends, when the governance profile the run was launched under later denies interactive sessions (`deny_interactive`), or when the check cannot be made. A connection opened with a registered key stays open.
 
 ## Finding a waiting sign-in
 
@@ -867,15 +906,17 @@ start.
 | `runner_not_found` / `runner_token_not_found` | No such runner or unused token for this caller; another person's runner, and an unclaimed runner past its wait, answer as an absent id. |
 | `runner_filter_invalid` | `state` is not `active`, `revoked` or `all`. |
 | `runner_limits_invalid` | `400`: `limits` is missing or not a valid set (runs at once 1 to 64, at least one CPU, disk in whole GiB, no per-run amount past its total); `422`: a total past what the runner last reported. |
+| `runner_mdm_device_invalid` | `400`: `PUT /runners/settings` named an MDM CA or CRL URL that is not valid, or only one of the two. |
+| `machine_kind_denials_invalid` | `400`: `PUT /runners/settings` named a `machine_kind_denials` entry whose trust class or machine kind is not one of the known values, or the same pair twice. |
 | `runner_trust_invalid` | `PUT /runners/{id}/trust`: `400`, `trust_class` is not `personal`, `managed_device` or `org_cluster`, or `reason` is missing; `409`, the runner is not claimed yet; `422`, a class its owner kind cannot hold (`org_cluster` is an organization runner's class and only its). |
 | `run_containment_pending` | `403` on token renewal (`identity.renew`): the run's Kubernetes runner deleted it but cannot yet prove it stopped, so its token is never renewed again. The runner's relay fence is what bounds its egress; this is the second layer. |
-| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. Launch the run again. |
-| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run with `allowed_models` on such a runner is refused `409` with it. |
+| `relay_ip_fenced` | The `reason` on a run's `run.create` failure row, and its failure hint: a Kubernetes runner gave the run's proxy pod an IP it still fences for an earlier run whose termination is unknown, so it stopped this run before it opened. A runner on 0.10.4 or later first replaces the proxy pod up to twice, so the reason means every try was given a held address or a pod could not be proven stopped. Launch the run again. |
+| `runner_proxy_setting_unsupported` | The `reason` on a run's `run.create` failure row: the run sets a proxy setting (`aws_sigv4`, `scrub_responses`, `vm`, `port_rule`, `local_models`, `kube_api`, `canonical_push_repos`, `gateway_identity`, `git_push_withheld`, `forge_hosts`, `allowed_models`, `aws_sigv4_gateways`, `mcp_approve_each`, `mcp_send_once`, `llm_headers`, `no_network`, `refuse_ip_literals`, `host_rules`, `push_hold_removals` or `local_model_relay`) its older runner cannot carry; upgrade its wardyn-runnerd. A revive of a run that sets any of these on such a runner is refused `409` with it. |
 | `gateway_identity_changed` | A run asked for a gateway token, or a revive was asked for, and its model provider was changed or turned off after the run started: `403` on the token, `409` on the revive. Create a new run, or edit the provider back. |
 | `gateway_identity_unavailable` | `503`: Wardyn couldn't read what a gateway token depends on, or the save that turns gateway identity on couldn't make the signing key, so nothing was issued or saved. |
 | `gateway_access_cut` | A run asked for a gateway token, or a revive was asked for, and the portal that launched the run was revoked with `?cut_in_flight=true`: `403` on the token, `409` on the revive. Permanent for that run; start a new run. |
 | `invalid_cut_in_flight_param` | `DELETE /admin/delegates/{id}`, `400`: `cut_in_flight` is not `true` or `false`, is given twice, or the query does not parse. Nothing was revoked. |
-| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. |
+| `runner_local_model_port_not_allowed` | The `reason` on a run's `run.create` failure row: the run's local model server is on a port the runner's person has not allowed with `--local-model-port`. A revive of such a run is refused `409` with it. |
 | `node_record_invalid` | `POST /runs/{id}/node-record`, `400`: `attestation` is not `node_powered_off` or `no_prior_holder`, `source` is not `provider_console`, `management_controller` or `other`, `source_id` is missing, longer than 256 characters or holds control characters, or `tuple` is missing. |
 | `node_record_refused` | `POST /runs/{id}/node-record`, `409`: the run is not held as containment pending, the runner's record (`tuple`) changed since the form was loaded, `no_prior_holder` was sent after a recorded name reuse or for a run with a causal node association, or another stop for the run already waits for its runner. A held record whose run moved before its approval is refused at the approval the same way. |
 | `node_record_human_only` | `POST /runs/{id}/node-record`, `403`: the admin token or an API token made it, or approved a held one (a node record is made and approved from a signed-in session), or the record needs two people and the server runs in local mode, which cannot show who they are. |
@@ -883,9 +924,29 @@ start.
 | `host_capacity_refused` | `503` with `Retry-After: 30` on every run launch door (new run, preflight, record, harness sign-in, source scan, site-config probe, workspace build): the host is short of memory or over its load ceiling (`WARDYN_HOST_MIN_MEM_AVAILABLE_MIB` / `WARDYN_HOST_MAX_LOAD1`). The body is the one exception to the `error`/`reason` shape: `error` is this code, `reason` names each limit crossed with its measured value, and `message` is the sentence to show. Wait and retry. |
 | `runner_limits_required` | `422`: a registration that declares no limits, or limits that are not a valid set. Register with this release's `wardyn-runnerd`. |
 | `runner_session_required` | `/me/runners` needs the person's own session; administrative and delegated credentials own no runner. |
-| `runners_enabled_required` | `PUT /runners/settings` needs `enabled` or `require_managed_device`, each true or false. |
+| `runners_enabled_required` | `PUT /runners/settings` needs at least one of `enabled`, `require_managed_device`, `mdm_device_ca_pem`, `mdm_device_crl_url` and `machine_kind_denials`; the first two are true or false. |
 | `runners_org_url_invalid` | Runners cannot be turned on until the organisation and control-plane URLs are HTTPS. |
-| `site_config_runners_via_own_route` | Change `runners.enabled` or `runners.require_managed_device` with `PUT /runners/settings`. |
+| `site_config_runners_via_own_route` | Change `runners.enabled`, `runners.require_managed_device`, `runners.machine_kind_denials` or the MDM device CA and CRL URL with `PUT /runners/settings`. |
+| `assistant_off` | `GET /me/assistant`: the organisation has this purpose turned off. |
+| `assistant_no_provider` | `GET /me/assistant`: no model provider is marked to serve this purpose. |
+| `assistant_unit_denies` | `GET /me/assistant`: your profile's `deny_model_providers` or `allowed_models`, or a provider you are not granted, rules out every marked provider and model. |
+| `assistant_not_connected` | `GET /me/assistant`: you have no credential for a marked provider yet. |
+| `assistant_settings_invalid` | `PUT /assistant/settings`: `400` for an unknown provider, a bad model list or an unknown record kind, `428` without `If-Match`, `412` when it no longer matches. `GET /me/assistant`: `purpose` is not `compose` or `review`. An approval refuses a block the providers no longer allow. |
+| `assistant_provider_cannot_serve` | `PUT /assistant/settings`: a marked provider does not pair with Claude Code, or is a Bedrock kind. |
+| `assistant_provider_defers_inspection` | `PUT /assistant/settings`: a marked provider leaves prompt inspection to its gateway. |
+| `assistant_settings_via_own_route` | Change `assistant` with `PUT /assistant/settings`, not `PUT /site-config`. |
+| `assistant_at_run_limit` | `POST /assistant/preview` and `POST /assistant/sessions` (`409`): you are at your `max_concurrent_runs`, and the assistant's run would count against it. End a run first. |
+| `assistant_kind_never_sent` | `POST /assistant/preview`, `POST /assistant/sessions`, and a message or edit on a live session (`409`): the target's kind is on the organisation's never-sent list, so its records are never sent to a model. |
+| `assistant_session_not_found` | `404`: no session with that id is yours; another person's session answers the same. `409` on a message, an edit or a run's event when the session has ended or another session replaced it. |
+| `assistant_purpose_target_mismatch` | `400`: the purpose does not take that kind of target (a review names a held change). |
+| `assistant_preview_stale` | `POST /assistant/sessions` (`409`): the records, or the provider or model that would serve them, changed since the preview you name. Preview again. |
+| `assistant_rate_limited` | `429` with `Retry-After`: too many assistant requests from you, or more than four open event streams and long-polls at once. |
+| `assistant_role_denied` | `403`: your role no longer allows the assistant (the session ends), or the caller is no person, such as the admin token. |
+| `assistant_session_provider_changed` | A message or edit (`409`): the session's provider or model no longer serves the purpose. The session ends; start a new one. |
+| `assistant_target_not_found` | `POST /assistant/preview` and `POST /assistant/sessions` (`404`): no such target, or one you cannot read. |
+| `assistant_sessions_unavailable` | `501`: this server's store keeps no assistant sessions. |
+| `assistant_session_events_full` | `POST /internal/assistant/events` (`429`): the session holds as many events as it may. Start a new session. |
+| `assistant_stream_unavailable` | `GET /assistant/sessions/{id}/events` with `Accept: text/event-stream` (`501`): this server cannot stream. Read the events by long-poll instead. |
 | `scheduled_runs_denied` | `403`: `start_at` under a profile that sets `deny_scheduled_runs`. A booked run ends `FAILED` with it. |
 | `component_denied` / `model_provider_denied` | `403`: the run attaches a component, or would use a model provider, that your profile's `deny_components` or `deny_model_providers` lists, at create, Review and preview. A queued run ends `FAILED` with it at its start. Operators are not exempt. |
 | `kept_machine_site_off` | `macos_vm.allow_kept_machines` is not true: this install keeps no machines. |
@@ -947,6 +1008,7 @@ start.
 | `not_captured` / `dead_credential` / `consent_required` / `interaction_required` / `unavailable` | `ADOEntraFailure`'s own closed enum ([`internal/api/ado_entra_store.go`](../internal/api/ado_entra_store.go)), carried through unchanged when the redemption classifies a renewal failure. Azure DevOps. |
 | `invalid_approval_state` / `invalid_run_id_param` / `invalid_view_param` / `invalid_decidable_by` / `invalid_owner_param` / `invalid_status_param` / `status_needs_exclusive` / `status_needs_requires_view` / `invalid_ended_within_param` / `invalid_include_killed_param` / `invalid_sponsored_param` / `invalid_no_end_param` / `runs_search_query_too_long` / `invalid_limit_param` / `invalid_offset_param` | A `GET /approvals` or `GET /runs` query parameter is malformed or conflicts with another one. `invalid_view_param` is the same reason on both routes (the same shape); `invalid_limit_param`/`invalid_offset_param` are `parseListPage`'s, shared by every paginated list route in `internal/api` (`GET /audit`, `/policies`, `/secrets`, `/user-drives`, `/api-tokens`, `/permissions/grants`, `/setup/integrations`, `/ssh-keys`, `/runs/policy-history`, …). |
 | `invalid_service_param` | `GET /runs?service=` is present but not `1` or `0`, an empty value included. |
+| `invalid_counts_param` | `GET /runs?counts=`, sent with one of the list parameters, is present but not `skip`. |
 | `listing_unscoped_backend` | The store backend cannot scope this listing to the caller's own runs — the SAME missing capability on `GET /approvals` and `GET /runs`. |
 | `approval_not_found` | The named approval does not exist, or the caller may not see it — `POST /approvals/{id}/{approve,deny}` and every other approval-lookup route, INCLUDING `GET /approvals/{id}/paths`: a foreign approval and a missing one answer byte-identically there, reason and body both, so the reason itself is not an existence oracle. |
 | `approval_run_ended` / `approval_run_past_lifetime` / `approval_already_decided` / `credential_reauth_not_decidable` / `decision_scope_invalid_for_kind` / `invalid_request_body` | `POST /approvals/{id}/{approve,deny}`'s pre-decision refusals: the run ended first, the run reached its lifetime cap first, the approval was already decided, a credential-reauth approval takes a sign-in instead, `decision_scope` was sent on a kind that does not accept one, the body did not decode, or `reason` is over 512 characters. A body over 16 KiB is `413` `request_body_too_large`. |
@@ -966,10 +1028,10 @@ start.
 | `workspace_repo_unknown` | `422`: a `repos` entry the workspace does not carry, or the `repo` of `GET /workspaces/{id}/branches` is not one of its repository sources. |
 | `placement_unavailable` / `placement_credential` / `placement_capability` / `placement_local_path` / `placement_trusted_output` | `422`: a `placement: "local"` run with no user pool of yours, or one carrying a credential, mount, storage, path or trusted-output operation a runner cannot take. A credential is judged at the trust class of each eligible runner, highest first, and the detail names the class it was refused at. An MCP server or Bedrock provider that sends run identity is a `placement_credential` too, named in the detail. A `machine_kind: "linux_vm"` run with `interactive_start: "agent"` is a `placement_capability` too: a Linux VM's terminal opens a shell, not the agent CLI, in this release. So is a `linux_vm` run that carries a folder, on a runner that cannot share one into the guest (older than VM folder shares, or no working `virtiofsd`). |
 | `runner_trust_changed` | `409`: a revive of a run on a runner whose trust class is no longer the one the run's credential plan was admitted at (or was never recorded). Launch the run again. |
-| `runner_trust_required` | `422`: a `placement: "local"` run whose eligible runners are all `personal` trust, while `runners.require_managed_device` is on (off by default). Mark a runner `managed_device` or use an organisation's runner. |
+| `runner_trust_required` | `422`: a `placement: "local"` run whose eligible runners are all `personal` trust, while `runners.require_managed_device` is on (off by default). Mark a runner `managed_device` or use an organisation's runner. It is also a `macos_vm` run at dispatch or revive on a runner that is not `managed_device` (the macOS floor, whatever `machine_kind_denials` says; at create that case is `placement_capability`), and any new run on a runner with no trust class Wardyn knows while `runners.machine_kind_denials` is set. |
 | `runner_posture_unmet` | `422`: a `runner_resident` credential the runner's reported posture does not meet (the detail names every unmet field and the requirement; a runner that reports no posture fails every posture requirement), a run with a CC3 floor, which a runner-asserted class never meets for a resident credential, or a `macos_vm` run on a Mac whose posture does not say `mdm_managed` from the MDM's posture file (the managed-Mac gate; a Mac not marked `managed_device` is `placement_capability`). |
 | `runner_keystore_unavailable` | `422`: the run's runner could not hold a `runner_resident` value: its OS keystore is unreachable or refused the write, or (macOS) the value is too long for the keychain. The run fails at dispatch, before its sandbox is created. |
-| `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). At revive the same `403` is audited `run.revive` denied; at dispatch the run fails and is audited `run.dispatch` failure with this `reason`. A managed-harness sign-in is exempt at every door; a site-config probe at create and dispatch. |
+| `placement_denied` | `403`: your governance profile's `deny_placements` refuses the run's placement, at create, preflight, policy preview and source scans; audited `authz.denied` (target `runs.placement`). At revive the same `403` is audited `run.revive` denied; at dispatch the run fails and is audited `run.dispatch` failure with this `reason`. A managed-harness sign-in is exempt at every door; a site-config probe at create and dispatch. The same `403` answers a new local run whose machine kind (`container`, `linux_vm` or `macos_vm`) the organisation's `runners.machine_kind_denials` refuses at the runner's trust class, at create, the queue's start and dispatch; a revive keeps its runner and is not judged. |
 | `runner_offline` | `422`: a `placement: "local"` run whose runner is offline or has not reported its capabilities yet, or none of your runners is online. `503` on the UI gateway's relay: the runner holding the run is offline; retry once it reconnects. |
 | `runner_at_capacity` | `422`: a revive onto a runner at one of its limits (Runs at once, or a total); or a launch that lost the runner's last room to another launch between placement and the insert (launch it again). A launch whose runners are all at their limits waits in the pool's queue instead. |
 | `runner_limits_unset` | `422`: no runner of the pool that could take the run has declared its limits. |
@@ -1102,7 +1164,7 @@ start.
 | `workspace_unit_not_yours` | `POST /runs`, preflight and the policy preview (403): an attached workspace's unit is on no path of the caller's units; `policy` names it. |
 | `unit_membership_gone` | Revive, admin restart, run-end extension (409): the run's owner holds no membership placing them in the run's unit ([governance writes](operations/governance-writes.md)). |
 | `governance_overlay_unsatisfiable` | `PUT/POST /governance/units` (409): a base change would leave a profile built on it with a policy nothing satisfies (the body names that profile). The SAME value as authz's own registered launch refusal ([`internal/authz/registry.go`](../internal/authz/registry.go), `403` on create, preflight and every live door), a literal in `reasons.go` for the same reason `groups_snapshot_stale` is. |
-| `governance_second_human_local_mode` | `WARDYN_GOVERNANCE_SECOND_HUMAN` cannot be enforced in local mode (`503`): nobody is authenticated there, so the proposer and the approver are both client-supplied. Every covered governance write (profile, assignment, grant, enforcement, availability, user-type priority, role mapping, egress baseline) and every `/governance/changes` approve or reject answers it. |
+| `governance_second_human_local_mode` | `WARDYN_GOVERNANCE_SECOND_HUMAN` cannot be enforced in local mode (`503`): nobody is authenticated there, so the proposer and the approver are both client-supplied. Every covered governance write (profile, assignment, grant, enforcement, availability, user-type priority, role mapping, egress baseline) and every `/governance/changes` approve or reject answers it, and so does a widening of the assistant settings, which is held whatever the switch says. |
 | `governance_change_pending` | A covered write (`/governance/units`, `/governance/memberships`, `/permissions/grants`, `/permissions/enforcement`, `/permissions/availability`, `PUT /user-types/{id}`, `/access/mappings`, `PUT /governance/egress-baseline`) with `WARDYN_GOVERNANCE_SECOND_HUMAN` on (409): a live change already waits for approval at this target; the message names it. Approve or reject that one first, or let it expire. |
 | `governance_change_stale` | `POST /governance/changes/{id}/approve` (409): the target (or, for an assignment, the profile it points at) or the deployment default changed since the change was proposed, so approving would apply something other than what the reviewer saw. Nothing was applied and the change is now `stale`; propose it again. |
 | `governance_change_not_pending` | `POST /governance/changes/{id}/approve` or `/reject` (409): the change was already applied, rejected, expired or marked stale. A change past its expiry is moved to `expired` by the request that finds it. |
@@ -1110,6 +1172,15 @@ start.
 | `governance_change_note_proposer_only` | `PUT /governance/changes/{id}/note` (403): the caller did not propose the change. Only its proposer writes the note. |
 | `governance_change_note_invalid` | `PUT /governance/changes/{id}/note` (400): the reason is over 500 characters or holds a control character, or the ticket is over 128 characters or is not one line. |
 | `governance_change_state_invalid` | `GET /governance/changes?state=` (400): not one of `pending`, `applied`, `rejected`, `expired` or `stale`. |
+| `governance_change_already_approved` | `POST /governance/changes/{id}/approve` (409): the same person already holds an approval of the change that counts; someone else approves it, or they take theirs back. |
+| `governance_change_security_approver_required` | `POST /governance/changes/{id}/approve` (409): the last approval would leave no security admin among those counted. |
+| `governance_change_proposer_inactive` | `POST /governance/changes/{id}/approve` (409): the last approval, while the person who proposed the change is deactivated. |
+| `governance_change_reason_required` | `POST /governance/changes/{id}/reject` (400): a change needing more approvals is rejected by someone other than its proposer, with no reason. |
+| `governance_change_approval_not_found` | `DELETE /governance/changes/{id}/approval` (404): the caller holds no approval of the change that counts. |
+| `governance_approval_counts_minimum_unset` | `PUT /governance/approval-counts` (409): `WARDYN_GOVERNANCE_MIN_APPROVALS` is unset, so new held changes need one approver; a held change keeps the count it was proposed with. |
+| `governance_approval_counts_local_mode` | `PUT /governance/approval-counts` (503): local mode authenticates nobody, so no edit can be held for distinct people. |
+| `governance_approval_counts_invalid` | `PUT /governance/approval-counts` (400): a count below the minimum (or 1) or above 9, a kind the counts do not list, a kind with one decider, the counts' own kind, or a kind listed twice. |
+| `governance_approval_counts_unreachable` | `PUT /governance/approval-counts` (422), the admin token included, and `POST /governance/changes/{id}/approve` on an edit to the counts: a count above the people besides the proposer who can approve its kind, a raise while someone who might approve it can't be counted, or a highest count that the security admins other than the proposer could not reach on an edit to the counts. |
 | `governance_request_needs_person` | `POST /governance/requests` (403): the caller is not a signed-in person (the admin token, a service, a device, local mode). Only a person can ask. |
 | `governance_request_kind_invalid` | `POST /governance/requests` (400): `kind` is not one this server takes; the message lists them. |
 | `elevation_not_offered` | `POST /governance/requests` (400): the unit offers the caller no elevation: no `elevation` rule on it or above it, the caller is in none of its `eligible_requesters` groups (or their group list is out of date), or the unit is Default or unknown. One answer for all of them. |
@@ -1142,9 +1213,13 @@ start.
 | `wall_preset_invalid` / `wall_preset_scope_forbidden` / `wall_preset_builtin` / `wall_preset_not_found` | `/wall-presets` ([Wall presets](#wall-presets)): `422` a preset that names a wider value or no limit, or a launch whose preset no longer passes the walls check; `403` a save to the organisation or a group you may not save to; `403` an edit or delete of a built-in; `404` no such preset, or one you cannot see. |
 | `wall_preset_name_taken` / `wall_preset_version_conflict` / `wall_preset_limit_reached` | `409`: another preset of the same audience, or a built-in, has the name; the preset changed since the version you read; the audience holds the most presets it may. |
 | `wall_preset_unknown` / `wall_preset_host` / `wall_presets_unavailable` | `422` a launch names a preset that does not exist or is not open to you; `403` `POST /approvals/{id}/approve` of a host the run's wall preset denies; `501` this server's store keeps no wall presets. |
+| `agent_rules_invalid` / `agent_rules_harness_unknown` | `PUT /agent-rules/{harness}` (`422`): rules that name a wider value, a knob Wardyn does not enforce for them yet, or nothing; a harness the catalogue does not have. `DELETE` answers `400` for a missing or non-positive `?version` and `404` for a harness with no rules, both `agent_rules_invalid`. A run create or preview, or a record session, whose stored rules no longer pass is refused `agent_rules_invalid` too. |
+| `agent_rules_conflict` | Run create, preflight and preview (`422`): the run cannot meet an agent's rules for the harness's own walls. |
+| `agent_rules_version_conflict` | `PUT` and `DELETE /agent-rules/{harness}` (`409`): the version named is not the stored one. |
+| `agent_rules_unavailable` | `/agent-rules` (`501`): this server's store keeps no agent rules. |
 | `no_network_needs_egress` | `422` a `no-network` launch would need a host; the message names each source. |
-| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary or the run owner's walls now withhold the grant or a host it reaches. |
-| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary or the run owner's walls could not be read to check the grant; retry. |
+| `credential_withheld` | `POST /internal/credentials/mint`, `GET /internal/injection/{grantID}` (403): the run's governance profile, the Wardyn boundary, the run owner's walls or the rules of an agent the run includes now withhold the grant or a host it reaches. |
+| `credential_withheld_unread` | `POST /internal/credentials/mint` (503): the run, its grants, its profile, the Wardyn boundary, the run owner's walls or the agent rules could not be read to check the grant; retry. |
 | `break_glass_reason_required` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` with the admin token (400): the boundary is in `hard_limits`, bounds something, a unit with its own walls or a restriction exists, and the `X-Wardyn-Break-Glass-Reason` header is missing, too long or has control characters. |
 | `secret_name_invalid` / `secret_name_reserved` / `secret_owner_param_refused` / `secret_body_invalid` / `secret_value_too_short` / `secret_cap_reached` / `secret_not_found` | `PUT/DELETE /secrets/{name}` (and `/me/secrets/{name}`, `/shared-secrets/{name}`): the name fails the secret-name format or is reserved, `?owner=` was sent on a write, the body is malformed, the value is below the mask minimum (a trailing line break does not count), the owner already holds the maximum number of secrets, or (the admin-only `?owner=` delete arm) that owner holds no secret by that name. Also `GET /internal/injection/{grantID}` (424): a stored header credential under the minimum without its trailing line break. |
 | `people_store_unavailable` / `person_principal_invalid` / `person_principal_reserved` / `person_email_invalid` / `person_collision` / `person_email_taken` | `POST /people` (operator/security-tier only). |
@@ -1243,6 +1318,10 @@ sending `error` alone — completing the sweep this issue tracks:
 | `run_inspect_no_runner` / `run_inspect_terminal` / `run_inspect_no_sandbox` / `run_inspect_paused` / `run_inspect_agent_stopped` / `run_inspect_exec_stream_unsupported` / `run_resources_read_failed` / `run_files_no_exec_session` | `GET /runs/{id}/resources` and `GET /runs/{id}/files` (`run_resources.go`, `run_files.go`): the two widgets read the identical run-state facts and share a reason per cause rather than each inventing its own synonym. `run_inspect_paused` also answers the Files panel's list (`desktop_files.go`). |
 | `run_exec_invalid` / `run_exec_unavailable` / `run_exec_busy` / `run_exec_failed` | `POST /runs/{id}/exec` (`run_exec.go`): the command is empty or over 128 KiB, or `timeout_sec` is outside 1 to 300 (`400`); the run cannot take a command now, and the message says why (`409`); the run's SSH channels are all in use (`429`); the runner could not start the command, or lost it before it ended (`502`, with no exit code). A runner with no exec stream answers `501 run_inspect_exec_stream_unsupported`. |
 | `run_exec_off` | `POST /runs/{id}/exec` (`run_exec.go`), `409`: the operator left `exec` out of `WARDYN_SSH_CHANNELS`, so commands are off for the deployment and a later try is refused the same way. |
+| `run_forward_off` / `run_forward_ticket_required` / `run_forward_invalid` / `run_forward_port_refused` / `run_forward_unavailable` / `run_forward_busy` / `run_forward_failed` | `GET /runs/{id}/attach/forward` (`attach_forward.go`): the operator has not turned forwarding on (`WARDYN_ATTACH_FORWARD`) or left `forward` out of `WARDYN_SSH_CHANNELS` (`409`); the request carries no attach ticket (`400`); the port is not 1 to 65535 (`400`); a macOS VM's Screen Sharing ports (`403`); the run cannot take a forward now (`409`); the run's SSH channels are all in use (`429`); the runner could not start the relay (`502`). |
+| `attach_ticket_purpose_invalid` / `attach_ticket_ports_invalid` | `POST /runs/{id}/attach/ticket` (`attach_ticket_purpose.go`), `400`: `purpose` starts `ssh-` but is not `ssh-exec`, `ssh-forward` or `ssh-editor`; `ports` is not 1 to 16 distinct ports from 1 to 65535, is missing on `ssh-forward` or `attach-forward`, or rides a purpose that takes none. |
+| `ssh_ticket_unsupported_caller` / `ssh_gateway_off` / `ssh_tickets_off` / `ssh_ticket_channel_off` | `POST /runs/{id}/attach/ticket` with an `ssh-*` purpose (`attach_ticket_purpose.go`): the caller is a portal, a device or a service, not a person signed in directly (`403`); the SSH gateway is off (`WARDYN_SSH_LISTEN`), `WARDYN_SSH_TICKETS` is off, or `WARDYN_SSH_CHANNELS` leaves out a kind the purpose needs (`409`). |
+| `ssh_gateway_unavailable` / `ssh_gateway_busy` / `ssh_ticket_unverifiable` | `GET /runs/{id}/ssh` (`sshgateway_ticket.go`), `503`: the gateway is not serving on this replica yet; the gateway's handshake bounds are full; the run or its governance profile could not be read. The door also answers `ssh_tickets_off` and `ssh_gateway_off` (`409`), a bad ticket as the terminal does (`403` `ui_gateway_ticket_invalid`), `run_owner_only`, `run_background_only` and `governance_unit`. |
 | `audit_unavailable` | Strict audit (`WARDYN_AUDIT_STRICT`, `audit_strict.go`), `503`: a covered change was refused because its audit intent row could not be written first. Nothing was changed; try again. |
 | `run_output_tail_invalid` / `run_output_interactive` / `run_output_not_captured` / `run_output_off` / `run_output_not_kept` / `run_output_expired` / `run_output_erased` | `GET /runs/{id}/output` (`run_output.go`): `?tail=` is not a positive number of bytes (`400`); the run is interactive with no pane snapshot (`409`): with recording off the sentence says nothing was kept, with it on it points at the recording; the runner exposes no direct stdout and no authorized recording-derived output is available (`409`); this deployment keeps none, or refuses stored rows (`WARDYN_EXEC_OUTPUT_TAIL=off`, `409`); no output is kept for the run — it finished before output was persisted, its runner captures none and no recording arrived, or it is still being captured and a later read serves it (`409`); a sign-in run is interactive and answers `run_output_interactive`; the in-memory tail outlived `WARDYN_EXEC_OUTPUT_TAIL_TTL`, or the run ended longer ago than `WARDYN_RUN_OUTPUT_RETENTION_DAYS` and its row was deleted (`410`); the run's output was erased (`404`). |
 | `run_sign_in_not_aws` / `run_sign_in_unreadable` | `GET /runs/{id}/sign-in` (`run_sign_in.go`): the run is not an AWS sign-in run (`409`); the sign-in pane, or the capture's audit row, could not be read in time — a read a moment later may answer (`503`). |
@@ -1351,7 +1430,7 @@ The rest reach the wire only through
 | `drive_portal_not_live` | `POST /drives/grants` to a portal, `422`: the portal is unknown or revoked. Allocate to a portal that is registered and live. |
 | `drive_not_allocated_to_portal` | `POST /runs` through an issuer portal, `403`: a `drives[]` entry names a drive no allocation of that portal reaches, or the request asks for the legacy `drive` flag. The body is the same whatever the drive is, so it never says whose it is. Ask a super admin to allocate the drive to the portal, or run without it. |
 | `service_scope` | A service identity's token asked for a route outside its fixed allow-list (#1508): run create, preflight, list, read, events, output, `PATCH` and kill, `GET /audit?run_id=`, `GET /presets`, `GET /workspaces`, `GET /me`, `GET /setup/status` and its own model-provider credential. Everything else, `GET /audit/export` included, answers `403`. |
-| `event_stream_cap` | The caller already holds 32 open `GET /runs/{id}/events` streams, the most one principal may (#1407); close one and retry. Answered `422` and not audited, like `run_quota`. |
+| `event_stream_cap` | The caller already holds 32 open event streams (#1407): run events and Walls view streams count together, and at most 2 may be `GET /walls/stream`. Close one and retry. Answered `422`, not audited, like `run_quota`. |
 | `component_autonomy` | The organisation's autonomy cap on runs that use the caller's own custom components closes the door, with or without a governance profile; the body's `policy` names the deployment. |
 | `placement_component_self_defined` | A run on your own runner carries a component you defined while your limits omit `local_self_defined_components` (default deny); `403`, target `runs.placement`. |
 | `governance_unit` | The caller's resolved governance profile itself closes the door (distinct from `groups_snapshot_stale`, which is the profile being unresolvable at all). |
@@ -1362,7 +1441,7 @@ The rest reach the wire only through
 | `model_provider_unavailable` | `POST /runs`, `/runs/preflight` and `/runs/policy-preview` model-provider authorization, and the record door's (`POST /workspaces/{id}/record`) (`writeProviderRefusal`, `run_model_provider.go`): the generic bucket for a non-credential refusal (provider off, not serving this agent, none chosen, no such provider) — the credential-shaped refusal instead sends `model_credential` (below), which the console's sign-in door recognizes. |
 | `recording_governed` | `POST /workspaces/{id}/record` by an admin whose runs are governed (`WARDYN_GOVERN_ADMIN_RUNS`): `403`, audited at target `workspaces.record`. The body names the remedy, `WARDYN_GOVERN_ADMIN_RUNS_EXEMPT` set to `recording`. The admin token and local mode are never refused. |
 | `run_kept` | The run is kept (ended or lost); its agent is stopped and nothing may act on it as if it were live. |
-| `run_owner_only` | Interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run whose owner is a person, asked by a super admin who is not that person (#1476): `403`, with `error` "only the person who started this run can open it interactively". Unlike `not_owner` it is not hidden — the admin can already see the run. A run with no personal owner (operator-owned) stays enterable; kill, approve, policy, grants, revoke, audit, revive and resume are unchanged. Also the SSH gateway's refusal of a service identity's sponsor, whatever grant they hold (#1508). |
+| `run_owner_only` | Interactive entry (attach-ticket mint or consume, the cookie attach lane, a UI app, take-over) to a run whose owner is a person, asked by a super admin who is not that person (#1476): `403`, with `error` "only the person who started this run can open it interactively". Unlike `not_owner` it is not hidden — the admin can already see the run. A run with no personal owner (operator-owned) stays enterable; kill, approve, policy, grants, revoke, audit, revive and resume are unchanged. Also the SSH gateway's refusal of a service identity's sponsor, whatever grant they hold (#1508), and the port forward's refusal of anyone, a sponsoring member included, on a service identity's run. |
 | `role_stamp_stale` | The `wdn_` API token's role and group stamp is older than the deployment's `WARDYN_ROLE_STAMP_TTL` (0.8.6); answered `401`. The token's owner signs in to the console again, which re-stamps it; mint nothing new. An inbound token on the app gateway is refused the same way. |
 | `key_domain_unknown` | A key-domain assignment named a domain the deployment's key domains file does not declare (`PUT /key-domains/assignments/{subject_type}/{subject}`): `422`, audited as `authz.denied`. |
 | `key_domain_ambiguous_membership` | A group key-domain assignment would leave people in groups assigned to different domains with no assignment of their own, or while a person whose last sign-in lost groups (a Microsoft Entra overage) has none, so their next principal key would be refused: `409`, audited as `authz.denied`, counting and naming them. Deactivated or purged people are not counted; deleting such a person's user assignment while a group is assigned is refused the same way, as is deleting the user assignment of a person whose groups are assigned to different domains. |
@@ -1500,6 +1579,17 @@ The portal person routes (`POST /people/{principal}/suspend`, `/reactivate`, `/p
 
 The lookups (`GET /people/portal-person`, `GET /people/{principal}/portals`) answer `principal`, `state` (`active`, `deactivated` or `purged`), `display_email`, `deactivated_at`, `purged_at` and `portals_used`, a list of `{delegate, name, run_in_under, revoked_at}` that keeps revoked portals; they never carry `purge_after`. Suspend, reactivate and purge answer `principal`, `state`, `deactivated_at`, `purge_after` and `purged_at`. `GET /admin/portal-lifecycle/status` answers `deactivated`, `pending`, `pending_suspensions` and `pending_purges`. A suspend with a positive `purge_after_seconds` is a super admin's; a security admin suspends without one. A purge refused because a reactivation committed first answers `person_not_suspended`. [The steps](operations/api-tokens.md#suspend-reactivate-and-purge-a-portals-person).
 
+### The Walls view
+
+`GET /walls/topology` and `GET /walls/stream` answer the security tier and unit admins. `GET /runs/{id}/walls` answers the run's owner and the security tier, and a unit admin gets the same 404 as a missing run. `GET /runs/{id}/walls/stream` also answers a unit admin of the run's unit. `GET /walls/stream` and `GET /runs/{id}/walls/stream` are `text/event-stream`. Each sends one `frame` event a second, even when nothing happened, and a `notice` event when an approval, a run's policy or a credential changes. A `Last-Event-ID` from the same server replays up to two minutes, shown under your current access; anything older gets a `gap` event, after which you refetch. One person may open 12 Walls view streams a minute and hold 2 `GET /walls/stream` at once. Each stream ends after 5 minutes; reconnect with `Last-Event-ID`. A unit admin's `elsewhere` totals count the runs active in the last 15 minutes outside their units.
+
+| Reason | Meaning |
+|---|---|
+| `walls_rate_limited` | (429): too many Walls view reads from one caller. Retry after the `Retry-After` seconds. |
+| `walls_snapshot_gone` | (409): the topology snapshot a continuation page named has expired or belongs to another caller; fetch the first page again. |
+| `walls_query_invalid` | (400): `window`, `edges`, `limit` or `cursor` is not a value the Walls view route takes. |
+| `walls_view_unavailable` | (501): this server does not serve that Walls view route yet, or its store cannot read decision rows. |
+
 ## Pending approval (governance writes)
 
 A deployment can require a second approver for governance writes: a covered write is
@@ -1544,6 +1634,12 @@ applied only once another approver approves it. The SDK never reads it as a save
 - `ListGovernanceChanges(ctx, state)`, `GetGovernanceChange`, `ApproveGovernanceChange` and
   `RejectGovernanceChange(ctx, id, reason)` read and decide the stored changes
   (`/api/v1/governance/changes`).
+- `GetGovernanceChangeImpact`, `ApproveGovernanceChangeWithReason(ctx, id, reason)` and `TakeBackGovernanceApproval`
+  read who and what a pending change would reach, approve it with a reason, and take your approval back.
+  `GovernanceChange.Approvals` says where a change that needs several approvals stands, and
+  `GovernanceChangeDiff.Review` what the check that held it found.
+- `GetApprovalCounts` and `PutApprovalCounts` read and replace how many approvals each kind of change needs
+  (`/api/v1/governance/approval-counts`). A person's `PutApprovalCounts` is held and comes back as `*PendingApprovalError`.
 - `ListGovernanceRequests` (`GET /api/v1/governance/requests`), `RequestElevation(ctx, unit, duration, reason, ticket)`
   (`POST /api/v1/governance/requests`, kind `elevation`), `RequestImage(ctx, image, reason, ticket)` (kind `image`, one
   image by digest; `ImageOffered` on the list says whether the caller may ask), `ApproveGovernanceRequest` and
@@ -1567,6 +1663,8 @@ for _, ch := range res.Pending {
 The CLI mirrors this. `wardyn governance set` prints the pending and deferred lists (profiles and assignments) on stderr and
 exits 0, and `wardyn governance changes list [--state ...]`, `changes approve <id>` and
 `changes reject <id> [--reason ...]` act on them.
+`changes show <id> [--impact] [--json]`, `changes approve <id> [--reason TEXT]`, `changes take-back <id>`,
+`wardyn governance approvals-needed get [--json]` and `approvals-needed set --file counts.json` cover approvals by several people.
 
 **Old clients.** A client built before 0.8.6 that writes governance against a deployment with this
 switch on decodes the `202` as an empty profile, and its next assignment write is refused with
@@ -1677,6 +1775,7 @@ curl -sN -H 'Authorization: Bearer demo-admin-token' \
   (exact match on the run's repo/workspace-path label) and `q` (case-insensitive
   substring search over title/task/repo/created_by).
 - `sponsored=exclude` drops the runs of the service identities a person sponsors from their own list; no-op where already left out.
+- `counts=skip` leaves the two hidden-count headers below out, for a poll that already has them. `counts` is read only together with one of the parameters above: on its own it is ignored and does not select this ordered list.
 
 - With any of them the
   response is ordered live runs first, then ended runs by end time, and two headers

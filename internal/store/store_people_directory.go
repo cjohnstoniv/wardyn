@@ -87,12 +87,12 @@ type PeopleDirectoryPage struct {
 	Next   string
 }
 
-// peopleDirectoryRows is the identity side (one row per principal, over every issuer it has
-// signed in on) full-joined to the people table, so a pre-created person who never signed in and
-// a sub-keyed user with no people row both appear. A service: principal is no person (#1508) and is
-// never listed, whichever table holds it. A person is deactivated when every identity
-// row of theirs is or when their people row is (a suspension over SCIM before the first sign-in).
-const peopleDirectoryRows = `
+// peopleDirectoryCTEs are the two common table expressions of the people directory: ident, the identity side
+// (one row per principal, over every issuer it has signed in on), and dir, ident full-joined to the people
+// table. The inactive rule (every identity row of a person is deactivated, or their people row is) and the
+// email a person is listed under are defined here once; peopleDirectoryRows and the sign-in record reads
+// (signInRecordRows) both build on them.
+const peopleDirectoryCTEs = `
 WITH ident AS (
     SELECT principal,
            bool_or(object_id <> '') AS entra,
@@ -121,7 +121,14 @@ WITH ident AS (
            COALESCE(i.portal_issuer, '') AS portal_issuer
       FROM ident i
       FULL JOIN people p ON p.principal = i.principal
-)
+)`
+
+// peopleDirectoryRows is the identity side (one row per principal, over every issuer it has
+// signed in on) full-joined to the people table, so a pre-created person who never signed in and
+// a sub-keyed user with no people row both appear. A service: principal is no person (#1508) and is
+// never listed, whichever table holds it. A person is deactivated when every identity
+// row of theirs is or when their people row is (a suspension over SCIM before the first sign-in).
+const peopleDirectoryRows = peopleDirectoryCTEs + `
 SELECT dir.principal, dir.email, dir.entra, dir.pre_created, dir.first_sign_in_at, dir.last_sign_in_at, dir.console_sign_in_at, dir.deactivated_at,
        COALESCE(g.groups, '[]'::jsonb), COALESCE(g.truncated, false), g.principal IS NOT NULL,
        dir.portal_issuer, COALESCE(pi.internal_issuer_norm, '')

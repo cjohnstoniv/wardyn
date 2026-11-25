@@ -10,11 +10,13 @@
 // card has a copy control and the claim field is never pre-filled. Everything a claimed runner says about
 // itself is labelled as reported. The card renders nothing while runners are off.
 import * as React from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { HttpError } from "../../../lib/api/core";
 import { RUNNERS_DISABLED, runners as runnersApi } from "../../../lib/api/runners";
 import { useMyCapabilities } from "../../../lib/capabilities";
+import { queryClient } from "../../../lib/query-client";
 import { usePoll } from "../../../lib/use-poll";
 import { absoluteTime, relativeTime, shortDate } from "../../../lib/format";
 import type { RunnerView } from "../../../lib/types/runners";
@@ -42,6 +44,9 @@ const POLL_MS = 5000;
 const NO_CARD_REASONS = [RUNNERS_DISABLED, "runner_session_required"];
 
 type Status = "loading" | "ready" | "error" | "hidden";
+const MY_RUNNERS_KEY = ["settings", "my-runners"];
+const MY_RUNNERS_KEY_STR = JSON.stringify(MY_RUNNERS_KEY);
+const NO_ROWS: RunnerView[] = [];
 
 function Fact({ label, reported, children }: { label: string; reported?: string; children: React.ReactNode }) {
   return (
@@ -231,54 +236,38 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
   const location = useLocation();
   const sectionRef = React.useRef<HTMLElement | null>(null);
   const [open, setOpen] = React.useState(false);
-  const [status, setStatus] = React.useState<Status>("loading");
-  const [loadMessage, setLoadMessage] = React.useState<string | undefined>();
-  const [rows, setRows] = React.useState<RunnerView[]>([]);
   const [claiming, setClaiming] = React.useState<RunnerView | null>(null);
   const [revoking, setRevoking] = React.useState<{ runner: RunnerView; notMine: boolean } | null>(null);
   const [confirming, setConfirming] = React.useState(false);
   const [limitsFor, setLimitsFor] = React.useState<RunnerView | null>(null);
-  const seq = React.useRef(0);
   const inBlock = React.useRef(false);
   // Read through a ref: `read` is built once, and the parent may pass a new function each render.
   const hiddenRef = React.useRef(onHidden);
   hiddenRef.current = onHidden;
 
-  const read = React.useCallback((silent: boolean) => {
-    const mine = ++seq.current;
-    return runnersApi
-      .listMine()
-      .then((list) => {
-        if (mine !== seq.current) return;
-        setRows(list);
-        setStatus("ready");
-      })
-      .catch((e) => {
-        if (mine !== seq.current) return;
-        if (e instanceof HttpError && e.status === 403 && NO_CARD_REASONS.includes(e.reason)) {
-          setStatus("hidden");
-          hiddenRef.current?.(e.reason);
-        } else if (!silent) {
-          setLoadMessage(failureSentence(e));
-          setStatus("error");
-        }
-      });
-  }, []);
-  // A read that was in flight when the card went away must not set state.
-  const abandon = React.useCallback(() => {
-    seq.current++;
-  }, []);
+  // One key for the person's runners: the card, its poll and every action re-read the same list.
+  const q = useQuery({ queryKey: MY_RUNNERS_KEY, queryFn: () => runnersApi.listMine() }, queryClient);
+  // The last failure stays on screen while a re-read is in flight; only a read that answers replaces it.
+  const [held, setHeld] = React.useState<{ key: string; error: unknown } | null>(null);
   React.useEffect(() => {
-    void read(false);
-    return abandon;
-  }, [read, abandon]);
+    if (q.isSuccess) setHeld(null);
+    else if (q.isError) setHeld({ key: MY_RUNNERS_KEY_STR, error: q.error });
+  }, [q.isSuccess, q.isError, q.error]);
+  const err = q.isError ? q.error : held?.key === MY_RUNNERS_KEY_STR ? held.error : null;
+  const hiddenError = err instanceof HttpError && err.status === 403 && NO_CARD_REASONS.includes(err.reason) ? err : null;
+  React.useEffect(() => {
+    if (hiddenError) hiddenRef.current?.(hiddenError.reason);
+  }, [hiddenError]);
+  const status: Status = hiddenError ? "hidden" : q.data !== undefined ? "ready" : err !== null ? "error" : "loading";
+  const loadMessage = err !== null && !hiddenError ? failureSentence(err) : undefined;
+  const rows = q.data ?? NO_ROWS;
 
   const live = rows.filter((r) => r.state !== "revoked");
   const waiting = live.filter((r) => r.state === "unclaimed");
   // The card polls only while it is open (Add this computer is shown then, so a runner `wardyn runner setup` just
   // registered appears) or while one waits to be claimed; a closed card does not poll, and a poll is never announced.
   const polling = status === "ready" && (waiting.length > 0 || open);
-  usePoll(() => read(true), POLL_MS, !polling);
+  usePoll(() => q.refetch({ cancelRefetch: false }), POLL_MS, !polling);
 
   // The first runner's arrival remounts the block (above My pools, then below): focus that was inside it is
   // lost to the page, so it returns to the card.
@@ -329,7 +318,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
           <p className="text-body text-muted-foreground">{MY_RUNNER.LEDE}</p>
           {status === "error" ? (
             <div role="status">
-              <ErrorState size="compact" title={MY_RUNNER.FETCH_FAILED} message={loadMessage} onRetry={() => read(false)} />
+              <ErrorState size="compact" title={MY_RUNNER.FETCH_FAILED} message={loadMessage} onRetry={() => void q.refetch()} />
             </div>
           ) : (
             <>
@@ -382,7 +371,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         runner={claiming}
         onOpenChange={(o) => !o && setClaiming(null)}
         onClaimed={() => {
-          void read(true);
+          void q.refetch();
           pools.reload();
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
@@ -392,7 +381,7 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         onOpenChange={(o) => !o && setLimitsFor(null)}
         onSave={(limits) => runnersApi.updateMine(limitsFor?.id ?? "", limits)}
         onSaved={() => {
-          void read(true);
+          void q.refetch();
           pools.reload();
         }}
       />
@@ -409,10 +398,10 @@ export function MyRunnerCard({ onHidden }: { onHidden?: (reason: string) => void
         onConfirm={() => runnersApi.revokeMine(revoking?.runner.id ?? "", revoking?.notMine)}
         onDone={() => {
           toast.success(RUNNER.REVOKED_TOAST(revoking?.runner.name ?? ""));
-          void read(true);
+          void q.refetch();
           requestAnimationFrame(() => sectionRef.current?.focus());
         }}
-        onRaced={() => read(true)}
+        onRaced={() => void q.refetch()}
       />
     </>
   );

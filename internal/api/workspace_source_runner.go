@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/pathutil"
 	"github.com/cjohnstoniv/wardyn/internal/placement"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -247,6 +248,23 @@ func mountBinding(holders []types.Workspace, path string) (rid *uuid.UUID, ok bo
 		}
 	}
 	return rid, true
+}
+
+// inBoundFolder reports whether path is a folder of ws bound to a person's runner, or a path inside one:
+// every local_dir source of ws whose folder holds path (pathutil.Within) is bound, all to one runner. A path
+// no folder of ws holds, or one an unbound folder holds, is on this host.
+func inBoundFolder(ws types.Workspace, path string) bool {
+	var rid *uuid.UUID
+	for _, src := range ws.Sources {
+		if src.Type != types.WorkspaceSourceTypeLocalDir || !pathutil.Within(src.Path, path) {
+			continue
+		}
+		if src.RunnerID == nil || (rid != nil && *rid != *src.RunnerID) {
+			return false
+		}
+		rid = src.RunnerID
+	}
+	return rid != nil
 }
 
 // mountPlacesMsg refuses a folder the run's workspaces put in two places.

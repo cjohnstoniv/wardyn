@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
@@ -57,8 +58,9 @@ func sshChannelOffMsg(k sshChannelKind) string {
 	return "wardyn: this deployment's SSH gateway does not serve " + sshKindWord(k) + " (WARDYN_SSH_CHANNELS)"
 }
 
-// sshKindRefusal is the sentence for a kind the switch leaves out or, on a support connection, the owner did not
-// tick, with the one ssh.channel.reject row written for it; "" when the kind may run.
+// sshKindRefusal is the sentence for a kind the switch leaves out, on a support connection the owner did not tick,
+// or on a ticket connection the purpose does not serve, with the one ssh.channel.reject row written for it; "" when
+// the kind may run.
 func (s *Server) sshKindRefusal(ctx context.Context, runID uuid.UUID, principal string, k sshChannelKind, channelType string) string {
 	if !s.sshChannelOn(k) {
 		s.sshAuditChannelOff(ctx, runID, types.ActorHuman, principal, channelType)
@@ -68,7 +70,7 @@ func (s *Server) sshKindRefusal(ctx context.Context, runID uuid.UUID, principal 
 		s.sshAuditSupportDoorOff(ctx, runID, principal, channelType)
 		return sshSupportOffMsg(k)
 	}
-	return ""
+	return s.sshTicketKindRefusal(ctx, runID, principal, k, channelType)
 }
 
 // sshAuditChannelOff writes the ssh.channel.reject row for a channel the switch turned off, as the actor type at:
@@ -80,11 +82,14 @@ func (s *Server) sshAuditChannelOff(ctx context.Context, runID uuid.UUID, at typ
 		})))
 }
 
-// sshRefuseForward refuses a direct-tcpip channel when forward is off or, for a helper, not ticked, else applies
-// the data_out rule.
+// sshRefuseForward refuses a direct-tcpip channel when forward is off or, for a helper, not ticked, or on an
+// ssh-forward ticket's connection to a port it was not minted for, else applies the data_out rule.
 func (s *Server) sshRefuseForward(ctx context.Context, runID uuid.UUID, principal string, ch ssh.NewChannel, rule types.TransferRule) bool {
 	if msg := s.sshKindRefusal(ctx, runID, principal, sshKindForward, "direct-tcpip"); msg != "" {
 		_ = ch.Reject(ssh.Prohibited, msg)
+		return true
+	}
+	if s.sshTicketPortRefused(ctx, runID, principal, ch) {
 		return true
 	}
 	return s.sshRefuseDataOut(ctx, runID, principal, ch, rule)
@@ -92,8 +97,8 @@ func (s *Server) sshRefuseForward(ctx context.Context, runID uuid.UUID, principa
 
 // sshGatewayHealthz is /healthz's "ssh" field: nil (disabled) or the pane's
 // three discovery facts (enabled, advertise_addr, host_key_fingerprint), plus
-// proxy_command only when WARDYN_SSH_PROXY_COMMAND is set — see healthz.go's
-// handleHealthz.
+// proxy_command only when WARDYN_SSH_PROXY_COMMAND is set, and tickets with the public host_key only when
+// WARDYN_SSH_TICKETS is on (the CLI pins the key it reads over TLS) — see healthz.go's handleHealthz.
 func (s *Server) sshGatewayHealthz() map[string]any {
 	if s.cfg.SSHListenAddr == "" || len(s.cfg.SSHHostKey) == 0 || s.sshUnbound.Load() {
 		return nil
@@ -116,6 +121,10 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 	out["channels"] = served
 	if s.cfg.SSHProxyCommand != "" {
 		out["proxy_command"] = s.cfg.SSHProxyCommand
+	}
+	if s.cfg.SSHTickets {
+		out["tickets"] = true
+		out["host_key"] = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 	}
 	return out
 }

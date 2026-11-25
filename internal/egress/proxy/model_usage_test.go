@@ -63,7 +63,7 @@ func usageRows(t *testing.T, buf *bytes.Buffer) []egress.DecisionLog {
 func meteredResponse(t *testing.T, p *Proxy, path string, hdr http.Header, body []byte, read func(io.Reader) []byte) ([]byte, *bytes.Buffer) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	p.sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+	p.sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 	r := httptest.NewRequest(http.MethodPost, "https://"+anthropicHost+path, strings.NewReader(`{}`))
 	resp := &http.Response{StatusCode: 200, Header: hdr, Body: io.NopCloser(bytes.NewReader(body))}
 	p.meterUsage(r, anthropicHost, 443, resp, "")
@@ -283,7 +283,7 @@ func TestUsageMeter_EveryProviderKind(t *testing.T) {
 			opts := tc.opts
 			opts.RunID, opts.CA, opts.Resolver = uuid.New(), fakeCA(t), publicResolver{}
 			opts.Dial, opts.TLSClientConfig = redirectDial(upstreamAddr(up.srv)), testInsecureTLSConfig
-			opts.Sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+			opts.Sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 			opts.Injector = staticInj(keys)
 			opts.Policy = CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost, openaiHost, gateway, routeThru, foundry, vpce}})
 			runUsageCalls(t, newProxy(opts), up, buf, tc.calls)
@@ -306,7 +306,7 @@ func TestUsageMeter_EveryProviderKind(t *testing.T) {
 		up := newUsageUpstream(t, false)
 		h.respond = up.srv.Config.Handler.ServeHTTP
 		buf := &bytes.Buffer{}
-		h.p.sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+		h.p.sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 		for _, path := range []string{"/model/m/converse", "/model/m/invoke"} {
 			rec := h.send(t, sandboxRequest(t, http.MethodPost, sigv4Bedrock, path, `{}`, nil, "", "bedrock", "us-east-1", ""), sigv4Bedrock)
 			if rec.Code != http.StatusOK {
@@ -320,7 +320,7 @@ func TestUsageMeter_EveryProviderKind(t *testing.T) {
 		up := newUsageUpstream(t, false)
 		g.respond = up.srv.Config.Handler.ServeHTTP
 		buf := &bytes.Buffer{}
-		g.p.sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+		g.p.sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 		rec := g.send(t, sgwRequest(t, sgwHost, sgwPrefix+"/model/m/converse", `{}`, map[string]string{"Content-Type": "application/json"}), sgwHost)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
@@ -428,7 +428,7 @@ func usageAzureProxy(t *testing.T, up *usageUpstream) (*Proxy, *bytes.Buffer) {
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{azHost + ":443"}}),
-		Injector: inj, Sink: &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}, Resolver: publicResolver{},
+		Injector: inj, Sink: &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}, Resolver: publicResolver{},
 		Dial: redirectDial(upstreamAddr(up.srv)), RunToken: newTokenSource("RUNTOK"), AzureGates: azureGateCfgs(0),
 	})
 	p.mitmHosts = map[string]bool{azHost: true}
@@ -445,7 +445,7 @@ func TestUsageMeter_OffLeavesTheAnswerAlone(t *testing.T) {
 		buf := &bytes.Buffer{}
 		p := newProxy(Options{RunID: uuid.New(), MITMLLM: true, CA: fakeCA(t), Resolver: publicResolver{},
 			Dial: redirectDial(upstreamAddr(up.srv)), TLSClientConfig: testInsecureTLSConfig,
-			Sink:   &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+			Sink:   &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 			Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{anthropicHost}})})
 		p.meterOff = off
 		runUsageCallsN(t, p, up, buf, map[bool]int{false: 1, true: 0}[off])
@@ -493,7 +493,7 @@ func TestUsageMeter_WhatIsNotMetered(t *testing.T) {
 		{http.MethodGet, "/v1/messages", 200},
 	} {
 		buf := &bytes.Buffer{}
-		p.sink = &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
+		p.sink = &decisionSink{out: buf, ch: make(chan queuedDecision, 64)}
 		resp := &http.Response{StatusCode: tc.status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":1}}`))}
 		p.meterUsage(httptest.NewRequest(tc.method, "https://"+anthropicHost+tc.path, nil), anthropicHost, 443, resp, "")
 		_, _ = io.ReadAll(resp.Body)

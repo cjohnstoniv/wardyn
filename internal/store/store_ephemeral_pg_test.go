@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -180,6 +181,47 @@ func TestPG_AttachTicket_CredentialRoundTrip(t *testing.T) {
 		if got.TokenID != want.TokenID || got.CLISessionID != want.CLISessionID {
 			t.Fatalf("%s: credential = %v/%v, want %v/%v", name, got.TokenID, got.CLISessionID, want.TokenID, want.CLISessionID)
 		}
+	}
+}
+
+// TestAttachTicket_PurposeRoundTrip_PG: a ticket's purpose and ports (migration 0402) come back from the burn as they
+// were minted, and a row an older binary wrote, with neither column set, reads purpose "" and no ports.
+func TestAttachTicket_PurposeRoundTrip_PG(t *testing.T) {
+	pool := runsPGPool(t)
+	st := store.NewPG(pool)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for name, want := range map[string]store.AttachTicket{
+		"a forward with ports": {Purpose: "ssh-forward", Ports: []int{3000, 5000}},
+		"one command":          {Purpose: "ssh-exec"},
+		"a terminal":           {},
+	} {
+		tok := uuid.NewString()
+		want.RunID, want.ActorType, want.Principal, want.AuthorizedAt = uuid.New(), types.ActorHuman, "alice", now
+		if err := st.MintAttachTicket(ctx, tok, want, now, now.Add(30*time.Second)); err != nil {
+			t.Fatalf("%s: mint: %v", name, err)
+		}
+		got, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+		if err != nil || !ok {
+			t.Fatalf("%s: consume: ok=%v err=%v", name, ok, err)
+		}
+		if got.Purpose != want.Purpose || !slices.Equal(got.Ports, want.Ports) || (want.Ports == nil) != (got.Ports == nil) {
+			t.Fatalf("%s: purpose %q ports %v, want %q %v", name, got.Purpose, got.Ports, want.Purpose, want.Ports)
+		}
+	}
+
+	tok := uuid.NewString()
+	sum := sha256.Sum256([]byte(tok))
+	if _, err := pool.Exec(ctx, `INSERT INTO attach_tickets (token_sha256, run_id, actor_type, principal, role, expires_at)
+		VALUES ($1, $2, 'human', 'legacy', 'user', $3)`, hex.EncodeToString(sum[:]), uuid.New(), now.Add(30*time.Second)); err != nil {
+		t.Fatalf("insert a row without the columns: %v", err)
+	}
+	got, ok, err := st.ConsumeAttachTicket(ctx, tok, now)
+	if err != nil || !ok {
+		t.Fatalf("consume the row without the columns: ok=%v err=%v", ok, err)
+	}
+	if got.Purpose != "" || got.Ports != nil {
+		t.Fatalf("a row without the columns read purpose %q ports %v, want \"\" and nil", got.Purpose, got.Ports)
 	}
 }
 
