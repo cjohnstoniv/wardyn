@@ -237,7 +237,7 @@ func (d *deadlineWriter) SetReadDeadline(t time.Time) error { d.deadline = t; re
 // allow keeps the deadline its headers set.
 func TestViaOrgHeldRequestBodyKeepsItsReadTime(t *testing.T) {
 	p := newProxy(Options{RunID: uuid.New(), Resolver: publicResolver{},
-		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		ViaOrgRoutes: []ViaOrgRoute{{GrantID: uuid.New(), Host: viaOrgHost}},
 		Policy:       CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{viaOrgHost}, HostRules: []types.HostRuleSet{{Rules: viaOrgHoldRules()}}})})
 	for _, tc := range []struct {

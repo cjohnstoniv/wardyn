@@ -8,8 +8,11 @@
 // the whole Guided card is the button, chevron and code marks, a centred trust line with its check.
 
 import * as React from "react";
-import { Check, ChevronRight, Code } from "lucide-react";
+import { Check, ChevronRight, Code, Sparkles } from "lucide-react";
+import { Link } from "react-router-dom";
+import { composerHref, useAssistantDoor } from "../../../../lib/composer-url";
 import { Button } from "../../../ui/button";
+import { AssistantAvailability } from "../../../wardyn/assistant-availability";
 import { PathCard } from "../../../wardyn/path-card";
 import { NR_START } from "../../../wardyn/copy/new-run/start";
 import type { NewRunScreenProps } from "../new-run-route";
@@ -18,6 +21,8 @@ import { useAnnounce } from "../steps/step-shell";
 export function StartScreen({ go }: NewRunScreenProps) {
   const heading = React.useRef<HTMLHeadingElement>(null);
   const announce = useAnnounce();
+  // The AI composer card opens the composer only when the assistant is ready; any other answer keeps it visible and shut.
+  const door = useAssistantDoor("compose");
   React.useEffect(() => {
     heading.current?.focus();
     announce(NR_START.TITLE);
@@ -31,7 +36,7 @@ export function StartScreen({ go }: NewRunScreenProps) {
         <h1 ref={heading} tabIndex={-1} className="text-display outline-none">{NR_START.TITLE}</h1>
         <p className="max-w-[620px] text-muted-foreground">{NR_START.LEDE}</p>
       </header>
-      <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-2">
+      <div className="mt-[18px] grid gap-3.5 min-[761px]:grid-cols-2 min-[1100px]:grid-cols-3">
         <PathCard
           icon={<ChevronRight className="size-5" />}
           title={NR_START.GUIDED_TITLE}
@@ -50,6 +55,28 @@ export function StartScreen({ go }: NewRunScreenProps) {
               <Button type="button" variant="outline" onClick={() => go({ screen: "document", format: "yaml" })}>{NR_START.DOC_YAML}</Button>
               <Button type="button" variant="outline" onClick={() => go({ screen: "document", format: "json" })}>{NR_START.DOC_JSON}</Button>
             </>
+          }
+        />
+        <PathCard
+          icon={<Sparkles className="size-5" />}
+          title={NR_START.AI_TITLE}
+          badge={NR_START.AI_BADGE}
+          description={NR_START.AI_BODY}
+          actions={
+            <div className="flex min-w-0 flex-col gap-2">
+              {door?.state === "ready" ? (
+                <Button asChild variant="outline">
+                  <Link to={composerHref({ kind: "run" })}>{NR_START.AI_FOOT}</Link>
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" disabled>
+                  {NR_START.AI_FOOT}
+                </Button>
+              )}
+              {door && door.state !== "ready" && (
+                <AssistantAvailability state={door.state} providerId={door.provider_id} providerName={door.provider_name} />
+              )}
+            </div>
           }
         />
       </div>

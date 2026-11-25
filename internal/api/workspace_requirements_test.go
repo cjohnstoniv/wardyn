@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -372,5 +373,48 @@ func TestSetWorkspaceRequirements_WriteKeyOnRunnerBoundFolderDenied(t *testing.T
 	body := `{"requirements":{"write:/etc/ssh":{"level":"required","provenance":"operator_set"}}}`
 	if w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body); w.Code != http.StatusBadRequest {
 		t.Errorf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// A write: key on a path inside a folder bound to a person's runner is checked by its text alone, like one
+// on the folder itself. A path inside an unbound folder, or beside a bound one (a shared text prefix only),
+// still gets the host check.
+func TestSetWorkspaceRequirements_WriteKeyInsideRunnerBoundFolder(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "src")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inside, beside := dir+"/out", dir+"-other"
+	if err := os.Symlink("/etc", inside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(beside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", beside+"/out"); err != nil {
+		t.Fatal(err)
+	}
+	runnerID := uuid.New()
+	for _, c := range []struct {
+		name     string
+		src      types.WorkspaceSource
+		key      string
+		want     int
+		wantBody string
+	}{
+		{"inside a bound folder", boundSource(dir, runnerID), inside, http.StatusOK, ""},
+		{"inside an unbound folder", types.WorkspaceSource{Type: types.WorkspaceSourceTypeLocalDir, Path: dir}, inside, http.StatusBadRequest, "/etc"},
+		{"beside a bound folder", boundSource(dir, runnerID), beside + "/out", http.StatusBadRequest, "/etc"},
+		{"a denied spelling inside a bound folder", boundSource("/srv/x", runnerID), "/srv/x/../../etc", http.StatusBadRequest, ""},
+	} {
+		h := newHarness(t)
+		id := uuid.New()
+		fake := &requirementsStoreFake{ws: types.Workspace{ID: id, Name: "w", Sources: []types.WorkspaceSource{c.src}}}
+		srv := New(baseTestConfig(h, fake))
+		body := `{"requirements":{"write:` + c.key + `":{"level":"required","provenance":"operator_set"}}}`
+		w := do(t, srv, http.MethodPut, "/api/v1/workspaces/"+id.String()+"/requirements", adminToken, body)
+		if w.Code != c.want || !strings.Contains(w.Body.String(), c.wantBody) {
+			t.Errorf("%s: code = %d, want %d containing %q; body=%s", c.name, w.Code, c.want, c.wantBody, w.Body.String())
+		}
 	}
 }

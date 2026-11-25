@@ -169,5 +169,6 @@ func neverOperator(ctx context.Context) bool {
 	_, isSCIM := scimCallerSlot(ctx)                   // the identity provider's connector removes access, and never acts as the admin token
 	_, _, isService := serviceIdentityFromContext(ctx) // automation: member reach, whatever role its context was published with
 	_, isPolicy := policyDeciderFrom(ctx)              // an approval rule's context holds no human, which would read as the admin token
-	return isDevice || delegated || isSCIM || isService || isPolicy
+	// An assistant context with no human is a bug that lost the person: it reads as a member, never the admin token.
+	return isDevice || delegated || isSCIM || isService || isPolicy || (assistantActorFromContext(ctx) && oidcHumanFromContext(ctx) == "")
 }

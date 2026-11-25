@@ -269,10 +269,19 @@ fi
 # statement to every recipient of that image (#2192). Skipped when no release tag
 # is reachable (a shallow clone), like the other tag-history guards.
 if [ -f "$GPL_OFFER" ]; then
-  # The newest final tag by version, not the nearest ancestor: a patch tagged on a
-  # release branch is not an ancestor of main, and git describe would name the one
-  # before it. Falls back to a pre-release tag only when no final exists.
+  # The newest final tag by version, not the nearest ancestor: a patch tagged on a release branch is not an
+  # ancestor of main, and git describe would name the one before it. Only tags whose line (X.Y) is not above this
+  # tree's own (internal/version/version.go) count: once two lines are released, a release/0.10 tree must not read
+  # 0.11's publish matrix. Falls back to a pre-release tag of those lines only when no final exists.
   tags=$(git tag --list 'v[0-9]*' --sort=-v:refname 2>/dev/null || true)
+  if [ -n "$tags" ]; then
+    own=$(sed -n 's/^const Version = "\([0-9]*\.[0-9]*\)\.[^"]*"$/\1/p' internal/version/version.go 2>/dev/null || true)
+    if [ -z "$own" ]; then
+      echo "FAIL: internal/version/version.go has no 'const Version = \"X.Y.Z\"' line, so the GPL offer check cannot tell which release line this tree is on" >&2
+      fail=1
+    fi
+    tags=$(printf '%s\n' "$tags" | awk -v own="${own:-0.0}" '{ split(substr($0, 2), v, "."); split(own, o, "."); if (v[1] + 0 < o[1] + 0 || (v[1] + 0 == o[1] + 0 && v[2] + 0 <= o[2] + 0)) print }')
+  fi
   prev_tag=$(printf '%s\n' "$tags" | grep -v -- '-' | head -1 || true)
   [ -n "$prev_tag" ] || prev_tag=$(printf '%s\n' "$tags" | head -1)
   if [ -n "$prev_tag" ] && prev_wf=$(git show "$prev_tag:.github/workflows/release.yml" 2>/dev/null); then

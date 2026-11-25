@@ -47,7 +47,8 @@ A run's lease ends it, or someone ends it now.
 | Approvals and credentials | Pending approvals are cancelled; broker credentials get a best-effort, audit-only revoke |
 
 - The run's own identity is not revoked, so the run stays `RUNNING` and holds its quota slot until `WARDYN_ENDED_RUN_GRACE` (default 7 days; `0` tears the run down at once) or an End run.
-- A run lost to an outage or a reboot (`run.lost`) is a separate path; see [Revive](#revive).
+- A run lost to an outage or a reboot (`run.lost`) is a separate path. After a control-plane outage that includes a headless run on the server's own Docker.
+- See [After a control-plane outage](#after-a-control-plane-outage) and [Revive](#revive).
 - `run.ending_soon` warns at 24h, 1h and 10m before the end.
 - A kept run's token is refused all the same: every `/internal/*` door refuses it (ended, or lost to a reboot or an outage) with `403` and an `authz.denied` row, reason `run_kept`. Nothing can mint a credential, resolve an injection or decide an approval with it.
 - Only the four tail uploads (the recording, the scan results, the captured SSO cache and the egress proxy's last decisions) are still accepted, for five minutes after the run was kept. A revive gives the new proxy a fresh token.
@@ -87,6 +88,45 @@ No container holds the proxy's rendered configuration at rest: its per-run TLS-M
 
 - A run with no stored proxy config (one started before the row existed) can't be revived: `409`, start a new run. It runs, ends and is torn down as before.
 - `WARDYN_PROXY_IMAGE` must name a proxy image from the same release as wardynd: an older proxy doesn't read its config from stdin and exits at start.
+
+## After a control-plane outage
+
+When the database or the server is unreachable, a run's proxy cannot renew its token, and the lapse sweep marks the run lost (`run.lost`, reason `outage`).
+
+| Where the run runs | After an outage |
+| --- | --- |
+| The server's own Docker | Kept, headless runs too: the proxy is stopped, and the agent and its files stay. |
+| The server's Kubernetes | Ended: the run is `FAILED` and torn down, as an interactive Kubernetes run is. |
+| Registered runners | Unchanged. An interactive run, and a headless run on a person's own runner, are kept; a headless run on an organisation runner is ended as before. |
+
+- A run is read as lost to an outage, and kept, in three cases. Any one is enough:
+  - the server is recovering: it started, or the database became reachable again, within `WARDYN_LAPSE_RECOVERY_GRACE` (default 25 minutes);
+  - none of the server's own runs has renewed for 20 minutes;
+  - at least five of them, and at least a quarter, lapsed within 30 minutes (`WARDYN_LAPSE_MASS_MIN`, `WARDYN_LAPSE_MASS_SHARE`).
+- Outside those cases a proxy that dies on its own is ended as before.
+- The agent keeps running with no network.
+- An agent that exits while its run is kept does not end the run. The exit is recorded when the run is revived (within about two minutes), or the run ends at its own end, at its maximum age, or when someone ends it.
+- A kept Background task is still ended at its own end.
+- [Revive](#revive) brings a kept run back.
+- The first pass that keeps an unattended run writes one `run.lapse_sweep.hold` audit row per outage, per server process.
+- [`WARDYN_ORPHAN_SWEEP_HOLD`](../ENV.md#wardyn_orphan_sweep_hold) (off by default, at most 24 hours) keeps a server Docker sandbox that has no run row, for example after a database restore, instead of deleting it.
+- A held sandbox has its proxy and agent stopped, and only its files are kept. It costs disk until the hold ends.
+- It has no record, so it cannot be ended or opened from the console, and is copied out only with host access.
+
+The server records outage windows on the database's clock, from its own observations only, and keeps them for 30 days:
+
+- `cp_outage`: no server beat for more than 30 seconds.
+- `runner_link`: a registered runner's link was down.
+- `server_outage`: the server's own proxies stopped renewing as a group. It needs at least two of the server's own runs; a single run whose proxy stops renewing is ended or kept as before.
+- A session the server ended itself because the runner may not come back (the runner was revoked, its owner deactivated, or runners switched off) records no runner outage.
+- A connection pool starved for more than 30 seconds records a `cp_outage` window while the server was up.
+- A database restored to an earlier point records one window, from the restored beat to the first beat after the restore. Both cases only widen what may recover, within a 24-hour bound.
+- A runner's link outage is recorded only by the server that held its session, two minutes after the link dropped.
+- A link that drops less than two minutes before that server stops (a restart, a deploy or a crash) is not recorded.
+- Nor is a runner that was still connected when the server stopped and cannot reach the new one: a deploy that breaks runner connectivity is not recorded as a runner outage.
+- A server that stops ends its runner sessions without recording a runner outage. Only the time during which no server was running is recorded, as a control-plane outage, when it is longer than 30 seconds. Runs on such a runner end as they did before this release.
+
+See [`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace) for the rule in full.
 
 ## Revive
 
@@ -199,6 +239,21 @@ The Kubernetes substrate doesn't implement the optional runner capabilities the 
 The agent-sandbox backend with keep turned on is the exception for some runs ([Keep and revive](kubernetes-agent-sandbox.md#keep-and-revive)). An interactive `claude-code` or `codex-cli` run with its work folder on a kept drive is kept when its time runs out, and can be revived and restarted. No Kubernetes run is paused.
 
 - A Kubernetes run's end and limits still fire on schedule.
+- After a long control-plane outage a server Kubernetes run is still ended.
+- The exception is a registered Kubernetes runner. There a run lost to an outage is kept with its agent running and no network, and cannot be revived.
+- Until the run's end, its owner, and nobody else, can open it to copy work out: the terminal, SSH and the Files panel's download, each where the run's policy allows it.
+- Nothing can be uploaded through the Files panel. The command route (`POST /runs/{id}/exec`), UI apps, a support session and a delegated or issuer portal attach stay closed.
+- A run created with the admin token or in local mode has no personal owner, so nobody can open it this way.
+- `GET /runs/{id}` carries `kept_copy_out: true` for the owner while the door is open. At the run's end the run is ended and torn down.
+
+| The owner is refused when | Answer |
+| --- | --- |
+| The run has reached its end or its maximum age | `409` `attach_run_kept`: "This run has reached its end, so work can no longer be copied out of it." |
+| Its agent was stopped | `409` `attach_run_kept`: "This run's agent has stopped, so there is nothing running to copy work out of." |
+| Wardyn has not confirmed that the network was cut | `409` `attach_run_kept`: "Wardyn has not confirmed that this run's network was cut, so it cannot be opened to copy work out yet. Try again in a minute." |
+| Its runner could not confirm the network was cut, and removed the sandbox | `409` `attach_run_kept`: "This run's runner could not confirm that its network was cut, so it removed the run's sandbox. There is nothing left to copy out." |
+| Wardyn could not read the run's state | `409` `attach_run_kept`: "Wardyn could not check whether this run's agent is still running, so it cannot be opened to copy work out. Try again." |
+
 - But ending, losing its sandbox, or being idle all degrade to an immediate, non-resumable teardown rather than a grace window. The pause half of [the clocks](#the-clocks-that-end-or-freeze-a-run) never applies.
 - Its proxy config reaches the proxy pod through a per-run Secret staged into an in-memory volume, not stdin. The run is never kept, so that Secret lives as long as the run and is never re-created from the stored row.
 - The row is still written for a k8s run (and deleted with it). A live egress edit reads it and stores its denies there.
@@ -222,6 +277,9 @@ Four clocks can end a run or freeze its agent. They are independent; the first o
 - Every attached surface resets the clock when it opens and every 30 seconds while it is held. The surfaces are the browser terminal, an SSH shell, an SSH exec, sftp or `-L` channel, and a relayed connection to an in-sandbox UI.
 - So a run someone is attached to is not idle-stopped, as long as those writes succeed. They are best effort and a failed one is dropped, so a database that refuses them for long enough lets an attached run look idle.
 - A run nobody is attached to is idle like any other, which is why a run can end an hour after its owner last looked at it.
+- An outage does not count as idleness. For 25 minutes after the database is reachable again, and after every start of the server ([`WARDYN_LAPSE_RECOVERY_GRACE`](../ENV.md#wardyn_lapse_recovery_grace); `0` turns this off), no run is idle-stopped. Each run's idle time starts again at the start of that window (with several replicas, once for each).
+- A run on a registered runner that the server has no connection to is not idle-stopped, and its idle time starts again when the runner reconnects. With several replicas, only the replica that holds the runner's connection idle-stops its runs.
+- The run's end and `WARDYN_RUN_MAX_AGE` still apply in both cases.
 - The value is `auto_stop_after_sec` in the run's policy. The shipped `default.json` sets `3600`; `0` and a negative value both mean never idle-stop.
 - A pool's Interactive idle stop bounds it: its default applies when the policy sets none, and its maximum is never exceeded.
 - A member under a positive ceiling already holds that ceiling's maximum by then (next bullet), so for a member only the pool's maximum bites; an administrator gets the pool's default.

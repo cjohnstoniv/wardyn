@@ -133,6 +133,32 @@ describe("runs.listRunsFiltered — service", () => {
   });
 });
 
+describe("runs.listRunsFiltered — counts", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn(() => Promise.resolve(new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("skipCounts sends counts=skip and reads countsRead from the headers", async () => {
+    await runs.listRunsFiltered({ view: "user" });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("counts=");
+    const skipped = await runs.listRunsFiltered({ view: "user", skipCounts: true });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("counts=skip");
+    expect(skipped.countsRead).toBe(false);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response("[]", {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Wardyn-Hidden-Older": "0", "X-Wardyn-Hidden-Killed": "0" },
+      }),
+    );
+    const counted = await runs.listRunsFiltered({ view: "user" });
+    expect(counted.countsRead).toBe(true);
+  });
+});
+
 // #159: opting into BOTH limit and offset switches listRuns() onto explicit
 // server-side paging and widens its return to { runs, truncated } — reading
 // X-Wardyn-Truncated off the response, which unwrapList's bare array return

@@ -48,6 +48,9 @@ func ceilingRunRefusal(err error) *runRefusal {
 	if u, ok := isOverlayUnsatisfiable(err); ok {
 		return runError(http.StatusForbidden, reasonGovernanceOverlayUnsatisfiable, u.Error())
 	}
+	if errors.Is(err, errPortalUnitUnavailable) {
+		return runError(http.StatusServiceUnavailable, reasonPortalUnitUnavailable, portalUnitUnavailableMsg)
+	}
 	if refusal := contextRunRefusal(err); refusal != nil {
 		return refusal
 	}

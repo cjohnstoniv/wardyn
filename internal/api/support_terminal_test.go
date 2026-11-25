@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -260,27 +262,38 @@ func TestSupportTerminalMintCarriesTheGrant(t *testing.T) {
 
 // (b), (c) and the switch: a door the owner did not tick, any other purpose under a grant, a path-mode UI
 // ticket, no grant and the switch off are all refused with the reason the value list names, and mint nothing.
+// The ssh rows run with the SSH gateway and tickets on; with the gateway off, the deployment's answer comes
+// before any run read, a helper's included.
 func TestSupportTerminalMintRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		doors  []string
 		query  string
 		off    bool
+		ssh    bool
 		status int
 		reason string
 	}{
-		{"terminal not ticked", []string{"files"}, "", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"no grant", nil, "", false, 403, runOwnerOnlyReason},
-		{"switch off", []string{"terminal"}, "", true, 403, runOwnerOnlyReason},
-		{"ssh-exec purpose under a grant", []string{"terminal"}, "?purpose=ssh-exec", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"ssh-exec purpose with no grant", nil, "?purpose=ssh-exec", false, 403, runOwnerOnlyReason},
-		{"ui purpose, no UI door ticked", []string{"terminal"}, "?purpose=ui", false, 403, string(authz.ReasonSupportDoorNotGranted)},
-		{"ui purpose in path mode", []string{"web_apps"}, "?purpose=ui", false, 403, reasonInboundNeedsHostMode},
+		{"terminal not ticked", []string{"files"}, "", false, false, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"no grant", nil, "", false, false, 403, runOwnerOnlyReason},
+		{"switch off", []string{"terminal"}, "", true, false, 403, runOwnerOnlyReason},
+		{"ssh-exec purpose under a grant", []string{"terminal"}, "?purpose=ssh-exec", false, true, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"ssh-exec purpose with no grant", nil, "?purpose=ssh-exec", false, true, 403, runOwnerOnlyReason},
+		{"ssh-exec purpose under a grant, gateway off", []string{"terminal"}, "?purpose=ssh-exec", false, false, 409, reasonSSHGatewayOff},
+		{"ui purpose, no UI door ticked", []string{"terminal"}, "?purpose=ui", false, false, 403, string(authz.ReasonSupportDoorNotGranted)},
+		{"ui purpose in path mode", []string{"web_apps"}, "?purpose=ui", false, false, 403, reasonInboundNeedsHostMode},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, tc.doors...)
 			if tc.off {
 				t.Setenv(envSupportSessions, "")
+			}
+			if tc.ssh {
+				_, hostKey, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rig.srv.cfg.SSHListenAddr, rig.srv.cfg.SSHHostKey, rig.srv.cfg.SSHTickets = "127.0.0.1:0", hostKey, true
 			}
 			w := rig.mint(rig.helper, tc.query)
 			if w.Code != tc.status || wireReason(t, w) != tc.reason || rig.ticketCount() != 0 {
@@ -344,18 +357,21 @@ func TestSupportTerminalRowsNameTheEntry(t *testing.T) {
 }
 
 // (e) and (f): a revoke or an expiry (the test clock) closes an open terminal with 4401 within an authority
-// tick, and so does a grant read that fails (fail closed). A grant that stays live leaves it open.
+// tick. A grant read that fails rides the session budget; at a budget of 0 it closes the terminal at that
+// check (fail closed) with the reconnecting 1013. A grant that stays live leaves it open.
 func TestSupportTerminalClosesWhenTheGrantStopsAuthorizing(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		stop func(*supportTermRig)
+		code websocket.StatusCode
 	}{
-		{"revoked", func(r *supportTermRig) { r.endGrant("revoked") }},
-		{"expired", func(r *supportTermRig) { r.st.tick(31 * time.Minute) }},
-		{"a failed grant read", func(r *supportTermRig) { r.st.failOn("SupportGrantLive", errors.New("database down")) }},
+		{"revoked", func(r *supportTermRig) { r.endGrant("revoked") }, attachAuthEndedCode},
+		{"expired", func(r *supportTermRig) { r.st.tick(31 * time.Minute) }, attachAuthEndedCode},
+		{"a failed grant read", func(r *supportTermRig) { r.st.failOn("SupportGrantLive", errors.New("database down")) }, websocket.StatusTryAgainLater},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, "terminal")
+			rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // a grant read that fails ends the terminal at its first check
 			end := rig.open(rig.ticket(supportHelperSub, true), false)
 			select {
 			case err := <-end:
@@ -363,8 +379,8 @@ func TestSupportTerminalClosesWhenTheGrantStopsAuthorizing(t *testing.T) {
 			case <-time.After(5 * authorityTick):
 			}
 			tc.stop(rig)
-			if code, _ := wantClosed(t, end); code != attachAuthEndedCode {
-				t.Fatalf("closed with %d, want %d", code, attachAuthEndedCode)
+			if code, _ := wantClosed(t, end); code != tc.code {
+				t.Fatalf("closed with %d, want %d", code, tc.code)
 			}
 		})
 	}
@@ -398,6 +414,7 @@ func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSupportTermRig(t, "commands")
+			rig.srv.sessionBudgets.test = ptr(time.Duration(0)) // a grant that cannot be read ends it at the first check
 			var closed atomic.Bool
 			rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
 			done := make(chan *httptest.ResponseRecorder, 1)
@@ -420,6 +437,52 @@ func TestSupportTerminalCommandEndsWithTheGrant(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A grant read that fails rides the session budget: the command runs on, and a rode_through row names the command.
+// Past the budget it ends with the support session's unverified words.
+func TestRunExecSupport_UnreadableGrantRidesTheBudget(t *testing.T) {
+	start := func(t *testing.T, budget time.Duration) (*supportTermRig, *atomic.Bool, chan *httptest.ResponseRecorder) {
+		rig := newSupportTermRig(t, "commands")
+		rig.srv.sessionBudgets.test = ptr(budget)
+		rig.srv.sessionBudgets.retry = 10 * time.Millisecond
+		var closed atomic.Bool
+		rig.fr.execFn = func(runner.ExecSpec) (*runner.ExecSession, error) { return hangingExecSession(&closed), nil }
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- rig.exec(rig.helper, "sleep 100") }()
+		waitFor(t, "the command to start", func() bool { return rig.fr.execs.Load() == 1 })
+		return rig, &closed, done
+	}
+	t.Run("one failed read rides", func(t *testing.T) {
+		rig, closed, _ := start(t, time.Hour)
+		rig.st.failOn("SupportGrantLive", errors.New("database down"))
+		waitFor(t, "the window to open", func() bool { return rig.st.failedLives() >= 1 })
+		rig.st.failOn("SupportGrantLive", nil)
+		_, data := wantUnconfirmedRows(t, rig.aud, 1)
+		if data[0]["result"] != "rode_through" || data[0]["surface"] != sessionSurfaceCommand {
+			t.Fatalf("row %v, want rode_through on the command", data[0])
+		}
+		if closed.Load() {
+			t.Fatal("the command was cut by a grant read that failed and then answered")
+		}
+	})
+	t.Run("past the budget it ends", func(t *testing.T) {
+		rig, closed, done := start(t, 50*time.Millisecond)
+		rig.st.failOn("SupportGrantLive", errors.New("database down"))
+		waitFor(t, "the command to be cut", closed.Load)
+		select {
+		case w := <-done:
+			if res := execResult(t, w); res.ExitCode != -1 {
+				t.Errorf("exit code = %d, want -1 for a cut command", res.ExitCode)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("POST /exec did not answer after the budget ran out")
+		}
+		rows := rig.rows("run.command.exec")
+		if len(rows) != 1 || !strings.Contains(string(rows[0].Data), runExecSupportUnverified) {
+			t.Fatalf("run.command.exec rows = %+v, want one naming %q", rows, runExecSupportUnverified)
+		}
+	})
 }
 
 // A helper's web attach refused at the run's session cap, through the real attach handler and a ticket the helper's
@@ -490,6 +553,16 @@ func TestSupportTerminalOwnerWinsTheWriterSeat(t *testing.T) {
 	rig := newSupportTermRig(t, "terminal")
 	helperEnd := rig.open(rig.ticket(supportHelperSub, true), false)
 	waitFor(t, "the helper to hold the seat", func() bool { w := rig.srv.attachHolderFor(rig.run.ID); return w != nil && w.support == rig.grant.ID })
+	// The owner joins once the helper's exec is open: an eviction while it is still opening ends the
+	// helper's attach as cancelled, before the displacement's close frame can be sent.
+	waitFor(t, "the helper's exec to open", func() bool {
+		for _, ev := range rig.rows("session.attach") {
+			if ev.Actor == supportHelperSub && strings.Contains(string(ev.Data), `"state":"ready"`) {
+				return true
+			}
+		}
+		return false
+	})
 
 	rig.open(rig.ticket(supportOwnerSub, false), false)
 	code, reason := wantClosed(t, helperEnd)

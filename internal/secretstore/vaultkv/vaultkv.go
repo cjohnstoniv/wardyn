@@ -36,6 +36,7 @@ package vaultkv
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
@@ -59,6 +60,11 @@ const (
 	metaKind   = "wardyn-kind"
 	metaFormat = "wardyn-format"
 )
+
+// dataWriteID is the data key beside "value" naming the write that made a version: a write
+// retried after a lost answer tells its own landed version from another writer's by it, not
+// by comparing clocks.
+const dataWriteID = "wardyn-write"
 
 var b32 = base32.HexEncoding.WithPadding(base32.NoPadding)
 
@@ -322,13 +328,13 @@ func (s *Store) Put(ctx context.Context, owner, name, _ string, value []byte, cr
 			return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 		}
 	}
+	id := rand.Text()
 	body := map[string]any{
-		"data":    map[string]string{"value": base64.StdEncoding.EncodeToString(value)},
+		"data":    map[string]string{"value": base64.StdEncoding.EncodeToString(value), dataWriteID: id},
 		"options": map[string]int{"cas": m.CurrentVersion},
 	}
-	began := time.Now()
 	if _, retried, err := s.as(rel).callRetried(ctx, http.MethodPost, s.mount+"/data/"+rel, body, nil); err != nil &&
-		!(retried && casMismatch(err) && s.landed(ctx, rel, m.CurrentVersion+1, began)) {
+		!(retried && casMismatch(err) && s.landed(ctx, rel, m.CurrentVersion+1, id)) {
 		return "", fmt.Errorf("write %s in mount %q: %w", s.ref(rel), s.mount, err)
 	}
 	return s.ref(rel), nil
@@ -341,26 +347,25 @@ func casMismatch(err error) bool {
 	return errors.As(err, &ve) && ve.status == http.StatusBadRequest && slices.ContainsFunc(ve.msgs, func(m string) bool { return strings.Contains(m, "check-and-set") })
 }
 
-// landed reports whether the write that expected to create version want is the
-// one Vault holds: a retry after a lost answer meets its own first attempt's
-// version as a check-and-set mismatch. It reads the metadata, never the value.
-// The version must be the current one, and Vault must say it was created no
-// earlier than the write began: an older version is another writer's, and a
-// missing or unreadable time fails closed. The two clocks can disagree either
-// way. A Vault clock behind this one's fails closed: this write's own version
-// reads as older than the write and is refused. A Vault clock ahead of this
-// one's widens the window by the skew: a version another writer made up to
-// that much before the write began still reads as no earlier, and is taken.
-// It cannot tell this write's version from one another writer made after the
-// write began (or, with Vault ahead, within the skew before it); that writer's
-// value is accepted as this write's.
-func (s *Store) landed(ctx context.Context, rel string, want int, began time.Time) bool {
-	m, found, err := s.metadata(ctx, rel)
-	if err != nil || !found || m.CurrentVersion != want {
-		return false
+// landed reports whether the write that expected to create version want, carrying id, is the
+// one Vault holds: a retry after a lost answer meets its own first attempt's version as a
+// check-and-set mismatch. It reads the current version and takes it only when it is want and
+// carries id. Another writer's version (no id, or another), a later one, and a read that fails
+// are not taken, and the write fails as it would have with no retry. It reads the version's
+// write id and nothing else of its data: the value is never decoded.
+func (s *Store) landed(ctx context.Context, rel string, want int, id string) bool {
+	var r struct {
+		Data struct {
+			Data struct {
+				WriteID string `json:"wardyn-write"` // dataWriteID; the value beside it is never decoded
+			} `json:"data"`
+			Metadata struct {
+				Version int `json:"version"`
+			} `json:"metadata"`
+		} `json:"data"`
 	}
-	created, err := time.Parse(time.RFC3339Nano, m.Versions[fmt.Sprint(want)].CreatedTime)
-	return err == nil && !created.Before(began)
+	status, err := s.as(rel).call(ctx, http.MethodGet, s.mount+"/data/"+rel, nil, &r)
+	return err == nil && status == http.StatusOK && id != "" && r.Data.Metadata.Version == want && r.Data.Data.WriteID == id
 }
 
 func sameMap(a, b map[string]string) bool {

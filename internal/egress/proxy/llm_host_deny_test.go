@@ -27,7 +27,7 @@ func TestLLMBroker_DeniedLocalModelHostIsRefused(t *testing.T) {
 		p := newProxy(Options{
 			RunID:        uuid.New(),
 			Policy:       CompilePolicy(types.RunPolicySpec{DeniedDomains: []string{"ollama.lan"}}),
-			Sink:         &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+			Sink:         &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 			Resolver:     fakeResolver{m: map[string][]net.IP{"ollama.lan": ips("10.40.1.5")}},
 			Dial:         redirectDial(upstreamAddr(up.srv)),
 			LLMUpstreams: map[string]string{anthropicHost: localModelBase, openaiHost: localModelBase},

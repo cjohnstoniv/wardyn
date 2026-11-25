@@ -26,7 +26,7 @@ const (
 	sshBoundPrincipal   = "principal"
 )
 
-// sshConnLimits is the gateway's connection bounds (maxSSHHandshakes, the
+// sshConnLimits is the gateway's connection bounds (Config.SSHMaxHandshakes, the
 // per-source share of it, Config.SSHMaxConnections) and the throttled warning
 // a refusal at any of them writes.
 type sshConnLimits struct {
@@ -40,8 +40,26 @@ type sshConnLimits struct {
 	refusals                map[string]int // refusal-grace connections per principal, under principalsMu
 	refusing                int            // refusal-grace connections in all, under principalsMu
 	metrics                 *metrics
-	lastWarn                atomic.Int64 // unix nanos of the last warning
-	quiet                   atomic.Int64 // refusals since it
+	serveCtx                context.Context // the serve loop's: ends with it, so a WebSocket door's connections end too
+	lastWarn                atomic.Int64    // unix nanos of the last warning
+	quiet                   atomic.Int64    // refusals since it
+}
+
+// sshAdmit takes one of src's handshake slots and one of the gateway's, counting a refusal as either bound's; false
+// when either is full. The TCP listener and the ticket door share the slots; whoever holds them gives both back.
+func sshAdmit(lim *sshConnLimits, src string) bool {
+	if !lim.enterSource(src) {
+		lim.refused(sshBoundSource, lim.perSource)
+		return false
+	}
+	select {
+	case lim.handshakes <- struct{}{}:
+		return true
+	default:
+		lim.leaveSource(src)
+		lim.refused(sshBoundHandshake, cap(lim.handshakes))
+		return false
+	}
 }
 
 // enterSource takes one of src's handshake slots; false when it holds them all.
@@ -208,7 +226,7 @@ func (s *Server) sshRefuseOverPrincipalCap(ctx context.Context, sconn *ssh.Serve
 	ext := sconn.Permissions.Extensions
 	if runID, err := uuid.Parse(ext["run_id"]); err == nil {
 		s.recordAudit(auditCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.connection.reject",
-			ext["key_fingerprint"], "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": lim.perPrincipal})))
+			sshConnTarget(sconn.Permissions), "failure", mustJSON(map[string]any{"reason": sshCapReasonPrincipal, "max": lim.perPrincipal})))
 	}
 	if !admitted {
 		return

@@ -420,8 +420,20 @@ func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string)
 	}
 	var seen bytes.Buffer // what the parser consumed, bounded by its own cap
 	head, err := readReceivePackCommands(io.TeeReader(r.Body, &seen), "")
-	push = &adoGitPush{}
-	for b := seen.Bytes(); len(b) >= 4; {
+	push = receivePackHead(seen.Bytes())
+	if err != nil {
+		push.refs = nil // a section that did not read cleanly names no ref to answer for
+		return nil, push, "Wardyn refused this git push: " + err.Error()
+	}
+	return head, push, ""
+}
+
+// receivePackHead reads the refs a receive-pack command section moves and the capabilities git asked for
+// from b's leading pkt-lines, stopping at the first flush or malformed line: what writeADOGitRefusal needs
+// to answer git in its own terms.
+func receivePackHead(b []byte) *adoGitPush {
+	push := &adoGitPush{}
+	for len(b) >= 4 {
 		n, perr := strconv.ParseUint(string(b[:4]), 16, 16)
 		if perr != nil || n < 5 || int(n) > len(b) {
 			break
@@ -432,12 +444,9 @@ func readADOGitPush(r *http.Request) (head []byte, push *adoGitPush, msg string)
 			push.caps = strings.Fields(caps)
 		}
 		cmd = strings.TrimSuffix(cmd, "\n")
-		if parts := strings.SplitN(cmd, " ", 3); err == nil && !strings.HasPrefix(cmd, "shallow ") && len(parts) == 3 {
+		if parts := strings.SplitN(cmd, " ", 3); !strings.HasPrefix(cmd, "shallow ") && len(parts) == 3 {
 			push.refs = append(push.refs, parts[2])
 		}
 	}
-	if err != nil {
-		return nil, push, "Wardyn refused this git push: " + err.Error()
-	}
-	return head, push, ""
+	return push
 }

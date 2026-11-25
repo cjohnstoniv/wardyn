@@ -75,9 +75,9 @@ export function ConnectSSHCard({ run }: { run: RunDetail }) {
   const sshDoorsMissing = asHelper ? missingDoors(helperDoors, SSH_LANE_DOORS) : [];
   const filesDoor = !asHelper || helperDoors.includes("files");
   const webAppsDoor = !asHelper || helperDoors.includes("web_apps");
-  // The server puts a declared novnc app behind the desktop door, not web_apps (uiSupportDoor).
+  // The server puts a desktop app (the novnc app, or one of kind desktop) behind the desktop door, not web_apps (uiSupportDoor).
   const desktopDoor = !asHelper || helperDoors.includes("desktop");
-  const appBehindClosedDoor = (a: UIApp) => !desktopDoor && a.name === "novnc";
+  const appBehindClosedDoor = (a: UIApp) => !desktopDoor && (a.name === "novnc" || a.kind === "desktop");
   const running = run.state === "RUNNING";
   // A service identity's sponsor opens the terminal and apps, never SSH (the server answers it run_owner_only).
   const sponsorOnly = resolved && !asHelper && sponsorOnlyEntry(run, principal, operator);
