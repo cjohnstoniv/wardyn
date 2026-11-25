@@ -31,6 +31,9 @@ const (
 	// containReceiptKeep is how long an unread receipt stays: a contain that found no serve never reads its own.
 	containReceiptKeep = time.Hour
 	containReqLimit    = 1 << 20
+	// containTmp ends a request or receipt still being written; containTmpKeep is how long one may sit unrenamed.
+	containTmp     = ".tmp"
+	containTmpKeep = time.Minute
 )
 
 // The receipt outcomes besides an error's text.
@@ -58,8 +61,9 @@ type containReceipt struct {
 
 // latchState is the manager's latch bookkeeping, guarded by m.mu.
 type latchState struct {
-	// onLatch is told, outside m.mu, each time a pass latched a run while the manager is online: serve passes the
-	// connection's RequireFresh, so the next session's STATE page carries the latch before READY.
+	// onLatch is told, outside m.mu, each time a pass latched a run, online or not: serve passes the connection's
+	// RequireFresh, which only marks the next session fresh, so its STATE page carries the latch before READY (a
+	// resume after a link blip would send none).
 	onLatch func()
 	// waits are the requests applied and not yet answered: their receipts are written after the next CheckLapses.
 	waits []containWait
@@ -74,7 +78,7 @@ type containWait struct {
 	err     string
 }
 
-// SetOnLatch sets the callback a latch applied while online calls (once per pass, outside m.mu).
+// SetOnLatch sets the callback a pass that latched a run calls (once per pass, outside m.mu).
 func (m *Manager) SetOnLatch(f func()) {
 	m.mu.Lock()
 	m.latch.onLatch = f
@@ -143,7 +147,7 @@ func (m *Manager) applyContainRequests(ctx context.Context) {
 		return
 	}
 	m.latch.waits = append(m.latch.waits, waits...)
-	notify := latched && m.online && m.latch.onLatch != nil
+	notify := latched && m.latch.onLatch != nil
 	cb := m.latch.onLatch
 	m.mu.Unlock()
 	for _, q := range reqs {
@@ -224,6 +228,10 @@ func (m *Manager) readContainInbox(ctx context.Context) []inboxRequest {
 			m.pruneReceipt(base, name)
 			continue
 		}
+		if strings.HasSuffix(name, containTmp) {
+			m.pruneTmp(name)
+			continue
+		}
 		base, ok := strings.CutSuffix(name, containReqSuffix)
 		id, perr := uuid.Parse(base)
 		if !ok || perr != nil || id.String() != base {
@@ -264,6 +272,14 @@ func (m *Manager) readContainRequest(name string) (containRequest, error) {
 		return req, errors.New("the request names neither runs nor all, or both")
 	}
 	return req, nil
+}
+
+// pruneTmp removes a request or receipt left half-written (its writer died before the rename) once it is
+// containTmpKeep old.
+func (m *Manager) pruneTmp(name string) {
+	if st, err := m.root.Lstat(containInbox + "/" + name); err == nil && !st.IsDir() && m.since(st.ModTime()) > containTmpKeep {
+		_ = m.root.Remove(containInbox + "/" + name)
+	}
 }
 
 // pruneReceipt removes a receipt nobody read within containReceiptKeep.

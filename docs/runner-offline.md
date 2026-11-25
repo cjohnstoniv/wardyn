@@ -113,6 +113,8 @@ generation; a pre-execution sandbox instead requires that no execution has yet
 been issued. The queued proof stays immutable, and another incarnation remains
 fenced until settlement. The audit records organisation arrival time and labels
 the runner's observed time as asserted evidence. It never restores credentials.
+A lost or ended run's GitHub installation tokens that the organisation kept sealed are handed back to GitHub by the
+revoke's background worker, so a revived run mints new ones.
 
 A run contained this way, by a settled `end` or `stop_proxy`, comes back only
 through a revive. Its runner refuses the run a lease until a `recover_containment`
@@ -151,6 +153,8 @@ On a Kubernetes runner, run the same command in the runnerd pod (`kubectl exec`)
 - The runner reports the latch in the STATE page of its next fresh session, before READY. The organisation records
   `runner.local_contain.record`, refuses the run's revive with `revive_local_contained` and its recovery, and the run
   is lost when its token lapses.
+- A run that has its first lease but no sandbox yet is not in the runner's record: `--run` answers `unknown` for it,
+  `--all` skips it, and its sandbox is still created. Contain it again once it has one.
 - `contain` does not end the run and does not refuse new runs; nothing clears it but ending the run. To stop new
   work, stop serve or revoke the runner.
 

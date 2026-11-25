@@ -5843,9 +5843,10 @@ What the switch needs, and refuses to render or boot without:
     (AAD: the run id, the jti and the key version), so a worker on any replica can hand it
     back to GitHub after the run's revoke.
     - A run with no masking manifest keeps no copy.
-    - The sealed copy is emptied on hand-back, expiry or abandonment, and the row goes
-      5 minutes after the token's expiry, or at the person's erasure; the manifest fence
-      stops a write after an erasure.
+    - The sealed copy is emptied when its hand-back ends (handed back, expired or
+      abandoned); a token no revoke asked for keeps its copy until its row goes.
+    - A row goes within one worker pass once it is 5 minutes past the token's expiry, or
+      at the person's erasure; the manifest fence stops a write after an erasure.
     - A split migrator and app role install grants the app role
       `SELECT, INSERT, UPDATE, DELETE` on `run_github_token_seals`; without it a GitHub
       token mint fails for a run with a masking manifest, and a revoke shows as

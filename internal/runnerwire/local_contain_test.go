@@ -144,3 +144,38 @@ func TestRequireFresh_LatchWhileResumeIsDialling(t *testing.T) {
 		t.Fatalf("BeforeReady ran %d times on the resumed session the latch ended", n)
 	}
 }
+
+// A latch applied while the runner is offline (no session up, between connects) still makes the next connect fresh,
+// so the latch reaches the organisation in its STATE page rather than being skipped by a resume.
+func TestRequireFresh_LatchWhileOfflineNextSessionIsFresh(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	resumes := make(chan *Resume, 1)
+	var row types.Runner
+	c, row := resumableClient(t, idleHooks(), func(context.Context) (Conn, error) {
+		org, run := Loopback()
+		go func() {
+			defer org.Close()
+			if auth, err := AuthenticateRunner(ctx, org, row, containOrgURL); err == nil {
+				resumes <- auth.Resume
+			}
+		}()
+		return run, nil
+	})
+	if c.live.Load() != nil {
+		t.Fatal("a session is up; the test proves nothing")
+	}
+	if _, r := c.resume(ctx); r == nil {
+		t.Fatal("the client would not resume before the latch; the test proves nothing")
+	}
+	c.RequireFresh()
+	_ = c.Connect(ctx)
+	select {
+	case r := <-resumes:
+		if r != nil {
+			t.Fatalf("the connect after an offline latch asked to resume %+v", r)
+		}
+	case <-ctx.Done():
+		t.Fatal("the organisation never saw the connect")
+	}
+}

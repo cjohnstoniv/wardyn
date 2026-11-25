@@ -55,7 +55,10 @@ func newKBL(t *testing.T) *kblFixture {
 	f := &kblFixture{ctx: ctx, key: key, orgURL: "https://org.example", link: &Link{},
 		online: make(chan *runnerwire.Peer, 4), resumed: make(chan bool, 4)}
 	f.row = types.Runner{ID: uuid.New(), PublicKey: pub, OrgURLSHA256: federation.OrgURLSHA256(f.orgURL), State: types.RunnerClaimed}
-	f.sub = New(f.row.ID.String(), f.link, Options{Queue: func(_ context.Context, kind types.RunnerActionKind, ref string) error {
+	f.sub = New(f.row.ID.String(), f.link, Options{Queue: func(ctx context.Context, kind types.RunnerActionKind, ref string) error {
+		if err := ctx.Err(); err != nil {
+			return err // as production's queue write fails on a done context
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.open = append(f.open, runnerwire.PendingAction{ID: uuid.New(), Kind: kind, Ref: ref})
@@ -242,8 +245,8 @@ func TestKillsBeforeLeases_HalfOpenLink(t *testing.T) {
 	callCtx, cancel := context.WithTimeout(f.ctx, 2*time.Second)
 	err := f.sub.KillSandbox(callCtx, ref)
 	cancel()
-	if err == nil {
-		t.Fatal("a kill the runner never answered succeeded")
+	if !errors.Is(err, runner.ErrPendingOnRunner) {
+		t.Fatalf("a kill the runner never answered = %v, want it queued for the runner's next session", err)
 	}
 	p.Close() // the dead link is noticed and the session ends
 	_ = awaitValue(t, f.ctx, done)

@@ -11,8 +11,8 @@
 -- the run's manifest FOR SHARE in the mint's own transaction, so no row is written after an erasure fenced it. A run
 -- with no masking manifest keeps no copy. revoke_due_at is set once a revoke asked for the token, next_attempt_at is
 -- the worker's next try and its claim hold. A row that ends (handed back, expired or abandoned) has its sealed copy
--- emptied and stays as a tombstone until 5 minutes after the token's expiry, so a later revoke of the run reads what
--- happened.
+-- emptied and stays as a tombstone, so a later revoke of the run reads what happened; a row no revoke asked for keeps
+-- its copy. Either goes within one worker pass once it is 5 minutes past the token's expiry (a GitHub mint prunes too).
 --
 -- run_local_containment records that a local operator contained a run on its runner (wardyn-runnerd contain), as the
 -- runner reported it in a STATE page. It only ever grows: a run's row goes with the run.

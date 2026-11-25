@@ -24,7 +24,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
 - A policy can shorten, and an admin can lengthen up to 24 hours, how long a run's network keeps serving while Wardyn cannot be reached, and a policy can mark it strict or end unattended runs after an outage (#4082).
 - A run whose token expired while Wardyn could not be reached gets its network back by itself once Wardyn checks the run again (#4082). Past its outage allowance a run's network pauses, or the run ends when its policy is strict, and a strict run lost to an outage past its allowance cannot be revived. A token that expired more than 24 hours ago is not recovered, and a run already lost to an outage comes back only by revive.
-- GitHub installation tokens a run minted are handed back to GitHub after the run's revoke, by a background worker that retries a failed hand-back until the token expires; the revoke itself no longer waits on GitHub (#4083).
+- GitHub installation tokens a run minted are handed back to GitHub after the run's revoke, by a background worker that retries a failed hand-back until the token expires; the revoke does not wait for GitHub (#4083).
 - `wardyn-runnerd contain --run <id>` or `--all` stops a run's proxy on its runner host and drops its later leases while the organisation cannot be reached; the organisation records it from the runner's next STATE page and refuses the run's revive (#4083).
 
 ### Before you upgrade

@@ -130,10 +130,7 @@ func (s *TokenSeal) sealTx(ctx context.Context, tx Querier, runID uuid.UUID, jti
 		VALUES ($1, $2, $3, $4, $5, $6)`, runID, jti, p.owner, p.version, p.sealed, expiresAt); err != nil {
 		return false, fmt.Errorf("broker: write the sealed github token: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM run_github_token_seals WHERE (run_id, jti) IN (
-		SELECT run_id, jti FROM run_github_token_seals
-		 WHERE expires_at < now() - interval '5 minutes' AND (revoke_due_at IS NULL OR ended_at IS NOT NULL)
-		 ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED)`); err != nil {
+	if _, err := tx.Exec(ctx, pruneSealsSQL); err != nil {
 		return false, fmt.Errorf("broker: prune expired github token seals: %w", err)
 	}
 	return true, nil
@@ -233,6 +230,22 @@ func (s *TokenSeal) retryAt(ctx context.Context, runID uuid.UUID, jti string, at
 	_, err := s.pool.Exec(ctx, `UPDATE run_github_token_seals SET attempts = $3, next_attempt_at = $4
 		WHERE run_id = $1 AND jti = $2 AND ended_at IS NULL`, runID, jti, attempts, at)
 	return err
+}
+
+// pruneSealsSQL deletes up to 100 rows past their token's expiry by 5 minutes that no hand-back still waits on,
+// skipping rows another transaction holds. A GitHub mint runs it, and so does each worker pass, so a run that mints
+// nothing more still loses its rows.
+const pruneSealsSQL = `DELETE FROM run_github_token_seals WHERE (run_id, jti) IN (
+	SELECT run_id, jti FROM run_github_token_seals
+	 WHERE expires_at < now() - interval '5 minutes' AND (revoke_due_at IS NULL OR ended_at IS NOT NULL)
+	 ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED)`
+
+// prune is pruneSealsSQL on its own transaction: the worker's backstop.
+func (s *TokenSeal) prune(ctx context.Context) error {
+	if _, err := s.pool.Exec(ctx, pruneSealsSQL); err != nil {
+		return fmt.Errorf("broker: prune expired github token seals: %w", err)
+	}
+	return nil
 }
 
 // DeleteOwner removes every row sealed under owner, tombstones included, and answers how many: a person's erasure.

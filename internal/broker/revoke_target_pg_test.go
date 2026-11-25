@@ -508,7 +508,8 @@ func TestPG_RevokeRun_RerunAfterHandBackSaysHandedBack(t *testing.T) {
 	}
 }
 
-// A tombstone goes 5 minutes after its token's expiry, and only then reads none.
+// A tombstone outlives its token's expiry by 5 minutes; then a worker pass prunes it, with no further mint, and it
+// reads none.
 func TestPG_TokenSeal_TombstonePrunedAfterExpiry(t *testing.T) {
 	f := newSealFixture(t, true)
 	got, err := f.b.MintForGrant(t.Context(), callerFor(f.runID), f.grantID)
@@ -531,9 +532,7 @@ func TestPG_TokenSeal_TombstonePrunedAfterExpiry(t *testing.T) {
 	if _, err := f.pool.Exec(t.Context(), `UPDATE run_github_token_seals SET expires_at = now() - interval '6 minutes' WHERE run_id = $1 AND jti = $2`, f.runID, got.JTI); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.b.MintForGrant(t.Context(), callerFor(f.runID), f.addGrant(t)); err != nil {
-		t.Fatal(err)
-	}
+	f.b.githubRevokePass(t.Context()) // the worker's backstop: no further mint is needed
 	states, err = f.b.githubRevokeStates(t.Context(), f.runID, []string{got.JTI})
 	if err != nil || len(states) != 0 {
 		t.Fatalf("states 6 minutes past expiry = %v, %v; want the tombstone pruned (none)", states, err)

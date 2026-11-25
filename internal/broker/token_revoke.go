@@ -122,7 +122,7 @@ func (b *Broker) RunGitHubTokenRevokes(ctx context.Context) {
 	}
 }
 
-// githubRevokePass claims one page of due rows and presents each held token to GitHub, at most githubRevokeInFlight at
+// githubRevokePass prunes rows past expiry (pruneSealsSQL), then claims one page of due rows and presents each held token to GitHub, at most githubRevokeInFlight at
 // once, within githubRevokePassBound. No claim or call starts once the pass budget or ctx is spent; a row claimed and
 // not called comes back after its claim hold. A call in flight ends within refRevokeTimeout (Revoke detaches from
 // cancel), and its outcome is written on a context neither cancels.
@@ -132,6 +132,9 @@ func (b *Broker) githubRevokePass(ctx context.Context) {
 	}
 	pctx, cancel := context.WithTimeout(ctx, githubRevokePassBound)
 	defer cancel()
+	if err := b.tokenSeal.prune(pctx); err != nil {
+		slog.WarnContext(ctx, "broker: github token hand-back could not prune expired tokens; it retries next pass", "err", err)
+	}
 	rows, now, err := b.tokenSeal.claimDue(pctx, githubRevokePage)
 	if err != nil {
 		slog.WarnContext(ctx, "broker: github token hand-back could not claim due tokens; it retries next pass", "err", err)
@@ -171,10 +174,20 @@ func (b *Broker) githubRevokePass(ctx context.Context) {
 		case <-pctx.Done():
 			return
 		}
+		if pctx.Err() != nil {
+			<-slots // a free slot and a spent budget can be ready together: start nothing
+			return
+		}
 		wg.Add(1)
 		go func(r dueRow, token string) {
 			defer wg.Done()
 			defer func() { <-slots }()
+			defer func() {
+				if p := recover(); p != nil {
+					slog.ErrorContext(ctx, "broker: PANIC in a github token hand-back call (contained; the row comes back after its claim hold)",
+						"run_id", r.runID, "jti", r.jti, slog.Any("panic", p))
+				}
+			}()
 			b.recordGitHubRevoke(ctx, r, now, b.github.Revoke(pctx, token))
 		}(r, token)
 	}

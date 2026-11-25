@@ -470,6 +470,10 @@ func (s *Substrate) teardown(ctx context.Context, method string, kind types.Runn
 	return s.teardownAt(ctx, method, kind, ref, 0)
 }
 
+// teardownQueueBound bounds queueing a teardown for the runner's next session, on a context the caller's expiry does
+// not cancel.
+const teardownQueueBound = 5 * time.Second
+
 // teardownAt is teardown naming the policy generation the call acts for. A call queued for an offline runner
 // carries none: the runner replays it as the plain verb.
 func (s *Substrate) teardownAt(ctx context.Context, method string, kind types.RunnerActionKind, ref string, gen int) error {
@@ -487,14 +491,21 @@ func (s *Substrate) teardownAt(ctx context.Context, method string, kind types.Ru
 	if err == nil && res.MacOSVMDisk != nil {
 		s.macOSVMDisks(ctx, []runner.MacOSVMDisk{*res.MacOSVMDisk})
 	}
-	if err == nil || !errors.Is(err, runner.ErrRunnerOffline) || s.opts.Queue == nil {
+	// A kill, end or proxy stop whose call ran out of time on a link that stopped answering may never have reached
+	// the runner: it is queued too, so the next fresh session carries it (the runner settles a repeat as one).
+	unanswered := errors.Is(err, context.DeadlineExceeded) &&
+		(kind == types.RunnerActionKill || kind == types.RunnerActionEnd || kind == types.RunnerActionStopProxy)
+	if err == nil || !(errors.Is(err, runner.ErrRunnerOffline) || unanswered) || s.opts.Queue == nil {
 		return err
 	}
-	if qerr := s.opts.Queue(ctx, kind, ref); qerr != nil {
+	// The caller's ctx may be the one that just expired; the queue write must still land.
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownQueueBound)
+	defer cancel()
+	if qerr := s.opts.Queue(qctx, kind, ref); qerr != nil {
 		return errors.Join(err, qerr)
 	}
 	if l, ok := s.t.(*Link); ok {
-		l.requireFresh(ctx)
+		l.requireFresh(qctx)
 	}
 	if ends {
 		s.dropVMKind(ref)
