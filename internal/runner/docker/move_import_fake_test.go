@@ -109,12 +109,15 @@ func TestMoveImport_MarkerBeforeLinks(t *testing.T) {
 	if _, _, err := newTestDriver(f).ImportSandbox(context.Background(), importSpec(), set, 1<<20, &buf); err != nil {
 		t.Fatalf("ImportSandbox: %v", err)
 	}
-	if len(f.copies) != 1 {
-		t.Fatalf("archive calls = %d; want 1", len(f.copies))
+	// The create also seeds the run's DNS volume through its own archive call; the import's archive is the one
+	// to the agent, and there must be exactly one.
+	imports := f.managedCopies()
+	if len(imports) != 1 {
+		t.Fatalf("archive calls besides the DNS seed = %d; want 1", len(imports))
 	}
 	var names []string
 	marker, firstLink := -1, -1
-	tr := tar.NewReader(bytes.NewReader(f.copies[0].archive))
+	tr := tar.NewReader(bytes.NewReader(imports[0].archive))
 	for {
 		th, err := tr.Next()
 		if err == io.EOF {
