@@ -83,7 +83,8 @@ type Server struct {
 	attachPrepare time.Duration
 	// maskBeat overrides maskCheckEvery for THIS server only (tests): how often
 	// an in-flight consumer re-reads its run's fence.
-	maskBeat time.Duration
+	maskBeat   time.Duration
+	maskFences maskFences // one fence loop per run on this replica (mask_fence_share.go)
 	// runOutputDrainWaitOverride and runOutputRetryBaseOverride shrink the
 	// output finaliser's drain barrier and retry backoff for a test; zero uses
 	// runOutputDrainWait and runOutputRetryBase (run_output_final.go).

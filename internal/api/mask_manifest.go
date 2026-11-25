@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -131,27 +130,9 @@ func (s *Server) holdMaskFence(ctx context.Context, runID uuid.UUID, end func())
 	if s.cfg.MaskManifests == nil {
 		return func() bool { return false }
 	}
-	var fenced atomic.Bool
-	go func() {
-		t := time.NewTicker(s.maskCheckPeriod())
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if !s.maskCovered(ctx, runID) {
-					if ctx.Err() != nil {
-						return
-					}
-					fenced.Store(true)
-					end()
-					return
-				}
-			}
-		}
-	}()
-	return fenced.Load
+	sub := &maskFenceSub{ctx: ctx, end: end}
+	s.joinMaskFence(runID, sub)
+	return sub.fenced.Load
 }
 
 // beginMaskManifest creates the dispatching run's masking manifest before any
