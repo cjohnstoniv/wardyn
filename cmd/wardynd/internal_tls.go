@@ -144,10 +144,16 @@ func startInternalListener(hop *hopTLS, f *bootFlags, handler http.Handler, errC
 		return nil
 	}
 	addr := *f.internalListen
+	tc := hop.server.Clone()
+	if f.internalMTLS != nil && *f.internalMTLS {
+		// Asked, not required: the ground-truth ingest presents none, and internalAuth refuses a run's
+		// request that comes without one (internal_mtls.go).
+		tc.ClientAuth = tls.RequestClientCert
+	}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           internalRoutesOnly(handler),
-		TLSConfig:         hop.server.Clone(),
+		TLSConfig:         tc,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
