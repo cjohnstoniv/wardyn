@@ -169,6 +169,8 @@ func (d *Dispatcher) Call(ctx context.Context, peer *runnerwire.Peer, id uint32,
 		return d.reclaimDrive(ctx, args)
 	case runnerwire.MethodKeptMachine:
 		return d.keptMachine(ctx, args)
+	case runnerwire.MethodSnapshotSandbox, runnerwire.MethodCommitSnapshot, runnerwire.MethodAbortSnapshot, runnerwire.MethodDeleteSnapshot, runnerwire.MethodListSnapshots:
+		return d.snapshot(ctx, method, args)
 	}
 	return d.refCall(ctx, method, args)
 }

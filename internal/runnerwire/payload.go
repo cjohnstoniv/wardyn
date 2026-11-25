@@ -196,6 +196,10 @@ type Caps struct {
 	// pool member pinned to a namespace is eligible only on such a runner. Absent (an older runner,
 	// or a runner on another substrate) says nothing: the runner serves its one namespace as before.
 	RunsNamespaces []string `json:"runs_namespaces,omitempty"`
+	// Snapshots says the runner snapshots and forks its Linux VM sandboxes (the snapshot calls, and a
+	// create_vm whose spec names a snapshot). An older runner never sends it, and the org sends such a
+	// runner neither: it would drop the spec's snapshot and boot a plain VM.
+	Snapshots bool `json:"snapshots,omitempty"`
 }
 
 // The run proxy settings a runner names in Caps.ProxySettings, each its proxy.Config key.
