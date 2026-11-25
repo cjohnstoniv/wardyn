@@ -252,6 +252,11 @@ func (duplicateNamePolicyStore) CreatePolicy(context.Context, types.RunPolicy) (
 	return types.RunPolicy{}, store.ErrConflict
 }
 
+// GetPolicy answers the create's after-read: the refused insert wrote no row under the new id.
+func (duplicateNamePolicyStore) GetPolicy(context.Context, uuid.UUID) (types.RunPolicy, error) {
+	return types.RunPolicy{}, store.ErrNotFound
+}
+
 // TestCreatePolicyDuplicateName pins that a duplicate policy name must
 // surface as a caller-actionable 409, never a blanket 500 (raw driver
 // error text).

@@ -141,10 +141,11 @@ func TestReleaseWorkflowPublishesAgentAWSSSO(t *testing.T) {
 		t.Error("release.yml's agent-aws-sso row does not point at deploy/images/aws-sso/Dockerfile")
 	}
 	// agentImage()'s ghcr fallback pulls the daemon's version tag (D19), which the
-	// per-row semver push covers; the float-latest rows must ALSO push :latest as
-	// the no-version-string fallback tag.
-	if !strings.Contains(doc, `IMAGE_NAME}:latest`) {
-		t.Error("release.yml's tag-compute step never publishes an agent-*:latest tag")
+	// per-row semver push covers; the float-latest rows also keep :latest, the
+	// no-version-string fallback tag, on the highest final release. One job writes
+	// it for every such row, through scripts/float-latest.sh.
+	if !strings.Contains(doc, "scripts/float-latest.sh") || !strings.Contains(doc, "group: release-floating-aliases") {
+		t.Error("release.yml has no float-latest job writing agent-*:latest through scripts/float-latest.sh under the release-floating-aliases group")
 	}
 }
 

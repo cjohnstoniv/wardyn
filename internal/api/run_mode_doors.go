@@ -94,8 +94,12 @@ var backgroundDoors = []backgroundDoor{
 	// sftp, wardyn-sync, direct-tcpip) makes before it execs. POST /runs/{id}/exec is
 	// the exec channel over HTTP (run_exec.go) and the contract's third exception: its
 	// read is execFreshRun, which takes a background run (TestBackgroundExecIsTheDoorsThirdException).
-	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun"},
-		Routes: []string{"POST /runs/{id}/exec"}, Enforced: true},
+	{Door: "SSH access", Owner: "C-mode-doors", Symbols: []string{"sshAuth", "sshFreshRun", "sshRunEntryRefusal"},
+		Routes: []string{"POST /runs/{id}/exec", "GET /runs/{id}/ssh"}, Enforced: true},
+	// Port forwarding over the organisation (#3281): an SSH -L channel's reach over the attach family, for a deployment
+	// whose gateway is off. handleAttachForward asks the predicate itself, after the entry rule.
+	{Door: "port forwarding", Owner: "#3281", Symbols: []string{"handleAttachForward"},
+		Routes: []string{"GET /runs/{id}/attach/forward"}, Enforced: true},
 	// handleUIEnter only parses and delegates to uiEnterCommon, and handleUIBind
 	// sets a binding cookie without reading any run, so neither can ask honestly.
 	// An app's ticket (handleAppTicket) is minted only for an inbound app, the door's
@@ -157,6 +161,9 @@ var passiveRunRoutes = map[string]string{
 	"POST /runs/{id}/support/{grant}/accept":  "the owner's answer to a help request; opens nothing itself",
 	"POST /runs/{id}/support/{grant}/decline": "the owner's refusal of a help request; opens nothing",
 	"POST /runs/{id}/support/{grant}/end":     "ends a help request or session; opens nothing",
+	// The Walls view's routes.
+	"GET /runs/{id}/walls":        "read",
+	"GET /runs/{id}/walls/stream": "read",
 }
 
 // backgroundOnlyRefusal is the one call every interactive door makes: nil when

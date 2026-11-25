@@ -439,14 +439,13 @@ render_cat() {
   cat <<'K8SGATED'
 ### Cluster lanes no coverage profile can see at all
 
-The nightly workflow runs the first two (the `kind-sso-walk` and
-`kind-sso-ado-walk` jobs) and no workflow runs the third, and `-coverpkg` never
+The nightly workflow runs all three (the
+`kind-sso-walk`, `kind-sso-ado-walk` and `kind-survival-walk` jobs), and `-coverpkg` never
 observes any of the three — not even as the K8S-gated bucket above, since they exercise code far
 beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
 untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
 Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
-only) — the three above self-skip without `WARDYN_TEST_K8S=1`, and the third
-is evidence only for the tip somebody actually ran it on.
+only) — the three above self-skip without `WARDYN_TEST_K8S=1`.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster

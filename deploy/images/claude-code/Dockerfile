@@ -86,7 +86,8 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-rec ./cmd/wardyn-rec \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-git-helper ./cmd/wardyn-git-helper \
  && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-scan ./cmd/wardyn-scan \
- && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-toolgate ./cmd/wardyn-toolgate \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /out/wardyn-assist ./cmd/wardyn-assist
 
 # ── Stage 2: agent runtime ────────────────────────────────────────────────────
 FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
@@ -296,9 +297,9 @@ RUN set -eu; \
 # a bump moves GH_VERSION and both digests together. gh gets no GitHub
 # credential here: a run with a GitHub CLI row gets an inert GH_TOKEN, and the
 # proxy adds the App token per request.
-ARG GH_VERSION=2.103.3
-ARG GH_SHA256_AMD64=e3bafef96328d1a67de3a968bdfe1cc2ffd58cf6aba8b5e201356897ed06bb3d
-ARG GH_SHA256_ARM64=cac3ff84b60b68e64cca69f31f303210c26320361cc3286b773655d4226b7b06
+ARG GH_VERSION=2.105.0
+ARG GH_SHA256_AMD64=1dac939af3e84fb3861927c984b357531341be9403b889e4aa86e8822145a09d
+ARG GH_SHA256_ARM64=d17e9b089ce0356679c9fa1898f3a7d38dccf943d529acaa94c24e8a4584e0ae
 ARG TARGETARCH
 RUN set -eu; \
     arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
@@ -449,6 +450,8 @@ COPY --from=builder /out/wardyn-git-helper /usr/local/bin/wardyn-git-helper
 COPY --from=builder /out/wardyn-scan       /usr/local/bin/wardyn-scan
 # wardyn-toolgate: parks tool-use approvals on the Wardyn UI (hold runs).
 COPY --from=builder /out/wardyn-toolgate   /usr/local/bin/wardyn-toolgate
+# wardyn-assist: the governed assistant run's relay and its read-only tool server.
+COPY --from=builder /out/wardyn-assist     /usr/local/bin/wardyn-assist
 # wardyn: the in-sandbox `wardyn needs-you <reason>` ("Needs you" takeover request), run by wardyn-toolgate.
 COPY deploy/images/common/wardyn-in-sandbox /usr/local/bin/wardyn
 
@@ -464,6 +467,7 @@ RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-scan \
            /usr/local/bin/wardyn-toolgate \
+           /usr/local/bin/wardyn-assist \
            /usr/local/bin/wardyn \
            /usr/local/bin/agent-run
 

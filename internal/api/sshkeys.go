@@ -65,6 +65,7 @@ func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 // sentence (ui/src/app/lib/permissions-copy.ts DENIED.SSH_KEY_FEATURE), byte
 // for byte.
 const sshKeyFeatureRefusal = "SSH keys aren't available to you. Ask your admin."
+const sshTicketFeatureRefusal = "SSH tickets aren't available to you. Ask your admin."
 
 // handleAddSSHKey is POST /api/v1/me/ssh-keys: register a public key against
 // the caller's own principal. This endpoint is the gateway's ENTIRE trust

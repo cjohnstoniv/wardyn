@@ -523,6 +523,14 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if !extra.noPosture {
 		reporter = posture.NewReporter()
 	}
+	// A Mac presents the MDM device identities its helper reads from the System keychain; with no helper
+	// beside this runner (no macOS VM support) it presents nothing.
+	var deviceCerts *posture.DeviceCertSender
+	if runtime.GOOS == "darwin" {
+		if helper, err := macVMHelperPath(); err == nil {
+			deviceCerts = posture.NewDeviceCertSender(helper, stateDir, identity.OrgURLSHA256)
+		}
+	}
 	if err := manager.SetOptions(extra.options); err != nil {
 		return runnerRuntime{}, err
 	}
@@ -550,6 +558,9 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 	if err != nil {
 		return runnerRuntime{}, err
 	}
+	// A restart keeps each run it can vouch for until its saved lapse time, then contains the rest. The k8s
+	// runner gave its runs theirs in started, after listing its proxies; this call adds none there.
+	manager.ProvisionalDeadlines()
 	checkLapsesAtStartup(ctx, manager)
 	caps := &capsReporter{sub: sub, extra: extra, capacity: capacity, dispatcher: dispatcher, hasLocal: local != nil, netPol: make(chan struct{}, 1)}
 	if extra.netPolWatch != nil {
@@ -594,6 +605,11 @@ func runnerRuntimeWith(ctx context.Context, identity runneridentity.Identity, st
 			caps.afterOnline(ctx, peer, resumed)
 			if reporter != nil {
 				go reporter.Watch(peer, postureInterval)
+			}
+			// The device certificate report waits on the Mac's keychain, so it runs beside the session, not on
+			// the way to READY: Watch sends at once, then every 6 hours.
+			if deviceCerts != nil {
+				go deviceCerts.Watch(peer)
 			}
 		},
 		LocalAttach: local.Set,

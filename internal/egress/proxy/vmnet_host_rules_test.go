@@ -17,7 +17,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/vmnet"
 	"github.com/cjohnstoniv/wardyn/internal/vmnet/vmnettest"
@@ -32,7 +31,7 @@ func vmRuleProxy(t *testing.T, noCA bool, extra []string, sets []types.HostRuleS
 	opts := Options{
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: append([]string{hrHost}, extra...), HostRules: sets}),
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(origin)),
 		TLSClientConfig: testInsecureTLSConfig,

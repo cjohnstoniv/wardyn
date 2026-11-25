@@ -188,7 +188,7 @@ func TestNoNetwork_ControlPlaneStillReached(t *testing.T) {
 	defer cp.Close()
 	p := newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}), Resolver: publicResolver{},
-		Sink:            &decisionSink{out: &syncBuf{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: &syncBuf{}, ch: make(chan queuedDecision, 64)},
 		ControlPlaneURL: cp.URL, RunToken: newTokenSource("RUNTOK"), NoNetwork: true,
 	})
 	resp, err := p.forwardToControlPlane(context.Background(), http.MethodGet, "/api/v1/internal/ping", nil, "")

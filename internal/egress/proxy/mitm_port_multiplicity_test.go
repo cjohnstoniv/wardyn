@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -38,7 +37,7 @@ func TestMITMHostsKeepOnlyTheLastPortPerHost(t *testing.T) {
 		return newProxy(Options{
 			RunID:     uuid.New(),
 			Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"m.corp:443", "m.corp:8443"}}),
-			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 			MITMHosts: hosts,
 			Resolver:  publicResolver{},
 		})
@@ -87,7 +86,7 @@ func TestMITMHostsKeepOnlyTheLastPortPerHost(t *testing.T) {
 		p := newProxy(Options{
 			RunID:     uuid.New(),
 			Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"m.corp:443", "m.corp:8443"}}),
-			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+			Sink:      &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 			CA:        ca,
 			MITMHosts: []string{"m.corp:443", "m.corp:8443"},
 			Resolver:  publicResolver{},

@@ -126,12 +126,12 @@ func runTargets(spec types.RunPolicySpec, wsRefs []types.Workspace, index worksp
 // element of the other.
 type carrierSet struct {
 	ids []int
-	key string // the set as one string, for an exact set match
+	id  int // the set's index among the run's distinct sets, for an exact set match
 }
 
 // carrierSets builds the carrierSet of each target.
 func carrierSets(targets []runTarget) []carrierSet {
-	index := map[string]int{}
+	index, setIndex := map[string]int{}, map[string]int{}
 	out := make([]carrierSet, len(targets))
 	for i, t := range targets {
 		for _, id := range t.carriers {
@@ -144,7 +144,13 @@ func carrierSets(targets []runTarget) []carrierSet {
 		}
 		slices.Sort(out[i].ids)
 		out[i].ids = slices.Compact(out[i].ids)
-		out[i].key = fmt.Sprint(out[i].ids)
+		key := fmt.Sprint(out[i].ids)
+		n, ok := setIndex[key]
+		if !ok {
+			n = len(setIndex)
+			setIndex[key] = n
+		}
+		out[i].id = n
 	}
 	return out
 }
@@ -175,29 +181,45 @@ func disjoint(a, b carrierSet) bool {
 // with x". A mount with one carrier is kept only as the first of its owner, and
 // only up to limit owners: when the earliest mount disjoint from x was not kept,
 // limit owners came before it, and since x has fewer carriers than limit, one
-// of those earlier mounts is disjoint from x too. A mount with several carriers
-// (a source two of the run's workspaces carry, which is rare) is kept as the
-// first of its carrier set: an earlier mount with the same set is disjoint from
-// x whenever it is. That bounds the list by the distinct shared sources, not
-// by how many targets repeat one.
+// of those earlier mounts is disjoint from x too. Mounts with several carriers
+// (a source two of the run's workspaces carry, which is rare) are kept in
+// order, and a later one with the same carrier set as an earlier one is dropped
+// whenever the list has doubled since it was last compacted: the earlier mount
+// is disjoint from x whenever the later one is, so the answer never changes,
+// and the list stays within twice the distinct shared sources, not how many
+// targets repeat one, at a constant cost per mount instead of a set lookup.
 type firstMounts struct {
 	single, multi []*placedMount
-	multiSets     map[string]bool // the carrier sets in multi
+	compacted     int // len(multi) after its last compaction
 }
 
-func (f *firstMounts) add(m *placedMount, limit int) {
+// add places m; seen is the scratch compact needs, false for every set.
+func (f *firstMounts) add(m *placedMount, limit int, seen []bool) {
 	switch {
 	case len(m.set.ids) > 1:
-		if !f.multiSets[m.set.key] {
-			if f.multiSets == nil {
-				f.multiSets = map[string]bool{}
-			}
-			f.multiSets[m.set.key] = true
-			f.multi = append(f.multi, m)
+		if f.multi = append(f.multi, m); len(f.multi) > 2*f.compacted {
+			f.compact(seen)
 		}
 	case len(f.single) < limit && !slices.ContainsFunc(f.single, func(p *placedMount) bool { return p.set.ids[0] == m.set.ids[0] }):
 		f.single = append(f.single, m)
 	}
+}
+
+// compact keeps the first mount of each carrier set in multi, in order. seen,
+// indexed by carrierSet.id, is false for every set before and after.
+func (f *firstMounts) compact(seen []bool) {
+	kept := f.multi[:0]
+	for _, m := range f.multi {
+		if !seen[m.set.id] {
+			seen[m.set.id] = true
+			kept = append(kept, m)
+		}
+	}
+	for _, m := range kept {
+		seen[m.set.id] = false
+	}
+	clear(f.multi[len(kept):])
+	f.multi, f.compacted = kept, len(kept)
 }
 
 func (f *firstMounts) disjointFrom(x carrierSet) *placedMount {
@@ -235,6 +257,7 @@ func targetOverlapRefusal(targets []runTarget) *runRefusal {
 		limit = max(limit, len(t.carriers)+1)
 	}
 	sets := carrierSets(targets)
+	seen := make([]bool, len(targets)) // a carrierSet.id is below len(targets)
 	root := &mountNode{}
 	clones := map[string]runTarget{}
 	for seq, t := range targets {
@@ -276,11 +299,11 @@ func targetOverlapRefusal(targets []runTarget) *runRefusal {
 			if node.children[e] == nil {
 				node.children[e] = &mountNode{}
 			}
-			node.tree.add(m, limit)
+			node.tree.add(m, limit, seen)
 			node = node.children[e]
 		}
-		node.tree.add(m, limit)
-		node.exact.add(m, limit)
+		node.tree.add(m, limit, seen)
+		node.exact.add(m, limit, seen)
 	}
 	return nil
 }
