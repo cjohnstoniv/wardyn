@@ -175,7 +175,9 @@ func (s *Server) loadRecordInputs(ctx context.Context, q store.Querier) (*record
 
 // loadPoolInputs reads, once per request, what every pool of the request is built from: the bounded sign-in
 // records with the directory's inactive rule and email, the role mappings, the user types and every
-// unit-admin grant. That is four reads. Its predicates read the unit scope on q, as a decision's do.
+// unit-admin grant. That is four reads. Its predicates read the unit scope on q, as a decision's do, each answer
+// memoized for q's life (withUnitScopeReadTx): a caller on a decision's transaction sets base back to
+// withUnitScopeTx so every check there reads afresh (recheckRaised).
 func (s *Server) loadPoolInputs(ctx context.Context, q store.Querier) (*poolInputs, error) {
 	mappings, userTypes, err := s.derivationInputs(ctx, q)
 	if err != nil {
