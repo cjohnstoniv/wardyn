@@ -13,6 +13,7 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A runner and the organisation now agree a larger per-stream window on the runner link (4 MiB instead of 256 KiB), so a long-distance link relays faster; each side still holds at most four streams' worth (16 MiB) of unread data per runner. An older runner or organisation keeps the old window (#4070).
 - `WARDYN_RUN_HISTORY_RETENTION_DAYS` (default `0`, keep forever) deletes runs that ended more than N days ago (at least 30), with their approvals and model usage; audit rows stay, and runs that held push or MCP evidence are kept. Runs dispatched to an enrolled runner since 0.9.3 are kept too (their output watermark holds them), so on an install whose runs go to runners it deletes only server-local runs. Each sweep that deleted anything writes a `run.retention.sweep` audit row (#4068).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `run_history_tombstones` to every role that was granted UPDATE on the runs table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then the unit admins' audit view, the device audit ingest and erasing a person's recordings fail.
 

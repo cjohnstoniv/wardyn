@@ -514,6 +514,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	}
 	ok := runnerwire.AuthOK{SessionID: s.id, Resumed: resumed, PingInterval: runnerwire.PingInterval, LastSeq: cfg.LastReceived}
 	h.orgChoices(&ok, current)
+	ok.StreamWindow = runnerwire.GrantStreamWindow(auth.StreamWindow)
 	s.perRun.Store(&perRunLimits{ok.PerRunCPUMillis, ok.PerRunMemoryMiB})
 	if err := runnerwire.WriteControl(ctx, conn, runnerwire.TypeAuthOK, ok); err != nil {
 		return nil, err
@@ -524,6 +525,7 @@ func (h *Hub) start(ctx context.Context, conn runnerwire.Conn, row types.Runner,
 	var peer *runnerwire.Peer
 	configureAdmission(ctx, &cfg, resumed, pending, a, s, s.id, func() *runnerwire.Peer { return peer })
 	h.configureActivity(ctx, &cfg, row, a, s, func() *runnerwire.Peer { return peer })
+	cfg.StreamWindow = int64(ok.StreamWindow)
 	peer = a.Link.AttachSession(conn, cfg)
 	if resumed {
 		// A resumed session sends no STATE page: it is past the org's page check from its start.
