@@ -117,19 +117,19 @@ func (d *Driver) moveHelperNetPol(h moveHelper) *networkingv1.NetworkPolicy {
 // context of its own: the pod is deleted under its UID and waited for before its policy goes, so the pod is never
 // without its policy.
 func (d *Driver) runMoveHelper(ctx context.Context, h moveHelper, argv []string, stdin io.Reader, stdout io.Writer) (err error) {
-	if err := d.cleanupMoveHelper(ctx, h.ns, nil, moveHelperName(h.runID), moveHelperNetPolName(h.runID)); err != nil {
+	if err := d.cleanupMoveHelper(ctx, h.ns, nil, moveHelperName(h.runID), nil, moveHelperNetPolName(h.runID)); err != nil {
 		return fmt.Errorf("k8s: move helper: reclaim one left by an earlier move: %w", err)
 	}
 	pols := d.clientset.NetworkingV1().NetworkPolicies(h.ns)
-	pol := d.moveHelperNetPol(h)
-	if _, err := pols.Create(ctx, pol, metav1.CreateOptions{}); err != nil {
+	pol, err := pols.Create(ctx, d.moveHelperNetPol(h), metav1.CreateOptions{})
+	if err != nil {
 		return fmt.Errorf("k8s: move helper: create its NetworkPolicy: %w", err)
 	}
 	var created *corev1.Pod
 	defer func() {
 		cctx, cancel := context.WithTimeout(context.Background(), moveHelperCleanup)
 		defer cancel()
-		if cerr := d.cleanupMoveHelper(cctx, h.ns, created, moveHelperName(h.runID), pol.Name); cerr != nil {
+		if cerr := d.cleanupMoveHelper(cctx, h.ns, created, moveHelperName(h.runID), pol, moveHelperNetPolName(h.runID)); cerr != nil {
 			err = errors.Join(err, cerr)
 		}
 	}()
@@ -176,9 +176,10 @@ func (d *Driver) helperImageOld(ctx context.Context, ns, name string) bool {
 	return false
 }
 
-// cleanupMoveHelper deletes the helper pod under its UID, waits until it is gone, then deletes its policy. A nil pod
-// is looked up by name and adopted if it exists; the policy is deleted only once the pod is known to be gone.
-func (d *Driver) cleanupMoveHelper(ctx context.Context, ns string, pod *corev1.Pod, podName, polName string) error {
+// cleanupMoveHelper deletes the helper pod under its UID, waits until it is gone, then deletes its policy under its
+// UID, so a cleanup never takes the policy of another helper of the run. A nil pod or policy is looked up by name and
+// adopted if it exists; the policy is deleted only once the pod is known to be gone.
+func (d *Driver) cleanupMoveHelper(ctx context.Context, ns string, pod *corev1.Pod, podName string, pol *networkingv1.NetworkPolicy, polName string) error {
 	if pod == nil {
 		got, err := d.clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 		switch {
@@ -199,7 +200,19 @@ func (d *Driver) cleanupMoveHelper(ctx context.Context, ns string, pod *corev1.P
 			return fmt.Errorf("k8s: move helper: wait for its pod to go: %w", err)
 		}
 	}
-	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).Delete(ctx, polName, metav1.DeleteOptions{}); err != nil && !isNotFound(err) {
+	pols := d.clientset.NetworkingV1().NetworkPolicies(ns)
+	if pol == nil {
+		got, err := pols.Get(ctx, polName, metav1.GetOptions{})
+		switch {
+		case isNotFound(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("k8s: move helper: read its NetworkPolicy: %w", err)
+		}
+		pol = got
+	}
+	uid := pol.UID
+	if err := pols.Delete(ctx, pol.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: move helper: delete its NetworkPolicy: %w", err)
 	}
 	return nil

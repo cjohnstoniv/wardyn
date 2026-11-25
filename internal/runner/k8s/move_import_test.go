@@ -407,13 +407,15 @@ func checkConfined(t *testing.T, pod *corev1.Pod, readOnly bool) {
 
 // helperWatch records the helper pod's deletes. After each one it answers the deleted pod to the next Get, so a
 // cleanup that does not wait for the pod to go reaches its policy delete with the pod still there. policyAfter holds,
-// for each helper policy delete that follows a pod delete, how many pod reads came between them.
+// for each helper policy delete that follows a pod delete, how many pod reads came between them; polUIDs holds the
+// UID precondition of every helper policy delete.
 type helperWatch struct {
 	deletes     []clienttesting.DeleteAction
 	gone        *corev1.Pod
 	deleted     bool
 	reads       int
 	policyAfter []int
+	polUIDs     []k8stypes.UID
 }
 
 func watchHelper(cs *fake.Clientset) *helperWatch {
@@ -444,7 +446,12 @@ func watchHelper(cs *fake.Clientset) *helperWatch {
 		return false, nil, nil
 	})
 	cs.PrependReactor("delete", "networkpolicies", func(a clienttesting.Action) (bool, runtime.Object, error) {
-		if a.(clienttesting.DeleteAction).GetName() == polName && w.deleted {
+		da := a.(clienttesting.DeleteAction)
+		if da.GetName() != polName {
+			return false, nil, nil
+		}
+		w.polUIDs = append(w.polUIDs, deleteUID(da))
+		if w.deleted {
 			w.policyAfter = append(w.policyAfter, w.reads)
 			w.deleted = false
 		}
@@ -453,11 +460,33 @@ func watchHelper(cs *fake.Clientset) *helperWatch {
 	return w
 }
 
-// stampHelperUID gives the helper pod uid as the API server would on its create.
-func stampHelperUID(cs *fake.Clientset, uid k8stypes.UID) {
+// stampHelperUID gives the helper pod podUID and its policy polUID, as the API server would on their creates.
+func stampHelperUID(cs *fake.Clientset, podUID, polUID k8stypes.UID) {
 	cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
 		if p, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod); ok && p.Name == moveHelperName(asRunID) {
-			p.UID = uid
+			p.UID = podUID
+		}
+		return false, nil, nil
+	})
+	cs.PrependReactor("create", "networkpolicies", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if p, ok := a.(clienttesting.CreateAction).GetObject().(*networkingv1.NetworkPolicy); ok && p.Name == moveHelperNetPolName(asRunID) {
+			p.UID = polUID
+		}
+		return false, nil, nil
+	})
+}
+
+// honourPolicyUID makes a NetworkPolicy delete answer Conflict when its UID precondition names another object, as the
+// API server does.
+func honourPolicyUID(cs *fake.Clientset) {
+	cs.PrependReactor("delete", "networkpolicies", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		da := a.(clienttesting.DeleteAction)
+		obj, err := cs.Tracker().Get(netpolsGVR, da.GetNamespace(), da.GetName())
+		if err != nil {
+			return false, nil, nil
+		}
+		if p := da.GetDeleteOptions().Preconditions; p != nil && p.UID != nil && *p.UID != obj.(*networkingv1.NetworkPolicy).UID {
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"}, da.GetName(), errors.New("test: UID precondition failed"))
 		}
 		return false, nil, nil
 	})
@@ -473,7 +502,8 @@ func deleteUID(a clienttesting.DeleteAction) k8stypes.UID {
 // The helper pod is deleted under its UID, and its policy only after a read finds the pod gone.
 func TestMoveHelper_CleanupDeletesPodUnderItsUIDAndWaits(t *testing.T) {
 	k, cs, _, _ := importRig(t)
-	stampHelperUID(cs, "helper-uid")
+	stampHelperUID(cs, "helper-uid", "helper-pol-uid")
+	honourPolicyUID(cs)
 	w := watchHelper(cs)
 	stream, set := workStream(t)
 	if _, _, err := k.ImportSandbox(context.Background(), importSpec(), set, 1<<20, stream); err != nil {
@@ -484,6 +514,9 @@ func TestMoveHelper_CleanupDeletesPodUnderItsUIDAndWaits(t *testing.T) {
 	}
 	if !slices.Equal(w.policyAfter, []int{2}) {
 		t.Errorf("pod reads before the helper policy delete = %v, want [2]: the pod still there, then gone", w.policyAfter)
+	}
+	if !slices.Equal(w.polUIDs, []k8stypes.UID{"helper-pol-uid"}) {
+		t.Errorf("helper policy delete UIDs = %v, want [helper-pol-uid]", w.polUIDs)
 	}
 }
 
@@ -511,6 +544,7 @@ func TestMoveHelper_PodCreateErrorAdoptsPod(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k, cs, _, _ := importRig(t)
+			stampHelperUID(cs, "", "pol-uid")
 			w := watchHelper(cs)
 			tried := false
 			cs.PrependReactor("get", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
@@ -552,6 +586,13 @@ func TestMoveHelper_PodCreateErrorAdoptsPod(t *testing.T) {
 			if kept := perr == nil; kept != tc.wantPolicy {
 				t.Errorf("helper policy kept = %v, want %v", kept, tc.wantPolicy)
 			}
+			if wantUIDs := []k8stypes.UID{"pol-uid"}; tc.wantPolicy {
+				if len(w.polUIDs) != 0 {
+					t.Errorf("helper policy delete UIDs = %v, want none", w.polUIDs)
+				}
+			} else if !slices.Equal(w.polUIDs, wantUIDs) {
+				t.Errorf("helper policy delete UIDs = %v, want %v", w.polUIDs, wantUIDs)
+			}
 		})
 	}
 }
@@ -566,10 +607,13 @@ func TestMoveImport_ReclaimsStaleHelper(t *testing.T) {
 	if err := cs.Tracker().Create(podsGVR, stale, testNamespace); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.Tracker().Create(netpolsGVR, k.moveHelperNetPol(h), testNamespace); err != nil {
+	stalePol := k.moveHelperNetPol(h)
+	stalePol.UID = "stale-pol-uid"
+	if err := cs.Tracker().Create(netpolsGVR, stalePol, testNamespace); err != nil {
 		t.Fatal(err)
 	}
-	stampHelperUID(cs, "new-uid")
+	stampHelperUID(cs, "new-uid", "new-pol-uid")
+	honourPolicyUID(cs)
 	w := watchHelper(cs)
 	order := namedWrites(cs, dyn)
 	stream, set := workStream(t)
@@ -582,6 +626,9 @@ func TestMoveImport_ReclaimsStaleHelper(t *testing.T) {
 	if !slices.Equal(w.policyAfter, []int{2, 2}) {
 		t.Errorf("pod reads before each helper policy delete = %v, want [2 2]", w.policyAfter)
 	}
+	if !slices.Equal(w.polUIDs, []k8stypes.UID{"stale-pol-uid", "new-pol-uid"}) {
+		t.Errorf("helper policy delete UIDs = %v, want [stale-pol-uid new-pol-uid]", w.polUIDs)
+	}
 	pol, pod := "networkpolicies "+moveHelperNetPolName(asRunID), "pods "+moveHelperName(asRunID)
 	idx := func(w string) int { return slices.Index(*order, w) }
 	if !(idx("delete "+pod) >= 0 && idx("delete "+pod) < idx("delete "+pol) && idx("delete "+pol) < idx("create "+pol) && idx("create "+pol) < idx("create "+pod)) {
@@ -592,5 +639,39 @@ func TestMoveImport_ReclaimsStaleHelper(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(*order, "\n"), "create pods "+proxyPodName(asRunID)) {
 		t.Errorf("the import created a proxy pod: %v", *order)
+	}
+}
+
+// Two helpers of one run overlap: another helper's policy has replaced this one's by the time this cleanup runs. The
+// delete under this policy's UID answers Conflict, so the other helper's policy stays and the cleanup returns the error.
+func TestMoveHelper_PolicyDeleteKeepsAnotherHelpersPolicy(t *testing.T) {
+	k, cs, _, _ := importRig(t)
+	stampHelperUID(cs, "a-uid", "a-pol-uid")
+	honourPolicyUID(cs)
+	w := watchHelper(cs)
+	swapped := false
+	cs.PrependReactor("delete", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if swapped || a.(clienttesting.DeleteAction).GetName() != moveHelperName(asRunID) {
+			return false, nil, nil
+		}
+		swapped = true
+		other := k.moveHelperNetPol(moveHelper{ns: testNamespace, runID: asRunID})
+		other.UID = "b-pol-uid"
+		if err := cs.Tracker().Update(netpolsGVR, other, testNamespace); err != nil {
+			t.Error(err)
+		}
+		return false, nil, nil
+	})
+	h := moveHelper{ns: testNamespace, runID: asRunID, claims: []helperClaim{{claim: "c", target: runner.ScratchWorkPath}}}
+	err := k.runMoveHelper(context.Background(), h, []string{proxyBinary}, nil, io.Discard)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("runMoveHelper = %v, want the policy delete's Conflict", err)
+	}
+	if !slices.Equal(w.polUIDs, []k8stypes.UID{"a-pol-uid"}) {
+		t.Errorf("helper policy delete UIDs = %v, want [a-pol-uid]", w.polUIDs)
+	}
+	obj, perr := cs.Tracker().Get(netpolsGVR, testNamespace, moveHelperNetPolName(asRunID))
+	if perr != nil || obj.(*networkingv1.NetworkPolicy).UID != "b-pol-uid" {
+		t.Errorf("the other helper's policy = %v (%v), want it kept", obj, perr)
 	}
 }
