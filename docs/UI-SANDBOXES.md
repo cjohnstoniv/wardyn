@@ -802,15 +802,17 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 - This relay puts a sandbox's UI in a **browser**.
 - Two questions follow it
   around: what about a native IDE, and what about a native desktop client?
-- Only the IDE has a native answer today. A desktop already runs in the browser
-  (the last row below), and this section exists so a native desktop client is not
-  mistaken for something that ships.
-- **No native client in the table below is built, scheduled, or tested**, and
-  [ROADMAP.md](../ROADMAP.md) lists no native IDE or remote-desktop path.
+- The IDE has a native answer today, and so does a Linux VM run's desktop. A
+  desktop also runs in the browser (the last row below), and this section exists
+  so no other native desktop client is mistaken for something that ships.
+- **One native client in the table below is built: a Linux VM run's window**
+  (`wardyn window <run>`, the "Built in 0.11" row). No other is built,
+  scheduled, or tested, and [ROADMAP.md](../ROADMAP.md) lists no other native
+  IDE or remote-desktop path.
 - **What exists today: VS Code Remote-SSH**, over the SSH gateway, with one
   client setting ([SSH.md §5](SSH.md#5-vs-code-remote-ssh)).
 - That is the whole
-  native story.
+  native IDE story.
 - It needs no relay, no `ui_apps` entry and no second listener —
   it is the SSH gateway doing what SSH does.
 - **What a further native lane would have to solve.** Each candidate is listed
@@ -825,6 +827,7 @@ no UI launcher in this image: /usr/local/bin/wardyn-ui-vscode not found
 |  | That path may already exist: [`ssh -L`](SSH.md#4--l-port-forwarding) carries arbitrary **loopback** TCP into the sandbox, so this is plausibly an image question, not a server one |  |
 |  | X11 forwarding is refused outright by the SSH gateway, so `-X` is not the route |  |
 | Xpra | Same image problem, smaller: a rootless X server and per-app windows instead of a whole desktop, reached the same way (`-L`, or xpra's own ssh transport) | Nothing built |
+| Linux VM window (RFB) | A viewer in the `wardyn` CLI that draws a Linux VM run's display on the computer its runner is on, over the runner's local socket. No new listener, and the browser desktop only watches while it is open | **Built in 0.11**: `wardyn window <run>`, off until `features.local_window.enabled` is on. Linux computers only, no clipboard, and not recorded, so a run recorded at Screen and actions refuses it ([more](operations/linux-vm-sandboxes.md#a-window-on-your-own-computer)) |
 | Browser desktop (VNC/noVNC) | Not a native lane at all — noVNC on a declared loopback port is an **image variant on this relay**, with no server change. It was the cheapest of the four for that reason | **Built in 0.7**: `deploy/images/novnc/`, `make agent-image-novnc`, declared as `"name": "novnc"`. FROM `agent-base`, the same default the vscode image now uses — an X stack does not need a language runtime |
 |  |  | Published with every release as `ghcr.io/cjohnstoniv/agent-novnc` ([Verify a release](VERIFY.md)). Measured: ~565 MB over the base, listening ~1s into the 20s budget |
 
