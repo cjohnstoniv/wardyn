@@ -46,6 +46,9 @@ type ClassSupport struct {
 	// member's user drive / deliver a root-owned file; false fail-closed.
 	UserDrives   bool
 	ManagedFiles bool
+	// ExtraContainers is CONJUNCTION-aggregated like UserDrives: can this substrate run
+	// SandboxSpec.Containers. False fail-closed.
+	ExtraContainers bool
 	// EphemeralDiskEnforcement names what binds runner.Resources.DiskMiB —
 	// `filesystem`, `eviction`, or `none`/empty. Aggregated as the WEAKEST.
 	EphemeralDiskEnforcement types.StorageEnforcement
