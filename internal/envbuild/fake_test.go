@@ -78,6 +78,10 @@ type fakeEnvbuilderDocker struct {
 	// inspected records the refs passed to ImageInspect, in order.
 	inspected []string
 
+	// buildLabels maps an output tag to the labels its build set; imageBuilds counts ImageBuild calls.
+	buildLabels map[string]map[string]string
+	imageBuilds int
+
 	// lastDockerfile is the Dockerfile of the last ImageBuild context.
 	lastDockerfile string
 	// noAuxID, when true, makes ImageBuild's stream carry no {"aux":{"ID":...}} message.
@@ -278,6 +282,7 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 			break
 		}
 	}
+	cfg.Labels = f.buildLabels[imageID]
 	return client.ImageInspectResult{
 		InspectResponse: image.InspectResponse{ID: f.imageIDFor(imageID), Config: cfg, RepoDigests: f.repoDigests[imageID]},
 	}, nil
@@ -300,6 +305,13 @@ func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Rea
 		f.beforeBuild()
 	}
 	f.imageBuildCalled = true
+	f.imageBuilds++
+	if f.buildLabels == nil {
+		f.buildLabels = map[string]map[string]string{}
+	}
+	for _, tag := range options.Tags {
+		f.buildLabels[tag] = options.Labels
+	}
 	f.lastBuildTags = options.Tags
 	f.lastBuildPullParent = options.PullParent
 	buildErr := f.buildErr

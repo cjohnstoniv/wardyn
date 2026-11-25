@@ -7,7 +7,7 @@
 // line cap (scripts/check-file-size.sh). Verbatim move: no behaviour change.
 import { Loader2, RotateCw, SquareTerminal } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { AuditEvent, Recording, RecordingLevel, RunNotRecorded } from "../../../lib/types";
+import type { AuditEvent, Recording, RecordingLevel, RunDetail, RunNotRecorded } from "../../../lib/types";
 import {
   Select,
   SelectContent,
@@ -83,6 +83,7 @@ export function RecordingTab({
   onRetryIndex,
   onGoAudit,
   refusal,
+  watermark,
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
@@ -110,6 +111,8 @@ export function RecordingTab({
   ended?: boolean;
   /** The run's session.recording and desktop.recording rows, for the desktop recordings and gaps. */
   recordingAudit?: AuditEvent[];
+  /** Who is viewing and whether the organisation requires the watermark, for the desktop replay (GET /runs/{id}, desktop runs only). */
+  watermark?: RunDetail["desktop_watermark"];
   /** Whether that index may be missing recordings: its latest read failed, or a list of them filled its page. */
   recordingIndex?: RecordingIndex;
   /** Reads the index again (offered when its read failed). */
@@ -181,7 +184,7 @@ export function RecordingTab({
       )}
 
       {desktopSelected ? (
-        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} onGoAudit={onGoAudit} />
+        <DesktopReplay runId={runId} recKey={selected} audit={recordingAudit} onGoAudit={onGoAudit} watermark={watermark} />
       ) : state === "loading" || state === "idle" ? (
         <div className="flex h-[360px] items-center justify-center rounded-xl border border-border bg-card">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />

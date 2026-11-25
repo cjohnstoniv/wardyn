@@ -24,7 +24,7 @@ the ADMIN pre-authorized.
 | `agent` | exact `--agent` string | narrows | which agent/harness a member may launch (same seam). Deliberately NOT constrained to the harness catalog, at the gate or at the grant write: `WARDYN_AGENT_IMAGES` custom agents are supported, so a catalog check would make an operator's own entry unwriteable |
 | `workspace_provider` | exact git provider row id | narrows | which git provider row a member's repositories may come from; see [`workspace_provider`](#workspace_provider) |
 | `model_provider` | exact model provider id | narrows | which model provider a person's run may use; see [`model_provider`](#model_provider) |
-| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
+| `feature` | `ssh_key`, `api_token`, `custom_component`, `service_attach`, `self_host_runner` or `inbound` | narrows | whether a member may add an SSH key, take an SSH ticket (`ssh_key`, while `WARDYN_SSH_TICKETS` is on), mint an API token, define a custom component, enter the runs of a service identity they sponsor, mint a token for a runner of their own or declare an app other people and services can call; see [`feature`](#feature) |
 | `policy` | stored policy uuid | narrows | which stored policy a member may select for their own run (`policy_id` on `POST /runs`/preflight, `denyUserRequest`, same seam) |
 | `component` | org component uuid | narrows | which org component (an admin-written row) a person may attach to their own run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)) |
 
@@ -86,7 +86,7 @@ the ADMIN pre-authorized.
 
 - **Subjects, and the group snapshot's ceiling.**
 - A grant's `subject_type` is
-  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits),
+  - `user` (matches **either** the lowercased OIDC `sub` **or** the email — an admin writing a grant shouldn't have to guess which the IdP made authoritative; a deny on either identity hits, while an allow on the email counts only when sign-in vouches for the email: [`WARDYN_CAPABILITY_GRANTS_VERIFIED_EMAIL`](../ENV.md#wardyn_capability_grants_verified_email), on by default),
   - `group` (the login-time union of the ID token's `roles` and `groups` claims, lowercased and deduped — so Entra App Roles are grantable for free),
   - `user_type` (everyone of one user type, named by the type's id),
   - or `all` (every signed-in human).
@@ -226,6 +226,7 @@ the ADMIN pre-authorized.
 - Security admins are bound like anyone; only the admin tier is exempt.
 - On `image`, the one widening kind, the restriction also switches that one image on for the people listed while the kind stays off for every other image.
 - Turning "Only…" on with no allow row naming the value is refused `400`, since the resource would then be available to nobody.
+- A policy created with `POST /policies?restricted=true`, or a model provider added with `PUT /model-providers?restricted=true`, is restricted before it is written, so it is never available to everyone, not even for a moment. Until its list is written through `POST /permissions/grants`, only admins may use it. If the restriction cannot be written, nothing is created; if the create fails after it, the restriction is lifted once the resource is confirmed absent. The console does this whenever "Only these" is chosen on a new policy or provider. An organisation `component` always starts restricted.
 - `egress_host` and `secret` values can't be restricted (`400`).
 - The value is the rest of the path, so an image ref's slashes need no escaping.
 
@@ -256,6 +257,7 @@ the ADMIN pre-authorized.
 
 - whether a member may add an SSH key (`POST /me/ssh-keys`), mint an API token (`POST /me/tokens`) or define a custom component of their own at all
 - One check at each mint door (the token door keeps its user-view `409`; the SSH door stores a capped key).
+- `ssh_key` also gates the SSH ticket mint (`POST /runs/{id}/attach/ticket` with an `ssh-*` purpose, target `runs.ssh_ticket`) while `WARDYN_SSH_TICKETS` is on; an `attach-forward` ticket is not asked. A connection already open is not closed by a later deny.
 - Mint only: a key or token that already exists keeps working until it is removed or revoked.
 - `custom_component` gates saving a component (`POST`/`PUT /me/components`) and attaching one the person defined, inline or saved, to a run (`componentAttachRefusal`, [`internal/api/components_authz.go`](../../internal/api/components_authz.go)).
   - It is on for everyone from the release that adds it, until a deny row names it. This is the one value that sets aside "an upgrade with no configuration changes nothing".

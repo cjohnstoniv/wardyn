@@ -24,6 +24,14 @@ const deliveryGetMock = vi.fn();
 vi.mock("../../../lib/api/credential-delivery", () => ({
   credentialDelivery: { get: () => deliveryGetMock(), put: vi.fn(), runnersEnabled: () => Promise.resolve(true) },
 }));
+// The assistant's settings and availability answer off, with the stored defaults.
+vi.mock("../../../lib/api/assistant", () => ({
+  assistant: {
+    getAssistantSettings: () => Promise.resolve({ settings: { compose: false, review: false, run_history_counts: false, never_sent_kinds: [], providers: [] }, etag: null }),
+    putAssistantSettings: () => Promise.resolve({ held: { id: "" } }),
+    getMyAssistant: () => Promise.resolve({ state: "off" }),
+  },
+}));
 
 import { BASELINE, CHANGES, DELIVERY, GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";

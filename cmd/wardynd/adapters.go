@@ -598,13 +598,16 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	// The one exception is a run kept after an outage whose agent still runs
 	// (store.HoldsSandboxSQL): it is listed as Kept, for the max age alone.
 	//
+	// runner_id comes back so the reaper can skip a run whose registered runner this replica holds no
+	// session for (lifecycle.Config.RunnerOnline).
+	//
 	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
 	// there are no rows to measure, so there is nothing for it to be wrong about,
 	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
 		SELECT id, created_at, admitted_at, updated_at,
 		       CASE WHEN experience = 'background' THEN 0 ELSE auto_stop_after_sec END,
-		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, now()
+		       lost_at IS NOT NULL, lifetime_cap_at IS NOT NULL, runner_id, now()
 		FROM agent_runs
 		WHERE state = $1 AND ` + store.HoldsSandboxSQL
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
@@ -618,7 +621,7 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 	for rows.Next() {
 		var s lifecycle.RunSummary
 		var admitted *time.Time
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &dbNow); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &admitted, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &s.Kept, &s.HasLifetimeCap, &s.RunnerID, &dbNow); err != nil {
 			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		if admitted != nil {
@@ -630,6 +633,22 @@ func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.
 		return nil, time.Time{}, fmt.Errorf("wardynd: iterate run summaries: %w", err)
 	}
 	return out, dbNow, nil
+}
+
+// StampIdleClocks is lifecycle.Config.StampIdle. It restarts the idle clock of every run
+// ListRunningWithPolicy could idle-stop (RUNNING, not kept, not a background task, a positive idle stop),
+// or with runner set only that runner's. updated_at moves to the store's own clock, the one the scan
+// measures against, and never back, so an idle stop's guard (UpdateRunStateIfIdle) skips a run it touched.
+func (l lifecycleStore) StampIdleClocks(ctx context.Context, runner *uuid.UUID) (int64, error) {
+	const q = `
+		UPDATE agent_runs SET updated_at = GREATEST(updated_at, now())
+		WHERE state = $1 AND lost_at IS NULL AND experience IS DISTINCT FROM 'background'
+		  AND auto_stop_after_sec > 0 AND ($2::uuid IS NULL OR runner_id = $2::uuid)`
+	tag, err := l.pool.Exec(ctx, q, string(types.RunRunning), runner)
+	if err != nil {
+		return 0, fmt.Errorf("wardynd: restart idle clocks: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // reapTickLock is the reaper's single-flight gate: a Postgres try-advisory-lock

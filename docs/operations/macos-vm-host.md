@@ -71,6 +71,10 @@
 - **A pre-planted name is moved, not changed.** A path that is already there and not exactly as above is moved into a new root-only `.wardyn-quarantine.*` folder. For `/Users/Shared/Wardyn` itself the folder sits beside it; for anything inside it, the folder sits inside `/Users/Shared/Wardyn`.
   - The installer makes the path again and moves the entries across. It never changes the owner or mode of what it found, and never deletes it.
   - An admin can inspect and delete a quarantine folder as root.
+- **An entry file marked immutable.** A login can set the user immutable flag (`uchg`) on its own entry file, which would stop the installer from carrying it across.
+  - When it rebuilds the entries directory in place, the installer clears that flag on a file with no other name, logs it, and carries the entry.
+  - A file with the system immutable flag (`schg`), or with another name, stops the installation with the file's path and the `chflags` command that clears it.
+  - An immutable entry in a directory an earlier installation set aside still stops the installation with the linking or moving error.
 - **The installer waits for the lock.** If any login holds the admission lock for more than 10 seconds, the installation fails closed: macOS VMs stay off. Reinstall the package to retry once nobody holds it.
 - A runner deletes only its own entries. The sticky bit stops another login's runner from removing them.
 - **The socket folder.** A Unix socket path holds only about 100 bytes, which a path under a home folder can exceed. So a run's control, agent and desktop sockets sit in `/Users/Shared/Wardyn/sock/u<uid>/<run-key>/`, about 56 bytes.
@@ -86,7 +90,9 @@
 - **When a slot is released.** A runner frees an entry only once the helper reported the VM stopped, the helper exited and the run directory is gone. There is one exception, a heuristic: a runner may free its own entry for a helper that was killed without that report.
   - It does so when the helper's process no longer exists, no Virtualization or `wardyn-macvm` process of the login created after that helper remains other than another entry's live helper, and the run directory is gone.
   - Nothing says which VM a process belongs to, so it errs toward keeping the entry ([Apple's licence and the two-VM limit](macos-vms.md#apples-licence-and-the-two-vm-limit)).
-  - Docker's Linux VM holds the slot only if Docker started after that helper. Which came first is read from the time since the Mac started, which a change of the clock does not move. A process whose creation time cannot be read keeps the slot.
+  - Docker's Linux VM holds the slot only if it started after that helper and before the runner saw the helper exit.
+  - For a base preparation, tools update or base edit the runner started, it sees the exit at once; otherwise at its next check, every 15 seconds.
+  - Which came first is read from the time since the Mac started, which a change of the clock does not move. A process whose creation time cannot be read keeps the slot.
   - Then the Virtualization framework's own cap of two is the backstop.
   - A slot recorded by an earlier release frees once no macOS VM, helper or Docker engine of that user runs. Two kinds wait for their owner instead (below).
 - **A login that ended with a VM live.** Another login's runner can free its slot and memory once the helper is gone.

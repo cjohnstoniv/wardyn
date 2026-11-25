@@ -44,6 +44,8 @@ const (
 	// routeSSOToken carries the AWS SSO session captured by an `aws sso login`
 	// container-login run. Same brokered shape as the scan result upload.
 	routeSSOToken = "/wardyn/v1/sso-token/"
+	// routeAssistant carries a governed assistant run's turns, events and tool calls.
+	routeAssistant = "/wardyn/v1/assistant/"
 
 	// rule_source values emitted for the brokered routes (audit pipeline).
 	ruleSourceMint        = "brokered:mint"
@@ -66,6 +68,8 @@ const (
 	// Appended, not slotted beside its siblings: docs/AUDIT-ACTIONS.md cites
 	// each by LINE, so inserting above rots citations.
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
+	// ruleSourceAssistant: a brokered call of a governed assistant run.
+	ruleSourceAssistant = "brokered:assistant"
 
 	// maxBrokeredBody caps mint/approvals forward bodies. LLM bodies are
 	// unbounded (streamed) — Anthropic is the size authority there.
@@ -80,6 +84,12 @@ const (
 	maxToolCmd          = 4 << 10
 	maxToolName         = 128
 	maxToolEnvNames     = 32
+
+	// recordingFormatHeader and recordingFormatLog are internal/recording's FormatHeader and
+	// FormatLog: the header wardyn-rec sets, to "log", on a plain-log upload. Spelled here so the
+	// sidecar does not link the recording store; relay_flush_test.go sends recording's own spelling.
+	recordingFormatHeader = "X-Wardyn-Recording-Format"
+	recordingFormatLog    = "log"
 )
 
 // handleLocalRoute dispatches an origin-form /wardyn/... request to its
@@ -101,6 +111,8 @@ func (p *Proxy) handleLocalRoute(w http.ResponseWriter, r *http.Request) {
 		p.handleBrokerScanResult(w, r)
 	case r.Method == http.MethodPut && strings.HasPrefix(path, routeSSOToken):
 		p.handleBrokerSSOToken(w, r)
+	case strings.HasPrefix(path, routeAssistant):
+		p.handleBrokerAssistant(w, r)
 	case strings.HasPrefix(path, routeVMNetPrefix):
 		p.handleVMNetReport(w, r)
 	case strings.HasPrefix(path, llmAnthropicPrefix):
@@ -476,6 +488,16 @@ func (p *Proxy) handleBrokerSSOToken(w http.ResponseWriter, r *http.Request) {
 // transport dials it directly. SECURITY: the inbound sandbox Authorization is
 // never carried here — constructed fresh with only the run token set.
 func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
+	hdr := http.Header{}
+	if contentType != "" {
+		hdr.Set("Content-Type", contentType)
+	}
+	return p.forwardToControlPlaneWith(ctx, method, path, body, hdr)
+}
+
+// forwardToControlPlaneWith is forwardToControlPlane with the request's headers given whole. The
+// run token is set last, so no header in hdr can stand in for it.
+func (p *Proxy) forwardToControlPlaneWith(ctx context.Context, method, path string, body []byte, hdr http.Header) (*http.Response, error) {
 	if p.controlPlaneURL == "" {
 		return nil, fmt.Errorf("control plane url not configured")
 	}
@@ -498,11 +520,11 @@ func (p *Proxy) forwardToControlPlane(ctx context.Context, method, path string, 
 	if err != nil {
 		return nil, err
 	}
+	for k, vs := range hdr {
+		req.Header[k] = vs
+	}
 	// Inject the run token ONLY toward the control plane.
 	req.Header.Set("Authorization", "Bearer "+p.runToken.Get())
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
 	return p.localClient.Do(req)
 }
 
@@ -586,7 +608,16 @@ func hostPortFromURL(rawURL string) (host string, port int, err error) {
 // approval id the decision row carries.
 func (p *Proxy) relayControlPlane(w http.ResponseWriter, r *http.Request, method, path string,
 	body []byte, contentType, ruleSource string, idOf func(status int, body []byte) *uuid.UUID) {
-	resp, err := p.forwardToControlPlane(r.Context(), method, path, body, contentType)
+	hdr := http.Header{}
+	if contentType != "" {
+		hdr.Set("Content-Type", contentType)
+	}
+	if ruleSource == ruleSourceRecordings && r.Header.Get(recordingFormatHeader) == recordingFormatLog {
+		// The recorder says its body is a plain log, and the server believes it over a guess
+		// from the first bytes (internal/api's recording upload). Only that value is carried.
+		hdr.Set(recordingFormatHeader, recordingFormatLog)
+	}
+	resp, err := p.forwardToControlPlaneWith(r.Context(), method, path, body, hdr)
 	if err != nil {
 		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
 		p.httpError(w, "control plane error", err, http.StatusBadGateway)
@@ -661,16 +692,14 @@ func approvalIDOn409(status int, body []byte) *uuid.UUID {
 func approvalIDAlways(_ int, body []byte) *uuid.UUID { return extractApprovalID(body) }
 
 // relay streams an upstream response back to the client verbatim, scrubbed
-// when Config.ScrubResponses is set. The streaming sibling of passThrough,
-// which writes an already-captured body.
+// when Config.ScrubResponses is set, flushing each chunk as it arrives
+// (flushRelay): a model's event stream reaches the agent as it is written,
+// not when a buffer fills. The streaming sibling of passThrough, which writes
+// an already-captured body.
 func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response) {
 	w, done := p.scrubbed(w)
 	defer done()
-	dst := w.Header()
-	copyHeader(dst, resp.Header)
-	removeHopByHop(dst)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	flushRelay(w, resp)
 }
 
 // passThrough writes a forwarded control-plane response verbatim: status code

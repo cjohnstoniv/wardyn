@@ -435,8 +435,10 @@ func uiCookiePolicy(raw string) api.UICookiePolicy {
 //
 // validateMemberModePosture stays OUT of this list on purpose: it needs
 // lm.enabled (local mode's RESOLVED fact, not the raw flag — local mode
-// auto-enables) and feats.authn != nil (OIDC actually configured, which a
-// failed OIDC discovery leaves nil), and neither exists this early in boot.
+// auto-enables) and feats.authn != nil (OIDC actually configured: nil only
+// when no issuer is set, or when discovery failed for an issuer never booted
+// with or for a reason other than an unanswering provider), and neither
+// exists this early in boot.
 // It is still called directly, at its own later point in run().
 func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 	if err := refuseRetiredModelEnv(os.Environ()); err != nil {
@@ -500,7 +502,7 @@ func validateBootPosture(f *bootFlags, posture tlsPosture) error {
 		return err
 	}
 	// applyLockPoolFlag validates and sets db.LockPoolMaxConns here, before the connect: db.LockerFor sizes on first use.
-	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate(), applyLockPoolFlag(f.lockPoolMaxConns)); err != nil {
+	if err := errors.Join(f.sessionLife.validate(), f.cliSignIn.validate(), f.outage.validate(), applyLockPoolFlag(f.lockPoolMaxConns)); err != nil {
 		return err
 	}
 	if *f.oidcIssuer != "" {
@@ -536,6 +538,9 @@ func validateSSHSessionFlags(f *bootFlags) error {
 		if _, err := parseSSHChannels(*f.sshChannels); err != nil {
 			return err
 		}
+	}
+	if f.sshTickets != nil && *f.sshTickets && flagValue(f.sshListen) == "" {
+		return fmt.Errorf("refusing to start: WARDYN_SSH_TICKETS needs the SSH gateway on (WARDYN_SSH_LISTEN)")
 	}
 	return nil
 }

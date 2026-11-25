@@ -225,6 +225,7 @@ export function RunLifetimeBanner({
       // and only the on-time / late sentence is left out.
       if (!offline && !unknown && stoppedLate === null) return null;
       const seen = run.runner_last_seen_at ? absoluteTime(run.runner_last_seen_at) : "—";
+      const copyOut = run.kept_copy_out === true;
       return (
         <Banner
           data-testid={unknown ? "run-lifetime-local-unknown" : offline ? "run-lifetime-local-lapse" : "run-lifetime-local-stopped"}
@@ -235,11 +236,15 @@ export function RunLifetimeBanner({
               ? LOCAL_RUN.UNKNOWN_BODY(runner, seen)
               : offline
                 ? LOCAL_RUN.LAPSE_BODY(runner, seen)
-                : stoppedLate === "failed" || containmentPending
+                : containmentPending
                   ? undefined
-                  : stoppedLate
-                    ? LOCAL_RUN.STOPPED_LATE(runner)
-                    : LOCAL_RUN.STOPPED_BODY(runner)
+                  : copyOut
+                    ? LOCAL_RUN.COPY_OUT_BODY(runner)
+                    : stoppedLate === "failed"
+                      ? undefined
+                      : stoppedLate
+                        ? LOCAL_RUN.STOPPED_LATE(runner)
+                        : LOCAL_RUN.STOPPED_BODY(runner)
           }
         >
           {offline && <p className="mt-1 text-xs text-muted-foreground">{LOCAL_RUN.REVIVE_WHEN_BACK(runner)}</p>}
@@ -247,9 +252,11 @@ export function RunLifetimeBanner({
             <div className="mt-2.5 flex flex-wrap gap-2">
               {!offline && (
                 <>
-                  <Button size="sm" onClick={() => void revive()} disabled={busy}>
-                    {action === "revive" ? RL.REVIVING : RL.REVIVE}
-                  </Button>
+                  {!copyOut && (
+                    <Button size="sm" onClick={() => void revive()} disabled={busy}>
+                      {action === "revive" ? RL.REVIVING : RL.REVIVE}
+                    </Button>
+                  )}
                   <Button size="sm" variant="outline" onClick={() => void extend(24 * 60 * 60 * 1000)} disabled={busy}>
                     {RL.ENDS_EXTEND}
                   </Button>
