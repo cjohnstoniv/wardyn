@@ -156,6 +156,8 @@ func TestRecoverRunOutput_LiveAdoptionResumesTheFollow(t *testing.T) {
 	if n, execs, saves := rr.recoverCount(), rr.execCount(), f.mem.saveCount(f.run.ID); n != 1 || execs != 0 || saves != 1 {
 		t.Fatalf("%d reads, %d execs, %d writes, want 1, 0, 1: the output is read once and the agent is never re-run", n, execs, saves)
 	}
+	// The watch runs on the goroutine this test started, outside WaitBackground: the teardown follows the revoke.
+	waitFor(t, "the revoke cascade and the teardown", func() bool { return brk.revocations(f.run.ID) >= 1 && rr.stopCount() >= 1 })
 	if brk.revocations(f.run.ID) != 1 || rr.stopCount() != 1 {
 		t.Fatalf("revocations %d, stops %d, want the revoke cascade and the teardown once each", brk.revocations(f.run.ID), rr.stopCount())
 	}

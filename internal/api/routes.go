@@ -544,6 +544,7 @@ func (s *Server) routes() chi.Router {
 			// defaults to — see mountProviderRoutes. One MOUNT, attached with no
 			// blank line, for the ratchet reason just above.
 			s.mountProviderRoutes(r, operatorOnly)
+			s.mountAssistantRoutes(r)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /
@@ -648,6 +649,7 @@ func (s *Server) routes() chi.Router {
 			s.mountUserDriveFamily(r, operatorOnly, securityOps)
 			s.mountKeptMachineRoutes(r, operatorOnly) // kept_machines.go: a person's own kept machines; the super admin's list and delete
 			s.mountRecordingRoutes(r)
+			s.mountWallsRoutes(r) // walls_routes.go: the Walls view's topology, run walls and live streams
 		})
 
 		// Interactive attach (WebSocket). Its own group: browsers cannot put
@@ -661,9 +663,10 @@ func (s *Server) routes() chi.Router {
 		// the ticket's MINTER for ticket auth — is recorded for attribution
 		// (invariant 4).
 		r.Group(func(r chi.Router) {
-			r.Use(s.ticketOrHumanAuth)
-			r.Get("/runs/{id}/attach", s.handleAttachWS)
+			r.With(s.ticketOrHumanAuthFor("")).Get("/runs/{id}/attach", s.handleAttachWS)
+			r.With(s.ticketOrHumanAuthFor(ticketPurposeAttachForward)).Get("/runs/{id}/attach/forward", s.handleAttachForward) // one TCP connection to the sandbox's loopback, by ticket only; off unless the operator turns it on (attach_forward.go)
 		})
+		s.mountSSHTicketDoor(r) // GET /runs/{id}/ssh: SSH over a WebSocket by an SSH ticket in a header, no other credential (sshgateway_ticket.go)
 
 		r.Group(s.mountInternalRoutes) // the sidecar surface (run-token bearer)
 		s.mountGatewayIdentityRoute(r) // and its one door gated before internalAuth
@@ -771,9 +774,12 @@ func (s *Server) mountPermissionRoutes(securityOps chi.Router) {
 	securityOps.Put("/governance/egress-baseline", s.handlePutEgressBaseline)
 	securityOps.Get("/governance/boundary", s.handleGetBoundary)
 	securityOps.Put("/governance/boundary", s.handlePutBoundary)
+	securityOps.Get("/governance/approval-counts", s.handleGetApprovalCounts)
+	securityOps.Put("/governance/approval-counts", s.handlePutApprovalCounts)
 	securityOps.Get("/governance/recording", s.handleGetRecording)
 	securityOps.Put("/governance/recording", s.handlePutRecording)
 	s.mountGovernanceRestrictionRoutes(securityOps)
+	s.mountAgentRulesRoutes(securityOps) // an organisation's rules for each agent harness (agent_rules.go)
 	securityOps.Get("/governance/approval-rules", s.handleListApprovalRules)
 	securityOps.Post("/governance/approval-rules/dry-run", s.handleApprovalRuleDryRun)
 	securityOps.Put("/governance/approval-rules/{name}", s.handlePutApprovalRule)
@@ -859,6 +865,8 @@ func (s *Server) mountInternalRoutes(r chi.Router) {
 	// via_org egress (design 0.9 §7.3): a local run's request for a via_org
 	// destination, served by the organisation; via_org.go.
 	s.mountViaOrgRoute(r)
+	// The assistant's run reads its person's turns and posts its events (assistant_internal.go).
+	s.mountAssistantInternalRoutes(r)
 
 	// Token renew: POST /api/v1/internal/token/renew
 	// The per-run proxy re-issues its own (short-TTL) run token before it

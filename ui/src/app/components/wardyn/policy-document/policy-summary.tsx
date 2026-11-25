@@ -70,6 +70,8 @@ type Group = { heading: string; intro?: string; rows: Row[]; items?: string[]; a
  */
 export interface PolicyPresetNotes {
   chip?: { label: string; fields: ReadonlySet<string> };
+  /** The same chip for each agent whose rules decided fields (provenance layer agent_rules), after the preset's. */
+  agentRulesChips?: { label: string; fields: ReadonlySet<string> }[];
   pushesUnstoppable?: boolean;
 }
 
@@ -183,9 +185,9 @@ function summarize(
   const add = (heading: string, rows: Row[]) => rows.length > 0 && groups.push({ heading, rows });
   // A row built from spec fields the wall preset decided carries the preset's chip on its first value.
   const row = (label: string, values: Value[], ...fields: string[]): Row => {
-    const chip = notes?.chip;
-    if (!chip || values.length === 0 || !fields.some((f) => chip.fields.has(f))) return { label, values };
-    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), { label: chip.label, tone: "info" }] };
+    const hit = [...(notes?.chip ? [notes.chip] : []), ...(notes?.agentRulesChips ?? [])].filter((c) => fields.some((f) => c.fields.has(f)));
+    if (hit.length === 0 || values.length === 0) return { label, values };
+    const first: Value = { ...values[0], chips: [...(values[0].chips ?? []), ...hit.map((c): { label: string; tone: "info" } => ({ label: c.label, tone: "info" }))] };
     return { label, values: [first, ...values.slice(1)] };
   };
   const entries = (items: string[], field: string): Value[] => [

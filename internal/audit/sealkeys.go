@@ -75,6 +75,9 @@ var sealFields = map[string][]SealField{
 	"approval.decide": {{Path: "reason", Subject: SubjectActor}},
 	// The free text the rejecting admin typed with the decision (gov4).
 	"governance.change.reject": {{Path: "reason", Subject: SubjectActor}},
+	// The free text an approver typed with an approval, whether it was recorded or applied the change.
+	"governance.change.approval": {{Path: "reason", Subject: SubjectActor}},
+	"governance.change.approve":  {{Path: "reason", Subject: SubjectActor}},
 	// The free text the proposer typed on a held change.
 	"governance.change.note": {{Path: "reason", Subject: SubjectActor}},
 	// An elevation request's reason is the requester's (the row's actor); its ticket is not sealed.

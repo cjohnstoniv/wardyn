@@ -601,7 +601,8 @@ func (s *Server) finishCreateRunLaunchTwin() { s.dispatchRun(nil, nil, nil, nil)
 // "file function" and how many it builds: the Wardyn boundary, a restriction and the run owner's own
 // walls, each with its fail-closed layer for a read that failed, and the walls' own layer, which the
 // owner's walls and the run's wall preset (read from the run, so it has no failed read) both build. A new layer is listed only once the
-// withholding, the mint door's pre-read and the run.ceiling.reassert row read it as they read these.
+// withholding, the mint door's pre-read and the run.ceiling.reassert row read it as they read these: the agent
+// rules' (agentRulesSealLayers, with its fail-closed layer for a read that failed) are read by all three.
 // A restriction's own layer is built by restrictionSealLayer, which restrictionSealLayers alone calls
 // beside building the fail-closed one: the same restriction layer, not a new one.
 var sealLayerCensus = map[string]int{
@@ -611,6 +612,7 @@ var sealLayerCensus = map[string]int{
 	"personal_walls.go personalWallsSealLayer":         1,
 	"personal_walls.go wallPresetSealLayer":            1,
 	"personal_walls.go wallsSealLayer":                 1,
+	"run_agent_rules.go agentRulesSealLayers":          1,
 }
 
 // sealLayersIn is each sealLayer literal in f's functions, as "file function": a typed one, or an

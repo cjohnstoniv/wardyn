@@ -14,6 +14,8 @@ import (
 
 // Server is the control-plane HTTP server. It is safe for concurrent use.
 type Server struct {
+	// mdmCRL is the MDM device CRL cache, made on first use (runner_device_cert.go).
+	mdmCRL          atomic.Pointer[mdmCRLCache]
 	svcGrant        serviceGrantRuntime
 	runnerStreams   runnerStreamState
 	gatewayIdentity gatewayIdentityState
@@ -132,6 +134,7 @@ type Server struct {
 	replicaOnce     sync.Once
 	leaseKeeperOnce sync.Once       // starts attachLeaseKeeper (attach_lease.go)
 	runEvents       runEventHub     // each run's lifecycle event ring (run_events.go)
+	assistantLive   assistantLive   // the assistant's wake-ups and each person's open reads (assistant_session_events.go)
 	leaseDeferred   sync.Map        // see deferRenewedLease
 	execOutputs     execOutputTails // each non-interactive run's output tail (run_output.go)
 	uiGatewayState                  // the UI gateway's process state (server_uigateway.go)
@@ -184,6 +187,7 @@ type Server struct {
 	scimState                        // the SCIM routes' rate limiters (scim_auth.go)
 	runLeaseState                    // the run lease sweep's process state (run_lease_server.go)
 	runEndState                      // the end loops' process state (run_end_loops.go)
+	wallsState                       // the Walls view's limiters and topology snapshots (walls_routes.go)
 	pause                pauseClocks // the pause sweep's process-local state (run_pause.go)
 	// activity is the CPU signal's last read, for the idle detection row (run_activity.go).
 	activity activitySignal

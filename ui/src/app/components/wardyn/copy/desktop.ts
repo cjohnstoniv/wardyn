@@ -99,4 +99,9 @@ export const DESKTOP = {
   escapeHint: `${TERMINAL.ESCAPE_CHORD} leaves the desktop`,
   canvasLabel: "Remote desktop",
   backToRun: (title: string) => `Back to ${title}`,
+  // The watermark over the picture (#2969): the per-view button when the organisation does not require it, the line that
+  // replaces the button when it does, and the text drawn over the picture.
+  watermarkToggle: "Watermark",
+  watermarkRequired: "Your organisation requires the watermark",
+  watermarkText: (who: string, run: string) => `${who} · ${run}`,
 } as const;

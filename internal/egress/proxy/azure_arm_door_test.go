@@ -87,7 +87,7 @@ func newARMHarness(t *testing.T, write bool, allowed ...string) *armHarness {
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: allowed}),
 		Injector:        inj,
-		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:            &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr(upstream)),
 		RunToken:        newTokenSource("RUNTOK"),

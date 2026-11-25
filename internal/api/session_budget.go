@@ -19,14 +19,14 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// An open session (a terminal, a helper's command, a desktop, a window on a Mac, a relayed app, an inbound stream or
-// an SSH connection) asks again on a clock whether its person may still be there. A check that answers "no" ends it
-// at that check, as it always has. A check that gets no answer (a store read that failed or ran out of its bound)
-// opens the session's unconfirmed-access window (#4057): the session asks again every sessionRetryEvery and ends,
-// with a close its client reconnects on, once no check has answered for the site's budget, counted from that first
-// unanswered check. A budget of 0 ends it at the first one. Each window writes one session.unconfirmed row:
-// rode_through when a later check answered, ended when the budget ran out, refused when a definite refusal ended
-// the session inside the window, closed when the session ended by itself inside the window.
+// An open session (a terminal, a helper's command, a desktop, a window on a Mac, a relayed app, an inbound stream, an
+// SSH connection or a port forward) asks again on a clock whether its person may still be there. A check that answers
+// "no" ends it at that check, as it always has. A check that gets no answer (a store read that failed or ran out of its
+// bound) opens the session's unconfirmed-access window (#4057): the session asks again every sessionRetryEvery and
+// ends, with a close its client reconnects on, once no check has answered for the site's budget, counted from that
+// first unanswered check. A budget of 0 ends it at the first one. Each window writes one session.unconfirmed row:
+// rode_through when a later check answered, ended when the budget ran out, refused when a definite refusal ended the
+// session inside the window, closed when the session ended by itself inside the window.
 
 const (
 	// sessionRetryEvery is how often a session whose access is unconfirmed asks again.
@@ -51,6 +51,7 @@ const (
 	sessionSurfaceUIApp    = "ui_app"
 	sessionSurfaceInbound  = "inbound"
 	sessionSurfaceSSH      = "ssh"
+	sessionSurfaceForward  = "forward"
 )
 
 // errSessionUnconfirmed marks a re-check that got no answer; unconfirmed wraps a failed read with it. Every other
@@ -143,12 +144,13 @@ func (b *sessionBudget) observe(check string, err error) budgetVerdict {
 		delete(b.failing, check)
 		if len(b.failing) == 0 {
 			if !b.since.IsZero() {
-				b.auditWindow("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
-				clear(b.seen)
-				b.since = time.Time{}
+				// The fence opens before the row is written: a rode_through row means input is taken again.
 				if b.fence != nil {
 					b.fence(false)
 				}
+				b.auditWindow("rode_through", time.Since(b.since), slices.Sorted(maps.Keys(b.seen)))
+				clear(b.seen)
+				b.since = time.Time{}
 			}
 			b.stopTimer()
 			return budgetHolds

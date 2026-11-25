@@ -90,10 +90,13 @@ const (
 	// EventMacWindowUnexpected carries a MacWindowUnexpected: a window opened on a macOS VM run through
 	// its helper's control socket, not through a mac_window call. Event.RunID is the run.
 	EventMacWindowUnexpected = "mac_window_unexpected"
+	// EventDeviceCert carries a DeviceCertReport: the MDM device certificates a Mac presents, each with a
+	// signature by its key over a message that names this runner's key. Only a Mac runner sends it.
+	EventDeviceCert = "device_cert"
 )
 
 // EventKinds is the closed list.
-var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected}
+var EventKinds = []string{EventCaps, EventPosture, EventWaiting, EventAgentExit, EventActionResult, EventSpool, EventResidentErase, EventWorkload, EventMacWindowUnexpected, EventDeviceCert}
 
 // Event is the EVENT payload. Call, when non-zero, names the in-flight CALL the
 // event belongs to (a waiting report), so the org can deliver it on that

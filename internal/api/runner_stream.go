@@ -334,6 +334,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 				if _, err := st.GetRunner(ctx, id); err != nil {
 					return err
 				}
+				if err := s.closeRunnerLinkWindow(ctx, st, id); err != nil {
+					return err
+				}
 				if err := st.TouchRunner(ctx, id, "", s.cfg.Now()); err != nil {
 					slog.WarnContext(ctx, "wardynd: record runner session", slog.String("runner_id", id.String()), slog.Any("err", err))
 				}
@@ -346,6 +349,9 @@ func (s *Server) runnerHub(st store.RunnerStore) *remote.Hub {
 				return nil
 			}
 			cfg.Disconnected = func(ctx context.Context, id uuid.UUID) error { return s.runnerDisconnected(ctx, st, id) }
+			cfg.LinkLost = func(ctx context.Context, id uuid.UUID, session string, droppedFor time.Duration) {
+				s.openRunnerLinkWindow(ctx, st, id, session, droppedFor)
+			}
 		}
 		s.runnerStreams.hub = remote.NewHub(s.cfg.BaseCtx, cfg)
 	})

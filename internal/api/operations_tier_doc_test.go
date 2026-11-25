@@ -122,6 +122,9 @@ var docTierRows = []struct{ route, token string }{
 	// Model providers (0.8), per verb for the same reason.
 	{"GET /api/v1/model-providers", "`GET /model-providers`"},
 	{"PUT /api/v1/model-providers", "`PUT /model-providers`"},
+	// The assistant's settings (0.11.0), per verb for the same reason.
+	{"GET /api/v1/assistant/settings", "`GET /assistant/settings`"},
+	{"PUT /api/v1/assistant/settings", "`PUT /assistant/settings`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},
@@ -225,6 +228,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/changes/{id}/approve", "the unit-admin `/governance` routes"},
 	{"POST /api/v1/governance/changes/{id}/reject", "the unit-admin `/governance` routes"},
 	{"PUT /api/v1/governance/changes/{id}/note", "the unit-admin `/governance` routes"},
+	{"DELETE /api/v1/governance/changes/{id}/approval", "the unit-admin `/governance` routes"},
+	// The Walls view's two unit-tier routes.
+	{"GET /api/v1/walls/topology", "the Walls view's unit-tier reads"},
+	{"GET /api/v1/walls/stream", "the Walls view's unit-tier reads"},
 	{"GET /api/v1/user-types", "the `/user-types` routes"},
 	{"POST /api/v1/user-types", "the `/user-types` routes"},
 	{"PUT /api/v1/user-types/{id}", "the `/user-types` routes"},
@@ -233,6 +240,8 @@ var docTierRows = []struct{ route, token string }{
 	{"PUT /api/v1/governance/egress-baseline", "the `/governance/egress-baseline` routes"},
 	{"GET /api/v1/governance/boundary", "the `/governance/boundary` routes"},
 	{"PUT /api/v1/governance/boundary", "the `/governance/boundary` routes"},
+	{"GET /api/v1/governance/approval-counts", "the `/governance/approval-counts` routes"},
+	{"PUT /api/v1/governance/approval-counts", "the `/governance/approval-counts` routes"},
 	{"GET /api/v1/governance/recording", "the `/governance/recording` routes"},
 	{"PUT /api/v1/governance/recording", "the `/governance/recording` routes"},
 	{"PUT /api/v1/governance/units/{id}/envelope", "the `/governance/units/{id}/envelope` routes"},
@@ -240,6 +249,9 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/restrictions", "the `/governance/restrictions` routes"},
 	{"PUT /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
 	{"DELETE /api/v1/governance/restrictions/{id}", "the `/governance/restrictions` routes"},
+	{"GET /api/v1/agent-rules", "the `/agent-rules` routes"},
+	{"PUT /api/v1/agent-rules/{harness}", "the `/agent-rules` routes"},
+	{"DELETE /api/v1/agent-rules/{harness}", "the `/agent-rules` routes"},
 	{"GET /api/v1/governance/approval-rules", "the `/governance/approval-rules` routes"},
 	{"POST /api/v1/governance/approval-rules/dry-run", "the `/governance/approval-rules` routes"},
 	{"PUT /api/v1/governance/approval-rules/{name}", "the `/governance/approval-rules` routes"},
@@ -268,6 +280,7 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/admin/identities/{id}/unbind", "`POST /admin/identities/{id}/unbind`"},
 	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
 	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
+	{"GET /api/v1/runs/{id}/attach/forward", "`GET /runs/{id}/attach/forward`"},
 	// Hybrid enrolment (0.8): the mint is SUPER, the inventory and revoke are
 	// the security tier's inventory-then-revoke pair.
 	{"POST /api/v1/admin/devices/enrolment-tokens", "`POST /admin/devices/enrolment-tokens`"},

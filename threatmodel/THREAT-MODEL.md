@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.10.4). Published alongside the codebase.
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.11.0-rc.2). Published alongside the codebase.
 
 This document states what Wardyn defends, what it does not, and for each load-bearing control the bypass class that defeats it. Report a claim the code does not support under [SECURITY.md](../SECURITY.md).
 
@@ -388,7 +388,7 @@ A run gets what every layer allows. The run's policy record names the layer that
 - With the listener off, a run's owner still has an unmasked, unrecorded command door: REST exec
   (`POST /runs/{id}/exec`) is an API route, not part of this boundary, under SSH exec's per-run controls
   ([§4.1](#41-output-masking-and-the-paths-it-does-not-cover)).
-- Registered-public-key-only auth; the trust root is the `ssh_public_keys` registry a human writes
+- Registered-public-key-only auth on the TCP listener; with `WARDYN_SSH_TICKETS` on, `GET /runs/{id}/ssh` also accepts a redeemed single-use ticket (B9 below). The trust root is the `ssh_public_keys` registry a human writes
   via self-service `/api/v1/me/ssh-keys`,
   - so this boundary is exactly as strong as that registration step and the pre-auth DoS bounds
     ([§4](#4-in-scope-defenses)).
@@ -614,7 +614,7 @@ is not the deployment described above.**
 | | A SEPARATE bound covers what a `net.Conn` deadline cannot: `sshAuth` wraps its own work in a `sshAuthTimeout` (5s) context, so a `PublicKeyCallback` stuck on a store call or audit write cannot park a slot indefinitely. | |
 | | These bounds are load-bearing rather than belt-and-braces: the DAEMON default is off (`WARDYN_SSH_LISTEN` unset), but the one-line installer and the desktop envelope both ship it ON at `:2222` (see B9). | |
 | | So the listener exists on those deployments and only the loopback host-port publish keeps it off the network. | |
-| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** Public-key auth only (no password/keyboard-interactive method is ever offered); the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of). | B9, AU |
+| Impersonation / unregistered-key access to the SSH gateway | **[v0.5+ shipped]** The TCP listener stays public-key only (no password or keyboard-interactive method); a second door, `GET /runs/{id}/ssh`, accepts the `none` method only on a per-connection configuration built after a redeemed single-use ticket, and only when the operator turns on `WARDYN_SSH_TICKETS`; the trust root is a fingerprint a human registers against their OWN principal (`POST /api/v1/me/ssh-keys`, self-service, no admin-on-behalf-of). | B9, AU |
 | | Authorization is owner-or-admin (`run.created_by == the key's principal`, OR the key's `role` column — migration `0043`, re-stamped bounded-stale on every OIDC login (`0046`, `WARDYN_SSH_ROLE_TTL`), never read live, residual #15). A member's key never satisfies the override. | |
 | | Every success and a bounded share of refusals are audited under `ssh.authenticate` with the source IP and, where a registered key was involved, the actual principal rather than "unknown"; refusals that name a registered key are recorded at a per-key bounded rate (burst 5, 1/s; per-key buckets are capped at 1024 live keys, and a key past the cap shares the `auth.fail` bound), and refusals with no attributable actor (unknown key, bad username, unknown run) share the `auth.fail` rate bound (burst 5, 1/s), with drops counted in `wardyn_auth_failed_suppressed_total`. Bounds: [`docs/SSH.md`](../docs/SSH.md). | |
 | SSH session resource exhaustion against one run | **[v0.5+ shipped]** A per-run cap on concurrent SSH channels, which `session` (shell/exec/sftp) and `direct-tcpip` (`-L`) share, independent of the connection-level cap. Since 0.9 `WARDYN_SSH_MAX_SESSIONS_PER_RUN` sets it; sync has its own cap. | B9 |
@@ -1777,6 +1777,8 @@ These risks are **not closed by v1 Wardyn**.
 
 - owner-or-admin — **moved DOWN since v0.5, deliberately NOT in the 403 list.**
 - The WebSocket re-checks the ticket's own stamped role/principal at consume time, since the ticket-bearing lane never runs this gate (`handleAttachWS`).
+- Attach tickets now carry a purpose, and a ticket minted for a purpose and spent at any other door is refused after it is burned; a terminal ticket with no purpose still opens the forward door.
+- SSH tickets ride a header, never a URL.
 - `credential` and `tool_call` approvals stay ADMIN-TIER-only regardless of ownership (residual #17).
 - And "admin tier" now means `isSecurityOperator`, which `authorizeUserDecision` consults BEFORE it looks at `Kind` or owner, so a `security_admin` decides any kind on any run.
 

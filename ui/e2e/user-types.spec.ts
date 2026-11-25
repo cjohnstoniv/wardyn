@@ -110,6 +110,8 @@ test.describe("User types — the list and what each type gets", () => {
     await image.getByRole("button", { name: `${EXPLAIN.REMOVE} ${IMAGE}` }).click();
     await expect(page.getByText(PERM.REMOVE_CONFIRM(DEVELOPER.name))).toBeVisible();
     await page.getByRole("alertdialog").getByRole("button", { name: PERM.REMOVE }).click();
+    // The dialog closes once the DELETE answers; on a loaded shared backend that has taken past the 5 s default.
+    await expect(page.getByRole("alertdialog")).toBeHidden({ timeout: 15_000 });
 
     // Still restricted, now listing nobody: the row stays, Not available.
     await expect(image.getByText(EXPLAIN.STATE.not_available, { exact: true })).toBeVisible();

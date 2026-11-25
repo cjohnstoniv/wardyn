@@ -56,6 +56,20 @@ func withUnitScopeTx(ctx context.Context, q store.Querier) context.Context {
 	return context.WithValue(ctx, unitScopeTxKey{}, q)
 }
 
+// memoQuerier is a read transaction whose unit-scope answers are kept for its life, so a read that asks the
+// same unit, strictness and identity for every kind reads each once. It is bound to that transaction: a later
+// withUnitScopeTx replaces it, so no answer reaches another transaction.
+type memoQuerier struct {
+	store.Querier
+	memo *unitScopeMemo
+}
+
+// withUnitScopeReadTx is withUnitScopeTx for a read transaction that judges many pools (loadPoolInputs), with
+// the unit-scope answers memoized on it. A write or decision transaction keeps withUnitScopeTx, unmemoized.
+func withUnitScopeReadTx(ctx context.Context, q store.Querier) context.Context {
+	return withUnitScopeTx(ctx, memoQuerier{Querier: q, memo: &unitScopeMemo{in: map[unitScopeKey]bool{}}})
+}
+
 // unitScopeMemoKey carries the per-request unit-scope memo (requireUnitScope installs it).
 type unitScopeMemoKey struct{}
 
@@ -89,6 +103,9 @@ func (s *Server) unitAdminStore() store.UnitAdminStore {
 // statement per (unit, strict, identity), memoized for the request.
 func (s *Server) unitScope(ctx context.Context, unit uuid.UUID, strict bool) (bool, error) {
 	if q, ok := ctx.Value(unitScopeTxKey{}).(store.Querier); ok {
+		if mq, ok := q.(memoQuerier); ok {
+			return s.unitScopeMemoQ(ctx, mq, unit, strict)
+		}
 		return s.unitScopeQ(ctx, q, unit, strict)
 	}
 	if s.isSecurityOperator(ctx) {
@@ -234,6 +251,26 @@ func (s *Server) unitScopeQ(ctx context.Context, q store.Querier, unit uuid.UUID
 		return false, nil
 	}
 	return store.UnitScopeQ(ctx, q, unit, users, groups, strict)
+}
+
+// unitScopeMemoQ is unitScopeQ on mq's transaction, each (unit, strictness, identity) read once for its life.
+func (s *Server) unitScopeMemoQ(ctx context.Context, mq memoQuerier, unit uuid.UUID, strict bool) (bool, error) {
+	if s.isSecurityOperator(ctx) {
+		return true, nil
+	}
+	users, groups := s.unitAdminSubjects(ctx)
+	key := unitScopeKey{unit: unit, strict: strict, who: scopeIdentity(users, groups)}
+	mq.memo.mu.Lock()
+	defer mq.memo.mu.Unlock()
+	if in, ok := mq.memo.in[key]; ok {
+		return in, nil
+	}
+	in, err := s.unitScopeQ(ctx, mq.Querier, unit, strict)
+	if err != nil {
+		return false, err
+	}
+	mq.memo.in[key] = in
+	return in, nil
 }
 
 // requireUnitScopeQ is unitScopeQ over every unit of units as a write's refusal: errOutsideScope

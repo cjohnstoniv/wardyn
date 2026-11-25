@@ -153,10 +153,18 @@ func (s *Server) personRoleResolver(r *http.Request) (func(p store.PersonListing
 		if p.GroupsVerified && p.GroupsTruncated {
 			return roleUnknown
 		}
-		d := s.cfg.OIDC.PreviewRoleAgainst(mappings, userTypes, nil, p.Groups, p.Email)
+		d := s.deriveRecordRole(mappings, userTypes, nil, p.Groups, p.Email)
 		if !d.OK() {
 			return accessDeniedRole
 		}
 		return d.Role
 	}, nil
+}
+
+// deriveRecordRole is the one role derivation for a recorded sign-in: the role the current mappings and user
+// types give the roles claim, groups and email a record holds. roles is nil for a record written before the
+// roles claim was kept beside the groups (its groups already carry the claim) and for a caller that has no
+// roles to give, such as the people list. It needs the OIDC authenticator; callers check s.cfg.OIDC first.
+func (s *Server) deriveRecordRole(mappings []oidc.RoleMapping, userTypes []types.UserType, roles, groups []string, email string) oidc.Derivation {
+	return s.cfg.OIDC.PreviewRoleAgainst(mappings, userTypes, roles, groups, email)
 }

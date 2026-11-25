@@ -433,6 +433,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 		wp.GitPatBrokerEnabled = &on
 		cfg.WorkspaceProviders = &wp
 	}
+	cfg.Runners = withDenialList(cfg.Runners) // after the ETag, which hashes the stored document
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -449,7 +450,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 var siteConfigFieldsAfter066 = []string{
 	"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers",
 	"model_providers", "sign_in_help_text", "sign_in_help_url", "branding", "policy_help", "components",
-	"recording", "governance_max_depth", "macos_vm", "images", "sessions",
+	"recording", "governance_max_depth", "macos_vm", "images", "sessions", "features", "desktop_watermark",
 }
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
@@ -517,6 +518,8 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	carryForwardSiteMacOSVM(cfg, existing, present)
 	carryForwardSiteImages(cfg, existing, present)
 	carryForwardSiteSessions(cfg, existing, present)
+	carryForwardSiteFeatures(cfg, existing, present)
+	carryForwardSiteDesktopWatermark(cfg, existing, present)
 	// branding (#1215), on the same terms: a file written before the key existed
 	// must not drop the logo_path the org named (an absent key also leaves the
 	// stored logo untouched — only a body that names the block acts on it).
@@ -683,14 +686,14 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
-	if !carryRunners(w, &cfg, existing) {
+	if !carryRunners(w, &cfg, existing) || !carryAssistant(w, &cfg, existing) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
 	if !s.admitGovernanceMaxDepth(w, r, &cfg, existing) { // under the lock, after the carry-forward
 		return
 	}
-	if !carryOwnRouteBlocks(w, &cfg, existing) {
+	if !carryOwnRouteBlocks(w, &cfg, existing) || !s.admitSiteFeatures(w, r, &cfg, existing) {
 		return
 	}
 	// After the carry-forward: the roster's defaults are checked against the
@@ -744,7 +747,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	providerWarnings, cleanup := s.finishServiceGrantWrite(r.Context(), plan, providerWarnings)
-	s.endUnanswerableSignIns(r.Context(), existing.ModelProviders, saved.ModelProviders)
+	s.afterSiteConfigSave(r.Context(), existing, saved)
 	// The logo follows the document just saved (siteBrandingLogo's doc). The
 	// document is already stored; a failure here is a 500, and the same apply
 	// repeated finishes it. The 500 waits until the audit row below is written.
@@ -756,7 +759,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	auditPolicyHelp(datum, saved.PolicyHelp, present["policy_help"])
 	auditComponentSettings(datum, saved.Components, present["components"])
 	auditSiteRecording(datum, saved.Recording, present["recording"])
-	auditSiteImages(datum, existing.Images, saved.Images, present["images"])
+	auditSiteBlocks(datum, existing, saved, present)
 	auditSiteBranding(datum, present["branding"], saved.Branding, siteLogo, logoErr != nil, logoPending)
 	auditProviderBlocks(datum, saved, invalidated)
 	auditServiceGrantCleanup(datum, cleanup)
@@ -852,6 +855,7 @@ func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
 		wp.GitPatBrokerEnabled = &on
 		saved.WorkspaceProviders = &wp
 	}
+	saved.Runners = withDenialList(saved.Runners)
 	return saved
 }
 

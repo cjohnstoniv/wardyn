@@ -35,7 +35,7 @@ func localModelProxy(t *testing.T, upstream string, inj *injector, s types.Local
 	return newProxy(Options{
 		RunID:        uuid.New(),
 		Policy:       CompilePolicy(types.RunPolicySpec{}),
-		Sink:         &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Sink:         &decisionSink{out: buf, ch: make(chan queuedDecision, 64)},
 		Resolver:     fakeResolver{m: map[string][]net.IP{"ollama.lan": ips("10.40.1.5")}},
 		Dial:         redirectDial(upstream),
 		Injector:     inj,
@@ -223,7 +223,7 @@ func TestLocalModel_GatewayLiftIsExactlyTheRegisteredAddress(t *testing.T) {
 	mk := func(answer string, cp []net.IP) *Proxy {
 		return newProxy(Options{
 			RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{}),
-			Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+			Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 			Resolver:     fakeResolver{m: map[string][]net.IP{"ollama.lan": ips(answer), "gw.lan": ips(answer)}},
 			LLMUpstreams: map[string]string{anthropicHost: localModelBase, openaiHost: "https://gw.lan"},
 			LocalModels:  map[string]types.LocalModelSettings{localModelBase: {Models: []string{localModelName}}},
@@ -259,7 +259,7 @@ func TestLocalModel_GatewayLiftIsExactlyTheRegisteredAddress(t *testing.T) {
 func TestLocalModel_OrdinaryLanesRefuseTheHost(t *testing.T) {
 	p := newProxy(Options{
 		RunID: uuid.New(), Policy: CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"ollama.lan", "ollama.lan.example"}}),
-		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+		Sink:         &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 8)},
 		Resolver:     publicResolver{},
 		LLMUpstreams: map[string]string{anthropicHost: localModelBase},
 		LocalModels:  map[string]types.LocalModelSettings{localModelBase: {Models: []string{localModelName}}},

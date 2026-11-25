@@ -365,7 +365,7 @@ func (s *Server) resolveRunPolicyFacts(ctx context.Context, r *http.Request, req
 
 // boundaryThenNoRepositories is the last steps of both arms of resolveRunPolicyFacts: the launching
 // person's own walls (personalWallsRunStep), then the wall preset the launch chose (wallPresetRunStep),
-// then the Wardyn boundary over whatever the earlier steps left (boundaryRunStep), then the refusal of a
+// then the rules of each agent the run includes (agentRulesRunStep), then the Wardyn boundary over whatever the earlier steps left (boundaryRunStep), then the refusal of a
 // run asked for with no repositories or drives whose resolved policy still attaches some
 // (noRepositoriesResolvedRefusal). A preset that is not there refuses the run; it never runs as Open.
 func (s *Server) boundaryThenNoRepositories(ctx context.Context, r *http.Request, ceiling governanceCeiling, req createRunRequest, spec *types.RunPolicySpec, source *policySourceRecord) ([]string, *runRefusal) {
@@ -381,11 +381,15 @@ func (s *Server) boundaryThenNoRepositories(ctx context.Context, r *http.Request
 	if refusal != nil {
 		return nil, refusal
 	}
+	agentWarns, refusal := s.agentRulesRunStep(ctx, req, spec, source)
+	if refusal != nil {
+		return nil, refusal
+	}
 	warns, refusal := s.boundaryRunStep(ceiling, spec, source)
 	if refusal != nil {
 		return nil, refusal
 	}
-	warns = append(append(wallsWarns, presetWarns...), warns...)
+	warns = append(append(append(wallsWarns, presetWarns...), agentWarns...), warns...)
 	if s.cfg.DisableGitPATBroker {
 		// The walls were read by their step just above, which refused the run had the read failed.
 		if walls, err := s.personalWalls(ctx, wallsPerson(ctx)); err == nil {

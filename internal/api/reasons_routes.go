@@ -718,6 +718,20 @@ const (
 	reasonGovernanceChangeNotPending     = "governance_change_not_pending"      // the change was already applied, rejected, expired or marked stale
 	reasonGovernanceChangeNotFound       = "governance_change_not_found"        // a /governance/changes route named no change, or one of a kind the caller may not see
 	reasonGovernanceChangeStateInvalid   = "governance_change_state_invalid"    // ?state= is not one of the five change states
+	// A change that needs the approval of several people (governance_change_approvals.go).
+	reasonGovernanceChangeAlreadyApproved  = "governance_change_already_approved"           // the same person, by principal or email, already holds an approval that counts
+	reasonGovernanceChangeSecurityApprover = "governance_change_security_approver_required" // the last approval would leave no security admin among those counted
+	reasonGovernanceChangeProposerInactive = "governance_change_proposer_inactive"          // the last approval, while the proposer is deactivated
+	reasonGovernanceChangeReasonRequired   = "governance_change_reason_required"            // a reject by someone other than the proposer needs a reason
+	reasonGovernanceChangeApprovalNotFound = "governance_change_approval_not_found"         // take back, when the caller holds no approval that counts
+)
+
+// How many approvals each kind of governance change needs (governance_approval_counts.go).
+const (
+	reasonGovernanceApprovalCountsMinimumUnset = "governance_approval_counts_minimum_unset" // a PUT while WARDYN_GOVERNANCE_MIN_APPROVALS is unset
+	reasonGovernanceApprovalCountsLocalMode    = "governance_approval_counts_local_mode"    // a PUT in local mode, which authenticates nobody
+	reasonGovernanceApprovalCountsInvalid      = "governance_approval_counts_invalid"       // a count out of range, a kind the page does not list, or a kind twice
+	reasonGovernanceApprovalCountsUnreachable  = "governance_approval_counts_unreachable"   // a count above the people who can approve, or edits to the counts that could not pass
 )
 
 // reasonIdentityDeactivated: a run, API token, SSH key, stored credential or runner registration
@@ -801,6 +815,7 @@ const (
 	reasonRunnerSessionRequired  = "runner_session_required"
 	reasonRunnersOrgURLInvalid   = "runners_org_url_invalid"
 	reasonRunnersEnabledRequired = "runners_enabled_required"
+	reasonRunnerMDMDeviceInvalid = "runner_mdm_device_invalid" // PUT /runners/settings: an MDM CA or CRL URL that is not valid, or only one of the two
 	reasonRunnerLimitsInvalid    = "runner_limits_invalid"
 	reasonRunnerTrustInvalid     = "runner_trust_invalid" // PUT /runners/{id}/trust: an unknown class, no reason, an unclaimed runner, or a class its owner kind cannot hold
 	reasonRunnerDrainInvalid     = "runner_drain_invalid" // PUT /runners/{id}/drain: no reason, or an unclaimed runner
@@ -848,4 +863,32 @@ const (
 	reasonDesktopSignInsUnavailable  = "desktop_sign_ins_unavailable"   // the run has no sign-in store, or it could not be read
 	reasonDesktopSignInsPauseFailed  = "desktop_sign_ins_pause_failed"  // the agent was not paused; it keeps running
 	reasonDesktopSignInsResumeFailed = "desktop_sign_ins_resume_failed" // the agent was not resumed, or its resume was not recorded
+)
+
+// The assistant's settings and availability (assistant_settings.go, assistant_availability.go).
+const (
+	reasonAssistantOff                 = "assistant_off"                   // the purpose is turned off for the organisation
+	reasonAssistantNoProvider          = "assistant_no_provider"           // no provider is marked to serve the purpose
+	reasonAssistantUnitDenies          = "assistant_unit_denies"           // the person's governance profile rules out every marked provider or model
+	reasonAssistantNotConnected        = "assistant_not_connected"         // the person has no credential for a marked provider
+	reasonAssistantSettingsInvalid     = "assistant_settings_invalid"      // the block, its If-Match or a purpose is refused
+	reasonAssistantCannotServe         = "assistant_provider_cannot_serve" // a marked provider does not pair with Claude Code, or is a Bedrock kind
+	reasonAssistantDefersInspection    = "assistant_provider_defers_inspection"
+	reasonAssistantSettingsViaOwnRoute = "assistant_settings_via_own_route" // a changed assistant block was named inline instead of through PUT /assistant/settings
+)
+
+// The assistant's sessions (assistant_session.go, assistant_run.go).
+const (
+	reasonAssistantAtRunLimit             = "assistant_at_run_limit"             // the person's max_concurrent_runs is spent
+	reasonAssistantKindNeverSent          = "assistant_kind_never_sent"          // the target's kind is on the never-sent list
+	reasonAssistantSessionNotFound        = "assistant_session_not_found"        // no such session for this person, or the call names another session than the live one
+	reasonAssistantPurposeTargetMismatch  = "assistant_purpose_target_mismatch"  // the purpose does not take that kind of target
+	reasonAssistantPreviewStale           = "assistant_preview_stale"            // the records or the serving binding changed since the preview
+	reasonAssistantRateLimited            = "assistant_rate_limited"             // too many assistant requests or open streams from this person
+	reasonAssistantRoleDenied             = "assistant_role_denied"              // the person's role no longer allows the session, or the caller is no person
+	reasonAssistantSessionProviderChanged = "assistant_session_provider_changed" // the session's provider or model no longer holds
+	reasonAssistantTargetNotFound         = "assistant_target_not_found"         // no such target, or one the person cannot read
+	reasonAssistantSessionsUnavailable    = "assistant_sessions_unavailable"     // this server's store keeps no assistant sessions
+	reasonAssistantSessionEventsFull      = "assistant_session_events_full"      // the run's session holds as many events as it may
+	reasonAssistantStreamUnavailable      = "assistant_stream_unavailable"       // this server cannot stream the session's events; read them by long-poll
 )

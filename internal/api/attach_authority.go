@@ -62,6 +62,10 @@ func (s *Server) attachAuthorityLookupBound() time.Duration {
 	return attachAuthorityLookup
 }
 
+// superAdmin reports whether the ticket was minted by an admin: the role stamped at mint, the only role a ticket
+// carries. The ticket lane's one role comparison, for the terminal's re-check and the SSH ticket door alike.
+func (a ticketActor) superAdmin() bool { return a.role == oidc.RoleAdmin }
+
 // attachAuthority returns the check an attach socket opened by r repeats while it is open, or nil for a
 // lane with nothing to repeat: the admin bearer token, local mode and a token presented directly on the
 // socket keep their handshake-only semantics. A ticket is checked whatever credential minted it, so a
@@ -95,7 +99,7 @@ func (s *Server) attachAuthority(r *http.Request, runID uuid.UUID) func(context.
 				deadline = earlierDeadline(deadline, sessionDeadline(expiry, issuedAt, ttl))
 			}
 		}
-		superAdmin := ta.role == oidc.RoleAdmin
+		superAdmin := ta.superAdmin()
 		bound := ta.tokenID != uuid.Nil || ta.cliSessionID != uuid.Nil
 		if s.cfg.SessionRevocations == nil && ta.via == nil && deadline.IsZero() && superAdmin && !s.cfg.GovernAdminRuns && !bound {
 			return nil
