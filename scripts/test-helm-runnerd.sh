@@ -117,20 +117,23 @@ refused "relay.servicePort empty" "relay.servicePort must be a port number" -f "
 server="$(helm template w deploy/helm/wardyn -n wardyn \
   --set auth.adminToken.secretRef.name=a --set secrets.ageKeyFromSecret=true --set serviceAccount.automount=true \
   --set k8s.enabled=true --set k8s.runsNamespace=wardyn-runs --set k8s.proxyImage=p:1 --set k8s.readNodes=true)"
-server_role="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | .rules')"
+server_role="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | .rules | del(.[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io"))')"
+server_svc_rules="$(docs "$server" 'select(.kind == "Role" and .metadata.name == "w-wardyn-k8s-runner") | [.rules[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io")] | length')"
 server_cluster="$(docs "$server" 'select(.kind == "ClusterRole") | .rules')"
 runs_role="$(docs "$out" 'select(.kind == "Role" and .metadata.name == "r-wardyn-runnerd-runs") | .rules')"
 cluster="$(docs "$out" 'select(.kind == "ClusterRole") | .rules')"
 [[ -n "$server_role" && -n "$server_cluster" ]] || die "the control-plane chart rendered no k8s-runner Role or ClusterRole to compare with"
+[ "$server_svc_rules" = 2 ] || die "the control-plane Role has no per-run Service rules to leave out of the comparison"
+[ "$(yq -o=json -I=0 '[.[] | select(.resources[0] == "services" or .apiGroups[0] == "discovery.k8s.io")] | length' <<<"$runs_role")" = 0 ] || die "the runs-namespace Role grants services or endpointslices"
 [ "$(yq -o=json -I=0 '.[:-1]' <<<"$runs_role")" = "$server_role" ] \
-  || die "the runs-namespace Role is not the control-plane Role rule for rule: runnerd $runs_role vs server $server_role"
+  || die "the runs-namespace Role is not the control-plane Role less its per-run Service rules, rule for rule: runnerd $runs_role vs server $server_role"
 [ "$(yq -o=json -I=0 '.[-1]' <<<"$runs_role")" = '{"apiGroups":[""],"resources":["pods"],"verbs":["patch"]}' ] \
   || die "the runs-namespace Role's one addition is not exactly pods: patch: $runs_role"
 [ "$cluster" = "$server_cluster" ] \
   || die "the ClusterRole is not the control-plane ClusterRole with k8s.readNodes: runnerd $cluster vs server $server_cluster"
 [ "$(docs "$out" 'select(.kind == "Role" and .metadata.namespace == null) | .rules')" = '[{"apiGroups":[""],"resources":["secrets"],"verbs":["create","get","delete","deletecollection"]}]' ] \
   || die "the release-namespace Role is not exactly secrets create/get/delete/deletecollection"
-ok "RBAC parity: server Role + pods: patch; server ClusterRole with readNodes; own-namespace secrets only"
+ok "RBAC parity: server Role less its per-run Service rules + pods: patch; server ClusterRole with readNodes; own-namespace secrets only"
 
 # Several runs namespaces: every one gets the same Role, a RoleBinding to runnerd's ServiceAccount and a
 # --runs-namespace flag (the default first), and the ingress rule names all of them in one In list.

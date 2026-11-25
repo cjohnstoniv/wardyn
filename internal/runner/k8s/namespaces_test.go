@@ -53,8 +53,9 @@ func TestCreateSandbox_InTheNamespaceTheSpecNames(t *testing.T) {
 			}
 		}
 	}
-	if creates != 5 {
-		t.Fatalf("%d creates, want the run's 5 objects", creates)
+	// Two NetworkPolicies, the Secret, the run's Service and EndpointSlice, and the two pods.
+	if creates != 7 {
+		t.Fatalf("%d creates, want the run's 7 objects", creates)
 	}
 
 	d.runNamespaces.Delete(spec.RunID) // a restarted driver has no map
@@ -74,8 +75,11 @@ func TestCreateSandbox_InTheNamespaceTheSpecNames(t *testing.T) {
 	pods, _ := cs.CoreV1().Pods(otherNamespace).List(ctx, sel)
 	pols, _ := cs.NetworkingV1().NetworkPolicies(otherNamespace).List(ctx, sel)
 	secs, _ := cs.CoreV1().Secrets(otherNamespace).List(ctx, sel)
-	if len(pods.Items)+len(pols.Items)+len(secs.Items) != 0 {
-		t.Errorf("teardown left %d pods, %d NetworkPolicies, %d Secrets in %s", len(pods.Items), len(pols.Items), len(secs.Items), otherNamespace)
+	svcs, _ := cs.CoreV1().Services(otherNamespace).List(ctx, sel)
+	slices, _ := cs.DiscoveryV1().EndpointSlices(otherNamespace).List(ctx, sel)
+	if len(pods.Items)+len(pols.Items)+len(secs.Items)+len(svcs.Items)+len(slices.Items) != 0 {
+		t.Errorf("teardown left %d pods, %d NetworkPolicies, %d Secrets, %d Services, %d EndpointSlices in %s",
+			len(pods.Items), len(pols.Items), len(secs.Items), len(svcs.Items), len(slices.Items), otherNamespace)
 	}
 }
 

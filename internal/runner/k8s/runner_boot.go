@@ -58,7 +58,8 @@ func (c accessCheck) String() string {
 // runnerAccess lists every verb §4 grants: the server Role in each runs namespace plus pods: patch,
 // secrets create/get/delete/deletecollection in runnerd's own namespace, and the ClusterRole's runtimeclasses: get
 // and nodes: list. A runner that lists workload namespaces (design T3 §2.5) also needs the WardynWorkload
-// Role in each: the resource's get, list and watch, and its status's patch.
+// Role in each: the resource's get, list and watch, and its status's patch. pods: watch is granted too
+// but never asked: without it the pod waits poll (podwatch.go), so its absence refuses no boot.
 func runnerAccess(runsNSs []string, ownNS string, workloadNSs []string) []accessCheck {
 	var out []accessCheck
 	add := func(ns, group, resource string, verbs ...string) {

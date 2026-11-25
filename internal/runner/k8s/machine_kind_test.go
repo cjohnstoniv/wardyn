@@ -7,6 +7,8 @@ package k8s
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,8 +104,10 @@ func TestEnableLinuxVMNeedsTheCC3RuntimeClass(t *testing.T) {
 
 // A VM pod is the CC3 container pod for the same spec, field for field: the same NetworkPolicies
 // (egress only to this run's proxy, no ingress), proxy pod and agent pod, under the pinned Kata
-// RuntimeClass whatever class the run named. So it reaches exactly what a CC3 run reaches today, every
-// confinement probe on that pod holds for it, and no Service exposes it.
+// RuntimeClass whatever class the run named. So it reaches exactly what a CC3 run reaches today, and every
+// confinement probe on that pod holds for it. Its one Service is the run's proxy Service, as on every server run: it
+// serves only the proxy's ports and selects nothing, so no Service exposes the VM; VNC is reached only through the
+// exec relay.
 func TestLinuxVMPodIsTheCC3Pod(t *testing.T) {
 	ctx := context.Background()
 	runID := uuid.New()
@@ -165,8 +169,20 @@ func TestLinuxVMPodIsTheCC3Pod(t *testing.T) {
 		!cmp.Equal(np.Spec.Egress[0].To[0].PodSelector.MatchLabels, wardynLabels(runID, componentProxy, nil)) {
 		t.Fatalf("VM agent NetworkPolicy = %+v, want no ingress and egress only to this run's proxy", np.Spec)
 	}
-	if svcs, err := vcs.CoreV1().Services(testNamespace).List(ctx, metav1.ListOptions{}); err != nil || len(svcs.Items) != 0 {
-		t.Fatalf("VM run Services = %v (%v), want none: VNC is reached only through the exec relay", svcs, err)
+	// The run's proxy Service and nothing else: the proxy's ports, no selector. VNC is reached only through the exec
+	// relay, so no Service names a VNC port or selects the VM pod.
+	svcs, err := vcs.CoreV1().Services(testNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil || len(svcs.Items) != 1 || svcs.Items[0].Name != keepServiceName(runID) {
+		t.Fatalf("VM run Services = %v (%v), want only the run's proxy Service %s", svcs, err, keepServiceName(runID))
+	}
+	svc := svcs.Items[0]
+	var ports []string
+	for _, p := range svc.Spec.Ports {
+		ports = append(ports, fmt.Sprintf("%d/%s", p.Port, p.Protocol))
+	}
+	slices.Sort(ports)
+	if want := []string{"3128/TCP", "53/TCP", "53/UDP"}; !slices.Equal(ports, want) || len(svc.Spec.Selector) != 0 {
+		t.Fatalf("VM run's proxy Service ports %v, selector %v; want exactly %v and no selector", ports, svc.Spec.Selector, want)
 	}
 	for _, c := range vpod.Spec.Containers {
 		if len(c.Ports) != 0 {

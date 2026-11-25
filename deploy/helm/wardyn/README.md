@@ -54,7 +54,7 @@ Wardyn is up.
 
 ## Prerequisites
 
-**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. In detail:
+**Helm 3, a NetworkPolicy-enforcing CNI, and Postgres 13+.** CI runs the chart on Kubernetes 1.31 and the latest kind image; it sets no `kubeVersion`. Everything else the control plane needs (ServiceAccount, namespaced RBAC, NetworkPolicies, Secrets wiring) is rendered by this chart. With `k8s.enabled` the chart renders two `ValidatingAdmissionPolicy` objects, so it needs Kubernetes 1.30+ serving `admissionregistration.k8s.io/v1` and refuses to render otherwise. An offline render (`helm template`) with no `--kube-version` is not refused: pass the cluster's version. In detail:
 
 - **Helm 3**. Other Kubernetes versions are untested.
   - With `k8s.enabled`, exec and attach add an ephemeral container (`UpdateEphemeralContainers`), which is GA from 1.25.
@@ -64,6 +64,7 @@ Wardyn is up.
     - (kind's default kindnet is the classic case — the conformance CI lane pins kind + Calico; `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` downgrades the refusal to a loud warning).
   - A DIFFERENT knob, `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1`, never downgrades this enforcement refusal — it only acknowledges the SEPARATE trap below (an ambient default-deny already present in `k8s.runsNamespace`),
     - and only when the canary pod actually ran and could not connect.
+- **Pod source addresses kept on pod-to-Service traffic** (no kube-proxy `masqueradeAll`): each run's agent reaches its proxy through a ClusterIP Service, and the proxy's NetworkPolicy admits only the agent pod's address. A masquerading cluster fails closed: no run can reach its proxy. The CNI must also apply NetworkPolicy after Service translation; Wardyn's conformance suite checks this on Calico.
 - **Pod sysctls allowed in `k8s.runsNamespace`** (with `k8s.enabled`): each run's proxy pod sets `net.ipv4.ip_unprivileged_port_start=53`, a namespaced safe sysctl, to bind its DNS listener without a capability. A cluster whose admission forbids pod sysctls fails every run at proxy start.
 - **Postgres 13+** (external or managed).
 - A wardynd image:
@@ -358,6 +359,8 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 ```
 
 - `k8s.enabled`: turns on the wiring below.
+  - Renders two `ValidatingAdmissionPolicy` objects with bindings, `<release>-wardyn-keep-service` and `-keep-endpoints`, for the runs namespace. They hold wardynd's creates, updates and deletes to a run's own ClusterIP Service, named for the run, with no selector and no external IPs, and to EndpointSlices labelled for such a Service.
+    - They need Kubernetes 1.30+ serving `admissionregistration.k8s.io/v1` and fail closed; the chart refuses to render otherwise. They select wardynd's ServiceAccount only.
   - **Requires `serviceAccount.automount=true`** — the chart refuses to render otherwise (the substrate drives the API server directly via client-go, which needs the pod's own projected ServiceAccount token;
     - `automount=false` is the chart's own default, since a non-k8s wardynd calls no API server at all).
   - The substrate advertises only `[CC1]` until a RuntimeClass is pinned,
@@ -398,7 +401,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   - Separately and always on, the runner Role has `list` on `resourcequotas`: a run that cannot fit the runs namespace's quota is refused before it is created (`namespace_quota_exceeded`),
     - and one that would fill a quota to 90% or more is warned; a quota wardynd may not read is reported as unreadable, never as empty.
 - `k8s.agentSandbox.enabled` (`WARDYN_K8S_AGENT_SANDBOX`, default `false`, **experimental**): creates each run's agent pod through a [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox` instead of directly.
-  - Off renders exactly what the chart rendered before the key existed: no extra RBAC, policy, CRD or env.
+  - Off adds no RBAC, policy, CRD or env of its own.
   - Tested against agent-sandbox v1.0.9 only (beta `agents.x-k8s.io/v1beta1`). Install its controller and CRD first: this chart installs neither.
   - Needs `k8s.enabled=true` and an enforced NetworkPolicy; the chart refuses `k8s.allowUnenforcedNetPol` and `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL`, including one set through `extraEnv` `valueFrom`, which it cannot read.
   - Adds `patch` on `pods` and `create`, `get`, `list`, `delete` on `sandboxes.agents.x-k8s.io` to the runner Role, nothing to the ClusterRole.
@@ -410,7 +413,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - A refused create is retried by the controller and shows as `SandboxPodCreateFailed` events on the `Sandbox`.
   - Refused with `k8s.ackAmbientDefaultDeny` or `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` too, as a literal or a `valueFrom`.
   - `k8s.agentSandbox.keep.enabled` (`WARDYN_K8S_AGENT_SANDBOX_KEEP`, default `false`, **experimental**): keeps an ended interactive `claude-code` or `codex-cli` run whose work folder is a kept drive, and revives it. Needs `k8s.agentSandbox.enabled=true`.
-    - Adds `create`, `get`, `delete` on `services` and `create`, `get`, `update`, `delete`, `deletecollection` on `endpointslices.discovery.k8s.io` to the runner Role. See [keep and revive](../../../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
+    - Adds no Role verb: every Kubernetes install already holds the per-run Service verbs. See [keep and revive](../../../docs/operations/kubernetes-agent-sandbox.md#keep-and-revive).
 - `k8s.warmPools` (`WARDYN_K8S_WARM_POOLS`, default `[]`, **experimental**): idle placeholder pods per pool that hold room on a node with the pool's image pulled. No new Role verb. See [Kubernetes: warm pools](../../../docs/operations/kubernetes-warm-pools.md).
   - `k8s.warmPoolPriorityClass.create` (default `true`) renders a PriorityClass of value -10 that never preempts. `.name` names it (`WARDYN_K8S_WARM_PRIORITY_CLASS`).
 - `runner.sandbox.defaultResources.cpuMillis` / `.memoryMiB`: the size of a run whose policy sets no resources (`WARDYN_SANDBOX_DEFAULT_CPU_MILLIS` / `WARDYN_SANDBOX_DEFAULT_MEMORY_MIB`).
@@ -463,10 +466,11 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
     - there is no generically-correct default peer.
   - **Scope this in any cluster where "wardynd can reach 443/6443 anywhere" is not an acceptable posture** — set it to a raw `NetworkPolicyPeer` list (same shape as `networkPolicy.egress.extra`), e.g. an `ipBlock` naming your cluster's actual apiserver/load-balancer CIDR.
 
-- RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/delete/deletecollection; `pods/ephemeralcontainers` update;
+- RBAC ships least-privilege: the namespaced Role covers exactly the verbs the substrate issues (pods create/get/list/watch/delete/deletecollection; `pods/ephemeralcontainers` update;
 - `pods/exec` get+create — the exec subresource's websocket transport issues GET, SPDY issues POST, and the driver tries websocket first; `pods/log` get, which streams an exec run's output into its tail for `GET /runs/{id}/output`;
 - secrets create/delete/deletecollection and networkpolicies create/list/delete/deletecollection — deliberately **no** `get`, `list` or `watch` on `secrets`:
 - every one of those returns the object's body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
+- `services` create/get/delete and `endpointslices` create/get/update/deletecollection: each run's own Service, no list or watch;
 - `list` on `networkpolicies` alone is what the orphan sweep needs to reach a run whose pods are both gone, and it is asked for best-effort — a Role without it degrades the sweep rather than killing it;
 - `events` list only, so an image pull reads as "Downloading the image" rather than ContainerCreating — a Role without it keeps the old wording and nothing else changes;
 - `pods` list in the `metrics.k8s.io` group, one namespaced PodMetrics read per sweep tick, so idle auto-stop counts CPU work inside a sandbox —
@@ -474,6 +478,7 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
 - the cluster-scoped ClusterRole covers `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver only ever resolves one by name).
 - One rule is conditional, and it is the only one switched twice: `persistentvolumeclaims` get+create, rendered only with `drives.enabled`, plus `delete` only with `drives.reclaim.enabled` — see [User drives](#user-drives-drivesenabled) below.
 - A run's `disk_mib` cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the runner already creates, and eviction is read back through the `pods: get` the Role already has.
+- `watch` on `pods` only wakes the pod waits (a start, a stop, a task's exit, the canary); each wait still decides on a `get` or `list`. A Role you write yourself under `k8s.rbac.create=false` may leave it out: the waits then poll as before and wardynd logs one warning per runs namespace.
 
 - **Two releases on one cluster is supported.**
   - The namespaced objects are named from the release, and the two cluster-scoped ones additionally carry the release namespace — `<namespace>-<fullname>-k8s-runtimeclasses`, so `helm install wardyn -n team-a` renders `team-a-wardyn-k8s-runtimeclasses`.
