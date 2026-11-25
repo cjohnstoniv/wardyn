@@ -58,10 +58,11 @@ var errPreviewStoreUnsupported = errors.New("this store keeps no run previews")
 
 // runPreviewStore is the store's run_previews table (store_run_previews.go).
 type runPreviewStore interface {
-	UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, error)
+	UpsertRunPreview(ctx context.Context, runID uuid.UUID, port int, vis types.PreviewVisibility, ttl time.Duration, by string, linkHash []byte) (types.RunPreview, bool, *types.RunPreview, error)
 	ListRunPreviews(ctx context.Context, runID uuid.UUID) ([]types.RunPreview, error)
 	LiveRunPreview(ctx context.Context, runID uuid.UUID, port int) (types.RunPreview, error)
 	RevokeRunPreview(ctx context.Context, runID uuid.UUID, port int, by string) (types.RunPreview, error)
+	RevokeRunPreviewByID(ctx context.Context, id uuid.UUID, by string) (types.RunPreview, error)
 	RevokeRunPreviewsAbove(ctx context.Context, ceiling types.PreviewVisibility, by string) ([]types.RunPreview, error)
 }
 
@@ -306,8 +307,8 @@ func (s *Server) handleListRunPreviews(w http.ResponseWriter, r *http.Request) {
 // It asks the run's entry first (getRunForEntry: the foreign-run 404, or 403 run_owner_only for a super admin on a
 // person's run), then a console person (previewConsolePerson), then runPreviewCheck. The same visibility on a
 // live row extends it (preview.update); any other write stores a new row (preview.create), revoking the port's
-// live one in the same transaction. Which of the two it was is the upsert's own answer. Then previewStillAllowed
-// asks the ceiling again. It answers {"preview": row}.
+// unrevoked one in the same transaction (its own preview.revoke). Which it was, and the row it replaced, are the
+// upsert's own answer. Then previewStillAllowed asks the ceiling again. It answers {"preview": row}.
 func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
@@ -334,10 +335,13 @@ func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, by := actorFromRequest(r)
-	p, created, err := ps.UpsertRunPreview(r.Context(), run.ID, ask.port, ask.vis, ask.ttl, by, nil)
+	p, created, replaced, err := ps.UpsertRunPreview(r.Context(), run.ID, ask.port, ask.vis, ask.ttl, by, nil)
 	if err != nil {
 		writeServerError(w, r, "create a run preview", err)
 		return
+	}
+	if replaced != nil {
+		s.auditPreview(r, run.ID, replaced.Port, "preview.revoke", "success", previewData(*replaced))
 	}
 	if created {
 		s.auditPreview(r, run.ID, p.Port, "preview.create", "success", previewData(p))
@@ -355,8 +359,9 @@ func (s *Server) handlePutRunPreview(w http.ResponseWriter, r *http.Request) {
 // lowers the ceiling or turns previews off revokes the rows above it (revokePreviewsAboveCeiling), but one that
 // lands between runPreviewCheck's read and this write cannot see the row the write adds. So the ceiling is read
 // again: a row it no longer allows is revoked here, as the writer, and the PUT answers as the ceiling does. A
-// site config that cannot be read again revokes the row too, as the first read refuses. The revoke is of the
-// port's unrevoked row, which is this write's unless another write on the port has replaced it since.
+// site config that cannot be read again revokes the row too, as the first read refuses. The revoke is of this
+// write's row, by its id, so a row another write has put on the port since is left alone; a revoke that fails
+// writes a preview.revoke failure row, and the gateway's re-check refuses the row while it is above the ceiling.
 func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p types.RunPreview, by string) *runRefusal {
 	ctx := r.Context()
 	sc, siteErr := s.cfg.Store.GetSiteConfig(ctx)
@@ -373,19 +378,23 @@ func (s *Server) previewStillAllowed(r *http.Request, ps runPreviewStore, p type
 	default:
 		return nil
 	}
-	gone, err := ps.RevokeRunPreview(ctx, p.RunID, p.Port, by)
+	gone, err := ps.RevokeRunPreviewByID(ctx, p.ID, by)
+	data := previewData(p)
+	if err == nil {
+		data = previewData(gone)
+	}
+	if siteErr == nil {
+		data["ceiling"] = ""
+		if previewURLsOn(sc) {
+			data["ceiling"] = string(previewCeiling(sc))
+		}
+	}
 	switch {
-	case errors.Is(err, store.ErrNotFound): // revoked already, by the site config write or a DELETE
+	case errors.Is(err, store.ErrNotFound): // revoked already: by the site config write, a DELETE or a later PUT
 	case err != nil:
+		s.auditPreview(r, p.RunID, p.Port, "preview.revoke", "failure", data)
 		return runServerError("revoke a run preview the ceiling no longer allows", err)
 	default:
-		data := previewData(gone)
-		if siteErr == nil {
-			data["ceiling"] = ""
-			if previewURLsOn(sc) {
-				data["ceiling"] = string(previewCeiling(sc))
-			}
-		}
 		s.auditPreview(r, p.RunID, gone.Port, "preview.revoke", "success", data)
 	}
 	return rf

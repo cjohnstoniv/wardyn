@@ -486,7 +486,7 @@ func TestPreviewRecheckEnds(t *testing.T) {
 		{"lowered ceiling", true, func(g *previewRig) { g.st.setSite(previewSite(true, "private"), nil) }},
 		{"switch off", false, func(g *previewRig) { g.st.setSite(previewSite(false, "org"), nil) }},
 		{"org lowered to private", true, func(g *previewRig) {
-			_, _, _ = g.st.UpsertRunPreview(ctx, g.h.run.ID, 3000, types.PreviewPrivate, time.Hour, "alice", nil)
+			_, _, _, _ = g.st.UpsertRunPreview(ctx, g.h.run.ID, 3000, types.PreviewPrivate, time.Hour, "alice", nil)
 		}},
 		{"run stopped", false, func(g *previewRig) { g.set(func(run *types.AgentRun) { run.State = types.RunStopped }) }},
 		{"data_out tightened", false, func(g *previewRig) {
