@@ -602,6 +602,7 @@ func (s *Server) inboundAppRead(ctx context.Context, runID uuid.UUID, app string
 		slog.ErrorContext(ctx, "wardynd: ui gateway inbound policy lookup failed", "run_id", runID, "err", err)
 		return types.UIApp{}, false, err
 	}
+	apps = s.withPreviewApps(ctx, runID, apps)
 	for _, a := range apps {
 		if a.Name == app && a.Inbound {
 			return a, true, nil

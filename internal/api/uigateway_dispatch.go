@@ -224,6 +224,9 @@ func (s *Server) uiDialSlot(ctx context.Context, runID uuid.UUID) (func(), bool)
 // uiThaw is uiDial's thaw. For an issuer portal's request it runs under a context that ends at the dispatch
 // time, and a thaw cut there is the dispatch 503.
 func (s *Server) uiThaw(ctx context.Context, run types.AgentRun, sess uiSession) error {
+	if uiPreviewSession(sess) { // a preview never wakes a paused run
+		return s.uiPreviewThaw(ctx, run)
+	}
 	tctx, cancel := uiBoundedCtx(ctx)
 	defer cancel()
 	if err := s.thawForExec(tctx, run, uiActorType(sess), sess.Principal, "presence"); err != nil {

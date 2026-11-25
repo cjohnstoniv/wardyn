@@ -563,7 +563,9 @@ func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			_ = s.cfg.Store.TouchRun(ctx, id)
+			if keepaliveTouches(ctx) { // a preview's connection is not presence (uiDial)
+				_ = s.cfg.Store.TouchRun(ctx, id)
+			}
 		}
 	}
 }
