@@ -36,24 +36,23 @@ var (
 	errImportSecretEnv      = errors.New("k8s: a moved run carries no secret env")
 	errImportClaimExists    = errors.New("k8s: storage for a carried drive already exists at the destination; a move writes only into storage it creates")
 	errImportRootNoDrive    = errors.New("k8s: a carried root is on no drive the import creates")
-	errImportDriveReattach  = errors.New("k8s: re-attaching a person's drive to a moved run is not supported yet")
 	errImportRunInNamespace = errors.New("k8s: the run already has a sandbox in the destination namespace")
 )
 
-// importPlan is what the import's checks settled: where the run goes, the drives it creates and writes, and the
-// runtime its agent pod takes.
+// importPlan is what the import's checks settled: where the run goes, the drives it creates and writes, the drives
+// it re-attaches, and the runtime its agent pod takes.
 type importPlan struct {
 	ns                               string
-	carry                            []types.DriveMount
+	carry, reattach                  []types.DriveMount
 	runtimeClassName, runtimeHandler string
 	enforced                         types.ConfinementClass
 }
 
 // importPlan checks spec and set before anything is created. Every carried root that the set does not leave out whole
 // must be at or under a drive of the spec, each such drive (a carry drive) is a managed claim this import creates and
-// whose claim does not exist yet, and the work folder is one of them. A drive that carries no root would be re-attached,
-// which a move does not do yet. The run's Service and Sandbox must not exist in the namespace: they are named by the
-// run, and the run's teardown would take both sandboxes.
+// whose claim does not exist yet, and the work folder is one of them. A drive that carries no root is re-attached. The
+// run's Service and Sandbox must not exist in the namespace: they are named by the run, and the run's teardown would
+// take both sandboxes.
 func (k *keepDriver) importPlan(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet) (importPlan, error) {
 	ns, err := k.createNamespace(spec)
 	if err != nil {
@@ -71,7 +70,7 @@ func (k *keepDriver) importPlan(ctx context.Context, spec runner.SandboxSpec, se
 	if len(spec.SecretEnv) > 0 {
 		return importPlan{}, errImportSecretEnv
 	}
-	carry, err := carryDrives(spec.Drives, set)
+	carry, reattach, err := carryDrives(spec.Drives, set)
 	if err != nil {
 		return importPlan{}, err
 	}
@@ -98,15 +97,15 @@ func (k *keepDriver) importPlan(ctx context.Context, spec runner.SandboxSpec, se
 	if err != nil {
 		return importPlan{}, err
 	}
-	return importPlan{ns: ns, carry: carry, runtimeClassName: rcName, runtimeHandler: handler, enforced: enforced}, nil
+	return importPlan{ns: ns, carry: carry, reattach: reattach, runtimeClassName: rcName, runtimeHandler: handler, enforced: enforced}, nil
 }
 
 // carryDrives is the drives set's roots are written into: for each root the set does not leave out whole, the drive
-// whose target is the deepest at or above it. The work drive must be one. Each is a managed, writable claim. Any
-// other drive of the spec refuses: a move does not re-attach a person's drive yet. That is where re-attaching would
-// begin: such a drive would go through ensureDrivePVC, as a create's does, and never be mounted in the helper.
-func carryDrives(drives []types.DriveMount, set runner.CarriedSet) ([]types.DriveMount, error) {
-	carry := map[int]bool{}
+// whose target is the deepest at or above it. The work drive must be one. Each is a managed, writable claim. Every
+// other drive of the spec is re-attached (reattach): it goes through ensureDrivePVC, as a create's does, and is never
+// mounted in the helper, so the import writes nothing into storage it did not create.
+func carryDrives(drives []types.DriveMount, set runner.CarriedSet) (carry, reattach []types.DriveMount, err error) {
+	carries := map[int]bool{}
 	for _, root := range set.Roots {
 		if movepack.Excluded(strings.TrimPrefix(root, "/"), set.Exclude) {
 			continue
@@ -118,35 +117,35 @@ func carryDrives(drives []types.DriveMount, set runner.CarriedSet) ([]types.Driv
 			}
 		}
 		if best < 0 {
-			return nil, fmt.Errorf("%w: %s", errImportRootNoDrive, root)
+			return nil, nil, fmt.Errorf("%w: %s", errImportRootNoDrive, root)
 		}
-		carry[best] = true
+		carries[best] = true
 	}
-	var out []types.DriveMount
 	work := false
 	for i, d := range drives {
-		if !carry[i] {
-			return nil, fmt.Errorf("%w: drive %q", errImportDriveReattach, d.DriveName)
+		if !carries[i] {
+			reattach = append(reattach, d)
+			continue
 		}
 		if d.Backend != types.DriveBackendK8sPVC || d.ReadOnly || d.Team {
-			return nil, fmt.Errorf("k8s: drive %q is not a writable managed drive, so the import cannot create it", d.DriveName)
+			return nil, nil, fmt.Errorf("k8s: drive %q is not a writable managed drive, so the import cannot create it", d.DriveName)
 		}
 		if err := validateDriveMount(&d); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		work = work || d.Target == scratchWorkPath
-		out = append(out, d)
+		carry = append(carry, d)
 	}
 	if !work {
-		return nil, errImportNoWorkDrive
+		return nil, nil, errImportNoWorkDrive
 	}
-	return out, nil
+	return carry, reattach, nil
 }
 
 // importInto creates the run held and never started, as importPlan settled it: both policies (the proxy's is the
-// deny-all hold), the carry claims, the files through the helper, then the Secret, Service, empty EndpointSlice and
-// the gated Sandbox, whose UID must be recorded and read back. A failure after the first object tears the run down;
-// the claims stay, since no run label is on them and a move's own drive rows own them.
+// deny-all hold), the carry claims, the re-attached drives' claims, the files through the helper, then the Secret,
+// Service, empty EndpointSlice and the gated Sandbox, whose UID must be recorded and read back. A failure after the
+// first object tears the run down; the claims stay, since no run label is on them and drive rows own them.
 func (k *keepDriver) importInto(ctx context.Context, spec runner.SandboxSpec, set runner.CarriedSet, maxBytes int64, plan importPlan, rd *movepack.Reader) (runner.Sandbox, runner.CarriedManifest, error) {
 	none := runner.CarriedManifest{}
 	ns, runID := plan.ns, spec.RunID
@@ -173,6 +172,12 @@ func (k *keepDriver) importInto(ctx context.Context, spec runner.SandboxSpec, se
 			return fail(runner.ErrMoveCreate, err)
 		}
 		claims = append(claims, helperClaim{claim: plan.carry[i].ObjectName, target: plan.carry[i].Target})
+	}
+	// A re-attached drive's claim is made to exist as a create's is, and only the Sandbox mounts it.
+	for i := range plan.reattach {
+		if _, err := ensureDrivePVC(ctx, k.clientset, ns, &plan.reattach[i]); err != nil {
+			return fail(runner.ErrMoveCreate, err)
+		}
 	}
 	m, err := k.importFiles(ctx, moveHelper{ns: ns, runID: runID, claims: claims}, set, maxBytes, rd)
 	if err != nil {

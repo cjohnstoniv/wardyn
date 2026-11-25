@@ -172,7 +172,7 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 		return runner.Sandbox{}, none, fmt.Errorf("%w: %w", runner.ErrMoveCreate, err)
 	}
 	if root, drive, ok := carriedRootOnDrive(set, spec.Drives); ok {
-		return runner.Sandbox{}, none, fmt.Errorf("%w: docker: the carried root %s is on the drive %q, and a move writes only into storage it creates",
+		return runner.Sandbox{}, none, fmt.Errorf("%w: docker: the carried root %s overlaps the drive %q, and a move writes only into storage it creates",
 			runner.ErrMoveCreate, root, drive)
 	}
 	rd, err := movepack.NewReader(carried, movepack.Options{Set: set, Limits: movepack.Limits{MaxBytes: maxBytes}})
@@ -202,11 +202,13 @@ func (d *Driver) ImportSandbox(ctx context.Context, spec runner.SandboxSpec, set
 	return sb, rd.Manifest(), nil
 }
 
-// carriedRootOnDrive finds a root of set, other than one set leaves out whole, at or under the target of one of
-// drives, and answers it and that drive's name. Every drive of a Docker destination's spec is a person's drive
-// that existed before the move (the work folder goes into the container's own layer), so an import never writes
-// one: the archive API would overwrite another run's newer writes on a shared volume.
+// carriedRootOnDrive finds a root of set, other than one set leaves out whole, that overlaps the target of one of
+// drives: at or under it, or above a target set does not leave out. It answers the root and that drive's name.
+// Every drive of a Docker destination's spec is a person's drive that existed before the move (the work folder goes
+// into the container's own layer), so an import never writes one: the archive API would overwrite another run's
+// newer writes on a shared volume.
 func carriedRootOnDrive(set runner.CarriedSet, drives []types.DriveMount) (string, string, bool) {
+	under := func(p, dir string) bool { return p == dir || strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/") }
 	for _, root := range set.Roots {
 		if movepack.Excluded(strings.TrimPrefix(root, "/"), set.Exclude) {
 			continue
@@ -214,7 +216,7 @@ func carriedRootOnDrive(set runner.CarriedSet, drives []types.DriveMount) (strin
 		clean := path.Clean(root)
 		for _, dr := range drives {
 			t := path.Clean(dr.Target)
-			if clean == t || strings.HasPrefix(clean, strings.TrimSuffix(t, "/")+"/") {
+			if under(clean, t) || (under(t, clean) && !movepack.Excluded(strings.TrimPrefix(t, "/"), set.Exclude)) {
 				return root, dr.DriveName, true
 			}
 		}

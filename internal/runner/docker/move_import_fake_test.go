@@ -203,12 +203,13 @@ func TestMoveImport_ManyShortLinksTripTheBound(t *testing.T) {
 	}
 }
 
-// TestMoveImport_RefusesCarriedRootOnDrive: a carried root at or under the target of a drive of the spec is
-// refused before anything is created, since every such drive existed before the move; a root the set leaves out
-// whole, or one that only shares a prefix with a drive's target, is not.
+// TestMoveImport_RefusesCarriedRootOnDrive: a carried root at or under the target of a drive of the spec, or above a
+// target the set does not leave out, is refused before anything is created, since every such drive existed before
+// the move; a root the set leaves out whole, one above a target it leaves out, or one that only shares a prefix with a
+// drive's target, is not.
 func TestMoveImport_RefusesCarriedRootOnDrive(t *testing.T) {
 	notes := types.DriveMount{DriveName: "notes", Backend: types.DriveBackendDockerVolume, ObjectName: "wardyn-drive-notes", Target: "/work"}
-	for _, root := range []string{"/work", "/work/sub"} {
+	for _, root := range []string{"/work", "/work/sub", "/"} {
 		f := newImportFake()
 		spec := importSpec()
 		spec.Drives = []types.DriveMount{notes}
@@ -225,6 +226,7 @@ func TestMoveImport_RefusesCarriedRootOnDrive(t *testing.T) {
 		{"a root left out whole", runner.CarriedSet{Roots: []string{"/work"}, Exclude: []string{"work"}}},
 		{"a root beside the drive", runner.CarriedSet{Roots: []string{"/workspace"}}},
 		{"no drive under the root's path", runner.CarriedSet{Roots: []string{"/home/agent/work"}}},
+		{"a root above a drive it leaves out", runner.CarriedSet{Roots: []string{"/"}, Exclude: []string{"work"}}},
 	} {
 		if root, drive, ok := carriedRootOnDrive(c.set, []types.DriveMount{notes}); ok {
 			t.Errorf("%s: refused %s on %q", c.name, root, drive)

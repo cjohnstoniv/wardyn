@@ -8,6 +8,7 @@ package k8s
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"slices"
@@ -181,13 +182,54 @@ func TestMoveImport_RefusesCarriedRootWithoutCarryDrive(t *testing.T) {
 	k, cs, dyn, _ := importRig(t)
 	set := runner.CarriedSet{Roots: []string{runner.ScratchWorkPath, "/home/agent/elsewhere"}}
 	importRefused(t, k, cs, dyn, importSpec(), set, errImportRootNoDrive)
-	// A drive that carries no root would be re-attached, which a move does not do yet.
+}
+
+// A drive that carries no root is re-attached: its claim, made before the move, is reused and not created again, the
+// helper does not mount it, and the Sandbox does.
+func TestMoveImport_ReattachesDrive(t *testing.T) {
+	k, cs, dyn, _ := importRig(t)
 	spec := importSpec()
 	other := spec.Drives[0]
 	other.Target, other.ObjectName, other.DriveName = "/home/agent/drive", "wardyn-drive-other", "other"
+	other.DriveID[0] ^= 0xff
+	if _, err := ensureDrivePVC(context.Background(), cs, testNamespace, &other); err != nil {
+		t.Fatal(err)
+	}
 	spec.Drives = append(spec.Drives, other)
-	_, set = workStream(t)
-	importRefused(t, k, cs, dyn, spec, set, errImportDriveReattach)
+	var helperClaims []string
+	cs.PrependReactor("create", "pods", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if pod, ok := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod); ok && pod.Name == moveHelperName(asRunID) {
+			for _, v := range pod.Spec.Volumes {
+				if v.PersistentVolumeClaim != nil {
+					helperClaims = append(helperClaims, v.PersistentVolumeClaim.ClaimName)
+				}
+			}
+		}
+		return false, nil, nil
+	})
+	order := namedWrites(cs, dyn)
+	stream, set := workStream(t)
+	if _, _, err := k.ImportSandbox(context.Background(), spec, set, 1<<20, stream); err != nil {
+		t.Fatalf("ImportSandbox: %v", err)
+	}
+	if slices.Contains(*order, "create persistentvolumeclaims "+other.ObjectName) ||
+		!slices.Contains(*order, "create persistentvolumeclaims "+spec.Drives[0].ObjectName) {
+		t.Errorf("writes = %v, want the work claim created and the re-attached claim reused", *order)
+	}
+	if slices.Contains(helperClaims, other.ObjectName) || !slices.Contains(helperClaims, spec.Drives[0].ObjectName) {
+		t.Errorf("the helper mounts the claims %v, want the work claim and not the re-attached one", helperClaims)
+	}
+	obj, err := dyn.Tracker().Get(sandboxesGVR, testNamespace, agentPodName(asRunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"claimName":"`+other.ObjectName+`"`) {
+		t.Errorf("the Sandbox does not mount the re-attached claim %q", other.ObjectName)
+	}
 }
 
 func TestMoveImport_RefusesRunAlreadyInNamespace(t *testing.T) {
