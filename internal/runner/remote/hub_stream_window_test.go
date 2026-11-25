@@ -8,9 +8,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/federation"
@@ -91,6 +94,48 @@ func (w megabyteWrites) stopAtTheLegacyWindow(t *testing.T, limit time.Duration)
 	w.completeWithin(t, limit, "after the reader drained")
 }
 
+// newInventoryFixtureWithin is newInventoryFixture with limit in place of its 5 s: the hub, every session
+// and every dial run on that context, so a test with fixed waits keeps its margin however long setup takes.
+func newInventoryFixtureWithin(t *testing.T, realWire bool, limit time.Duration) *inventoryFixture {
+	ctx, cancel := context.WithTimeout(t.Context(), limit)
+	t.Cleanup(cancel)
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	f := &inventoryFixture{ctx: ctx, key: key, orgURL: "https://org.example", link: &Link{}, hubDone: make(chan error, 8)}
+	f.row = types.Runner{ID: uuid.New(), Owner: "owner", PublicKey: pub, State: types.RunnerClaimed}
+	f.store = newInventoryStore(f.link)
+	sub := New(f.row.ID.String(), f.link, Options{})
+	config := HubConfig{Lookup: func(context.Context, uuid.UUID) (types.Runner, error) { return f.row, nil },
+		Admit: func(context.Context, types.Runner) (Admission, error) { return f.store.admission(sub, f.link), nil }}
+	if realWire {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := websocket.Accept(w, r, nil)
+			if err == nil {
+				err = f.hub.Serve(ctx, recordingConn{runnerwire.NewWebSocket(conn), f.store}, f.row.ID)
+			}
+			f.hubDone <- err
+		}))
+		t.Cleanup(server.Close)
+		f.orgURL = server.URL
+	}
+	config.OrgURL = f.orgURL
+	f.row.OrgURLSHA256 = federation.OrgURLSHA256(f.orgURL)
+	f.hub = NewHub(ctx, config)
+	t.Cleanup(f.hub.Close)
+	f.dial = func() runnerwire.Conn {
+		if realWire {
+			conn, err := runnerwire.DialWebSocket(ctx, f.orgURL, f.row.ID.String(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return conn
+		}
+		org, run := runnerwire.Loopback()
+		go func() { f.hubDone <- f.hub.Serve(ctx, recordingConn{org, f.store}, f.row.ID) }()
+		return run
+	}
+	return f
+}
+
 // The hub grants a runner's offered window, so a 1 MiB write fits one window both ways; a runner that
 // offers none, and a current runner against an organisation that answers none, keep the legacy window.
 func TestHubGrantsTheRunnersOfferedWindow(t *testing.T) {
@@ -123,7 +168,8 @@ func TestHubGrantsTheRunnersOfferedWindow(t *testing.T) {
 			awaitValue(t, f.ctx, done)
 		})
 		t.Run("older runner", func(t *testing.T) {
-			f := newInventoryFixture(t, realWire)
+			// Two fixed 2 s waits follow the setup, so this subtest runs on 10 s, as the older organisation's does.
+			f := newInventoryFixtureWithin(t, realWire, 10*time.Second)
 			atOrg := make(streamCatcher, 1)
 			f.link.SetHandler(atOrg)
 			conn, ok, seq := f.open(t, nil)
