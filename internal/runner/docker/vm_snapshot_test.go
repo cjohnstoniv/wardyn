@@ -369,13 +369,14 @@ func TestSnapshot_LayerStaysOnRunner(t *testing.T) {
 }
 
 // TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt: the runner refuses to delete a layer while a fork on
-// it still has its disk there, and deletes it once that fork has ended.
+// it still has its disk there, also after a teardown whose removal of the fork's run directory failed, and
+// deletes it once that directory is gone.
 func TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt(t *testing.T) {
 	r := newSnapRig(t)
 	ctx := context.Background()
 	_, sb := r.boot(t, nil)
 	l := r.snapshot(t, sb.Ref)
-	_, fork := r.boot(t, sourceOf(l))
+	forkSpec, fork := r.boot(t, sourceOf(l))
 	if err := r.d.DeleteSnapshot(ctx, l.ID); !errors.Is(err, runner.ErrSnapshotInUse) {
 		t.Fatalf("delete while a fork backs onto the layer = %v, want snapshot_in_use", err)
 	}
@@ -385,8 +386,40 @@ func TestSnapshotLayer_RunnerRefusesDeleteWhileARunBacksOnIt(t *testing.T) {
 	if got := runnerwire.SnapshotRefusal(r.d.DeleteSnapshot(ctx, l.ID)); got != "snapshot_in_use" {
 		t.Fatalf("wire reason = %q", got)
 	}
+	// A folder the teardown cannot empty makes its removal of the run directory fail; the overlay stays.
+	forkDir := r.vc.runDir(forkSpec.RunID)
+	stuck := filepath.Join(forkDir, "stuck")
+	asRoot := os.Getuid() == 0
+	if !asRoot {
+		if err := os.MkdirAll(stuck, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(stuck, "f"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(stuck, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(stuck, 0o700) })
+	}
 	if err := r.d.KillSandbox(ctx, fork.Ref); err != nil {
 		t.Fatal(err)
+	}
+	if asRoot {
+		t.Log("root: a run directory's failed removal cannot be forced by permissions, so that case is not checked")
+	} else {
+		if !exists(forkDir) {
+			t.Fatal("the run directory's removal did not fail as planted")
+		}
+		if err := r.d.DeleteSnapshot(ctx, l.ID); !errors.Is(err, runner.ErrSnapshotInUse) {
+			t.Fatalf("delete while the ended fork's run directory is still there = %v, want snapshot_in_use", err)
+		}
+		if err := os.Chmod(stuck, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(forkDir); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := r.d.DeleteSnapshot(ctx, l.ID); err != nil {
 		t.Fatalf("delete once the fork's disk is gone = %v", err)

@@ -58,6 +58,10 @@ var (
 // directory exists: vmBase records the fork just before createVM makes that directory.
 const forkRecordGrace = time.Minute
 
+// forkEnded is the content of a fork's record once its run's teardown has begun: no grace, only its run
+// directory keeps the layer in use.
+const forkEnded = "ended"
+
 // snapshotHeadroom is the free disk a snapshot leaves beyond what its copy and a fork's flatten may take.
 const snapshotHeadroom = 1 << 30
 
@@ -195,6 +199,8 @@ func (d *Driver) cutSnapshot(ctx context.Context, ref string, v *vmRun, id uuid.
 	thaw()
 	if err != nil {
 		// A backup that timed out on this side may have started: the target goes only once its job is seen ended.
+		// QEMU's QMP socket takes one client at a time, so this one closes before dropCopy dials its own.
+		_ = q.Close()
 		d.dropCopy(v.dir, id)
 		return nil, err
 	}
@@ -650,6 +656,13 @@ func (d *Driver) layerInUse(id uuid.UUID) (bool, error) {
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return false, err
 		}
+		b, err := os.ReadFile(filepath.Join(d.layerDir(id), forksDir, f.Name()))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if string(b) == forkEnded {
+			continue
+		}
 		if fi, err := f.Info(); err == nil && time.Since(fi.ModTime()) < forkRecordGrace {
 			return true, nil // recorded just now; its run directory comes next
 		}
@@ -789,12 +802,14 @@ func (d *Driver) cancelRunSnapshots(ctx context.Context, runID uuid.UUID) {
 		d.abortPending(id)
 	}
 	_ = d.clearLeftovers(ctx, runID, false)
-	// A fork's record goes with its run: its QEMU is gone by now, so the layer no longer backs a disk here.
+	// A fork's record is marked ended, not removed: teardownVM removes the run directory after this, and a
+	// removal that fails leaves the overlay there, so layerInUse keeps honouring the record while that directory
+	// exists, and stops the moment it is gone.
 	if vc := d.vmConfig(); vc != nil {
 		recs, _ := filepath.Glob(filepath.Join(vc.StateDir, "snapshots", "*", forksDir, runID.String()))
 		t.mu.Lock()
 		for _, r := range recs {
-			_ = os.Remove(r)
+			_ = os.WriteFile(r, []byte(forkEnded), 0o600)
 		}
 		t.mu.Unlock()
 	}
