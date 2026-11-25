@@ -650,7 +650,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	if !s.keepFinalRunProxyConfig(ctx, run, spec.ProxyConfig, stopCreateLease) {
 		return
 	}
-	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
+	if !s.admitAndStampPolicy(ctx, run, ceiling, siteCfg, siteCfgErr, &spec, orgConfigKeys, llm, p, &envelope, stopCreateLease) {
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.resolve",
@@ -746,10 +746,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // reads the envelope. The digest is recorded before the row, so the row is stamped too, and the
 // run row's data_out rule is stored before it (keepRunDataOut). False when the run was refused or
 // failed, which has answered.
-func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, siteCfg types.SiteConfig,
+func (s *Server) admitAndStampPolicy(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, siteCfg types.SiteConfig, siteCfgErr error,
 	spec *runner.SandboxSpec, orgConfigKeys []string, llm llmTransport, p dispatchParams, envelope *effectivePolicyDatum,
 	stopLease func(),
 ) bool {
+	// A local run is judged against the organisation's machine_kind_denials, which an unreadable site config would
+	// read as none: it fails closed here, as a revive does.
+	if siteCfgErr != nil && !remotePlacement(run.Placement) {
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, "This run was not launched: the organisation's site configuration could not be read")
+		return false
+	}
 	if !s.sandboxCreateAdmitted(ctx, run, ceiling, siteCfg, spec, orgConfigKeys, llm, p) {
 		return false
 	}

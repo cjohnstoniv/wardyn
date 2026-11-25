@@ -817,8 +817,14 @@ var maxAuditFindingsConst = regexp.MustCompile(`(?m)^const maxAuditFindings = (\
 // at all, which is why every other gate stayed green with the row wrong.
 func TestAuditActionsDocLLMScanDataFieldsMatchTheEmitSite(t *testing.T) {
 	body := funcBody(t, readSrc(t, "internal", "egress", "scan_audit.go"), "ScanAudit")
+	// The direct path builds its row in llmScanAuditEvent, which decisionEvents calls for the single and the
+	// batch decision post alike; runner replay builds its own in runnerDecisionEvents.
+	direct := readSrc(t, "internal", "api", "internal_decisions_batch.go")
+	if !strings.Contains(methodBody(t, direct, "decisionEvents"), "s.llmScanAuditEvent(") {
+		t.Fatal("the direct decision path must build its scan row with llmScanAuditEvent")
+	}
 	for _, caller := range []string{
-		methodBody(t, readSrc(t, "internal", "api", "internal.go"), "recordLLMScanAudit"),
+		methodBody(t, direct, "llmScanAuditEvent"),
 		funcBody(t, readSrc(t, "internal", "store", "store_runner_spool.go"), "runnerDecisionEvents"),
 	} {
 		if !strings.Contains(caller, "egress.ScanAudit(") {

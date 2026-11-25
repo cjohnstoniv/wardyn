@@ -326,3 +326,124 @@ func TestPG_RunTrust_PromotedRunKeepsTheRoomierPersonalLaptopBesideAManagedOneWi
 		}
 	}
 }
+
+// denyMachineKinds stores the organisation's runners.machine_kind_denials as the runner settings route does, and
+// returns the site configuration as stored.
+func (e *placementEnv) denyMachineKinds(ds ...types.MachineKindDenial) types.SiteConfig {
+	e.t.Helper()
+	ctx := context.Background()
+	sc, err := e.pg.GetSiteConfig(ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	rs := types.RunnerSettings{Enabled: true}
+	if sc.Runners != nil {
+		rs = *sc.Runners
+	}
+	rs.MachineKindDenials = ds
+	sc.Runners = &rs
+	if _, err := e.pg.PutSiteConfig(ctx, sc); err != nil {
+		e.t.Fatal(err)
+	}
+	return sc
+}
+
+// laptopOfClass is a pooled online runner of the person's with the given trust class.
+func (e *placementEnv) laptopOfClass(pool uuid.UUID, class types.RunnerTrustClass) uuid.UUID {
+	e.t.Helper()
+	id := e.laptop(e.personP, 4000, 8192, types.CC1, types.CC2, types.CC3)
+	e.maxRuns(id, e.personP, types.RunnerMaxRunsCeiling)
+	e.addToPool(e.person, pool, id)
+	e.setTrust(id, class)
+	return id
+}
+
+// P4: the organisation denies containers on personal runners and leaves them on company-managed ones. A pool of
+// both places the run on the managed runner; a pool whose runners are all personal is refused with the sentence that
+// says why and writes no run. Denying the managed class instead sends the same pool's run to the personal runner, so
+// the list, not the class order, decides.
+func TestPlacementTrust_DenyOnOneClassAllowOnAnother_PG(t *testing.T) {
+	e := newPlacementEnv(t)
+	pool := e.createOwnPool(e.person, "Laptops")
+	personal := e.laptopOfClass(pool.ID, types.RunnerTrustPersonal)
+	managed := e.laptopOfClass(pool.ID, types.RunnerTrustManagedDevice)
+	body := runBody(`"placement":"local","runner_pool_id":"` + pool.ID.String() + `"`)
+	placedOn := func(want uuid.UUID, class types.RunnerTrustClass) {
+		t.Helper()
+		run, code, refused := e.launchStored(body)
+		if code != http.StatusCreated {
+			t.Fatalf("launch = %d %s, want it placed on the %s runner", code, refused, class)
+		}
+		if run.RunnerID == nil || *run.RunnerID != want || e.runTrust(run.ID) != class {
+			t.Fatalf("bound to %v at %q, want runner %s at %s", run.RunnerID, e.runTrust(run.ID), want, class)
+		}
+	}
+
+	e.denyMachineKinds(types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineContainer})
+	placedOn(managed, types.RunnerTrustManagedDevice)
+	e.denyMachineKinds(types.MachineKindDenial{Trust: types.RunnerTrustManagedDevice, MachineKind: types.MachineContainer})
+	placedOn(personal, types.RunnerTrustPersonal)
+
+	e.denyMachineKinds(types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineContainer})
+	e.setTrust(managed, types.RunnerTrustPersonal)
+	before := e.count(`SELECT count(*) FROM agent_runs`)
+	w := e.call(e.person, http.MethodPost, "/api/v1/runs", body)
+	const sentence = "Your organisation does not allow container sandboxes on personal runners."
+	if w.Code != http.StatusForbidden || wireReason(t, w) != string(placement.ReasonPlacementDenied) || wireError(t, w) != sentence {
+		t.Fatalf("a pool of personal runners only = %d %s, want 403 placement_denied saying %q", w.Code, w.Body, sentence)
+	}
+	if e.count(`SELECT count(*) FROM agent_runs`) != before {
+		t.Error("the refused launch wrote a run")
+	}
+}
+
+// launchedOnPersonal is a run placed on the person's one personal runner, with its launch's own dispatch settled
+// before the organisation's list changes.
+func (e *placementEnv) launchedOnPersonal() types.AgentRun {
+	e.t.Helper()
+	pool := e.createOwnPool(e.person, "Laptops")
+	e.laptopOfClass(pool.ID, types.RunnerTrustPersonal)
+	run, code, refused := e.launchStored(runBody(`"placement":"local","runner_pool_id":"` + pool.ID.String() + `"`))
+	if code != http.StatusCreated || run.RunnerID == nil {
+		e.t.Fatalf("launch = %d %s", code, refused)
+	}
+	e.srv.WaitBackground()
+	return run
+}
+
+// dispatchClassifies runs the dispatch's placement classification of run against sc and answers whether it went on.
+func (e *placementEnv) dispatchClassifies(run types.AgentRun, sc types.SiteConfig) bool {
+	e.t.Helper()
+	spec := runner.SandboxSpec{RunID: run.ID}
+	return e.srv.classifyLocalDispatch(context.Background(), run, ceilingForDispatch(governanceCeiling{}, adoEntraUngraded(), bedrockCredUngraded()), sc, &spec, nil, llmTransport{}, false)
+}
+
+// P6: a denial added after create refuses the run at dispatch, naming machine_kind in the run.dispatch failure row,
+// so a run that waited never starts against it.
+func TestPlacementTrust_DispatchRefusesALaterDenial_PG(t *testing.T) {
+	e := newPlacementEnv(t)
+	run := e.launchedOnPersonal()
+	sc := e.denyMachineKinds(types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineContainer})
+	if e.dispatchClassifies(run, sc) {
+		t.Fatal("a container run was dispatched to a personal runner against a denial of it")
+	}
+	ev := findAuditData(e.h.audit.snapshot(), run.ID, "run.dispatch", string(placement.ReasonPlacementDenied))
+	if ev == nil || ev.Outcome != "failure" || !strings.Contains(string(ev.Data), `"machine_kind"`) {
+		t.Fatalf("no placement_denied failure naming machine_kind: %s", auditDump(e.h.audit.snapshot(), run.ID))
+	}
+}
+
+// P6, the revive half: a revive keeps its runner, so the same denial that refuses the run's dispatch does not
+// refuse its revive.
+func TestPlacementTrust_ReviveKeepsItsRunner_PG(t *testing.T) {
+	e := newPlacementEnv(t)
+	run := e.launchedOnPersonal()
+	sc := e.denyMachineKinds(types.MachineKindDenial{Trust: types.RunnerTrustPersonal, MachineKind: types.MachineContainer})
+	if e.dispatchClassifies(run, sc) {
+		t.Fatal("the denial does not refuse a dispatch, so a revive passing it proves nothing")
+	}
+	cfg := proxy.Config{RunID: run.ID}
+	if err := e.srv.refreshLocalDeploymentConfig(context.Background(), run, sc, &cfg); err != nil {
+		t.Fatalf("a revive of a run on a runner whose class the list now denies it at: %v, want it admitted", err)
+	}
+}

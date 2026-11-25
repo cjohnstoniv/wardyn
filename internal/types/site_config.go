@@ -29,6 +29,10 @@ type SiteConfig struct {
 	// Runners defaults off. PUT /site-config retains the stored value; the
 	// dedicated audited runner enablement operation owns changes.
 	Runners *RunnerSettings `json:"runners,omitempty"`
+	// Assistant is the organisation's assistant block: which purposes are on, which model providers may
+	// serve them, and what is never sent. PUT /site-config retains the stored value; PUT
+	// /assistant/settings owns changes. Absent means every purpose is off.
+	Assistant *AssistantSettings `json:"assistant,omitempty"`
 	// UpstreamProxySecretRef names a secret holding the corporate upstream
 	// proxy URL, or "" for none. UpstreamProxyURL wins if both are set (not
 	// rejected, so an operator can migrate between the two).
@@ -376,6 +380,18 @@ type RunnerSettings struct {
 	// Runs already in flight are untouched. It is set only by PUT /runners/settings, never PUT /site-config.
 	// Always on the wire, false included, so GET /runners/settings states it when it is off.
 	RequireManagedDevice bool `json:"require_managed_device"`
+	// MDMDeviceCAPEM is the organisation's MDM CA bundle (PEM, CA certificates only). It must hold the CA that
+	// issues the device certificates and signs the CRL. When set, a macOS sandbox needs a device certificate
+	// that chains to it and is not on MDMDeviceCRLURL's current CRL. Empty: no certificate check (the v0.10.2
+	// behaviour). Set only by PUT /runners/settings; not sent to runners.
+	MDMDeviceCAPEM string `json:"mdm_device_ca_pem,omitempty"`
+	// MDMDeviceCRLURL is where the control plane fetches that CA's full CRL (https recommended; http works,
+	// since the CRL is signature-checked). Required exactly when MDMDeviceCAPEM is set.
+	MDMDeviceCRLURL string `json:"mdm_device_crl_url,omitempty"`
+	// MachineKindDenials refuses a new local run of a machine kind on runners of a trust class (#2950).
+	// Deny-only, so it only narrows; a macOS VM needs a managed_device runner whatever it says. Set only
+	// by PUT /runners/settings, never PUT /site-config. Always on the wire, [] when none.
+	MachineKindDenials []MachineKindDenial `json:"machine_kind_denials"`
 }
 
 // SiteSessions is SiteConfig.Sessions.

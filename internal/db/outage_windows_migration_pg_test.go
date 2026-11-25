@@ -9,13 +9,13 @@ import (
 	"testing"
 )
 
-const outageWindowsMigration = "0400"
+const outageWindowsMigration = "0403"
 
-// TestMigration0400_AppRoleOpensAndClosesAWindow_PG: on a split-role install the migration gives the heartbeat and
+// TestMigration0403_AppRoleOpensAndClosesAWindow_PG: on a split-role install the migration gives the heartbeat and
 // the windows to the role that already updates agent_runs, read from the catalog, so the upgrade needs no hand grant.
 // That role, which owns nothing and holds no sequence privilege, then beats, opens a window (its identity id), closes
 // it and prunes it. A role that may only read agent_runs gets nothing.
-func TestMigration0400_AppRoleOpensAndClosesAWindow_PG(t *testing.T) {
+func TestMigration0403_AppRoleOpensAndClosesAWindow_PG(t *testing.T) {
 	pool, schema := partialSchemaPool(t, outageWindowsMigration)
 	app, appPass := auditRole(t, pgPool(t), "wardyn_ow_app")
 	reader, _ := auditRole(t, pgPool(t), "wardyn_ow_reader")
@@ -25,7 +25,7 @@ func TestMigration0400_AppRoleOpensAndClosesAWindow_PG(t *testing.T) {
 	pgExec(t, pool, `GRANT SELECT, INSERT, UPDATE, DELETE ON agent_runs TO `+app)
 	pgExec(t, pool, `GRANT SELECT ON agent_runs TO `+reader)
 
-	migrateBefore(t, pool, "0401")
+	migrateBefore(t, pool, "0404")
 
 	for table, privs := range map[string]map[string]bool{
 		"cp_heartbeat":   {"SELECT": true, "INSERT": true, "UPDATE": true, "DELETE": false, "TRUNCATE": false},

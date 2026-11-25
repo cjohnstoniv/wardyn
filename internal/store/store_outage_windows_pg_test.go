@@ -235,13 +235,18 @@ func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 	}
 	// The barrier: a third transaction holds the heartbeat row until both beats wait on it, so the two beats
 	// overlap rather than happen to run one after the other. It is released well inside the beats' 5 s lock timeout.
-	hold, err := pool.Begin(ctx)
+	// It runs on its own pool, since the poll below reads from the test's pool while the barrier is held.
+	holdPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	hold, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer hold.Rollback(ctx) //nolint:errcheck // released below
-	var pid int
-	if err := hold.QueryRow(ctx, `SELECT pg_backend_pid() FROM cp_heartbeat WHERE singleton FOR UPDATE`).Scan(&pid); err != nil {
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM cp_heartbeat WHERE singleton FOR UPDATE`); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -256,8 +261,10 @@ func TestBeatControlPlane_ConcurrentBeatsOneWindow_PG(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
+		// Only the first beat waits on the holder itself; the second queues behind the first beat's tuple lock, so
+		// both are counted as blocked backends of this test's own database.
 		var waiting int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, pid).Scan(&waiting); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting == 2 {
@@ -351,7 +358,13 @@ func TestBeatControlPlane_HeldRowFailsFast_PG(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE cp_heartbeat SET beat_at = now() - interval '45 seconds'`); err != nil {
 		t.Fatal(err)
 	}
-	hold, err := pool.Begin(ctx)
+	// The holder runs on its own pool, since the beat below asks the test's pool for a connection while it holds the row.
+	holdPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holdPool.Close()
+	hold, err := holdPool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +435,13 @@ func TestRunnerLinkWindow_LateTimerAfterFreshSessionOpensNothing_PG(t *testing.T
 		ctx := context.Background()
 		s1 := uuid.NewString()
 		rn := outageRunner(t, st, s1)
-		tx, err := pool.Begin(ctx)
+		// The fresh session's transaction runs on its own pool, since the poll below reads from the test's pool while it is open.
+		txPool, err := pgxpool.New(ctx, pool.Config().ConnString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer txPool.Close()
+		tx, err := txPool.Begin(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

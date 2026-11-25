@@ -265,7 +265,7 @@ func (a changelogRelease) after(b changelogRelease) bool {
 // this tree to 0.11 (0.11.0-rc.1) and leaves when 0.10.x stops getting patches, about four weeks after 0.11.0. When
 // the tree moves to 0.12, "0.11" joins in the commit that opens 0.12, with a case in
 // TestChangelogTagGuardFollowsVersionLines. A line forgotten here is loud: its next unported tag reds the guard.
-var changelogMaintainedLines = []string{}
+var changelogMaintainedLines = []string{"0.10"}
 
 // changelogLines parses this tree's version and the maintained list, which may name only lines below it.
 func changelogLines(own string, maintained []string) (changelogRelease, []changelogLine, error) {

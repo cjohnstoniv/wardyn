@@ -436,6 +436,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 		wp.GitPatBrokerEnabled = &on
 		cfg.WorkspaceProviders = &wp
 	}
+	cfg.Runners = withDenialList(cfg.Runners) // after the ETag, which hashes the stored document
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -695,7 +696,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// Carry forward, or a round-trip PUT by any client erases the install's
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
-	if !carryRunners(w, &cfg, existing) {
+	if !carryRunners(w, &cfg, existing) || !carryAssistant(w, &cfg, existing) {
 		return
 	}
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
@@ -865,6 +866,7 @@ func (s *Server) projectPutSiteConfig(saved types.SiteConfig) types.SiteConfig {
 		wp.GitPatBrokerEnabled = &on
 		saved.WorkspaceProviders = &wp
 	}
+	saved.Runners = withDenialList(saved.Runners)
 	return saved
 }
 

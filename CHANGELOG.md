@@ -13,6 +13,46 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ### Added
 
+- A policy can shorten, and an admin can lengthen up to 24 hours, how long a run's network keeps serving while Wardyn cannot be reached, and a policy can mark it strict or end unattended runs after an outage (#4082). This release records and carries the setting; pausing and ending at the allowance follow in a later release.
+
+### Before you upgrade
+
+- Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail at start on a run proxy older than this release. An operator who pins the proxy image upgrades it first.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_outage_terms`. They grant it to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same as soon as the migration has run. Until then a run whose outage terms are not the default ones is refused at start, and a run on a connected runner cannot be leased: it does not start, or it stops when its current lease runs out.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
+- A connected runner older than this release is refused a run whose outage allowance is not the default one or whose outage terms are strict; upgrade the runner first. Every other run still starts on it, one that only ends unattended runs after an outage included.
+
+## [0.11.0-rc.2] — 2026-11-25
+
+### Added
+
 - The control plane records when it could not be reached, when each runner's link was down and when its own proxies stopped renewing, so that a later release can tell an outage from a failed proxy (#4082).
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
   and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
@@ -20,17 +60,89 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
   run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
   the runner connects; a server with no remote runners loses only the windows.
-- Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
+- A macOS sandbox can require the Mac's MDM device certificate: set the MDM CA and its CRL URL in the runner settings; a missing, expired or revoked certificate, or one whose revocation cannot be checked, refuses the sandbox. Off until set. The macOS runner presents the Mac's MDM device certificate. Not yet tried on a real Mac. Migration `0400_runner_device_cert` adds the columns `device_cert` and `device_cert_reported_at` to `runners`. (#2975)
+- Machine kinds by runner trust class (#2950): a super admin can deny a machine kind (container, Linux VM, macOS VM) on runners of one trust class (personal, company-managed, organisation cluster) with PUT /runners/settings. A new local run on a registered runner is never placed on a denied pair, and a pool places it on a class that admits it; the organisation's own executor is not judged. A macOS VM still runs only on a company-managed Mac.
+- Agent rules (#2949): an admin or security admin sets rules for an agent harness (sites it may reach or not, desktop directions, withheld credentials, tool rules, pushes, recording, idle stop, and the harness's own sandbox and approvals). Every run that includes that agent is narrowed by them on any runner, a person's own laptop included. A run without the agent is not. The run's policy names the layer. Writes are held for a second security admin when the second-person switch is on.
+- Migration `0405_agent_rules` creates `agent_rules`: one row per harness holding its walls and inner walls, with a version.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
 - Desktop views can show a watermark naming the viewer and the run, and an admin can require it in site config (`desktop_watermark.required`).
-- A policy can shorten, and an admin can lengthen up to 24 hours, how long a run's network keeps serving while Wardyn cannot be reached, and a policy can mark it strict or end unattended runs after an outage (#4082). This release records and carries the setting; pausing and ending at the allowance follow in a later release.
+
+### Changed
+
+- The AI gateway test (agentgateway in front of a fake model and MCP server) now runs on every release candidate and gates the release.
+- Server egress proxies post decisions in batches of up to 128 once the control plane says it takes them, and each batch is appended under one audit lock; a retried batch adds no duplicate rows unless the proxy's clock is more than 10 minutes behind the control plane's or 5 minutes ahead, and rows decided while the control plane was unreachable are labelled. The audit chain format is unchanged. (#4063)
+
+### Before you upgrade
+
+- If you move the control plane back to an earlier release while server proxies run, each proxy's first batch after the move is stored there as one empty egress row before the proxy goes back to single posts; its decisions are then posted one by one.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
+- Rolling back to an earlier release and then writing site config there clears the MDM device CA; set it again after upgrading again.
+
+## [0.11.0-rc.1] — 2026-11-24
+
+### Added
+
+- `wardyn run forward` reaches a run's port through the organisation when the SSH gateway is off, if the operator sets `WARDYN_ATTACH_FORWARD` (off by default). Each connection takes its own attach ticket, keeps the SSH gateway's bounds (a service identity's run takes no forward, its sponsor's ticket included), is checked again every 30 s and writes a `run.port.forward` audit row (#3281).
+- The organisation's assistant settings. `GET` and `PUT /assistant/settings` (super admin) hold which purposes (Compose, Review) are on, which model providers may serve each and with which models, whether run history may be sent as host counts, and the record kinds that are never sent. A change that only narrows applies at once; one that widens is held for a second super admin whatever `WARDYN_GOVERNANCE_SECOND_HUMAN` says, and is refused in local mode. `GET /me/assistant?purpose=` tells any signed-in person whether they can use it, and why not. Each applied change writes an `assistant.settings.write` audit row.
+- A held governance change can need more than one approver. `WARDYN_GOVERNANCE_MIN_APPROVALS` (flag `-governance-min-approvals`, 0 to 9) sets the fewest approvals a change of a kind with more than one decider needs; the default `0` leaves every change to one approver. An approval counts only while its person is still eligible, and a person can take their own back with `DELETE /governance/changes/{id}/approval`.
+- Assistant sessions. A signed-in person can see the exact records a first message will carry (`POST /assistant/preview`), then start a session that composes a run, unit or template or reviews a held change (`POST /assistant/sessions`, with messages, edits, an event stream, and `DELETE` to end it). A session is its person's own: another person's answers 404. It starts only while the assistant is on in the assistant settings, its run counts against the person's `max_concurrent_runs`, and `assistant.session.start`, `assistant.session.end` and `assistant.suggestion.create` are audited.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- The Walls view's topology and run routes (`GET /api/v1/walls/topology`, `GET /api/v1/runs/{id}/walls`), for the 3D view. Its stream routes answer 501 until the live stream ships.
+- Site config has a `features` block for the features that are new in 0.11 and off until an admin turns them on, one key each: `org_sites`, `windows_vm`, `run_move`, `machine_snapshots`, `local_window`, `preview_urls`, `component_request_rules` and `org_runner_drives`. A key whose feature this release cannot turn on yet is refused with `feature_unavailable` by a write that turns it on or sets it, and reads off whatever is stored. `GET /setup/status` reports each feature that is on under `features`.
+- An operator can let a person reach a run over the SSH gateway with no registered key: `GET /runs/{id}/ssh` takes a 30-second single-use ticket minted at `POST /runs/{id}/attach/ticket` (`WARDYN_SSH_TICKETS`, off by default). A ticket names what it opens, so one minted for a command opens no terminal (#3279).
+- An attach ticket minted for a port forward (`purpose=attach-forward`) opens only that forward and only its ports, and does not count against the run's terminal sessions.
+
+### Changed
+
+- With the SSH gateway off, `wardyn run forward` now asks the organisation first, and its one-line refusal names `WARDYN_ATTACH_FORWARD`.
+- `PUT /site-config` carries the stored `assistant` block forward and answers `400 assistant_settings_via_own_route` when the document names a different one.
+- wardynd now starts when the identity provider does not answer, if it has booted with that issuer before: sign-in stays closed and is retried in the background, logouts the provider sends meanwhile are held and applied, and existing sessions, API tokens and runs keep working.
+
+### Security
+
+- The agent images now carry GitHub CLI 2.105.0, built with `golang.org/x/net` v0.62.0. The earlier images carried 2.103.3, built with
+  `golang.org/x/net` v0.60.0, which image scanners flag for CVE-2026-78661 and CVE-2026-97045 and can refuse to admit.
 
 ### Before you upgrade
 
 - The features new in 0.11 are off after the upgrade, and none of them does anything until an admin turns it on under `features` in site config. A site config saved from a later release that turns on a feature this release cannot turn on yet is refused on restore with `feature_unavailable`: take that key out, or set it to `{"enabled": false}`, and apply it again.
 - A switch already stored, by a downgrade or a database edit, takes effect with no new write once a release that can turn that feature on starts. Before you upgrade from 0.10.x, read the stored block with `psql "$WARDYN_PG_DSN" -Atc "SELECT config->'features' FROM site_config"`: `wardyn site-config get` on 0.10.x does not show it. Or upgrade first, then check `features` with a 0.11 or later `wardyn site-config get` and `GET /setup/status`, and turn off what you do not want.
-- Raising the site's outage allowance, or a policy that shortens the outage allowance or sets `strict`, makes runs fail at start on a run proxy older than this release. An operator who pins the proxy image upgrades it first.
-- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT` on `run_outage_terms`. They grant it to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same as soon as the migration has run. Until then a run whose outage terms are not the default ones is refused at start, and a run on a connected runner cannot be leased: it does not start, or it stops when its current lease runs out.
-- A connected runner older than this release is refused a run whose outage allowance is not the default one or whose outage terms are strict; upgrade the runner first. Every other run still starts on it, one that only ends unattended runs after an outage included.
+- A migration adds two columns to attach tickets; older replicas ignore them. Turn on `WARDYN_SSH_TICKETS` only after every replica runs this release. An older replica does not read a ticket's purpose: while one is serving, a ticket minted for a port forward also opens a terminal there (its minter may open that terminal anyway). Turn on `WARDYN_ATTACH_FORWARD` only after every replica runs this release, or turn it off for the upgrade if it is already on.
 
 ## [0.10.4] — 2026-11-24
 

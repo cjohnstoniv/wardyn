@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/adoscope"
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -44,7 +43,7 @@ func newEntraProxy(t *testing.T, spec types.RunPolicySpec, addr string, caps ...
 		RunID:           uuid.New(),
 		Policy:          CompilePolicy(spec),
 		Injector:        inj,
-		Sink:            &decisionSink{out: sink, ch: make(chan egress.DecisionLog, 256)},
+		Sink:            &decisionSink{out: sink, ch: make(chan queuedDecision, 256)},
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(addr),
 		RunToken:        newTokenSource("RUNTOK"),

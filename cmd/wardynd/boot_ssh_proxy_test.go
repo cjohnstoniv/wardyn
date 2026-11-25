@@ -173,3 +173,31 @@ func TestSSHChannelsBoot(t *testing.T) {
 		}
 	}
 }
+
+// TestSSHTicketsBoot: WARDYN_SSH_TICKETS needs the SSH gateway on. On with no WARDYN_SSH_LISTEN refuses to start with
+// the sentence; off boots, and on with the gateway on boots.
+func TestSSHTicketsBoot(t *testing.T) {
+	ensureUnset(t, "WARDYN_SSH_TICKETS")
+	ensureUnset(t, "WARDYN_SSH_LISTEN")
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"wardynd-test"}
+	const refusal = "refusing to start: WARDYN_SSH_TICKETS needs the SSH gateway on (WARDYN_SSH_LISTEN)"
+	for _, tc := range []struct {
+		tickets, listen string
+		refused         bool
+	}{
+		{"on", "", true},
+		{"", "", false},
+		{"off", ":2222", false},
+		{"on", ":2222", false},
+	} {
+		t.Setenv("WARDYN_SSH_TICKETS", tc.tickets)
+		t.Setenv("WARDYN_SSH_LISTEN", tc.listen)
+		resetFlags(t)
+		err := validateBootPosture(parseBootFlags(), tlsPosture{})
+		if got := err != nil && strings.Contains(err.Error(), refusal); got != tc.refused {
+			t.Errorf("tickets %q listen %q: boot = %v, want refused %v", tc.tickets, tc.listen, err, tc.refused)
+		}
+	}
+}

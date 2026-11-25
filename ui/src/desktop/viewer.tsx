@@ -19,8 +19,8 @@ import { RfbClient, type RfbDisplay } from "./rfb";
 // `view_only`: the gateway keeps this session's input from the desktop.
 // `background`: this session is a watch of a background run's desktop; it always comes with view_only.
 // `run_title` and `run_href`: the run's name and its page, for the way back to it; both or neither.
-// `watermark`: who is looking and at which run, and whether the organisation requires the mark; absent from an older gateway.
 // `cause`: "denied" when a door refused the desktop (its governance profile), not a used link.
+// `watermark`: who is looking and at which run, and whether the organisation requires the mark; absent from an older gateway.
 export type Boot = { state: "open"; expires: number; rfb: string; close: string; machine_kind?: string; view_only?: boolean; background?: boolean; run_title?: string; run_href?: string; watermark?: { who: string; run: string; required: boolean } } | { state: "refused"; said: string; cause?: "denied" };
 
 /** What the gateway wrote on the page, or null when it wrote nothing usable. */

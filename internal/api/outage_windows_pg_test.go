@@ -285,7 +285,7 @@ func TestRunnerLinkWindow_ServerEndedSessionOpensNothing_PG(t *testing.T) {
 		setup func(t *testing.T, f *linkFixture) store.RunnerStore
 	}{
 		{"revoked", func(t *testing.T, f *linkFixture) store.RunnerStore {
-			if _, err := f.st.RevokeRunner(context.Background(), f.rn.ID, time.Now(), "admin", "test"); err != nil {
+			if _, err := f.st.RevokeRunner(context.Background(), f.rn.ID, time.Now(), "admin", ""); err != nil {
 				t.Fatal(err)
 			}
 			return f.st

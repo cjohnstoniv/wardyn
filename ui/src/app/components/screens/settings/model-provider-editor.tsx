@@ -63,6 +63,7 @@ import { LaptopRunnersSwitch } from "./model-provider-laptop";
 import { GatewayInspection } from "./model-provider-gateway-inspection";
 import { ExtraHeaders } from "./model-provider-extra-headers";
 import { GatewayPresets } from "./model-provider-gateway-presets";
+import { AzureFields, SavedWarning } from "./model-provider-azure";
 import { HarnessBlock } from "./model-provider-harness";
 import { OidcChoice, OidcFields } from "./model-provider-oidc";
 import { applyPreset, type PresetId } from "./model-provider-presets";
@@ -74,9 +75,11 @@ import {
   draftGatewayAddress,
   editorProvidesLine,
   gatewayKind,
+  isAzure,
   isBedrock,
   isEndpoint,
   isLocal,
+  kindOffered,
   newDraft,
   oidcChange,
   providerFrom,
@@ -127,7 +130,7 @@ export function ModelProviderEditor({
   // refused, the editor stays open on the saved provider, with the snapshot
   // the save answered, so a further Save is an edit and not a stale create.
   const [audience, setAudience] = React.useState<AvailabilityDraftValue>({ restricted: false, audiences: [] });
-  const [partial, setPartial] = React.useState<{ list: ModelProvidersList; provider: ModelProvider; message: string } | null>(
+  const [partial, setPartial] = React.useState<{ list: ModelProvidersList; provider: ModelProvider; message: string; warnings?: string[] } | null>(
     null,
   );
   const list = partial?.list ?? listProp;
@@ -199,7 +202,7 @@ export function ModelProviderEditor({
         await writeAvailability("model_provider", next.id, audience, person, audience.restricted);
       } catch (e) {
         const provider = snap.providers.providers?.find((p) => p.id === next.id) ?? next;
-        setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e) });
+        setPartial({ list: { ...list, ...snap }, provider, message: getErrorMessage(e), warnings: snap.model_provider_warnings });
         // The row is saved now, with identity as the draft has it: later edits compare against that.
         const kept: ProviderDraft = {
           ...draft!,
@@ -211,6 +214,13 @@ export function ModelProviderEditor({
         setBaseline(editedText(kept, audience));
         return;
       }
+    }
+    const warnings = snap.model_provider_warnings;
+    if (warnings) {
+      setPartial({ list: { ...list, ...snap }, provider: snap.providers.providers?.find((p) => p.id === next.id) ?? next, message: "", warnings });
+      setBaseline(edited);
+      setConfirm(null);
+      return;
     }
     toast.success(PROVIDER_EDITOR.SAVED_TOAST);
     onSaved();
@@ -231,6 +241,9 @@ export function ModelProviderEditor({
 
   // How many people hold a credential for it — what rule 8 would delete (E9).
   const n = editing ? (list.connected[editing.id] ?? 0) : 0;
+  const azure = isAzure(kind);
+  // Saved with advisories and nothing else to do: the form is read-only and the one action is Done.
+  const saved = !!partial?.warnings && !partial.message;
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     // Rule 8 asks first only when someone would lose a credential (decision 2).
@@ -257,7 +270,9 @@ export function ModelProviderEditor({
         ? n === 1 ? O.TO_PASTE_ONE : O.TO_PASTE(n)
         : signInChange === "edited"
           ? n === 1 ? O.CONFIRM_BODY_ONE : O.CONFIRM_BODY(n)
-          : n === 1
+          : azure
+            ? n === 1 ? PROVIDER_EDITOR.ADDRESS_BODY_SIGNIN_ONE : PROVIDER_EDITOR.ADDRESS_BODY_SIGNIN(n)
+            : n === 1
       ? keyKind
         ? PROVIDER_EDITOR.ADDRESS_BODY_KEY_ONE
         : PROVIDER_EDITOR.ADDRESS_BODY_ONE
@@ -288,17 +303,20 @@ export function ModelProviderEditor({
             }}
             onCancel={onClose}
             subscriptionAvailable={subscriptionAvailable}
+            kindsAvailable={list.kindsAvailable}
+            entraLoginConfigured={list.entraLoginConfigured === true}
           />
         ) : (
           <form className="space-y-4" onSubmit={onSubmit}>
-            {partial && (
+            {partial?.warnings && <SavedWarning warnings={partial.warnings} />}
+            {partial?.message && (
               <div role="alert" className="flex flex-col gap-1 rounded-lg bg-danger-subtle p-3 text-body text-danger">
                 <b className="font-semibold">{AVAILABILITY.CREATE_PARTIAL_TITLE}</b>
                 <span>{partial.message}</span>
                 <span>{audience.restricted ? AVAILABILITY.CREATE_PARTIAL_RESTRICTED : AVAILABILITY.CREATE_PARTIAL_EVERYONE}</span>
               </div>
             )}
-            <fieldset disabled={busy || reloading} className="m-0 min-w-0 space-y-4 border-0 p-0">
+            <fieldset disabled={busy || reloading || saved} className="m-0 min-w-0 space-y-4 border-0 p-0">
               <ProviderFields
                 draft={draft}
                 setDraft={setDraft}
@@ -341,18 +359,26 @@ export function ModelProviderEditor({
             {stale && <SavedElsewhereBanner documentText={stale} onDiscard={discard} />}
             {/* Sticky: on a phone the sign-in fields make this dialog scroll, and Save must stay in reach. */}
             <div data-testid="provider-editor-footer" className={`${INLINE_ACTIONS} ${STICKY_FOOTER}`}>
-              {editing && (
+              {editing && !saved && (
                 <Button type="button" variant="outline" className={`mr-auto ${DANGER_OUTLINE}`} disabled={busy || reloading} onClick={() => setConfirm("remove")}>
                   {PROVIDER_EDITOR.REMOVE}
                 </Button>
               )}
-              <Button type="button" variant="ghost" onClick={close}>
-                {PROVIDER_EDITOR.CANCEL}
-              </Button>
-              <Button type="submit" disabled={busy || reloading || audience.pending}>
-                {showSpinner && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
-                {PROVIDER_EDITOR.SAVE}
-              </Button>
+              {!saved && (
+                <Button type="button" variant="ghost" onClick={close}>
+                  {PROVIDER_EDITOR.CANCEL}
+                </Button>
+              )}
+              {saved ? (
+                <Button type="button" onClick={close}>
+                  {PROVIDER_EDITOR.DONE}
+                </Button>
+              ) : (
+                <Button type="submit" disabled={busy || reloading || audience.pending}>
+                  {showSpinner && <Loader2 className="size-4 animate-spin" aria-hidden="true" />}
+                  {PROVIDER_EDITOR.SAVE}
+                </Button>
+              )}
             </div>
           </form>
         )}
@@ -372,6 +398,8 @@ export function ModelProviderEditor({
                   ? addressBody
                   : blockedFor
                     ? PROVIDER_EDITOR.DELETE_BLOCKED(title, blockedFor)
+                    : azure
+                      ? PROVIDER_EDITOR.DELETE_BODY_SIGNIN
                     : keyKind
                       ? PROVIDER_EDITOR.DELETE_BODY_KEY
                       : PROVIDER_EDITOR.DELETE_BODY}
@@ -405,10 +433,16 @@ function KindStep({
   onPick,
   onCancel,
   subscriptionAvailable,
+  kindsAvailable,
+  entraLoginConfigured,
 }: {
   onPick: (kind: (typeof EDITOR_KINDS)[number]) => void;
   onCancel: () => void;
   subscriptionAvailable: boolean;
+  // The kinds the server lists; absent from an older one. Azure Foundry is offered only when listed, and is
+  // disabled with its reason until the console's Microsoft Entra sign-in is set up.
+  kindsAvailable?: ModelProvidersList["kindsAvailable"];
+  entraLoginConfigured: boolean;
 }) {
   return (
     <div className="space-y-4">
@@ -417,18 +451,25 @@ function KindStep({
           {PROVIDER_EDITOR.KIND_TITLE}
         </p>
         <div className="overflow-hidden rounded-lg border border-border">
-          {EDITOR_KINDS.map((kind) => {
-            const disabled = kind === "anthropic_subscription" && !subscriptionAvailable;
+          {EDITOR_KINDS.filter((kind) => kindOffered(kind, kindsAvailable)).map((kind) => {
+            const reason =
+              kind === "anthropic_subscription" && !subscriptionAvailable
+                ? PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING
+                : kind === "azure_foundry" && !entraLoginConfigured
+                  ? PROVIDER_EDITOR.ENTRA_MISSING
+                  : undefined;
+            const disabled = !!reason;
             return (
               <button
                 key={kind}
                 type="button"
                 disabled={disabled}
                 onClick={() => onPick(kind)}
-                className="block w-full border-b border-border px-3 py-2 text-left text-body last:border-b-0 hover:enabled:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                className={`block w-full border-b border-border px-3 py-2 text-left text-body last:border-b-0 hover:enabled:bg-accent disabled:cursor-not-allowed${disabled ? " hatch-unavailable" : ""}`}
               >
-                {MODEL_PROVIDERS.KIND[kind]}
-                {disabled && <p className="mt-0.5 text-xs font-normal text-muted-foreground">{PROVIDER_EDITOR.CLAUDE_IMAGE_MISSING}</p>}
+                {/* A disabled row dims its label only: the reason under it keeps full contrast. */}
+                <span className={disabled ? "opacity-60" : undefined}>{MODEL_PROVIDERS.KIND[kind]}</span>
+                {reason && <p className="mt-0.5 text-xs font-normal text-muted-foreground">{reason}</p>}
               </button>
             );
           })}
@@ -509,6 +550,8 @@ function ProviderFields({
     return undefined;
   })();
   const signInGroup = useRovingRadio(2, sso ? 0 : 1, (i) => set({ kind: i === 0 ? "bedrock_sso" : "bedrock_bearer" }));
+
+  if (isAzure(draft.kind)) return <AzureFields draft={draft} set={set} refused={refused} refusedAt={refusedAt} rows={rows} />;
 
   return (
     <>

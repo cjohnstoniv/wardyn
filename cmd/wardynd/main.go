@@ -592,6 +592,7 @@ func run() error {
 		SSHRoleTTL:           *f.sshRoleTTL,
 		SSHMaxSessionsPerRun: *f.sshMaxSessionsPerRun,
 		SSHChannels:          sshChannelSet(f.sshChannels),
+		SSHTickets:           *f.sshTickets,
 		SyncDeny:             api.SplitSyncDeny(*f.syncDeny),
 		LocalFolderSeedWait:  *f.localFolderSeedWait,
 		ComputerFolders:      *f.computerFolders,
@@ -605,7 +606,8 @@ func run() error {
 		SSHMaxConnectionsPerPrincipal: *f.sshPerPrincipal,
 		// How long a governance change held for a second human waits (the switch itself is read
 		// per request by internal/api).
-		GovernanceChangeTTL: *f.governanceChangeTTL,
+		GovernanceChangeTTL:    *f.governanceChangeTTL,
+		GovernanceMinApprovals: *f.governanceMinApprovals,
 		// UI-sandbox gateway (pillar 4): same "empty = off" shape as SSH above —
 		// UISessionKey is nil unless -ui-sandbox-listen is set, and the gateway
 		// checks both.

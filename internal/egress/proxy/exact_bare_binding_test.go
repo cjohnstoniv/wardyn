@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -39,7 +38,7 @@ func TestPortQualifiedOnlyHostIsNotCredentialedOnPort80(t *testing.T) {
 			AllowedDomains: []string{"vendor.example:8443"}, AllowAllEgress: true,
 		}),
 		Injector: staticInj(map[string]injectedHeader{"vendor.example": {name: "X-Api-Key", value: "BROKERED-KEY"}}),
-		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+		Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 		Resolver: publicResolver{},
 		Dial:     redirectDial(upstreamAddr(cu.srv)),
 	})
@@ -62,7 +61,7 @@ func TestPortQualifiedOnlyHostIsNotCredentialedOnPort80(t *testing.T) {
 			RunID:    uuid.New(),
 			Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"connector.internal"}}),
 			Injector: staticInj(map[string]injectedHeader{"connector.internal": {name: "X-Api-Key", value: "BROKERED-KEY"}}),
-			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 64)},
+			Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan queuedDecision, 64)},
 			Resolver: publicResolver{},
 			Dial:     redirectDial(upstreamAddr(cu.srv)),
 		})
