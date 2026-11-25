@@ -555,6 +555,7 @@ Some constants show only under a condition. A step lane applies the rule; `new-r
 | `DETAIL_NETWORK` | mock | Network |
 | `DETAIL_CREDENTIAL` | mock | Credential |
 | `DETAIL_MCP` | mock | MCP |
+| `DETAIL_IMAGE` | mock | Image |
 | `DETAIL_NOTE` | mock | Note |
 | `DETAIL_NONE` | mock | None |
 | `DETAIL_MCP_BODY` | mock | Turn it on for a harness under Harness setup. |
