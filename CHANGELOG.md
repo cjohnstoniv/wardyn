@@ -11,6 +11,10 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- `WARDYN_IDENTITY_NARROWING` (`audit` by default) records, and under `enforce` applies, two narrowings by the identities behind a request (#4073).
+
 ## [0.10.2] — 2026-11-22
 
 ### Added
