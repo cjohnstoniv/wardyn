@@ -42,9 +42,10 @@ type mcpRelayInbound struct {
 	p        *Proxy
 	digest   string
 	upstream netip.AddrPort
-	// corpus is the sandbox's own secret values, from its policy's known-secret
-	// list, with each multi-line value's renderings and lines: scrubbed from
-	// every answer with the credentials this proxy holds.
+	// corpus is the server's own secret values (relay_scrub_values), with each
+	// multi-line value's renderings and lines: scrubbed from every answer with
+	// the credentials this proxy holds. It is not the scan corpus: the LLM scan
+	// switch never empties it, and it never reaches the outbound scanners.
 	corpus [][]byte
 }
 
@@ -57,10 +58,8 @@ func newMCPRelayInbound(p *Proxy, cfg *Config, srv *http.Server) *http.Server {
 	}
 	h := &mcpRelayInbound{p: p, digest: in.TokenSHA256}
 	h.upstream, _ = netip.ParseAddrPort(in.Upstream)
-	if li := cfg.Policy.LLMInspection; li != nil {
-		for _, v := range li.WorkspaceSecretValues {
-			h.corpus = append(append(h.corpus, []byte(v)), secretmask.MultilineRenderings([]byte(v))...)
-		}
+	for _, v := range cfg.RelayScrubValues {
+		h.corpus = append(append(h.corpus, []byte(v)), secretmask.MultilineRenderings([]byte(v))...)
 	}
 	relay := &http.Server{Addr: in.Listen, Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second}
 	srv.RegisterOnShutdown(func() { _ = relay.Close() })
@@ -120,7 +119,7 @@ func (h *mcpRelayInbound) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // scrubbed wraps w with a masking writer over the sandbox's own secrets: the
-// known-secret corpus and every credential this proxy registered, each also as
+// relay scrub list and every credential this proxy registered, each also as
 // it appears inside a JSON string, since an MCP answer is JSON. Always on.
 func (h *mcpRelayInbound) scrubbed(w http.ResponseWriter) (http.ResponseWriter, func()) {
 	secrets := append(append([][]byte(nil), h.corpus...), procRegistry.Masker(h.p.maskKey).Secrets()...)

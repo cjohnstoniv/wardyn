@@ -222,7 +222,9 @@ func newServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// own-subnet/control-plane exclusion needs both before any request is
 	// served. net.InterfaceAddrs() already sees the control-plane network at
 	// this point, since NetworkConnect precedes ContainerStart on the docker
-	// driver.
+	// driver. An MCP sandbox's proxy relies on the same order for its relay
+	// link: the docker runner connects that network to the created, unstarted
+	// container, so the relay subnet is in this snapshot too.
 	//
 	// A lookup failure for either is non-fatal but NOT free: the exclusion is
 	// a CLAMP on the lift, so an empty clamp would widen it instead of

@@ -12,8 +12,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -32,6 +35,18 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	case "exit5":
 		os.Exit(5)
+	case "ignore-term":
+		signal.Ignore(syscall.SIGTERM)
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "orphan":
+		// A process it started keeps its stdout open after it exits.
+		gc := exec.Command("sleep", "20")
+		gc.Stdout = os.Stdout
+		if gc.Start() != nil {
+			os.Exit(98)
+		}
+		os.Exit(0)
 	}
 	os.Exit(99)
 }
@@ -266,5 +281,48 @@ func TestMCPHostExitsWithServerCode(t *testing.T) {
 		env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
 	if err != nil || code != 5 {
 		t.Fatalf("code %d, err %v; want 5", code, err)
+	}
+}
+
+// TestMCPHostExitsOnServerExit: the host ends when its server exits, though a process the server
+// started still holds the server's stdout open.
+func TestMCPHostExitsOnServerExit(t *testing.T) {
+	t.Setenv(childModeEnv, "orphan")
+	start := time.Now()
+	code, err := run(context.Background(), options{caDir: t.TempDir(), listen: "127.0.0.1:0", stderr: io.Discard,
+		env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
+	if err != nil || code != 0 {
+		t.Fatalf("code %d, err %v; want 0", code, err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("the host took %s: it waited for the stdout a leftover process holds", d)
+	}
+}
+
+// TestMCPHostKillsServerThatIgnoresTerm: on a signal the host sends the server SIGTERM, then SIGKILL
+// once killAfter passes, so a server that ignores SIGTERM still ends.
+func TestMCPHostKillsServerThatIgnoresTerm(t *testing.T) {
+	t.Setenv(childModeEnv, "ignore-term")
+	prev := killAfter
+	killAfter = 300 * time.Millisecond
+	t.Cleanup(func() { killAfter = prev })
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan string, 1)
+	done := make(chan int, 1)
+	go func() {
+		code, _ := run(ctx, options{caDir: t.TempDir(), listen: "127.0.0.1:0", stderr: io.Discard, ready: func(a string) { ready <- a },
+			env: envOf(map[string]string{launchEnv: childLaunch(t), caPEMEnv: testCA})})
+		done <- code
+	}()
+	<-ready
+	time.Sleep(200 * time.Millisecond) // the child has set its SIGTERM handling
+	cancel()
+	select {
+	case code := <-done:
+		if code == 0 {
+			t.Fatal("exit code 0 for a killed server")
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the host did not end a server that ignores SIGTERM")
 	}
 }

@@ -411,6 +411,10 @@ type Config struct {
 	// MCPRelayInbound is an MCP sandbox proxy's relay listener (mcp_relay_inbound.go); required with, and
 	// only with, the MCP sandbox audience.
 	MCPRelayInbound *MCPRelayInboundConfig `json:"mcp_relay_inbound,omitempty"`
+	// RelayScrubValues is an MCP sandbox proxy's list of its server's own secret values, scrubbed from
+	// every answer its relay listener sends. It never joins the scan corpus, and the LLM scan switch
+	// does not touch it. Only an MCP sandbox's proxy carries it.
+	RelayScrubValues []string `json:"relay_scrub_values,omitempty"`
 	// DisableModelUsage turns off the per-call model-token meter, which is on by
 	// default with nothing in the config. Only an admin's opt-out sets it, so a
 	// default config still loads on an older proxy, which refuses this key.

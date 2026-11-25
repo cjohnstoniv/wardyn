@@ -45,7 +45,7 @@ func TestMCPProxyServesNoLocalRoutes(t *testing.T) {
 	for _, mcp := range []bool{true, false} {
 		extra := `,"vm":true`
 		if mcp {
-			extra = `,"control_plane_audience":"wardyn-mcp-sandbox","mcp_relay_inbound":{"listen":":3130","token_sha256":"` + mcpRelayDigest + `","upstream":"10.88.0.3:8765"}`
+			extra = `,"control_plane_audience":"wardyn-mcp-sandbox","mcp_relay_inbound":{"listen":"10.77.0.5:3130","token_sha256":"` + mcpRelayDigest + `","upstream":"10.88.0.3:8765"}`
 		}
 		cfg, err := LoadConfigBytes(fmt.Appendf(nil, `{"run_id":%q,"control_plane_url":%q,"run_token":"t"%s}`, uuid.New(), cp.URL, extra))
 		if err != nil {

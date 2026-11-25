@@ -57,6 +57,7 @@ var mcpSandboxConfigFields = []string{
 	"RunID", "ControlPlaneURL", "ControlPlaneCAPEM", "RunToken", "ControlPlaneAudience", "Policy",
 	"LiveDenies", "Injection", "Listen", "DecisionBufferSize", "DecisionSpoolDir", "MITMCACertPEM",
 	"MITMCAKeyPEM", "MITMHosts", "TrustedCAPEM", "HardDeny", "ScrubResponses", "MCPRelayInbound",
+	"RelayScrubValues",
 }
 
 // mcpSandbox reports whether this is an MCP sandbox's proxy.
@@ -78,8 +79,8 @@ func (p *Proxy) forwardHandler(cfg *Config) http.Handler {
 func (c *Config) validateMCPSandboxConfig() error {
 	switch c.ControlPlaneAudience {
 	case "":
-		if c.MCPRelayInbound != nil {
-			return errors.New("config: mcp_relay_inbound is set only with control_plane_audience " + MCPSandboxAudience)
+		if c.MCPRelayInbound != nil || len(c.RelayScrubValues) > 0 {
+			return errors.New("config: mcp_relay_inbound and relay_scrub_values are set only with control_plane_audience " + MCPSandboxAudience)
 		}
 		return nil
 	case MCPSandboxAudience:
@@ -116,14 +117,14 @@ func (in *MCPRelayInboundConfig) validate() error {
 	if err != nil || !validPort(port) {
 		return fmt.Errorf("config: mcp_relay_inbound.listen %q is not an address and port", in.Listen)
 	}
-	if a, err := netip.ParseAddr(host); host != "" && (err != nil || a.IsUnspecified()) {
-		return fmt.Errorf("config: mcp_relay_inbound.listen %q: the host is a literal address or empty", in.Listen)
+	if a, err := netip.ParseAddr(host); err != nil || a.IsUnspecified() {
+		return fmt.Errorf("config: mcp_relay_inbound.listen %q: the host is not a literal address that names one interface", in.Listen)
 	}
 	if b, err := hex.DecodeString(in.TokenSHA256); err != nil || len(b) != 32 || strings.ToLower(in.TokenSHA256) != in.TokenSHA256 {
 		return errors.New("config: mcp_relay_inbound.token_sha256 is not a lower-case SHA-256 hex digest")
 	}
-	if ap, err := netip.ParseAddrPort(in.Upstream); err != nil || ap.Addr().IsUnspecified() || ap.Port() == 0 {
-		return fmt.Errorf("config: mcp_relay_inbound.upstream %q is not a literal address and port", in.Upstream)
+	if ap, err := netip.ParseAddrPort(in.Upstream); err != nil || !relayAddrOK(ap) {
+		return fmt.Errorf("config: mcp_relay_inbound.upstream %q is not a literal IP and port (never loopback, unspecified, multicast or link-local)", in.Upstream)
 	}
 	return nil
 }

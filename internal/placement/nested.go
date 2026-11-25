@@ -26,8 +26,9 @@ var nestedFields = map[reflect.Type][]string{
 		// SigninListen is ProxyConfig.DesktopSignins as stored (localStoredSpec), refused by its row.
 		// LiveDenies is the hosts a live egress edit denied: it only narrows egress and carries no credential.
 		// ControlPlaneAudience and MCPRelayInbound are an MCP sandbox's proxy's: its token's audience, and its relay
-		// listener with the relay token's digest, never the token. Neither is a credential.
-		"VM PortRule SigninListen NoNetwork LiveDenies ControlPlaneAudience MCPRelayInbound"),
+		// listener with the relay token's digest, never the token. Neither is a credential. RelayScrubValues is the
+		// same proxy's list of its MCP server's own secret values, to scrub from answers; a run's proxy is refused it.
+		"VM PortRule SigninListen NoNetwork LiveDenies ControlPlaneAudience MCPRelayInbound RelayScrubValues"),
 	reflect.TypeFor[proxy.InjectionConfig]():       strings.Fields("InjectionRule GrantID"),
 	reflect.TypeFor[proxy.DecisionSinkConfig]():    strings.Fields("URL SPKISHA256 Key"),
 	reflect.TypeFor[proxy.HardDenyConfig]():        strings.Fields("Suffixes Hosts CIDRs"),

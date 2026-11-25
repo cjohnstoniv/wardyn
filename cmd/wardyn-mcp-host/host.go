@@ -37,6 +37,9 @@ const (
 	caPEMEnv      = "WARDYN_MITM_CA_PEM"
 )
 
+// killAfter is how long a server has to stop after SIGTERM before SIGKILL.
+var killAfter = 5 * time.Second
+
 // systemBundles are the system CA bundles, in the order the first present one is taken.
 var systemBundles = []string{"/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem", "/etc/pki/tls/certs/ca-bundle.crt"}
 
@@ -139,12 +142,18 @@ func run(ctx context.Context, o options) (int, error) {
 		_ = ln.Close()
 		return 1, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	// A plain pipe, not StdoutPipe: Wait then returns when the server exits, even if a process it
+	// started still holds its stdout open.
+	stdout, stdoutW, err := os.Pipe()
 	if err != nil {
 		_ = ln.Close()
 		return 1, err
 	}
-	if err := cmd.Start(); err != nil {
+	defer func() { _ = stdout.Close() }()
+	cmd.Stdout = stdoutW
+	err = cmd.Start()
+	_ = stdoutW.Close() // only the server holds the write end now
+	if err != nil {
 		_ = ln.Close()
 		return 1, fmt.Errorf("start the MCP server: %w", err)
 	}
@@ -155,17 +164,21 @@ func run(ctx context.Context, o options) (int, error) {
 	if o.ready != nil {
 		o.ready(ln.Addr().String())
 	}
-	readDone := make(chan struct{})
-	go func() { defer close(readDone); h.readServer(stdout) }()
+	go h.readServer(stdout)
 	go func() {
 		select {
 		case <-ctx.Done():
+			// SIGTERM, then SIGKILL for a server that does not stop.
 			_ = cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-h.done:
+			case <-time.After(killAfter):
+				_ = cmd.Process.Kill()
+			}
 		case <-h.done:
 		}
 	}()
-	<-readDone // the server's stdout closes as it exits; Wait must follow the last read
-	werr := cmd.Wait()
+	werr := cmd.Wait() // the server's exit, not its stdout's close, ends the host
 	close(h.done)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -69,17 +70,27 @@ func newMCPRelayServer(s MCPServerConfig) *mcpServer {
 }
 
 // validateRelay checks a relay server: no URL and no grant, its address a
-// literal private IP and port, never a host name, and a relay token.
+// literal IP and port (relayAddrOK), never a host name, and a relay token.
 func (s MCPServerConfig) validateRelay() error {
 	switch ap, err := netip.ParseAddrPort(s.Relay.Addr); {
 	case s.URL != "" || s.GrantID != nil:
 		return errors.New("a relay server has no url and no grant_id")
-	case err != nil || !ap.Addr().Unmap().IsPrivate() || ap.Port() == 0:
-		return fmt.Errorf("relay.addr %q is not a literal private IP and port", s.Relay.Addr)
+	case err != nil || !relayAddrOK(ap):
+		return fmt.Errorf("relay.addr %q is not a literal IP and port (never loopback, unspecified, multicast or link-local)", s.Relay.Addr)
 	case !mcpRelayTokenRE.MatchString(s.Relay.Token):
 		return errors.New("relay.token is not 43 or more base64url characters")
 	}
 	return nil
+}
+
+// relayAddrOK is the address rule for both ends of a relay link: a port, and an
+// IP that is not loopback, unspecified, multicast or link-local (which holds
+// the cloud metadata address). Any other range is allowed, so a pool outside
+// RFC 1918, such as 100.64.0.0/10, works.
+func relayAddrOK(ap netip.AddrPort) bool {
+	a := ap.Addr().Unmap()
+	return ap.Port() != 0 && a.IsValid() && !a.IsLoopback() && !a.IsUnspecified() && !a.IsMulticast() &&
+		!a.IsLinkLocalUnicast() && !a.IsLinkLocalMulticast()
 }
 
 // forwardRelay sends the call to the server's MCP proxy on the relay link.
@@ -117,6 +128,11 @@ func (x *mcpExchange) forwardRelay(w http.ResponseWriter, body []byte) {
 		out.Header.Set("Accept-Encoding", "identity")
 	}
 	resp, err := p.controlTransport.RoundTrip(out)
+	if err == nil && resp.StatusCode == http.StatusBadGateway {
+		// The MCP proxy is up but its host did not answer: the server is down all the same.
+		_ = resp.Body.Close()
+		err = errors.New("the MCP proxy answered 502: its host did not answer")
+	}
 	if err != nil {
 		x.relayDown(w, body, callID, scan, err)
 		return
@@ -150,8 +166,9 @@ func (x *mcpExchange) forwardRelay(w http.ResponseWriter, body []byte) {
 	p.relayStreaming(w, resp)
 }
 
-// relayDown answers a call the server's MCP proxy could not take: each request
-// of the body gets the JSON-RPC error, and a bodiless request a 502. The error
+// relayDown answers a call the server's MCP proxy could not take, or took with
+// no host behind it: each request of the body gets the JSON-RPC error, and a
+// body with no request (notifications only, or none) a 502. The error
 // is logged without its URL, which holds the relay token.
 func (x *mcpExchange) relayDown(w http.ResponseWriter, body []byte, callID string, scan *egress.ScanSummary, err error) {
 	if ue := (*url.Error)(nil); errors.As(err, &ue) {
@@ -199,6 +216,12 @@ func (x *mcpExchange) mcpCallHeaders(w http.ResponseWriter, h http.Header, body 
 			return false
 		}
 		h.Del(hv.header)
+		// A name that folds to it ("_" for "-", any case) reads as it to some servers: never sent.
+		for k := range h {
+			if strings.EqualFold(strings.ReplaceAll(k, "_", "-"), hv.header) {
+				delete(h, k)
+			}
+		}
 		if hv.want != "" {
 			h.Set(hv.header, hv.want)
 		}
