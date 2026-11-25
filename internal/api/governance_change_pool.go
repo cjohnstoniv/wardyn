@@ -193,7 +193,7 @@ func (s *Server) loadPoolInputs(ctx context.Context, q store.Querier) (*poolInpu
 	if len(records) > poolCandidateCap {
 		in.records, in.tooMany = records[:poolCandidateCap], true
 	}
-	in.recordInputs = recordInputs{base: withUnitScopeTx(detachedContext(ctx), q), mappings: mappings, userTypes: userTypes}
+	in.recordInputs = recordInputs{base: withUnitScopeReadTx(detachedContext(ctx), q), mappings: mappings, userTypes: userTypes}
 	return in, nil
 }
 
