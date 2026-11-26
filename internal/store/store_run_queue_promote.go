@@ -603,6 +603,9 @@ type QueueStart struct {
 	// Binding, set for a custom resource's run, is the namespace binding its launch was authorised under:
 	// the start holds only while that binding exists (ErrWorkloadBindingGone).
 	Binding *uuid.UUID
+	// Containers are the run's extras with the start's image admission verdicts (types.AgentRun.Containers),
+	// written over the create's; nil leaves the stored row.
+	Containers []types.RunExtraContainer
 }
 
 // ErrRunTasksErased is StartQueuedRun's answer for a promoted run, not yet started, that its owner's
@@ -698,6 +701,20 @@ func startQueuedRun(ctx context.Context, q Querier, id uuid.UUID, st QueueStart,
 	}
 	if err != nil {
 		return types.AgentRun{}, false, fmt.Errorf("store: start queued run: %w", err)
+	}
+	if st.Containers != nil {
+		doc, err := json.Marshal(st.Containers)
+		if err != nil {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
+		}
+		tag, err := q.Exec(ctx, `UPDATE run_containers SET containers = $2 WHERE run_id = $1`, id, doc)
+		if err != nil {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return types.AgentRun{}, false, fmt.Errorf("store: start queued run: containers: %d stored rows, want 1", tag.RowsAffected())
+		}
+		run.Containers = st.Containers
 	}
 	return run, true, nil
 }

@@ -43,8 +43,15 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
   member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
   same on the table as soon as the migration has run.
 - Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): migration `0404_runner_device_cert` only adds two columns to the existing runners table and creates no table, so it grants nothing and needs no grant by hand: the app role keeps the access to that table it already has.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `run_containers` to every role that was granted `UPDATE` on `agent_runs`, other than that table's owner. If the app
+  role is not one of those roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT
+  PRIVILEGES` step in Operations, grant it the same on the table as soon as the migration has run. Until then no run
+  starts, a revive that re-checks image admission fails, and a person's run_tasks erasure fails; give the grant, then
+  run the erasure again.
 - Erasing a person's credentials also deletes the `identity_token_bindings` rows that name them, on every install, whichever identity provider is selected. A split-role install therefore needs the `DELETE` grant above even with the `embedded` provider, or the credentials erasure step fails.
 - A custom component can name the image a run must use. A run on another image is refused with a sentence naming the component and both images (#1972).
+- A run can carry up to 4 extra containers beside the agent (`containers` on `POST /runs`), on Kubernetes: each shares the agent's network, work folder and drives, egresses only through the run's proxy, runs under the agent's restricted security context with no secret, and takes its CPU and memory out of the run's size. Each image is pinned by digest and gated like `image`.
 
 ### Changed
 

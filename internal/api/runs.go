@@ -484,6 +484,7 @@ func newRunRow(ctx context.Context, in runRowInput) types.AgentRun {
 		Experience:       req.Experience,
 		ImageInput:       &imageInput,
 		ImageAdmission:   f.admission,
+		Containers:       f.containers,
 		Shape:            storedRunShape(req),
 		CorrelationID:    correlationID(req.CorrelationID),
 		Service:          service,
@@ -624,6 +625,7 @@ func (s *Server) runCreateAuditData(ctx context.Context, a runCreateAudit) map[s
 	maps.Copy(createData, f.place.auditFields(a.created, s.runnerNameOf(ctx, a.created)))
 	s.markRunCreateExempt(ctx, createDigestInput(a.req, f.carriedImage), createData)
 	stampImageAdmission(createData, f.admission)
+	s.stampRunContainers(ctx, createData, f.containers)
 	s.stampBreakGlass(ctx, a.runID, a.createdByType, a.createdBy, createData)
 	stampIdempotencyKey(ctx, createData)
 	return createData

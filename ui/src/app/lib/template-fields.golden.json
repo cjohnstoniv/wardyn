@@ -178,6 +178,17 @@
       "pids_limit",
       "disk_mib"
     ],
+    "RunContainer": [
+      "name",
+      "image",
+      "command",
+      "ports",
+      "resources"
+    ],
+    "RunContainerResources": [
+      "cpu_millis",
+      "memory_mib"
+    ],
     "RunEgressOverrides": [
       "first_use_approval",
       "allow_all_egress"
@@ -911,6 +922,15 @@
       "omitted": "unset_optional",
       "empty": "value",
       "meaning": "The command is not kept running: it runs once and the run ends with it. A present service is a choice to keep it running; its restart, port and health check follow the defaults the server fills.",
+      "section": "run_wide"
+    },
+    {
+      "name": "containers",
+      "part": "tools_image",
+      "omitted": "unset_optional",
+      "empty": "same_as_omitted",
+      "meaning": "No extra container runs beside the agent.",
+      "sensitive": true,
       "section": "run_wide"
     },
     {

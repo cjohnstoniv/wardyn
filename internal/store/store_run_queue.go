@@ -154,6 +154,10 @@ func (s PG) CreateQueuedRun(ctx context.Context, r types.AgentRun, e RunQueueEnt
 	if err := bindRunCreateKey(ctx, tx, created.ID); err != nil {
 		return types.AgentRun{}, err
 	}
+	if err := insertRunContainers(ctx, tx, created.ID, r.Containers); err != nil {
+		return types.AgentRun{}, err
+	}
+	created.Containers = r.Containers
 	if keep {
 		if created, err = insertLaunchIntent(ctx, tx, created, r.LaunchIntent); err != nil {
 			return types.AgentRun{}, err
