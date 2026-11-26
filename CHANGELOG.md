@@ -11,6 +11,41 @@ This file holds `[Unreleased]` and the newest released minor line. Older release
 
 ## [Unreleased]
 
+### Added
+
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE` on `cp_heartbeat`,
+  and `SELECT, INSERT, UPDATE, DELETE` on `outage_windows`, to every role that was granted `UPDATE` on `agent_runs`, other
+  than that table's owner. If the app role is not one of those roles or a member of one, and does not pick up new tables
+  through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the migration has
+  run. Until then the server records no outage window and logs a warning, and refuses every remote runner's session when
+  the runner connects; a server with no remote runners loses only the windows.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `agent_rules`
+  to every role that was granted `UPDATE` on `delegates`, other than that table's owner. If the app role is not one of those
+  roles or a member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations,
+  grant it the same on the table as soon as the migration has run. Until then agent rules cannot be read or written, and a
+  run that includes a harness is refused.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_approval_counts` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `governance_change_approvals` to every role
+  that was granted `UPDATE` on `governance_changes`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_session_events` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on `assistant_sessions` to every role
+  that was granted `DELETE` on `run_attach_leases`, other than that table's owner. If the app role is not one of those roles or a
+  member of one, and does not pick up new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the
+  same on the table as soon as the migration has run.
+- Split-role installs (`WARDYN_PG_MIGRATE_DSN` set): this release's migrations grant `SELECT, INSERT, UPDATE, DELETE` on
+  `drive_reclaims`, and `SELECT, INSERT` on `drive_object_holds`, to every role that was granted `UPDATE` on the user
+  drives table, other than its owner. If the app role is not one of those roles or a member of one, and does not pick up
+  new tables through the `ALTER DEFAULT PRIVILEGES` step in Operations, grant it the same on each table as soon as the
+  migration has run. Until then a drive reclaim is refused, and so is a run that names a Docker volume or claim drive.
+
 ## [0.11.0-rc.2] — 2026-11-25
 
 ### Added
