@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/audit"
-	"github.com/cjohnstoniv/wardyn/internal/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -64,7 +64,7 @@ func TestMCPSandboxDecisionScope(t *testing.T) {
 		if got := mcpSandboxDecisionRule(w, hold, scope); got != want {
 			t.Errorf("MCP hold, scope %q: passes %v, want %v", scope, got, want)
 		}
-		if !want && (w.Code != http.StatusBadRequest || reasonOf(w) != reasonDecisionScopeInvalidForKind) {
+		if !want && (w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonDecisionScopeInvalidForKind) {
 			t.Errorf("MCP hold, scope %q: %d %s", scope, w.Code, w.Body.String())
 		}
 		if !mcpSandboxDecisionRule(httptest.NewRecorder(), agent, scope) {
@@ -95,7 +95,7 @@ func TestMCPHoldApprovalNeverWritesBack(t *testing.T) {
 			wsID := f.seedWorkspace(t, []string{"pypi.org"}, []string{"evil.test"})
 			id := f.seedMCPHold(host)
 			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/"+verb, admin, decideBody(t, types.ScopeAlways, nil))
-			if w.Code != http.StatusBadRequest || reasonOf(w) != reasonDecisionScopeInvalidForKind {
+			if w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonDecisionScopeInvalidForKind {
 				t.Fatalf("%s always: %d %s, want 400 %s", verb, w.Code, w.Body.String(), reasonDecisionScopeInvalidForKind)
 			}
 			approved, denied := f.egressLists(t, wsID)

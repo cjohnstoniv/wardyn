@@ -121,7 +121,7 @@ type mcpAuthFixture struct {
 	tokID      identity.RunIdentity
 }
 
-func mintMCPToken(t *testing.T, h *harness, runID uuid.UUID) identity.RunIdentity {
+func mcpProxyToken(t *testing.T, h *harness, runID uuid.UUID) identity.RunIdentity {
 	t.Helper()
 	id, err := h.idp.MintRunIdentity(context.Background(), runID, "alice@example.com", "", mcpSandboxAudience, false)
 	if err != nil {
@@ -134,7 +134,7 @@ func newMCPAuthFixture(t *testing.T) *mcpAuthFixture {
 	t.Helper()
 	h := newHarness(t)
 	runID, grant := uuid.New(), uuid.New()
-	id := mintMCPToken(t, h, runID)
+	id := mcpProxyToken(t, h, runID)
 	rows := &mcpRowsFake{rows: []store.RunMCPSandbox{{RunID: runID, ServerKey: "files", State: store.MCPSandboxReady,
 		CPTokenJTI: id.JTI, GrantIDs: []uuid.UUID{grant}}}}
 	cfg := baseTestConfig(h, mcpAuthStore{mcpRowsFake: rows})
@@ -150,12 +150,6 @@ const (
 	mcpDenyDecision  = `{"request":{"host":"evil.test","method":"GET"},"decision":"deny","rule_source":"policy:denied"}`
 	mcpEgressRaise   = `{"kind":"egress_domain","requested_scope":{"host":"pkg.files.test","mode":"wait_for_review"}}`
 )
-
-func reasonOf(w *httptest.ResponseRecorder) string {
-	var b errorBody
-	_ = json.Unmarshal(w.Body.Bytes(), &b)
-	return b.Reason
-}
 
 // mcpRowsLabelled is how many of the harness's audit rows carry mcp_sandbox=key.
 func mcpRowsLabelled(h *harness, key string) int {
@@ -239,7 +233,7 @@ func TestMCPTokenServesItsFiveRoutes(t *testing.T) {
 		t.Fatalf("approval GET: %d %s", w.Code, w.Body.String())
 	}
 	// The injection route is the MCP door's: a grant the server does not hold is its refusal, not internalAuth's.
-	if w := do(t, f.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), f.tok, ""); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown {
+	if w := do(t, f.srv, http.MethodGet, "/api/v1/internal/injection/"+uuid.NewString(), f.tok, ""); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 		t.Fatalf("injection: %d %s", w.Code, w.Body.String())
 	}
 	if w := do(t, f.srv, http.MethodPost, "/api/v1/internal/token/renew", f.tok, ""); w.Code != http.StatusOK {
@@ -266,7 +260,7 @@ func TestMCPTokenResolvesOnlyItsGrants(t *testing.T) {
 		s.handleMCPSandboxInjection(w, r.WithContext(ctx))
 		return w
 	}
-	if w := serve(uuid.New()); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown || f.h.broker.lastCall != nil {
+	if w := serve(uuid.New()); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown || f.h.broker.lastCall != nil {
 		t.Fatalf("another grant: %d %s, broker asked %v", w.Code, w.Body.String(), f.h.broker.lastCall != nil)
 	}
 	serve(f.grant)
@@ -307,7 +301,7 @@ func TestMCPTokenRelayedRefused(t *testing.T) {
 		})
 	}
 	w := doVia(t, relayed, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision)
-	if w.Code < 400 || reasonOf(w) != string(placement.ReasonRelayRouteRefused) {
+	if w.Code < 400 || reasonOf(t, w) != string(placement.ReasonRelayRouteRefused) {
 		t.Fatalf("relayed: %d %s, want %s", w.Code, w.Body.String(), placement.ReasonRelayRouteRefused)
 	}
 }
@@ -350,7 +344,7 @@ func TestMCPFirstUseHoldReachesApprovals(t *testing.T) {
 	forged := `{"kind":"egress_domain","requested_scope":{"host":"pkg.files.test","MCP_Sandbox":"files"}}`
 	for name, tok := range map[string]string{"internal": f.agent, "mcp": f.tok} {
 		before := authFailRows(f.h, reasonReservedScopeKey)
-		if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, tok, forged); w.Code != http.StatusBadRequest || reasonOf(w) != reasonReservedScopeKey {
+		if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, tok, forged); w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonReservedScopeKey {
 			t.Errorf("%s token naming mcp_sandbox: %d %s", name, w.Code, w.Body.String())
 		}
 		if authFailRows(f.h, reasonReservedScopeKey) != before+1 {
@@ -374,7 +368,7 @@ func TestMCPTokenRaisesEgressHoldsOnly(t *testing.T) {
 		`{"kind":"human_takeover","requested_scope":{"reason":"look"}}`,
 		`{"kind":"push_content","requested_scope":{"ref":"main"}}`,
 	} {
-		if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, f.tok, body); w.Code != http.StatusBadRequest || reasonOf(w) != reasonUnsupportedInternalApprovalKind {
+		if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, f.tok, body); w.Code != http.StatusBadRequest || reasonOf(t, w) != reasonUnsupportedInternalApprovalKind {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -413,11 +407,11 @@ func TestMCPHoldRejoinAndGetHeldToLabel(t *testing.T) {
 	} {
 		w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, c.tok, rejoin(c.row.ID))
 		stamped := f.h.approvals.byID[c.row.ID].LastRejoinedAt != nil
-		if c.wantOK != (w.Code == http.StatusOK) || (!c.wantOK && (reasonOf(w) != reasonApprovalNotFound || stamped)) {
+		if c.wantOK != (w.Code == http.StatusOK) || (!c.wantOK && (reasonOf(t, w) != reasonApprovalNotFound || stamped)) {
 			t.Errorf("%s: rejoin %d %s, stamped %v", c.name, w.Code, w.Body.String(), stamped)
 		}
 		g := do(t, f.srv, http.MethodGet, mcpApprovalsPath+"/"+c.row.ID.String(), c.tok, "")
-		if c.wantOK != (g.Code == http.StatusOK) || (!c.wantOK && reasonOf(g) != reasonApprovalNotFound) {
+		if c.wantOK != (g.Code == http.StatusOK) || (!c.wantOK && reasonOf(t, g) != reasonApprovalNotFound) {
 			t.Errorf("%s: GET %d %s", c.name, g.Code, g.Body.String())
 		}
 	}
@@ -441,12 +435,12 @@ func TestMCPRenewKeepsPrevJTIUntilExpiry(t *testing.T) {
 			t.Errorf("%s token: %d %s", name, w.Code, w.Body.String())
 		}
 	}
-	if w := do(t, f.srv, http.MethodPost, "/api/v1/internal/token/renew", f.tok, ""); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown {
+	if w := do(t, f.srv, http.MethodPost, "/api/v1/internal/token/renew", f.tok, ""); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 		t.Errorf("a renewal with the old token: %d %s", w.Code, w.Body.String())
 	}
 	past := time.Now().Add(-time.Second)
 	f.rows.set(func(r *store.RunMCPSandbox) { r.PrevCPTokenUntil = &past })
-	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown {
+	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpAllowDecision); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 		t.Errorf("the old token past its until: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -466,11 +460,11 @@ func TestMCPProxyTailRowsLandAfterEnd(t *testing.T) {
 	if mcpRowsLabelled(f.h, "files") == 0 {
 		t.Fatal("the tail row is not labelled")
 	}
-	if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, f.tok, mcpEgressRaise); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown {
+	if w := do(t, f.srv, http.MethodPost, mcpApprovalsPath, f.tok, mcpEgressRaise); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 		t.Errorf("another route inside the grace: %d %s", w.Code, w.Body.String())
 	}
 	stop(terminalUploadGrace + time.Minute)
-	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpDenyDecision); w.Code != http.StatusForbidden || reasonOf(w) != reasonMCPSandboxUnknown {
+	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, f.tok, mcpDenyDecision); w.Code != http.StatusForbidden || reasonOf(t, w) != reasonMCPSandboxUnknown {
 		t.Errorf("past the grace: %d %s", w.Code, w.Body.String())
 	}
 }
@@ -499,7 +493,7 @@ func TestMCPSandboxEgressIsNotRunActivity(t *testing.T) {
 		st = &mcpPresenceStore{presenceStore: &presenceStore{pauseStore: c.Store.(*pauseStore)}, mcpRowsFake: &mcpRowsFake{}}
 		c.Store = st
 	})
-	id := mintMCPToken(t, f.h, f.run.ID)
+	id := mcpProxyToken(t, f.h, f.run.ID)
 	st.rows = []store.RunMCPSandbox{{RunID: f.run.ID, ServerKey: "files", State: store.MCPSandboxReady, CPTokenJTI: id.JTI}}
 	if w := do(t, f.srv, http.MethodPost, mcpDecisionsPath, id.Token, mcpAllowDecision); w.Code != http.StatusAccepted {
 		t.Fatalf("MCP decision: %d %s", w.Code, w.Body.String())
@@ -551,8 +545,8 @@ func TestInternalTokenUnchangedByMCPAuth(t *testing.T) {
 	} {
 		routed := do(t, h.srv, http.MethodPost, c.path, tok, c.body)
 		alone := direct(c.handler, http.MethodPost, c.path, c.body)
-		if routed.Code != alone.Code || reasonOf(routed) != reasonOf(alone) {
-			t.Errorf("%s: routed %d %q, internalAuth alone %d %q", c.name, routed.Code, reasonOf(routed), alone.Code, reasonOf(alone))
+		if routed.Code != alone.Code || reasonOf(t, routed) != reasonOf(t, alone) {
+			t.Errorf("%s: routed %d %q, internalAuth alone %d %q", c.name, routed.Code, reasonOf(t, routed), alone.Code, reasonOf(t, alone))
 		}
 	}
 	// A fresh server, so the earlier refusals have not spent the auth.fail limiter's burst of five.
@@ -564,13 +558,13 @@ func TestInternalTokenUnchangedByMCPAuth(t *testing.T) {
 		`{"kind":"egress_domain","requested_scope":{"lane":"ado"}}`:                              reasonReservedScopeKey,
 	} {
 		before := authFailRows(h, want)
-		if w := do(t, h.srv, http.MethodPost, mcpApprovalsPath, tok, body); w.Code != http.StatusBadRequest || reasonOf(w) != want || authFailRows(h, want) != before+1 {
+		if w := do(t, h.srv, http.MethodPost, mcpApprovalsPath, tok, body); w.Code != http.StatusBadRequest || reasonOf(t, w) != want || authFailRows(h, want) != before+1 {
 			t.Errorf("%s: %d %s, want 400 %s and one auth.fail row", body, w.Code, w.Body.String(), want)
 		}
 	}
 	h.srv.cfg.Approvals = getErrApprovals{h.approvals}
 	rejoin := `{"kind":"egress_domain","requested_scope":{"host":"pkg.files.test"},"rejoin_id":"` + uuid.NewString() + `"}`
-	if w := do(t, h.srv, http.MethodPost, mcpApprovalsPath, tok, rejoin); w.Code != http.StatusServiceUnavailable || reasonOf(w) != reasonInternalLivenessReadFailed {
+	if w := do(t, h.srv, http.MethodPost, mcpApprovalsPath, tok, rejoin); w.Code != http.StatusServiceUnavailable || reasonOf(t, w) != reasonInternalLivenessReadFailed {
 		t.Errorf("a rejoin whose read fails: %d %s, want 503", w.Code, w.Body.String())
 	}
 }

@@ -157,7 +157,8 @@ func TestMCPBrokeredServerFor(t *testing.T) {
 		return runComponents{attached: []attachedComponent{{snapshot: types.RunComponent{Definition: def, MCPHarnesses: []string{codexHarness}}}}}
 	}
 	remote := types.ComponentDefinition{MCP: &types.ComponentMCP{Transport: types.ComponentMCPTransportHTTP, URL: "https://mcp.remote.test/mcp"}}
-	for name, c := range map[string]struct {
+	for _, c := range []struct {
+		name    string
 		comps   runComponents
 		harness string
 		want    bool
@@ -169,7 +170,7 @@ func TestMCPBrokeredServerFor(t *testing.T) {
 		{"no components", runComponents{}, codexHarness, false},
 	} {
 		if got := mcpBrokeredServerFor(c.comps, c.harness); got != c.want {
-			t.Errorf("%s: %v, want %v", name, got, c.want)
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
 	req := createRunRequest{}
