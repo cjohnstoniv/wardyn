@@ -556,10 +556,11 @@ func (s PG) ListApprovalsPage(ctx context.Context, stateFilter types.ApprovalSta
 // BY seq an indexed range scan with no sort; OFFSET pages forward without
 // flipping to DESC, so the per-run trail stays ASC (docs/sdk.md's exit-code
 // contract) and a caller reads the newest events with ?offset= or with Page.Newest.
+// runAuditFromSQL skips the partitions from before the run.
 func (s PG) QueryAuditEventsPage(ctx context.Context, runID uuid.UUID, p Page) ([]types.AuditEvent, error) {
 	q, args := p.appendTo(`
 		SELECT `+auditCols+`
-		FROM audit_events WHERE run_id=$1 ORDER BY seq `+auditRunOrder(p), []any{runID})
+		FROM audit_events WHERE run_id=$1 AND `+fmt.Sprintf(runAuditFromSQL, "$1")+` ORDER BY seq `+auditRunOrder(p), []any{runID})
 	return collect(ctx, s.Pool, "query", "audit events", q, args, scanAuditEvent)
 }
 
