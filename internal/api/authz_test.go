@@ -1174,15 +1174,18 @@ func absentRowSignInAnswer(method, pattern string, w *httptest.ResponseRecorder)
 		w.Code == http.StatusForbidden && errorReason(w) == "capability_component"
 }
 
-// assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
 // unknownMCPServerAnswer reports whether w is the MCP server Stop's own answer for a key the run has no server
 // for: the probe fills {key} with the run's id, so the handler, reached past its authorization, answers its
-// own 404, whose reason the not-owner 404 never carries.
+// own 404, whose reason the not-owner 404 never carries. The exemption is the Stop route's alone.
 func unknownMCPServerAnswer(method, pattern string, w *httptest.ResponseRecorder) bool {
-	return method == http.MethodPost && pattern == "/api/v1/runs/{id}/mcp-servers/{key}/stop" &&
+	return method == http.MethodPost && pattern == mcpServerStopRoute &&
 		w.Code == http.StatusNotFound && errorReason(w) == reasonMCPSandboxUnknown
 }
 
+// mcpServerStopRoute is the MCP server Stop's route pattern.
+const mcpServerStopRoute = "/api/v1/runs/{id}/mcp-servers/{key}/stop"
+
+// assertNotBlockedOn is assertNotBlocked for a probed route, passing the sign-in route's own 403.
 func assertNotBlockedOn(t *testing.T, method, pattern, who string, w *httptest.ResponseRecorder) {
 	t.Helper()
 	if absentRowSignInAnswer(method, pattern, w) {
@@ -1207,6 +1210,31 @@ func TestAbsentRowSignInAnswer_IsScopedToTheSignInRoute(t *testing.T) {
 	} {
 		if got := absentRowSignInAnswer(tc.method, tc.pattern, w); got != tc.want {
 			t.Errorf("%s %s: exempt = %v, want %v", tc.method, tc.pattern, got, tc.want)
+		}
+	}
+}
+
+func TestUnknownMCPServerAnswer_IsScopedToTheStopRoute(t *testing.T) {
+	w := httptest.NewRecorder()
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.WriteString(`{"error":"x","reason":"` + reasonMCPSandboxUnknown + `"}`)
+	other := httptest.NewRecorder()
+	other.WriteHeader(http.StatusNotFound)
+	_, _ = other.WriteString(`{"error":"x","reason":"run_not_found"}`)
+	for _, tc := range []struct {
+		method, pattern string
+		w               *httptest.ResponseRecorder
+		want            bool
+	}{
+		{http.MethodPost, mcpServerStopRoute, w, true},
+		{http.MethodPost, mcpServerStopRoute, other, false},
+		{http.MethodPost, "/api/v1/runs/{id}/mcp-servers/{key}/restart", w, false},
+		{http.MethodGet, "/api/v1/runs/{id}/mcp-servers", w, false},
+		{http.MethodPost, "/api/v1/runs/{id}/kill", w, false},
+		{http.MethodGet, mcpServerStopRoute, w, false},
+	} {
+		if got := unknownMCPServerAnswer(tc.method, tc.pattern, tc.w); got != tc.want {
+			t.Errorf("%s %s (%s): exempt = %v, want %v", tc.method, tc.pattern, errorReason(tc.w), got, tc.want)
 		}
 	}
 }
