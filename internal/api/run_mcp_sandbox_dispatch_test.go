@@ -362,8 +362,9 @@ func TestRefusedAtAdmissionStartsNoMCPServer(t *testing.T) {
 }
 
 // TestCreateFailureLeavesNoMCPSandbox: a create that fails fails the run before the agent's sandbox is
-// created, kills what it may have left and fails its row with the cause; a host the sandbox would be
-// reachable from is refused with its own reason.
+// created, kills what it may have left and writes its create failure row with the cause; a host the sandbox
+// would be reachable from is refused with its own reason. The row the create failed is then stopped by the
+// dispatch's deferred end, as every row is on a return before RUNNING (I8).
 func TestCreateFailureLeavesNoMCPSandbox(t *testing.T) {
 	for _, tc := range []struct {
 		err   error
@@ -378,11 +379,12 @@ func TestCreateFailureLeavesNoMCPSandbox(t *testing.T) {
 		if f.sbx.left() != 0 || f.sbx.count("start") != 0 || f.agentSpec().Image != "" || f.state() != types.RunFailed {
 			t.Fatalf("%v: left %d calls %v agent %v run %s", tc.err, f.sbx.left(), f.sbx.calls, f.agentSpec().Image != "", f.state())
 		}
-		if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxFailed || row.LastCause != tc.cause {
-			t.Errorf("%v: row %s cause %q, want failed %q", tc.err, row.State, row.LastCause, tc.cause)
+		if row := f.st.mcpRowsMem.get(0); row.State != store.MCPSandboxStopped || row.LastCause != mcpEndUnstarted {
+			t.Errorf("%v: row %s cause %q, want stopped %q", tc.err, row.State, row.LastCause, mcpEndUnstarted)
 		}
-		if !f.audit.has(f.run.ID, "run.mcp_sandbox.create", "failure") {
-			t.Errorf("%v: no run.mcp_sandbox.create failure row", tc.err)
+		evs := f.audit.eventsFor(f.run.ID, "run.mcp_sandbox.create")
+		if len(evs) != 1 || evs[0].Outcome != "failure" || !strings.Contains(string(evs[0].Data), `"cause":"`+tc.cause+`"`) {
+			t.Errorf("%v: run.mcp_sandbox.create rows %+v, want one failure with cause %q", tc.err, evs, tc.cause)
 		}
 	}
 }
