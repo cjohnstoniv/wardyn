@@ -139,6 +139,10 @@ func (f *cutFake) FenceProxy(context.Context, string) error {
 	f.calls = append(f.calls, "FenceProxy")
 	return f.agentErr
 }
+func (f *cutFake) StopLostProxyAt(context.Context, string, int) error {
+	f.calls = append(f.calls, "StopLostProxyAt")
+	return f.agentErr
+}
 func (f *cutFake) StopMCPProxies(_ context.Context, ref string) error {
 	f.calls = append(f.calls, "StopMCPProxies:"+ref)
 	return f.mcpErr
@@ -157,6 +161,7 @@ func cutHelpers() map[string]func(context.Context, *cutFake) error {
 		"FenceEgress":     func(ctx context.Context, f *cutFake) error { return FenceEgress(ctx, f, "ref-1") },
 		"EndSandboxCut":   func(ctx context.Context, f *cutFake) error { return EndSandboxCut(ctx, f, "ref-1") },
 		"EndSandboxCutAt": func(ctx context.Context, f *cutFake) error { return EndSandboxCutAt(ctx, f, "ref-1", 3) },
+		"CutLostEgressAt": func(ctx context.Context, f *cutFake) error { return CutLostEgressAt(ctx, f, "ref-1", 3) },
 	}
 }
 
@@ -188,6 +193,7 @@ func TestCutEgressAtLeavesNewerMCPProxies(t *testing.T) {
 	for name, call := range map[string]func(*cutFake) error{
 		"CutEgressAt":     func(f *cutFake) error { return CutEgressAt(context.Background(), f, "ref-1", 2) },
 		"EndSandboxCutAt": func(f *cutFake) error { return EndSandboxCutAt(context.Background(), f, "ref-1", 2) },
+		"CutLostEgressAt": func(f *cutFake) error { return CutLostEgressAt(context.Background(), f, "ref-1", 2) },
 	} {
 		f := &cutFake{agentErr: ErrProxyGenerationNewer}
 		if err := call(f); !errors.Is(err, ErrProxyGenerationNewer) {

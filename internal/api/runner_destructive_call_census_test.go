@@ -20,14 +20,14 @@ import (
 // call or a method value handed on, is a site of the census.
 var destructiveRunnerCalls = map[string]bool{
 	"StopSandbox": true, "StopProxy": true, "KillSandbox": true, "EndSandbox": true,
-	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true,
+	"FenceProxy": true, "StopProxyAt": true, "EndSandboxAt": true, "StopLostProxyAt": true,
 }
 
 // cutHelperCalls are the runner's cut helpers (internal/runner/mcp_sandbox.go), each made over one of those
 // methods: a reference to one is a site of its method, so a call moved into a helper keeps its row and guard.
 var cutHelperCalls = map[string]string{
 	"CutEgress": "StopProxy", "CutEgressAt": "StopProxyAt", "FenceEgress": "FenceProxy",
-	"EndSandboxCut": "EndSandbox", "EndSandboxCutAt": "EndSandboxAt",
+	"EndSandboxCut": "EndSandbox", "EndSandboxCutAt": "EndSandboxAt", "CutLostEgressAt": "StopLostProxyAt",
 }
 
 // destructiveWrappers are the functions that make one of those calls for their caller. A reference to one is a site
