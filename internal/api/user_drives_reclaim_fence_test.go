@@ -509,7 +509,7 @@ func TestDispatch_ReclaimFenceFailsARunWhoseObjectIsClaimed(t *testing.T) {
 			})
 
 			if fr.createCalls != tc.creates {
-				t.Fatalf("createCalls = %d, want %d; events: %s", fr.createCalls, tc.creates, auditDump(audit.events, run.ID))
+				t.Fatalf("createCalls = %d, want %d; events: %s", fr.createCalls, tc.creates, auditDump(audit.snapshot(), run.ID))
 			}
 			if !slices.Equal(f.stepLog(), tc.steps) {
 				t.Errorf("fence steps = %v, want %v", f.stepLog(), tc.steps)
@@ -526,9 +526,9 @@ func TestDispatch_ReclaimFenceFailsARunWhoseObjectIsClaimed(t *testing.T) {
 			if tc.reason == driveRefusalReclaiming && !strings.Contains(st.FailureHint(), tc.drive.DriveName) {
 				t.Errorf("failure hint = %q, want the drive named", st.FailureHint())
 			}
-			ev := findAudit(audit.events, run.ID, "run.create", "failure")
+			ev := findAudit(audit.snapshot(), run.ID, "run.create", "failure")
 			if ev == nil || !strings.Contains(string(ev.Data), `"reason":"`+tc.reason+`"`) {
-				t.Errorf("no run.create failure with reason %s; events: %s", tc.reason, auditDump(audit.events, run.ID))
+				t.Errorf("no run.create failure with reason %s; events: %s", tc.reason, auditDump(audit.snapshot(), run.ID))
 			}
 		})
 	}
